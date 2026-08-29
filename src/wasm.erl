@@ -597,6 +597,12 @@ destroy(Inst) ->
                                                     wasm_global:is_global(G)],
               ok
           end),
+    %% The compiled code this instance may have claimed. Same argument as the
+    %% memories above: the lease names the instance, so it goes when the
+    %% instance does, and until this line it went only when the owning process
+    %% died. A process serving many distinct modules pinned the sixteen slots
+    %% one at a time and then interpreted for ever.
+    _ = wasm_error:capture(fun() -> wasm_jit:release(Inst) end),
     %% The object store goes when the last instance sharing it goes, not with
     %% the first: linked instances hold references into one store.
     ok = wasm_heap:delete(Inst#inst.heap, Inst#inst.id),

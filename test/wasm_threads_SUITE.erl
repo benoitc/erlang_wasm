@@ -36,6 +36,7 @@ all() ->
      notify_wakes_no_more_than_asked,
      killing_a_waiter_does_not_strand_the_others,
      two_notifiers_never_both_claim_one_waiter,
+     a_notify_racing_a_timeout_leaves_no_message_behind,
      the_waiter_table_never_belongs_to_a_waiter,
      wait_on_an_unshared_memory_traps,
      a_shared_memory_outlives_the_process_that_made_it].
@@ -268,6 +269,62 @@ one_contested_wakeup() ->
     B = receive {Tag, Y} -> Y after 5000 -> ct:fail(no_second) end,
     receive {woke, 0} -> ok after 5000 -> ct:fail({not_woken, Waiter}) end,
     A + B.
+
+%% A notifier claims a waiter's row and *then* sends. Between those two the
+%% waiter could time out, find its mailbox empty, delete a row already gone and
+%% return "timed out"; the message arrived afterwards and stayed in the mailbox
+%% for ever, because the reference is per wait and no later wait can match it.
+%% An agent that waits with a short timeout under contention accumulated one per
+%% wait.
+%%
+%% The two now race for the same row, so exactly one wins: either the waiter
+%% times out and no message is ever sent, or the notifier has it and the waiter
+%% waits for what it knows is coming. Both are asserted here, over enough rounds
+%% to land on both sides of the window.
+a_notify_racing_a_timeout_leaves_no_message_behind(_Config) ->
+    %% Held inside the window on purpose. Racing for it does not work: two
+    %% thousand rounds of trying landed in it zero times, and a test that cannot
+    %% reach the defect passes whether it is fixed or not.
+    ok = application:set_env(wasm, wait_claim_hook, fun() -> timer:sleep(100) end),
+    try
+        {Woke, Counted, Left} = one_raced_timeout(),
+        %% The notifier claimed this waiter, so it counted a wakeup and the
+        %% waiter has to agree that it was woken.
+        ?assertEqual(1, Counted),
+        ?assertEqual(1, Woke),
+        %% And nothing is left over. This is what the defect looked like from
+        %% outside: the waiter reported a timeout, the notifier reported a
+        %% wakeup, and the message sat in the mailbox for the life of the
+        %% process because the reference is per wait.
+        ?assertEqual(0, Left)
+    after
+        application:unset_env(wasm, wait_claim_hook)
+    end.
+
+one_raced_timeout() ->
+    MemId = make_ref(),
+    Self = self(),
+    Waiter = spawn(fun() ->
+                       %% Ten milliseconds against the notifier's hundred, so
+                       %% the timeout fires while the notifier is holding the
+                       %% window open.
+                       R = wasm_wait:wait(MemId, 0,
+                                          fun() -> Self ! ready, equal end,
+                                          10000000),
+                       {message_queue_len, N} =
+                           process_info(self(), message_queue_len),
+                       Self ! {woke, R, N}
+                   end),
+    receive ready -> ok after 5000 -> ct:fail(never_registered) end,
+    Tag = make_ref(),
+    spawn(fun() -> Self ! {Tag, wasm_wait:notify(MemId, 0, 1)} end),
+    Counted = receive {Tag, C} -> C after 5000 -> ct:fail(no_notify) end,
+    receive {woke, R, N} -> {woken(R), Counted, N}
+    after 5000 -> ct:fail({no_result, Waiter})
+    end.
+
+woken(0) -> 1;
+woken(2) -> 0.
 
 %% The table has to be owned by something that outlives waiters, and a waiter
 %% is a guest's process that a worker timeout kills outright. There used to be

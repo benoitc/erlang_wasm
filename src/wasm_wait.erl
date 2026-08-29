@@ -59,23 +59,39 @@ wait(MemId, Addr, Read, TimeoutNs) ->
     try
         case Read() of
             not_equal -> 1;
-            equal -> park(Ref, TimeoutNs)
+            equal -> park(Entry, Ref, TimeoutNs)
         end
     after
         ets:delete_object(?TAB, Entry),
         flush(Ref)
     end.
 
-park(Ref, TimeoutNs) ->
+park(Entry, Ref, TimeoutNs) ->
     Timeout = timeout_ms(TimeoutNs),
     receive
         {wasm_notify, Ref} -> 0
     after Timeout ->
-        %% A notify may have been sent while the timeout was firing. The
-        %% message is already in the mailbox if so, and answering "timed out"
-        %% when someone was woken would lose a wakeup.
-        receive {wasm_notify, Ref} -> 0
-        after 0 -> 2
+        %% Race the notifier for our own row, and let whoever removes it decide.
+        %%
+        %% Looking in the mailbox instead was not enough. A notifier claims the
+        %% row and *then* sends, and between those two the waiter could time
+        %% out, find nothing, delete a row that was already gone and flush an
+        %% empty mailbox: the message arrived afterwards and stayed there for
+        %% ever, because `Ref` is per wait and no later wait can match it. A
+        %% worker that times out often accumulated one per wait.
+        %%
+        %% `claim/1` removes the row and answers whether *this* caller removed
+        %% it, so exactly one of the two wins and the loser knows it lost.
+        case claim(Entry) of
+            true ->
+                2;
+            false ->
+                %% A notifier has us and counted us as woken. Its send is
+                %% already done or one instruction away, so wait for it and
+                %% answer as it did: disagreeing would lose the wakeup.
+                receive {wasm_notify, Ref} -> 0
+                after 1000 -> 0
+                end
         end
     end.
 
@@ -109,6 +125,7 @@ wake([], _Left, N) -> N;
 wake([{_Key, Pid, Ref} = Entry | Rest], Left, N) ->
     case claim(Entry) of
         true ->
+            ok = claimed_hook(),
             Pid ! {wasm_notify, Ref},
             wake(Rest, Left - 1, N + 1);
         false ->
@@ -131,6 +148,22 @@ wake([{_Key, Pid, Ref} = Entry | Rest], Left, N) ->
 %% caller sees 1.
 claim({Key, Pid, Ref}) ->
     ets:select_delete(?TAB, [{{Key, Pid, Ref}, [], [true]}]) =:= 1.
+
+-ifdef(TEST).
+%% A sync point between claiming a waiter and sending to it.
+%%
+%% The window between those two is nanoseconds wide and a test cannot land in it
+%% by racing: two thousand rounds of trying hit it zero times, which is how a
+%% test for this ends up passing whether the defect is there or not. So the
+%% notifier can be held open here on request. Never compiled into a release.
+claimed_hook() ->
+    case application:get_env(wasm, wait_claim_hook) of
+        {ok, F} when is_function(F, 0) -> _ = F(), ok;
+        _ -> ok
+    end.
+-else.
+claimed_hook() -> ok.
+-endif.
 
 %% A negative timeout is "wait forever". The specification counts nanoseconds
 %% and Erlang counts milliseconds, so a timeout under a millisecond rounds up

@@ -27,6 +27,7 @@ all() ->
      a_failed_compile_answers_everybody_waiting,
      a_restart_leaves_nothing_published,
      a_waiter_that_dies_before_the_compile_lands_leaves_no_claim,
+     a_waiter_that_gave_up_leaves_no_claim,
      a_holder_that_dies_after_the_compile_lands_leaves_no_claim,
      two_loads_of_the_same_bytes_share_an_identity,
      a_module_without_bytes_still_has_an_identity].
@@ -253,6 +254,53 @@ a_waiter_that_dies_before_the_compile_lands_leaves_no_claim(Config) ->
     %% One holder, the compiler. A claim for the dead waiter would make it two,
     %% and nothing would ever take it back.
     ?assertEqual(1, holders(Bin)),
+    exit(Compiler, kill),
+    wait_until(fun() -> holders(Bin) =:= absent end, 5000).
+
+%% Dying is not the only way to stop waiting. `wasm_module_cache:load/1` has a
+%% thirty-second deadline, and a caller that reaches it is very much alive: it
+%% got an error, has no handle, and will never call `unload/1`. The claim
+%% `stored` made for it was therefore permanent, and the module stayed resident
+%% for the life of the node.
+%%
+%% Driven through the message the timeout path now sends rather than by waiting
+%% out thirty seconds, and the two orders that message can arrive in are the
+%% two this asserts: before the compile lands, and after it.
+a_waiter_that_gave_up_leaves_no_claim(Config) ->
+    Bin = unique(big_module(Config)),
+    Hash = crypto:hash(sha256, Bin),
+    Self = self(),
+    Compiler = spawn(fun() -> {ok, _} = wasm:load(Bin), Self ! loaded,
+                              receive never -> ok end end),
+    wait_until(fun() -> compiling(Hash) end, 5000),
+
+    %% The production path with its deadline shortened, so the case takes a
+    %% quarter of a second instead of the thirty seconds `?CALL_TIMEOUT` would.
+    %% Everything else is what `wasm_module_cache:call/1` does: park on
+    %% `acquire`, give up, and say so.
+    Waiter = spawn(fun() ->
+                       R = try gen_server:call(wasm_module_cache,
+                                               {acquire, Hash}, 250)
+                           catch exit:{timeout, _} ->
+                               gen_server:call(wasm_module_cache,
+                                               {gave_up, Hash}),
+                               gave_up
+                           end,
+                       Self ! {waiter, R},
+                       receive never -> ok end
+                   end),
+    wait_until(fun() -> waiting_on(Hash) >= 1 end, 5000),
+    receive {waiter, gave_up} -> ok
+    after 5000 -> ct:fail(never_gave_up)
+    end,
+
+    receive loaded -> ok after 60000 -> ct:fail(no_load) end,
+    timer:sleep(200),
+    %% One holder, the compiler. The waiter is alive and has no handle, so a
+    %% claim for it is one nothing will ever take back and the module would stay
+    %% resident for the life of the node.
+    ?assertEqual(1, holders(Bin)),
+    exit(Waiter, kill),
     exit(Compiler, kill),
     wait_until(fun() -> holders(Bin) =:= absent end, 5000).
 

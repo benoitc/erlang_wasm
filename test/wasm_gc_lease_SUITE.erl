@@ -18,6 +18,8 @@ two processes can use one.
 -export([a_foreign_process_mid_call_keeps_what_it_holds/1,
          a_pending_request_blocks_nobody/1,
          a_collector_killed_mid_sweep_does_not_wedge_the_store/1,
+         a_killed_reader_does_not_stop_collection_for_ever/1,
+         exclusive_is_never_held_without_a_collector_to_find/1,
          re_entrant_calls_take_one_lease/1,
          overlapping_traffic_still_gets_collected/1]).
 
@@ -25,6 +27,8 @@ all() ->
     [a_foreign_process_mid_call_keeps_what_it_holds,
      a_pending_request_blocks_nobody,
      a_collector_killed_mid_sweep_does_not_wedge_the_store,
+     a_killed_reader_does_not_stop_collection_for_ever,
+     exclusive_is_never_held_without_a_collector_to_find,
      re_entrant_calls_take_one_lease,
      overlapping_traffic_still_gets_collected].
 
@@ -157,6 +161,67 @@ a_collector_killed_mid_sweep_does_not_wedge_the_store(_Config) ->
     ok = wasm_heap:unlease(Heap, true),
     ?assertEqual(0, wasm_heap:readers(Heap)).
 
+%% The other half of the killed-holder problem, and the one that was open. A
+%% *reader* killed outright never runs the `after` that gives its count back,
+%% so the lease cell stays above zero for ever: `last_out/2` never sees the
+%% store empty, `try_exclusive/1` never matches, and nothing on this store is
+%% ever collected again. Unreachable objects then accumulate without bound,
+%% which is a leak rather than the slowdown a stranded code slot costs.
+a_killed_reader_does_not_stop_collection_for_ever(_Config) ->
+    Heap = wasm_heap:new(),
+    Self = self(),
+    Reader = spawn(fun() ->
+                       true = wasm_heap:lease(Heap),
+                       Self ! holding,
+                       receive never -> ok end
+                   end),
+    receive holding -> ok after 5000 -> ct:fail(never_held) end,
+    ?assertEqual(1, wasm_heap:readers(Heap)),
+    Ref = monitor(process, Reader),
+    exit(Reader, kill),
+    receive {'DOWN', Ref, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
+    %% Still counted, because nothing gave it back. That is the defect, and it
+    %% is only a defect once somebody wants to collect.
+    ?assertEqual(1, wasm_heap:readers(Heap)),
+    ok = wasm_heap:request_collect(Heap),
+    %% A live reader arrives, does its work and leaves. On the way out it is the
+    %% only one left alive, so it must be handed the collection rather than
+    %% concluding that somebody else is still inside.
+    true = wasm_heap:lease(Heap),
+    ?assertEqual(collect_now, wasm_heap:unlease(Heap, true)),
+    ?assertEqual(0, wasm_heap:readers(Heap) rem (1 bsl 32)),
+    ok = wasm_heap:release_exclusive(Heap),
+    %% And the store is usable afterwards.
+    ?assertEqual(true, try_lease(Heap, 5000)),
+    ok = wasm_heap:unlease(Heap, true).
+
+%% The invariant that makes a stranded collector recoverable at all. Exclusivity
+%% used to be taken before the collector row was written, so a process killed
+%% between the two left the store exclusive with nobody to find, `reclaim/2`
+%% answered `false`, and every reader spun without bound. Marking first makes
+%% that state unreachable; this asserts the order rather than the window,
+%% because the window no longer exists to be caught.
+exclusive_is_never_held_without_a_collector_to_find(_Config) ->
+    Heap = wasm_heap:new(),
+    true = wasm_heap:lease(Heap),
+    true = wasm_heap:try_exclusive(Heap),
+    %% Held, and findable: nobody else gets in, and the row says who has it.
+    ?assertEqual(timeout, try_lease(Heap, 300)),
+    ?assertMatch([{_, _, _}], collector_rows(Heap)),
+    ok = wasm_heap:release_exclusive(Heap),
+    ?assertEqual([], collector_rows(Heap)),
+    %% A failed upgrade leaves no mark behind either, or the next reader would
+    %% think a collection was in progress.
+    Self = self(),
+    Other = spawn(fun() -> true = wasm_heap:lease(Heap), Self ! in,
+                           receive go -> ok end,
+                           ok = wasm_heap:unlease(Heap, true) end),
+    receive in -> ok after 5000 -> ct:fail(never_in) end,
+    ?assertEqual(false, wasm_heap:try_exclusive(Heap)),
+    ?assertEqual([], collector_rows(Heap)),
+    Other ! go,
+    ok = wasm_heap:unlease(Heap, true).
+
 %% A host import calling back into the instance is one execution, not two. Two
 %% leases would be harmless; what would not be is releasing on the way out of
 %% the inner one and leaving the outer running unprotected.
@@ -226,5 +291,12 @@ try_lease(Heap, Ms) ->
     receive {Tag, R} -> R
     after Ms -> exit(P, kill), timeout
     end.
+
+%% The collector row, read straight out of the heap's own objects table. There
+%% is no api for it and there should not be: it exists so a reader can tell a
+%% collection in progress from one whose collector is gone, and this asserts
+%% that distinction is always available.
+collector_rows({wasm_heap, Objs, _, _}) ->
+    ets:lookup(Objs, '$wasm_collector').
 
 destroy(Insts) -> [ok = wasm:destroy(I) || I <- Insts], ok.

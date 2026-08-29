@@ -403,7 +403,20 @@ declaring no struct and no array type, so those pay one comparison.
 """.
 -spec lease(undefined | heap()) -> boolean().
 lease(undefined) -> false;
-lease({wasm_heap, Objs, _, Ctr}) -> read_lease(Objs, Ctr, 0), true.
+lease({wasm_heap, Objs, _, Ctr}) ->
+    read_lease(Objs, Ctr, 0),
+    %% Who is holding it, so that a reader killed before its `after` runs can be
+    %% told from one still working. The count alone cannot: a leaked increment
+    %% and a busy reader look identical, and the leaked one stopped `try_
+    %% exclusive/1` from ever matching again, which stopped collection for the
+    %% life of the store.
+    %%
+    %% One `ets:update_counter` per *outermost* invocation, and only for a
+    %% module that declares a struct or an array type: `lease/1` already answers
+    %% `false` for every other module, so nothing that does not use the object
+    %% store pays for this.
+    ok = remember_reader(Objs),
+    true.
 
 read_lease(Objs, Ctr, Tries) ->
     case atomics:add_get(Ctr, ?LEASE, 1) >= ?EXCL of
@@ -456,6 +469,17 @@ unmark_collector(Objs) ->
     try ets:delete(Objs, ?COLLECTOR) catch error:badarg -> true end,
     ok.
 
+%% Take the mark back only if it is still ours. A plain delete would take a
+%% concurrent collector's mark away with it, and that collector holds the store:
+%% readers would then find `?EXCL` with nobody marked, which is exactly the
+%% state marking first exists to make impossible.
+unmark_if_mine(Objs) ->
+    Me = self(),
+    try ets:select_delete(Objs, [{{?COLLECTOR, Me, '_'}, [], [true]}])
+    catch error:badarg -> 0
+    end,
+    ok.
+
 -doc """
 Give up a read lease.
 
@@ -466,20 +490,88 @@ gathering roots is not this module's business.
 -spec unlease(undefined | heap(), boolean()) -> ok | collect_now.
 unlease(_H, false) -> ok;
 unlease({wasm_heap, Objs, _, Ctr}, true) ->
+    ok = forget_reader(Objs),
     case atomics:sub_get(Ctr, ?LEASE, 1) of
         0 -> last_out(Objs, Ctr);
-        _ -> ok
+        N -> still_inside(Objs, Ctr, N)
     end.
+
+%% Somebody is still in, so this reader is not the one to collect. Unless the
+%% somebody is dead: a reader killed with `exit(Pid, kill)` never ran the
+%% `after` that gives its count back, and `last_out/2` would then never see
+%% zero again however long the store waited.
+%%
+%% Checked only when a collection is actually pending, so the ordinary path is
+%% the same two atomics it has always been, and only from the *falling* edge, so
+%% a store with steady traffic pays for it once per invocation that leaves
+%% somebody behind rather than once per invocation.
+still_inside(Objs, Ctr, N) ->
+    case atomics:get(Ctr, ?REQUEST) of
+        0 -> ok;
+        _ -> reap(Objs, Ctr, N)
+    end.
+
+%% Give back what dead readers are holding, and collect if that empties the
+%% store. `is_process_alive/1` is the authority here for the same reason
+%% `code:soft_purge/1` is the authority in `wasm_code_slots`: a lease is given
+%% back in an `after` and an `after` does not run for a killed process, so the
+%% lease cannot be what decides.
+reap(Objs, Ctr, N) ->
+    case dead_readers(Objs) of
+        0 -> ok;
+        Dead ->
+            case atomics:sub_get(Ctr, ?LEASE, min(Dead, N)) of
+                0 -> case last_out(Objs, Ctr) of
+                         collect_now -> collect_now;
+                         ok -> ok
+                     end;
+                _ -> ok
+            end
+    end.
+
+%% Rows are deleted as they are counted, so two reapers cannot both subtract
+%% for the same corpse: `ets:take/2` hands the row to exactly one of them.
+dead_readers(Objs) ->
+    try ets:select(Objs, [{{{reader, '$1'}, '_'}, [], ['$1']}]) of
+        Pids ->
+            lists:sum([Held || Pid <- Pids, not is_process_alive(Pid),
+                               Held <- [taken(Objs, Pid)]])
+    catch error:badarg -> 0
+    end.
+
+taken(Objs, Pid) ->
+    case ets:take(Objs, {reader, Pid}) of
+        [{_, Held}] -> Held;
+        [] -> 0
+    end.
+
+remember_reader(Objs) ->
+    Key = {reader, self()},
+    try ets:update_counter(Objs, Key, {2, 1}, {Key, 0}) catch error:badarg -> 0 end,
+    ok.
+
+forget_reader(Objs) ->
+    Key = {reader, self()},
+    try
+        case ets:update_counter(Objs, Key, {2, -1}, {Key, 0}) of
+            N when N =< 0 -> ets:delete(Objs, Key);
+            _ -> true
+        end
+    catch error:badarg -> true
+    end,
+    ok.
 
 last_out(Objs, Ctr) ->
     case atomics:get(Ctr, ?REQUEST) of
         0 -> ok;
         _ ->
+            %% Marked first, for the reason `try_exclusive/1` gives.
+            ok = mark_collector(Objs, 0),
             case atomics:compare_exchange(Ctr, ?LEASE, 0, ?EXCL) of
-                ok -> ok = mark_collector(Objs, 0), collect_now;
+                ok -> collect_now;
                 %% Somebody came back in first. The request stands and the next
                 %% one out will find it.
-                _ -> ok
+                _ -> ok = unmark_if_mine(Objs), ok
             end
     end.
 
@@ -492,9 +584,18 @@ upgrade that cannot deadlock: there is nobody to wait for.
 -spec try_exclusive(undefined | heap()) -> boolean().
 try_exclusive(undefined) -> false;
 try_exclusive({wasm_heap, Objs, _, Ctr}) ->
+    %% Marked *before* the exchange, and this order is the whole safety of it.
+    %% The other way round left a window where the store read as exclusive with
+    %% no collector row: a process killed in there stranded `?EXCL` for ever,
+    %% `reclaim/2` found `none` and answered `false`, and every reader spun in
+    %% `read_lease/3` without bound. This way that state cannot exist, and the
+    %% state this order does allow -- marked, not exclusive -- is harmless,
+    %% because the row is only ever consulted once the count is already at
+    %% `?EXCL`.
+    ok = mark_collector(Objs, 1),
     case atomics:compare_exchange(Ctr, ?LEASE, 1, ?EXCL + 1) of
-        ok -> ok = mark_collector(Objs, 1), true;
-        _ -> false
+        ok -> true;
+        _ -> ok = unmark_if_mine(Objs), false
     end.
 
 -doc "Release the exclusive hold, leaving any read lease the caller had.".
@@ -552,8 +653,14 @@ collect({wasm_heap, _, Elems, Ctr} = H, Roots) ->
         true -> major(H, Roots, Next);
         false -> minor(H, Roots, Next)
     end,
-    forget_all(Elems),
+    %% The watermark first, then the remembered set. A collector killed between
+    %% the two used to drop the remembered set while the watermark still named
+    %% the previous generation, so the next minor collection traced neither the
+    %% old-to-young references nor the objects they pointed at, and freed live
+    %% ones. This order leaves the conservative state instead: a remembered set
+    %% larger than it needs to be, which costs a longer trace and nothing else.
     atomics:put(Ctr, ?WATERMARK, Next),
+    forget_all(Elems),
     ok.
 
 -doc "Whether the next collection will trace the whole store.".
@@ -807,7 +914,11 @@ sweep_from('$end_of_table', _Objs, _Elems, _Marks) -> ok;
 %% they are not objects and have no mark bit. The collector row is always
 %% present during a sweep, because taking the store exclusively is what writes
 %% it and what a sweep runs under.
-sweep_from(Key, Objs, Elems, Marks) when Key =:= ?REGISTRY; Key =:= ?COLLECTOR ->
+%% An object id is an integer, so anything else in this table is bookkeeping:
+%% the registry, the collector, and the reader rows. Written as the shape of a
+%% key rather than as a list of them, because the list had to be extended every
+%% time a row was added and forgetting would have deleted live objects.
+sweep_from(Key, Objs, Elems, Marks) when not is_integer(Key) ->
     sweep_from(ets:next(Objs, Key), Objs, Elems, Marks);
 sweep_from(Id, Objs, Elems, Marks) ->
     Next = ets:next(Objs, Id),

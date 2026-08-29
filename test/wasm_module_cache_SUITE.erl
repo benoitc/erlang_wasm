@@ -274,22 +274,30 @@ a_waiter_that_gave_up_leaves_no_claim(Config) ->
                               receive never -> ok end end),
     wait_until(fun() -> compiling(Hash) end, 5000),
 
-    %% The production path with its deadline shortened, so the case takes a
-    %% quarter of a second instead of the thirty seconds `?CALL_TIMEOUT` would.
-    %% Everything else is what `wasm_module_cache:call/1` does: park on
-    %% `acquire`, give up, and say so.
+    %% `send_request/2` puts this process in the server's waiting list exactly
+    %% as a call does, and then lets the test decide when it gives up. Shortening
+    %% a real deadline instead made the case a race against how long the compile
+    %% takes, which is a different number every run.
     Waiter = spawn(fun() ->
-                       R = try gen_server:call(wasm_module_cache,
-                                               {acquire, Hash}, 250)
-                           catch exit:{timeout, _} ->
-                               gen_server:call(wasm_module_cache,
-                                               {gave_up, Hash}),
-                               gave_up
+                       _Req = gen_server:send_request(wasm_module_cache,
+                                                      {acquire, Hash}),
+                       Self ! registered,
+                       receive give_up -> ok end,
+                       %% What `wasm_module_cache:call/1` now does on a timeout.
+                       %% The result is deliberately not matched: a server that
+                       %% does not know this message must leave the waiter
+                       %% *alive*, or the case passes against the defect for the
+                       %% wrong reason, a dead waiter being skipped.
+                       _ = try gen_server:call(wasm_module_cache,
+                                               {gave_up, Hash})
+                           catch exit:_ -> ignored
                            end,
-                       Self ! {waiter, R},
+                       Self ! {waiter, gave_up},
                        receive never -> ok end
                    end),
+    receive registered -> ok after 5000 -> ct:fail(never_registered) end,
     wait_until(fun() -> waiting_on(Hash) >= 1 end, 5000),
+    Waiter ! give_up,
     receive {waiter, gave_up} -> ok
     after 5000 -> ct:fail(never_gave_up)
     end,

@@ -27,6 +27,7 @@ the node's life.
          a_builder_killed_before_it_finishes_releases_what_it_took/1,
          instantiating_and_destroying_does_not_grow_the_store/1,
          touching_a_table_and_destroying_leaves_no_cache/1,
+         a_trapping_start_hands_back_what_it_left_behind/1,
          two_instances_of_one_module_share_no_mutable_state/1,
          two_modules_in_one_process_do_not_borrow_each_others_functions/1,
          a_keeper_restart_keeps_the_registry/1,
@@ -49,6 +50,7 @@ all() ->
      a_builder_killed_before_it_finishes_releases_what_it_took,
      instantiating_and_destroying_does_not_grow_the_store,
      touching_a_table_and_destroying_leaves_no_cache,
+     a_trapping_start_hands_back_what_it_left_behind,
      two_instances_of_one_module_share_no_mutable_state,
      two_modules_in_one_process_do_not_borrow_each_others_functions,
      a_keeper_restart_keeps_the_registry,
@@ -364,6 +366,26 @@ touching_a_table_and_destroying_leaves_no_cache(_Config) ->
              ok = wasm:destroy(I)
          end || _ <- lists:seq(1, 200)],
     ?assertEqual([], [K || {{wasm_table_cache, _} = K, _} <- get()]).
+
+%% A start function that traps keeps its instance on purpose: the specification
+%% says the store keeps what instantiation wrote, and `linking.wast` requires a
+%% call through a reference such a module left in an imported table to work
+%% afterwards. What was wrong was that nobody was handed the instance, so its
+%% memories were held until the *building process* exited, and a long-lived
+%% builder that instantiates many trapping modules never gets them back.
+a_trapping_start_hands_back_what_it_left_behind(_Config) ->
+    Base = wasm_engine:pages_in_use(),
+    Mod = compile(~"(module (memory 4 4)
+                            (func $s (unreachable))
+                            (start $s))"),
+    {error, Err} = wasm:instantiate(Mod, #{}),
+    ?assertMatch(#{class := trap}, Err),
+    %% Still charged, which is the half that is deliberate.
+    ?assertEqual(Base + 4, wasm_engine:pages_in_use()),
+    %% And reachable, which is the half that was missing.
+    Inst = maps:get(instance, maps:get(ctx, Err)),
+    ok = wasm:destroy(Inst),
+    ?assertEqual(Base, wasm_engine:pages_in_use()).
 
 %%% -------------------------------------------------------------- restarts ---
 

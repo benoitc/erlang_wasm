@@ -82,16 +82,43 @@ the most tempting wrong claim available about this design. A process is a
    timeout, which the specification defines as waiting forever: it consumes no
    fuel and nothing here will interrupt it.
 
-5. **Timing and microarchitectural side channels are not addressed.** Nothing
+5. **A start function that traps keeps its instance.** The specification
+   requires it: the store keeps what instantiation wrote, so a module that
+   fills an imported memory and then traps has to leave those bytes behind.
+   The pages, tables and globals it took stay held. In a long-lived builder
+   that instantiates many modules, a hostile one can repeat this until the node
+   budget is gone.
+
+   The instance comes back in the error so you can end it when you know nothing
+   escaped:
+
+   ```erlang
+   case wasm:instantiate(Mod, Imports) of
+       {ok, Inst} ->
+           {ok, Inst};
+       {error, #{ctx := #{instance := Inst}} = Error} ->
+           ok = wasm:destroy(Inst),
+           {error, Error};
+       {error, Error} ->
+           {error, Error}
+   end.
+   ```
+
+   Do not destroy it if another instance imported something from this one and
+   may still reach what it wrote. Building each instantiation in its own
+   short-lived process is the other answer, and the one `docs/worker.md`
+   already recommends.
+
+6. **Timing and microarchitectural side channels are not addressed.** Nothing
    here stops a co-tenant module measuring shared cache behaviour. A shared BEAM
    node is not a boundary against that class of attack; only OS-level or
    hardware separation is.
 
-6. **An inline call cannot be interrupted.** `wasm:call/3` runs in your process.
+7. **An inline call cannot be interrupted.** `wasm:call/3` runs in your process.
    A module looping with `fuel => infinity` hangs you and cannot be killed
    without killing you. Use a worker for anything untrusted.
 
-7. **WASI path resolution has a residual race without the NIF.** On the
+8. **WASI path resolution has a residual race without the NIF.** On the
    `fallback` backend, a component can be swapped for a symlink between the
    check and the open. Check `wasi_fs:backend()`; on `fallback`, do not point a
    preopen at a directory a hostile party can write to concurrently.

@@ -2241,3 +2241,86 @@ one.
 one order of magnitude of Cranelift on arithmetic and ahead of it at the Erlang
 boundary. On a bytecode interpreter compiled to wasm it is two orders. Where
 the tier cannot finish in time, there is no tier.
+
+## Where the tier's compile time goes
+
+Measured to answer "get hot code compiled sooner". QuickJS, the 223-function
+hot set the default policy actually compiles, box at load 7 to 30 where noted.
+
+### The SSA optimiser buys nothing and costs 68 seconds
+
+| quality | compile, 223 funcs | warm `_start` | speedup |
+| --- | ---: | ---: | ---: |
+| `baseline` | **54.8 s** | 141.1 ms | 13.1x |
+| `full` | **123.1 s** | 142.1 ms | 13.0x |
+
+This default has been both ways. It went to `full` because the optimiser was
+measured at 10% on QuickJS and **86% on a tight arithmetic loop**, 2.51 ns an
+iteration against 4.66. That is no longer reproducible: the same loop over five
+interleaved pairs is **3.35 ns either way**, memory access is 28.58 against
+28.42 ns, and bulk copy is 102.1 ms against 102.0. The generator changed
+underneath the trade, and whatever the optimiser was recovering `wasm_core` no
+longer leaves for it. `baseline` is the default again.
+
+### It is all the OTP compiler
+
+| | |
+| --- | ---: |
+| lowering wasm IR to Core (`wasm_core:forms/5`) | **362.8 ms** |
+| `compile:forms/2` on that Core | **53,928.9 ms** |
+| | **99.3% compiler** |
+
+223 functions produce **10.9 MB** of BEAM. Nothing about the front end is worth
+optimising for this; the whole cost is what the OTP compiler does with what it
+is handed.
+
+### Cost is linear in what is generated, and I was wrong about why
+
+Compiling prefixes of the hot set:
+
+| funcs | compile | BEAM |
+| ---: | ---: | ---: |
+| 16 | 30.0 s | 6212 KB |
+| 32 | 40.0 s | 8647 KB |
+| 64 | 43.2 s | 9556 KB |
+| 128 | 47.0 s | 10395 KB |
+| 223 | 49.5 s | 10883 KB |
+
+**Sixteen functions already cost 30 seconds**, and 207 more add 65%. My first
+reading of that was that a few tiny functions explode: function 45 reports "24
+instructions" and generates 1.9 MB. That was wrong, and the mistake was mine:
+`length(IR)` counts *top-level* terms and a whole function nests inside one
+`block`, so it measures nothing. Flattened, function 45 is 98,191 words.
+
+Per function, against the real size:
+
+| idx | bytes | ms | vars | ir words | bytes/word |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 45 | 1,897,524 | 8403 | 60 | 98,191 | 19.3 |
+| 158 | 1,559,744 | 9373 | 37 | 98,262 | 15.9 |
+| 46 | 1,018,748 | 4345 | 32 | 61,554 | 16.6 |
+| 48 | 473,760 | 1812 | 16 | 32,590 | 14.5 |
+| 80 | 107,176 | 320 | 9 | 8,071 | 13.3 |
+
+**Bytes per IR word is 11 to 19 whatever the function looks like**, and barely
+moves with the number of locals, so the locals-as-arguments shape is not
+exploding either. There is no pathology. Code size is linear in IR size,
+compile time is linear in code size, and the first sixteen cost thirty seconds
+because they are the big ones.
+
+### What that means for compiling sooner
+
+**Sharding for early partial delivery is worth much less than it looks.** A
+16-function first shard is 55% of the whole cost, because the functions worth
+compiling are the expensive ones to compile. Choosing a first shard by *IR
+words* rather than by count would compile quickly and would compile the wrong
+functions, which is [[compiled-tier-coverage-not-speed]] over again.
+
+**Sharding for parallelism is the lever.** The units are independent BEAM
+modules and `compile:forms/2` is 99.3% of the work, so N shards compile on N
+schedulers. Four functions are about 19 seconds of the 54, and this box has 14
+cores.
+
+The remaining front is bytes per IR word. Twelve to nineteen bytes of BEAM per
+word of wasm IR is what sets the floor under all of it, and nothing here has
+looked at why.

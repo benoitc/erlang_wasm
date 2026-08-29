@@ -1,0 +1,27 @@
+_build/
+# ex_doc writes its site here; the sources are in docs/
+doc/
+priv/*.so
+priv/*.dll
+*.beam
+*.dump
+erl_crash.dump
+.rebar3/
+rebar3.crashdump
+
+# The specification test suite is upstream's, not vendored. Clone it with
+#   git clone --depth 1 https://github.com/WebAssembly/testsuite.git
+# wasm_spec_SUITE skips with that message when it is absent, so a fresh clone
+# still runs every other suite.
+/testsuite
+test/fixtures/spec/
+test/fixtures/lang/
+
+# Built by bench/cross/README.md, not checked in.
+bench/cross/loop.wasm
+priv/*.dSYM/
+
+# The WASI test suite, also upstream. Clone it with
+#   git clone --depth 1 --branch prod/testsuite-base https://github.com/WebAssembly/wasi-testsuite.git
+# wasi_conformance_SUITE skips with that message when it is absent.
+/wasi-testsuite

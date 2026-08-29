@@ -1,0 +1,17 @@
+{application, wasm, [
+    {description, "A WebAssembly runtime implemented in Erlang/OTP"},
+    %% The OTP application is `wasm'; the Hex package is `erlang_wasm', because
+    %% `wasm' on hex.pm is not ours. Depend on it as
+    %% {deps, [{wasm, {pkg, erlang_wasm}}]}.
+    {pkg_name, erlang_wasm},
+    {vsn, "0.1.0"},
+    {registered, [wasm_sup, wasm_engine, wasm_module_cache]},
+    {mod, {wasm_app, []}},
+    {applications, [kernel, stdlib, crypto]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/benoitc/erlang_wasm"}]},
+    {files, ["src", "include", "c_src", "scripts", "examples", "docs",
+             "rebar.config", "README.md", "LICENSE", "CHANGELOG.md"]}
+]}.

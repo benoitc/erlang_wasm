@@ -93,6 +93,31 @@ false `Unknown function cerl:c_atom/1`. Then it caught a fabricated partial
 `#st{}` built to fit `indirect_target/4`'s old signature, with `locals`, `fuel`
 and `max_depth` undefined. The right fix was to change the signature.
 
+**A function-to-module tuple in `#st.code`, for sharding.** To compile one wasm
+module into several generated ones, the interpreter has to know which one holds
+a given function. The obvious shape is a tuple indexed by function number, read
+in `wasm_exec:do_call/4` instead of calling in to be told `{error,
+not_compiled}` -- strictly less work on the path it replaced, and it removes a
+cross-module call.
+
+It cost **8% of a QuickJS run**, and the whole shape was built twice to find
+out where: once with the tuple looked up in the process dictionary at the
+crossing, once with it emitted as a literal into the generated code so there is
+no lookup at all. Both measured the same 8%, so it is neither. Base-first and
+head-first orderings both showed it, so it is not the running order either.
+Generated code grew by 22 KB of 10.9 MB, so it is not size.
+
+That leaves `do_call/4` itself, and this is the fourth time an extra call on
+that path has cost far more than what it does: see the operand-cache entry
+points, the threaded locals, and the `branch/3` traversal. The mechanism is
+still unproven and `run/3`'s two hundred clauses are still the suspect.
+
+**Reverted, and the design changed rather than the measurement.** Shards do not
+need the interpreter to know where anything lives: shard 1's `invoke/6` can
+call shard 2's by name, as a literal, when it is handed an index it does not
+hold. The chain costs one call per miss *inside generated code*, and
+`wasm_exec` is untouched. That is what to build.
+
 ## Numbers that were withdrawn
 
 **The QuickJS benchmark arm never ran any JavaScript.** For its entire

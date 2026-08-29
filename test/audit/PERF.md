@@ -2324,3 +2324,31 @@ cores.
 The remaining front is bytes per IR word. Twelve to nineteen bytes of BEAM per
 word of wasm IR is what sets the floor under all of it, and nothing here has
 looked at why.
+
+### A tuple in `#st.code` costs 8%, twice, for reasons still unexplained
+
+Sharding needs the interpreter to know which generated module holds a function.
+A tuple indexed by function number, read in `wasm_exec:do_call/4`, replaces a
+cross-module call that returned `{error, not_compiled}`: strictly less work.
+
+`realbench` on qjs with the tier on, five interleaved pairs, run 3 of each:
+
+| | base | with the tuple |
+| --- | ---: | ---: |
+| 1 | 181.7 | 201.2 |
+| 2 | 182.8 | 192.8 |
+| 3 | 191.1 | 203.7 |
+| 4 | 186.3 | 200.2 |
+| 5 | 188.5 | 200.0 |
+
+No overlap. Built a second time with the tuple as a *literal* in the generated
+code so the crossing does no lookup at all: 193.8, 201.0 against 178.6 base,
+and head ran **first** in those, so it is not the ordering. Generated code grew
+22 KB of 10,905, so it is not size. The literal is shared, as expected.
+
+Reverted. It is the fourth time an extra call on `do_call`/`branch`/`run` has
+cost multiples of what it does, and the mechanism is still unproven.
+
+**The design changes instead.** Shards can chain in generated code: shard 1's
+`invoke/6` calls shard 2's by name when handed an index it does not hold, and
+the interpreter is not involved at all.

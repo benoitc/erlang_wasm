@@ -174,9 +174,13 @@ functions each, which is why it is affordable there and nowhere else.
 
 ## Short notes
 
-- `#{compile_quality => baseline}` skips the OTP compiler's SSA optimiser:
-  about 2.6x less compile time, at a cost that is 10% on a bytecode interpreter
-  and 86% on tight arithmetic. Figures in `test/audit/PERF.md`.
+- `baseline` is the default: it skips the OTP compiler's SSA optimiser, which
+  costs **123.1 seconds against 54.8** on QuickJS's hot set and buys nothing
+  measurable. The warm run is 141.1 ms against 142.1, and a tight arithmetic
+  loop is 3.35 ns an iteration either way over five interleaved pairs. Ask for
+  `#{compile_quality => full}` if you find a workload where it pays; the 86%
+  penalty this default once existed to avoid is no longer reproducible.
+  Figures in `test/audit/PERF.md`.
 - Turning the tier on by default is a decision that has not been made. Every
   gate passes; the recommendation is still no, because it is 8.4x on one real
   workload and flat on another.

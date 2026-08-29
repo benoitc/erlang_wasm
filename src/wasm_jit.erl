@@ -467,14 +467,29 @@ generate(Inst, Limits, Mod, Token, Executed) ->
             ok = wasm_code_slots:abort(Token),
             error;
         Unit ->
-            %% `full` unless the caller asks for `baseline`. The SSA
-            %% optimiser was measured at 10% of run time on QuickJS, which made
-            %% it look skippable, and at 86% on a tight arithmetic loop, which
-            %% is what it is actually for. It is affordable again now that
-            %% compilation is off the calling process and sized to the hot set:
-            %% the 74 seconds it cost on all 1666 functions is about 8 on 223
-            %% and nobody is waiting for either. See `wasm_core:module/5`.
-            Mode = maps:get(compile_quality, Limits, full),
+            %% `baseline` unless the caller asks for `full`, and this default
+            %% has now been both ways.
+            %%
+            %% It was `baseline`, then `full`, because the SSA optimiser was
+            %% measured at 10% of run time on QuickJS and **86% on a tight
+            %% arithmetic loop**: 2.51 ns an iteration against 4.66. That is a
+            %% real measurement and it is no longer reproducible. The same loop,
+            %% five interleaved pairs, is 3.35 ns either way, and QuickJS's warm
+            %% run is 141.1 ms at `baseline` against 142.1 at `full`. Memory
+            %% access and bulk copy are level too. The generator changed
+            %% underneath the trade: the memory path was rewritten and the
+            %% arithmetic helpers inlined, and whatever the optimiser was
+            %% recovering, `wasm_core` no longer leaves for it.
+            %%
+            %% What it still costs is the compile: **123.1 seconds against 54.8**
+            %% on QuickJS's 223-function hot set. So it is 68 seconds of latency
+            %% before any compiled code exists, buying one millisecond of a
+            %% 141-millisecond run.
+            %%
+            %% `#{compile_quality => full}` asks for the old behaviour. If a
+            %% workload is found where it pays, this comment is where to record
+            %% it. See `test/audit/PERF.md`.
+            Mode = maps:get(compile_quality, Limits, baseline),
             {_Name, Gen} = Token,
             Stamp = stamp(Inst, Gen),
             case artifact(Inst, Mod, Unit, Mode, Stamp) of

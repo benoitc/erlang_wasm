@@ -35,6 +35,7 @@ eventually refuses every allocation on the node.
 -export([table_put/2, table_get/1, table_forget/1]).
 -export([cell_put/2, cell_get/1, cell_forget/1]).
 -export([intern_rec_group/1, ensure_store/0]).
+-export([rec_group_limit/0, rec_groups_in_use/0]).
 -export([ensure_waiters/0, ensure_waiter_table/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -51,6 +52,9 @@ eventually refuses every allocation on the node.
 
 %% 1 GiB of linear memory across the whole node unless configured otherwise.
 -define(DEFAULT_PAGE_LIMIT, 16384).
+%% Distinct recursive type groups this node will intern. A row is never removed
+%% (see `intern_rec_group/1'), so this is the whole bound on that table.
+-define(DEFAULT_REC_GROUP_LIMIT, 100000).
 
 %% The largest a table may become. Not a node-wide budget: it bounds the work
 %% one `table.grow' can be asked to do, since a table's declared maximum may be
@@ -180,6 +184,22 @@ new_counters() ->
 configured_limit() ->
     application:get_env(wasm, page_limit, ?DEFAULT_PAGE_LIMIT).
 
+-doc """
+How many distinct recursive type groups this node may intern.
+
+Set it with `application:set_env(wasm, max_rec_groups, N)`. The default is high
+enough that no legitimate workload reaches it: a real module declares tens of
+groups and the interning is shared, so this is a bound on churn from modules
+that keep arriving with types nothing has seen before.
+""".
+-spec rec_group_limit() -> pos_integer().
+rec_group_limit() ->
+    application:get_env(wasm, max_rec_groups, ?DEFAULT_REC_GROUP_LIMIT).
+
+-doc "How many are interned. Never goes down: see `intern_rec_group/1`.".
+-spec rec_groups_in_use() -> non_neg_integer().
+rec_groups_in_use() -> atomics:get(counters_ref(), ?SLOT_TYPE_IDS).
+
 %%% --------------------------------------------------------- table storage ---
 %%
 %% Table contents live here rather than inside an instance, because a table can
@@ -225,6 +245,24 @@ intern_rec_group(Key) ->
     case ets:lookup(?TABLES_TAB, {rec_group, Key}) of
         [{_, Id}] -> Id;
         [] ->
+            %% Bounded, because a row here is never removed and never can be: a
+            %% type id is compared by `ref.eq` and by import matching, so
+            %% dropping one would silently make two different types the same for
+            %% whatever module still holds it, and nothing here knows when the
+            %% last such module is gone. A `#module{}` is a plain term with no
+            %% lifetime to hang a reference count on.
+            %%
+            %% So the table grows for the life of the node, and a caller feeding
+            %% it distinct type groups grew it without bound while the module
+            %% cache beside it stayed bounded. This turns that into a limit that
+            %% refuses a module, which is what every other node-wide budget here
+            %% does: `wasm_engine:set_page_limit/1` for pages,
+            %% `max_resident_modules` for the cache.
+            rec_groups_in_use() < rec_group_limit()
+                orelse wasm_error:invalid(
+                         too_many_rec_groups,
+                         ~"the node's recursive type table is full",
+                         #{limit => rec_group_limit()}),
             Id = atomics:add_get(counters_ref(), ?SLOT_TYPE_IDS, 1),
             case ets:insert_new(?TABLES_TAB, {{rec_group, Key}, Id}) of
                 true -> Id;

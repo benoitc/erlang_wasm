@@ -329,8 +329,17 @@ grow(#mem{id = Res, max = Max, index_type = IdxType} = M, Delta) ->
             New = Pages + Delta,
             try extend(M, Pages, New) of
                 Chunks ->
-                    ok = wasm_keeper:grow_commit(Res, GrowRef, Chunks, New),
-                    {ok, Pages, M#mem{chunks = Chunks, pages = New}}
+                    case wasm_keeper:grow_commit(Res, GrowRef, Chunks, New) of
+                        ok ->
+                            {ok, Pages, M#mem{chunks = Chunks, pages = New}};
+                        %% The keeper restarted between the reservation and
+                        %% here and gave the pages back, so this growth never
+                        %% happened. The extension is dropped with the record
+                        %% that would have carried it, and the guest gets -1,
+                        %% which `memory.grow` allows for any refusal.
+                        stale ->
+                            {error, grow_error(gone)}
+                    end
             catch
                 %% Dying here is handled by the keeper's monitor. Surviving a
                 %% failure is not, so the growth has to be given back or every

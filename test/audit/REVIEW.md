@@ -562,3 +562,72 @@ are five confirmed defects, one of them a crash introduced by my own fix, one a
 node-wide accounting corruption reachable from ordinary linking, one a
 node-wide denial of service reachable by a guest with `resolve => allow`, and
 two documentation claims about safety that the code does not implement.
+
+---
+
+# Second audit: lifecycle and crash recovery
+
+Compliance was signed off and leak and deadlock safety was not: 397 tests, 65,481
+assertions in both phases, xref and dialyzer clean, and eight findings against
+the lifetimes around all of it. Five High. Every one was read at the line cited
+before anything was changed, and every one reproduced.
+
+**They are one defect, eight times.** Each piece of state below is released
+either by an `after` block or by a process staying alive, and `exit(Pid, kill)`
+skips the first and is the documented way this runtime stops runaway code. The
+project solved this once for memories, tables and globals: `wasm_keeper` holds
+tokens naming the process whose death releases them. These extend that to the
+state left out.
+
+Two of them are the same reasoning copied without its consequence.
+`wasm_code_slots`'s moduledoc says a stuck lease "costs speed and never safety",
+because callers interpret instead, and adds that "`wasm_heap` accepts the same
+exposure on the same reasoning". For the heap the consequence is not a slowdown:
+collection stops for good.
+
+| # | finding | closed by |
+| ---: | --- | --- |
+| 1 | a killed reader pins the heap lease and collection never runs again | `2ce563d` |
+| 2 | a collector killed between taking exclusivity and marking itself makes readers spin for ever; the remembered set was cleared before the watermark was published | `2ce563d` |
+| 3 | a keeper restart mid-growth loses the transaction, leaving the memory charged for pages the guest cannot see and reporting them as the previous size | `b58dcfc` |
+| 4 | `wasm:destroy/1` never released the code-slot lease, so distinct modules pinned the sixteen slots one at a time | `faa1f76` |
+| 5 | the per-process table array cache was never erased | `01fbd26` |
+| 6 | the node-wide recursive type table had no bound | `e9b4b58` |
+| 7 | a trapped start function's instance was reachable by nobody | `d839fe4` |
+| 8 | a timed-out module-cache caller was still claimed; `atomic.notify` could send after a waiter had flushed | `c2d6e24` |
+
+## A ninth, found by testing the third
+
+`grow_abort` never removed the resource from the keeper's `growing` map, which
+the commit path and the `DOWN` handler both do. `grow_begin` queues behind that
+mark on a `gen_server:call` with no timeout, so **one aborted growth blocked
+every later growth of that memory for ever**, with no error and nothing to time
+out. `wasm_memory:grow/3` only aborts when extending raises, which is why it
+survived: it is on the path nothing ordinarily takes.
+
+This is the deadlock the audit looked for and reported as absent.
+
+## Three tests that would have passed anyway
+
+The reason each fix here landed with a test run against the *previous* commit
+first.
+
+- `wasm_jit_lifetime_SUITE`'s `kill_compilers/0` read the lease map's keys,
+  which are `{instance, Id}` tuples, and filtered them with `is_pid/1`. It
+  killed nothing, and `a_compiler_killed_mid_flight_leaves_no_slot_behind` had
+  been passing by doing nothing.
+- The `atomic.notify` race is nanoseconds wide. Two thousand rounds of racing
+  for it landed in it zero times, so the first version of that case passed
+  against the defect. `wasm_wait` now carries a test-only sync point between the
+  claim and the send.
+- The module-cache case first drove a real deadline, which raced the compile,
+  and its waiter died on the unknown call, which is a *different* reason for the
+  claim not to appear. Both had to go before it could fail for the right one.
+
+## Not a defect
+
+Raw instances default to infinite fuel, and blocking host calls and a
+specification-defined `memory.atomic.wait` consume none, so inline execution is
+not protected against non-termination. That is the documented design:
+`docs/worker.md` and `wasm_exec`'s moduledoc both say a killable worker and a
+wall clock are required. Nothing here changes it.

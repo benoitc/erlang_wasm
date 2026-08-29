@@ -134,6 +134,7 @@ call(Request) ->
     try gen_server:call(?SERVER, Request, ?CALL_TIMEOUT)
     catch
         exit:{timeout, _} ->
+            ok = gave_up(Request),
             {error, #{class => link, kind => cache_timeout,
                       msg => <<"module cache did not answer in time">>,
                       ctx => #{request => element(1, Request),
@@ -148,6 +149,18 @@ call(Request) ->
                       ctx => #{request => element(1, Request),
                                reason => Reason}}}
     end.
+
+%% Tell the server this caller is no longer waiting, so it is not given a claim
+%% it has no handle for and will never release. Only `acquire' can leave one
+%% behind, and a failure here leaves exactly the behaviour that was there before
+%% the message existed, so it is not worth raising over.
+gave_up({acquire, Hash}) ->
+    try gen_server:call(?SERVER, {gave_up, Hash}, 5000) of
+        _ -> ok
+    catch exit:_ -> ok
+    end;
+gave_up(_Other) ->
+    ok.
 
 -doc """
 Drop your claim. The module stays resident until the last holder goes.
@@ -214,6 +227,29 @@ handle_call({acquire, Hash}, {Pid, _} = From, State) ->
         error ->
             acquire_missing(Hash, From, State)
     end;
+
+%% A waiter that gave up.
+%%
+%% `stored` claims for everybody in the waiting list that is still alive, and a
+%% caller whose `gen_server:call/3` timed out is very much alive: it got an
+%% error, has no handle, and will never release, so its claim pinned the module
+%% for the life of the node. Being told is the only way the server can know, and
+%% because it is a call into the same serialised process there are exactly two
+%% orders and both end correctly: before `stored`, this takes the caller out of
+%% the waiting list so no claim is made; after it, the claim is dropped.
+%%
+%% `drop_claim/3` is already a no-op for a process that claimed nothing, which
+%% is what makes the first order safe.
+handle_call({gave_up, Hash}, {Pid, _}, State) ->
+    Compiling =
+        case maps:find(Hash, State#state.compiling) of
+            {ok, {Compiler, Waiting}} ->
+                maps:put(Hash, {Compiler, [W || {P, _} = W <- Waiting, P =/= Pid]},
+                         State#state.compiling);
+            error ->
+                State#state.compiling
+        end,
+    {reply, ok, drop_claim(Pid, Hash, State#state{compiling = Compiling})};
 
 handle_call({stored, Hash, Size}, {Pid, _}, State0) ->
     {_Compiler, Waiting} = maps:get(Hash, State0#state.compiling, {Pid, []}),

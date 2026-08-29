@@ -220,13 +220,26 @@ run_start(#module{start = undefined}, Inst, _Opts) ->
 %% `foreign_reference' trap.
 %%
 %% So the instance stays, reachable through whatever it wrote, and what it
-%% holds is released when the process that built it exits. Nobody is handed the
-%% handle, so there is no earlier moment at which anything could release it.
+%% holds is released when the process that built it exits.
+%%
+%% It is *handed over* now, in the error's context under `instance`. It used to
+%% be dropped on the floor, and "the builder exits" is not a bound in a process
+%% that builds many: every trapping instantiation left its memories, tables and
+%% globals held for the life of that process, with no handle anywhere to release
+%% them through. A caller that knows nothing escaped can now `destroy/1` it, and
+%% one that does not can ignore the field and get exactly the old behaviour.
 run_start(#module{start = F}, Inst, Opts) ->
     case invoke(Inst, F, [], Opts) of
         {ok, _} -> {ok, Inst};
-        {error, _} = E -> E
+        {error, Err} -> {error, abandoned(Err, Inst)}
     end.
+
+%% Only where there is somewhere to put it. An error from a host function is
+%% whatever that function returned and is not this module's to reshape.
+abandoned(#{ctx := Ctx} = Err, Inst) when is_map(Ctx) ->
+    Err#{ctx := Ctx#{instance => Inst}};
+abandoned(Err, _Inst) ->
+    Err.
 
 %%% ----------------------------------------------------------------- calls ---
 
@@ -597,6 +610,12 @@ destroy(Inst) ->
                                                     wasm_global:is_global(G)],
               ok
           end),
+    %% The compiled code this instance may have claimed. Same argument as the
+    %% memories above: the lease names the instance, so it goes when the
+    %% instance does, and until this line it went only when the owning process
+    %% died. A process serving many distinct modules pinned the sixteen slots
+    %% one at a time and then interpreted for ever.
+    _ = wasm_error:capture(fun() -> wasm_jit:release(Inst) end),
     %% The object store goes when the last instance sharing it goes, not with
     %% the first: linked instances hold references into one store.
     ok = wasm_heap:delete(Inst#inst.heap, Inst#inst.id),

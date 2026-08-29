@@ -96,9 +96,23 @@ new(#tabletype{limits = #limits{min = Size}} = TT, Default, Opts) ->
 acquire({wasm_table, Id, _V, _TT}, Token, Owner) ->
     wasm_keeper:acquire(Id, Token, Owner).
 
--doc "Remove a holder. The table goes when the last one lets go.".
+-doc """
+Remove a holder. The table goes when the last one lets go.
+
+Drops this process's cached copy of the array as well. The cache is keyed by
+table id and lives in the process dictionary, so nothing but this call and
+process death ever removed one: an instance per request, which is the shape
+`docs/worker.md` recommends, left one whole array per request in the worker for
+as long as the worker lived.
+
+Erasing here is safe even when another instance in this process still holds the
+table, because the entry is a cache: the next `array_of/1` reloads it from the
+store and pays one `ets:lookup` for doing so.
+""".
 -spec release(table(), wasm_keeper:token()) -> ok.
-release({wasm_table, Id, _V, _TT}, Token) -> wasm_keeper:release(Id, Token).
+release({wasm_table, Id, _V, _TT}, Token) ->
+    _ = erase({wasm_table_cache, Id}),
+    wasm_keeper:release(Id, Token).
 
 -doc "This table's registry identity.".
 -spec resource(table()) -> wasm_keeper:resource().

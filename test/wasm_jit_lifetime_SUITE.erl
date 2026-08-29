@@ -35,7 +35,8 @@ all() ->
      many_processes_compiling_at_once_all_answer_the_same,
      more_modules_than_slots_still_all_answer,
      hashed_modules_contending_for_slots_all_answer,
-     a_metered_invocation_never_reaches_generated_code].
+     a_metered_invocation_never_reaches_generated_code,
+     destroying_an_instance_gives_its_slot_lease_back].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -427,9 +428,41 @@ a_metered_invocation_never_reaches_generated_code(_) ->
     ?assert(maps:get(entered, wasm_jit:counts()) > 0),
     ok = wasm:destroy(I).
 
+destroying_an_instance_gives_its_slot_lease_back(_) ->
+    %% Compiling takes an instance lease on the slot, and it is the *instance*
+    %% that owns it, so `wasm:destroy/1' has to hand it back. It did not: the
+    %% lease was released only when the owning process died, and a long-lived
+    %% process serving many distinct modules therefore pinned slots one by one
+    %% until the tier was off for good.
+    %%
+    %% Distinct hashed modules, because two instances of one module share a
+    %% slot and would hide the accumulation behind a single lease.
+    ?assertEqual(0, instance_leases()),
+    N = length(wasm_code_slots:slots()) + 4,
+    [begin
+         M = hashed(I),
+         {ok, Inst} = wasm:instantiate(M, #{}, sync_opts()),
+         {ok, _} = wasm:call(Inst, ~"f", [1]),
+         ok = wasm:destroy(Inst)
+     end || I <- lists:seq(1, N)],
+    ?assertEqual(ok, until(fun() -> instance_leases() =:= 0 end, 5000),
+                 "destroy left an instance lease on a code slot"),
+    %% And the pool is usable afterwards, which is the consequence that matters:
+    %% with the leases stranded there was no free slot left and every later
+    %% module interpreted for the life of the node.
+    ?assert(free_slots() > 0),
+    %% Under 64: `hashed/1' writes the immediate as one signed LEB byte.
+    {ok, J} = wasm:instantiate(hashed(50), #{}, sync_opts()),
+    ?assertEqual({ok, [51]}, wasm:call(J, ~"f", [1])),
+    ok = wasm:destroy(J).
+
 %%% -------------------------------------------------------------- helpers ---
 
 opts() -> #{compile => true, compile_after => 1}.
+
+%% On the calling process, so a case that counts leases counts them after the
+%% compilation rather than racing a background compiler.
+sync_opts() -> (opts())#{compile_sync => true}.
 
 call_fresh(M, Opts, Arg) ->
     {ok, I} = wasm:instantiate(M, #{}, Opts),
@@ -500,12 +533,23 @@ loading_slots() ->
 
 %% Whoever is holding a slot in `loading`. There is no api for this, and there
 %% should not be: it exists to be killed from a test.
+%%
+%% The *values*, not the keys. A lease map is `Lease => Owner', so the keys are
+%% `{instance, Id}' tuples and `is_pid/1' over them matched nothing: this killed
+%% no compiler at all, and the case that calls it passed for four months by
+%% doing nothing. The fourth vacuous test in this project.
 kill_compilers() ->
     [begin
-         [exit(Pid, kill) || Pid <- maps:keys(Leases), is_pid(Pid)],
+         [exit(Pid, kill) || Pid <- maps:values(Leases), is_pid(Pid)],
          ok
      end || {_N, _G, {loading, _}, Leases} <- ets:tab2list(wasm_code_slots)],
     ok.
+
+%% Slots holding an instance lease, which is what `wasm:destroy/1' has to give
+%% back. A lease map is `Lease => Owner'.
+instance_leases() ->
+    length([L || {_N, _G, _St, Leases} <- ets:tab2list(wasm_code_slots),
+                 {instance, _} = L <- maps:keys(Leases)]).
 
 compiled_something() -> maps:get(compiled, wasm_jit:counts()) > 0.
 

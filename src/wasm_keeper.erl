@@ -226,11 +226,22 @@ last looked. Concurrent growers queue here rather than being refused.
 grow_begin(Resource, Delta, Ceiling) ->
     call({grow_begin, Resource, Delta, Ceiling}).
 
--doc "Publish the chunk tuple and the new size together, ending the growth.".
--spec grow_commit(resource(), reference(), tuple(), non_neg_integer()) -> ok.
+-doc """
+Publish the chunk tuple and the new size together, ending the growth.
+
+`stale` when the keeper has no record of this growth, which a restart between
+`grow_begin/3` and here produces: it rolled the reservation back, so publishing
+now would put a size into the store that nothing is charged for. The caller
+gives up and the guest sees -1.
+""".
+-spec grow_commit(resource(), reference(), tuple(), non_neg_integer()) ->
+          ok | stale.
 grow_commit(Resource, GrowRef, Chunks, NewPages) ->
     case call({grow_commit, Resource, GrowRef, Chunks, NewPages}) of
         ok -> ok;
+        stale -> stale;
+        %% No keeper at all is not the same as a keeper that disowned this
+        %% growth: nothing rolled anything back, so the local extension stands.
         {error, keeper_unavailable} -> ok
     end.
 
@@ -340,8 +351,16 @@ init([]) ->
     %% are rebuilt from them. Without this the registry would survive and its
     %% death-release would not, which is the worse of the two halves to keep.
     {Held, Mons} = adopt(),
-    {ok, #{held => Held, mons => Mons, growing => #{}, queued => #{},
-           caps => #{}, totals => adopt_totals()}}.
+    %% And the growths in flight, which used to be forgotten. The charge moves
+    %% at `grow_begin` and the size is published at `grow_commit`, so a keeper
+    %% that came up believing nothing was growing left the memory charged for
+    %% pages the guest could not see, and then answered the *next* grow with
+    %% that inflated size as its previous one. `memory.grow` promises the guest
+    %% the size before the growth, so that is a specification violation and not
+    %% only a leak.
+    {Growing, Totals} = adopt_growths(adopt_totals()),
+    {ok, #{held => Held, mons => Mons, growing => Growing, queued => #{},
+           caps => #{}, totals => Totals}}.
 
 %% Rebuilt from the registry on a restart, for the same reason the monitors are.
 %% The caps are not: they belong to instances that are still building or
@@ -349,19 +368,50 @@ init([]) ->
 %% until it is destroyed. Losing a ceiling is the safer half to lose.
 adopt_totals() ->
     ets:foldl(
-      fun({_Res, _Meta, Pages, Holders}, Acc) ->
+      fun({_Res, _Meta, Pages, Holders}, Acc) when is_map(Holders) ->
           maps:fold(fun(Tok, _Owner, A) ->
                         A#{Tok => maps:get(Tok, A, 0) + Pages}
-                    end, Acc, Holders)
+                    end, Acc, Holders);
+         (_Other, Acc) -> Acc
       end, #{}, ?TAB).
 
 adopt() ->
     ets:foldl(
-      fun({Res, _Meta, _Pages, Holders}, Acc) ->
+      fun({Res, _Meta, _Pages, Holders}, Acc) when is_map(Holders) ->
           maps:fold(fun(_Tok, none, A) -> A;
                        (Tok, Pid, A) -> add_held(Pid, Res, Tok, A)
-                    end, Acc, Holders)
+                    end, Acc, Holders);
+         (_Other, Acc) -> Acc
       end, {#{}, #{}}, ?TAB).
+
+%% Growths the previous keeper was holding when it died.
+%%
+%% A live grower keeps its transaction: it is between `extend/3` and
+%% `grow_commit/4` and may still succeed, so the monitor is rebuilt and the
+%% entry restored. A dead one cannot, and its reservation goes back the way the
+%% `DOWN` handler would have given it back.
+%%
+%% The `{growing, Res}` row exists for this and for nothing else. The state map
+%% did not survive the restart and the charge did, which is the asymmetry that
+%% made the defect.
+adopt_growths(Totals) ->
+    Rows = ets:select(?TAB, [{{{growing, '$1'}, '$2'}, [], [{{'$1', '$2'}}]}]),
+    lists:foldl(
+      fun({Res, {GrowRef, Pid, Delta}}, {G, T}) ->
+          case is_process_alive(Pid) of
+              true ->
+                  MonRef = erlang:monitor(process, Pid),
+                  {G#{Res => {GrowRef, Pid, MonRef, Delta}}, T};
+              false ->
+                  true = ets:delete(?TAB, {growing, Res}),
+                  %% `caps` as well as `totals`: `sub_total/3` drops a token's
+                  %% ceiling with its last page, and this runs before the state
+                  %% map exists.
+                  #{totals := T1} =
+                      unreserve(Res, Delta, #{totals => T, caps => #{}}),
+                  {G, T1}
+          end
+      end, {#{}, Totals}, Rows).
 
 handle_call({bequeath, Heir}, _From, State) ->
     %% A no-op when the supervisor created the table itself, which is the
@@ -464,17 +514,33 @@ handle_call({grow_commit, Res, GrowRef, Chunks, NewPages}, _From,
     case maps:find(Res, Growing) of
         {ok, {GrowRef, _Pid, MonRef, _Delta}} ->
             erlang:demonitor(MonRef, [flush]),
+            true = ets:delete(?TAB, {growing, Res}),
             ok = publish(Res, Chunks, NewPages),
             {reply, ok, next_growth(Res, State#{growing := maps:remove(Res, Growing)})};
+        %% A transaction this keeper does not have. It answered `ok` and
+        %% published nothing, so the guest believed it had grown while the store
+        %% still held the old size and the old chunk tuple, and the next grow
+        %% reported the inflated charge as the previous size. `stale` instead,
+        %% and the grower gives up: a refused `memory.grow` is a legal -1 and a
+        %% silently unpublished one is not.
         _ ->
-            {reply, ok, State}
+            {reply, stale, State}
     end;
 
 handle_call({grow_abort, Res, GrowRef}, _From, #{growing := Growing} = State) ->
     case maps:find(Res, Growing) of
         {ok, {GrowRef, _Pid, MonRef, Delta}} ->
             erlang:demonitor(MonRef, [flush]),
-            {reply, ok, next_growth(Res, unreserve(Res, Delta, State))};
+            true = ets:delete(?TAB, {growing, Res}),
+            %% Removed from `growing', which this did not do. The commit path
+            %% and the `DOWN' handler both did, so an aborted growth was the one
+            %% way out that left the resource marked as growing for ever, and
+            %% `grow_begin/3' queues behind that mark on an `infinity' call:
+            %% every later grow of that memory blocked, permanently, with no
+            %% error and no timeout.
+            Left = maps:remove(Res, Growing),
+            {reply, ok,
+             next_growth(Res, unreserve(Res, Delta, State#{growing := Left}))};
         _ ->
             {reply, ok, State}
     end;
@@ -493,6 +559,7 @@ handle_info({'DOWN', MonRef, process, Pid, _Reason},
     S1 = lists:foldl(
            fun({Res, Delta}, S) ->
                Left = maps:remove(Res, maps:get(growing, S)),
+               true = ets:delete(?TAB, {growing, Res}),
                next_growth(Res, unreserve(Res, Delta, S#{growing := Left}))
            end, State, Aborted),
     {noreply, forget_holder(Pid, S1)};
@@ -650,6 +717,15 @@ start_growth(Res, Delta, Ceiling, {Pid, _} = _From, State) ->
                             %% a later release gives them back.
                             true = ets:insert(?TAB, {Res, Meta, New, Holders}),
                             GrowRef = make_ref(),
+                            %% Written beside the charge and in the same table,
+                            %% because the two have to survive together: a
+                            %% keeper that came up with the charge and without
+                            %% the transaction left the memory paying for pages
+                            %% nobody could see. `adopt_growths/1` is the other
+                            %% half of this line.
+                            true = ets:insert(?TAB,
+                                              {{growing, Res},
+                                               {GrowRef, Pid, Delta}}),
                             MonRef = erlang:monitor(process, Pid),
                             S1 = lists:foldl(
                                    fun(T, S) -> add_total(T, Delta, S) end,

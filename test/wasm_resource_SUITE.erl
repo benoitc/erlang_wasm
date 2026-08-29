@@ -26,9 +26,13 @@ the node's life.
          a_failed_build_gives_back_what_it_took/1,
          a_builder_killed_before_it_finishes_releases_what_it_took/1,
          instantiating_and_destroying_does_not_grow_the_store/1,
+         touching_a_table_and_destroying_leaves_no_cache/1,
+         a_trapping_start_hands_back_what_it_left_behind/1,
          two_instances_of_one_module_share_no_mutable_state/1,
          two_modules_in_one_process_do_not_borrow_each_others_functions/1,
          a_keeper_restart_keeps_the_registry/1,
+         a_keeper_restart_mid_growth_leaves_the_size_it_promised/1,
+         an_aborted_growth_does_not_block_the_next_one/1,
          an_engine_restart_keeps_the_store_and_the_waiters/1,
          restarts_under_traffic_leave_nothing_behind/1]).
 
@@ -45,9 +49,13 @@ all() ->
      a_failed_build_gives_back_what_it_took,
      a_builder_killed_before_it_finishes_releases_what_it_took,
      instantiating_and_destroying_does_not_grow_the_store,
+     touching_a_table_and_destroying_leaves_no_cache,
+     a_trapping_start_hands_back_what_it_left_behind,
      two_instances_of_one_module_share_no_mutable_state,
      two_modules_in_one_process_do_not_borrow_each_others_functions,
      a_keeper_restart_keeps_the_registry,
+     a_keeper_restart_mid_growth_leaves_the_size_it_promised,
+     an_aborted_growth_does_not_block_the_next_one,
      an_engine_restart_keeps_the_store_and_the_waiters,
      restarts_under_traffic_leave_nothing_behind].
 
@@ -343,6 +351,42 @@ instantiating_and_destroying_does_not_grow_the_store(_Config) ->
     ?assertEqual(Rows, ets:info(wasm_tables, size)),
     ?assertEqual(Held, wasm_keeper:resources()).
 
+%% The store rows are only half of it. `wasm_table:array_of/1` caches a table's
+%% whole array in the *calling process's* dictionary, and nothing erased it: an
+%% instance per request, which is what `docs/worker.md` recommends, left one
+%% array per request in the worker for as long as the worker lived.
+touching_a_table_and_destroying_leaves_no_cache(_Config) ->
+    Mod = compile(~"(module (table (export \"t\") 2 4 funcref)
+                            (func (export \"n\") (result i32) table.size 0))"),
+    _ = [begin
+             {ok, I} = wasm:instantiate(Mod, #{}),
+             %% Reading the table is what fills the cache. Without this the
+             %% case passes against the defect as well as against the fix.
+             {ok, [2]} = wasm:call(I, ~"n", []),
+             ok = wasm:destroy(I)
+         end || _ <- lists:seq(1, 200)],
+    ?assertEqual([], [K || {{wasm_table_cache, _} = K, _} <- get()]).
+
+%% A start function that traps keeps its instance on purpose: the specification
+%% says the store keeps what instantiation wrote, and `linking.wast` requires a
+%% call through a reference such a module left in an imported table to work
+%% afterwards. What was wrong was that nobody was handed the instance, so its
+%% memories were held until the *building process* exited, and a long-lived
+%% builder that instantiates many trapping modules never gets them back.
+a_trapping_start_hands_back_what_it_left_behind(_Config) ->
+    Base = wasm_engine:pages_in_use(),
+    Mod = compile(~"(module (memory 4 4)
+                            (func $s (unreachable))
+                            (start $s))"),
+    {error, Err} = wasm:instantiate(Mod, #{}),
+    ?assertMatch(#{class := trap}, Err),
+    %% Still charged, which is the half that is deliberate.
+    ?assertEqual(Base + 4, wasm_engine:pages_in_use()),
+    %% And reachable, which is the half that was missing.
+    Inst = maps:get(instance, maps:get(ctx, Err)),
+    ok = wasm:destroy(Inst),
+    ?assertEqual(Base, wasm_engine:pages_in_use()).
+
 %%% -------------------------------------------------------------- restarts ---
 
 %% The registry says who holds what, and it is what decides whether pages ever
@@ -386,6 +430,78 @@ a_keeper_restart_keeps_the_registry(_Config) ->
     ?assertEqual([], wasm_keeper:holders_of(Owned)),
 
     ok = wasm_memory:free(Mem),
+    ?assertEqual(Base, wasm_engine:pages_in_use()).
+
+%% A growth ends three ways: committed, aborted, or the grower died. The commit
+%% path and the `DOWN` handler both took the resource out of `growing`; the
+%% abort path did not, and `grow_begin/3` queues behind that mark on a call with
+%% no timeout. So one abort made every later growth of that memory block for
+%% ever, with no error to see and nothing to time out.
+%%
+%% `wasm_memory:grow/3` only aborts when extending raises, which is why this
+%% survived: it is on the path nothing ordinarily takes.
+an_aborted_growth_does_not_block_the_next_one(_Config) ->
+    Base = wasm_engine:pages_in_use(),
+    {ok, Mem} = wasm_memory:new(1, 8),
+    Res = wasm_memory:resource(Mem),
+    {ok, GrowRef, 1} = wasm_keeper:grow_begin(Res, 4, 8),
+    ok = wasm_keeper:grow_abort(Res, GrowRef),
+    ?assertEqual(1, wasm_keeper:charge_of(Res)),
+    %% From another process and with a deadline, because the defect is a block
+    %% and asserting it from here would hang the suite instead of failing it.
+    Self = self(),
+    Tag = make_ref(),
+    P = spawn(fun() -> Self ! {Tag, wasm_keeper:grow_begin(Res, 2, 8)} end),
+    Second = receive {Tag, R} -> ?assertMatch({ok, _, 1}, R), R
+             after 5000 -> exit(P, kill), ct:fail(a_second_growth_never_started)
+             end,
+    %% Ended explicitly rather than left to the grower's death, so the next case
+    %% does not start while this memory is still mid-transaction.
+    {ok, Second_Ref, _} = Second,
+    ok = wasm_keeper:grow_abort(Res, Second_Ref),
+    wait_until(fun() -> wasm_keeper:charge_of(Res) =:= 1 end, 2000),
+    ok = wasm_memory:free(Mem),
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 2000),
+    ?assertEqual(Base, wasm_engine:pages_in_use()).
+
+%% The charge moves at `grow_begin/3` and the size is published at
+%% `grow_commit/4`, so a keeper that restarts between them has to account for
+%% the half that already happened. It did not: `growing` started empty, the
+%% memory stayed charged for pages the guest could not see, and the commit was
+%% answered `ok` without publishing anything. The next grow then reported the
+%% inflated charge as the size before it, which is the one thing `memory.grow`
+%% promises the guest.
+a_keeper_restart_mid_growth_leaves_the_size_it_promised(_Config) ->
+    Base = wasm_engine:pages_in_use(),
+    {ok, Mem} = wasm_memory:new(1, 8),
+    Res = wasm_memory:resource(Mem),
+    ?assertEqual(1, wasm_keeper:charge_of(Res)),
+
+    %% Begun and not committed, which is where the grower sits while it
+    %% allocates its chunks.
+    {ok, GrowRef, 1} = wasm_keeper:grow_begin(Res, 4, 8),
+    ?assertEqual(5, wasm_keeper:charge_of(Res)),
+
+    Pid = whereis(wasm_keeper),
+    Ref = monitor(process, Pid),
+    exit(Pid, kill),
+    receive {'DOWN', Ref, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
+    wait_until(fun() -> is_pid(whereis(wasm_keeper)) andalso
+                            whereis(wasm_keeper) =/= Pid end, 2000),
+
+    %% This process is alive, so the growth it started is still its own to
+    %% finish: the new keeper rebuilt the transaction rather than forgetting it.
+    ?assertEqual(5, wasm_keeper:charge_of(Res)),
+    ?assertEqual(ok, wasm_keeper:grow_abort(Res, GrowRef)),
+    ?assertEqual(1, wasm_keeper:charge_of(Res)),
+
+    %% One kill, not two. The supervisor allows five restarts in ten seconds and
+    %% this suite spends them: a second kill here took the tree down and the
+    %% *next* case failed instead of this one. The other half of `adopt_growths/1`,
+    %% rolling back a growth whose grower died across the restart, is left to the
+    %% `DOWN` handler it shares an outcome with.
+    ok = wasm_memory:free(Mem),
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 2000),
     ?assertEqual(Base, wasm_engine:pages_in_use()).
 
 %% The store holds every table's contents, every shared global and every

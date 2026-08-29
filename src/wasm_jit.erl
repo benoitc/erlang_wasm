@@ -53,7 +53,7 @@ why it is affordable there and nowhere else.
 moved, because even with all three a refusal still interprets.
 """.
 
--export([entry/3, after_call/2, counts/0, reset_counts/0, await/2]).
+-export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
 -export([reentered/0]).
 -export([compiler_loop/0]).
 -export([dump/1, dump/2]).
@@ -177,6 +177,24 @@ maybe_adopt(Inst, Limits, Entry) ->
                 error -> put(?ASK, true), Entry
             end
     end.
+
+-doc """
+Give back the slot lease this instance took, if it took one.
+
+Called from `wasm:destroy/1` beside the memory, table and global releases, and
+for the same reason: the lease names the *instance*, so it has to go when the
+instance does. Until this existed it went only when the owning process died,
+and a long-lived process serving many distinct modules pinned the slots one at
+a time until the pool was gone and every later module interpreted for the life
+of the node. `wasm_code_slots`'s moduledoc describes exactly this shape as the
+usage it expects and nothing called it.
+
+Idempotent, because `destroy/1` is: releasing a lease that is not there is a
+no-op in `wasm_code_slots:drop/3`, which is the same property that makes a
+double release of a memory harmless.
+""".
+-spec release(#inst{}) -> ok.
+release(Inst) -> wasm_code_slots:release(key(Inst), {instance, Inst#inst.id}).
 
 -doc "How much has been compiled, and how often generated code was entered.".
 -spec counts() -> #{atom() => non_neg_integer()}.

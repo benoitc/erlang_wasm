@@ -22,7 +22,8 @@ all() ->
      a_mutable_field_is_invariant,
      packed_fields_round_trip_through_their_width,
      ref_eq_compares_identity_not_contents,
-     an_i31_allocates_nothing].
+     an_i31_allocates_nothing,
+     the_type_table_is_bounded].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -50,6 +51,44 @@ identical_types_in_separate_groups_are_the_same(_Config) ->
     {ok, Inst} = wasm:instantiate(Mod, #{}),
     ?assertMatch({ok, [1]}, wasm:call(Inst, ~"test_other", [])),
     ok = wasm:destroy(Inst).
+
+%% A row in the node-wide type table is never removed and never can be: an id is
+%% compared by `ref.eq` and by import matching, so dropping one would silently
+%% make two different types the same for whatever module still holds it, and a
+%% `#module{}` is a plain term with no lifetime to count references against. So
+%% the table grew for the life of the node, one row per distinct type group,
+%% while the module cache beside it stayed bounded.
+%%
+%% It is a budget now, like pages and resident modules: a module that would push
+%% the node past it is refused, and nothing already interned is disturbed.
+the_type_table_is_bounded(_Config) ->
+    Old = application:get_env(wasm, max_rec_groups),
+    ok = application:set_env(wasm, max_rec_groups,
+                             wasm_engine:rec_groups_in_use() + 2),
+    try
+        %% Two get in, whatever this node has interned already.
+        ?assertMatch({ok, _}, validate_group(1)),
+        ?assertMatch({ok, _}, validate_group(2)),
+        %% The third is refused, as a value and not as a crash.
+        ?assertMatch({error, #{class := invalid, kind := too_many_rec_groups}},
+                     validate_group(3)),
+        %% And a module whose group is already interned still validates: the
+        %% limit bounds new groups, not use of the ones that exist.
+        ?assertMatch({ok, _}, validate_group(1))
+    after
+        case Old of
+            {ok, V} -> application:set_env(wasm, max_rec_groups, V);
+            undefined -> application:unset_env(wasm, max_rec_groups)
+        end
+    end.
+
+%% A struct wide enough that no other suite has interned this shape, so each of
+%% these really does take a row rather than finding one.
+validate_group(N) ->
+    Fields = lists:duplicate(40 + N, "(field i32) "),
+    {ok, P} = wasm_wat:module(
+                iolist_to_binary(["(module (type (struct ", Fields, ")))"])),
+    wasm_validate:module(P).
 
 %% Inside the type section a type may only name its own group or an earlier
 %% one. A forward reference is unknown even though the index exists once the

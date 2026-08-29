@@ -42,11 +42,18 @@ call inside a worker.
 | `max_host_calls` | calls out through an import, per invocation |
 | `max_memory_pages` | every memory one instance can reach, imports included |
 | node page budget | linear memory across every instance |
+| `max_rec_groups` | distinct recursive type groups interned node-wide |
 
 `max_memory_pages` counts an imported memory, because a module that imports one
 can address every page of it, and it counts a memory once however many import
 slots name it. A memory two instances share grows only as far as the stricter
 of their ceilings allows.
+
+`max_rec_groups` bounds a table whose rows can never be removed: a type id is
+compared by `ref.eq` and by import matching, so dropping one would make two
+different types the same for whatever module still holds it. A module that would
+push the node past the limit is refused with `too_many_rec_groups`. The default
+is 100,000 and a real module declares tens.
 
 `fuel`, `max_depth` and `max_host_calls` belong to the invocation the embedder
 started, not to each entry into the interpreter. A guest that recurses by

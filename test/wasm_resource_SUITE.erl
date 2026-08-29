@@ -26,6 +26,7 @@ the node's life.
          a_failed_build_gives_back_what_it_took/1,
          a_builder_killed_before_it_finishes_releases_what_it_took/1,
          instantiating_and_destroying_does_not_grow_the_store/1,
+         touching_a_table_and_destroying_leaves_no_cache/1,
          two_instances_of_one_module_share_no_mutable_state/1,
          two_modules_in_one_process_do_not_borrow_each_others_functions/1,
          a_keeper_restart_keeps_the_registry/1,
@@ -45,6 +46,7 @@ all() ->
      a_failed_build_gives_back_what_it_took,
      a_builder_killed_before_it_finishes_releases_what_it_took,
      instantiating_and_destroying_does_not_grow_the_store,
+     touching_a_table_and_destroying_leaves_no_cache,
      two_instances_of_one_module_share_no_mutable_state,
      two_modules_in_one_process_do_not_borrow_each_others_functions,
      a_keeper_restart_keeps_the_registry,
@@ -342,6 +344,22 @@ instantiating_and_destroying_does_not_grow_the_store(_Config) ->
     ?assertEqual(Pages, wasm_engine:pages_in_use()),
     ?assertEqual(Rows, ets:info(wasm_tables, size)),
     ?assertEqual(Held, wasm_keeper:resources()).
+
+%% The store rows are only half of it. `wasm_table:array_of/1` caches a table's
+%% whole array in the *calling process's* dictionary, and nothing erased it: an
+%% instance per request, which is what `docs/worker.md` recommends, left one
+%% array per request in the worker for as long as the worker lived.
+touching_a_table_and_destroying_leaves_no_cache(_Config) ->
+    Mod = compile(~"(module (table (export \"t\") 2 4 funcref)
+                            (func (export \"n\") (result i32) table.size 0))"),
+    _ = [begin
+             {ok, I} = wasm:instantiate(Mod, #{}),
+             %% Reading the table is what fills the cache. Without this the
+             %% case passes against the defect as well as against the fix.
+             {ok, [2]} = wasm:call(I, ~"n", []),
+             ok = wasm:destroy(I)
+         end || _ <- lists:seq(1, 200)],
+    ?assertEqual([], [K || {{wasm_table_cache, _} = K, _} <- get()]).
 
 %%% -------------------------------------------------------------- restarts ---
 

@@ -1014,7 +1014,10 @@ unop(Op, A) ->
 emit2(Op, Rest, G0, Exit) ->
     {B, G1} = pop(G0), {A, G2} = pop(G1),
     {V, G3} = var(G2),
-    cerl:c_let([V], binop(Op, A, B), seq(Rest, push(V, G3), Exit)).
+    %% A second name, for an operation that has to look at its own result before
+    %% it can finish. Allocated here because this is where the counter lives.
+    {W, G4} = var(G3),
+    cerl:c_let([V], binop(Op, A, B, W), seq(Rest, push(V, G4), Exit)).
 
 %%% ------------------------------------------------------ inline arithmetic ---
 %%
@@ -1032,15 +1035,25 @@ emit2(Op, Rest, G0, Exit) ->
 %% Values are held signed, exactly as the interpreter holds them, so wrapping is
 %% masking to width and then flipping and subtracting the sign bit: three BIFs
 %% and no test, where a comparison would branch.
-binop(Op, A, B) ->
-    case inline(Op) of
-        false -> call_op(op2, [cerl:c_atom(Op), A, B]);
-        Expr -> Expr(A, B)
+binop(Op, A, B, W) ->
+    case inline_w(Op) of
+        false ->
+            case inline(Op) of
+                false -> call_op(op2, [cerl:c_atom(Op), A, B]);
+                Expr -> Expr(A, B)
+            end;
+        Expr -> Expr(A, B, W)
     end.
+
 
 -define(W32, 16#FFFFFFFF).
 -define(S32, 16#80000000).
 -define(W64, 16#FFFFFFFFFFFFFFFF).
+-define(P64, 16#10000000000000000).
+%% The largest BEAM small integer: 60 bits, signed. A literal at or below this
+%% is an immediate and a literal above it is a bignum, which is the whole
+%% reason `wrap_sum/2` has two range tests instead of one.
+-define(SMALL, 576460752303423487).
 -define(S64, 16#8000000000000000).
 
 %% The four integer-to-f64 conversions, which are *total*: every i32 and i64
@@ -1143,6 +1156,45 @@ test(Erl, A, B) ->
     cerl:c_case(bif(Erl, [A, B]),
                 [cerl:c_clause([cerl:abstract(true)], cerl:abstract(1)),
                  cerl:c_clause([cerl:abstract(false)], cerl:abstract(0))]).
+
+%% The two operations that are cheaper for looking at their own result.
+%%
+%% `wrap(64, _)` masks with 2^64-1 and folds with 2^63, and both literals are
+%% past the 60 bits a BEAM immediate covers, so the whole expression is bignum
+%% arithmetic however small the value is. That is the entire difference between
+%% `i32.add` at 1.26 nanoseconds and `i64.add` at 26.40: the i32 constants are
+%% immediates and the i64 ones are not.
+%%
+%% An i64 is always held in `[-2^63, 2^63)` -- that is the invariant every wrap
+%% maintains -- so a sum or difference of two of them lands in `(-2^64, 2^64)`
+%% and the correction is a comparison and at most one subtraction. Multiply and
+%% shift are not here: their results are unbounded and only the mask answers.
+inline_w(i64_add) -> fun(A, B, W) -> wrap_sum(bif('+', [A, B]), W) end;
+inline_w(i64_sub) -> fun(A, B, W) -> wrap_sum(bif('-', [A, B]), W) end;
+inline_w(_) -> false.
+
+wrap_sum(E, W) ->
+    cerl:c_case(
+      E,
+      [%% Small enough to be a BEAM immediate, which is what almost every value
+       %% in real code is. This clause exists because the *next* one compares
+       %% against 2^63, and a literal that large is itself a bignum: testing
+       %% against it cost about 5.5 nanoseconds a comparison, which was most of
+       %% what was left after the mask went. These bounds are the 60-bit
+       %% immediate range exactly, so the test is register work.
+       cerl:c_clause([W],
+                     bif('and', [bif('>=', [W, cerl:abstract(-?SMALL - 1)]),
+                                 bif('=<', [W, cerl:abstract(?SMALL)])]),
+                     W),
+       %% In range but big enough to be a bignum. Correct, and rare.
+       cerl:c_clause([W],
+                     bif('and', [bif('>=', [W, cerl:abstract(-?S64)]),
+                                 bif('<', [W, cerl:abstract(?S64)])]),
+                     W),
+       cerl:c_clause([W], bif('>=', [W, cerl:abstract(?S64)]),
+                     bif('-', [W, cerl:abstract(?P64)])),
+       cerl:c_clause([W], cerl:abstract(true),
+                     bif('+', [W, cerl:abstract(?P64)]))]).
 
 wrap(32, E) -> bif('-', [bif('bxor', [bif('band', [E, cerl:abstract(?W32)]),
                                       cerl:abstract(?S32)]),

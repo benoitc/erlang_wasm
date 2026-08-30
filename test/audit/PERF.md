@@ -2618,3 +2618,57 @@ of magnitude on a copy of any size, and it applies to `memory.fill`,
 
 QuickJS makes 953 bulk calls a run and will not notice. A memcpy-heavy Rust
 plugin is a different workload, which is what the profiles are for.
+
+## Telling the JIT what validation already proved
+
+Since OTP 25 the JIT emits better arithmetic when the compiler knows a value's
+range: an addition drops from ten instructions to four, a comparison from
+eleven to four, a tuple test from five to three. That range comes from the SSA
+type pass, which `no_ssa_opt` turns off.
+
+This morning `full` bought nothing -- QuickJS 141.1 ms against 142.1 -- and it
+was demoted for costing 123.1 seconds against 54.8 to compile. That measurement
+was correct. It is no longer true, and what changed is the code handed to the
+pass rather than the pass itself.
+
+The immediate-path work above is written as *guards*: `wrap_sum/2` tests
+`W >= -2^63, W < 2^63`, `decode_word/2` tests `W =< 2^59-1`. A guard is how a
+range gets stated, and stating it is all the type pass ever needed. The
+generator had been proving every value's width in validation and throwing it
+away.
+
+`wrap(32, _)` was then given the same shape deliberately, through `inline_w/1`.
+Its constants were immediates already so the branch-free form cost nothing to
+*run*; what it cost was the information. It is faster both ways:
+
+| | before | after |
+| --- | ---: | ---: |
+| `i32.add` | 1.29 | **0.76** |
+
+QuickJS, warmed and timed five times per process:
+
+| quality | ms |
+| --- | ---: |
+| `baseline` | 86.1 to 87.7 |
+| **`full`** | **75.0 to 76.8** |
+
+So `full` is the default again. It still costs **129.3 seconds against 58.1**
+to compile the hot set, and that is what `compile_shards` is for.
+
+### Where the branch ends up
+
+Against its branch point, everything measured moved and nothing regressed:
+
+| | before | after |
+| --- | ---: | ---: |
+| QuickJS, warm | 124.7 ms | **76.5** |
+| `bench/cross/loop.wasm` | 3.35 ns/iter | **2.98** |
+| the i32 memory loop | 28.42 ns/iter | **25.28** |
+| `i64.add` | 26.40 ns | 0.48 |
+| `i64.load` | 39.81 | 7.79 |
+| `i64.store` | 22.55 | 9.49 |
+| `i32.store` | 22.16 | 13.77 |
+| `i32.add` | 1.26 | 0.76 |
+
+**39% on QuickJS**, and the whole of it is one idea: a BEAM immediate holds 60
+bits, and generated code should stay inside them and say so.

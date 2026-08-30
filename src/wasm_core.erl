@@ -1054,6 +1054,7 @@ binop(Op, A, B, W) ->
 %% is an immediate and a literal above it is a bignum, which is the whole
 %% reason `wrap_sum/2` has two range tests instead of one.
 -define(SMALL, 576460752303423487).
+-define(P32, 16#100000000).
 -define(S64, 16#8000000000000000).
 
 %% The four integer-to-f64 conversions, which are *total*: every i32 and i64
@@ -1171,7 +1172,27 @@ test(Erl, A, B) ->
 %% shift are not here: their results are unbounded and only the mask answers.
 inline_w(i64_add) -> fun(A, B, W) -> wrap_sum(bif('+', [A, B]), W) end;
 inline_w(i64_sub) -> fun(A, B, W) -> wrap_sum(bif('-', [A, B]), W) end;
+%% The 32-bit pair is here for a different reason. Its constants are immediates
+%% already, so the branch-free `wrap(32, _)` costs nothing to run -- but it
+%% tells the compiler nothing either, and since OTP 25 the JIT emits far better
+%% code for arithmetic whose range it knows: an addition drops from ten
+%% instructions to four and a comparison from eleven to four. A guard is how
+%% that range gets stated, and validation has already proved it.
+inline_w(i32_add) -> fun(A, B, W) -> wrap_sum32(bif('+', [A, B]), W) end;
+inline_w(i32_sub) -> fun(A, B, W) -> wrap_sum32(bif('-', [A, B]), W) end;
 inline_w(_) -> false.
+
+wrap_sum32(E, W) ->
+    cerl:c_case(
+      E,
+      [cerl:c_clause([W],
+                     bif('and', [bif('>=', [W, cerl:abstract(-?S32)]),
+                                 bif('<', [W, cerl:abstract(?S32)])]),
+                     W),
+       cerl:c_clause([W], bif('>=', [W, cerl:abstract(?S32)]),
+                     bif('-', [W, cerl:abstract(?P32)])),
+       cerl:c_clause([W], cerl:abstract(true),
+                     bif('+', [W, cerl:abstract(?P32)]))]).
 
 wrap_sum(E, W) ->
     cerl:c_case(

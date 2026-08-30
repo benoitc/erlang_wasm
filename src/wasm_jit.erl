@@ -467,29 +467,30 @@ generate(Inst, Limits, Mod, Token, Executed) ->
             ok = wasm_code_slots:abort(Token),
             error;
         Unit ->
-            %% `baseline` unless the caller asks for `full`, and this default
-            %% has now been both ways.
+            %% `full` unless the caller asks for `baseline`, and this
+            %% default has now moved three times. It is worth reading why,
+            %% because the reason it moved back is not the reason it moved.
             %%
-            %% It was `baseline`, then `full`, because the SSA optimiser was
-            %% measured at 10% of run time on QuickJS and **86% on a tight
-            %% arithmetic loop**: 2.51 ns an iteration against 4.66. That is a
-            %% real measurement and it is no longer reproducible. The same loop,
-            %% five interleaved pairs, is 3.35 ns either way, and QuickJS's warm
-            %% run is 141.1 ms at `baseline` against 142.1 at `full`. Memory
-            %% access and bulk copy are level too. The generator changed
-            %% underneath the trade: the memory path was rewritten and the
-            %% arithmetic helpers inlined, and whatever the optimiser was
-            %% recovering, `wasm_core` no longer leaves for it.
+            %% It was `full`, then `baseline`, because the SSA optimiser bought
+            %% *nothing*: QuickJS ran in 141.1 ms against 142.1, a tight
+            %% arithmetic loop was 3.35 ns an iteration either way, and it cost
+            %% 123.1 seconds against 54.8 to compile. That measurement was
+            %% correct and is no longer true.
             %%
-            %% What it still costs is the compile: **123.1 seconds against 54.8**
-            %% on QuickJS's 223-function hot set. So it is 68 seconds of latency
-            %% before any compiled code exists, buying one millisecond of a
-            %% 141-millisecond run.
+            %% What changed is the code handed to it. Since OTP 25 the JIT emits
+            %% far better arithmetic when the compiler knows a value's range --
+            %% an addition drops from ten instructions to four, a comparison
+            %% from eleven to four -- and the range comes from the SSA type
+            %% pass, which is exactly what `no_ssa_opt` turns off. The generator
+            %% used to state no ranges, so there was nothing for the pass to
+            %% find and skipping it was free. It states them now, in the guards
+            %% `wrap_sum/2`, `wrap_sum32/2` and `decode_word/2` are written as,
+            %% and QuickJS is **75.0 to 76.8 ms at `full` against 86.1 to 87.7
+            %% at `baseline`**.
             %%
-            %% `#{compile_quality => full}` asks for the old behaviour. If a
-            %% workload is found where it pays, this comment is where to record
-            %% it. See `test/audit/PERF.md`.
-            Mode = maps:get(compile_quality, Limits, baseline),
+            %% It still costs 129.3 seconds against 58.1 to compile the hot set,
+            %% and that is what `compile_shards` is for.
+            Mode = maps:get(compile_quality, Limits, full),
             {_Name, Gen} = Token,
             Stamp = stamp(Inst, Gen),
             case artifact(Inst, Mod, Unit, Mode, Stamp) of

@@ -2,7 +2,7 @@
 -moduledoc """
 When a module gets compiled, and how a call reaches the result.
 
-You get here from `\wasm:invoke_at/6`. Everything in this module is a policy
+You get here from `wasm`, on the path an invocation takes. Everything here is a policy
 decision on top of two mechanisms that already exist: `wasm_core` generates and
 compiles, and `wasm_code_slots` decides which module name the result may be
 loaded into and when that name may be reused.
@@ -209,8 +209,8 @@ of the node. `wasm_code_slots`'s moduledoc describes exactly this shape as the
 usage it expects and nothing called it.
 
 Idempotent, because `destroy/1` is: releasing a lease that is not there is a
-no-op in `wasm_code_slots:drop/3`, which is the same property that makes a
-double release of a memory harmless.
+no-op in `wasm_code_slots`, which is the same property that makes a double
+release of a memory harmless.
 """.
 -spec release(#inst{}) -> ok.
 release(Inst) ->

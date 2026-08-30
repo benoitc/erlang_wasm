@@ -1395,9 +1395,9 @@ remember(#inst{id = Id} = Inst) ->
 -doc """
 Note the compiled entry this process has cached for an instance.
 
-`wasm_jit:cached_entry/3` keys it by a bare `reference()` the instance record
-carries, which is what makes a hit one `get/1` with no tuple to build, and also
-what stops anything else recognising the entry as belonging to an instance. So
+`wasm_jit` keys it by a bare `reference()` the instance record carries, which
+is what makes a hit one dictionary read with no tuple to build, and also what
+stops anything else recognising the entry as belonging to an instance. So
 the sweep could not reach it and `release/1` only ever ran in the process that
 destroyed the instance: a worker calling instances somebody else destroys kept
 one closure for each of them, for as long as it lived.

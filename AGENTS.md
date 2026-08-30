@@ -42,8 +42,12 @@ rebar3 compile      # warnings_as_errors is on
 rebar3 lint         # elvis
 rebar3 xref
 rebar3 dialyzer
-rebar3 ct           # 409 cases
+rebar3 ct           # 408 cases
 ```
+
+The benchmarks are not among them: `wasm_bench_SUITE` and
+`wasm_gc_bench_SUITE` keep their measurements in a `bench` group, so a plain
+`rebar3 ct` runs only what can fail and `rebar3 bench` runs the numbers.
 
 `make check` runs the four that matter. CI (`.github/workflows/ci.yml`) runs
 them as separate jobs gated on `compile`, and clones both upstream test suites

@@ -150,7 +150,6 @@ unreachable_code_is_annotated_too(_) ->
             i32.add)))
         """),
     [{0, 0, {block, _, Inner}}] = body(M, 1),
-    ?assertEqual(4, length(Inner)),
     [_, _, {H1, {i32_const, 2}}, {H2, i32_add}] = Inner,
     %% Both are inside the frame, never below its base.
     ?assert(H1 >= 0),
@@ -182,7 +181,6 @@ real_modules_hold_the_invariants_throughout(_) ->
          Funcs = M#module.funcs,
          ?assert(length(Funcs) > 0),
          [begin
-              ?assertMatch({validated, _}, F#func.body),
               {validated, Ann} = F#func.body,
               check_invariants(Ann),
               check_frames(Ann)

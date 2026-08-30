@@ -80,7 +80,6 @@ runs_to_completion(Config) ->
     ct:log("program output:~n~ts", [Out]),
     %% `std::process::exit(7)' arrives as a trap carrying the status, because a
     %% trap is the only way to unwind a WebAssembly stack.
-    ?assertMatch({error, _}, Result),
     {error, Err} = Result,
     ?assertEqual({ok, 7}, wasi_preview1:exit_code(Err)),
     ?assertNotEqual(nomatch, binary:match(Out, <<"hello from rust on wasm">>)),

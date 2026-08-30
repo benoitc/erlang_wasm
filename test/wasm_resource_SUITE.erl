@@ -393,7 +393,6 @@ a_caller_that_never_destroys_keeps_a_bounded_cache(_Config) ->
          end || _ <- lists:seq(1, 200)],
     Caller ! {report, Self},
     Cached = receive {cached, N} -> N after 5000 -> ct:fail(no_report) end,
-    ?assert(Cached < 200),
     ?assert(Cached =< 64).
 
 serve(Parent) ->

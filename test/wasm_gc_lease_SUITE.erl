@@ -198,7 +198,9 @@ a_killed_reader_does_not_stop_collection_for_ever(_Config) ->
     %% concluding that somebody else is still inside.
     true = wasm_heap:lease(Heap),
     ?assertEqual(collect_now, wasm_heap:unlease(Heap, true)),
-    ?assertEqual(0, wasm_heap:readers(Heap) rem (1 bsl 32)),
+    %% No reader left. The store is held exclusively at this point and
+    %% `readers/1' divides that bit out, so this says nothing about the corpse.
+    ?assertEqual(0, wasm_heap:readers(Heap)),
     ok = wasm_heap:release_exclusive(Heap),
     %% And the store is usable afterwards.
     ?assertEqual(true, try_lease(Heap, 5000)),

@@ -558,16 +558,25 @@ an_unknown_profile_is_a_value_not_a_crash(_) ->
 %% The number is not the point; that it stops growing is.
 a_caller_that_never_destroys_keeps_a_bounded_entry_cache(_) ->
     M = build(loop_wat()),
-    Self = self(),
-    Caller = spawn(fun() -> serve(Self) end),
-    _ = monitor(process, Caller),
-    First = serve_and_count(M, Caller, 200),
-    Second = serve_and_count(M, Caller, 200),
-    ct:pal("entry cache after 200: ~p, after 400: ~p", [First, Second]),
-    ?assert(First < 200),
-    %% Four hundred instances served, and still bounded: the sweep collects
-    %% them the same way it collects everything else keyed by instance.
-    ?assert(Second < 200).
+    Caller = spawn(fun() -> serve() end),
+    Mon = monitor(process, Caller),
+    try
+        First = serve_and_count(M, Caller, 200),
+        Second = serve_and_count(M, Caller, 200),
+        ct:pal("entry cache after 200: ~p, after 400: ~p", [First, Second]),
+        ?assert(First < 200),
+        %% Four hundred instances served, and still bounded: the sweep collects
+        %% them the same way it collects everything else keyed by instance.
+        ?assert(Second < 200)
+    after
+        %% It has to survive two reports, so the report clause cannot be what
+        %% ends it. Stopped here instead, rather than left running for the rest
+        %% of the suite holding four hundred instances' worth of closures.
+        Caller ! stop,
+        receive {'DOWN', Mon, _, _, _} -> ok
+        after 5000 -> exit(Caller, kill)
+        end
+    end.
 
 serve_and_count(M, Caller, N) ->
     Self = self(),
@@ -585,7 +594,7 @@ serve_and_count(M, Caller, N) ->
     Caller ! {report, Self},
     receive {cached, K} -> K after 10000 -> ct:fail(no_report) end.
 
-serve(Parent) ->
+serve() ->
     receive
         {call, I, From} ->
             %% Twice: the first call adopts the slot and interprets, and the
@@ -593,10 +602,12 @@ serve(Parent) ->
             {ok, [_]} = wasm:call(I, ~"f", [3]),
             {ok, [_]} = wasm:call(I, ~"f", [3]),
             From ! called,
-            serve(Parent);
+            serve();
         {report, To} ->
             To ! {cached, length([K || {K, _} <- get(), is_reference(K)])},
-            serve(Parent)
+            serve();
+        stop ->
+            ok
     end.
 
 %%% -------------------------------------------------------------- helpers ---

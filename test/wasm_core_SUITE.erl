@@ -474,11 +474,11 @@ check(Name, Src, ArgSets, How) ->
                catch throw:{wasm_error, #{kind := K}} -> {trap, K} end,
          ct:log("~s ~p: interpreted ~p, compiled ~p", [Name, Args, Want, Got]),
          case Want of
-             %% The mutable state the compiled path hands back is compared as
-             %% well as the results: a `global.set' that did not thread would
-             %% return the right number and lose the write.
-             {ok, Rs} -> ?assertMatch({ok, Rs, _}, Got),
-                         ?assertEqual(Rs, element(2, Got));
+             %% `Rs' is bound, so this is an equality check on the results and
+             %% not merely a shape. The `#mut{}' the compiled path hands back
+             %% is not read here; what a lost write costs is
+             %% `every_memory_access_agrees_with_the_interpreter'.
+             {ok, Rs} -> ?assertMatch({ok, Rs, _}, Got);
              {error, #{kind := Kind}} -> ?assertEqual({trap, Kind}, Got)
          end,
          [ok = wasm:destroy(X) || How =:= fresh, X <- [Ii, Ic]]
@@ -526,11 +526,14 @@ a_hot_instance_runs_compiled_and_answers_the_same(_) ->
     ok = wasm_jit:await(I, 30000),
     Warm = [wasm:call(I, ~"f", [N]) || N <- lists:seq(1, 8)],
     ok = wasm:destroy(I),
-    %% The same instance answers the same thing warm as the fresh ones did
-    %% cold, and a global written by a compiled call has to persist across
-    %% calls the way an interpreted one does, so these accumulate.
-    ?assert(length(Warm) =:= 8),
-    [?assertMatch({ok, [_]}, R) || R <- Warm],
+    %% One instance, so the global a compiled call writes has to persist into
+    %% the next call the way an interpreted one does. `f(n)' adds the first `n'
+    %% integers to it, so the answers are the running sums of those: the
+    %% tetrahedral numbers, `n(n+1)(n+2)/6'. A compiled `global.set' that did
+    %% not thread would answer the triangular numbers instead, and both are
+    %% `{ok, [_]}'.
+    ?assertEqual([{ok, [N * (N + 1) * (N + 2) div 6]} || N <- lists:seq(1, 8)],
+                 Warm),
 
     #{compiled := C, entered := E} = wasm_jit:counts(),
     ct:log("compiled ~p functions, entered generated code ~p times", [C, E]),
@@ -667,7 +670,7 @@ everything_that_can_fail_falls_back_to_the_interpreter(_) ->
     ?assertEqual(0, maps:get(entered, wasm_jit:counts())),
 
     %% And with the tier simply off, which is the default.
-    ?assertEqual(run(Compilable, #{}, 5), run(Compilable, #{}, 5)),
+    ?assertEqual({ok, [6]}, run(Compilable, #{}, 5)),
     ?assertEqual(0, maps:get(entered, wasm_jit:counts())),
     wasm_test_slots:reset().
 

@@ -271,7 +271,8 @@ cache(Id, Version, Array) ->
 fill(Id, Version, Array) ->
     case get(?CACHED_KEYS) of
         undefined -> put(?CACHED_KEYS, {1, [Id]});
-        {N, Ids} when N < ?CACHED_TABLES -> put(?CACHED_KEYS, {N + 1, [Id | Ids]});
+        {N, Ids} when N < ?CACHED_TABLES ->
+            put(?CACHED_KEYS, {N + 1, [Id | Ids]});
         {_N, Ids} -> put(?CACHED_KEYS, evict(Id, Ids))
     end,
     cache(Id, Version, Array).

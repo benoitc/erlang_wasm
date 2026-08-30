@@ -324,7 +324,8 @@ a_corpse_never_takes_the_count_below_the_living(_Config) ->
         ?assertEqual(1, wasm_heap:readers(Heap)),
         %% And when the living one leaves, it is handed the collection itself.
         Live ! leave,
-        ?assertEqual(true, waits_for(fun() -> wasm_heap:readers(Heap) =:= 0 end))
+        Empty = fun() -> wasm_heap:readers(Heap) =:= 0 end,
+        ?assertEqual(true, waits_for(Empty))
     end).
 
 %% The invariant that makes a stranded collector recoverable at all. Exclusivity

@@ -358,7 +358,8 @@ a_notifier_that_dies_holding_a_wakeup_does_not_fake_one(_Config) ->
         after 900 -> exit(Waiter, kill), ct:fail(waited_on_a_clock)
         end,
         %% And nothing of the dead notifier is left in the table.
-        ?assertEqual([], [X || {{claimed, _}, _} = X <- ets:tab2list(wasm_waiters)])
+        Rows = ets:tab2list(wasm_waiters),
+        ?assertEqual([], [X || {{claimed, _}, _} = X <- Rows])
     after
         application:unset_env(wasm, wait_claim_hook)
     end.

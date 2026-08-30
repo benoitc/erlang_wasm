@@ -108,8 +108,8 @@ source() -> ~"""
                         (i32.const 128) (local.get $port) (i32.const 0)
                         (i32.const 4)))
   ;; The same send_to, with the out-pointer past the end of a one-page memory.
-  (func (export "bad_send_to") (param $fd i32) (param $len i32) (param $port i32)
-        (result i32)
+  (func (export "bad_send_to")
+        (param $fd i32) (param $len i32) (param $port i32) (result i32)
     (call $iov (local.get $len))
     (call $sock_send_to (local.get $fd) (i32.const 8) (i32.const 1)
                         (i32.const 128) (local.get $port) (i32.const 0)
@@ -479,7 +479,8 @@ a_failed_datagram_leaves_no_socket_behind(Config) ->
     %% reached, so the send fails after the socket is already open.
     I = instance(Config, #{connect => [{udp, ~"127.0.0.1", {0, 1}}]}),
     ?assertEqual({ok, [?ESUCCESS]},
-                 wasm:call(I, ~"open", [?ADDRESS_FAMILY_INET4, ?SOCK_TYPE_DGRAM])),
+                 wasm:call(I, ~"open",
+                           [?ADDRESS_FAMILY_INET4, ?SOCK_TYPE_DGRAM])),
     {ok, [Fd]} = wasm:call(I, ~"out_fd", []),
     ok = wasm:write_memory(I, 128, <<127, 0, 0, 1>>),
     ok = wasm:write_memory(I, 64, ~"ping"),
@@ -495,16 +496,19 @@ a_failed_datagram_leaves_no_socket_behind(Config) ->
 %% table it built: answering an errno without that table dropped the entry that
 %% owns the socket, so destroying the instance closed nothing.
 a_refused_out_pointer_keeps_the_socket_it_opened(Config) ->
-    {ok, Peer} = gen_udp:open(0, [binary, {active, false}, {ip, {127, 0, 0, 1}}]),
+    {ok, Peer} = gen_udp:open(0, [binary, {active, false},
+                                  {ip, {127, 0, 0, 1}}]),
     {ok, PeerPort} = inet:port(Peer),
     I = instance(Config, #{connect => [{udp, ~"127.0.0.1", PeerPort}]}),
     ?assertEqual({ok, [?ESUCCESS]},
-                 wasm:call(I, ~"open", [?ADDRESS_FAMILY_INET4, ?SOCK_TYPE_DGRAM])),
+                 wasm:call(I, ~"open",
+                           [?ADDRESS_FAMILY_INET4, ?SOCK_TYPE_DGRAM])),
     {ok, [Fd]} = wasm:call(I, ~"out_fd", []),
     ok = wasm:write_memory(I, 128, <<127, 0, 0, 1>>),
     ok = wasm:write_memory(I, 64, ~"ping"),
     Before = length(erlang:ports()),
-    ?assertEqual({ok, [?EFAULT]}, wasm:call(I, ~"bad_send_to", [Fd, 4, PeerPort])),
+    ?assertEqual({ok, [?EFAULT]},
+                 wasm:call(I, ~"bad_send_to", [Fd, 4, PeerPort])),
     %% It really was sent, so the socket really was opened.
     ?assertMatch({ok, {_, _, ~"ping"}}, gen_udp:recv(Peer, 0, 2000)),
     ?assertEqual(Before + 1, length(erlang:ports())),

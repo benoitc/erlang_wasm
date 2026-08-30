@@ -387,7 +387,7 @@ a_caller_that_never_destroys_keeps_a_bounded_cache(_Config) ->
              {ok, I} = wasm:instantiate(Mod, #{}),
              Caller ! {touch, I, Self},
              receive touched -> ok after 5000 -> ct:fail(no_touch) end,
-             %% Destroyed here, which is exactly the point: `wasm_table:release/2`
+             %% Destroyed here, which is the point: `wasm_table:release/2`
              %% runs in this process and never in the caller.
              ok = wasm:destroy(I)
          end || _ <- lists:seq(1, 200)],
@@ -403,7 +403,8 @@ serve(Parent) ->
             From ! touched,
             serve(Parent);
         {report, To} ->
-            To ! {cached, length([K || {{wasm_table_cache, _} = K, _} <- get()])}
+            Keys = [K || {{wasm_table_cache, _} = K, _} <- get()],
+            To ! {cached, length(Keys)}
     end.
 
 %% A start function that traps keeps its instance on purpose: the specification
@@ -471,10 +472,10 @@ a_keeper_restart_keeps_the_registry(_Config) ->
     ok = wasm_memory:free(Mem),
     ?assertEqual(Base, wasm_engine:pages_in_use()).
 
-%% `max_memory_pages` is a promise `wasm:instantiate/3` makes for the life of the
-%% instance, and a keeper restart used to withdraw it. Everything else came back
-%% from the registry -- the holders, the charges, the growths in flight -- and
-%% the ceilings did not, because they lived only in the keeper's state map. An
+%% `max_memory_pages` is a promise `wasm:instantiate/3` makes for the life of
+%% the instance, and a keeper restart used to withdraw it. Everything else came
+%% back from the registry -- the holders, the charges, the growths in flight --
+%% and the ceilings did not: they lived only in the keeper's state map. An
 %% instance capped at two pages refused the third before a restart and took it
 %% afterwards, up to the node budget.
 %%

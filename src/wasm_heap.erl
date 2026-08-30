@@ -501,7 +501,7 @@ unlease({wasm_heap, Objs, _, Ctr}, true) ->
     ok = forget_reader(Objs),
     case N of
         0 -> last_out(Objs, Ctr);
-        _ -> still_inside(Objs, Ctr, N)
+        _ -> still_inside(Objs, Ctr)
     end.
 
 %% Somebody is still in, so this reader is not the one to collect. Unless the
@@ -513,14 +513,14 @@ unlease({wasm_heap, Objs, _, Ctr}, true) ->
 %% the same two atomics it has always been, and only from the *falling* edge, so
 %% a store with steady traffic pays for it once per invocation that leaves
 %% somebody behind rather than once per invocation.
-still_inside(Objs, Ctr, _N) ->
+still_inside(Objs, Ctr) ->
     case atomics:get(Ctr, ?REQUEST) of
         0 -> ok;
         _ -> reap(Objs, Ctr)
     end.
 
-%% Give back what dead readers are holding, and collect if that empties the
-%% store. `is_process_alive/1` is the authority here for the same reason
+%% Clear out the dead readers, and settle the count if there were any.
+%% `is_process_alive/1` is the authority here for the same reason
 %% `code:soft_purge/1` is the authority in `wasm_code_slots`: a lease is given
 %% back in an `after` and an `after` does not run for a killed process, so the
 %% lease cannot be what decides.

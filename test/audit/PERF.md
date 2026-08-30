@@ -2721,3 +2721,43 @@ quarter of a request copying buffers, and a NIF removes almost all of it.
 `read_memory`/`write_memory`, where the buffers are large and the caller is
 Erlang rather than the guest, and only for an embedder that passes large ones.
 The plugin arm passes a handful of bytes and would not notice either.
+
+### The bulk NIF cannot be built, and did not need to be
+
+`erl_nif.h` has **no atomics API at all** -- zero mentions. A NIF cannot reach
+the memory an `atomics` array holds, so the narrow bulk NIF recommended above
+is not implementable without moving linear memory into NIF-owned buffers. That
+is the whole layout change, and it would make every per-operation access slower:
+a NIF call is 7.80 nanoseconds against `atomics:get`'s 4.66.
+
+**So no NIF shape survives.** Per-operation reads lose to `atomics`, the
+resource-backed binary loses to `atomics`, guest-side bulk is 0.05% of a run,
+and the embedder boundary cannot be reached from C without giving up the
+representation.
+
+What the boundary needed was the treatment the access path already had. Both
+`scatter/3` and `collect/4` resolved the chunk once per *word*, and
+`put_word/3` masked with `16#FFFFFFFFFFFFFFFF` on a value that came out of a
+64-bit binary field and was already in range.
+
+| | before | after |
+| --- | ---: | ---: |
+| `write_memory`, 64 KB | 87 us | **56** |
+| `read_memory`, 64 KB | 110 us | **68** |
+| `write_memory`, 1 MB | 1580 us | **1147** |
+| `read_memory`, 1 MB | 1908 us | **1178** |
+
+**A 64 KB round trip is 124 microseconds against 197**, which is about 11% of a
+690-microsecond plugin call.
+
+Two things this cost to learn, both worth keeping:
+
+- **Returning a binary tail from a loop costs a sub-binary per iteration.** The
+  first version of `scatter_run/4` returned its remainder so the caller could
+  continue, and that defeats the match-context optimisation: a 64 KB write went
+  to 133 microseconds, *worse* than the 87 it started at. Splitting once per run
+  with `split_binary/2` and letting the loop consume its binary to exhaustion is
+  what makes it 56.
+- **The append was the read's cost, not the read.** `atomics:get` is 4.66
+  nanoseconds a word and the loop measured nearly twice that; four words per
+  append rather than one closed most of it.

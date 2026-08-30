@@ -559,6 +559,21 @@ fill_run(C, I, W, N) ->
     atomics:put(C, I, W),
     fill_run(C, I + 1, W, N - 1).
 
+%% Four words per append rather than one. The append is amortised constant
+%% time but not free, and reading is `atomics:get` at about 4.7 nanoseconds a
+%% word against nearly twice that measured, so the difference was the appending
+%% rather than the reading.
+collect_run(C, I, N, Acc) when N >= 4 ->
+    collect_run(C, I + 4, N - 4,
+                <<Acc/binary,
+                  (atomics:get(C, I)):64/little,
+                  (atomics:get(C, I + 1)):64/little,
+                  (atomics:get(C, I + 2)):64/little,
+                  (atomics:get(C, I + 3)):64/little>>);
+collect_run(_C, _I, 0, Acc) -> Acc;
+collect_run(C, I, N, Acc) ->
+    collect_run(C, I + 1, N - 1, <<Acc/binary, (atomics:get(C, I)):64/little>>).
+
 %% Address decoding: chunk index, then word index inside the chunk. Both are
 %% shifts and masks because the chunk size is a power of two.
 word(#mem{shift = Shift} = M, Addr) ->
@@ -616,8 +631,17 @@ load_bytes(M, Addr, Len) ->
 %% constant time; building 8192 heap binaries and then joining them measured
 %% roughly eight times slower.
 collect(_M, _Addr, 0, Acc) -> Acc;
+%% As `scatter/3`: one chunk resolution for a run of words rather than one per
+%% word.
 collect(M, Addr, Len, Acc) when Len >= 8, Addr band 7 =:= 0 ->
-    collect(M, Addr + 8, Len - 8, <<Acc/binary, (word(M, Addr)):64/little>>);
+    case run_words(M, Len, [Addr]) of
+        0 ->
+            collect(M, Addr + 8, Len - 8,
+                    <<Acc/binary, (word(M, Addr)):64/little>>);
+        N ->
+            {C, I} = word_at(M, Addr),
+            collect(M, Addr + N * 8, Len - N * 8, collect_run(C, I, N, Acc))
+    end;
 collect(M, Addr, Len, Acc) ->
     collect(M, Addr + 1, Len - 1, <<Acc/binary, (read(M, Addr, 1)):8>>).
 
@@ -628,12 +652,38 @@ store_bytes(M, Addr, Bin) ->
     scatter(M, Addr, Bin).
 
 scatter(_M, _Addr, <<>>) -> ok;
-scatter(M, Addr, <<W:64/little, Rest/binary>>) when Addr band 7 =:= 0 ->
+%% A run of whole words inside one chunk, with the chunk and the index resolved
+%% once for the run rather than once per word. `put_word/3` also masks with
+%% `16#FFFFFFFFFFFFFFFF` on the way in, which is a bignum literal doing nothing:
+%% the word came out of a 64-bit binary field and is already in range.
+scatter(M, Addr, Bin) when byte_size(Bin) >= 8, Addr band 7 =:= 0 ->
+    case run_words(M, byte_size(Bin), [Addr]) of
+        0 ->
+            scatter_byte(M, Addr, Bin);
+        N ->
+            {C, I} = word_at(M, Addr),
+            %% Split once for the run, and let `scatter_run/3` consume its
+            %% binary to exhaustion without ever *returning* a tail. Returning
+            %% one costs a sub-binary per word: the first version of this did,
+            %% and it made a 64 KB write 133 microseconds against 87.
+            {Head, Tail} = split_binary(Bin, N * 8),
+            ok = scatter_run(C, I, Head),
+            scatter(M, Addr + N * 8, Tail)
+    end;
+scatter(M, Addr, Bin) ->
+    scatter_byte(M, Addr, Bin).
+
+scatter_byte(M, Addr, <<W:64/little, Rest/binary>>) when Addr band 7 =:= 0 ->
     put_word(M, Addr, W),
     scatter(M, Addr + 8, Rest);
-scatter(M, Addr, <<B:8, Rest/binary>>) ->
+scatter_byte(M, Addr, <<B:8, Rest/binary>>) ->
     write(M, Addr, 1, B),
     scatter(M, Addr + 1, Rest).
+
+scatter_run(_C, _I, <<>>) -> ok;
+scatter_run(C, I, <<W:64/little, Rest/binary>>) ->
+    atomics:put(C, I, W),
+    scatter_run(C, I + 1, Rest).
 
 -doc """
 Whole-memory snapshot. Diagnostics and tests only: it materialises the

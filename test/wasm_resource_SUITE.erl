@@ -27,6 +27,7 @@ the node's life.
          a_builder_killed_before_it_finishes_releases_what_it_took/1,
          instantiating_and_destroying_does_not_grow_the_store/1,
          touching_a_table_and_destroying_leaves_no_cache/1,
+         a_caller_that_never_destroys_keeps_a_bounded_cache/1,
          a_trapping_start_hands_back_what_it_left_behind/1,
          two_instances_of_one_module_share_no_mutable_state/1,
          two_modules_in_one_process_do_not_borrow_each_others_functions/1,
@@ -51,6 +52,7 @@ all() ->
      a_builder_killed_before_it_finishes_releases_what_it_took,
      instantiating_and_destroying_does_not_grow_the_store,
      touching_a_table_and_destroying_leaves_no_cache,
+     a_caller_that_never_destroys_keeps_a_bounded_cache,
      a_trapping_start_hands_back_what_it_left_behind,
      two_instances_of_one_module_share_no_mutable_state,
      two_modules_in_one_process_do_not_borrow_each_others_functions,
@@ -368,6 +370,41 @@ touching_a_table_and_destroying_leaves_no_cache(_Config) ->
              ok = wasm:destroy(I)
          end || _ <- lists:seq(1, 200)],
     ?assertEqual([], [K || {{wasm_table_cache, _} = K, _} <- get()]).
+
+%% Erasing on release only reaches the process that destroys the instance, and
+%% that is often not the one that called it: a worker pool calls into instances
+%% a request handler creates and destroys. Two hundred instances served left two
+%% hundred arrays in the worker, one per table it had ever read.
+%%
+%% So the cache is bounded as well as erased. The number is not the point; that
+%% it stops growing is.
+a_caller_that_never_destroys_keeps_a_bounded_cache(_Config) ->
+    Mod = compile(~"(module (table (export \"t\") 2 4 funcref)
+                            (func (export \"n\") (result i32) table.size 0))"),
+    Self = self(),
+    Caller = spawn(fun() -> serve(Self) end),
+    _ = [begin
+             {ok, I} = wasm:instantiate(Mod, #{}),
+             Caller ! {touch, I, Self},
+             receive touched -> ok after 5000 -> ct:fail(no_touch) end,
+             %% Destroyed here, which is exactly the point: `wasm_table:release/2`
+             %% runs in this process and never in the caller.
+             ok = wasm:destroy(I)
+         end || _ <- lists:seq(1, 200)],
+    Caller ! {report, Self},
+    Cached = receive {cached, N} -> N after 5000 -> ct:fail(no_report) end,
+    ?assert(Cached < 200),
+    ?assert(Cached =< 64).
+
+serve(Parent) ->
+    receive
+        {touch, I, From} ->
+            {ok, [2]} = wasm:call(I, ~"n", []),
+            From ! touched,
+            serve(Parent);
+        {report, To} ->
+            To ! {cached, length([K || {{wasm_table_cache, _} = K, _} <- get()])}
+    end.
 
 %% A start function that traps keeps its instance on purpose: the specification
 %% says the store keeps what instantiation wrote, and `linking.wast` requires a

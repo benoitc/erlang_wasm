@@ -19,6 +19,11 @@ two processes can use one.
          a_pending_request_blocks_nobody/1,
          a_collector_killed_mid_sweep_does_not_wedge_the_store/1,
          a_killed_reader_does_not_stop_collection_for_ever/1,
+         a_reader_killed_before_it_counts_leaves_nothing_stranded/1,
+         a_reader_killed_after_it_uncounts_leaves_nothing_stranded/1,
+         a_collector_killed_before_it_unmarks_does_not_wedge_the_store/1,
+         a_release_never_unmarks_the_next_collector/1,
+         a_corpse_never_takes_the_count_below_the_living/1,
          exclusive_is_never_held_without_a_collector_to_find/1,
          re_entrant_calls_take_one_lease/1,
          overlapping_traffic_still_gets_collected/1]).
@@ -28,6 +33,11 @@ all() ->
      a_pending_request_blocks_nobody,
      a_collector_killed_mid_sweep_does_not_wedge_the_store,
      a_killed_reader_does_not_stop_collection_for_ever,
+     a_reader_killed_before_it_counts_leaves_nothing_stranded,
+     a_reader_killed_after_it_uncounts_leaves_nothing_stranded,
+     a_collector_killed_before_it_unmarks_does_not_wedge_the_store,
+     a_release_never_unmarks_the_next_collector,
+     a_corpse_never_takes_the_count_below_the_living,
      exclusive_is_never_held_without_a_collector_to_find,
      re_entrant_calls_take_one_lease,
      overlapping_traffic_still_gets_collected].
@@ -195,6 +205,128 @@ a_killed_reader_does_not_stop_collection_for_ever(_Config) ->
     ?assertEqual(true, try_lease(Heap, 5000)),
     ok = wasm_heap:unlease(Heap, true).
 
+%% The count and the row are two writes and a kill can land between them, so
+%% which one goes first decides what a corpse leaves behind. The rule is that
+%% **the rows are a superset of the counts**: a row without a count is a delay,
+%% a count without a row is unrecoverable.
+%%
+%% Here the reader dies having recorded its row and not yet counted. Recording
+%% second left the mirror state, a count nothing could account for, and the
+%% store never collected again.
+a_reader_killed_before_it_counts_leaves_nothing_stranded(_Config) ->
+    Heap = wasm_heap:new(),
+    with_hook(fun() ->
+        Reader = held_at(row_before_count,
+                         fun() -> true = wasm_heap:lease(Heap) end),
+        kill(Reader),
+        ?assertEqual(collect_now, next_one_out_collects(Heap)),
+        ok = wasm_heap:release_exclusive(Heap),
+        ?assertEqual(0, wasm_heap:readers(Heap))
+    end).
+
+%% And the same window read the other way round: the reader has given the count
+%% back and dies before deleting its row. That leaves a row leading its count,
+%% which is the direction the store survives.
+a_reader_killed_after_it_uncounts_leaves_nothing_stranded(_Config) ->
+    Heap = wasm_heap:new(),
+    with_hook(fun() ->
+        Reader = held_at(count_before_row,
+                         fun() ->
+                             true = wasm_heap:lease(Heap),
+                             ok = wasm_heap:unlease(Heap, true)
+                         end),
+        kill(Reader),
+        ?assertEqual(collect_now, next_one_out_collects(Heap)),
+        ok = wasm_heap:release_exclusive(Heap),
+        ?assertEqual(0, wasm_heap:readers(Heap))
+    end).
+
+%% The collector has the same two writes and the same rule, pointing the other
+%% way: exclusivity may never be visible without a row naming who holds it. So
+%% the count is given back first. Unmarking first left a collector killed in
+%% between holding `?EXCL` with nobody to find, `reclaim/2` answered `none`, and
+%% every reader spun without bound.
+a_collector_killed_before_it_unmarks_does_not_wedge_the_store(_Config) ->
+    Heap = wasm_heap:new(),
+    with_hook(fun() ->
+        Collector = held_at(released_before_unmark,
+                            fun() ->
+                                true = wasm_heap:lease(Heap),
+                                true = wasm_heap:try_exclusive(Heap),
+                                ok = wasm_heap:release_exclusive(Heap)
+                            end),
+        kill(Collector),
+        %% The store is free the instant the count goes back, whatever the row
+        %% says, so a reader gets in rather than spinning against a corpse.
+        ?assertEqual(true, try_lease(Heap, 5000))
+    end).
+
+%% Giving the count back first makes the store claimable while the releasing
+%% process still has its unmark to run, so that unmark has to be conditional.
+%% A plain delete would take the *next* collector's row away while it holds the
+%% store, which is exactly the state the order above exists to prevent.
+a_release_never_unmarks_the_next_collector(_Config) ->
+    Heap = wasm_heap:new(),
+    Self = self(),
+    with_hook(fun() ->
+        %% Claimed the way the last reader out claims it, so this collector
+        %% holds no read lease of its own and the store is empty behind it.
+        Collector = held_at(released_before_unmark,
+                            fun() ->
+                                collect_now = next_one_out_collects(Heap),
+                                ok = wasm_heap:release_exclusive(Heap),
+                                Self ! released
+                            end),
+        %% The store is already free, so somebody else becomes the collector
+        %% while the first one is still holding its unmark. Off this process,
+        %% because a store that is *not* free leaves this spinning in
+        %% `read_lease/3` and a hung case says less than a failed one.
+        Next = spawn(fun() ->
+                         true = wasm_heap:lease(Heap),
+                         true = wasm_heap:try_exclusive(Heap),
+                         Self ! collecting,
+                         receive done -> ok end,
+                         ok = wasm_heap:release_exclusive(Heap),
+                         ok = wasm_heap:unlease(Heap, true)
+                     end),
+        receive collecting -> ok
+        after 5000 -> exit(Next, kill), ct:fail(store_never_became_free)
+        end,
+        Collector ! proceed,
+        receive released -> ok after 5000 -> ct:fail(never_released) end,
+        ?assertMatch([{_, Next, 1}], collector_rows(Heap)),
+        Next ! done
+    end).
+
+%% What the corpse's row is worth. It says what that reader *would* have held,
+%% which for one killed before it counted is more than it ever did, so giving
+%% the counter back what the row says can take it below the readers actually
+%% inside -- and then a collection runs with somebody in the store. The count is
+%% recomputed from the survivors instead, which can only err upwards.
+a_corpse_never_takes_the_count_below_the_living(_Config) ->
+    Heap = wasm_heap:new(),
+    Self = self(),
+    with_hook(fun() ->
+        Dead = held_at(row_before_count,
+                       fun() -> true = wasm_heap:lease(Heap) end),
+        kill(Dead),
+        Live = spawn(fun() ->
+                         true = wasm_heap:lease(Heap),
+                         Self ! inside,
+                         receive leave -> ok end,
+                         ok = wasm_heap:unlease(Heap, true)
+                     end),
+        receive inside -> ok after 5000 -> ct:fail(never_inside) end,
+        ok = wasm_heap:request_collect(Heap),
+        %% One reader is inside, so nobody else may be handed the collection.
+        true = wasm_heap:lease(Heap),
+        ?assertEqual(ok, wasm_heap:unlease(Heap, true)),
+        ?assertEqual(1, wasm_heap:readers(Heap)),
+        %% And when the living one leaves, it is handed the collection itself.
+        Live ! leave,
+        ?assertEqual(true, waits_for(fun() -> wasm_heap:readers(Heap) =:= 0 end))
+    end).
+
 %% The invariant that makes a stranded collector recoverable at all. Exclusivity
 %% used to be taken before the collector row was written, so a process killed
 %% between the two left the store exclusive with nobody to find, `reclaim/2`
@@ -283,6 +415,52 @@ linked_pair(Config, Parent, Gate) ->
 get_reenter_readers(Inst, _Heap) ->
     {ok, [_]} = wasm:call(Inst, ~"nested", [3]),
     receive {readers, N} -> N after 5000 -> ct:fail(no_reenter) end.
+
+%% The hook is application-wide, so a process opts itself in by naming the
+%% window it means to stop in. Nothing else in the node is held.
+with_hook(F) ->
+    Parent = self(),
+    Hook = fun(Where) ->
+               case get('$hold_at') of
+                   Where -> Parent ! {at, Where, self()},
+                            receive proceed -> ok end;
+                   _ -> ok
+               end
+           end,
+    ok = application:set_env(wasm, heap_hook, Hook),
+    try F() after application:unset_env(wasm, heap_hook) end.
+
+%% Spawn a process that runs `F' and stops inside `Where', and answer once it
+%% is actually there. It stays stopped until it is killed or sent `proceed'.
+held_at(Where, F) ->
+    P = spawn(fun() -> put('$hold_at', Where), F() end),
+    receive {at, Where, P} -> P
+    after 5000 -> ct:fail({never_reached, Where})
+    end.
+
+kill(Pid) ->
+    Ref = monitor(process, Pid),
+    exit(Pid, kill),
+    receive {'DOWN', Ref, _, _, _} -> ok
+    after 5000 -> ct:fail({still_alive, Pid})
+    end.
+
+%% Ask for a collection and go in and out once. Whoever is last out of a store
+%% with a request standing performs it, and a corpse must not stop that being
+%% this caller.
+next_one_out_collects(Heap) ->
+    ok = wasm_heap:request_collect(Heap),
+    true = wasm_heap:lease(Heap),
+    wasm_heap:unlease(Heap, true).
+
+waits_for(F) -> waits_for(F, 50).
+
+waits_for(F, 0) -> F();
+waits_for(F, N) ->
+    case F() of
+        true -> true;
+        false -> timer:sleep(20), waits_for(F, N - 1)
+    end.
 
 try_lease(Heap, Ms) ->
     Self = self(),

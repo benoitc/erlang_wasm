@@ -404,18 +404,24 @@ declaring no struct and no array type, so those pay one comparison.
 -spec lease(undefined | heap()) -> boolean().
 lease(undefined) -> false;
 lease({wasm_heap, Objs, _, Ctr}) ->
-    read_lease(Objs, Ctr, 0),
     %% Who is holding it, so that a reader killed before its `after` runs can be
     %% told from one still working. The count alone cannot: a leaked increment
     %% and a busy reader look identical, and the leaked one stopped `try_
     %% exclusive/1` from ever matching again, which stopped collection for the
     %% life of the store.
     %%
+    %% The row goes in *first*, and every path in this module keeps that order:
+    %% **the rows are a superset of the counts**. Recording afterwards left a
+    %% window of exactly the kind the row exists to close, because a reader
+    %% killed between the two held a count no row could ever account for.
+    %%
     %% One `ets:update_counter` per *outermost* invocation, and only for a
     %% module that declares a struct or an array type: `lease/1` already answers
     %% `false` for every other module, so nothing that does not use the object
     %% store pays for this.
     ok = remember_reader(Objs),
+    ok = hook(row_before_count),
+    read_lease(Objs, Ctr, 0),
     true.
 
 read_lease(Objs, Ctr, Tries) ->
@@ -465,10 +471,6 @@ mark_collector(Objs, Held) ->
     try ets:insert(Objs, {?COLLECTOR, self(), Held}) catch error:badarg -> true end,
     ok.
 
-unmark_collector(Objs) ->
-    try ets:delete(Objs, ?COLLECTOR) catch error:badarg -> true end,
-    ok.
-
 %% Take the mark back only if it is still ours. A plain delete would take a
 %% concurrent collector's mark away with it, and that collector holds the store:
 %% readers would then find `?EXCL` with nobody marked, which is exactly the
@@ -490,10 +492,16 @@ gathering roots is not this module's business.
 -spec unlease(undefined | heap(), boolean()) -> ok | collect_now.
 unlease(_H, false) -> ok;
 unlease({wasm_heap, Objs, _, Ctr}, true) ->
+    %% The count goes back first and the row second, which is the same
+    %% superset ordering `lease/1` establishes read the other way round. The
+    %% other order left a reader killed between them holding a count with no
+    %% row, and nothing could give that back.
+    N = atomics:sub_get(Ctr, ?LEASE, 1),
+    ok = hook(count_before_row),
     ok = forget_reader(Objs),
-    case atomics:sub_get(Ctr, ?LEASE, 1) of
+    case N of
         0 -> last_out(Objs, Ctr);
-        N -> still_inside(Objs, Ctr, N)
+        _ -> still_inside(Objs, Ctr, N)
     end.
 
 %% Somebody is still in, so this reader is not the one to collect. Unless the
@@ -505,10 +513,10 @@ unlease({wasm_heap, Objs, _, Ctr}, true) ->
 %% the same two atomics it has always been, and only from the *falling* edge, so
 %% a store with steady traffic pays for it once per invocation that leaves
 %% somebody behind rather than once per invocation.
-still_inside(Objs, Ctr, N) ->
+still_inside(Objs, Ctr, _N) ->
     case atomics:get(Ctr, ?REQUEST) of
         0 -> ok;
-        _ -> reap(Objs, Ctr, N)
+        _ -> reap(Objs, Ctr)
     end.
 
 %% Give back what dead readers are holding, and collect if that empties the
@@ -516,21 +524,45 @@ still_inside(Objs, Ctr, N) ->
 %% `code:soft_purge/1` is the authority in `wasm_code_slots`: a lease is given
 %% back in an `after` and an `after` does not run for a killed process, so the
 %% lease cannot be what decides.
-reap(Objs, Ctr, N) ->
+reap(Objs, Ctr) ->
     case dead_readers(Objs) of
         0 -> ok;
-        Dead ->
-            case atomics:sub_get(Ctr, ?LEASE, min(Dead, N)) of
-                0 -> case last_out(Objs, Ctr) of
-                         collect_now -> collect_now;
-                         ok -> ok
-                     end;
-                _ -> ok
-            end
+        _ -> recount(Objs, Ctr)
     end.
 
-%% Rows are deleted as they are counted, so two reapers cannot both subtract
-%% for the same corpse: `ets:take/2` hands the row to exactly one of them.
+%% The count is **recomputed** from the surviving rows, never subtracted from.
+%%
+%% Subtracting was wrong once the rows became a superset of the counts: a
+%% corpse's row can hold more than the corpse ever counted -- it is killed
+%% between `remember_reader/1` and `read_lease/3` -- and giving back what the
+%% row says would take the counter below the readers actually inside, which is
+%% a collection running with somebody in the store. Recomputing can only err
+%% the other way: a row that leads its count makes the answer too *high*, which
+%% costs a delayed collection and nothing else.
+%%
+%% The exchange is what makes the read-then-write safe. Anything that touched
+%% the counter between the two loses the race and this call does nothing; the
+%% next reader out of a store with a request standing tries again.
+recount(Objs, Ctr) ->
+    case atomics:get(Ctr, ?LEASE) of
+        Seen when Seen >= ?EXCL ->
+            %% A collector has it. Not ours to rewrite.
+            ok;
+        Seen ->
+            settle(Objs, Ctr, Seen, live_readers(Objs))
+    end.
+
+settle(_Objs, _Ctr, Seen, Live) when Live >= Seen -> ok;
+settle(Objs, Ctr, Seen, Live) ->
+    case atomics:compare_exchange(Ctr, ?LEASE, Seen, Live) of
+        ok when Live =:= 0 -> last_out(Objs, Ctr);
+        _ -> ok
+    end.
+
+%% Rows are deleted as they are counted, so two reapers cannot both account for
+%% the same corpse: `ets:take/2` hands the row to exactly one of them. The sum
+%% is only a signal that there was something to clear; `recount/2` decides what
+%% the counter becomes.
 dead_readers(Objs) ->
     try ets:select(Objs, [{{{reader, '$1'}, '_'}, [], ['$1']}]) of
         Pids ->
@@ -538,6 +570,30 @@ dead_readers(Objs) ->
                                Held <- [taken(Objs, Pid)]])
     catch error:badarg -> 0
     end.
+
+%% Every row left after `dead_readers/1` has taken the corpses away. A reader
+%% that dies between the two is simply counted this time round and cleared the
+%% next, which is the conservative direction.
+live_readers(Objs) ->
+    try ets:select(Objs, [{{{reader, '_'}, '$1'}, [], ['$1']}]) of
+        Held -> lists:sum(Held)
+    catch error:badarg -> 0
+    end.
+
+-ifdef(TEST).
+%% Sync points in the three places where a count and a row are updated one
+%% after the other. Each window is a handful of instructions wide and a test
+%% cannot land in it by racing, which is how a test for exactly this defect
+%% ends up passing whether the defect is there or not. So a test can hold a
+%% process open inside one. Never compiled into a release.
+hook(Where) ->
+    case application:get_env(wasm, heap_hook) of
+        {ok, F} when is_function(F, 1) -> _ = F(Where), ok;
+        _ -> ok
+    end.
+-else.
+hook(_Where) -> ok.
+-endif.
 
 taken(Objs, Pid) ->
     case ets:take(Objs, {reader, Pid}) of
@@ -602,12 +658,23 @@ try_exclusive({wasm_heap, Objs, _, Ctr}) ->
 -spec release_exclusive(undefined | heap()) -> ok.
 release_exclusive(undefined) -> ok;
 release_exclusive({wasm_heap, Objs, _, Ctr}) ->
-    ok = unmark_collector(Objs),
+    atomics:put(Ctr, ?REQUEST, 0),
     %% Subtracted, not assigned: a reader that arrived during the collection
     %% added to this cell and will subtract again, and assigning zero would
     %% take its decrement below zero and wrap.
+    %%
+    %% The row goes *after* the subtraction, which is the mirror of the order
+    %% `try_exclusive/1` argues for: unmarking first left a window where the
+    %% store read as exclusive with no collector row, and a kill in there
+    %% stranded `?EXCL` for ever with `reclaim/2` answering `none`.
+    %%
+    %% `unmark_if_mine/1` rather than a plain delete, because by now the
+    %% store is free and the next collector may already have marked itself:
+    %% a plain delete would take that collector's row away while it holds the
+    %% store, which is the state this order exists to make impossible.
     atomics:sub(Ctr, ?LEASE, ?EXCL),
-    atomics:put(Ctr, ?REQUEST, 0),
+    ok = hook(released_before_unmark),
+    ok = unmark_if_mine(Objs),
     ok.
 
 -doc "Record that a collection is wanted but could not be performed now.".

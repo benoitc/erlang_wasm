@@ -63,6 +63,10 @@ wait(MemId, Addr, Read, TimeoutNs) ->
         end
     after
         ets:delete_object(?TAB, Entry),
+        %% And any naming a notifier left behind by dying inside the two steps
+        %% above. The key is this wait's own reference, so nothing else can be
+        %% removed by it.
+        ets:delete(?TAB, {claimed, Ref}),
         flush(Ref)
     end.
 
@@ -83,16 +87,50 @@ park(Entry, Ref, TimeoutNs) ->
         %% `claim/1` removes the row and answers whether *this* caller removed
         %% it, so exactly one of the two wins and the loser knows it lost.
         case claim(Entry) of
-            true ->
-                2;
-            false ->
-                %% A notifier has us and counted us as woken. Its send is
-                %% already done or one instruction away, so wait for it and
-                %% answer as it did: disagreeing would lose the wakeup.
-                receive {wasm_notify, Ref} -> 0
-                after 1000 -> 0
-                end
+            true -> 2;
+            false -> lost_the_race(Ref)
         end
+    end.
+
+%% A notifier has us and counted us as woken. Its send is already done or one
+%% instruction away, so wait for it and answer as it did: disagreeing would
+%% lose the wakeup.
+%%
+%% What to wait *on* is the question. A second was the first answer and it was
+%% a guess: a notifier killed between claiming us and sending made every waiter
+%% report a wakeup that never happened, a second late, and a message arriving
+%% after that second lingered past the flush with a reference no later wait can
+%% match. So the notifier leaves its own name behind while it sends, and the
+%% wait is bounded by that process rather than by a clock -- the message, or
+%% the death of the only process that could still send it.
+%%
+%% No row means the send has already happened and the message is on its way, so
+%% the plain receive stands.
+lost_the_race(Ref) ->
+    case claimer(Ref) of
+        none ->
+            %% The row goes after the send, so there is no row only once the
+            %% message is already in this mailbox.
+            receive {wasm_notify, Ref} -> 0 end;
+        Pid ->
+            Mon = erlang:monitor(process, Pid),
+            try
+                receive
+                    {wasm_notify, Ref} -> 0;
+                    %% It died holding our wakeup, so nothing woke us and the
+                    %% timeout we already had is the honest answer.
+                    {'DOWN', Mon, _, _, _} -> 2
+                end
+            after
+                erlang:demonitor(Mon, [flush])
+            end
+    end.
+
+claimer(Ref) ->
+    try ets:lookup(?TAB, {claimed, Ref}) of
+        [{_, Pid}] -> Pid;
+        [] -> none
+    catch error:badarg -> none
     end.
 
 -doc "Wake up to `Count` agents waiting on `Addr`, answering how many.".
@@ -123,15 +161,29 @@ alive(Entry, Pid) ->
 wake(_Waiters, 0, N) -> N;
 wake([], _Left, N) -> N;
 wake([{_Key, Pid, Ref} = Entry | Rest], Left, N) ->
-    case claim(Entry) of
-        true ->
-            ok = claimed_hook(),
-            Pid ! {wasm_notify, Ref},
-            wake(Rest, Left - 1, N + 1);
+    %% Named *before* the claim is attempted, and `insert_new/2` is what makes
+    %% the naming the thing that is raced for: exactly one notifier can hold it,
+    %% so a waiter that lost has one process to wait on rather than a guess at
+    %% how long a send takes. A notifier that does not hold it does not try to
+    %% claim, which is why the row can be trusted to name the sender.
+    case ets:insert_new(?TAB, {{claimed, Ref}, self()}) of
         false ->
-            %% Somebody else's wakeup, or a waiter that gave up. Either way not
-            %% ours to count, and not one of our `Count' either.
-            wake(Rest, Left, N)
+            wake(Rest, Left, N);
+        true ->
+            case claim(Entry) of
+                true ->
+                    ok = claimed_hook(),
+                    Pid ! {wasm_notify, Ref},
+                    %% After the send, so finding no row means the message is
+                    %% already in the waiter's mailbox.
+                    true = ets:delete(?TAB, {claimed, Ref}),
+                    wake(Rest, Left - 1, N + 1);
+                false ->
+                    %% Somebody else's wakeup, or a waiter that gave up. Either
+                    %% way not ours to count, and not one of our `Count` either.
+                    true = ets:delete(?TAB, {claimed, Ref}),
+                    wake(Rest, Left, N)
+            end
     end.
 
 %% Removing the row is what claims the waiter, and it has to answer whether

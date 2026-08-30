@@ -37,6 +37,7 @@ all() ->
      killing_a_waiter_does_not_strand_the_others,
      two_notifiers_never_both_claim_one_waiter,
      a_notify_racing_a_timeout_leaves_no_message_behind,
+     a_notifier_that_dies_holding_a_wakeup_does_not_fake_one,
      the_waiter_table_never_belongs_to_a_waiter,
      wait_on_an_unshared_memory_traps,
      a_shared_memory_outlives_the_process_that_made_it].
@@ -325,6 +326,42 @@ one_raced_timeout() ->
 
 woken(0) -> 1;
 woken(2) -> 0.
+
+%% The other end of that race. A waiter that loses waits for a message it knows
+%% is coming, and what it waited on was a second of wall clock: a notifier
+%% killed between claiming the waiter and sending to it left the waiter
+%% reporting a wakeup that never happened, a second late, and any message that
+%% did arrive after that second stayed in the mailbox with a reference no later
+%% wait can match.
+%%
+%% So the notifier names itself before it claims anybody, and the wait is
+%% bounded by that process rather than by a clock.
+a_notifier_that_dies_holding_a_wakeup_does_not_fake_one(_Config) ->
+    Self = self(),
+    ok = application:set_env(wasm, wait_claim_hook,
+                             fun() -> Self ! claimed, timer:sleep(60000) end),
+    try
+        MemId = make_ref(),
+        Waiter = spawn(fun() ->
+                           R = wasm_wait:wait(MemId, 0,
+                                              fun() -> Self ! ready, equal end,
+                                              10000000),
+                           Self ! {woke, R}
+                       end),
+        receive ready -> ok after 5000 -> ct:fail(never_registered) end,
+        Notifier = spawn(fun() -> wasm_wait:notify(MemId, 0, 1) end),
+        receive claimed -> ok after 5000 -> ct:fail(never_claimed) end,
+        exit(Notifier, kill),
+        %% Promptly, and 2: nothing woke it. A second of wall clock and an
+        %% answer of 0 is what this replaces.
+        receive {woke, R} -> ?assertEqual(2, R)
+        after 900 -> exit(Waiter, kill), ct:fail(waited_on_a_clock)
+        end,
+        %% And nothing of the dead notifier is left in the table.
+        ?assertEqual([], [X || {{claimed, _}, _} = X <- ets:tab2list(wasm_waiters)])
+    after
+        application:unset_env(wasm, wait_claim_hook)
+    end.
 
 %% The table has to be owned by something that outlives waiters, and a waiter
 %% is a guest's process that a worker timeout kills outright. There used to be

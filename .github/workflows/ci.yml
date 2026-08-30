@@ -63,6 +63,11 @@ jobs:
         run: |
           git clone --depth 1 --branch prod/testsuite-base \
             https://github.com/WebAssembly/wasi-testsuite.git
+      # 1.8 MB of somebody else's program, fetched rather than committed. The
+      # suites that read it skip without it, and a skipping suite proves
+      # nothing.
+      - name: Fetch the QuickJS fixture
+        run: scripts/fetch-qjs-fixture.sh
       - run: rebar3 ct
 
   lint:

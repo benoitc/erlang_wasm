@@ -43,7 +43,9 @@ every other refusal here: interpret it.
 """.
 
 -export([fun_name/1, frame_name/1, limits/0, atoms/0]).
--export([supported/1, can_compile/2, ops/0, module/4, module/6, forms/5]).
+-export([supported/1, can_compile/2, ops/0, module/4, module/6]).
+-export([module/7, module/8, module/9]).
+-export([forms/5, forms/6, forms/7, forms/8]).
 
 -include("wasm_exec.hrl").
 -include("wasm_memory.hrl").
@@ -408,7 +410,39 @@ would rather have the module sooner.
 -spec module(module(), [term()], map(), map(), baseline | full,
              binary() | non_neg_integer()) -> {ok, binary()} | {error, term()}.
 module(Name, Unit, Sigs, TSigs, Mode, Stamp) ->
-    case forms(Name, Unit, Sigs, TSigs, Stamp) of
+    module(Name, Unit, Sigs, TSigs, Mode, Stamp, undefined).
+
+-doc """
+As `module/6`, naming the generated module that holds the rest of this one.
+
+A wasm module compiled into several units chains them: each answers for the
+functions it holds and hands anything else to `Next`, which is a literal it was
+built with. The last one answers `not_compiled` and the caller interprets.
+""".
+-spec module(module(), [term()], map(), map(), baseline | full,
+             binary() | non_neg_integer(), undefined | module()) ->
+          {ok, binary()} | {error, term()}.
+module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next) ->
+    module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Name).
+
+-doc """
+As `module/7`, naming the head of the chain for a crossing to re-enter at.
+""".
+-spec module(module(), [term()], map(), map(), baseline | full,
+             binary() | non_neg_integer(), undefined | module(), module()) ->
+          {ok, binary()} | {error, term()}.
+module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Head) ->
+    module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Head, #{}).
+
+-doc """
+As `module/8`, saying which other unit holds each function this one does not.
+""".
+-spec module(module(), [term()], map(), map(), baseline | full,
+             binary() | non_neg_integer(), undefined | module(), module(),
+             #{non_neg_integer() => module()}) ->
+          {ok, binary()} | {error, term()}.
+module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Head, Elsewhere) ->
+    case forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) of
         {ok, Core} ->
             case compile:forms(Core, copts(Mode)) of
                 {ok, Name, Bin} -> {ok, Bin};
@@ -438,6 +472,45 @@ tells you how.
             binary() | non_neg_integer()) ->
           {ok, cerl:c_module()} | {error, term()}.
 forms(Name, Unit, Sigs, TSigs, Stamp) ->
+    forms(Name, Unit, Sigs, TSigs, Stamp, undefined).
+
+-doc """
+As `forms/5`, naming the generated module that holds the rest of this one.
+
+`undefined` for a module compiled as a single unit, which is every one until
+something asks for shards.
+""".
+-spec forms(module(), [term()], map(), map(),
+            binary() | non_neg_integer(), undefined | module()) ->
+          {ok, cerl:c_module()} | {error, term()}.
+forms(Name, Unit, Sigs, TSigs, Stamp, Next) ->
+    forms(Name, Unit, Sigs, TSigs, Stamp, Next, Name).
+
+-doc """
+As `forms/6`, naming the head of the chain as well as the next link.
+
+`Head` is where a crossing back into the interpreter says to re-enter, and it is
+the *first* unit rather than this one. The chain runs one way, so a caller that
+starts in the middle can only reach what is below it: entering at the head is
+what makes every function reachable from every shard.
+""".
+-spec forms(module(), [term()], map(), map(), binary() | non_neg_integer(),
+            undefined | module(), module()) ->
+          {ok, cerl:c_module()} | {error, term()}.
+forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head) ->
+    forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, #{}).
+
+-doc """
+As `forms/7`, saying which other unit holds each function this one does not.
+
+A call to one of those is emitted as a direct call into that unit rather than a
+crossing back into the interpreter, which is the whole difference between
+splitting being worth it and not.
+""".
+-spec forms(module(), [term()], map(), map(), binary() | non_neg_integer(),
+            undefined | module(), module(), #{non_neg_integer() => module()}) ->
+          {ok, cerl:c_module()} | {error, term()}.
+forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) ->
     try
         Shapes = [{Pos, shape_of(IR)} || {Pos, _, _, IR} <- Unit],
         %% What every function needs to know about its siblings, so that a call
@@ -446,9 +519,10 @@ forms(Name, Unit, Sigs, TSigs, Stamp) ->
         Known = maps:from_list([{Idx, {Pos, maps:get(Pos, maps:from_list(Shapes))}}
                                 || {Pos, Idx, _, _} <- Unit]),
         Defs = [{cerl:c_fname(fun_name(Pos), arity(F, S)),
-                 function(F, IR, S, {Known, Sigs, TSigs, Name, Stamp})}
+                 function(F, IR, S, {Known, Sigs, TSigs, Head, Elsewhere,
+                                     Stamp})}
                 || {{Pos, _Idx, F, IR}, {Pos, S}} <- lists:zip(Unit, Shapes)],
-        Invoke = invoke_fn(Unit, maps:from_list(Shapes), Stamp),
+        Invoke = invoke_fn(Unit, maps:from_list(Shapes), Stamp, Next),
         Exports = [cerl:c_fname(invoke, 6)],
         {ok, cerl:c_module(cerl:c_atom(Name), Exports, [], [Invoke | Defs])}
     catch
@@ -468,10 +542,11 @@ copts(baseline) -> [from_core, binary, return_errors, no_ssa_opt].
 %% the budget are untouched by any of this.
 shape_of(IR) -> case shape(IR) of pure -> pure; _ -> stateful end.
 
+
 arity(#fn{nparams = NP}, pure) -> NP;
 arity(#fn{nparams = NP}, stateful) -> NP + 3.
 
-invoke_fn(Unit, Shapes, Stamp) ->
+invoke_fn(Unit, Shapes, Stamp, Next) ->
     Inst = cerl:c_var('Inst'), Mut = cerl:c_var('Mut'),
     Idx = cerl:c_var('Idx'), Args = cerl:c_var('Args'),
     %% The fifth argument is the caller's call depth, not the limits map it
@@ -482,8 +557,7 @@ invoke_fn(Unit, Shapes, Stamp) ->
     Clauses = [invoke_clause(Pos, I, F, maps:get(Pos, Shapes), Inst, Mut, Depth)
                || {Pos, I, F, _} <- Unit]
         ++ [cerl:c_clause([cerl:c_var('_Other')],
-                          cerl:c_tuple([cerl:c_atom(error),
-                                        cerl:c_atom(not_compiled)]))],
+                          miss(Next, Inst, Mut, Idx, Args, Depth))],
     Body = cerl:c_case(Idx, Clauses),
     %% What this module was built for, checked against what the caller was
     %% promised when it took its call lease.
@@ -516,6 +590,26 @@ invoke_fn(Unit, Shapes, Stamp) ->
                                                  cerl:c_atom(stale)]))]),
     {cerl:c_fname(invoke, 6),
      cerl:c_fun([Inst, Mut, Idx, Args, Depth, Want], Checked)}.
+
+%% An index this unit does not hold.
+%%
+%% One wasm module may be compiled into several generated ones, and this is the
+%% whole of how a caller reaches the right one: each names the next as a
+%% literal and hands the call straight over. The chain costs one call per miss
+%% and it costs it *inside generated code*, which is why it is here and not in
+%% the interpreter. Putting the same decision in `wasm_exec:do_call/4`, as a
+%% tuple indexed by function number, cost 8% of a QuickJS run for reasons
+%% `ATTEMPTS.md` records and nobody has explained.
+%%
+%% The last shard in the chain answers `not_compiled` and the caller
+%% interprets, exactly as a single unit always has. The stamp is passed along
+%% unchanged: every shard of one module was built for the same one, so the
+%% check at the far end means what it means here.
+miss(undefined, _Inst, _Mut, _Idx, _Args, _Depth) ->
+    cerl:c_tuple([cerl:c_atom(error), cerl:c_atom(not_compiled)]);
+miss(Next, Inst, Mut, Idx, Args, Depth) ->
+    cerl:c_call(cerl:c_atom(Next), cerl:c_atom(invoke),
+                [Inst, Mut, Idx, Args, Depth, cerl:c_var('Stamp')]).
 
 invoke_clause(Pos, Idx, #fn{nparams = NP} = F, Shape, Inst, Mut, Depth) ->
     Vs = [cerl:c_var(N) || N <- lists:seq(1, NP)],
@@ -568,7 +662,7 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %%          reaches is not known until it runs.
 -record(g, {env = #{}, stack = [], frames = [], depth = 0, n = 0,
             nlocals = 0, nres = 0, inst, mut, d, unit = #{}, sigs = #{},
-            tsigs = #{}, mod, gen = 0}).
+            tsigs = #{}, mod, elsewhere = #{}, gen = 0}).
 
 %% Two shapes, not three. `pure' keeps what the spike measured -- locals as Core
 %% variables, nothing threaded, a loop that carries no state. Anything touching
@@ -576,7 +670,7 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %% latter back, which reading alone does not need but is free to do and saves a
 %% third calling convention.
 function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
-         {Unit, Sigs, TSigs, Mod, Stamp}) ->
+         {Unit, Sigs, TSigs, Mod, Elsewhere, Stamp}) ->
     NLocals = NP + length(Defaults),
     {Extra, Inst, Mut, D, N0} =
         case Shape of
@@ -598,7 +692,8 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
     %% pools in this module exist for.
     G = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
            inst = Inst, mut = Mut, d = D, unit = Unit, sigs = Sigs,
-           tsigs = TSigs, mod = Mod, gen = Stamp},
+           tsigs = TSigs, mod = Mod, elsewhere = Elsewhere,
+           gen = Stamp},
     %% Parameters arrive in the interpreter's representation, which holds
     %% integers *signed*, and `wasm_exec:op1/2' and `op2/3' expect exactly that.
     %%
@@ -930,6 +1025,7 @@ instr({global_set, I}, Rest, G0, Exit) ->
 %% `wasm_exec:call_out/5', priced at 37.4 to 43.4 ns against the interpreter's
 %% own 43.5 to 44.7 for the same call.
 
+
 instr({call, F}, Rest, #g{unit = Unit, sigs = Sigs} = G0, Exit) ->
     {NP, NR} = maps:get(F, Sigs),
     {Args, G1} = take(NP, G0),
@@ -942,10 +1038,7 @@ instr({call, F}, Rest, #g{unit = Unit, sigs = Sigs} = G0, Exit) ->
                    %% caller's own state passes straight through.
                    cerl:c_tuple([local_call(Pos, NP, Args), G0#g.mut]);
                error ->
-                   call_op(call_out, [G0#g.inst, G0#g.mut, cerl:abstract(F),
-                                      cerl:make_list(Args), deeper(G0),
-                                      cerl:c_atom(G0#g.mod),
-                                      cerl:abstract(G0#g.gen)])
+                   outward(F, Args, G0)
            end,
     %% Results come back as a list, whatever side the call landed on, and are
     %% taken apart by matching: the count is static, so no walking and a wrong
@@ -968,9 +1061,9 @@ instr({call_indirect, TypeIdx, TableIdx}, Rest,
     %% The table index is on top, above the arguments.
     {I, G1} = pop(G0),
     {Args, G2} = take(NP, G1),
-    %% This module's own name, as a literal, so that a target compiled
-    %% alongside the caller is a call into generated code rather than a crossing
-    %% back into the interpreter. Passed rather than looked up: which module
+    %% The head of the chain, as a literal, so that a target compiled alongside
+    %% the caller is a call into generated code rather than a crossing back into
+    %% the interpreter. Passed rather than looked up: which module
     %% this is was decided at generation time, and a bytecode dispatch loop
     %% reaches this often enough that an `atomics` read to rediscover it would
     %% be part of the cost being removed.
@@ -1532,6 +1625,29 @@ encode(f64, V) -> cerl:c_call(cerl:c_atom(wasm_num), cerl:c_atom(f64_to_bits), [
 
 %% A pure vector operation: the same `wasm_simd` call the interpreter makes,
 %% with its result bound and pushed.
+%% A callee this unit does not define.
+%%
+%% Another unit of the same module is a *call*, straight into it, because which
+%% unit holds which function was decided before any of this was generated. Going
+%% out through the interpreter instead and coming back in through the head of
+%% the chain is what made four units 1.5x slower to run than one, and it was
+%% never necessary: the name is as much a literal as this unit's own.
+%%
+%% Anything else is a genuine crossing: a host function, or one the generator
+%% refused.
+outward(F, Args, #g{elsewhere = Elsewhere} = G0) ->
+    Common = [G0#g.inst, G0#g.mut, cerl:abstract(F), cerl:make_list(Args),
+              deeper(G0)],
+    case maps:find(F, Elsewhere) of
+        {ok, Other} ->
+            call_op(shard_call, Common ++ [cerl:c_atom(Other),
+                                           cerl:c_atom(G0#g.mod),
+                                           cerl:abstract(G0#g.gen)]);
+        error ->
+            call_op(call_out, Common ++ [cerl:c_atom(G0#g.mod),
+                                         cerl:abstract(G0#g.gen)])
+    end.
+
 simd(F, Args, Rest, G0, Exit) ->
     {V, G} = var(G0),
     cerl:c_let([V], cerl:c_call(cerl:c_atom(wasm_simd), cerl:c_atom(F), Args),

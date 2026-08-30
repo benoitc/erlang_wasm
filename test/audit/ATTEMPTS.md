@@ -118,6 +118,26 @@ call shard 2's by name, as a literal, when it is handed an index it does not
 hold. The chain costs one call per miss *inside generated code*, and
 `wasm_exec` is untouched. That is what to build.
 
+**Chaining shards in generated code, instead of a tuple in the interpreter.**
+After the tuple in `#st.code` cost 8%, the same problem was solved without
+touching `wasm_exec` at all: each generated unit names the next as a literal and
+hands over any index it does not hold. It works and it is tested, and one
+mistake in it is worth keeping. The chain runs one way, so a crossing back into
+the interpreter has to name the **head** of the chain rather than the unit it
+left; naming itself meant a caller that re-entered in the middle could only
+reach what was below it, and one call in five was silently interpreted.
+
+The test for it had to be written three times. Identical answers prove nothing,
+because a chain that does not chain falls back to the interpreter and answers
+the same; asserting `entered` moved was what made it fail when the chain was
+broken. Then the first version of that assertion was itself wrong, because
+`compile_sync` builds at the *end* of an invocation and the call that triggers
+it is interpreted.
+
+**Still off by default.** It works on the calling process and fails through the
+background compiler, two different ways, and neither reproduces from a harness
+that skips the interpreted first instance. `PERF.md` has both.
+
 ## Numbers that were withdrawn
 
 **The QuickJS benchmark arm never ran any JavaScript.** For its entire

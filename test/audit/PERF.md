@@ -2353,6 +2353,72 @@ cost multiples of what it does, and the mechanism is still unproven.
 `invoke/6` calls shard 2's by name when handed an index it does not hold, and
 the interpreter is not involved at all.
 
+### Shards work on the calling process and fail off it
+
+One wasm module compiled into several generated ones, each answering for the
+functions it holds and handing anything else to the next by name. QuickJS's
+223-function hot set, `#{compile_shards => 4}`:
+
+| | funcs | warm `_start` | speedup |
+| --- | ---: | ---: | ---: |
+| one unit | 223 | 174.4 ms | 13.2x |
+| four units, `compile_sync` | 223 | 157.2 ms | 11.8x |
+
+Correct, and every function accounted for. Through the **background** compiler
+the same options fail, twice over and differently each time: once with 223
+functions lowered, 16.3 seconds spent and **nothing published**, once with a
+shard raising out of `invoke/6` on a later instance's first call. A harness
+that skips the interpreted first instance does not reproduce either, in six
+attempts.
+
+The thread to pull is that `spawn_compile/2` re-lowers every body **in the
+compiler process**, where the fusion decision the calling process made is not
+set. That has been true for the single-unit path all along and is apparently
+survivable there.
+
+So the mechanism is in and the policy is not: `auto` is one unit until this is
+understood. No wall-clock number for parallel compilation yet, because the
+arrangement that would produce it is the one that fails.
+
+### Shards: 3.8x to compile, 1.5x to run
+
+The failure above was not the fusion decision. Publishing shard one is what
+makes the whole chain adoptable -- `wasm_jit:await/2` returns on it and the
+next instance calls straight in -- and the loop was loading and publishing each
+unit in turn. In the window between shard one going live and shard four being
+loaded, the chain reached a module that did not exist and generated code raised
+`undef`, which arrived as an internal error on somebody else's first call.
+Only off the calling process, because nothing else was racing that loop.
+
+Every unit is loaded before any is published now. QuickJS's 223-function hot
+set, background compiler:
+
+| | compile | warm `_start` | speedup |
+| --- | ---: | ---: | ---: |
+| one unit | 57.8 s | 174.4 ms | 13.2x |
+| four units | **15.2 s** | **268.5 ms** | 7.5x |
+
+**3.8x faster to compile and 1.5x slower to run**, and the second half was not
+inherent. `wasm_core:forms/7` built `Known` from its own unit only, so a call to
+a function in another unit crossed back into the interpreter and re-entered
+through the head of the chain. Which unit holds which function is decided before
+anything is generated, so it can be a direct call instead, and now is:
+
+| | compile | warm `_start` | speedup |
+| --- | ---: | ---: | ---: |
+| one unit | 55.6 s | 133.0 ms | 13.9x |
+| four units | **15.5 s** | **154.4 ms** | 14.6x |
+
+**3.6x faster to compile and about 16% slower to run.** What is left is that a
+call between units is a cross-module call through `wasm_exec:shard_call/8`
+where a call within one is a local `apply`, and that is inherent to their being
+separate BEAM modules.
+
+**The default stays one unit**, because the trade depends on something the
+runtime cannot know: forty seconds saved against twenty-one milliseconds a run
+is about nineteen hundred invocations to break even. A worker that serves one
+module all day should not split. Something that compiles a module to run it a
+few times should. So it is `compile_shards` and it is the embedder's call.
 ## The cost model: what generated code actually pays for
 
 Built because the alternative was guessing. Two things it killed on the first

@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# The runtime needs OTP 29: `-nominal' types and triple-quoted strings are
+# both used, and `docs/getting-started.md' says so.
+env:
+  OTP: '29'
+  REBAR3: '3.27'
+
+jobs:
+  compile:
+    name: Compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build
+          key: ${{ runner.os }}-rebar3-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
+      # `warnings_as_errors' is on, and the optional NIF builds here rather
+      # than falling back, so a C-side break fails the build instead of
+      # silently taking the pure Erlang path.
+      - run: rebar3 compile
+      - name: The NIF built, rather than falling back
+        run: test -f priv/wasi_file_nif.so
+
+  tests:
+    name: Tests
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build
+          key: ${{ runner.os }}-rebar3-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
+      # Neither suite is vendored; both skip when absent, and a skipping
+      # conformance run proves nothing. `wasm_spec_SUITE' asserts a floor of
+      # 65,481 executed assertions and an empty skip list, so this is what
+      # makes the run mean something.
+      - name: Fetch the specification test suite
+        run: git clone --depth 1 https://github.com/WebAssembly/testsuite.git
+      - name: Fetch the WASI test suite
+        run: |
+          git clone --depth 1 --branch prod/testsuite-base \
+            https://github.com/WebAssembly/wasi-testsuite.git
+      - run: rebar3 ct
+
+  lint:
+    name: Lint
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build
+          key: ${{ runner.os }}-rebar3-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
+      - run: rebar3 lint
+
+  xref:
+    name: Xref
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build
+          key: ${{ runner.os }}-rebar3-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
+      - run: rebar3 xref
+
+  dialyzer:
+    name: Dialyzer
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build
+          key: ${{ runner.os }}-rebar3-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
+      - uses: actions/cache@v4
+        with:
+          path: _build/default/*_plt
+          key: ${{ runner.os }}-plt-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: ${{ runner.os }}-plt-${{ env.OTP }}-
+      - run: rebar3 dialyzer

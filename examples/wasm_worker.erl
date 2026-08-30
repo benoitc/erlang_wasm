@@ -49,6 +49,11 @@ pool and check one out per request.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          handle_continue/2, terminate/2]).
 
+%% Long enough that an ordinary request never hits it, short enough that a
+%% runaway one is noticed. Five seconds is a guess about your workload and not
+%% a good one, which is why it has a name and a knob.
+-define(DEFAULT_TIMEOUT, 5000).
+
 -record(state, {
     module,                        % cached module handle
     imports = #{} :: map(),
@@ -79,9 +84,22 @@ Run one request.
 The timeout is enforced on both sides: `gen_server:call` stops waiting, and the
 worker is killed so the work actually stops. Giving up without killing would
 leave a runaway module burning a scheduler with nobody watching.
+
+`call/3` uses `worker_timeout`, five seconds unless you set it:
+
+```erlang
+application:set_env(wasm, worker_timeout, 30000).
+```
+
+Which is a default and not a policy. A deadline that belongs to the request
+belongs in `call/4`, where the caller who knows it can say so.
 """.
 -spec call(pid(), binary(), [term()]) -> {ok, [term()]} | {error, term()}.
-call(Pid, Function, Args) -> call(Pid, Function, Args, 5000).
+call(Pid, Function, Args) ->
+    call(Pid, Function, Args, default_timeout()).
+
+default_timeout() ->
+    application:get_env(wasm, worker_timeout, ?DEFAULT_TIMEOUT).
 
 -spec call(pid(), binary(), [term()], timeout()) -> {ok, [term()]} | {error, term()}.
 call(Pid, Function, Args, Timeout) ->

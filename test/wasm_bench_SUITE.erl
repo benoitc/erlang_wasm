@@ -15,7 +15,8 @@
 %% </ul>
 %%
 %% Run with `rebar3 bench'. Numbers are logged, not asserted, except the
-%% responsiveness check, which is a correctness property in disguise.
+%% responsiveness check, which is a correctness property in disguise and is
+%% therefore the only case a plain `rebar3 ct' runs.
 -module(wasm_bench_SUITE).
 
 -compile([export_all, nowarn_export_all]).
@@ -23,9 +24,13 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
-all() ->
-    [pipeline_costs, dispatch_throughput, memory_throughput,
-     scheduler_stays_responsive].
+%% Only the one that asserts something. The other three log numbers and cannot
+%% fail, so `rebar3 ct' has nothing to learn from them; `rebar3 bench' asks for
+%% the group.
+all() -> [scheduler_stays_responsive].
+
+groups() ->
+    [{bench, [], [pipeline_costs, dispatch_throughput, memory_throughput]}].
 
 init_per_suite(Config) ->
     case fixture() of

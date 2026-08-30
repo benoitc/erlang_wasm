@@ -108,10 +108,15 @@ as long as the worker lived.
 Erasing here is safe even when another instance in this process still holds the
 table, because the entry is a cache: the next `array_of/1` reloads it from the
 store and pays one `ets:lookup` for doing so.
+
+It only reaches the *destroying* process, which is why the cache is bounded as
+well. A worker calling into instances somebody else destroys never runs this
+line and would otherwise keep one array per table it ever touched.
 """.
 -spec release(table(), wasm_keeper:token()) -> ok.
 release({wasm_table, Id, _V, _TT}, Token) ->
     _ = erase({wasm_table_cache, Id}),
+    ok = forget(Id),
     wasm_keeper:release(Id, Token).
 
 -doc "This table's registry identity.".
@@ -229,10 +234,8 @@ array_of({wasm_table, Id, Version, _TT}) ->
     Now = atomics:get(Version, 1),
     case get({wasm_table_cache, Id}) of
         {Now, Cached} -> Cached;
-        _ ->
-            Array = wasm_engine:table_get(Id),
-            put({wasm_table_cache, Id}, {Now, Array}),
-            Array
+        undefined -> fill(Id, Now, wasm_engine:table_get(Id));
+        _ -> cache(Id, Now, wasm_engine:table_get(Id))
     end.
 
 store({wasm_table, Id, Version, _TT}, Array) ->
@@ -240,8 +243,57 @@ store({wasm_table, Id, Version, _TT}, Array) ->
     %% Bump first, then cache at the new version, so this process's own write
     %% leaves its cache valid while every other process reloads.
     New = atomics:add_get(Version, 1, 1),
-    put({wasm_table_cache, Id}, {New, Array}),
+    case get({wasm_table_cache, Id}) of
+        undefined -> _ = fill(Id, New, Array);
+        _ -> _ = cache(Id, New, Array)
+    end,
     ok.
+
+cache(Id, Version, Array) ->
+    put({wasm_table_cache, Id}, {Version, Array}),
+    Array.
+
+%%% ------------------------------------------------------- bounded cache ---
+
+%% How many tables one process may keep an array for. The cap is the whole
+%% point: `release/2` runs in the process that destroys the instance, and a
+%% worker that calls into instances owned elsewhere never runs it, so without a
+%% bound a long-lived caller keeps one array per table it has ever touched. Two
+%% hundred instances served left two hundred arrays.
+%%
+%% Well past any real working set, and a literal you can read. Nothing here is
+%% on the hit path: a hit is one `atomics:get` and one process dictionary read,
+%% exactly as before, and this runs only when an id is cached for the first
+%% time.
+-define(CACHED_TABLES, 64).
+-define(CACHED_KEYS, wasm_table_cached).
+
+fill(Id, Version, Array) ->
+    case get(?CACHED_KEYS) of
+        undefined -> put(?CACHED_KEYS, {1, [Id]});
+        {N, Ids} when N < ?CACHED_TABLES ->
+            put(?CACHED_KEYS, {N + 1, [Id | Ids]});
+        {_N, Ids} -> put(?CACHED_KEYS, evict(Id, Ids))
+    end,
+    cache(Id, Version, Array).
+
+%% The oldest half goes, rather than all of it, so a working set sitting just
+%% over the cap reloads once in a while instead of on every call.
+evict(Id, Ids) ->
+    Keep = ?CACHED_TABLES div 2,
+    {Recent, Old} = lists:split(Keep, Ids),
+    _ = [erase({wasm_table_cache, I}) || I <- Old],
+    {Keep + 1, [Id | Recent]}.
+
+forget(Id) ->
+    case get(?CACHED_KEYS) of
+        undefined -> ok;
+        {N, Ids} ->
+            case lists:delete(Id, Ids) of
+                Ids -> ok;
+                Rest -> put(?CACHED_KEYS, {N - 1, Rest}), ok
+            end
+    end.
 
 fill_range(Array, _Dst, 0, _V) -> Array;
 fill_range(Array, Dst, Len, V) ->

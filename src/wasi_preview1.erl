@@ -846,9 +846,13 @@ handle(sock_send_to, Ctx, [Fd, IovsPtr, IovsLen, AddrPtr, Port, _Flags, OutPtr],
                         {ok, Data} ?= read_iovecs(Ctx, IovsPtr, IovsLen),
                         {ok, H1} ?= wasi_sock:send_to(H, Data, Endpoint),
                         St1 = fd_set_handle(St, Fd, H1),
+                        %% The new state goes back either way. `send_to/3' may
+                        %% have opened the socket, and answering an errno
+                        %% without `St1' dropped the descriptor table entry
+                        %% that owns it: a guest passing an out-of-bounds
+                        %% `OutPtr' leaked one socket per call.
                         case write_u32(Ctx, OutPtr, byte_size(Data)) of
-                            {errno, ?ESUCCESS} -> {errno, ?ESUCCESS, St1};
-                            Other -> Other
+                            {errno, Errno} -> {errno, Errno, St1}
                         end
                     else
                         false -> {errno, ?ENOTCAPABLE};

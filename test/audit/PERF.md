@@ -2827,3 +2827,36 @@ Two things this cost to learn, both worth keeping:
 - **The append was the read's cost, not the read.** `atomics:get` is 4.66
   nanoseconds a word and the loop measured nearly twice that; four words per
   append rather than one closed most of it.
+
+## The second audit's fixes, held against QuickJS
+
+Nothing in that branch is meant to move a number. Two of the fixes touch code
+a call passes through anyway -- `wasm_heap:lease/1` and `unlease/2` on the
+outermost invocation, and `wasm_jit:cached_entry/3` on the entry path -- and
+this project has had three changes on the dispatch path cost about 70% while
+the synthetic loop measured nothing, so "it should be free" is not evidence.
+
+Five interleaved pairs on `qjs.wasm` with the tier on, minimum of three runs
+each, orderings alternated. Load average rose from 9 to 20 across the run,
+which is why the ordering matters more than the totals.
+
+| pair | order | base | branch |
+| ---: | --- | ---: | ---: |
+| 1 | base first | 131.8 ms | 135.2 ms |
+| 2 | **branch first** | 133.8 ms | 133.0 ms |
+| 3 | base first | 128.6 ms | 138.4 ms |
+| 4 | **branch first** | 135.8 ms | 136.9 ms |
+| 5 | base first | 132.0 ms | 133.5 ms |
+
+**Read it by the ordering, not by the totals.** Whichever arm runs *second*
+loses, in every pair: the branch loses all three base-first pairs and the two
+branch-first pairs are a tie, one each. That is the shape a rising load average
+produces and not the shape a code change produces, and it is exactly why the
+protocol in `bench/paths/README.md` says to run both orderings.
+
+There is also no mechanism. QuickJS declares no struct or array type, so
+`lease/1` answers `false` on its first comparison and none of the heap change
+is reached; and `wasm_jit:counts/0` reports `entered => 3` for the whole run,
+so `cached_entry/3` runs three times against 30,000 JavaScript iterations.
+
+Worth re-running on a quiet box before the next performance claim leans on it.

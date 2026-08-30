@@ -27,11 +27,13 @@ the node's life.
          a_builder_killed_before_it_finishes_releases_what_it_took/1,
          instantiating_and_destroying_does_not_grow_the_store/1,
          touching_a_table_and_destroying_leaves_no_cache/1,
+         a_caller_that_never_destroys_keeps_a_bounded_cache/1,
          a_trapping_start_hands_back_what_it_left_behind/1,
          two_instances_of_one_module_share_no_mutable_state/1,
          two_modules_in_one_process_do_not_borrow_each_others_functions/1,
          a_keeper_restart_keeps_the_registry/1,
          a_keeper_restart_mid_growth_leaves_the_size_it_promised/1,
+         a_keeper_restart_keeps_the_ceiling_it_promised/1,
          an_aborted_growth_does_not_block_the_next_one/1,
          an_engine_restart_keeps_the_store_and_the_waiters/1,
          restarts_under_traffic_leave_nothing_behind/1]).
@@ -50,11 +52,13 @@ all() ->
      a_builder_killed_before_it_finishes_releases_what_it_took,
      instantiating_and_destroying_does_not_grow_the_store,
      touching_a_table_and_destroying_leaves_no_cache,
+     a_caller_that_never_destroys_keeps_a_bounded_cache,
      a_trapping_start_hands_back_what_it_left_behind,
      two_instances_of_one_module_share_no_mutable_state,
      two_modules_in_one_process_do_not_borrow_each_others_functions,
      a_keeper_restart_keeps_the_registry,
      a_keeper_restart_mid_growth_leaves_the_size_it_promised,
+     a_keeper_restart_keeps_the_ceiling_it_promised,
      an_aborted_growth_does_not_block_the_next_one,
      an_engine_restart_keeps_the_store_and_the_waiters,
      restarts_under_traffic_leave_nothing_behind].
@@ -367,6 +371,41 @@ touching_a_table_and_destroying_leaves_no_cache(_Config) ->
          end || _ <- lists:seq(1, 200)],
     ?assertEqual([], [K || {{wasm_table_cache, _} = K, _} <- get()]).
 
+%% Erasing on release only reaches the process that destroys the instance, and
+%% that is often not the one that called it: a worker pool calls into instances
+%% a request handler creates and destroys. Two hundred instances served left two
+%% hundred arrays in the worker, one per table it had ever read.
+%%
+%% So the cache is bounded as well as erased. The number is not the point; that
+%% it stops growing is.
+a_caller_that_never_destroys_keeps_a_bounded_cache(_Config) ->
+    Mod = compile(~"(module (table (export \"t\") 2 4 funcref)
+                            (func (export \"n\") (result i32) table.size 0))"),
+    Self = self(),
+    Caller = spawn(fun() -> serve(Self) end),
+    _ = [begin
+             {ok, I} = wasm:instantiate(Mod, #{}),
+             Caller ! {touch, I, Self},
+             receive touched -> ok after 5000 -> ct:fail(no_touch) end,
+             %% Destroyed here, which is the point: `wasm_table:release/2`
+             %% runs in this process and never in the caller.
+             ok = wasm:destroy(I)
+         end || _ <- lists:seq(1, 200)],
+    Caller ! {report, Self},
+    Cached = receive {cached, N} -> N after 5000 -> ct:fail(no_report) end,
+    ?assert(Cached =< 64).
+
+serve(Parent) ->
+    receive
+        {touch, I, From} ->
+            {ok, [2]} = wasm:call(I, ~"n", []),
+            From ! touched,
+            serve(Parent);
+        {report, To} ->
+            Keys = [K || {{wasm_table_cache, _} = K, _} <- get()],
+            To ! {cached, length(Keys)}
+    end.
+
 %% A start function that traps keeps its instance on purpose: the specification
 %% says the store keeps what instantiation wrote, and `linking.wast` requires a
 %% call through a reference such a module left in an imported table to work
@@ -431,6 +470,40 @@ a_keeper_restart_keeps_the_registry(_Config) ->
 
     ok = wasm_memory:free(Mem),
     ?assertEqual(Base, wasm_engine:pages_in_use()).
+
+%% `max_memory_pages` is a promise `wasm:instantiate/3` makes for the life of
+%% the instance, and a keeper restart used to withdraw it. Everything else came
+%% back from the registry -- the holders, the charges, the growths in flight --
+%% and the ceilings did not: they lived only in the keeper's state map. An
+%% instance capped at two pages refused the third before a restart and took it
+%% afterwards, up to the node budget.
+%%
+%% So a ceiling lives in the registry beside the pages it bounds.
+a_keeper_restart_keeps_the_ceiling_it_promised(_Config) ->
+    %% On a fresh tree, for the reason `restarts_under_traffic_leave_nothing_
+    %% behind/1` gives: the restart budget is `intensity => 5, period => 10`
+    %% and it is shared with every other case here that kills something. This
+    %% one spends a unit of it, and without the reset the *next* case's kill is
+    %% the one the supervisor refuses.
+    ok = application:stop(wasm),
+    {ok, _} = application:ensure_all_started(wasm),
+    {ok, Inst} = wasm:instantiate(exports_memory(), #{},
+                                  #{max_memory_pages => 2}),
+    ?assertEqual({ok, [1]}, wasm:call(Inst, ~"grow", [1])),
+    %% At the ceiling: the third page is refused, which is -1 to the guest.
+    ?assertEqual({ok, [-1]}, wasm:call(Inst, ~"grow", [1])),
+
+    Pid = whereis(wasm_keeper),
+    Ref = monitor(process, Pid),
+    exit(Pid, kill),
+    receive {'DOWN', Ref, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
+    wait_until(fun() -> is_pid(whereis(wasm_keeper)) andalso
+                            whereis(wasm_keeper) =/= Pid end, 2000),
+
+    %% Still refused, and still two pages.
+    ?assertEqual({ok, [-1]}, wasm:call(Inst, ~"grow", [1])),
+    ?assertEqual({ok, [2]}, wasm:call(Inst, ~"size", [])),
+    ok = wasm:destroy(Inst).
 
 %% A growth ends three ways: committed, aborted, or the grower died. The commit
 %% path and the `DOWN` handler both took the resource out of `growing`; the
@@ -602,7 +675,10 @@ traffic(Mod, N) ->
 
 exports_memory() ->
     compile(~"(module (memory (export \"m\") 1 8)
-                (func (export \"read\") (result i32) (i32.const 0) (i32.load)))").
+                (func (export \"read\") (result i32) (i32.const 0) (i32.load))
+                (func (export \"grow\") (param i32) (result i32)
+                  (memory.grow (local.get 0)))
+                (func (export \"size\") (result i32) (memory.size)))").
 
 imports_memory() ->
     compile(~"(module (import \"e\" \"m\" (memory 1 8))

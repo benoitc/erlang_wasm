@@ -38,6 +38,7 @@ what you use of it rather than what it contains.
 -export([ask_compile/1, release_ask/1, executed/1]).
 -export([publish/2, unpublish/2, published/1]).
 -export([get_extra/2, set_extra/3, on_destroy/2, run_cleanups/1]).
+-export([note_entry/2]).
 
 -define(DEFAULT_LIMITS, #{fuel => infinity, max_depth => 1024}).
 
@@ -1354,9 +1355,9 @@ bounded staleness the version counter already handles.
 """.
 -spec release(#inst{}) -> ok.
 release(#inst{store = T, id = Id, entry_key = EK}) ->
-    %% The compiled entry is cached under a bare reference this record carries,
-    %% which `forget/1' cannot reach from an id alone. Erased here, where the
-    %% record is in hand.
+    %% Belt as well as braces: `forget/1' now reaches the entry from the id,
+    %% and this line is what makes the destroying process pay nothing to wait
+    %% for a sweep.
     _ = EK =:= undefined orelse erase(EK),
     ok = forget(Id),
     try ets:delete(T) catch error:badarg -> true end,
@@ -1390,6 +1391,23 @@ remember(#inst{id = Id} = Inst) ->
         _Already ->
             ok
     end.
+
+-doc """
+Note the compiled entry this process has cached for an instance.
+
+`wasm_jit:cached_entry/3` keys it by a bare `reference()` the instance record
+carries, which is what makes a hit one `get/1` with no tuple to build, and also
+what stops anything else recognising the entry as belonging to an instance. So
+the sweep could not reach it and `release/1` only ever ran in the process that
+destroyed the instance: a worker calling instances somebody else destroys kept
+one closure for each of them, for as long as it lived.
+
+Recorded against the id, where the sweep already looks.
+""".
+-spec note_entry(term(), reference()) -> ok.
+note_entry(Id, Key) ->
+    put({wasm_entry, Id}, Key),
+    ok.
 
 -doc """
 Note that this process has cached something belonging to this instance.
@@ -1441,6 +1459,10 @@ forget(Id) ->
     erase({wasm_live, Id}),
     erase({wasm_inst, Id}),
     erase({wasm_mut_cache, Id}),
+    case erase({wasm_entry, Id}) of
+        undefined -> ok;
+        Key -> erase(Key)
+    end,
     forget_ir(Id).
 
 forget_ir(Id) ->

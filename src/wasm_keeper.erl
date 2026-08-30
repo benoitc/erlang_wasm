@@ -358,14 +358,11 @@ init([]) ->
     %% that inflated size as its previous one. `memory.grow` promises the guest
     %% the size before the growth, so that is a specification violation and not
     %% only a leak.
-    {Growing, Totals} = adopt_growths(adopt_totals()),
+    {Growing, Totals, Caps} = adopt_growths(adopt_totals(), adopt_caps()),
     {ok, #{held => Held, mons => Mons, growing => Growing, queued => #{},
-           caps => #{}, totals => Totals}}.
+           caps => Caps, totals => Totals}}.
 
 %% Rebuilt from the registry on a restart, for the same reason the monitors are.
-%% The caps are not: they belong to instances that are still building or
-%% running, and an instance whose cap is forgotten is bounded by the node budget
-%% until it is destroyed. Losing a ceiling is the safer half to lose.
 adopt_totals() ->
     ets:foldl(
       fun({_Res, _Meta, Pages, Holders}, Acc) when is_map(Holders) ->
@@ -374,6 +371,18 @@ adopt_totals() ->
                     end, Acc, Holders);
          (_Other, Acc) -> Acc
       end, #{}, ?TAB).
+
+%% And the ceilings, which used to be dropped. A keeper that came up with no
+%% caps let every instance grow to the node budget: an instance created with a
+%% two-page maximum refused the third page before a restart and took it after,
+%% which is the limit `wasm:instantiate/3` promised being silently withdrawn.
+%%
+%% So a cap lives in the registry beside the pages it bounds, and goes when the
+%% last page under its token goes.
+adopt_caps() ->
+    ets:foldl(fun({{cap, Tok}, Max}, Acc) -> Acc#{Tok => Max};
+                 (_Other, Acc) -> Acc
+              end, #{}, ?TAB).
 
 adopt() ->
     ets:foldl(
@@ -394,24 +403,24 @@ adopt() ->
 %% The `{growing, Res}` row exists for this and for nothing else. The state map
 %% did not survive the restart and the charge did, which is the asymmetry that
 %% made the defect.
-adopt_growths(Totals) ->
+adopt_growths(Totals, Caps) ->
     Rows = ets:select(?TAB, [{{{growing, '$1'}, '$2'}, [], [{{'$1', '$2'}}]}]),
     lists:foldl(
-      fun({Res, {GrowRef, Pid, Delta}}, {G, T}) ->
+      fun({Res, {GrowRef, Pid, Delta}}, {G, T, C}) ->
           case is_process_alive(Pid) of
               true ->
                   MonRef = erlang:monitor(process, Pid),
-                  {G#{Res => {GrowRef, Pid, MonRef, Delta}}, T};
+                  {G#{Res => {GrowRef, Pid, MonRef, Delta}}, T, C};
               false ->
                   true = ets:delete(?TAB, {growing, Res}),
                   %% `caps` as well as `totals`: `sub_total/3` drops a token's
                   %% ceiling with its last page, and this runs before the state
                   %% map exists.
-                  #{totals := T1} =
-                      unreserve(Res, Delta, #{totals => T, caps => #{}}),
-                  {G, T1}
+                  #{totals := T1, caps := C1} =
+                      unreserve(Res, Delta, #{totals => T, caps => C}),
+                  {G, T1, C1}
           end
-      end, {#{}, Totals}, Rows).
+      end, {#{}, Totals, Caps}, Rows).
 
 handle_call({bequeath, Heir}, _From, State) ->
     %% A no-op when the supervisor created the table itself, which is the
@@ -425,6 +434,7 @@ handle_call({bequeath, Heir}, _From, State) ->
     {reply, ok, State};
 
 handle_call({set_limit, Token, Max}, _From, #{caps := Caps} = State) ->
+    true = ets:insert(?TAB, {{cap, Token}, Max}),
     {reply, ok, State#{caps := Caps#{Token => Max}}};
 
 handle_call({total_of, Token}, _From, #{totals := Totals} = State) ->
@@ -477,8 +487,11 @@ handle_call({release, Res, Token}, _From, State) ->
 handle_call({discard, Token}, {Pid, _}, #{held := Held} = State) ->
     Mine = [Res || {Res, Tok} <- maps:keys(maps:get(Pid, Held, #{})),
                    Tok =:= Token],
-    {reply, ok, lists:foldl(fun(Res, S) -> drop(Res, Token, S) end,
-                            State, Mine)};
+    S1 = lists:foldl(fun(Res, S) -> drop(Res, Token, S) end, State, Mine),
+    %% And the ceiling, which nothing else would take: `sub_total/3` drops one
+    %% with the token's last page, and a build that failed before reserving
+    %% anything has no page to drop.
+    {reply, ok, forget_cap(Token, S1)};
 
 handle_call({transfer, From, To, Owner}, {Pid, _}, #{held := Held} = State) ->
     %% Off the reverse index rather than a scan of the registry: what a builder
@@ -489,7 +502,14 @@ handle_call({transfer, From, To, Owner}, {Pid, _}, #{held := Held} = State) ->
     %% dropping the last of it takes its ceiling with it, so moving after would
     %% leave the instance with no limit at all: growth was refused during the
     %% build and unbounded for the whole life of the instance afterwards.
-    S1 = move_cap(From, To, State),
+    %% Nothing moved means the instance holds nothing to bound and never will:
+    %% everything is acquired during the build, and growth only extends a
+    %% memory that is already here. So the ceiling is dropped rather than
+    %% carried, which is what keeps a cap from outliving every use of it.
+    S1 = case Moved of
+             [] -> forget_cap(From, State);
+             _ -> move_cap(From, To, State)
+         end,
     S2 = lists:foldl(fun(Res, S) -> retag(Res, From, To, Owner, S) end,
                      S1, Moved),
     {reply, ok, S2};
@@ -569,9 +589,17 @@ handle_info(_Info, State) ->
 
 move_cap(From, To, #{caps := Caps} = State) ->
     case maps:take(From, Caps) of
-        {Max, Rest} -> State#{caps := Rest#{To => Max}};
-        error -> State
+        {Max, Rest} ->
+            true = ets:delete(?TAB, {cap, From}),
+            true = ets:insert(?TAB, {{cap, To}, Max}),
+            State#{caps := Rest#{To => Max}};
+        error ->
+            State
     end.
+
+forget_cap(Token, #{caps := Caps} = State) ->
+    true = ets:delete(?TAB, {cap, Token}),
+    State#{caps := maps:remove(Token, Caps)}.
 
 %% Whether this holder can take `Pages` more without passing its ceiling.
 within(Token, Pages, #{caps := Caps, totals := Totals}) ->
@@ -590,6 +618,7 @@ sub_total(Token, Pages, #{totals := Totals, caps := Caps} = State) ->
         N when N =< 0 ->
             %% Nothing left under this token, so its ceiling goes with it. A
             %% build token that was transferred, or an instance destroyed.
+            true = ets:delete(?TAB, {cap, Token}),
             State#{totals := maps:remove(Token, Totals),
                    caps := maps:remove(Token, Caps)};
         N ->

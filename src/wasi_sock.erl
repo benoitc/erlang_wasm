@@ -257,8 +257,18 @@ send_to({pending, Family, dgram} = H, Data, {udp, _, _} = Endpoint) ->
     %% source is whatever the host picks.
     Any = case Family of inet -> {0, 0, 0, 0}; inet6 -> {0, 0, 0, 0, 0, 0, 0, 0} end,
     case udp_open(Any, 0) of
-        {error, _} = E -> _ = H, E;
-        {ok, Opened} -> send_to(Opened, Data, Endpoint)
+        {error, _} = E ->
+            _ = H,
+            E;
+        {ok, Opened} ->
+            %% The socket belongs to the caller only if the send works: a
+            %% failure answers an errno and no handle, so nothing would ever
+            %% close this one. An unreachable destination on an unbound socket
+            %% leaked one file descriptor per call.
+            case send_to(Opened, Data, Endpoint) of
+                {ok, _} = Ok -> Ok;
+                {error, _} = E -> ok = close(Opened), E
+            end
     end;
 send_to(_Handle, _Data, _Endpoint) ->
     {error, ?ENOTSUP}.

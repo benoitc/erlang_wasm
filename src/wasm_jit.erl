@@ -151,13 +151,21 @@ entry_1(Inst, Limits, Entry) ->
 cached_entry(#inst{entry_key = K} = Inst, Slot, Entry) when K =/= undefined ->
     case get(K) of
         {Slot, Entry, Fun} -> Fun;
-        _ ->
-            Fun = compiled(Inst, Slot, Entry),
-            put(K, {Slot, Entry, Fun}),
-            Fun
+        %% First time this process caches anything under this key, so the id it
+        %% belongs to is recorded: nothing else can tell a bare reference from
+        %% any other dictionary key, and without that the sweep that drops a
+        %% destroyed instance's caches leaves this one behind for ever.
+        undefined -> fresh(Inst, Slot, Entry, K, note);
+        _ -> fresh(Inst, Slot, Entry, K, known)
     end;
 cached_entry(Inst, Slot, Entry) ->
     compiled(Inst, Slot, Entry).
+
+fresh(#inst{id = Id} = Inst, Slot, Entry, Key, Seen) ->
+    Fun = compiled(Inst, Slot, Entry),
+    Seen =:= note andalso wasm_instance:note_entry(Id, Key),
+    put(Key, {Slot, Entry, Fun}),
+    Fun.
 
 %% Adopting happens here and asking happens at the end of the call, and the
 %% split is the point.

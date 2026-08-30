@@ -31,7 +31,6 @@ eventually refuses every allocation on the node.
 -export([table_grow_limit/0]).
 -export([reserve_pages/1, release_pages/1, pages_in_use/0, page_limit/0,
          set_page_limit/1, stats/0]).
--export([register_limits/2, unregister_limits/1, limits_of/1]).
 -export([table_put/2, table_get/1, table_forget/1]).
 -export([cell_put/2, cell_get/1, cell_forget/1]).
 -export([intern_rec_group/1, ensure_store/0]).
@@ -41,7 +40,6 @@ eventually refuses every allocation on the node.
 
 -define(SERVER, ?MODULE).
 -define(PT_KEY, {wasm_engine, counters}).
--define(LIMITS_TAB, wasm_instance_limits).
 -define(TABLES_TAB, wasm_tables).
 -define(WAITERS_TAB, wasm_waiters).
 
@@ -361,55 +359,9 @@ ensure_tables_table() ->
         _ -> ok
     end.
 
-%%% ------------------------------------------------ per-instance limits ---
-%%
-%% An instance's limits have to be readable by a *caller* before it makes a
-%% call, because the call timeout is enforced caller-side: asking the instance
-%% what its timeout is would require the very round trip the timeout is meant
-%% to bound. A public ETS lookup costs about 30 ns against 1 to 3 us for a
-%% gen_server round trip, so this is invisible next to the call it guards.
-
--spec register_limits(pid(), map()) -> ok.
-register_limits(Pid, Limits) ->
-    ensure_limits_table(),
-    true = ets:insert(?LIMITS_TAB, {Pid, Limits}),
-    ok.
-
--spec unregister_limits(pid()) -> ok.
-unregister_limits(Pid) ->
-    case ets:whereis(?LIMITS_TAB) of
-        undefined -> ok;
-        _ -> true = ets:delete(?LIMITS_TAB, Pid), ok
-    end.
-
--spec limits_of(pid()) -> map().
-limits_of(Pid) ->
-    case ets:whereis(?LIMITS_TAB) of
-        undefined -> #{};
-        _ ->
-            case ets:lookup(?LIMITS_TAB, Pid) of
-                [{_, L}] -> L;
-                [] -> #{}
-            end
-    end.
-
-ensure_limits_table() ->
-    case ets:whereis(?LIMITS_TAB) of
-        undefined ->
-            %% Racy against a concurrent creator; whoever loses gets a badarg
-            %% and the winner's table is the one everybody uses.
-            try ets:new(?LIMITS_TAB, [named_table, set, public,
-                                      {read_concurrency, true}])
-            catch error:badarg -> ok
-            end,
-            ok;
-        _ -> ok
-    end.
-
 %%% ------------------------------------------------------------ callbacks ---
 
 init([]) ->
-    ensure_limits_table(),
     ensure_tables_table(),
     ensure_waiters_table(),
     case persistent_term:get(?PT_KEY, undefined) of

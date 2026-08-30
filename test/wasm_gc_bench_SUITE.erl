@@ -17,8 +17,10 @@
 %%       of whichever process happened to make the call.</li>
 %% </ul>
 %%
-%% Run with `rebar3 bench'. Sizes stop at 10^5 so the suite stays usable in a
-%% normal `rebar3 ct' run; set `WASM_BENCH_FULL=1' for the 10^6 arms.
+%% Run with `rebar3 bench'. A plain `rebar3 ct' runs none of it: these are
+%% measurements rather than regression tests, and `all/0' is empty so that they
+%% are not counted as passing cases. Sizes stop at 10^5; set `WASM_BENCH_FULL=1'
+%% for the 10^6 arms.
 %%
 %% Numbers are logged, not asserted. This box has been seen at load average 33
 %% and repeated runs of one arm vary by more than 3x, so every measurement here
@@ -37,17 +39,24 @@
 %% (ref null $s), where $s is type index 0 in each module below.
 -define(REF0, [16#63, 0]).
 
-all() ->
-    [call_round_trip_vs_heap_size,
-     collector_pause_vs_live_set,
-     minor_pause_vs_live_set,
-     collector_pause_vs_garbage,
-     allocation_throughput,
-     field_access,
-     bulk_array_ops,
-     field_index_cost,
-     collector_process_heap,
-     store_primitives].
+%% Empty on purpose. Every case here logs a number and asserts nothing, so a
+%% plain `rebar3 ct' would spend minutes on measurements that cannot fail and
+%% would report them as passing tests. They live in a group instead, which is
+%% what `rebar3 bench' asks for.
+all() -> [].
+
+groups() ->
+    [{bench, [],
+      [call_round_trip_vs_heap_size,
+       collector_pause_vs_live_set,
+       minor_pause_vs_live_set,
+       collector_pause_vs_garbage,
+       allocation_throughput,
+       field_access,
+       bulk_array_ops,
+       field_index_cost,
+       collector_process_heap,
+       store_primitives]}].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),

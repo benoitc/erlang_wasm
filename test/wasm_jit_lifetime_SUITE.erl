@@ -37,6 +37,7 @@ all() ->
      hashed_modules_contending_for_slots_all_answer,
      a_metered_invocation_never_reaches_generated_code,
      destroying_an_instance_gives_its_slot_lease_back,
+     a_caller_that_never_destroys_keeps_a_bounded_entry_cache,
      a_module_split_across_shards_answers_the_same,
      a_profile_sets_what_you_did_not,
      an_unknown_profile_is_a_value_not_a_crash].
@@ -545,6 +546,69 @@ an_unknown_profile_is_a_value_not_a_crash(_) ->
     M = build(loop_wat()),
     ?assertMatch({error, #{kind := unknown_profile}},
                  wasm:instantiate(M, #{}, #{profile => turbo})).
+
+%% The compiled entry is built once per instance and kept in the *calling*
+%% process's dictionary under a bare reference, which is what makes a hit one
+%% `get/1'. Nothing else can recognise that key as belonging to an instance, so
+%% the sweep that drops a destroyed instance's caches could not reach it and
+%% `wasm_instance:release/1' only ever runs in the process that destroys the
+%% instance. A worker calling instances a request handler creates and destroys
+%% kept one closure per instance for as long as it lived.
+%%
+%% The number is not the point; that it stops growing is.
+a_caller_that_never_destroys_keeps_a_bounded_entry_cache(_) ->
+    M = build(loop_wat()),
+    Caller = spawn(fun() -> serve() end),
+    Mon = monitor(process, Caller),
+    try
+        First = serve_and_count(M, Caller, 200),
+        Second = serve_and_count(M, Caller, 200),
+        ct:pal("entry cache after 200: ~p, after 400: ~p", [First, Second]),
+        ?assert(First < 200),
+        %% Four hundred instances served, and still bounded: the sweep collects
+        %% them the same way it collects everything else keyed by instance.
+        ?assert(Second < 200)
+    after
+        %% It has to survive two reports, so the report clause cannot be what
+        %% ends it. Stopped here instead, rather than left running for the rest
+        %% of the suite holding four hundred instances' worth of closures.
+        Caller ! stop,
+        receive {'DOWN', Mon, _, _, _} -> ok
+        after 5000 -> exit(Caller, kill)
+        end
+    end.
+
+serve_and_count(M, Caller, N) ->
+    Self = self(),
+    _ = [begin
+             {ok, I} = wasm:instantiate(M, #{}, sync_opts()),
+             Caller ! {call, I, Self},
+             receive
+                 called -> ok;
+                 {'DOWN', _, _, _, Why} -> ct:fail({caller_died, Why})
+             after 10000 -> ct:fail(no_call) end,
+             %% Destroyed here, which is the point: the caller never runs the
+             %% erase and has no way to key one.
+             ok = wasm:destroy(I)
+         end || _ <- lists:seq(1, N)],
+    Caller ! {report, Self},
+    receive {cached, K} -> K after 10000 -> ct:fail(no_report) end.
+
+serve() ->
+    receive
+        {call, I, From} ->
+            %% Twice: the first call adopts the slot and interprets, and the
+            %% second is the one that builds and caches the compiled entry.
+            {ok, [_]} = wasm:call(I, ~"f", [3]),
+            {ok, [_]} = wasm:call(I, ~"f", [3]),
+            From ! called,
+            serve();
+        {report, To} ->
+            To ! {cached, length([K || {K, _} <- get(), is_reference(K)])},
+            serve();
+        stop ->
+            ok
+    end.
 
 %%% -------------------------------------------------------------- helpers ---
 

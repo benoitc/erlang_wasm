@@ -2672,3 +2672,52 @@ Against its branch point, everything measured moved and nothing regressed:
 
 **39% on QuickJS**, and the whole of it is one idea: a BEAM immediate holds 60
 bits, and generated code should stay inside them and say so.
+
+## What a bulk NIF would be worth, before building one
+
+The one NIF shape the floors left standing. Priced before writing any C.
+
+### Bulk through generated code today
+
+| | ns | ns per byte |
+| --- | ---: | ---: |
+| `memory.copy`, 8 bytes | 40.92 | 5.11 |
+| `memory.copy`, 64 bytes | 117.34 | 1.83 |
+| `memory.copy`, 1024 bytes | 1290.70 | 1.26 |
+| `memory.fill`, 1024 bytes | 756.54 | 0.74 |
+| `wasm:write_memory/3`, 64 KB | 87,000 | 1.33 |
+| `wasm:read_memory/3`, 64 KB | 110,000 | 1.68 |
+| `wasm:write_memory/3`, 1 MB | 1,580,000 | 1.51 |
+
+A NIF is one 7.80-nanosecond call plus `memcpy`, so about 0.05 nanoseconds a
+byte once it is moving.
+
+### And what the workload actually moves
+
+A QuickJS run makes 953 `memory.copy` calls totalling **18,437 bytes** and 117
+`memory.fill` calls totalling 14,539: an average of 19 and 124 bytes. That is
+**0.04 milliseconds of an 80.8-millisecond run, or 0.05%**.
+
+**So the guest side is not the case.** `bulk.wasm` shows 95x against wasmtime
+because it exists to isolate the operation, not because real programs spend
+time there.
+
+### Where it is the case
+
+The embedder boundary. `docs/worker.md`'s pattern hands a request body in and
+takes a response out on every call, and that is `read_memory`/`write_memory` at
+1.0 to 1.8 nanoseconds a byte:
+
+| round trip | today | with a NIF |
+| --- | ---: | ---: |
+| 64 KB in and out | ~197 us | ~7 us |
+| 1 MB in and out | ~3.5 ms | ~55 us |
+
+A plugin call is about 690 microseconds, so a 64 KB round trip spends roughly a
+quarter of a request copying buffers, and a NIF removes almost all of it.
+
+**The recommendation is therefore narrow.** Not `memory.copy`: a NIF there is
+9 to 19x on an operation nothing measurable spends time in. The embedder's
+`read_memory`/`write_memory`, where the buffers are large and the caller is
+Erlang rather than the guest, and only for an embedder that passes large ones.
+The plugin arm passes a handful of bytes and would not notice either.

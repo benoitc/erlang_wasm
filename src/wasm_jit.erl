@@ -591,11 +591,28 @@ split(Unit, Limits) ->
         N -> renumber(bins(lists:reverse(lists:sort(Sized)), empty_bins(N)))
     end.
 
+%% `auto` is one, which is to say splitting is off unless you ask for it.
+%%
+%% It works, and only on the calling process. `#{compile_shards => 4}` with
+%% `compile_sync` compiles QuickJS's hot set into four units and runs it at
+%% 11.8x, every function accounted for. Through the *background* compiler the
+%% same options fail two ways: once with 223 functions lowered, 16 seconds
+%% spent and nothing published, and once with a shard raising out of
+%% `invoke/6` on a later instance's first call. Neither reproduces from a
+%% harness that skips the interpreted first instance, which is the thread to
+%% pull: `spawn_compile/2` re-lowers every body in the compiler process, where
+%% the fusion decision the caller made is not set.
+%%
+%% So the mechanism ships and the policy does not. Until that is understood,
+%% nothing splits unless an embedder asks, and `wasm_jit_lifetime_SUITE` is
+%% what keeps the chain honest meanwhile.
 shards(Words, Limits) ->
     case maps:get(compile_shards, Limits, auto) of
-        auto -> erlang:max(1, erlang:min(?MAX_SHARDS, Words div ?SHARD_WORDS));
+        auto -> auto_shards(Words);
         N when is_integer(N), N >= 1 -> erlang:min(?MAX_SHARDS, N)
     end.
+
+auto_shards(_Words) -> 1.
 
 empty_bins(N) -> [{0, []} || _ <- lists:seq(1, N)].
 

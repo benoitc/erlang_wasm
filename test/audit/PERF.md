@@ -2352,3 +2352,30 @@ cost multiples of what it does, and the mechanism is still unproven.
 **The design changes instead.** Shards can chain in generated code: shard 1's
 `invoke/6` calls shard 2's by name when handed an index it does not hold, and
 the interpreter is not involved at all.
+
+### Shards work on the calling process and fail off it
+
+One wasm module compiled into several generated ones, each answering for the
+functions it holds and handing anything else to the next by name. QuickJS's
+223-function hot set, `#{compile_shards => 4}`:
+
+| | funcs | warm `_start` | speedup |
+| --- | ---: | ---: | ---: |
+| one unit | 223 | 174.4 ms | 13.2x |
+| four units, `compile_sync` | 223 | 157.2 ms | 11.8x |
+
+Correct, and every function accounted for. Through the **background** compiler
+the same options fail, twice over and differently each time: once with 223
+functions lowered, 16.3 seconds spent and **nothing published**, once with a
+shard raising out of `invoke/6` on a later instance's first call. A harness
+that skips the interpreted first instance does not reproduce either, in six
+attempts.
+
+The thread to pull is that `spawn_compile/2` re-lowers every body **in the
+compiler process**, where the fusion decision the calling process made is not
+set. That has been true for the single-unit path all along and is apparently
+survivable there.
+
+So the mechanism is in and the policy is not: `auto` is one unit until this is
+understood. No wall-clock number for parallel compilation yet, because the
+arrangement that would produce it is the one that fails.

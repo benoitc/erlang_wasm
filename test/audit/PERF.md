@@ -2525,3 +2525,46 @@ rather than 240 times per dispatch.
 
 Data operations do transfer, and those are what the table above is weighted by.
 Control flow has to be counted in compiled code or not at all.
+
+### The narrow store, and where the floor actually is
+
+A four-byte store into a 64-bit `atomics` word is a read, a splice and a write,
+and the splice reached for `16#FFFFFFFF00000000` as its keep-mask. That literal
+is a bignum, so it took the whole expression off the immediate path for the
+sake of a constant -- even when the half of the word not being written is zero,
+which is most of a grown memory and any value that fits in the half being
+written.
+
+The bits above the field are kept by shifting them out and back and the bits
+below by a mask that is small because the offset is at most 32, so nothing in
+the common case is a bignum. The literal-offset list also covered only 0 and
+32, which is where an i32 lands; every byte and 16-bit store fell to the
+dynamic form that builds its mask and both shifts at run time. It covers every
+offset the width can naturally sit at now.
+
+| | before | after |
+| --- | ---: | ---: |
+| `i32.store` | 22.16 | **13.77** |
+| `i32.store8` | 22.13 | **14.41** |
+| `i64.store` | 22.55 | **9.49** |
+| `f64.store` | 29.21 | **15.67** |
+| `i32.load`, untouched | 8.80 | 8.80 |
+
+**Neither benchmark can show this.** QuickJS is i64-heavy -- 488,629 `i64.store`
+against 92,022 `i32.store` -- and its i64 path was already fixed, so it sits at
+87.6 ms against 124.7 either way. The plugin arm calls a trivial `capacity` two
+hundred times, is not memory-heavy at all, and spans 161 to 216 microseconds
+over four interleaved pairs. The construct prices are the evidence, and the
+change cannot cost anything: it is strictly fewer and cheaper operations on
+every path it touches.
+
+`wasm_core_SUITE:every_memory_access_agrees_with_the_interpreter` is what says
+it is correct, and it walks every load and store against boundary patterns.
+
+**This is close to the floor for the representation.** `PERF.md` put that at
+about 19 nanoseconds a store when `atomics` get-then-put on one word cost
+19.13; that pair is 9.59 now and a four-byte store is 13.77. What is left is
+the address arithmetic and the bounds check. Going below it means changing the
+representation, and the two ways to do that -- a 32-bit lane layout, or a NIF --
+are both profile decisions, because a lane layout would make i32 cheaper and
+i64 dearer and QuickJS is i64-heavy while a Rust plugin is not.

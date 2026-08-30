@@ -1433,23 +1433,47 @@ unsigned_word(_Int, V) ->
 %% alternates between the two offsets below, so both are worth naming. Anything
 %% else keeps the general form, which is the one that was always there.
 spliced(N, Old, Vm, Bit) ->
-    Aligned = [B || B <- [0, 32], B + N * 8 =< 64, B rem (N * 8) =:= 0],
+    %% Every offset the width can naturally sit at, not just the two an i32
+    %% uses. A byte store lands on any of eight and each is a literal splice;
+    %% before this they all fell to the dynamic form, which builds the mask and
+    %% both shifts at run time.
+    Aligned = [B || B <- lists:seq(0, 56, 8),
+                    B + N * 8 =< 64, B rem (N * 8) =:= 0],
     cerl:c_case(Bit,
                 [cerl:c_clause([cerl:abstract(B)], splice_at(N, Old, Vm, B))
                  || B <- Aligned]
                 ++ [cerl:c_clause([cerl:c_var('_Bit')],
                                   splice_dyn(N, Old, Vm, Bit))]).
 
-%% `Bit` is a literal here, so the keep-mask is one too. Written as the
-%% complement rather than `bnot`, which would make it negative and take the
-%% value off the 64-bit fixnum path on the way back in.
+%% `Bit` is a literal here, so the whole splice is built from literals -- but
+%% not from the *keep-mask*, which is where this used to reach for
+%% `16#FFFFFFFF00000000` and take a four-byte store off the immediate path for
+%% the sake of a constant.
+%%
+%% The bits above the field are kept by shifting them out and back, and the bits
+%% below by a mask that is small because `B` is at most 32. A word whose other
+%% half happens to be zero -- which is most of a freshly grown memory, and any
+%% value that fits in the half being written -- then stays in immediates from
+%% end to end.
 splice_at(N, Old, Vm, B) ->
-    Keep = cerl:abstract(?W64 bxor (mask(N) bsl B)),
+    Top = B + N * 8,
+    Above = case Top of
+                64 -> none;
+                _ -> bif('bsl', [bif('bsr', [Old, cerl:abstract(Top)]),
+                                 cerl:abstract(Top)])
+            end,
+    Below = case B of
+                0 -> none;
+                _ -> bif('band', [Old, cerl:abstract((1 bsl B) - 1)])
+            end,
     Placed = case B of
                  0 -> Vm;
                  _ -> bif('bsl', [Vm, cerl:abstract(B)])
              end,
-    bif('bor', [bif('band', [Old, Keep]), Placed]).
+    lists:foldl(fun(none, Acc) -> Acc;
+                   (E, none) -> E;
+                   (E, Acc) -> bif('bor', [Acc, E])
+                end, none, [Above, Below, Placed]).
 
 splice_dyn(N, Old, Vm, Bit) ->
     Keep = bif('bxor', [cerl:abstract(?W64),

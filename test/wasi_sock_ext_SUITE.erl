@@ -31,6 +31,8 @@ all() ->
      a_resolved_address_gets_no_authority_from_being_resolved,
      a_made_up_service_name_mints_no_atoms,
      a_refused_out_pointer_does_not_leak_the_connection,
+     a_failed_datagram_leaves_no_socket_behind,
+     a_refused_out_pointer_keeps_the_socket_it_opened,
      the_socket_cap_covers_opening].
 
 %%% ---------------------------------------------------------------- fixture ---
@@ -105,6 +107,13 @@ source() -> ~"""
     (call $sock_send_to (local.get $fd) (i32.const 8) (i32.const 1)
                         (i32.const 128) (local.get $port) (i32.const 0)
                         (i32.const 4)))
+  ;; The same send_to, with the out-pointer past the end of a one-page memory.
+  (func (export "bad_send_to") (param $fd i32) (param $len i32) (param $port i32)
+        (result i32)
+    (call $iov (local.get $len))
+    (call $sock_send_to (local.get $fd) (i32.const 8) (i32.const 1)
+                        (i32.const 128) (local.get $port) (i32.const 0)
+                        (i32.const 0x7FFF0000)))
   (func (export "recv_from") (param $fd i32) (param $len i32) (result i32)
     (call $iov (local.get $len))
     (call $sock_recv_from (local.get $fd) (i32.const 8) (i32.const 1)
@@ -460,6 +469,50 @@ a_refused_out_pointer_does_not_leak_the_connection(Config) ->
     ?assertEqual({error, closed}, gen_tcp:recv(Peer, 0, 2000)),
     ok = wasm:destroy(I).
 
+
+%% Sending from a socket that was never bound binds it ephemerally, which means
+%% `sock_send_to' opens one. If the send then fails, the caller is answered an
+%% errno and no handle, so nothing would ever close what was opened: one
+%% descriptor per call, for as long as the process lived.
+a_failed_datagram_leaves_no_socket_behind(Config) ->
+    %% Port zero is a legal destination to ask for and not one that can be
+    %% reached, so the send fails after the socket is already open.
+    I = instance(Config, #{connect => [{udp, ~"127.0.0.1", {0, 1}}]}),
+    ?assertEqual({ok, [?ESUCCESS]},
+                 wasm:call(I, ~"open", [?ADDRESS_FAMILY_INET4, ?SOCK_TYPE_DGRAM])),
+    {ok, [Fd]} = wasm:call(I, ~"out_fd", []),
+    ok = wasm:write_memory(I, 128, <<127, 0, 0, 1>>),
+    ok = wasm:write_memory(I, 64, ~"ping"),
+    Before = length(erlang:ports()),
+    _ = [?assertMatch({ok, [E]} when E =/= ?ESUCCESS,
+                      wasm:call(I, ~"send_to", [Fd, 4, 0]))
+         || _ <- lists:seq(1, 20)],
+    ?assertEqual(Before, length(erlang:ports())),
+    ok = wasm:destroy(I).
+
+%% And the other end of the same operation. The send works, the guest's out
+%% pointer does not, and the socket `send_to/3' opened is in the descriptor
+%% table it built: answering an errno without that table dropped the entry that
+%% owns the socket, so destroying the instance closed nothing.
+a_refused_out_pointer_keeps_the_socket_it_opened(Config) ->
+    {ok, Peer} = gen_udp:open(0, [binary, {active, false}, {ip, {127, 0, 0, 1}}]),
+    {ok, PeerPort} = inet:port(Peer),
+    I = instance(Config, #{connect => [{udp, ~"127.0.0.1", PeerPort}]}),
+    ?assertEqual({ok, [?ESUCCESS]},
+                 wasm:call(I, ~"open", [?ADDRESS_FAMILY_INET4, ?SOCK_TYPE_DGRAM])),
+    {ok, [Fd]} = wasm:call(I, ~"out_fd", []),
+    ok = wasm:write_memory(I, 128, <<127, 0, 0, 1>>),
+    ok = wasm:write_memory(I, 64, ~"ping"),
+    Before = length(erlang:ports()),
+    ?assertEqual({ok, [?EFAULT]}, wasm:call(I, ~"bad_send_to", [Fd, 4, PeerPort])),
+    %% It really was sent, so the socket really was opened.
+    ?assertMatch({ok, {_, _, ~"ping"}}, gen_udp:recv(Peer, 0, 2000)),
+    ?assertEqual(Before + 1, length(erlang:ports())),
+    %% And destroying the instance closes it, which is what the dropped state
+    %% made impossible.
+    ok = wasm:destroy(I),
+    ?assertEqual(Before, length(erlang:ports())),
+    ok = gen_udp:close(Peer).
 
 %% A service name is guest data, and resolving it needed `binary_to_atom/2` on
 %% that data. The atom table is node-wide and never reclaimed, so a module

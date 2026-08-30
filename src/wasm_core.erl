@@ -1060,6 +1060,24 @@ binop(Op, A, B) ->
 %% f32 is deliberately not here. Every f32 result has to be rounded to single
 %% precision, which Erlang has no native way to do, so those stay in
 %% `wasm_num_float' where the one implementation lives.
+%% The four unary operations a real workload actually spends its time in.
+%%
+%% Measured, not guessed: a compiled QuickJS run leaves generated code
+%% 1,317,284 times for `wasm_exec:op1/2` and for almost nothing else --
+%% `check_depth/2`, the next one down, is 23,085 -- and four operations are the
+%% whole of it: `i32_eqz` 581,201, `i32_wrap_i64` 521,684,
+%% `i64_extend_i32_u` 154,285, `i64_eqz` 60,031. Every one is pure arithmetic
+%% with no trap and no state, and every one was a cross-module call.
+%%
+%% Each is the interpreter's own definition written in Core rather than a second
+%% spelling of it: `wasm_num:wrap_s32/1` is `wrap(32, _)`, `wasm_num:to_u32/1`
+%% over the i32 domain is `uns(32, _)`, and `i64.extend_i32_s` is the identity
+%% because an i32 is already held signed.
+inline1(i32_eqz) -> fun(A) -> test('=:=', A, cerl:abstract(0)) end;
+inline1(i64_eqz) -> fun(A) -> test('=:=', A, cerl:abstract(0)) end;
+inline1(i32_wrap_i64) -> fun(A) -> wrap(32, A) end;
+inline1(i64_extend_i32_u) -> fun(A) -> uns(32, A) end;
+inline1(i64_extend_i32_s) -> fun(A) -> A end;
 inline1(f64_convert_i32_s) -> fun(A) -> bif(float, [A]) end;
 inline1(f64_convert_i64_s) -> fun(A) -> bif(float, [A]) end;
 inline1(f64_convert_i32_u) ->

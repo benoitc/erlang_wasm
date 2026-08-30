@@ -2352,3 +2352,96 @@ cost multiples of what it does, and the mechanism is still unproven.
 **The design changes instead.** Shards can chain in generated code: shard 1's
 `invoke/6` calls shard 2's by name when handed an index it does not hold, and
 the interpreter is not involved at all.
+
+## The cost model: what generated code actually pays for
+
+Built because the alternative was guessing. Two things it killed on the first
+day: that boxing dominates (a compiled run reclaims 3,989,087 words against the
+interpreter's 1,432,733,751, GC at 0.0% by `msacc`), and that `call_indirect`
+matters for QuickJS (5,145 of them in a run).
+
+### Prices
+
+`bench/paths/perinstr.erl` builds the same loop with K copies of a snippet and
+with 2K and takes the difference, so loop overhead cancels. It priced the
+*interpreter* until now; `-run perinstr main on` prices generated code.
+
+| snippet | interpreted | **compiled** |
+| --- | ---: | ---: |
+| `nop`, `i32.const`, `local.get`, `local.set` | 1.9 to 11.1 | **~0** |
+| `i32.add` | 14.45 | **1.26** |
+| `i32.mul` | 15.05 | 2.45 |
+| `i32.shl` | 14.92 | 1.95 |
+| `global.get` | 7.43 | 1.65 |
+| `call` (empty) | 19.63 | 3.77 |
+| `f64.convert_i32_u` | 32.52 | 4.73 |
+| `i32.load` | 25.75 | 9.35 |
+| `global.set` | 23.84 | 15.80 |
+| `i32.store` | 36.53 | 22.25 |
+| **`i64.add`** | 29.11 | **26.40** |
+| **`i64.shl`** | 29.56 | **24.99** |
+| **`f64.load`** | 51.12 | **35.91** |
+| **`i64.load`** | 48.70 | **39.51** |
+| **`call_indirect`** | 78.47 | **63.22** |
+| `memory.copy`, 64 bytes | 123.59 | 319.41 |
+
+The operand stack and locals really are compiled away: `nop` and `local.get`
+cost nothing at all. i32 arithmetic is 1 to 2.5 ns. What stands out is that
+**an `i64` operation is 21x its `i32` twin** -- 26.40 against 1.26 -- and that
+`memory.copy` is *worse* compiled than interpreted.
+
+### Counts
+
+The interpreter never runs, so `run/3` cannot be counted. What can be counted
+is every function the generator emits a call to; `wasm_core`'s `call_op/2`
+names them. One QuickJS run, `call_count` tracing:
+
+| escape | calls |
+| --- | ---: |
+| **`op1/2`** | **1,317,284** |
+| `check_depth/2` | 23,085 |
+| `set_global_at/4` | 9,552 |
+| `indirect_out/9` | 5,145 |
+| `global_at/2` | 4,800 |
+| `load_at/5` | 4,543 |
+| `store_at/6` | 2,259 |
+| everything else | under 1,000 each |
+
+`check_depth/2` is one per call, so **the whole run makes about 23,000 wasm
+calls** and `call_indirect` at 5,145 cannot matter however expensive it is.
+`load_at`/`store_at` are only the slow path; the fast one is inlined and
+invisible here.
+
+`op1/2` is two orders of magnitude above everything else, and four operations
+are all of it:
+
+| op | calls | share |
+| --- | ---: | ---: |
+| `i32_eqz` | 581,201 | 44% |
+| `i32_wrap_i64` | 521,684 | 40% |
+| `i64_extend_i32_u` | 154,285 | 12% |
+| `i64_eqz` | 60,031 | 5% |
+
+### The first thing it found
+
+Every one of those four is pure arithmetic with no trap and no state, and every
+one was a cross-module call because `wasm_core:inline1/1` covered only four f64
+conversions. Inlining them is the interpreter's own definition written in Core:
+`wasm_num:wrap_s32/1` is `wrap(32, _)`, `wasm_num:to_u32/1` over the i32 domain
+is `uns(32, _)`, and `i64.extend_i32_s` is the identity because an i32 is
+already held signed.
+
+**`op1/2` disappears from the escape table entirely.**
+
+### What it says to do next
+
+- **`i64` operations at 21x their `i32` twins.** `wrap(64, _)` masks with
+  `16#FFFFFFFFFFFFFFFF`, which is past the 60-bit immediate range, so every
+  64-bit wrap is bignum arithmetic on values that are usually small. This is
+  the largest single lever the model has found and it is pure code generation.
+- **`memory.copy` slower compiled than interpreted**, at 5 ns a byte.
+- **`i32.store` at 22.25 against `i32.load` at 9.35**, which is the
+  read-modify-write the `atomics` representation forces and what the NIF
+  question is about.
+- **`call_indirect` and boxing are not worth touching for this workload**, and
+  the model is what says so.

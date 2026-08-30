@@ -480,6 +480,13 @@ a_keeper_restart_keeps_the_registry(_Config) ->
 %%
 %% So a ceiling lives in the registry beside the pages it bounds.
 a_keeper_restart_keeps_the_ceiling_it_promised(_Config) ->
+    %% On a fresh tree, for the reason `restarts_under_traffic_leave_nothing_
+    %% behind/1` gives: the restart budget is `intensity => 5, period => 10`
+    %% and it is shared with every other case here that kills something. This
+    %% one spends a unit of it, and without the reset the *next* case's kill is
+    %% the one the supervisor refuses.
+    ok = application:stop(wasm),
+    {ok, _} = application:ensure_all_started(wasm),
     {ok, Inst} = wasm:instantiate(exports_memory(), #{},
                                   #{max_memory_pages => 2}),
     ?assertEqual({ok, [1]}, wasm:call(Inst, ~"grow", [1])),

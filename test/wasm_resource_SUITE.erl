@@ -32,6 +32,7 @@ the node's life.
          two_modules_in_one_process_do_not_borrow_each_others_functions/1,
          a_keeper_restart_keeps_the_registry/1,
          a_keeper_restart_mid_growth_leaves_the_size_it_promised/1,
+         a_keeper_restart_keeps_the_ceiling_it_promised/1,
          an_aborted_growth_does_not_block_the_next_one/1,
          an_engine_restart_keeps_the_store_and_the_waiters/1,
          restarts_under_traffic_leave_nothing_behind/1]).
@@ -55,6 +56,7 @@ all() ->
      two_modules_in_one_process_do_not_borrow_each_others_functions,
      a_keeper_restart_keeps_the_registry,
      a_keeper_restart_mid_growth_leaves_the_size_it_promised,
+     a_keeper_restart_keeps_the_ceiling_it_promised,
      an_aborted_growth_does_not_block_the_next_one,
      an_engine_restart_keeps_the_store_and_the_waiters,
      restarts_under_traffic_leave_nothing_behind].
@@ -432,6 +434,33 @@ a_keeper_restart_keeps_the_registry(_Config) ->
     ok = wasm_memory:free(Mem),
     ?assertEqual(Base, wasm_engine:pages_in_use()).
 
+%% `max_memory_pages` is a promise `wasm:instantiate/3` makes for the life of the
+%% instance, and a keeper restart used to withdraw it. Everything else came back
+%% from the registry -- the holders, the charges, the growths in flight -- and
+%% the ceilings did not, because they lived only in the keeper's state map. An
+%% instance capped at two pages refused the third before a restart and took it
+%% afterwards, up to the node budget.
+%%
+%% So a ceiling lives in the registry beside the pages it bounds.
+a_keeper_restart_keeps_the_ceiling_it_promised(_Config) ->
+    {ok, Inst} = wasm:instantiate(exports_memory(), #{},
+                                  #{max_memory_pages => 2}),
+    ?assertEqual({ok, [1]}, wasm:call(Inst, ~"grow", [1])),
+    %% At the ceiling: the third page is refused, which is -1 to the guest.
+    ?assertEqual({ok, [-1]}, wasm:call(Inst, ~"grow", [1])),
+
+    Pid = whereis(wasm_keeper),
+    Ref = monitor(process, Pid),
+    exit(Pid, kill),
+    receive {'DOWN', Ref, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
+    wait_until(fun() -> is_pid(whereis(wasm_keeper)) andalso
+                            whereis(wasm_keeper) =/= Pid end, 2000),
+
+    %% Still refused, and still two pages.
+    ?assertEqual({ok, [-1]}, wasm:call(Inst, ~"grow", [1])),
+    ?assertEqual({ok, [2]}, wasm:call(Inst, ~"size", [])),
+    ok = wasm:destroy(Inst).
+
 %% A growth ends three ways: committed, aborted, or the grower died. The commit
 %% path and the `DOWN` handler both took the resource out of `growing`; the
 %% abort path did not, and `grow_begin/3` queues behind that mark on a call with
@@ -602,7 +631,10 @@ traffic(Mod, N) ->
 
 exports_memory() ->
     compile(~"(module (memory (export \"m\") 1 8)
-                (func (export \"read\") (result i32) (i32.const 0) (i32.load)))").
+                (func (export \"read\") (result i32) (i32.const 0) (i32.load))
+                (func (export \"grow\") (param i32) (result i32)
+                  (memory.grow (local.get 0)))
+                (func (export \"size\") (result i32) (memory.size)))").
 
 imports_memory() ->
     compile(~"(module (import \"e\" \"m\" (memory 1 8))

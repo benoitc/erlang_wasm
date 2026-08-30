@@ -49,7 +49,7 @@ scheduler, which is precisely what a NIF-based one can.
 %% Read by `wasm_core` at generation time, so the width and signedness of an
 %% access are decided once and in one place.
 -export([load_spec/1, store_spec/1]).
--export([call_out/7, check_depth/2, indirect_out/9]).
+-export([call_out/7, shard_call/8, check_depth/2, indirect_out/9]).
 -export([memory_size_at/2, memory_grow_at/5, memory_fill_at/6, memory_copy_at/8,
          memory_init_at/8, data_drop_at/3]).
 -export([simd_load_at/7, simd_store_at/6, simd_load_lane_at/9,
@@ -1006,6 +1006,28 @@ call_out(Inst, Mut, Idx, Args, Depth, Mod, Gen) ->
                                  code_module => {Mod, Gen}},
     {ok, Results, Mut1} = call(Inst, Mut, Idx, Args, Limits),
     {Results, Mut1}.
+
+-doc """
+Call a function this generated module does not hold but a sibling does.
+
+One wasm module may be compiled into several generated ones, and a call between
+them is a call, not a crossing: which unit holds which function was decided
+before either was generated, so the name is a literal exactly as the caller's
+own is. Going out through the interpreter and back in through the head of the
+chain instead measured 268.5 ms against 174.4 on QuickJS.
+
+`{error, _}` means the sibling's slot was refilled between generation and now,
+which its stamp check catches. The crossing is the right answer to that, and it
+is the same one a caller with no sibling at all gets.
+""".
+-spec shard_call(#inst{}, #mut{}, non_neg_integer(), [term()],
+                 non_neg_integer(), module(), module(),
+                 non_neg_integer() | binary()) -> {[term()], #mut{}}.
+shard_call(Inst, Mut, Idx, Args, Depth, Target, Head, Gen) ->
+    case Target:invoke(Inst, Mut, Idx, Args, Depth, Gen) of
+        {ok, Results, Mut1} -> {Results, Mut1};
+        {error, _} -> call_out(Inst, Mut, Idx, Args, Depth, Head, Gen)
+    end.
 
 -doc """
 Charge one level of call depth, or raise what `enter/5` raises.

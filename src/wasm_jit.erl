@@ -529,7 +529,7 @@ generate(Inst, Limits, Mod, Token, Executed) ->
 %% compile: sixteen of QuickJS's hot functions are already 30 seconds of the 54.
 %% See `test/audit/PERF.md`.
 build(Inst, Limits, Mode, Stamp, Unit, [_], [{Mod, Token}]) ->
-    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod) of
+    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod, #{}) of
         {ok, Bin} ->
             {module, Mod} = code:load_binary(Mod, "wasm_generated", Bin),
             ok = wasm_code_slots:publish(Token),
@@ -552,9 +552,17 @@ build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First]) ->
         Tokens ->
             Mods = [M || {M, _} <- Tokens],
             Head = hd(Mods),
+            %% Which unit holds each function, so a call between them is a call
+            %% and not a crossing. Known here because the split happens before
+            %% anything is generated.
+            Where = maps:from_list(
+                      [{Idx, M} || {P, M} <- lists:zip(Parts, Mods),
+                                   {_, Idx, _, _} <- P]),
             Jobs = lists:zip3(Parts, Mods, tl(Mods) ++ [undefined]),
             Bins = pmap(fun({U, M, Next}) ->
-                            artifact(Inst, M, U, Mode, Stamp, Next, Head)
+                            Mine = [Idx || {_, Idx, _, _} <- U],
+                            artifact(Inst, M, U, Mode, Stamp, Next, Head,
+                                     maps:without(Mine, Where))
                         end, Jobs),
             publish_all(Inst, Limits, Tokens, Parts, Bins)
     end.
@@ -602,23 +610,25 @@ split(Unit, Limits) ->
 
 %% `auto` is one, which is to say splitting is off unless you ask for it.
 %%
-%% It works now, off the calling process as well as on it, and what it buys and
-%% costs are both measured. QuickJS's 223-function hot set, four units:
+%% It works, and what it buys and costs are both measured. QuickJS's
+%% 223-function hot set, background compiler:
 %%
 %% | | compile | warm `_start` |
 %% | --- | ---: | ---: |
-%% | one unit | 57.8 s | 174.4 ms |
-%% | four units | **15.2 s** | **268.5 ms** |
+%% | one unit | 55.6 s | 133.0 ms |
+%% | four units | **15.5 s** | **154.4 ms** |
 %%
-%% So it is 3.8x faster to compile and 1.5x slower to run, and the reason for
-%% the second half is in `wasm_core:forms/7`: a callee in *another* unit is not
-%% in `Known`, so the call crosses back into the interpreter and comes in again
-%% through the head of the chain, where a callee in the same unit is a local
-%% `apply`. Which unit holds what is decided before anything is generated, so
-%% that crossing is avoidable and is the next thing to do.
+%% **3.6x faster to compile and about 16% slower to run.** The 16% is a call
+%% between units going through `wasm_exec:shard_call/8` where a call within one
+%% is a local `apply`; it was 1.5x until those calls stopped going out through
+%% the interpreter and back in through the head of the chain.
 %%
-%% Until it is, the trade is bad for anything that runs more than briefly and
-%% the default stays one unit.
+%% The default is one unit anyway, because the trade depends on something this
+%% module cannot know: forty seconds saved against twenty-one milliseconds a
+%% run is about nineteen hundred invocations to break even. A worker that
+%% serves a module for a day should not split; something that compiles a module
+%% to run it a few times should. So it is `compile_shards`, and it is the
+%% embedder's call.
 shards(Words, Limits) ->
     case maps:get(compile_shards, Limits, auto) of
         auto -> auto_shards(Words);
@@ -705,7 +715,7 @@ collect(Pid) ->
 %% today's instance. What it *does* depend on is the slot, because a module's
 %% name is part of its BEAM file, which is why the slot is in the key and why
 %% `wasm_code_slots` prefers a module's own slot when one is free.
-artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head) ->
+artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere) ->
     %% Not cached when it is one of several. The key would have to carry which
     %% module the chain points at next, and a shard set is only reproducible if
     %% the same split falls out of the same workload, which nothing promises.
@@ -721,7 +731,7 @@ artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head) ->
         {ok, Bin} -> bump(?IX_CACHED, 1), {ok, Bin};
         _ ->
             case wasm_core:module(Mod, Unit, sigs(Inst), tsigs(Inst), Mode,
-                                  Stamp, Next, Head) of
+                                  Stamp, Next, Head, Elsewhere) of
                 {ok, Bin} = Ok ->
                     Key =:= undefined orelse wasm_code_cache:store(Key, Bin),
                     Ok;

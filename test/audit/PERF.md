@@ -2398,10 +2398,24 @@ set, background compiler:
 | one unit | 57.8 s | 174.4 ms | 13.2x |
 | four units | **15.2 s** | **268.5 ms** | 7.5x |
 
-**3.8x faster to compile and 1.5x slower to run.** The second half is not
-inherent: `wasm_core:forms/7` builds `Known` from its own unit only, so a call
-to a function in another unit crosses back into the interpreter and re-enters
-through the head of the chain, where a call within the unit is a local `apply`.
-Which unit holds which function is decided before anything is generated, so
-that crossing can be a direct `Mod:invoke` instead. Until it is, the trade is
-bad for anything that runs more than briefly and the default stays one unit.
+**3.8x faster to compile and 1.5x slower to run**, and the second half was not
+inherent. `wasm_core:forms/7` built `Known` from its own unit only, so a call to
+a function in another unit crossed back into the interpreter and re-entered
+through the head of the chain. Which unit holds which function is decided before
+anything is generated, so it can be a direct call instead, and now is:
+
+| | compile | warm `_start` | speedup |
+| --- | ---: | ---: | ---: |
+| one unit | 55.6 s | 133.0 ms | 13.9x |
+| four units | **15.5 s** | **154.4 ms** | 14.6x |
+
+**3.6x faster to compile and about 16% slower to run.** What is left is that a
+call between units is a cross-module call through `wasm_exec:shard_call/8`
+where a call within one is a local `apply`, and that is inherent to their being
+separate BEAM modules.
+
+**The default stays one unit**, because the trade depends on something the
+runtime cannot know: forty seconds saved against twenty-one milliseconds a run
+is about nineteen hundred invocations to break even. A worker that serves one
+module all day should not split. Something that compiles a module to run it a
+few times should. So it is `compile_shards` and it is the embedder's call.

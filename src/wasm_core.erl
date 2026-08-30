@@ -44,7 +44,8 @@ every other refusal here: interpret it.
 
 -export([fun_name/1, frame_name/1, limits/0, atoms/0]).
 -export([supported/1, can_compile/2, ops/0, module/4, module/6]).
--export([module/7, module/8, forms/5, forms/6, forms/7]).
+-export([module/7, module/8, module/9]).
+-export([forms/5, forms/6, forms/7, forms/8]).
 
 -include("wasm_exec.hrl").
 -include("wasm_memory.hrl").
@@ -431,7 +432,17 @@ As `module/7`, naming the head of the chain for a crossing to re-enter at.
              binary() | non_neg_integer(), undefined | module(), module()) ->
           {ok, binary()} | {error, term()}.
 module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Head) ->
-    case forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head) of
+    module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Head, #{}).
+
+-doc """
+As `module/8`, saying which other unit holds each function this one does not.
+""".
+-spec module(module(), [term()], map(), map(), baseline | full,
+             binary() | non_neg_integer(), undefined | module(), module(),
+             #{non_neg_integer() => module()}) ->
+          {ok, binary()} | {error, term()}.
+module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Head, Elsewhere) ->
+    case forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) of
         {ok, Core} ->
             case compile:forms(Core, copts(Mode)) of
                 {ok, Name, Bin} -> {ok, Bin};
@@ -487,6 +498,19 @@ what makes every function reachable from every shard.
             undefined | module(), module()) ->
           {ok, cerl:c_module()} | {error, term()}.
 forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head) ->
+    forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, #{}).
+
+-doc """
+As `forms/7`, saying which other unit holds each function this one does not.
+
+A call to one of those is emitted as a direct call into that unit rather than a
+crossing back into the interpreter, which is the whole difference between
+splitting being worth it and not.
+""".
+-spec forms(module(), [term()], map(), map(), binary() | non_neg_integer(),
+            undefined | module(), module(), #{non_neg_integer() => module()}) ->
+          {ok, cerl:c_module()} | {error, term()}.
+forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) ->
     try
         Shapes = [{Pos, shape_of(IR)} || {Pos, _, _, IR} <- Unit],
         %% What every function needs to know about its siblings, so that a call
@@ -495,7 +519,8 @@ forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head) ->
         Known = maps:from_list([{Idx, {Pos, maps:get(Pos, maps:from_list(Shapes))}}
                                 || {Pos, Idx, _, _} <- Unit]),
         Defs = [{cerl:c_fname(fun_name(Pos), arity(F, S)),
-                 function(F, IR, S, {Known, Sigs, TSigs, Head, Stamp})}
+                 function(F, IR, S, {Known, Sigs, TSigs, Head, Elsewhere,
+                                     Stamp})}
                 || {{Pos, _Idx, F, IR}, {Pos, S}} <- lists:zip(Unit, Shapes)],
         Invoke = invoke_fn(Unit, maps:from_list(Shapes), Stamp, Next),
         Exports = [cerl:c_fname(invoke, 6)],
@@ -516,6 +541,7 @@ copts(baseline) -> [from_core, binary, return_errors, no_ssa_opt].
 %% (`src/wasm.erl'), so error capture, checkpoint settlement, the heap lease and
 %% the budget are untouched by any of this.
 shape_of(IR) -> case shape(IR) of pure -> pure; _ -> stateful end.
+
 
 arity(#fn{nparams = NP}, pure) -> NP;
 arity(#fn{nparams = NP}, stateful) -> NP + 3.
@@ -636,7 +662,7 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %%          reaches is not known until it runs.
 -record(g, {env = #{}, stack = [], frames = [], depth = 0, n = 0,
             nlocals = 0, nres = 0, inst, mut, d, unit = #{}, sigs = #{},
-            tsigs = #{}, mod, gen = 0}).
+            tsigs = #{}, mod, elsewhere = #{}, gen = 0}).
 
 %% Two shapes, not three. `pure' keeps what the spike measured -- locals as Core
 %% variables, nothing threaded, a loop that carries no state. Anything touching
@@ -644,7 +670,7 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %% latter back, which reading alone does not need but is free to do and saves a
 %% third calling convention.
 function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
-         {Unit, Sigs, TSigs, Mod, Stamp}) ->
+         {Unit, Sigs, TSigs, Mod, Elsewhere, Stamp}) ->
     NLocals = NP + length(Defaults),
     {Extra, Inst, Mut, D, N0} =
         case Shape of
@@ -666,7 +692,8 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
     %% pools in this module exist for.
     G = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
            inst = Inst, mut = Mut, d = D, unit = Unit, sigs = Sigs,
-           tsigs = TSigs, mod = Mod, gen = Stamp},
+           tsigs = TSigs, mod = Mod, elsewhere = Elsewhere,
+           gen = Stamp},
     %% Parameters arrive in the interpreter's representation, which holds
     %% integers *signed*, and `wasm_exec:op1/2' and `op2/3' expect exactly that.
     %%
@@ -998,6 +1025,7 @@ instr({global_set, I}, Rest, G0, Exit) ->
 %% `wasm_exec:call_out/5', priced at 37.4 to 43.4 ns against the interpreter's
 %% own 43.5 to 44.7 for the same call.
 
+
 instr({call, F}, Rest, #g{unit = Unit, sigs = Sigs} = G0, Exit) ->
     {NP, NR} = maps:get(F, Sigs),
     {Args, G1} = take(NP, G0),
@@ -1010,10 +1038,7 @@ instr({call, F}, Rest, #g{unit = Unit, sigs = Sigs} = G0, Exit) ->
                    %% caller's own state passes straight through.
                    cerl:c_tuple([local_call(Pos, NP, Args), G0#g.mut]);
                error ->
-                   call_op(call_out, [G0#g.inst, G0#g.mut, cerl:abstract(F),
-                                      cerl:make_list(Args), deeper(G0),
-                                      cerl:c_atom(G0#g.mod),
-                                      cerl:abstract(G0#g.gen)])
+                   outward(F, Args, G0)
            end,
     %% Results come back as a list, whatever side the call landed on, and are
     %% taken apart by matching: the count is static, so no walking and a wrong
@@ -1439,6 +1464,29 @@ encode(f64, V) -> cerl:c_call(cerl:c_atom(wasm_num), cerl:c_atom(f64_to_bits), [
 
 %% A pure vector operation: the same `wasm_simd` call the interpreter makes,
 %% with its result bound and pushed.
+%% A callee this unit does not define.
+%%
+%% Another unit of the same module is a *call*, straight into it, because which
+%% unit holds which function was decided before any of this was generated. Going
+%% out through the interpreter instead and coming back in through the head of
+%% the chain is what made four units 1.5x slower to run than one, and it was
+%% never necessary: the name is as much a literal as this unit's own.
+%%
+%% Anything else is a genuine crossing: a host function, or one the generator
+%% refused.
+outward(F, Args, #g{elsewhere = Elsewhere} = G0) ->
+    Common = [G0#g.inst, G0#g.mut, cerl:abstract(F), cerl:make_list(Args),
+              deeper(G0)],
+    case maps:find(F, Elsewhere) of
+        {ok, Other} ->
+            call_op(shard_call, Common ++ [cerl:c_atom(Other),
+                                           cerl:c_atom(G0#g.mod),
+                                           cerl:abstract(G0#g.gen)]);
+        error ->
+            call_op(call_out, Common ++ [cerl:c_atom(G0#g.mod),
+                                         cerl:abstract(G0#g.gen)])
+    end.
+
 simd(F, Args, Rest, G0, Exit) ->
     {V, G} = var(G0),
     cerl:c_let([V], cerl:c_call(cerl:c_atom(wasm_simd), cerl:c_atom(F), Args),

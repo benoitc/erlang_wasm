@@ -75,5 +75,8 @@ indirect_calls(C) ->
 
 i64_arithmetic(C) ->
     ?assertEqual({ok, [57879]}, call(C, <<"i64ops">>, [123, 456])),
-    {ok, [R]} = call(C, <<"i64ops">>, [-1, 2]),
-    ?assert(is_integer(R)).
+    %% `(a * b) ^ (a >> 3) ^ (b << 5)' with a = -1: -2 xor -1 is 1, xor 64 is
+    %% 65. The sign is the point -- the shift is arithmetic and the operands
+    %% are two's complement -- so the answer is worth naming rather than
+    %% checking that it is an integer.
+    ?assertEqual({ok, [65]}, call(C, <<"i64ops">>, [-1, 2])).

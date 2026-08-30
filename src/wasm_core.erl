@@ -1107,7 +1107,10 @@ unop(Op, A) ->
 emit2(Op, Rest, G0, Exit) ->
     {B, G1} = pop(G0), {A, G2} = pop(G1),
     {V, G3} = var(G2),
-    cerl:c_let([V], binop(Op, A, B), seq(Rest, push(V, G3), Exit)).
+    %% A second name, for an operation that has to look at its own result before
+    %% it can finish. Allocated here because this is where the counter lives.
+    {W, G4} = var(G3),
+    cerl:c_let([V], binop(Op, A, B, W), seq(Rest, push(V, G4), Exit)).
 
 %%% ------------------------------------------------------ inline arithmetic ---
 %%
@@ -1125,15 +1128,26 @@ emit2(Op, Rest, G0, Exit) ->
 %% Values are held signed, exactly as the interpreter holds them, so wrapping is
 %% masking to width and then flipping and subtracting the sign bit: three BIFs
 %% and no test, where a comparison would branch.
-binop(Op, A, B) ->
-    case inline(Op) of
-        false -> call_op(op2, [cerl:c_atom(Op), A, B]);
-        Expr -> Expr(A, B)
+binop(Op, A, B, W) ->
+    case inline_w(Op) of
+        false ->
+            case inline(Op) of
+                false -> call_op(op2, [cerl:c_atom(Op), A, B]);
+                Expr -> Expr(A, B)
+            end;
+        Expr -> Expr(A, B, W)
     end.
+
 
 -define(W32, 16#FFFFFFFF).
 -define(S32, 16#80000000).
 -define(W64, 16#FFFFFFFFFFFFFFFF).
+-define(P64, 16#10000000000000000).
+%% The largest BEAM small integer: 60 bits, signed. A literal at or below this
+%% is an immediate and a literal above it is a bignum, which is the whole
+%% reason `wrap_sum/2` has two range tests instead of one.
+-define(SMALL, 576460752303423487).
+-define(P32, 16#100000000).
 -define(S64, 16#8000000000000000).
 
 %% The four integer-to-f64 conversions, which are *total*: every i32 and i64
@@ -1153,6 +1167,24 @@ binop(Op, A, B) ->
 %% f32 is deliberately not here. Every f32 result has to be rounded to single
 %% precision, which Erlang has no native way to do, so those stay in
 %% `wasm_num_float' where the one implementation lives.
+%% The four unary operations a real workload actually spends its time in.
+%%
+%% Measured, not guessed: a compiled QuickJS run leaves generated code
+%% 1,317,284 times for `wasm_exec:op1/2` and for almost nothing else --
+%% `check_depth/2`, the next one down, is 23,085 -- and four operations are the
+%% whole of it: `i32_eqz` 581,201, `i32_wrap_i64` 521,684,
+%% `i64_extend_i32_u` 154,285, `i64_eqz` 60,031. Every one is pure arithmetic
+%% with no trap and no state, and every one was a cross-module call.
+%%
+%% Each is the interpreter's own definition written in Core rather than a second
+%% spelling of it: `wasm_num:wrap_s32/1` is `wrap(32, _)`, `wasm_num:to_u32/1`
+%% over the i32 domain is `uns(32, _)`, and `i64.extend_i32_s` is the identity
+%% because an i32 is already held signed.
+inline1(i32_eqz) -> fun(A) -> test('=:=', A, cerl:abstract(0)) end;
+inline1(i64_eqz) -> fun(A) -> test('=:=', A, cerl:abstract(0)) end;
+inline1(i32_wrap_i64) -> fun(A) -> wrap(32, A) end;
+inline1(i64_extend_i32_u) -> fun(A) -> uns(32, A) end;
+inline1(i64_extend_i32_s) -> fun(A) -> A end;
 inline1(f64_convert_i32_s) -> fun(A) -> bif(float, [A]) end;
 inline1(f64_convert_i64_s) -> fun(A) -> bif(float, [A]) end;
 inline1(f64_convert_i32_u) ->
@@ -1218,6 +1250,65 @@ test(Erl, A, B) ->
     cerl:c_case(bif(Erl, [A, B]),
                 [cerl:c_clause([cerl:abstract(true)], cerl:abstract(1)),
                  cerl:c_clause([cerl:abstract(false)], cerl:abstract(0))]).
+
+%% The two operations that are cheaper for looking at their own result.
+%%
+%% `wrap(64, _)` masks with 2^64-1 and folds with 2^63, and both literals are
+%% past the 60 bits a BEAM immediate covers, so the whole expression is bignum
+%% arithmetic however small the value is. That is the entire difference between
+%% `i32.add` at 1.26 nanoseconds and `i64.add` at 26.40: the i32 constants are
+%% immediates and the i64 ones are not.
+%%
+%% An i64 is always held in `[-2^63, 2^63)` -- that is the invariant every wrap
+%% maintains -- so a sum or difference of two of them lands in `(-2^64, 2^64)`
+%% and the correction is a comparison and at most one subtraction. Multiply and
+%% shift are not here: their results are unbounded and only the mask answers.
+inline_w(i64_add) -> fun(A, B, W) -> wrap_sum(bif('+', [A, B]), W) end;
+inline_w(i64_sub) -> fun(A, B, W) -> wrap_sum(bif('-', [A, B]), W) end;
+%% The 32-bit pair is here for a different reason. Its constants are immediates
+%% already, so the branch-free `wrap(32, _)` costs nothing to run -- but it
+%% tells the compiler nothing either, and since OTP 25 the JIT emits far better
+%% code for arithmetic whose range it knows: an addition drops from ten
+%% instructions to four and a comparison from eleven to four. A guard is how
+%% that range gets stated, and validation has already proved it.
+inline_w(i32_add) -> fun(A, B, W) -> wrap_sum32(bif('+', [A, B]), W) end;
+inline_w(i32_sub) -> fun(A, B, W) -> wrap_sum32(bif('-', [A, B]), W) end;
+inline_w(_) -> false.
+
+wrap_sum32(E, W) ->
+    cerl:c_case(
+      E,
+      [cerl:c_clause([W],
+                     bif('and', [bif('>=', [W, cerl:abstract(-?S32)]),
+                                 bif('<', [W, cerl:abstract(?S32)])]),
+                     W),
+       cerl:c_clause([W], bif('>=', [W, cerl:abstract(?S32)]),
+                     bif('-', [W, cerl:abstract(?P32)])),
+       cerl:c_clause([W], cerl:abstract(true),
+                     bif('+', [W, cerl:abstract(?P32)]))]).
+
+wrap_sum(E, W) ->
+    cerl:c_case(
+      E,
+      [%% Small enough to be a BEAM immediate, which is what almost every value
+       %% in real code is. This clause exists because the *next* one compares
+       %% against 2^63, and a literal that large is itself a bignum: testing
+       %% against it cost about 5.5 nanoseconds a comparison, which was most of
+       %% what was left after the mask went. These bounds are the 60-bit
+       %% immediate range exactly, so the test is register work.
+       cerl:c_clause([W],
+                     bif('and', [bif('>=', [W, cerl:abstract(-?SMALL - 1)]),
+                                 bif('=<', [W, cerl:abstract(?SMALL)])]),
+                     W),
+       %% In range but big enough to be a bignum. Correct, and rare.
+       cerl:c_clause([W],
+                     bif('and', [bif('>=', [W, cerl:abstract(-?S64)]),
+                                 bif('<', [W, cerl:abstract(?S64)])]),
+                     W),
+       cerl:c_clause([W], bif('>=', [W, cerl:abstract(?S64)]),
+                     bif('-', [W, cerl:abstract(?P64)])),
+       cerl:c_clause([W], cerl:abstract(true),
+                     bif('+', [W, cerl:abstract(?P64)]))]).
 
 wrap(32, E) -> bif('-', [bif('bxor', [bif('band', [E, cerl:abstract(?W32)]),
                                       cerl:abstract(?S32)]),
@@ -1384,20 +1475,66 @@ word_index(A, Sh) ->
 
 atomic(F, Args) -> cerl:c_call(cerl:c_atom(atomics), cerl:c_atom(F), Args).
 
+%% A full-word load is the word.
+%%
+%% `ordinary/6` only takes the fast path when the access fits inside one word,
+%% so for eight bytes `Bit` is necessarily zero and the shift and the mask are
+%% both identities -- but the mask is `2^64-1`, which is past the 60-bit
+%% immediate range, so the compiler cannot see that and every `i64.load` did
+%% bignum arithmetic on a value that is usually small. `i64.load` measured
+%% 39.81 nanoseconds against `i32.load`'s 9.35, which is backwards: an aligned
+%% eight-byte load is one `atomics:get` and should be the cheapest of the two.
+inline_load(8, Kind, _A, _Sh, Ix, Ck, _Bit) ->
+    decode_word(Kind, atomic(get, [Ck, Ix]));
 inline_load(N, Kind, _A, _Sh, Ix, Ck, Bit) ->
     Raw = bif('band', [bif('bsr', [atomic(get, [Ck, Ix]), Bit]),
                        cerl:abstract(mask(N))]),
     decode(Kind, N, Raw).
 
+%% The word as `atomics` hands it over: unsigned, `[0, 2^64)`.
+%%
+%% Reinterpreting that as a signed i64 is one comparison, and the first one is
+%% against the immediate bound rather than 2^63 for the reason `wrap_sum/2`
+%% gives: a literal that large is a bignum and comparing against it is not free.
+decode_word(f64, Raw) ->
+    cerl:c_call(cerl:c_atom(wasm_num), cerl:c_atom(f64_from_bits), [Raw]);
+decode_word(_Int, Raw) ->
+    W = cerl:c_var('Rw'),
+    cerl:c_case(Raw,
+                [cerl:c_clause([W], bif('=<', [W, cerl:abstract(?SMALL)]), W),
+                 cerl:c_clause([W], bif('<', [W, cerl:abstract(?S64)]), W),
+                 cerl:c_clause([W], cerl:abstract(true),
+                               bif('-', [W, cerl:abstract(?P64)]))]).
+
 %% A narrow store is a read, a splice and a write: `atomics' words are 64 bits
 %% and there is no narrower write. That is why a store costs twice a load, and
 %% it is a property of the representation rather than of this code.
+%% A full-word store is the word, so there is nothing to splice into.
+%%
+%% The general path reads the word, masks the value with `2^64-1` and merges;
+%% for eight bytes the read is pointless, the merge is the identity and the mask
+%% is the signed-to-unsigned reinterpretation, which one comparison does without
+%% touching a bignum literal. That is a read, a bignum `band` and a splice
+%% removed from every `i64.store` and `f64.store`.
+inline_store(8, Kind, _A, _Sh, Ix, Ck, _Bit, Val) ->
+    atomic(put, [Ck, Ix, unsigned_word(Kind, encode(Kind, Val))]);
 inline_store(N, Kind, _A, _Sh, Ix, Ck, Bit, Val) ->
     V = cerl:c_var('V'), Old = cerl:c_var('Old'), Vm = cerl:c_var('Vm'),
     cerl:c_let([V], encode(Kind, Val),
       cerl:c_let([Vm], bif('band', [V, cerl:abstract(mask(N))]),
         cerl:c_let([Old], atomic(get, [Ck, Ix]),
           atomic(put, [Ck, Ix, spliced(N, Old, Vm, Bit)])))).
+
+%% The bits `atomics` wants: unsigned, `[0, 2^64)`. Float bits arrive that way
+%% already; a signed i64 needs `2^64` added when it is negative.
+unsigned_word(f64, Bits) ->
+    Bits;
+unsigned_word(_Int, V) ->
+    W = cerl:c_var('Uw'),
+    cerl:c_case(V,
+                [cerl:c_clause([W], bif('>=', [W, cerl:abstract(0)]), W),
+                 cerl:c_clause([W], cerl:abstract(true),
+                               bif('+', [W, cerl:abstract(?P64)]))]).
 
 %% Where in the word the value goes.
 %%
@@ -1410,23 +1547,47 @@ inline_store(N, Kind, _A, _Sh, Ix, Ck, Bit, Val) ->
 %% alternates between the two offsets below, so both are worth naming. Anything
 %% else keeps the general form, which is the one that was always there.
 spliced(N, Old, Vm, Bit) ->
-    Aligned = [B || B <- [0, 32], B + N * 8 =< 64, B rem (N * 8) =:= 0],
+    %% Every offset the width can naturally sit at, not just the two an i32
+    %% uses. A byte store lands on any of eight and each is a literal splice;
+    %% before this they all fell to the dynamic form, which builds the mask and
+    %% both shifts at run time.
+    Aligned = [B || B <- lists:seq(0, 56, 8),
+                    B + N * 8 =< 64, B rem (N * 8) =:= 0],
     cerl:c_case(Bit,
                 [cerl:c_clause([cerl:abstract(B)], splice_at(N, Old, Vm, B))
                  || B <- Aligned]
                 ++ [cerl:c_clause([cerl:c_var('_Bit')],
                                   splice_dyn(N, Old, Vm, Bit))]).
 
-%% `Bit` is a literal here, so the keep-mask is one too. Written as the
-%% complement rather than `bnot`, which would make it negative and take the
-%% value off the 64-bit fixnum path on the way back in.
+%% `Bit` is a literal here, so the whole splice is built from literals -- but
+%% not from the *keep-mask*, which is where this used to reach for
+%% `16#FFFFFFFF00000000` and take a four-byte store off the immediate path for
+%% the sake of a constant.
+%%
+%% The bits above the field are kept by shifting them out and back, and the bits
+%% below by a mask that is small because `B` is at most 32. A word whose other
+%% half happens to be zero -- which is most of a freshly grown memory, and any
+%% value that fits in the half being written -- then stays in immediates from
+%% end to end.
 splice_at(N, Old, Vm, B) ->
-    Keep = cerl:abstract(?W64 bxor (mask(N) bsl B)),
+    Top = B + N * 8,
+    Above = case Top of
+                64 -> none;
+                _ -> bif('bsl', [bif('bsr', [Old, cerl:abstract(Top)]),
+                                 cerl:abstract(Top)])
+            end,
+    Below = case B of
+                0 -> none;
+                _ -> bif('band', [Old, cerl:abstract((1 bsl B) - 1)])
+            end,
     Placed = case B of
                  0 -> Vm;
                  _ -> bif('bsl', [Vm, cerl:abstract(B)])
              end,
-    bif('bor', [bif('band', [Old, Keep]), Placed]).
+    lists:foldl(fun(none, Acc) -> Acc;
+                   (E, none) -> E;
+                   (E, Acc) -> bif('bor', [Acc, E])
+                end, none, [Above, Below, Placed]).
 
 splice_dyn(N, Old, Vm, Bit) ->
     Keep = bif('bxor', [cerl:abstract(?W64),

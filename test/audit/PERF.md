@@ -2419,3 +2419,411 @@ runtime cannot know: forty seconds saved against twenty-one milliseconds a run
 is about nineteen hundred invocations to break even. A worker that serves one
 module all day should not split. Something that compiles a module to run it a
 few times should. So it is `compile_shards` and it is the embedder's call.
+## The cost model: what generated code actually pays for
+
+Built because the alternative was guessing. Two things it killed on the first
+day: that boxing dominates (a compiled run reclaims 3,989,087 words against the
+interpreter's 1,432,733,751, GC at 0.0% by `msacc`), and that `call_indirect`
+matters for QuickJS (5,145 of them in a run).
+
+### Prices
+
+`bench/paths/perinstr.erl` builds the same loop with K copies of a snippet and
+with 2K and takes the difference, so loop overhead cancels. It priced the
+*interpreter* until now; `-run perinstr main on` prices generated code.
+
+| snippet | interpreted | **compiled** |
+| --- | ---: | ---: |
+| `nop`, `i32.const`, `local.get`, `local.set` | 1.9 to 11.1 | **~0** |
+| `i32.add` | 14.45 | **1.26** |
+| `i32.mul` | 15.05 | 2.45 |
+| `i32.shl` | 14.92 | 1.95 |
+| `global.get` | 7.43 | 1.65 |
+| `call` (empty) | 19.63 | 3.77 |
+| `f64.convert_i32_u` | 32.52 | 4.73 |
+| `i32.load` | 25.75 | 9.35 |
+| `global.set` | 23.84 | 15.80 |
+| `i32.store` | 36.53 | 22.25 |
+| **`i64.add`** | 29.11 | **26.40** |
+| **`i64.shl`** | 29.56 | **24.99** |
+| **`f64.load`** | 51.12 | **35.91** |
+| **`i64.load`** | 48.70 | **39.51** |
+| **`call_indirect`** | 78.47 | **63.22** |
+| `memory.copy`, 64 bytes | 123.59 | 319.41 |
+
+The operand stack and locals really are compiled away: `nop` and `local.get`
+cost nothing at all. i32 arithmetic is 1 to 2.5 ns. What stands out is that
+**an `i64` operation is 21x its `i32` twin** -- 26.40 against 1.26 -- and that
+`memory.copy` is *worse* compiled than interpreted.
+
+### Counts
+
+The interpreter never runs, so `run/3` cannot be counted. What can be counted
+is every function the generator emits a call to; `wasm_core`'s `call_op/2`
+names them. One QuickJS run, `call_count` tracing:
+
+| escape | calls |
+| --- | ---: |
+| **`op1/2`** | **1,317,284** |
+| `check_depth/2` | 23,085 |
+| `set_global_at/4` | 9,552 |
+| `indirect_out/9` | 5,145 |
+| `global_at/2` | 4,800 |
+| `load_at/5` | 4,543 |
+| `store_at/6` | 2,259 |
+| everything else | under 1,000 each |
+
+`check_depth/2` is one per call, so **the whole run makes about 23,000 wasm
+calls** and `call_indirect` at 5,145 cannot matter however expensive it is.
+`load_at`/`store_at` are only the slow path; the fast one is inlined and
+invisible here.
+
+`op1/2` is two orders of magnitude above everything else, and four operations
+are all of it:
+
+| op | calls | share |
+| --- | ---: | ---: |
+| `i32_eqz` | 581,201 | 44% |
+| `i32_wrap_i64` | 521,684 | 40% |
+| `i64_extend_i32_u` | 154,285 | 12% |
+| `i64_eqz` | 60,031 | 5% |
+
+### The first thing it found
+
+Every one of those four is pure arithmetic with no trap and no state, and every
+one was a cross-module call because `wasm_core:inline1/1` covered only four f64
+conversions. Inlining them is the interpreter's own definition written in Core:
+`wasm_num:wrap_s32/1` is `wrap(32, _)`, `wasm_num:to_u32/1` over the i32 domain
+is `uns(32, _)`, and `i64.extend_i32_s` is the identity because an i32 is
+already held signed.
+
+**`op1/2` disappears from the escape table entirely**, and the constructs
+themselves, priced the same differential way on both trees:
+
+| | before | after |
+| --- | ---: | ---: |
+| `i32.eqz` into a local | 9.96 | **0.13** |
+| `i32.eqz` in a `br_if` | 2.82 | **1.91** |
+| `i32.wrap_i64` | 2.95 | **0.77** |
+| `i64.extend_i32_u` | 2.56 | **0.19** |
+| `i32.add`, the control | 1.26 | 1.31 |
+
+End to end, QuickJS warmed and timed five times per process, four alternating
+pairs in both orderings once the box was quiet:
+
+| | runs (ms) | min |
+| --- | --- | ---: |
+| before | 125.8, 122.3, 121.6, 122.6 | 121.6 |
+| after | 119.7, 118.7, 115.4, 115.9 | **115.4** |
+
+**About 5%**, and the two sets do not overlap: 1,317,284 cross-module calls at
+roughly 4.5 nanoseconds each. `bench/cross/loop.wasm` is unmoved at 3.38
+against 3.35 ns an iteration, which it should be -- it has no unary escape in
+it. The plugin arm cannot resolve the change: twelve interleaved pairs in both
+orderings spread from 146 to 198 microseconds, and every construct the change
+touches got faster while the control did not move.
+
+### What it says to do next
+
+- **`i64` operations at 21x their `i32` twins.** `wrap(64, _)` masks with
+  `16#FFFFFFFFFFFFFFFF`, which is past the 60-bit immediate range, so every
+  64-bit wrap is bignum arithmetic on values that are usually small. This is
+  the largest single lever the model has found and it is pure code generation.
+- **`memory.copy` slower compiled than interpreted**, at 5 ns a byte.
+- **`i32.store` at 22.25 against `i32.load` at 9.35**, which is the
+  read-modify-write the `atomics` representation forces and what the NIF
+  question is about.
+- **`call_indirect` and boxing are not worth touching for this workload**, and
+  the model is what says so.
+
+### What the model found next: 60 bits is the whole story
+
+Three changes, one cause. A BEAM immediate holds 60 bits, so any literal at or
+above 2^59 is a bignum, and the generator was reaching for `2^64-1` and `2^63`
+on paths that almost never need them.
+
+| construct | before | after |
+| --- | ---: | ---: |
+| `i64.add` | 26.40 | **0.48** |
+| `i64.load` | 39.81 | **7.79** |
+| `i64.store` | 22.55 | **9.58** |
+| `f64.load` | 35.91 | **25.18** |
+| `f64.store` | 29.21 | **14.08** |
+| `i32.add`, the control | 1.26 | 1.29 |
+
+- **`i64.add` and `i64.sub`.** `wrap(64, _)` masks with `2^64-1` and folds with
+  `2^63`. An i64 is always held in `[-2^63, 2^63)`, so a sum lands in
+  `(-2^64, 2^64)` and one comparison decides it. Two tiers, because comparing
+  against `2^63` is itself bignum work: 26.40 with the mask, 12.30 with one
+  range test, **0.48** with an immediate-bounded test first.
+- **The full-word load.** `ordinary/6` only takes the fast path when the access
+  fits in one word, so for eight bytes the shift and the mask are both
+  identities -- but `mask(8)` is `2^64-1` and the compiler cannot see through
+  it. An aligned `i64.load` is one `atomics:get`; it now costs less than
+  `i32.load`, which is the right way round.
+- **The full-word store.** Same shape: the read, the splice and the mask are
+  all unnecessary when the value fills the word.
+
+End to end on QuickJS, warmed and timed five times per process, alternating
+against the branch point:
+
+| | ms |
+| --- | ---: |
+| before | 124.4 |
+| after `op1` inlining | 115.4 |
+| after the `i64` load | 92.4 |
+| after the `i64` store | **85.4** |
+
+**31%.** `bench/cross/loop.wasm` is unmoved at 3.38 ns an iteration and the
+i32 memory loop is unmoved at 28.68 against 28.89 interleaved, both of which
+they should be: neither change touches a path they take.
+
+### And a method correction
+
+The opcode census run against the interpreter reports 132,583,392 `block`
+entries a run, more than every other opcode combined, because QuickJS's
+bytecode dispatch is a `br_table` inside a deep nest of them and the
+interpreter re-enters the whole nest per dispatch. **That count does not
+transfer to compiled code**, where a control frame is a function and a branch
+is a tail call, so the nest is not executed at all. An empty `block` does cost
+1.32 ns compiled and eight nested cost 2.11 each, but they are entered once
+rather than 240 times per dispatch.
+
+Data operations do transfer, and those are what the table above is weighted by.
+Control flow has to be counted in compiled code or not at all.
+
+### The narrow store, and where the floor actually is
+
+A four-byte store into a 64-bit `atomics` word is a read, a splice and a write,
+and the splice reached for `16#FFFFFFFF00000000` as its keep-mask. That literal
+is a bignum, so it took the whole expression off the immediate path for the
+sake of a constant -- even when the half of the word not being written is zero,
+which is most of a grown memory and any value that fits in the half being
+written.
+
+The bits above the field are kept by shifting them out and back and the bits
+below by a mask that is small because the offset is at most 32, so nothing in
+the common case is a bignum. The literal-offset list also covered only 0 and
+32, which is where an i32 lands; every byte and 16-bit store fell to the
+dynamic form that builds its mask and both shifts at run time. It covers every
+offset the width can naturally sit at now.
+
+| | before | after |
+| --- | ---: | ---: |
+| `i32.store` | 22.16 | **13.77** |
+| `i32.store8` | 22.13 | **14.41** |
+| `i64.store` | 22.55 | **9.49** |
+| `f64.store` | 29.21 | **15.67** |
+| `i32.load`, untouched | 8.80 | 8.80 |
+
+**Neither benchmark can show this.** QuickJS is i64-heavy -- 488,629 `i64.store`
+against 92,022 `i32.store` -- and its i64 path was already fixed, so it sits at
+87.6 ms against 124.7 either way. The plugin arm calls a trivial `capacity` two
+hundred times, is not memory-heavy at all, and spans 161 to 216 microseconds
+over four interleaved pairs. The construct prices are the evidence, and the
+change cannot cost anything: it is strictly fewer and cheaper operations on
+every path it touches.
+
+`wasm_core_SUITE:every_memory_access_agrees_with_the_interpreter` is what says
+it is correct, and it walks every load and store against boundary patterns.
+
+**This is close to the floor for the representation.** `PERF.md` put that at
+about 19 nanoseconds a store when `atomics` get-then-put on one word cost
+19.13; that pair is 9.59 now and a four-byte store is 13.77. What is left is
+the address arithmetic and the bounds check. Going below it means changing the
+representation, and the two ways to do that -- a 32-bit lane layout, or a NIF --
+are both profile decisions, because a lane layout would make i32 cheaper and
+i64 dearer and QuickJS is i64-heavy while a Rust plugin is not.
+
+## The NIF floors, measured
+
+The gate Phase 0 existed for. A dozen lines of C on a *regular* scheduler --
+every NIF this project ships is dirty-scheduled I/O and says nothing about
+this -- timed by the same differential method, dedicated loops, no fun
+indirection.
+
+| operation | ns |
+| --- | ---: |
+| **a NIF call that does nothing** | **7.80** |
+| NIF read, 4 bytes from NIF-owned memory | 6.0 to 8.7 |
+| NIF write, 4 bytes | 9.21 |
+| `atomics:get/2` | **4.66 to 4.93** |
+| `atomics:put/3` | 5.77 |
+| `atomics` get then put, one word | 9.77 |
+| binary view, fixed offset | 9.10 to 11.57 |
+| binary match at a varying offset | 8.95 |
+| `binary_part/3` at a varying offset | 17.50 |
+| empty loop, the control | 0.63 |
+
+### A per-operation memory NIF is not worth building
+
+**`atomics` is the fastest read primitive on this runtime.** A NIF call costs
+more than an `atomics:get` before it has read anything, so a per-operation NIF
+read is a regression however good the C is. The resource-backed binary, which
+was the one design that could have avoided the call entirely, is slower still:
+8.95 nanoseconds at a varying offset against 4.93.
+
+A NIF *write* does win, because a four-byte store is a read-modify-write:
+9.21 against the 13.77 a generated `i32.store` costs. But priced against what
+the two workloads actually execute, that is under a millisecond of QuickJS's
+87.6, because it does 488,629 `i64.store` -- already 9.49 -- against 92,022
+narrow ones.
+
+**And this answer is a consequence of doing the pure-Erlang work first.**
+Before the immediate-path changes an `i32.store` was 22.16 nanoseconds and a
+NIF write at 9.21 would have been a 2.4x win worth building. Keeping the
+generated code inside BEAM immediates took the case away.
+
+### What a NIF is still for
+
+Bulk. `memory.copy` runs at about 1.8 nanoseconds a byte through generated
+code, where a NIF is one 7.80-nanosecond call plus `memcpy`. That is two orders
+of magnitude on a copy of any size, and it applies to `memory.fill`,
+`memory.init` and the `read_memory`/`write_memory` embedder API as much as to
+`memory.copy`.
+
+QuickJS makes 953 bulk calls a run and will not notice. A memcpy-heavy Rust
+plugin is a different workload, which is what the profiles are for.
+
+## Telling the JIT what validation already proved
+
+Since OTP 25 the JIT emits better arithmetic when the compiler knows a value's
+range: an addition drops from ten instructions to four, a comparison from
+eleven to four, a tuple test from five to three. That range comes from the SSA
+type pass, which `no_ssa_opt` turns off.
+
+This morning `full` bought nothing -- QuickJS 141.1 ms against 142.1 -- and it
+was demoted for costing 123.1 seconds against 54.8 to compile. That measurement
+was correct. It is no longer true, and what changed is the code handed to the
+pass rather than the pass itself.
+
+The immediate-path work above is written as *guards*: `wrap_sum/2` tests
+`W >= -2^63, W < 2^63`, `decode_word/2` tests `W =< 2^59-1`. A guard is how a
+range gets stated, and stating it is all the type pass ever needed. The
+generator had been proving every value's width in validation and throwing it
+away.
+
+`wrap(32, _)` was then given the same shape deliberately, through `inline_w/1`.
+Its constants were immediates already so the branch-free form cost nothing to
+*run*; what it cost was the information. It is faster both ways:
+
+| | before | after |
+| --- | ---: | ---: |
+| `i32.add` | 1.29 | **0.76** |
+
+QuickJS, warmed and timed five times per process:
+
+| quality | ms |
+| --- | ---: |
+| `baseline` | 86.1 to 87.7 |
+| **`full`** | **75.0 to 76.8** |
+
+So `full` is the default again. It still costs **129.3 seconds against 58.1**
+to compile the hot set, and that is what `compile_shards` is for.
+
+### Where the branch ends up
+
+Against its branch point, everything measured moved and nothing regressed:
+
+| | before | after |
+| --- | ---: | ---: |
+| QuickJS, warm | 124.7 ms | **76.5** |
+| `bench/cross/loop.wasm` | 3.35 ns/iter | **2.98** |
+| the i32 memory loop | 28.42 ns/iter | **25.28** |
+| `i64.add` | 26.40 ns | 0.48 |
+| `i64.load` | 39.81 | 7.79 |
+| `i64.store` | 22.55 | 9.49 |
+| `i32.store` | 22.16 | 13.77 |
+| `i32.add` | 1.26 | 0.76 |
+
+**39% on QuickJS**, and the whole of it is one idea: a BEAM immediate holds 60
+bits, and generated code should stay inside them and say so.
+
+## What a bulk NIF would be worth, before building one
+
+The one NIF shape the floors left standing. Priced before writing any C.
+
+### Bulk through generated code today
+
+| | ns | ns per byte |
+| --- | ---: | ---: |
+| `memory.copy`, 8 bytes | 40.92 | 5.11 |
+| `memory.copy`, 64 bytes | 117.34 | 1.83 |
+| `memory.copy`, 1024 bytes | 1290.70 | 1.26 |
+| `memory.fill`, 1024 bytes | 756.54 | 0.74 |
+| `wasm:write_memory/3`, 64 KB | 87,000 | 1.33 |
+| `wasm:read_memory/3`, 64 KB | 110,000 | 1.68 |
+| `wasm:write_memory/3`, 1 MB | 1,580,000 | 1.51 |
+
+A NIF is one 7.80-nanosecond call plus `memcpy`, so about 0.05 nanoseconds a
+byte once it is moving.
+
+### And what the workload actually moves
+
+A QuickJS run makes 953 `memory.copy` calls totalling **18,437 bytes** and 117
+`memory.fill` calls totalling 14,539: an average of 19 and 124 bytes. That is
+**0.04 milliseconds of an 80.8-millisecond run, or 0.05%**.
+
+**So the guest side is not the case.** `bulk.wasm` shows 95x against wasmtime
+because it exists to isolate the operation, not because real programs spend
+time there.
+
+### Where it is the case
+
+The embedder boundary. `docs/worker.md`'s pattern hands a request body in and
+takes a response out on every call, and that is `read_memory`/`write_memory` at
+1.0 to 1.8 nanoseconds a byte:
+
+| round trip | today | with a NIF |
+| --- | ---: | ---: |
+| 64 KB in and out | ~197 us | ~7 us |
+| 1 MB in and out | ~3.5 ms | ~55 us |
+
+A plugin call is about 690 microseconds, so a 64 KB round trip spends roughly a
+quarter of a request copying buffers, and a NIF removes almost all of it.
+
+**The recommendation is therefore narrow.** Not `memory.copy`: a NIF there is
+9 to 19x on an operation nothing measurable spends time in. The embedder's
+`read_memory`/`write_memory`, where the buffers are large and the caller is
+Erlang rather than the guest, and only for an embedder that passes large ones.
+The plugin arm passes a handful of bytes and would not notice either.
+
+### The bulk NIF cannot be built, and did not need to be
+
+`erl_nif.h` has **no atomics API at all** -- zero mentions. A NIF cannot reach
+the memory an `atomics` array holds, so the narrow bulk NIF recommended above
+is not implementable without moving linear memory into NIF-owned buffers. That
+is the whole layout change, and it would make every per-operation access slower:
+a NIF call is 7.80 nanoseconds against `atomics:get`'s 4.66.
+
+**So no NIF shape survives.** Per-operation reads lose to `atomics`, the
+resource-backed binary loses to `atomics`, guest-side bulk is 0.05% of a run,
+and the embedder boundary cannot be reached from C without giving up the
+representation.
+
+What the boundary needed was the treatment the access path already had. Both
+`scatter/3` and `collect/4` resolved the chunk once per *word*, and
+`put_word/3` masked with `16#FFFFFFFFFFFFFFFF` on a value that came out of a
+64-bit binary field and was already in range.
+
+| | before | after |
+| --- | ---: | ---: |
+| `write_memory`, 64 KB | 87 us | **56** |
+| `read_memory`, 64 KB | 110 us | **68** |
+| `write_memory`, 1 MB | 1580 us | **1147** |
+| `read_memory`, 1 MB | 1908 us | **1178** |
+
+**A 64 KB round trip is 124 microseconds against 197**, which is about 11% of a
+690-microsecond plugin call.
+
+Two things this cost to learn, both worth keeping:
+
+- **Returning a binary tail from a loop costs a sub-binary per iteration.** The
+  first version of `scatter_run/4` returned its remainder so the caller could
+  continue, and that defeats the match-context optimisation: a 64 KB write went
+  to 133 microseconds, *worse* than the 87 it started at. Splitting once per run
+  with `split_binary/2` and letting the loop consume its binary to exhaustion is
+  what makes it 56.
+- **The append was the read's cost, not the read.** `atomics:get` is 4.66
+  nanoseconds a word and the loop measured nearly twice that; four words per
+  append rather than one closed most of it.

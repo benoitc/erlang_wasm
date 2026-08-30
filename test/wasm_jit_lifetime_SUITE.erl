@@ -37,7 +37,9 @@ all() ->
      hashed_modules_contending_for_slots_all_answer,
      a_metered_invocation_never_reaches_generated_code,
      destroying_an_instance_gives_its_slot_lease_back,
-     a_module_split_across_shards_answers_the_same].
+     a_module_split_across_shards_answers_the_same,
+     a_profile_sets_what_you_did_not,
+     an_unknown_profile_is_a_value_not_a_crash].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -514,6 +516,35 @@ chain_wat() ->
           local.get 0 call 2 local.get 0 i32.add)
         (func (export \"f5\") (param i32) (result i32)
           local.get 0 call 3 local.get 0 i32.add))".
+%% A profile names a workload and expands into options that already exist. What
+%% has to hold is that it sets them and that anything you set yourself wins,
+%% because the whole point is a starting position rather than a policy.
+a_profile_sets_what_you_did_not(_) ->
+    M = build(loop_wat()),
+    %% `script` asks for a compile after one call, so one call is enough. Under
+    %% the default threshold of 32 nothing would be compiled here at all, which
+    %% is exactly the case it exists for.
+    Before = maps:get(compiled, wasm_jit:counts()),
+    {ok, I} = wasm:instantiate(M, #{}, #{profile => script,
+                                         compile_sync => true}),
+    {ok, [55]} = wasm:call(I, ~"f", [10]),
+    ?assert(maps:get(compiled, wasm_jit:counts()) > Before),
+    ok = wasm:destroy(I),
+
+    %% And an explicit option beats the profile's: `compile => false` means the
+    %% tier is off however loudly the profile asks for it.
+    Mid = maps:get(compiled, wasm_jit:counts()),
+    {ok, J} = wasm:instantiate(M, #{}, #{profile => script, compile => false,
+                                         compile_sync => true}),
+    {ok, [55]} = wasm:call(J, ~"f", [10]),
+    ?assertEqual(Mid, maps:get(compiled, wasm_jit:counts())),
+    ok = wasm:destroy(J).
+
+%% Nothing in this library raises, including on a name nobody defined.
+an_unknown_profile_is_a_value_not_a_crash(_) ->
+    M = build(loop_wat()),
+    ?assertMatch({error, #{kind := unknown_profile}},
+                 wasm:instantiate(M, #{}, #{profile => turbo})).
 
 %%% -------------------------------------------------------------- helpers ---
 

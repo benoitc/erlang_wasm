@@ -172,6 +172,38 @@ specification says -1.
 seconds against about 8 for the hot set. Specification modules are a few
 functions each, which is why it is affordable there and nowhere else.
 
+## Pick a profile instead of the knobs
+
+`profile` names a workload. Everything it sets is an option you could set
+yourself, and anything you do set wins.
+
+```erlang
+{ok, I} = wasm:instantiate(M, Imports, #{profile => plugin}).
+```
+
+| | `plugin` | `script` |
+| --- | --- | --- |
+| the shape | a module called many times through a long-lived instance | a program run end to end, usually an interpreter with a script |
+| `compile` | `true` | `true` |
+| `compile_quality` | `full` | `baseline` |
+| `compile_after` | 32, the default | **1** |
+
+**Why they differ, in numbers.** `full` is 75.0 to 76.8 milliseconds on QuickJS
+against 86.1 to 87.7 at `baseline`, and costs 129.3 seconds against 58.1 to
+compile the hot set. A plugin pays that once and wins on every call after it. A
+script may be run a handful of times, so the cheaper compile wins unless it is
+run thousands.
+
+`compile_after => 1` matters more than it looks. A script is often a *single*
+call -- `_start` and nothing else -- and the default threshold of 32 is never
+reached, so nothing is ever compiled. The whole tier is invisible without it.
+
+**Set `code_cache_dir` with `script`.** Otherwise the compile is paid at every
+node start, and for a program run once per start the tier is a pure loss: 58
+seconds to save 1.9. See `wasm_code_cache`.
+
+An unrecognised profile is `{error, #{kind := unknown_profile}}`, not a crash.
+
 ## Short notes
 
 - `baseline` is the default: it skips the OTP compiler's SSA optimiser, which

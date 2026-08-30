@@ -66,6 +66,17 @@ moved, because even with all three a refusal still interprets.
 -define(ABI, 3).
 
 -define(DEFAULT_AFTER, 32).
+
+%% Splitting a compile across units. The unit is what `compile:forms/2` is
+%% handed, and that call is 99.3% of the cost, so several of them run at once
+%% where one cannot. Sized in words of lowered IR because generated code is
+%% linear in that: 11 to 19 bytes of BEAM per word, near enough constant.
+%%
+%% The floor exists because a split is not free -- it takes a slot per unit out
+%% of a pool of sixteen that the whole node shares -- and a module that compiles
+%% in a second is not the problem. QuickJS's hot set is about 900,000 words.
+-define(SHARD_WORDS, 150000).
+-define(MAX_SHARDS, 4).
 %% Set by `entry_1/3` when this call found the module hot and unbuilt, read by
 %% `after_call/2` once the call has finished. The invocation's own lifetime is
 %% exactly the right one for it, which is the same argument the checkpoint key
@@ -194,7 +205,11 @@ no-op in `wasm_code_slots:drop/3`, which is the same property that makes a
 double release of a memory harmless.
 """.
 -spec release(#inst{}) -> ok.
-release(Inst) -> wasm_code_slots:release(key(Inst), {instance, Inst#inst.id}).
+release(Inst) ->
+    ok = wasm_code_slots:release(key(Inst), {instance, Inst#inst.id}),
+    each_shard(Inst, 2, fun(Key) ->
+                            wasm_code_slots:release(Key, {instance, Inst#inst.id})
+                        end).
 
 -doc "How much has been compiled, and how often generated code was entered.".
 -spec counts() -> #{atom() => non_neg_integer()}.
@@ -445,7 +460,16 @@ compiler_loop() ->
 compile(Inst, Limits, Executed, Mode) ->
     Key = key(Inst),
     case wasm_code_slots:claim_loading(Key, {instance, Inst#inst.id}, self()) of
-        {resident, Mod} -> adopt(Inst, Mod);
+        {resident, Mod} ->
+            %% The rest of the chain as well. Shard one is what `code_slot`
+            %% names and what a call leases, but shard one *calls* the others,
+            %% and a slot nobody holds can be taken while it is idle. Losing a
+            %% later shard is not unsafe -- its replacement carries a different
+            %% stamp and the chain gets `stale`, so the caller interprets -- but
+            %% it is silent and permanent, because shard one is still resident
+            %% and nothing asks for a recompile.
+            ok = lease_rest(Inst, 2),
+            adopt(Inst, Mod);
         %% Somebody else is compiling this module. Interpreting is always
         %% correct, and waiting on another process's compilation is not.
         loading -> error;
@@ -492,18 +516,154 @@ generate(Inst, Limits, Mod, Token, Executed) ->
             Mode = maps:get(compile_quality, Limits, baseline),
             {_Name, Gen} = Token,
             Stamp = stamp(Inst, Gen),
-            case artifact(Inst, Mod, Unit, Mode, Stamp) of
-                {ok, Bin} ->
-                    {module, Mod} = code:load_binary(Mod, "wasm_generated", Bin),
-                    ok = wasm_code_slots:publish(Token),
-                    bump(?IX_COMPILED, length(Unit)),
-                    adopt(Inst, Mod);
-                {error, Reason} ->
-                    ok = wasm_code_slots:abort(Token),
-                    forced(Limits) andalso
-                        erlang:error({compile_failed, Reason}),
-                    error
-            end
+            build(Inst, Limits, Mode, Stamp, Unit, split(Unit, Limits),
+                  [{Mod, Token}])
+    end.
+
+%% One unit or several, and the difference is only how many slots are held.
+%%
+%% Splitting exists for wall clock and nothing else: 99.3% of a compile is
+%% `compile:forms/2`, the units are independent BEAM modules, and this box has
+%% fourteen cores. It does not reduce the work and it does not let anything be
+%% used sooner, because the functions worth compiling are the ones expensive to
+%% compile: sixteen of QuickJS's hot functions are already 30 seconds of the 54.
+%% See `test/audit/PERF.md`.
+build(Inst, Limits, Mode, Stamp, Unit, [_], [{Mod, Token}]) ->
+    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod) of
+        {ok, Bin} ->
+            {module, Mod} = code:load_binary(Mod, "wasm_generated", Bin),
+            ok = wasm_code_slots:publish(Token),
+            bump(?IX_COMPILED, length(Unit)),
+            adopt(Inst, Mod);
+        {error, Reason} ->
+            ok = wasm_code_slots:abort(Token),
+            forced(Limits) andalso erlang:error({compile_failed, Reason}),
+            error
+    end;
+build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First]) ->
+    %% Every slot claimed before anything is generated, because each unit names
+    %% the next as a literal and cannot be built until that name exists. This
+    %% process owns all of them, so a compiler that dies takes every reservation
+    %% with it rather than stranding the ones it had not published yet.
+    case claim_rest(Inst, length(Parts) - 1, [First]) of
+        {error, Held} ->
+            _ = [wasm_code_slots:abort(T) || {_, T} <- Held],
+            error;
+        Tokens ->
+            Mods = [M || {M, _} <- Tokens],
+            Head = hd(Mods),
+            Jobs = lists:zip3(Parts, Mods, tl(Mods) ++ [undefined]),
+            Bins = pmap(fun({U, M, Next}) ->
+                            artifact(Inst, M, U, Mode, Stamp, Next, Head)
+                        end, Jobs),
+            publish_all(Inst, Limits, Tokens, Parts, Bins)
+    end.
+
+%% All or nothing. A chain with a hole in it would answer `not_compiled` for
+%% every function past the hole, which is correct but is most of the work thrown
+%% away, and the slots would be held for it.
+publish_all(Inst, Limits, Tokens, Parts, Bins) ->
+    case [R || {error, _} = R <- Bins] of
+        [{error, Reason} | _] ->
+            _ = [wasm_code_slots:abort(T) || {_, T} <- Tokens],
+            forced(Limits) andalso erlang:error({compile_failed, Reason}),
+            error;
+        [] ->
+            _ = [begin
+                     {module, M} = code:load_binary(M, "wasm_generated", B),
+                     ok = wasm_code_slots:publish(T)
+                 end || {{M, T}, {ok, B}} <- lists:zip(Tokens, Bins)],
+            bump(?IX_COMPILED, lists:sum([length(P) || P <- Parts])),
+            adopt(Inst, element(1, hd(Tokens)))
+    end.
+
+%% Balanced by IR words, largest first into the lightest unit so far.
+%%
+%% Not by function count: one QuickJS function is 98,191 words and 8.4 seconds
+%% on its own, and an even count would put it with fifty others and leave the
+%% other units idle. Longest-processing-time-first is the standard answer and
+%% the critical path here is one function whatever the split, so it is close to
+%% the best available.
+split(Unit, Limits) ->
+    Sized = [{erts_debug:flat_size(IR), U} || {_, _, _, IR} = U <- Unit],
+    case shards(lists:sum([W || {W, _} <- Sized]), Limits) of
+        1 -> [Unit];
+        N -> renumber(bins(lists:reverse(lists:sort(Sized)), empty_bins(N)))
+    end.
+
+shards(Words, Limits) ->
+    case maps:get(compile_shards, Limits, auto) of
+        auto -> erlang:max(1, erlang:min(?MAX_SHARDS, Words div ?SHARD_WORDS));
+        N when is_integer(N), N >= 1 -> erlang:min(?MAX_SHARDS, N)
+    end.
+
+empty_bins(N) -> [{0, []} || _ <- lists:seq(1, N)].
+
+bins([], Bins) ->
+    [lists:reverse(Us) || {_, Us} <- Bins, Us =/= []];
+bins([{W, U} | Rest], Bins) ->
+    [{Load, Us} | Others] = lists:sort(Bins),
+    bins(Rest, [{Load + W, [U | Us]} | Others]).
+
+%% `wasm_core` names functions by position in the unit, so each unit needs a
+%% dense range of its own.
+renumber(Parts) ->
+    [[{Pos, Idx, F, IR} || {Pos, {_, Idx, F, IR}} <- lists:enumerate(0, P)]
+     || P <- Parts].
+
+%% Shard one keeps the module's own key, so `maybe_adopt/3` finds a compiled
+%% module by asking the same question it always did.
+shard_key(Inst, N) -> {wasm_instance:identity(Inst), ?ABI, N}.
+
+%% Take an instance lease on shards two and up, stopping at the first gap: the
+%% chain is contiguous by construction, so a gap means there is nothing further.
+lease_rest(Inst, N) ->
+    each_shard(Inst, N, fun(Key) -> lease_one(Inst, Key) end).
+
+lease_one(Inst, Key) ->
+    case wasm_code_slots:claim_loading(Key, {instance, Inst#inst.id}, self()) of
+        {resident, _} ->
+            ok;
+        %% Nothing there. Reading first would race; claiming and giving it
+        %% straight back is what `maybe_adopt/3` does for the same reason.
+        {compile, _, Token} ->
+            ok = wasm_code_slots:abort(Token),
+            stop;
+        _ ->
+            stop
+    end.
+
+each_shard(_Inst, N, _F) when N > ?MAX_SHARDS ->
+    ok;
+each_shard(Inst, N, F) ->
+    case F(shard_key(Inst, N)) of
+        stop -> ok;
+        _ -> each_shard(Inst, N + 1, F)
+    end.
+
+claim_rest(_Inst, 0, Acc) ->
+    lists:reverse(Acc);
+claim_rest(Inst, N, Acc) ->
+    case wasm_code_slots:claim_loading(shard_key(Inst, length(Acc) + 1),
+                                       {instance, Inst#inst.id}, self()) of
+        {compile, Mod, Token} -> claim_rest(Inst, N - 1, [{Mod, Token} | Acc]);
+        %% No slot, or somebody else holds this shard's key. Give back what this
+        %% call took and compile as one unit next time round.
+        _ -> {error, Acc}
+    end.
+
+%% Run the units at once. `compile:forms/2` is the whole of the cost and the
+%% units share nothing, so this is the wall clock the split is for.
+pmap(F, Xs) ->
+    Parent = self(),
+    Pids = [element(1, spawn_monitor(fun() -> Parent ! {self(), F(X)} end))
+            || X <- Xs],
+    [collect(P) || P <- Pids].
+
+collect(Pid) ->
+    receive
+        {Pid, R} -> receive {'DOWN', _, process, Pid, _} -> R after 5000 -> R end;
+        {'DOWN', _, process, Pid, Why} -> {error, {compiler_died, Why}}
     end.
 
 %% The compiled module: from the cache when it is there, and compiled and kept
@@ -515,13 +675,23 @@ generate(Inst, Limits, Mod, Token, Executed) ->
 %% today's instance. What it *does* depend on is the slot, because a module's
 %% name is part of its BEAM file, which is why the slot is in the key and why
 %% `wasm_code_slots` prefers a module's own slot when one is free.
-artifact(Inst, Mod, Unit, Mode, Stamp) ->
-    Key = wasm_code_cache:key(wasm_instance:identity(Inst), ?ABI, Mod, Mode,
-                              [Idx || {_P, Idx, _F, _IR} <- Unit], Stamp),
+artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head) ->
+    %% Not cached when it is one of several. The key would have to carry which
+    %% module the chain points at next, and a shard set is only reproducible if
+    %% the same split falls out of the same workload, which nothing promises.
+    Key = case Next of
+              undefined ->
+                  wasm_code_cache:key(wasm_instance:identity(Inst), ?ABI, Mod,
+                                      Mode,
+                                      [Idx || {_P, Idx, _F, _IR} <- Unit],
+                                      Stamp);
+              _ -> undefined
+          end,
     case Key =/= undefined andalso wasm_code_cache:lookup(Key) of
         {ok, Bin} -> bump(?IX_CACHED, 1), {ok, Bin};
         _ ->
-            case wasm_core:module(Mod, Unit, sigs(Inst), tsigs(Inst), Mode, Stamp) of
+            case wasm_core:module(Mod, Unit, sigs(Inst), tsigs(Inst), Mode,
+                                  Stamp, Next, Head) of
                 {ok, Bin} = Ok ->
                     Key =:= undefined orelse wasm_code_cache:store(Key, Bin),
                     Ok;

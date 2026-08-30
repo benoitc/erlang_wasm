@@ -36,7 +36,8 @@ all() ->
      more_modules_than_slots_still_all_answer,
      hashed_modules_contending_for_slots_all_answer,
      a_metered_invocation_never_reaches_generated_code,
-     destroying_an_instance_gives_its_slot_lease_back].
+     destroying_an_instance_gives_its_slot_lease_back,
+     a_module_split_across_shards_answers_the_same].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -455,6 +456,64 @@ destroying_an_instance_gives_its_slot_lease_back(_) ->
     {ok, J} = wasm:instantiate(hashed(50), #{}, sync_opts()),
     ?assertEqual({ok, [51]}, wasm:call(J, ~"f", [1])),
     ok = wasm:destroy(J).
+
+%% One wasm module compiled into several generated ones. Each holds some of the
+%% functions and names the next as a literal, so a call for an index this one
+%% does not have is handed along the chain rather than sent back to the
+%% interpreter. What must not change is any answer.
+%%
+%% Forced with `compile_shards`, because the automatic split only fires on a
+%% module big enough that compiling it in one piece is the latency problem, and
+%% no test module is remotely that.
+a_module_split_across_shards_answers_the_same(_) ->
+    M = build(chain_wat()),
+    %% Interpreted, for the answers the compiled ones have to match.
+    {ok, Plain} = wasm:instantiate(M, #{}, #{}),
+    Want = [wasm:call(Plain, N, [7]) || N <- exports()],
+    ?assertEqual([{ok, [7]}, {ok, [14]}, {ok, [21]}, {ok, [28]}, {ok, [35]}],
+                 Want),
+    ok = wasm:destroy(Plain),
+
+    C0 = wasm_jit:counts(),
+    {ok, I} = wasm:instantiate(M, #{}, (sync_opts())#{compile_shards => 3,
+                                                      compile_whole => true}),
+    %% One call to get it compiled. `compile_sync` builds at the *end* of an
+    %% invocation, because what to compile is read from what has run, so the
+    %% call that triggers it is itself interpreted.
+    _ = wasm:call(I, ~"f1", [7]),
+    Before = wasm_jit:counts(),
+    %% Every function was compiled, so nothing was quietly dropped on the way
+    %% into a unit: five functions across three of them.
+    ?assertEqual(5, maps:get(compiled, Before) - maps:get(compiled, C0)),
+    ?assertEqual(Want, [wasm:call(I, N, [7]) || N <- exports()]),
+    After = wasm_jit:counts(),
+    %% And every call *entered* generated code, which is the assertion that
+    %% makes this case worth having. Answers alone prove nothing: a chain that
+    %% does not chain answers `not_compiled`, the caller interprets, and the
+    %% results are identical. Checked by breaking `wasm_core:miss/6` and
+    %% watching this line fail.
+    ?assertEqual(5, maps:get(entered, After) - maps:get(entered, Before)),
+    %% And three slots are held, not one.
+    ?assert(instance_leases() >= 3),
+    ok = wasm:destroy(I),
+    ?assertEqual(ok, until(fun() -> instance_leases() =:= 0 end, 5000),
+                 "destroy left a shard's lease behind").
+
+exports() -> [~"f1", ~"f2", ~"f3", ~"f4", ~"f5"].
+
+%% Five functions, each calling the one below it, so a call crosses whatever
+%% shard boundary the split happens to draw.
+chain_wat() ->
+    ~"(module
+        (func (export \"f1\") (param i32) (result i32) local.get 0)
+        (func (export \"f2\") (param i32) (result i32)
+          local.get 0 call 0 local.get 0 i32.add)
+        (func (export \"f3\") (param i32) (result i32)
+          local.get 0 call 1 local.get 0 i32.add)
+        (func (export \"f4\") (param i32) (result i32)
+          local.get 0 call 2 local.get 0 i32.add)
+        (func (export \"f5\") (param i32) (result i32)
+          local.get 0 call 3 local.get 0 i32.add))".
 
 %%% -------------------------------------------------------------- helpers ---
 

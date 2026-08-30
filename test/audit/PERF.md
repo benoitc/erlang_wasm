@@ -2568,3 +2568,53 @@ the address arithmetic and the bounds check. Going below it means changing the
 representation, and the two ways to do that -- a 32-bit lane layout, or a NIF --
 are both profile decisions, because a lane layout would make i32 cheaper and
 i64 dearer and QuickJS is i64-heavy while a Rust plugin is not.
+
+## The NIF floors, measured
+
+The gate Phase 0 existed for. A dozen lines of C on a *regular* scheduler --
+every NIF this project ships is dirty-scheduled I/O and says nothing about
+this -- timed by the same differential method, dedicated loops, no fun
+indirection.
+
+| operation | ns |
+| --- | ---: |
+| **a NIF call that does nothing** | **7.80** |
+| NIF read, 4 bytes from NIF-owned memory | 6.0 to 8.7 |
+| NIF write, 4 bytes | 9.21 |
+| `atomics:get/2` | **4.66 to 4.93** |
+| `atomics:put/3` | 5.77 |
+| `atomics` get then put, one word | 9.77 |
+| binary view, fixed offset | 9.10 to 11.57 |
+| binary match at a varying offset | 8.95 |
+| `binary_part/3` at a varying offset | 17.50 |
+| empty loop, the control | 0.63 |
+
+### A per-operation memory NIF is not worth building
+
+**`atomics` is the fastest read primitive on this runtime.** A NIF call costs
+more than an `atomics:get` before it has read anything, so a per-operation NIF
+read is a regression however good the C is. The resource-backed binary, which
+was the one design that could have avoided the call entirely, is slower still:
+8.95 nanoseconds at a varying offset against 4.93.
+
+A NIF *write* does win, because a four-byte store is a read-modify-write:
+9.21 against the 13.77 a generated `i32.store` costs. But priced against what
+the two workloads actually execute, that is under a millisecond of QuickJS's
+87.6, because it does 488,629 `i64.store` -- already 9.49 -- against 92,022
+narrow ones.
+
+**And this answer is a consequence of doing the pure-Erlang work first.**
+Before the immediate-path changes an `i32.store` was 22.16 nanoseconds and a
+NIF write at 9.21 would have been a 2.4x win worth building. Keeping the
+generated code inside BEAM immediates took the case away.
+
+### What a NIF is still for
+
+Bulk. `memory.copy` runs at about 1.8 nanoseconds a byte through generated
+code, where a NIF is one 7.80-nanosecond call plus `memcpy`. That is two orders
+of magnitude on a copy of any size, and it applies to `memory.fill`,
+`memory.init` and the `read_memory`/`write_memory` embedder API as much as to
+`memory.copy`.
+
+QuickJS makes 953 bulk calls a run and will not notice. A memcpy-heavy Rust
+plugin is a different workload, which is what the profiles are for.

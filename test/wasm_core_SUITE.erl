@@ -15,6 +15,25 @@
 -include_lib("wasm/include/wasm_exec.hrl").
 -include_lib("wasm/include/wasm_memory.hrl").
 
+-define(NEEDS_QJS, [the_bounds_cover_the_real_modules,
+                    the_subset_covers_a_measured_share_of_the_real_modules]).
+
+%% The QuickJS build is fetched, not committed: it is 1.8 MB of somebody
+%% else's program. The cases that read it skip when it is absent, the same way
+%% `wasm_lang_SUITE' does, rather than failing with `enoent' five times.
+init_per_testcase(Case, Config) ->
+    case lists:member(Case, ?NEEDS_QJS) andalso not filelib:is_regular(qjs()) of
+        true ->
+            {skip, "no QuickJS build: run scripts/fetch-qjs-fixture.sh"};
+        false ->
+            Config
+    end.
+
+end_per_testcase(_Case, _Config) -> ok.
+
+qjs() ->
+    filename:join([wasm_spec_runner:fixtures_dir(), "lang", "qjs.wasm"]).
+
 all() ->
     [the_pools_are_bounded_by_what_the_source_says,
      every_name_is_distinct,

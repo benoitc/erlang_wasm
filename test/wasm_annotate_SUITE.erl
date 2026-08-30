@@ -21,7 +21,8 @@ function of the real fixtures, and unreachable code asserted explicitly.
 -include_lib("wasm/include/wasm.hrl").
 -include_lib("wasm/include/wasm_exec.hrl").
 
--export([all/0, init_per_suite/1, end_per_suite/1]).
+-export([all/0, init_per_suite/1, end_per_suite/1,
+         init_per_testcase/2, end_per_testcase/2]).
 -export([heights_are_exact_on_a_body_small_enough_to_read/1,
          a_frames_body_starts_at_the_frames_own_height/1,
          unreachable_code_is_annotated_too/1,
@@ -31,6 +32,26 @@ function of the real fixtures, and unreachable code asserted explicitly.
          the_compiler_gets_unfused_ir_whatever_the_instance_asked_for/1,
          revalidating_an_annotated_module_changes_nothing/1,
          an_unvalidated_module_still_instantiates/1]).
+
+-define(NEEDS_QJS, [real_modules_hold_the_invariants_throughout,
+                    lazily_lowered_functions_inherit_the_annotation,
+                    the_compiler_gets_unfused_ir_whatever_the_instance_asked_for]).
+
+%% The QuickJS build is fetched, not committed: it is 1.8 MB of somebody
+%% else's program. The cases that read it skip when it is absent, the same way
+%% `wasm_lang_SUITE' does, rather than failing with `enoent' five times.
+init_per_testcase(Case, Config) ->
+    case lists:member(Case, ?NEEDS_QJS) andalso not filelib:is_regular(qjs()) of
+        true ->
+            {skip, "no QuickJS build: run scripts/fetch-qjs-fixture.sh"};
+        false ->
+            Config
+    end.
+
+end_per_testcase(_Case, _Config) -> ok.
+
+qjs() ->
+    filename:join([wasm_spec_runner:fixtures_dir(), "lang", "qjs.wasm"]).
 
 all() ->
     [heights_are_exact_on_a_body_small_enough_to_read,

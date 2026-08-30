@@ -15,6 +15,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("wasm/include/wasm.hrl").
 
 all() ->
     [parses_what_the_decoder_parses,
@@ -22,7 +23,9 @@ all() ->
      float_literals_round_once,
      refuses_what_the_format_forbids,
      an_unknown_instruction_does_not_become_an_atom,
-     errors_carry_an_offset].
+     errors_carry_an_offset,
+     the_facade_compiles_text_too,
+     the_facade_answers_a_value_for_bad_text].
 
 %% Only the differential cases need `wasm-tools`, so only they skip without one.
 init_per_testcase(Case, Config)
@@ -408,3 +411,34 @@ errors_carry_an_offset(_Config) ->
     {error, #{ctx := #{offset := Off}}} =
         wasm_wat:module(~"(module (memory 1)"),
     ?assertEqual(0, Off).
+
+%% `wasm:compile/1` takes the text format, so an embedder writing a module
+%% inline does not have to know that parsing and validating are two calls.
+%% It has to be the *same* module the two calls produce, or the convenience
+%% would be a second way to build one.
+the_facade_compiles_text_too(_Config) ->
+    Src = ~"""
+    (module
+      (memory (export "mem") 1)
+      (global $g (mut i32) (i32.const 3))
+      (func (export "f") (param i32) (result i32)
+        local.get 0 global.get $g i32.add))
+    """,
+    {ok, Parsed} = wasm_wat:module(Src),
+    {ok, Want} = wasm_validate:module(Parsed),
+    {ok, M} = wasm:compile({wat, Src}),
+    %% Everything but the identity, which is a fresh reference per build and is
+    %% meant to be: text has nothing stable to key a cache on.
+    ?assertEqual(Want#module{identity = undefined}, M#module{identity = undefined}),
+    %% And it instantiates, which is the point of having it.
+    {ok, I} = wasm:instantiate(M, #{}),
+    ?assertEqual({ok, [7]}, wasm:call(I, ~"f", [4])),
+    ok = wasm:destroy(I).
+
+%% Nothing raises. The text front end already answers a value through
+%% `wasm_error:capture/1'; this is that the facade does not lose it.
+the_facade_answers_a_value_for_bad_text(_Config) ->
+    ?assertMatch({error, #{class := _, kind := _, ctx := #{offset := _}}},
+                 wasm:compile({wat, ~"(module (memory 1)"})),
+    ?assertMatch({error, #{class := _, kind := _}},
+                 wasm:compile({wat, ~"(module (global i32 (i32.no_such_thing 1)))"})).

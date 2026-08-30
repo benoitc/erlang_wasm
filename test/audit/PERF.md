@@ -2469,3 +2469,59 @@ touches got faster while the control did not move.
   question is about.
 - **`call_indirect` and boxing are not worth touching for this workload**, and
   the model is what says so.
+
+### What the model found next: 60 bits is the whole story
+
+Three changes, one cause. A BEAM immediate holds 60 bits, so any literal at or
+above 2^59 is a bignum, and the generator was reaching for `2^64-1` and `2^63`
+on paths that almost never need them.
+
+| construct | before | after |
+| --- | ---: | ---: |
+| `i64.add` | 26.40 | **0.48** |
+| `i64.load` | 39.81 | **7.79** |
+| `i64.store` | 22.55 | **9.58** |
+| `f64.load` | 35.91 | **25.18** |
+| `f64.store` | 29.21 | **14.08** |
+| `i32.add`, the control | 1.26 | 1.29 |
+
+- **`i64.add` and `i64.sub`.** `wrap(64, _)` masks with `2^64-1` and folds with
+  `2^63`. An i64 is always held in `[-2^63, 2^63)`, so a sum lands in
+  `(-2^64, 2^64)` and one comparison decides it. Two tiers, because comparing
+  against `2^63` is itself bignum work: 26.40 with the mask, 12.30 with one
+  range test, **0.48** with an immediate-bounded test first.
+- **The full-word load.** `ordinary/6` only takes the fast path when the access
+  fits in one word, so for eight bytes the shift and the mask are both
+  identities -- but `mask(8)` is `2^64-1` and the compiler cannot see through
+  it. An aligned `i64.load` is one `atomics:get`; it now costs less than
+  `i32.load`, which is the right way round.
+- **The full-word store.** Same shape: the read, the splice and the mask are
+  all unnecessary when the value fills the word.
+
+End to end on QuickJS, warmed and timed five times per process, alternating
+against the branch point:
+
+| | ms |
+| --- | ---: |
+| before | 124.4 |
+| after `op1` inlining | 115.4 |
+| after the `i64` load | 92.4 |
+| after the `i64` store | **85.4** |
+
+**31%.** `bench/cross/loop.wasm` is unmoved at 3.38 ns an iteration and the
+i32 memory loop is unmoved at 28.68 against 28.89 interleaved, both of which
+they should be: neither change touches a path they take.
+
+### And a method correction
+
+The opcode census run against the interpreter reports 132,583,392 `block`
+entries a run, more than every other opcode combined, because QuickJS's
+bytecode dispatch is a `br_table` inside a deep nest of them and the
+interpreter re-enters the whole nest per dispatch. **That count does not
+transfer to compiled code**, where a control frame is a function and a branch
+is a tail call, so the nest is not executed at all. An empty `block` does cost
+1.32 ns compiled and eight nested cost 2.11 each, but they are entered once
+rather than 240 times per dispatch.
+
+Data operations do transfer, and those are what the table above is weighted by.
+Control flow has to be counted in compiled code or not at all.

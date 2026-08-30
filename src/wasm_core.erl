@@ -1361,20 +1361,66 @@ word_index(A, Sh) ->
 
 atomic(F, Args) -> cerl:c_call(cerl:c_atom(atomics), cerl:c_atom(F), Args).
 
+%% A full-word load is the word.
+%%
+%% `ordinary/6` only takes the fast path when the access fits inside one word,
+%% so for eight bytes `Bit` is necessarily zero and the shift and the mask are
+%% both identities -- but the mask is `2^64-1`, which is past the 60-bit
+%% immediate range, so the compiler cannot see that and every `i64.load` did
+%% bignum arithmetic on a value that is usually small. `i64.load` measured
+%% 39.81 nanoseconds against `i32.load`'s 9.35, which is backwards: an aligned
+%% eight-byte load is one `atomics:get` and should be the cheapest of the two.
+inline_load(8, Kind, _A, _Sh, Ix, Ck, _Bit) ->
+    decode_word(Kind, atomic(get, [Ck, Ix]));
 inline_load(N, Kind, _A, _Sh, Ix, Ck, Bit) ->
     Raw = bif('band', [bif('bsr', [atomic(get, [Ck, Ix]), Bit]),
                        cerl:abstract(mask(N))]),
     decode(Kind, N, Raw).
 
+%% The word as `atomics` hands it over: unsigned, `[0, 2^64)`.
+%%
+%% Reinterpreting that as a signed i64 is one comparison, and the first one is
+%% against the immediate bound rather than 2^63 for the reason `wrap_sum/2`
+%% gives: a literal that large is a bignum and comparing against it is not free.
+decode_word(f64, Raw) ->
+    cerl:c_call(cerl:c_atom(wasm_num), cerl:c_atom(f64_from_bits), [Raw]);
+decode_word(_Int, Raw) ->
+    W = cerl:c_var('Rw'),
+    cerl:c_case(Raw,
+                [cerl:c_clause([W], bif('=<', [W, cerl:abstract(?SMALL)]), W),
+                 cerl:c_clause([W], bif('<', [W, cerl:abstract(?S64)]), W),
+                 cerl:c_clause([W], cerl:abstract(true),
+                               bif('-', [W, cerl:abstract(?P64)]))]).
+
 %% A narrow store is a read, a splice and a write: `atomics' words are 64 bits
 %% and there is no narrower write. That is why a store costs twice a load, and
 %% it is a property of the representation rather than of this code.
+%% A full-word store is the word, so there is nothing to splice into.
+%%
+%% The general path reads the word, masks the value with `2^64-1` and merges;
+%% for eight bytes the read is pointless, the merge is the identity and the mask
+%% is the signed-to-unsigned reinterpretation, which one comparison does without
+%% touching a bignum literal. That is a read, a bignum `band` and a splice
+%% removed from every `i64.store` and `f64.store`.
+inline_store(8, Kind, _A, _Sh, Ix, Ck, _Bit, Val) ->
+    atomic(put, [Ck, Ix, unsigned_word(Kind, encode(Kind, Val))]);
 inline_store(N, Kind, _A, _Sh, Ix, Ck, Bit, Val) ->
     V = cerl:c_var('V'), Old = cerl:c_var('Old'), Vm = cerl:c_var('Vm'),
     cerl:c_let([V], encode(Kind, Val),
       cerl:c_let([Vm], bif('band', [V, cerl:abstract(mask(N))]),
         cerl:c_let([Old], atomic(get, [Ck, Ix]),
           atomic(put, [Ck, Ix, spliced(N, Old, Vm, Bit)])))).
+
+%% The bits `atomics` wants: unsigned, `[0, 2^64)`. Float bits arrive that way
+%% already; a signed i64 needs `2^64` added when it is negative.
+unsigned_word(f64, Bits) ->
+    Bits;
+unsigned_word(_Int, V) ->
+    W = cerl:c_var('Uw'),
+    cerl:c_case(V,
+                [cerl:c_clause([W], bif('>=', [W, cerl:abstract(0)]), W),
+                 cerl:c_clause([W], cerl:abstract(true),
+                               bif('+', [W, cerl:abstract(?P64)]))]).
 
 %% Where in the word the value goes.
 %%

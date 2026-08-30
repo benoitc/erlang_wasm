@@ -56,7 +56,15 @@ main([Tier]) ->
          {"call_indirect          ", "(call_indirect (type $void) (i32.const 0))", 2},
          {"global.get + drop      ", "(drop (global.get $g))", 2},
          {"global.set             ", "(global.set $g (local.get $i))", 2},
-         {"memory.copy 64B        ", "(memory.copy (i32.const 0) (i32.const 4096) (i32.const 64))", 4}],
+         {"memory.copy 64B        ", "(memory.copy (i32.const 0) (i32.const 4096) (i32.const 64))", 4},
+         %% QuickJS executes 132,583,392 `block` entries a run against 2.2
+         %% million `local.get`: its bytecode dispatch is a `br_table` inside a
+         %% deep nest of them, and every dispatch re-enters the whole nest.
+         {"block, empty           ", "(block (nop))", 1},
+         {"block x8 nested        ", "(block (block (block (block (block (block (block (block (nop)))))))))", 8},
+         {"br_table 4 of 8 nested ",
+          "(block $a (block $b (block $c (block $d (block $e (block $f (block $g (block $h (br_table $a $b $c $d $e $f $g $h (local.get $i))))))))))",
+          9}],
     io:format("~-24s ~10s ~10s~n", ["snippet", "ns/snip", "ns/instr"]),
     [run_case(Name, Snip, Instrs) || {Name, Snip, Instrs} <- Cases],
     init:stop().

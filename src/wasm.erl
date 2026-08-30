@@ -203,11 +203,53 @@ instantiate({wasm_module, _} = Handle, Imports, Opts) ->
             {error, err(link, module_not_loaded, ~"module is not loaded",
                         #{handle => Handle})}
     end;
-instantiate(#module{} = M, Imports, Opts) ->
-    case wasm_instance:new(M, Imports, Opts) of
-        {error, _} = E -> E;
-        {ok, Inst} -> run_start(M, Inst, Opts)
+instantiate(#module{} = M, Imports, Opts0) ->
+    case profile(Opts0) of
+        {error, _} = E ->
+            E;
+        {ok, Opts} ->
+            case wasm_instance:new(M, Imports, Opts) of
+                {error, _} = E -> E;
+                {ok, Inst} -> run_start(M, Inst, Opts)
+            end
     end.
+
+%% `profile` names a workload; everything it sets is an option you could have
+%% set yourself, and any you did set wins.
+%%
+%% It exists because the right answers genuinely differ and every one of them is
+%% measured. See `docs/compiled-tier.md` and `test/audit/PERF.md`.
+profile(#{profile := P} = Opts) ->
+    case defaults(P) of
+        undefined ->
+            {error, err(link, unknown_profile,
+                        ~"profile must be plugin or script", #{profile => P})};
+        D ->
+            {ok, maps:merge(D, Opts)}
+    end;
+profile(Opts) ->
+    {ok, Opts}.
+
+%% A module called many times through a long-lived instance. Run time is what
+%% there is to win, and the compile is paid once and amortised over everything
+%% after it, so it is worth 2.2x more of it: `full` is 75.0 to 76.8 ms on
+%% QuickJS against 86.1 to 87.7 at `baseline`.
+defaults(plugin) ->
+    #{compile => true, compile_quality => full};
+%% A program run end to end, which is usually an interpreter with a script to
+%% run. Two things follow. It may be a *single* call, so the default threshold
+%% of 32 would never reach it and nothing would ever compile. And the compile
+%% is a large share of the whole thing -- 58.1 seconds at `baseline` against
+%% 129.3 at `full` for QuickJS's hot set -- so the cheaper one wins unless the
+%% same module is run a great many times.
+%%
+%% Set `code_cache_dir` as well if you run the same module more than once per
+%% node: without it that compile is paid at every start. See
+%% `wasm_code_cache`.
+defaults(script) ->
+    #{compile => true, compile_quality => baseline, compile_after => 1};
+defaults(_) ->
+    undefined.
 
 run_start(#module{start = undefined}, Inst, _Opts) ->
     {ok, Inst};

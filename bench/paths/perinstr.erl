@@ -4,20 +4,70 @@
 %% The marginal cost of one instruction: build the same loop with K copies of a
 %% snippet and with 2K, and take the difference. Everything the two runs share,
 %% loop overhead included, cancels.
-main(_) ->
+%%
+%%     erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \\
+%%         -run perinstr main off      % the interpreter
+%%     erl ... -run perinstr main on   % generated code
+%%
+%% The tier arm is the one that matters now. A warm QuickJS run makes *zero*
+%% `wasm_exec:run/3` calls (`bench/paths/tiered.erl`), so nothing it does is
+%% interpreted and only these prices explain where its time goes.
+main([Tier]) ->
     {ok, _} = application:ensure_all_started(wasm),
+    Opts = case Tier of
+               "off" -> #{};
+               %% Whole-module and synchronous, so the loop being timed is
+               %% compiled before the first measured call rather than during it.
+               "on" -> #{compile => true, compile_sync => true,
+                         compile_after => 1, compile_whole => true}
+           end,
+    put(opts, Opts),
     Cases =
         [{"nop                    ", "(nop)", 1},
          {"i32.const + drop       ", "(drop (i32.const 7))", 2},
          {"local.get + drop       ", "(drop (local.get $i))", 2},
          {"local.get + local.set  ", "(local.set $t (local.get $i))", 2},
          {"i32.add                ", "(local.set $t (i32.add (local.get $t) (local.get $i)))", 4},
-         {"i32.eqz + drop         ", "(drop (i32.eqz (local.get $i)))", 3},
+         {"i32.eqz -> local        ", "(local.set $t (i32.eqz (local.get $i)))", 3},
+         {"i32.eqz in br_if        ", "(if (i32.eqz (local.get $t)) (then (nop)))", 3},
+         {"i32.wrap_i64            ", "(local.set $t (i32.wrap_i64 (local.get $u)))", 3},
+         {"i64.extend_i32_u        ", "(local.set $u (i64.extend_i32_u (local.get $i)))", 3},
          {"i32.ge_u + drop        ", "(drop (i32.ge_u (local.get $i) (local.get $i)))", 4},
          {"i64.add                ", "(local.set $u (i64.add (local.get $u) (i64.const 1)))", 3},
          {"f64.add                ", "(local.set $f (f64.add (local.get $f) (f64.const 1)))", 3},
          {"i32.load               ", "(local.set $t (i32.load (i32.const 0)))", 3},
-         {"call (empty func)      ", "(call $empty)", 1}],
+         {"call (empty func)      ", "(call $empty)", 1},
+         %% Everything below is here because QuickJS pays for it and the
+         %% original set did not cover it.
+         {"i32.store              ", "(i32.store (i32.const 0) (local.get $i))", 3},
+         {"i32.load8_u            ", "(local.set $t (i32.load8_u (i32.const 1)))", 3},
+         {"i32.store8             ", "(i32.store8 (i32.const 1) (local.get $i))", 3},
+         {"i64.load               ", "(local.set $u (i64.load (i32.const 0)))", 3},
+         {"i64.store              ", "(i64.store (i32.const 0) (local.get $u))", 3},
+         {"f64.load               ", "(local.set $f (f64.load (i32.const 0)))", 3},
+         {"f64.store              ", "(f64.store (i32.const 0) (local.get $f))", 3},
+         {"f64.convert_i32_u      ", "(local.set $f (f64.convert_i32_u (local.get $i)))", 3},
+         {"i32.trunc_f64_u        ", "(local.set $t (i32.trunc_f64_u (local.get $f)))", 3},
+         {"f64.mul                ", "(local.set $f (f64.mul (local.get $f) (local.get $f)))", 3},
+         {"i32.mul                ", "(local.set $t (i32.mul (local.get $t) (local.get $i)))", 4},
+         {"i32.div_u              ", "(local.set $t (i32.div_u (local.get $i) (i32.const 3)))", 4},
+         {"i32.shl                ", "(local.set $t (i32.shl (local.get $t) (i32.const 1)))", 4},
+         {"i64.shl                ", "(local.set $u (i64.shl (local.get $u) (i64.const 1)))", 4},
+         {"call_indirect          ", "(call_indirect (type $void) (i32.const 0))", 2},
+         {"global.get + drop      ", "(drop (global.get $g))", 2},
+         {"global.set             ", "(global.set $g (local.get $i))", 2},
+         {"memory.copy 8B         ", "(memory.copy (i32.const 0) (i32.const 4096) (i32.const 8))", 4},
+         {"memory.copy 64B        ", "(memory.copy (i32.const 0) (i32.const 4096) (i32.const 64))", 4},
+         {"memory.copy 1024B      ", "(memory.copy (i32.const 0) (i32.const 4096) (i32.const 1024))", 4},
+         {"memory.fill 1024B      ", "(memory.fill (i32.const 0) (i32.const 7) (i32.const 1024))", 4},
+         %% QuickJS executes 132,583,392 `block` entries a run against 2.2
+         %% million `local.get`: its bytecode dispatch is a `br_table` inside a
+         %% deep nest of them, and every dispatch re-enters the whole nest.
+         {"block, empty           ", "(block (nop))", 1},
+         {"block x8 nested        ", "(block (block (block (block (block (block (block (block (nop)))))))))", 8},
+         {"br_table 4 of 8 nested ",
+          "(block $a (block $b (block $c (block $d (block $e (block $f (block $g (block $h (br_table $a $b $c $d $e $f $g $h (local.get $i))))))))))",
+          9}],
     io:format("~-24s ~10s ~10s~n", ["snippet", "ns/snip", "ns/instr"]),
     [run_case(Name, Snip, Instrs) || {Name, Snip, Instrs} <- Cases],
     init:stop().
@@ -34,8 +84,11 @@ time_for(Snippet, K) ->
     Src = source(Snippet, K),
     {ok, P} = wasm_wat:module(Src),
     {ok, M} = wasm_validate:module(P),
-    {ok, I} = wasm:instantiate(M, #{}),
+    {ok, I} = wasm:instantiate(M, #{}, get(opts)),
     N = 200000,
+    %% One call to trigger and finish the compile, so the timed ones are
+    %% measuring generated code and not the compiler.
+    _ = wasm:call(I, ~"bench", [1]),
     R = lists:min([element(1, timer:tc(fun() -> wasm:call(I, ~"bench", [N]) end))
                    || _ <- lists:seq(1, 5)]),
     ok = wasm:destroy(I),
@@ -46,6 +99,10 @@ source(Snippet, K) ->
     iolist_to_binary(
       ["(module (memory 1)\n",
        " (func $empty)\n",
+       " (type $void (func))\n",
+       " (table 1 1 funcref)\n",
+       " (elem (i32.const 0) $empty)\n",
+       " (global $g (mut i32) (i32.const 0))\n",
        " (func (export \"bench\") (param $n i32) (result i32)\n",
        "  (local $i i32) (local $t i32) (local $u i64) (local $f f64)\n",
        "  (block $done (loop $l\n",

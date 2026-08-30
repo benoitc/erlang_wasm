@@ -2431,7 +2431,31 @@ conversions. Inlining them is the interpreter's own definition written in Core:
 is `uns(32, _)`, and `i64.extend_i32_s` is the identity because an i32 is
 already held signed.
 
-**`op1/2` disappears from the escape table entirely.**
+**`op1/2` disappears from the escape table entirely**, and the constructs
+themselves, priced the same differential way on both trees:
+
+| | before | after |
+| --- | ---: | ---: |
+| `i32.eqz` into a local | 9.96 | **0.13** |
+| `i32.eqz` in a `br_if` | 2.82 | **1.91** |
+| `i32.wrap_i64` | 2.95 | **0.77** |
+| `i64.extend_i32_u` | 2.56 | **0.19** |
+| `i32.add`, the control | 1.26 | 1.31 |
+
+End to end, QuickJS warmed and timed five times per process, four alternating
+pairs in both orderings once the box was quiet:
+
+| | runs (ms) | min |
+| --- | --- | ---: |
+| before | 125.8, 122.3, 121.6, 122.6 | 121.6 |
+| after | 119.7, 118.7, 115.4, 115.9 | **115.4** |
+
+**About 5%**, and the two sets do not overlap: 1,317,284 cross-module calls at
+roughly 4.5 nanoseconds each. `bench/cross/loop.wasm` is unmoved at 3.38
+against 3.35 ns an iteration, which it should be -- it has no unary escape in
+it. The plugin arm cannot resolve the change: twelve interleaved pairs in both
+orderings spread from 146 to 198 microseconds, and every construct the change
+touches got faster while the control did not move.
 
 ### What it says to do next
 

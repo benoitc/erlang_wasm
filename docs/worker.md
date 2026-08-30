@@ -134,6 +134,16 @@ catch
 end.
 ```
 
+`wasm_worker:call/3` uses `worker_timeout` for `Timeout`, five seconds unless
+you set it:
+
+```erlang
+application:set_env(wasm, worker_timeout, 30000).
+```
+
+Pass a deadline you actually know to `call/4` instead. The default is there so
+that copying the example does not silently give you five seconds.
+
 ## Get parallelism from more workers
 
 Never from concurrent calls into one instance. Two processes calling one

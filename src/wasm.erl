@@ -58,12 +58,14 @@ context to diagnose it.
 -export([read_memory/3, write_memory/3, memory_size/1]).
 -export([format_error/1]).
 
--export_type([module_/0, instance/0]).
+-export_type([module_/0, instance/0, source/0]).
 
 -doc "A module: compiled inline, or a handle to a cached one.".
 -nominal module_() :: #module{} | wasm_module_cache:handle().
 -doc "An instance, owned by the process that created it.".
 -nominal instance() :: #inst{}.
+-doc "What `compile/1` takes: the binary format, or the text format.".
+-nominal source() :: binary() | {wat, binary()}.
 
 %%% ------------------------------------------------------------- lifecycle ---
 
@@ -101,12 +103,21 @@ unload({wasm_module, _} = Handle) -> wasm_module_cache:unload(Handle);
 unload(#module{}) -> ok.       % compiled inline; nothing cached to release
 
 -doc """
-Decode and validate a module binary without caching it.
+Decode and validate a module without caching it.
+
+Takes the binary format, or `{wat, Source}` for the text format:
+
+```erlang
+{ok, M} = wasm:compile({wat, ~"(module (func (export \"f\") (result i32) i32.const 7))"}).
+```
 
 Use it for one-shot work. If you instantiate more than once, use `load/1`.
+Text is one-shot by construction: the cache is keyed on a content hash of the
+bytes, and a module built from text takes a fresh identity every time it is
+validated, so `load/1` takes the binary format only.
 """.
--spec compile(binary()) -> {ok, module_()} | {error, wasm_error:error()}.
-compile(Bin) -> compile(Bin, #{}).
+-spec compile(source()) -> {ok, module_()} | {error, wasm_error:error()}.
+compile(Src) -> compile(Src, #{}).
 
 -doc """
 As `compile/1`, with an `identity` for the module.
@@ -118,11 +129,17 @@ one the module gets a fresh reference, which is correct and simply does not
 share. Nothing hashes on this path: five milliseconds on the 1.8 MB QuickJS
 module is not worth paying to buy sharing the inline API does not promise.
 """.
--spec compile(binary(), map()) -> {ok, module_()} | {error, wasm_error:error()}.
-compile(Bin, Opts) ->
+-spec compile(source(), map()) -> {ok, module_()} | {error, wasm_error:error()}.
+compile({wat, Source}, Opts) -> compile_with(Source, Opts, fun wasm_wat:module/1);
+compile(Bin, Opts) -> compile_with(Bin, Opts, fun wasm_decode:module/1).
+
+%% Both front ends answer a `#module{}` or an error value -- `wasm_wat:module/1`
+%% through `wasm_error:capture/1` -- so validation and the identity are the same
+%% two lines either way and neither path raises.
+compile_with(Src, Opts, Front) ->
     Identity = maps:get(identity, Opts, undefined),
-    with_room(byte_size(Bin), fun() ->
-        case wasm_decode:module(Bin) of
+    with_room(byte_size(Src), fun() ->
+        case Front(Src) of
             {error, _} = E -> E;
             {ok, M} -> wasm_validate:module(M#module{identity = Identity})
         end

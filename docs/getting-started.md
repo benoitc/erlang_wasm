@@ -36,6 +36,27 @@ validates the bytes and caches the result by content hash, so loading the same
 file again costs microseconds instead of milliseconds. Each `instantiate/2`
 gives you a fresh instance that shares nothing with the others.
 
+## Write the module inline
+
+You do not need a `.wasm` file to try something. The runtime reads the text
+format itself, with no toolchain involved:
+
+```erlang
+Src = ~"""
+(module
+  (func (export "add") (param i32 i32) (result i32)
+    local.get 0 local.get 1 i32.add))
+""",
+{ok, Mod}  = wasm:compile({wat, Src}),
+{ok, Inst} = wasm:instantiate(Mod, #{}),
+{ok, [7]}  = wasm:call(Inst, ~"add", [3, 4]).
+```
+
+Use it for a snippet, a test, or a shell session. `compile/1` skips the cache,
+which is right for text: a module built from text takes a fresh identity every
+time, so there is nothing stable to cache it against. Use `load_file/1` for a
+module you instantiate repeatedly.
+
 ## Give it something to call
 
 Imports are plain Erlang functions. Key them by the module and field name the

@@ -63,6 +63,17 @@ you put each one:
 Use `wasm:compile/1` only for one-shot work; it skips the cache. If you
 instantiate more than once, use `load/1`.
 
+`compile/1` also takes the text format, which is the one-shot case by
+construction:
+
+```erlang
+{ok, Mod} = wasm:compile({wat, ~"(module (func (export \"f\") (result i32) i32.const 7))"}).
+```
+
+`load/1` takes bytes only. The cache is keyed on a content hash and a module
+built from text takes a fresh identity every time it is validated, so there
+would be nothing stable to key on.
+
 ## Know who owns the instance
 
 An instance belongs to the process that created it, like a port or an ETS table:

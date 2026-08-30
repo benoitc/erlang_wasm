@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.1
+
+`wasm:compile/1` takes the text format:
+
+```erlang
+{ok, M} = wasm:compile({wat, ~"(module (func (export \"f\") (result i32) i32.const 7))"}).
+```
+
+`load/1` still takes the binary format only: the cache is keyed on a content
+hash, and a module built from text takes a fresh identity every time.
+
+### Fixed
+
+Seven lifecycle defects found by an audit of the previous release.
+
+- A reader killed inside `wasm_heap:lease/1` or `unlease/2` stranded a count
+  nothing could give back, and the object store never collected again.
+- A keeper restart dropped every per-instance memory ceiling, so an instance
+  created with `max_memory_pages` grew past it.
+- A process calling instances it does not destroy kept one table array and one
+  compiled entry per instance, without bound.
+- `sock_send_to` leaked a socket when the send failed, and another when the
+  guest's output pointer was out of bounds.
+- `atomic.wait` reported a wakeup that never happened when the notifier died
+  between claiming a waiter and sending to it.
+- `wasm_engine`'s per-instance limits table had no callers and is gone.
+
 ## 0.1.0
 
 First public release. The versions before it were developed in a private

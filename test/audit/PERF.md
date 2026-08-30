@@ -2379,3 +2379,29 @@ survivable there.
 So the mechanism is in and the policy is not: `auto` is one unit until this is
 understood. No wall-clock number for parallel compilation yet, because the
 arrangement that would produce it is the one that fails.
+
+### Shards: 3.8x to compile, 1.5x to run
+
+The failure above was not the fusion decision. Publishing shard one is what
+makes the whole chain adoptable -- `wasm_jit:await/2` returns on it and the
+next instance calls straight in -- and the loop was loading and publishing each
+unit in turn. In the window between shard one going live and shard four being
+loaded, the chain reached a module that did not exist and generated code raised
+`undef`, which arrived as an internal error on somebody else's first call.
+Only off the calling process, because nothing else was racing that loop.
+
+Every unit is loaded before any is published now. QuickJS's 223-function hot
+set, background compiler:
+
+| | compile | warm `_start` | speedup |
+| --- | ---: | ---: | ---: |
+| one unit | 57.8 s | 174.4 ms | 13.2x |
+| four units | **15.2 s** | **268.5 ms** | 7.5x |
+
+**3.8x faster to compile and 1.5x slower to run.** The second half is not
+inherent: `wasm_core:forms/7` builds `Known` from its own unit only, so a call
+to a function in another unit crosses back into the interpreter and re-enters
+through the head of the chain, where a call within the unit is a local `apply`.
+Which unit holds which function is decided before anything is generated, so
+that crossing can be a direct `Mod:invoke` instead. Until it is, the trade is
+bad for anything that runs more than briefly and the default stays one unit.

@@ -569,10 +569,19 @@ publish_all(Inst, Limits, Tokens, Parts, Bins) ->
             forced(Limits) andalso erlang:error({compile_failed, Reason}),
             error;
         [] ->
-            _ = [begin
-                     {module, M} = code:load_binary(M, "wasm_generated", B),
-                     ok = wasm_code_slots:publish(T)
-                 end || {{M, T}, {ok, B}} <- lists:zip(Tokens, Bins)],
+            %% Every module loaded before any of them is published, and the two
+            %% must not be interleaved.
+            %%
+            %% Publishing shard one is what makes the whole chain adoptable:
+            %% `await/2` returns on it and the next instance calls straight into
+            %% it. If the rest is still being loaded at that moment, the chain
+            %% reaches a module that does not exist yet and generated code
+            %% raises `undef`, which arrives as an internal error on somebody
+            %% else's first call. That is exactly what happened, and only off
+            %% the calling process, because nothing else was racing the loop.
+            _ = [{module, M} = code:load_binary(M, "wasm_generated", B)
+                 || {{M, _}, {ok, B}} <- lists:zip(Tokens, Bins)],
+            _ = [ok = wasm_code_slots:publish(T) || {_, T} <- Tokens],
             bump(?IX_COMPILED, lists:sum([length(P) || P <- Parts])),
             adopt(Inst, element(1, hd(Tokens)))
     end.
@@ -593,19 +602,23 @@ split(Unit, Limits) ->
 
 %% `auto` is one, which is to say splitting is off unless you ask for it.
 %%
-%% It works, and only on the calling process. `#{compile_shards => 4}` with
-%% `compile_sync` compiles QuickJS's hot set into four units and runs it at
-%% 11.8x, every function accounted for. Through the *background* compiler the
-%% same options fail two ways: once with 223 functions lowered, 16 seconds
-%% spent and nothing published, and once with a shard raising out of
-%% `invoke/6` on a later instance's first call. Neither reproduces from a
-%% harness that skips the interpreted first instance, which is the thread to
-%% pull: `spawn_compile/2` re-lowers every body in the compiler process, where
-%% the fusion decision the caller made is not set.
+%% It works now, off the calling process as well as on it, and what it buys and
+%% costs are both measured. QuickJS's 223-function hot set, four units:
 %%
-%% So the mechanism ships and the policy does not. Until that is understood,
-%% nothing splits unless an embedder asks, and `wasm_jit_lifetime_SUITE` is
-%% what keeps the chain honest meanwhile.
+%% | | compile | warm `_start` |
+%% | --- | ---: | ---: |
+%% | one unit | 57.8 s | 174.4 ms |
+%% | four units | **15.2 s** | **268.5 ms** |
+%%
+%% So it is 3.8x faster to compile and 1.5x slower to run, and the reason for
+%% the second half is in `wasm_core:forms/7`: a callee in *another* unit is not
+%% in `Known`, so the call crosses back into the interpreter and comes in again
+%% through the head of the chain, where a callee in the same unit is a local
+%% `apply`. Which unit holds what is decided before anything is generated, so
+%% that crossing is avoidable and is the next thing to do.
+%%
+%% Until it is, the trade is bad for anything that runs more than briefly and
+%% the default stays one unit.
 shards(Words, Limits) ->
     case maps:get(compile_shards, Limits, auto) of
         auto -> auto_shards(Words);

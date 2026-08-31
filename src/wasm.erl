@@ -232,10 +232,32 @@ instantiate(#module{} = M, Imports, Opts0) ->
         {error, _} = E ->
             E;
         {ok, Opts} ->
-            case wasm_instance:new(M, Imports, Opts) of
+            case check_limits(Opts) of
                 {error, _} = E -> E;
-                {ok, Inst} -> run_start(M, Inst, Opts)
+                ok ->
+                    case wasm_instance:new(M, Imports, Opts) of
+                        {error, _} = E -> E;
+                        {ok, Inst} -> run_start(M, Inst, Opts)
+                    end
             end
+    end.
+
+%% A limits map that cannot mean what it says is refused rather than ignored.
+%%
+%% `wasm_limits:validate/1` has always been able to answer this and nothing
+%% called it, so a bad value was simply not enforced. `#{max_depth => lots}` was
+%% the sharp one: the guard is `Depth >= MaxDepth`, every integer sorts before
+%% every atom, so the test was never true and a guest could recurse a million
+%% frames under a limit the embedder thought they had set. It failed open, which
+%% is the one direction a limit must not fail.
+check_limits(Opts) ->
+    case wasm_limits:validate(Opts) of
+        ok ->
+            ok;
+        {error, {invalid_limits, Bad}} ->
+            {error, err(link, invalid_limits,
+                        ~"limit is not a value that limit can take",
+                        #{keys => Bad})}
     end.
 
 %% `profile` names a workload; everything it sets is an option you could have
@@ -311,11 +333,23 @@ abandoned(Err, _Inst) ->
 
 -spec call(instance(), binary(), [term()]) ->
           {ok, [term()]} | {error, wasm_error:error()}.
-call(Inst, Name, Args) -> call(Inst, Name, Args, #{}).
+call(Inst, Name, Args) -> call_1(Inst, Name, Args, #{}).
 
 -spec call(instance(), binary(), [term()], map()) ->
           {ok, [term()]} | {error, wasm_error:error()}.
+%% Per-call limits are checked here and not in `invoke_at/6`, which nested and
+%% re-entrant calls also reach. An empty map is the common case -- `call/3` is
+%% this with `#{}` -- so the check is a clause head rather than work on the path
+%% every QuickJS call takes.
+call(Inst, Name, Args, Opts) when map_size(Opts) =:= 0 ->
+    call_1(Inst, Name, Args, Opts);
 call(Inst, Name, Args, Opts) ->
+    case check_limits(Opts) of
+        {error, _} = E -> E;
+        ok -> call_1(Inst, Name, Args, Opts)
+    end.
+
+call_1(Inst, Name, Args, Opts) ->
     case wasm_instance:export_kind(Inst, Name) of
         {ok, {func, Idx}} -> invoke(Inst, Idx, Args, Opts);
         {ok, Other} ->

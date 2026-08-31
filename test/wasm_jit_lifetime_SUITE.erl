@@ -212,9 +212,15 @@ the_compiler_is_supervised(_) ->
     %% A process nothing can see is a process nothing can stop, bound or count.
     %% Compiling used to be a bare `spawn/1`: invisible to the tree, outliving
     %% `application:stop(wasm)`, and unbounded.
-    Children = supervisor:which_children(wasm_sup),
+    %% Under `wasm_code_sup` rather than the root: the slot manager and the
+    %% compilers that reserve slots from it share one subsystem, and one
+    %% restart budget, on purpose. See `wasm_sup`.
+    ?assertMatch({wasm_code_sup, _, supervisor, _},
+                 lists:keyfind(wasm_code_sup, 1,
+                               supervisor:which_children(wasm_sup))),
     ?assertMatch({wasm_jit_sup, _, supervisor, _},
-                 lists:keyfind(wasm_jit_sup, 1, Children)),
+                 lists:keyfind(wasm_jit_sup, 1,
+                               supervisor:which_children(wasm_code_sup))),
     %% Started empty and told what to compile afterwards, so the instance is
     %% copied to the child and not through the supervisor as well.
     {ok, Pid} = supervisor:start_child(wasm_jit_sup, []),

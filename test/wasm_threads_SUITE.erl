@@ -369,12 +369,17 @@ a_notifier_that_dies_holding_a_wakeup_does_not_fake_one(_Config) ->
 %% a fallback that created it in whichever agent got there first, taken when
 %% the application was not running; it is gone, and an unsupervised engine is
 %% started on demand instead.
+%%
+%% `wasm_store` owns it now, with `wasm_store_sup` as its heir, so the list of
+%% acceptable owners is those two plus the engine that creates it when there is
+%% no application at all. What the case is really about is the last line.
 the_waiter_table_never_belongs_to_a_waiter(_Config) ->
     MemId = make_ref(),
     %% Force the table into existence through the ordinary path.
     0 = wasm_wait:notify(MemId, 0, 1),
     Owner = ets:info(wasm_waiters, owner),
-    ?assert(Owner =:= whereis(wasm_sup) orelse Owner =:= whereis(wasm_engine)),
+    ?assert(lists:member(Owner, [whereis(wasm_store), whereis(wasm_store_sup),
+                                 whereis(wasm_engine)])),
     ?assertNotEqual(self(), Owner).
 
 %%% ---------------------------------------------------------------- setup ---

@@ -30,6 +30,7 @@ eventually refuses every allocation on the node.
 -export([start_link/0]).
 -export([table_grow_limit/0]).
 -export([reserve_pages/1, release_pages/1, pages_in_use/0, page_limit/0,
+         set_pages_in_use/1,
          set_page_limit/1, stats/0]).
 -export([table_put/2, table_get/1, table_forget/1]).
 -export([cell_put/2, cell_get/1, cell_forget/1]).
@@ -113,6 +114,24 @@ release_pages(N) when is_integer(N), N > 0 ->
 
 -spec pages_in_use() -> non_neg_integer().
 pages_in_use() -> atomics:get(counters_ref(), ?SLOT_PAGES).
+
+-doc """
+Set the page count outright, for `wasm_keeper` reconciliation and nothing else.
+
+The counter lives in `persistent_term` and so outlives the supervision tree; the
+registry that says who holds those pages is a table that does not. If the tree
+goes, the count survives with nobody left to give any of it back, and every page
+charged at that moment is gone for the life of the node. `wasm_keeper` puts the
+two back in step when it starts, which it can do safely because every
+`reserve_pages/1` and `release_pages/1` call in the runtime goes through that
+process.
+
+Call it from anywhere else and the node's accounting becomes a number somebody
+chose rather than a sum of what is held.
+""".
+-spec set_pages_in_use(non_neg_integer()) -> ok.
+set_pages_in_use(N) when is_integer(N), N >= 0 ->
+    atomics:put(counters_ref(), ?SLOT_PAGES, N).
 
 -spec page_limit() -> non_neg_integer().
 page_limit() -> atomics:get(counters_ref(), ?SLOT_LIMIT).

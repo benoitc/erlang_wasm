@@ -36,6 +36,7 @@ the node's life.
          a_keeper_restart_keeps_the_ceiling_it_promised/1,
          an_aborted_growth_does_not_block_the_next_one/1,
          an_engine_restart_keeps_the_store_and_the_waiters/1,
+         a_tree_death_does_not_leak_the_page_budget/1,
          each_subsystem_has_its_own_restart_budget/1,
          a_table_owner_crash_does_not_lose_the_tables/1,
          restarts_under_traffic_leave_nothing_behind/1]).
@@ -63,6 +64,7 @@ all() ->
      a_keeper_restart_keeps_the_ceiling_it_promised,
      an_aborted_growth_does_not_block_the_next_one,
      an_engine_restart_keeps_the_store_and_the_waiters,
+     a_tree_death_does_not_leak_the_page_budget,
      each_subsystem_has_its_own_restart_budget,
      a_table_owner_crash_does_not_lose_the_tables,
      restarts_under_traffic_leave_nothing_behind].
@@ -636,6 +638,60 @@ each_subsystem_has_its_own_restart_budget(_Config) ->
     ?assertEqual(Engine, whereis(wasm_engine)),
     ?assertEqual(Keeper, whereis(wasm_keeper)),
     ?assertEqual(Slots, whereis(wasm_code_slots)).
+
+%% Losing the tree costs the node its page budget, permanently, unless the
+%% counter is put back in step with the registry.
+%%
+%% The counter is an `atomics' array in `persistent_term' and outlives
+%% everything; the registry is a table and does not. Before this, killing the
+%% tree with four 8-page instances alive left 32 pages charged to memories whose
+%% monitors were gone: destroying every instance released nothing, restarting
+%% the application released nothing, and the budget stayed spent for the life of
+%% the node. It accumulated, one tree death at a time.
+%%
+%% The registry is the truth here, because it is the only thing that can give a
+%% page back. A registry that came back empty means nothing is releasable, so
+%% zero is the honest count.
+a_tree_death_does_not_leak_the_page_budget(_Config) ->
+    ok = application:stop(wasm),
+    {ok, _} = application:ensure_all_started(wasm),
+    Mod = compile(~"(module (memory (export \"m\") 8))"),
+    Insts = [begin {ok, I} = wasm:instantiate(Mod, #{}), I end
+             || _ <- lists:seq(1, 4)],
+    ?assert(wasm_engine:pages_in_use() >= 32),
+
+    Sup = whereis(wasm_sup),
+    Ref = monitor(process, Sup),
+    exit(Sup, kill),
+    receive {'DOWN', Ref, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
+    wait_until(fun() -> not lists:keymember(wasm, 1,
+                                            application:which_applications())
+               end, 5000),
+    {ok, _} = application:ensure_all_started(wasm),
+
+    %% The registry came back empty, so the counter has to say so too. Asserting
+    %% against the registry rather than against zero is the point: what must
+    %% hold is that the two agree, and zero is only what that happens to be
+    %% after a total loss.
+    ?assertEqual(registry_pages(), wasm_engine:pages_in_use()),
+    ?assertEqual(0, registry_pages()),
+
+    %% And the node still allocates the full budget afterwards, which is the
+    %% thing the leak took away.
+    {ok, Fresh} = wasm:instantiate(Mod, #{}),
+    ?assertEqual(8, wasm_engine:pages_in_use()),
+    ok = wasm:destroy(Fresh),
+    ?assertEqual(0, wasm_engine:pages_in_use()),
+    _ = Insts,
+    ok.
+
+%% What the registry says is charged, summed per resource row. Not per holder:
+%% a memory two instances share is one charge, and `wasm_keeper:adopt_totals/0`
+%% counts it twice on purpose because it is building per-token totals.
+registry_pages() ->
+    ets:foldl(fun({_Res, _Meta, Pages, H}, Acc) when is_map(H) -> Acc + Pages;
+                 (_Other, Acc) -> Acc
+              end, 0, wasm_holders).
 
 %% The tables outlive the process that owns them.
 %%

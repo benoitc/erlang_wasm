@@ -359,8 +359,43 @@ init([]) ->
     %% the size before the growth, so that is a specification violation and not
     %% only a leak.
     {Growing, Totals, Caps} = adopt_growths(adopt_totals(), adopt_caps()),
+    ok = reconcile_pages(),
     {ok, #{held => Held, mons => Mons, growing => Growing, queued => #{},
            caps => Caps, totals => Totals}}.
+
+%% Put the node page counter back in step with the registry.
+%%
+%% The counter is an `atomics' array in `persistent_term': it outlives this
+%% process, the supervision tree, and `application:stop(wasm)'. The registry is
+%% a table that does not. When the two part company the counter is the half that
+%% survives, holding a charge for memories whose monitors are gone, so nothing
+%% will ever release them: a killed tree used to cost the node eight megabytes
+%% of budget per thirty-two page instance, permanently, accumulating across
+%% application restarts until only a node restart cleared it.
+%%
+%% The registry is the truth, because it is the only thing that can give pages
+%% back. Doing this here is race-free without any locking: every
+%% `wasm_engine:reserve_pages/1' and `release_pages/1' call in the runtime is
+%% made from this process, and callers block on `gen_server:call' until `init/1'
+%% returns, so no reservation can be in flight while it runs.
+reconcile_pages() ->
+    Charged = ets:foldl(fun({_Res, _Meta, Pages, H}, Acc) when is_map(H) ->
+                                Acc + Pages;
+                           (_Other, Acc) -> Acc
+                        end, 0, ?TAB),
+    %% Per resource row, not per holder: `adopt_totals/0' counts a two-holder
+    %% memory twice on purpose, because it is building per-token totals. The
+    %% node count must not.
+    case wasm_engine:pages_in_use() - Charged of
+        0 ->
+            ok;
+        Orphaned ->
+            ok = wasm_engine:set_pages_in_use(Charged),
+            logger:warning("wasm: page counter held ~p pages no holder claims; "
+                           "reset to ~p to match the registry",
+                           [Orphaned, Charged]),
+            ok
+    end.
 
 %% Rebuilt from the registry on a restart, for the same reason the monitors are.
 adopt_totals() ->

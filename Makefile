@@ -1,4 +1,4 @@
-.PHONY: all compile check test ct lint xref dialyzer docs bench suites clean
+.PHONY: all compile check test ct lint xref dialyzer docs publish bench suites clean
 
 all: compile
 
@@ -24,6 +24,9 @@ dialyzer:
 
 docs:
 	rebar3 ex_doc
+
+publish:
+	rebar3 hex publish
 
 # The benchmark arms the performance record in `test/audit/PERF.md' cites.
 # `realbench' is the one a speed claim comes from; read

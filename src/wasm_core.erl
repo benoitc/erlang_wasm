@@ -29,9 +29,9 @@ Rust plugin and over QuickJS:
 **Arity is not the constraint it looks like.** The worst function in QuickJS
 would generate a 71-argument continuation against the BEAM's limit of 255, so
 `?MAX_ARITY` costs no coverage at all and exists to refuse the pathological
-rather than to shape the common case. The decoder admits a million locals
-(`\wasm_decode:expand_locals/1`) and that is what a bound has to survive, not
-what it has to accommodate.
+rather than to shape the common case. The decoder admits a million locals, which
+`wasm_decode` expands, and that is what a bound has to survive rather than what
+it has to accommodate.
 
 **Frame names are bounded by nesting, not by count.** A function with 1016
 control frames needs far fewer than 1016 names, because Core `letrec` scoping

@@ -59,6 +59,13 @@ context to diagnose it.
 -export([format_error/1]).
 
 -export_type([module_/0, instance/0, source/0]).
+%% `module_()` is a `#module{}`, so everything its fields are typed with is part
+%% of what a reader of that type needs. They are declared in `include/wasm.hrl`
+%% and exported here, which is also what stops the documentation build reporting
+%% each of them as a reference to something private.
+-export_type([typeidx/0, funcidx/0, tableidx/0, memidx/0,
+              valtype/0, reftype/0, heaptype/0, numtype/0, vectype/0,
+              mut/0, externtype/0, instr/0, annotated/0]).
 
 -doc "A module: compiled inline, or a handle to a cached one.".
 -nominal module_() :: #module{} | wasm_module_cache:handle().

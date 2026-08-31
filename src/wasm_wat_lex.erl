@@ -40,7 +40,8 @@ so a parse error can say where rather than what.
 
 -export([tokens/1, scan_all/1]).
 
--export_type([token/0]).
+%% `pos/0` because every `token/0` carries one.
+-export_type([token/0, pos/0]).
 
 -doc "A token and the byte offset it starts at.".
 -nominal token() :: {lparen, pos()}

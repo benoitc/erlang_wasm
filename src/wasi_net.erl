@@ -54,7 +54,8 @@ you mean. See `docs/security.md`.
 -export([grant/1, allows/3, bindable/1, resolves/1, max_sockets/1, timeout/1]).
 -export([normalise/1, parse/1]).
 
--export_type([grant/0, endpoint/0, kind/0]).
+%% `rule/0` because `grant/0` is made of them.
+-export_type([grant/0, endpoint/0, kind/0, rule/0]).
 
 %% A cap on descriptors, for the reason the node page budget exists: without
 %% one, a module opens sockets until the node runs out of them.

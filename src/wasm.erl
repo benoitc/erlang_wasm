@@ -250,6 +250,57 @@ instantiate(#module{} = M, Imports, Opts0) ->
 %% every atom, so the test was never true and a guest could recurse a million
 %% frames under a limit the embedder thought they had set. It failed open, which
 %% is the one direction a limit must not fail.
+%% Arguments are checked here, at the one boundary both engines are behind.
+%%
+%% `wasm_exec:check_arity/2` guards the interpreter and the compiled tier never
+%% reaches it: `wasm_jit` enters the generated module directly. So the same
+%% mistake answered `{link, argument_arity}` interpreted and `{malformed,
+%% internal}` compiled, and which one an embedder saw depended on whether the
+%% function happened to be hot yet.
+%%
+%% Types were not checked on either path. The interpreter blew up on a float
+%% where an i32 belonged and the error value was a captured crash; the compiled
+%% tier ran `i32.add` on the float and answered `{ok, [-2.5]}`, a wrong-typed
+%% result with nothing to say it was wrong. Checking once here makes the two
+%% agree by construction rather than by keeping two checks in step.
+check_args(Inst, Name, Args) ->
+    case wasm_instance:params_of(Inst, Name) of
+        undefined ->
+            ok;
+        Params when length(Params) =/= length(Args) ->
+            {error, err(link, argument_arity, ~"wrong number of arguments",
+                        #{expected => length(Params), got => length(Args)})};
+        Params ->
+            check_arg_types(Params, Args, 0)
+    end.
+
+%% Numbers and vectors only.
+%%
+%% Those are the types the engines disagreed about, because they are the ones
+%% generated code computes on: an `i32.add` handed a float answered with a
+%% float. A reference is an opaque term with several shapes -- `{objref, N}` for
+%% a struct or array, a funcref carrying its defining instance, `null` -- and
+%% both engines pass them through the same way, so a partial predicate over them
+%% would reject working programs to no purpose. `wasm_instance:value_matches/2`
+%% is written for imported globals and is exactly that partial predicate; the
+%% first version of this used it for every parameter and refused every GC
+%% reference the collection suite passes.
+check_arg_types([], [], _N) ->
+    ok;
+check_arg_types([T | Ts], [A | As], N) when T =:= i32; T =:= i64;
+                                            T =:= f32; T =:= f64;
+                                            T =:= v128 ->
+    case wasm_instance:value_matches(T, A) of
+        true ->
+            check_arg_types(Ts, As, N + 1);
+        false ->
+            {error, err(link, argument_type,
+                        ~"argument is not a value of the declared type",
+                        #{index => N, expected => T, got => A})}
+    end;
+check_arg_types([_Ref | Ts], [_A | As], N) ->
+    check_arg_types(Ts, As, N + 1).
+
 check_limits(Opts) ->
     case wasm_limits:validate(Opts) of
         ok ->
@@ -351,7 +402,11 @@ call(Inst, Name, Args, Opts) ->
 
 call_1(Inst, Name, Args, Opts) ->
     case wasm_instance:export_kind(Inst, Name) of
-        {ok, {func, Idx}} -> invoke(Inst, Idx, Args, Opts);
+        {ok, {func, Idx}} ->
+            case check_args(Inst, Name, Args) of
+                {error, _} = E -> E;
+                ok -> invoke(Inst, Idx, Args, Opts)
+            end;
         {ok, Other} ->
             {error, err(link, not_a_function, <<"export is not a function">>,
                         #{name => Name, kind => Other})};

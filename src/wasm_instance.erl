@@ -30,6 +30,7 @@ what you use of it rather than what it contains.
 -include("wasm_exec.hrl").
 
 -export([new/2, new/3, exports/1, export_kind/2, func_type/2, global_type/2]).
+-export([params_of/2, value_matches/2]).
 -export([tag/2, default_value/1]).
 -export([mut/1, set_mut/2, memory/2, heap/1]).
 -export([root_view/1, mut_of/1, elems_of/1, release/1]).
@@ -822,8 +823,14 @@ heap_subtype({type, _}, func) -> true;
 heap_subtype(_, _) -> false.
 
 
-%% The embedder hands over a bare Erlang term for a global, so the check is on
-%% the value's shape rather than on a declared type it does not carry.
+-doc """
+Does this Erlang term satisfy that WebAssembly value type?
+
+The embedder hands over a bare term, for an imported global or for a call
+argument, so the check is on the value's shape rather than on a declared type it
+does not carry.
+""".
+-spec value_matches(term(), term()) -> boolean().
 value_matches(i32, V) -> is_integer(V);
 value_matches(i64, V) -> is_integer(V);
 value_matches(f32, V) -> is_float(V) orelse is_float_special(V);
@@ -1234,6 +1241,22 @@ func_type(#inst{exports = E, funcs = Fs}, Name) ->
                 #hostfn{type = T} -> T
             end;
         _ -> undefined
+    end.
+
+-doc """
+The parameter types of an exported function, or `undefined`.
+
+`func_type/2` answers what the function carries, which is a canonical id, its
+supertypes and the `#functype{}`. A caller checking arguments wants only the
+last part, and unwrapping it at each call site is how the two shapes get
+confused.
+""".
+-spec params_of(#inst{}, binary()) -> [valtype()] | undefined.
+params_of(Inst, Name) ->
+    case func_type(Inst, Name) of
+        {_Canon, _Supers, #functype{params = P}} -> P;
+        #functype{params = P} -> P;
+        undefined -> undefined
     end.
 
 -spec memory(#inst{}, non_neg_integer()) -> wasm_memory:mem().

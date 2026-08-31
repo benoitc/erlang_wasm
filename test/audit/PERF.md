@@ -2860,3 +2860,38 @@ is reached; and `wasm_jit:counts/0` reports `entered => 3` for the whole run,
 so `cached_entry/3` runs three times against 30,000 JavaScript iterations.
 
 Worth re-running on a quiet box before the next performance claim leans on it.
+
+## The stress run's fixes, held against QuickJS
+
+Two of these touch code every embedder call passes through: `wasm:call/4` now
+checks the limits map when it is not empty, and `call_1/4` checks argument arity
+and types before either engine is chosen. Neither is per-instruction, but this
+project has had three changes near the dispatch path cost about 70% while the
+synthetic loop measured nothing, so the protocol applies whatever the shape of
+the change.
+
+Five interleaved pairs on `qjs.wasm` against `f8d4f13`, minimum of three runs
+per launch, orderings alternated. Load average 10.4 to 10.9 throughout, which is
+below the 12 to 14 the rest of this file was taken at.
+
+| pair | order | base | branch |
+| ---: | --- | ---: | ---: |
+| 1 | base first | 1679.3 ms | 1843.2 ms |
+| 2 | **branch first** | 1672.9 ms | 1717.1 ms |
+| 3 | base first | 1653.8 ms | 1659.8 ms |
+| 4 | **branch first** | 2760.5 ms | 1692.8 ms |
+| 5 | base first | 1694.2 ms | 1660.7 ms |
+
+Minimums: base 1653.8 ms, branch 1659.8 ms, a difference of 0.36%.
+
+**This establishes no large regression, not no regression.** The base arm's own
+spread across the five launches is 1653.8 to 2760.5 ms, which is sixty-seven
+per cent, and the difference being measured is well inside it. Pair 4's base is
+plainly an outlier; the ordering does not explain the rest, since the branch
+wins one base-first pair and loses one branch-first pair.
+
+The mechanism agrees. `wasm:call/3` reaches the limits check as a clause head on
+an empty map and does no work, and the argument check runs once per embedder
+call: this workload makes one, then runs 30,000 JavaScript iterations inside it.
+
+Worth re-running on a quiet box before any claim leans on the 0.36%.

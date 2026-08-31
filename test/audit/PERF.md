@@ -2895,3 +2895,60 @@ an empty map and does no work, and the argument check runs once per embedder
 call: this workload makes one, then runs 30,000 JavaScript iterations inside it.
 
 Worth re-running on a quiet box before any claim leans on the 0.36%.
+
+## Charging the object store, and two versions that were too expensive
+
+Garbage-collected objects are ETS rows, so neither `max_heap_size` nor the page
+budget could see them: a guest filled a twenty-million element array and took
+1.8 GB with every limit reading zero. Charging the heap against the node page
+budget puts a check on the allocation and array-write paths, which is exactly
+where this project has been bitten before, so it was priced three times.
+
+`wasm_gc_bench_SUITE`, `allocation_throughput` and `bulk_array_ops`, against
+`05720c4`.
+
+| version of the check | struct.new | array.fill part, 100 |
+| --- | ---: | ---: |
+| base, no charge | 171.9 ns/object | 84.6 ns/element |
+| `application:get_env/3` per operation | 234.9 (+37%) | 120.0 (+42%) |
+| interval cached in an `atomics` slot | 200.6 (+17%) | 92.9 (+10%) |
+| `band` against a literal mask | 181.4 (+5.5%) | 92.9 (+10%) |
+
+The first two are the finding. `application:get_env/3` is an ETS lookup, and
+`gc_alloc_threshold` beside it gets away with being read from the environment
+only because `should_collect/1` asks once per outermost call; this is asked once
+per *allocation*. Caching it in the counter array removed the lookup and still
+cost 17%, because it is another read on a path whose whole body is one
+`ets:insert`. A power-of-two constant needs no read at all, and the allocation
+path already has the id in hand, so `Id band 16#FFF` replaces both.
+
+**The third row, priced properly.** Timing could not resolve it: ten interleaved
+pairs of `allocation_throughput` gave base 189.4 to 244.7 ns and branch 185.9 to
+274.1, a 29% and 47% spread against a difference of a few per cent, and the
+minimum said -1.8% while the median said +8.8%. The null experiment settled that
+it was noise and not the change: removing the hook from `new_struct/3` entirely
+and repeating gave 182.0 / 186.3, 211.2 / 222.4 and 216.0 / **170.0**, the arm
+with nothing in it winning a pair by 21%. Load average was 21 to 26, and starting
+at 4.6 did not help because running all ten arms twice a pair drives it there.
+
+So the instrument was wrong. Reductions are a *count*, immune to whatever else
+the box is doing, and they are what this change should be measured in:
+
+| operation | base | branch | added |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 68.11 reductions | 70.09 | **+1.98, +2.9%** |
+| `array.set` | 44.10 reductions | 47.24 | **+3.14, +7.1%** |
+
+Identical to two decimal places across three runs on both trees, at load 5.8,
+and exactly what the code adds: a call, a `band` and a compare on the allocation
+path; an `atomics:add_get`, a `band` and a compare on the write path. Dropping
+the `ok =` match beside the write changed nothing, so those three are
+irreducible for what they do.
+
+Read it as work and not as time. Reductions overstate a BIF's share, and the
+dominant cost of both operations is an `ets:insert` the VM charges lightly and
+the clock does not. What can be said is that the added work is small, bounded,
+attributable instruction by instruction, and does not scale with heap size.
+
+The reconcile itself is not on the path: `ets:info(memory)` on both tables is
+1.78 microseconds for the pair, once per 4096 operations.

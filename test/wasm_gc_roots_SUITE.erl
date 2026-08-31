@@ -26,7 +26,10 @@ all() ->
      an_array_of_numbers_is_never_walked,
      a_reentrant_call_keeps_its_writes,
      a_root_view_works_from_a_process_with_a_cold_cache,
-     a_root_view_of_a_destroyed_instance_is_not_a_crash].
+     a_root_view_of_a_destroyed_instance_is_not_a_crash,
+     a_guest_cannot_outgrow_the_node_budget,
+     a_heap_gives_its_pages_back_when_collected,
+     a_shared_heap_is_charged_once].
 
 %% The collector reads its roots through `wasm_instance:mut_of/1', which is
 %% handed a root view rather than an instance: four fields, no `#inst{}'. A
@@ -561,3 +564,117 @@ garbage_body() ->
         16#20, 0, 16#41, 1, 16#6B, 16#22, 0, 16#0D, 0,
       16#0B,
       16#0B>>.
+
+%%% -------------------------------------------------------------- charging ---
+
+%% A guest's objects are node memory, and until they were charged nothing
+%% bounded them.
+%%
+%% They live in ETS (`wasm_heap:new/2'), and ETS is not process heap, so
+%% `max_heap_size` cannot see them and neither could the page budget, which
+%% counts `atomics`. Filling a twenty-million element array took 1.8 GB with
+%% `max_heap_words` set, `process_flag(max_heap_size, ...)` set on the process
+%% running it, and `pages_in_use` reading zero throughout. A differential oracle
+%% found it: V8 refused the same call with an array-size cap of its own.
+a_guest_cannot_outgrow_the_node_budget(_Config) ->
+    Mod = filler(),
+    Old = wasm_engine:page_limit(),
+    Base = wasm_engine:pages_in_use(),
+    try
+        wasm_engine:set_page_limit(Base + 512),          % 32 MiB of headroom
+        {ok, I} = wasm:instantiate(Mod, #{}),
+        Ets = erlang:memory(ets),
+        ?assertMatch({error, #{class := exhaustion, kind := heap_limit}},
+                     wasm:call(I, ~"fill", [20000000])),
+        %% Refused near the ceiling rather than somewhere past it. The bound is
+        %% the budget plus one reconcile interval's overshoot, and 1.8 GB was
+        %% what this took before.
+        ?assert((erlang:memory(ets) - Ets) < 64 * 1024 * 1024),
+        ok = wasm:destroy(I)
+    after
+        wasm_engine:set_page_limit(Old)
+    end,
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 5000).
+
+%% What a collection frees is pages the node gets back, rather than a charge
+%% that only ever ratchets up.
+a_heap_gives_its_pages_back_when_collected(_Config) ->
+    Mod = filler(),
+    Base = wasm_engine:pages_in_use(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(I, ~"fill", [200000]),
+    Charged = wasm_engine:pages_in_use(),
+    ?assert(Charged > Base, {nothing_charged, Base, Charged}),
+    %% The array the fill made is unreachable the moment the call returns: it
+    %% lived in a local and nothing else names it. What it is not is
+    %% *collected*, because a collection is due every hundred thousand
+    %% allocations and the fill made one. Lowering the threshold is what makes
+    %% this a test of the charge coming back rather than of the collector's
+    %% schedule.
+    ok = application:set_env(wasm, gc_alloc_threshold, 1),
+    try
+        {ok, [0]} = wasm:call(I, ~"drop", []),
+        wait_until(fun() -> wasm_engine:pages_in_use() < Charged end, 5000)
+    after
+        ok = application:unset_env(wasm, gc_alloc_threshold)
+    end,
+    ok = wasm:destroy(I),
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 5000).
+
+%% Two instances sharing one store are two holders of one resource, exactly as
+%% two instances importing one memory are. Charging per instance would count the
+%% same rows twice and refuse at half the real ceiling.
+a_shared_heap_is_charged_once(_Config) ->
+    Mod = filler(),
+    Base = wasm_engine:pages_in_use(),
+    {ok, A} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(A, ~"fill", [200000]),
+    One = wasm_engine:pages_in_use(),
+    %% Before comparing, establish there is something to compare. Without this
+    %% the case passes against a runtime that charges nothing at all, because
+    %% every reading is then equal at zero, and it did.
+    ?assert(One > Base, {nothing_charged, Base, One}),
+    {ok, B} = wasm:instantiate(Mod, #{}, #{link => A}),
+    ?assertEqual(One, wasm_engine:pages_in_use()),
+    %% And it survives the instance that made it.
+    ok = wasm:destroy(A),
+    ?assertEqual(One, wasm_engine:pages_in_use()),
+    ok = wasm:destroy(B),
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 5000).
+
+%% Writes elements, so the cost lands in `wasm_heap_elements' rather than in one
+%% array header: `array.new_default' of a hundred million is a single row.
+filler() ->
+    build(~"""
+    (module
+      (type $a (array (mut i64)))
+      (global $keep (mut (ref null $a)) (ref.null $a))
+      (func (export "fill") (param i32) (result i32)
+        (local $r (ref $a)) (local $i i32)
+        (local.set $r (array.new_default $a (local.get 0)))
+        (block $o (loop $l
+          (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
+          (array.set $a (local.get $r) (local.get $i)
+                        (i64.extend_i32_u (local.get $i)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (array.len (local.get $r)))
+      (func (export "drop") (result i32)
+        ;; Allocates, so a collection is due when the threshold is low, and
+        ;; keeps nothing, so what the fill made is unreachable.
+        (global.set $keep (array.new_default $a (i32.const 1)))
+        (global.set $keep (ref.null $a))
+        (i32.const 0)))
+    """).
+
+build(Src) ->
+    {ok, P} = wasm_wat:module(Src),
+    {ok, M} = wasm_validate:module(P),
+    M.
+
+wait_until(Pred, 0) -> Pred() orelse ct:fail({timeout_waiting, Pred()});
+wait_until(Pred, Ms) ->
+    case Pred() of
+        true -> ok;
+        false -> timer:sleep(20), wait_until(Pred, erlang:max(Ms - 20, 0))
+    end.

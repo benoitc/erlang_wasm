@@ -38,7 +38,7 @@ call inside a worker.
 | --- | --- |
 | `fuel` | execution work, charged at calls and loop back-edges |
 | `max_depth` | WebAssembly call depth |
-| `max_heap_words` | Erlang term allocation, applied by the owning process |
+| `max_heap_words` | Erlang terms on the owning process's own heap, applied by it. Not linear memory, not the object store |
 | `max_host_calls` | calls out through an import, per invocation |
 | `max_memory_pages` | every memory one instance can reach, imports included |
 | node page budget | linear memory across every instance |
@@ -65,6 +65,13 @@ one that recursed directly.
 Stated plainly, because "each instance is in a process, so it is isolated" is
 the most tempting wrong claim available about this design. A process is a
 **fault and lifecycle** boundary, not a security boundary.
+
+1. **Neither linear memory nor the object store is on any process heap, so
+   `max_heap_size` bounds neither.** Linear memory is `atomics`; a struct or an
+   array is a row in ETS. Both are counted explicitly by `wasm_engine` instead,
+   which is what `max_memory_pages` and the node page budget bound. A guest
+   filling a twenty-million element array took 1.8 GB before the object store
+   was counted, with every limit reading zero.
 
 1. **Linear memory is invisible to `max_heap_size`.** It is `atomics`, which is
    off-heap. A module can exhaust node memory without its process heap moving.

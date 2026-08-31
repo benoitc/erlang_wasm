@@ -64,6 +64,7 @@ now rather than the size the handle was made at.
 -export([reserve/4, acquire/3, release/2, transfer/3, discard/1]).
 -export([set_limit/2, total_of/1]).
 -export([grow_begin/3, grow_commit/4, grow_abort/2]).
+-export([resize/3]).
 -export([charge_of/1, holders_of/1, resources/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -91,7 +92,8 @@ thing, not two that have to be kept in step.
 """.
 -type meta() :: {memory, undefined | reference(),
                  undefined | atomics:atomics_ref()}
-              | cell.
+              | cell
+              | heap.
 
 -export_type([token/0, resource/0]).
 
@@ -211,6 +213,26 @@ discard(Token) ->
         ok -> ok;
         {error, keeper_unavailable} -> ok
     end.
+
+-doc """
+Set a resource's charge to `Pages`, up or down, in one call.
+
+For a resource whose size is *discovered* rather than requested. A memory grows
+by a delta the guest asked for, and allocating its chunks has to happen outside
+this process, which is what `grow_begin/3` and `grow_commit/4` are for. A
+garbage-collected heap has no chunks to publish and its rows already exist by
+the time anyone measures them: what changes is only the number, and it can fall
+as well as rise.
+
+A decrease is always allowed and cannot fail. An increase is checked against
+every holder's ceiling and the node budget, exactly as a growth is, so a heap
+shared by two instances is bounded by the stricter of them.
+""".
+-spec resize(resource(), non_neg_integer(), non_neg_integer() | infinity) ->
+          ok | {error, limit | instance_limit | exceeds_max | gone
+                     | keeper_unavailable}.
+resize(Resource, Pages, Ceiling) ->
+    call({resize, Resource, Pages, Ceiling}).
 
 -doc """
 Claim the right to grow `Resource` by `Delta`, up to `Ceiling` pages.
@@ -549,6 +571,10 @@ handle_call({transfer, From, To, Owner}, {Pid, _}, #{held := Held} = State) ->
                      S1, Moved),
     {reply, ok, S2};
 
+handle_call({resize, Res, Want, Ceiling}, _From, State) ->
+    {reply, R, S1} = do_resize(Res, Want, Ceiling, State),
+    {reply, R, S1};
+
 handle_call({grow_begin, Res, Delta, Ceiling}, From,
             #{growing := Growing} = State) ->
     case maps:is_key(Res, Growing) of
@@ -750,7 +776,11 @@ reclaim(Res, Meta, Pages) ->
 
 forget_meta(_Res, {memory, undefined, _}) -> ok;
 forget_meta(_Res, {memory, CRef, _}) -> wasm_engine:cell_forget(CRef);
-forget_meta(Res, cell) -> wasm_engine:cell_forget(Res).
+forget_meta(Res, cell) -> wasm_engine:cell_forget(Res);
+%% Nothing in the shared store belongs to a heap: it owns its own two ETS
+%% tables and `wasm_heap:drop_tables/2` deletes them. The registry row and the
+%% charge are all there is to reclaim here.
+forget_meta(_Res, heap) -> ok.
 
 %%% --------------------------------------------------------------- growth ---
 
@@ -797,6 +827,48 @@ start_growth(Res, Delta, Ceiling, {Pid, _} = _From, State) ->
                             G = (maps:get(growing, S1))#{Res =>
                                     {GrowRef, Pid, MonRef, Delta}},
                             {{ok, GrowRef, Pages}, S1#{growing := G}}
+                    end
+            end
+    end.
+
+%% Up or down to an absolute number, in one transaction with the registry row.
+%%
+%% The counter and the row move together here for the same reason they do in
+%% `start_growth/5`: a charge recorded against no resource is a charge nothing
+%% will ever give back, and `wasm_engine`'s moduledoc is explicit that a counter
+%% which disagrees with the registry eventually refuses every allocation on the
+%% node.
+do_resize(Res, Want, Ceiling, State) ->
+    case ets:lookup(?TAB, Res) of
+        [] ->
+            {reply, {error, gone}, State};
+        [{Res, Meta, Pages, Holders}] when Want =< Pages ->
+            %% Giving pages back never fails and never consults a ceiling.
+            Back = Pages - Want,
+            ok = wasm_engine:release_pages(Back),
+            true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
+            S1 = lists:foldl(fun(T, S) -> sub_total(T, Back, S) end,
+                             State, maps:keys(Holders)),
+            {reply, ok, S1};
+        [{Res, Meta, Pages, Holders}] ->
+            Delta = Want - Pages,
+            Toks = maps:keys(Holders),
+            AllFit = lists:all(fun(T) -> within(T, Delta, State) end, Toks),
+            if
+                Ceiling =/= infinity andalso Want > Ceiling ->
+                    {reply, {error, exceeds_max}, State};
+                not AllFit ->
+                    {reply, {error, instance_limit}, State};
+                true ->
+                    case wasm_engine:reserve_pages(Delta) of
+                        {error, limit} ->
+                            {reply, {error, limit}, State};
+                        ok ->
+                            true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
+                            S1 = lists:foldl(
+                                   fun(T, S) -> add_total(T, Delta, S) end,
+                                   State, Toks),
+                            {reply, ok, S1}
                     end
             end
     end.

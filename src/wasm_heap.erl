@@ -65,6 +65,7 @@ silently name a different live object instead.
 -export([array_default/2, array_fill/5]).
 -export([type_of/2]).
 -export([size/1, allocs/1, should_collect/1, collect/2, major_due/1]).
+-export([new/2, acquire/3, charge/1]).
 -export([lease/1, unlease/2, try_exclusive/1, release_exclusive/1,
          request_collect/1, readers/1]).
 -export([pin/2, unpin/2, unpin_all/1, pins/1]).
@@ -84,12 +85,30 @@ silently name a different live object instead.
 %% collection they could not perform. See "Leases" below.
 -define(LEASE, 4).
 -define(REQUEST, 5).
+%% Element writes since the charge was last reconciled. See `charge/1'.
+-define(WRITES, 6).
 %% Set by a collector holding the store exclusively. Above any plausible reader
 %% count, and added rather than assigned so a reader that arrives mid-collection
 %% and steps back out cannot lose its own decrement.
 -define(EXCL, (1 bsl 32)).
 
 -define(DEFAULT_ALLOC_THRESHOLD, 100000).
+%% Element writes and allocations between reconciliations of the heap's charge.
+%%
+%% The number is a trade between how far a hostile guest may overshoot its
+%% ceiling and what the write path pays. Reading both tables' sizes costs 1.78
+%% microseconds for the pair, so once per 4096 is nothing and once per write
+%% would be most of the cost of a write. At the 91 bytes an element measures,
+%% the overshoot this admits is about 370 KB.
+%%
+%% A constant, and a power of two, unlike `gc_alloc_threshold' beside it. That
+%% one is read from the application environment because `should_collect/1' asks
+%% once per outermost call; this is asked once per *allocation*, and
+%% `application:get_env/3' is an ETS lookup. Reading it there cost `struct.new'
+%% 37% and a partial `array.fill' 42%; caching it in an `atomics' slot still
+%% cost 17%. A `band' against a literal costs nothing and needs no counter of
+%% its own on the allocation path, which already has the id in hand.
+-define(RECONCILE_MASK, 16#FFF).
 -define(DEFAULT_MAJOR_RATIO, 2).
 %% No major collection below this many objects: tracing a store of forty costs
 %% less than deciding not to, and a program that never grows never needs one.
@@ -110,6 +129,10 @@ silently name a different live object instead.
 %% Who holds the store exclusively, and how much of the lease cell is theirs.
 %% Only ever written by that holder, and only while it holds it.
 -define(COLLECTOR, '$wasm_collector').
+%% The keeper resource this heap is charged against. A row rather than a fifth
+%% element of the handle, because the handle is matched in thirty-four places
+%% here and this is read only on the rare reconcile path.
+-define(RESOURCE, '$wasm_resource').
 
 %%% ------------------------------------------------------------ lifecycle ---
 
@@ -121,7 +144,20 @@ the module, so a heap has exactly the lifetime `#inst.store` already has and
 adds no new ownership rule.
 """.
 -spec new() -> heap().
-new() ->
+new() -> new({process, self()}, self()).
+
+-doc """
+Create a heap charged to `Token`, whose `Owner` dying gives its pages back.
+
+A heap is a registry resource like a memory, for the reason `wasm_engine`'s
+moduledoc gives: its objects are ETS rows, ETS is not process heap, and so
+nothing the BEAM offers can see them. Counting them somewhere private would
+drift the moment the creating process died without destroying, because the
+tables die with it. The keeper already owns the monitor, the holder set and the
+reconciliation that stop exactly that.
+""".
+-spec new(wasm_keeper:token(), pid() | none) -> heap().
+new(Token, Owner) ->
     Objs = ets:new(wasm_heap_objects, [set, public, {read_concurrency, true}]),
     %% The second table holds array elements *and* the write barrier's
     %% remembered set, so every heap needs it. A struct-only module briefly got
@@ -130,7 +166,22 @@ new() ->
     Elems = ets:new(wasm_heap_elements,
                     [ordered_set, public, {read_concurrency, true}]),
     true = ets:insert(Objs, {?REGISTRY, #{}}),
-    {wasm_heap, Objs, Elems, atomics:new(5, [{signed, false}])}.
+    %% Zero pages: an empty heap costs two empty tables and is charged for what
+    %% it grows into, measured, rather than for what it might.
+    case wasm_keeper:reserve(0, heap, Token, Owner) of
+        {ok, Res} -> true = ets:insert(Objs, {?RESOURCE, Res});
+        %% No keeper is the no-application path the conformance suite and
+        %% escript embedding use. Uncharged rather than refused, which is what
+        %% every other resource does when the keeper is away.
+        {error, _} -> ok
+    end,
+    {wasm_heap, Objs, Elems, atomics:new(6, [{signed, false}])}.
+
+%% The keeper resource, or `undefined` for a heap made without one.
+resource(Objs) ->
+    try ets:lookup_element(Objs, ?RESOURCE, 2, undefined)
+    catch error:badarg -> undefined
+    end.
 
 -doc """
 Record that an instance's roots have to be traced when this heap collects.
@@ -149,6 +200,21 @@ register(undefined, _Key, _Inst) -> ok;
 register({wasm_heap, Objs, _, _}, Key, Inst) ->
     true = ets:insert(Objs, {?REGISTRY, (registry(Objs))#{Key => Inst}}),
     ok.
+
+-doc """
+Add `Token` as a holder of a heap this instance did not create.
+
+Linked instances share one store, so a heap has holders exactly as a shared
+memory does, and the keeper's rule that the strictest holder bounds it then
+applies without anything here knowing about ceilings.
+""".
+-spec acquire(undefined | heap(), wasm_keeper:token(), pid() | none) -> ok.
+acquire(undefined, _Token, _Owner) -> ok;
+acquire({wasm_heap, Objs, _, _}, Token, Owner) ->
+    case resource(Objs) of
+        undefined -> ok;
+        Res -> _ = wasm_keeper:acquire(Res, Token, Owner), ok
+    end.
 
 -doc "Every instance registered with this heap.".
 -spec instances(undefined | heap()) -> [term()].
@@ -170,10 +236,20 @@ Idempotent: `wasm:destroy/1` is documented as safe to call twice.
 -spec delete(undefined | heap(), term()) -> ok.
 delete(undefined, _Key) -> ok;
 delete({wasm_heap, Objs, Elems, _}, Key) ->
+    %% Before the tables go, so the charge is given back while the row that
+    %% names it is still readable. A failed instantiation passes `undefined`
+    %% and is covered by `wasm_keeper:discard/1` on its build token instead.
+    Key =:= undefined orelse release_hold(Objs, {instance, Key}),
     Remaining = maps:remove(Key, registry(Objs)),
     case map_size(Remaining) of
         0 -> drop_tables(Objs, Elems);
         _ -> true = ets:insert(Objs, {?REGISTRY, Remaining}), ok
+    end.
+
+release_hold(Objs, Token) ->
+    case resource(Objs) of
+        undefined -> ok;
+        Res -> ok = wasm_keeper:release(Res, Token)
     end.
 
 drop_tables(Objs, Elems) ->
@@ -189,9 +265,10 @@ is_heap(_) -> false.
 %%% ----------------------------------------------------------- allocation ---
 
 -spec new_struct(heap(), non_neg_integer(), [term()]) -> {objref, non_neg_integer()}.
-new_struct({wasm_heap, Objs, _, Ctr}, TypeIdx, Fields) ->
+new_struct({wasm_heap, Objs, _, Ctr} = H, TypeIdx, Fields) ->
     Id = atomics:add_get(Ctr, ?NEXT_ID, 1) - 1,
     true = ets:insert(Objs, list_to_tuple([Id, s, TypeIdx | Fields])),
+    allocated(H, Id),
     {objref, Id}.
 
 -doc """
@@ -205,10 +282,11 @@ is the kind of work worth not doing.
 """.
 -spec new_array(heap(), non_neg_integer(), non_neg_integer(), term(),
                 boolean()) -> {objref, non_neg_integer()}.
-new_array({wasm_heap, Objs, _, Ctr}, TypeIdx, Len, Default, Traced) ->
+new_array({wasm_heap, Objs, _, Ctr} = H, TypeIdx, Len, Default, Traced) ->
     Id = atomics:add_get(Ctr, ?NEXT_ID, 1) - 1,
     Kind = case Traced of true -> a; false -> n end,
     true = ets:insert(Objs, {Id, Kind, TypeIdx, Len, Default}),
+    allocated(H, Id),
     {objref, Id}.
 
 %%% --------------------------------------------------------------- access ---
@@ -274,7 +352,8 @@ array_set({wasm_heap, _, Elems, Ctr} = H, {objref, Id} = Ref, Idx, Value) ->
     case array_len(H, Ref) of
         Len when Idx < Len ->
             true = ets:insert(Elems, {{Id, Idx}, Value}),
-            remember(Elems, Ctr, Id, Value);
+            ok = remember(Elems, Ctr, Id, Value),
+            wrote(H, 1);
         Len ->
             wasm_error:trap(out_of_bounds_array_access,
                             #{index => Idx, length => Len})
@@ -288,9 +367,10 @@ must leave the array untouched. Checking again per element then doubles the
 table operations to answer a question already answered.
 """.
 -spec array_set_unchecked(heap(), term(), non_neg_integer(), term()) -> ok.
-array_set_unchecked({wasm_heap, _, Elems, Ctr}, {objref, Id}, Idx, Value) ->
+array_set_unchecked({wasm_heap, _, Elems, Ctr} = H, {objref, Id}, Idx, Value) ->
     true = ets:insert(Elems, {{Id, Idx}, Value}),
-    remember(Elems, Ctr, Id, Value).
+    ok = remember(Elems, Ctr, Id, Value),
+    wrote(H, 1).
 
 -doc """
 Fill a range with one value.
@@ -342,10 +422,11 @@ type_of({wasm_heap, Objs, _, _}, {objref, Id} = Ref) ->
 -spec size(undefined | heap()) -> non_neg_integer().
 size(undefined) -> 0;
 size({wasm_heap, Objs, _, _}) ->
-    %% Minus the registry row, and minus the collector row when there is one:
+    %% Minus the registry and resource rows, and minus the collector row when
+    %% there is one:
     %% neither is an object, and `major_due/1` compares this against a live-set
     %% baseline that must not drift because a collection is in progress.
-    ets:info(Objs, size) - 1 - collector_rows(Objs).
+    ets:info(Objs, size) - 2 - collector_rows(Objs).
 
 collector_rows(Objs) ->
     case lookup_collector(Objs) of
@@ -368,6 +449,82 @@ should_collect(H) -> allocs(H) >= threshold().
 
 threshold() ->
     application:get_env(wasm, gc_alloc_threshold, ?DEFAULT_ALLOC_THRESHOLD).
+
+%%% --------------------------------------------------------------- charge ---
+%%
+%% What a heap costs the node, and where that gets noticed.
+%%
+%% Its objects are ETS rows. ETS is not process heap, so `max_heap_size` cannot
+%% see them and neither can the page budget, which counts `atomics`. A guest
+%% that filled a twenty-million element array took 1.8 GB with `max_heap_words`
+%% set, `process_flag(max_heap_size, ...)` set on the process running it, and
+%% `pages_in_use` reading zero throughout. So the heap is charged in pages
+%% against the same node budget, which `wasm_engine`'s moduledoc argues is where
+%% memory the BEAM cannot see has to be counted.
+%%
+%% The obvious hook is not one. `should_collect/1` tests the allocation counter,
+%% and `?NEXT_ID` moves only in `new_struct/3` and `new_array/5`: filling an
+%% array is one allocation and a million writes, so nothing on the path that
+%% spends the memory ever asks. Hence a second counter, and a reconcile when it
+%% crosses a threshold.
+
+%% A workload that allocates without writing elements -- structs, or arrays left
+%% at their default -- reaches no `wrote/2`, so allocation carries the same
+%% trigger. It rides the id the allocator has already taken rather than taking a
+%% second counter: two atomic increments on the allocation path would be
+%% measurable where a remainder is not.
+allocated(H, Id) ->
+    case Id band ?RECONCILE_MASK of
+        0 -> charge(H);
+        _ -> ok
+    end.
+
+%% One write, and a reconcile every `?DEFAULT_RECONCILE_WRITES` of them.
+wrote({wasm_heap, _, _, Ctr} = H, N) ->
+    case atomics:add_get(Ctr, ?WRITES, N) band ?RECONCILE_MASK of
+        0 -> charge(H);
+        _ -> ok
+    end.
+
+-doc """
+Bring this heap's charge in line with what it actually occupies.
+
+Measured rather than accumulated, so a miscount cannot survive one call: what
+the tables report is the truth and the keeper is told to match it. That is the
+same shape `wasm_keeper:init/1` uses to repair the page counter after a
+registry loss, and for the same reason.
+
+Traps `exhaustion` when the node budget or a holder's ceiling refuses the new
+size. There is no -1 to answer with here: `memory.grow` has one because the
+specification gives it one, and `array.set` does not.
+""".
+-spec charge(undefined | heap()) -> ok.
+charge(undefined) -> ok;
+charge({wasm_heap, Objs, Elems, _Ctr}) ->
+    case resource(Objs) of
+        undefined ->
+            ok;
+        Res ->
+            Words = words(Objs) + words(Elems),
+            Pages = (Words * erlang:system_info(wordsize) + 65535) div 65536,
+            case wasm_keeper:resize(Res, Pages, infinity) of
+                ok -> ok;
+                %% The keeper being away leaves the charge where it was, which
+                %% is the same answer every other resource gives.
+                {error, keeper_unavailable} -> ok;
+                {error, gone} -> ok;
+                {error, Why} ->
+                    wasm_error:exhaustion(heap_limit,
+                                          #{pages => Pages, reason => Why})
+            end
+    end.
+
+words(undefined) -> 0;
+words(T) ->
+    case ets:info(T, memory) of
+        undefined -> 0;
+        N -> N
+    end.
 
 %%% --------------------------------------------------------------- leases ---
 %%
@@ -728,6 +885,10 @@ collect({wasm_heap, _, Elems, Ctr} = H, Roots) ->
     %% larger than it needs to be, which costs a longer trace and nothing else.
     atomics:put(Ctr, ?WATERMARK, Next),
     forget_all(Elems),
+    %% What a collection freed is pages the node can have back. Reconciling here
+    %% rather than waiting for the next write is what makes a heap that grows
+    %% and shrinks stay honest instead of ratcheting.
+    charge(H),
     ok.
 
 -doc "Whether the next collection will trace the whole store.".

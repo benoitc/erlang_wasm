@@ -18,13 +18,17 @@ Limits = wasm_limits:untrusted(),
 | `fuel` | execution budget, charged at calls and loop back-edges; every unbounded execution passes through one of those |
 | `timeout` | wall clock per call. Enforced by whoever owns the instance, not by the library: an inline call runs in your process and cannot be interrupted. See `docs/worker.md` |
 | `max_depth` | WebAssembly call depth |
-| `max_heap_words` | Erlang heap ceiling, applied by the process owning the instance, killing runaway term allocation |
-| `max_memory_pages` | every memory this instance can reach, added together |
+| `max_heap_words` | Erlang terms on the *caller's own heap*, applied by the process owning the instance with `process_flag(max_heap_size, ...)`. Not linear memory and not garbage-collected objects: neither is on that heap. See `examples/wasm_worker.erl` |
+| `max_memory_pages` | node memory this instance can reach: every memory it can address, plus its share of the object store, added together |
 | node page budget | `wasm_engine`, across all instances |
 
 `max_memory_pages` bounds what an instance can *reach*, not what it created. An
 imported memory counts, because a module that imports one can address every
-page of it, and it counts once however many import slots name it. Growing a
+page of it, and it counts once however many import slots name it. A garbage
+collected heap counts the same way and for the same reason: linked instances
+share one store, so it is charged once and bounded by whichever of them was
+promised least. Its objects are ETS rows rather than `atomics` pages, and are
+converted at the page size purely so that one number bounds both. Growing a
 memory two instances share therefore needs room under both ceilings: the
 stricter one wins, or the more generous instance would grow a memory past what
 the other was promised. Refusal is the value -1 from `memory.grow`, as the

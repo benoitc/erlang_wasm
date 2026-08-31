@@ -10,8 +10,11 @@ wasm_engine:set_page_limit(16384),          % 1 GiB
 #{pages_in_use := N} = wasm_engine:stats().
 ```
 
-Set the cap. Linear memory is backed by `atomics` arrays, which live outside the
-process heap. That is what makes them fast (see the benchmark table in the
+The budget covers every kind of memory a guest can take that the BEAM cannot see
+for it: linear memory, and the garbage-collected object store. Set the cap.
+Linear memory is backed by `atomics` arrays, which live outside the process
+heap, and a struct or an array is a row in ETS, which is not process heap
+either. That is what makes them fast (see the benchmark table in the
 design notes), but it also means `max_heap_size` cannot see them: a module can
 exhaust node memory without its owning process's heap ever moving. So page
 accounting has to be explicit, and it has to be node-wide rather than

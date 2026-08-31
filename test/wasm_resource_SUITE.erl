@@ -36,6 +36,7 @@ the node's life.
          a_keeper_restart_keeps_the_ceiling_it_promised/1,
          an_aborted_growth_does_not_block_the_next_one/1,
          an_engine_restart_keeps_the_store_and_the_waiters/1,
+         a_killed_owner_releases_its_heap_pages/1,
          a_tree_death_does_not_leak_the_page_budget/1,
          each_subsystem_has_its_own_restart_budget/1,
          a_table_owner_crash_does_not_lose_the_tables/1,
@@ -64,6 +65,7 @@ all() ->
      a_keeper_restart_keeps_the_ceiling_it_promised,
      an_aborted_growth_does_not_block_the_next_one,
      an_engine_restart_keeps_the_store_and_the_waiters,
+     a_killed_owner_releases_its_heap_pages,
      a_tree_death_does_not_leak_the_page_budget,
      each_subsystem_has_its_own_restart_budget,
      a_table_owner_crash_does_not_lose_the_tables,
@@ -147,6 +149,45 @@ killing_an_instance_owner_releases_what_it_held(_Config) ->
     exit(Owner, kill),
     receive {'DOWN', Ref, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
     wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 2000).
+
+%% A heap is charged like a memory, so it has to come back like one.
+%%
+%% Its objects are ETS rows in tables the creating process owns, so a process
+%% killed with no chance to clean up takes the tables with it. Nothing but the
+%% keeper's monitor can give the charge back, which is why a heap is a registry
+%% resource rather than a private counter.
+a_killed_owner_releases_its_heap_pages(_Config) ->
+    Base = wasm_engine:pages_in_use(),
+    Mod = allocating(),
+    Self = self(),
+    Owner = spawn(fun() ->
+                      {ok, I} = wasm:instantiate(Mod, #{}),
+                      {ok, [_]} = wasm:call(I, ~"fill", [200000]),
+                      Self ! {charged, wasm_engine:pages_in_use()},
+                      receive never -> ok end
+                  end),
+    Charged = receive {charged, P} -> P after 30000 -> ct:fail(no_heap) end,
+    ?assert(Charged > Base, {nothing_charged, Base, Charged}),
+    Ref = monitor(process, Owner),
+    exit(Owner, kill),
+    receive {'DOWN', Ref, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 5000).
+
+allocating() ->
+    compile(~"""
+    (module
+      (type $a (array (mut i64)))
+      (func (export "fill") (param i32) (result i32)
+        (local $r (ref $a)) (local $i i32)
+        (local.set $r (array.new_default $a (local.get 0)))
+        (block $o (loop $l
+          (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
+          (array.set $a (local.get $r) (local.get $i)
+                        (i64.extend_i32_u (local.get $i)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (array.len (local.get $r))))
+    """).
 
 %% One instance, one holder, however many import slots name the same memory.
 %% Counting slots would release the memory on the first destroy and charge it

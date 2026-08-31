@@ -61,7 +61,6 @@ new(M, Imports, Opts) ->
     %% expression may allocate: `struct.new' is admitted in a global's
     %% initialiser. It is created here rather than inside `build/3' so that an
     %% instantiation which fails part way still releases its tables.
-    {Heap, Owned} = heap_for(M, Opts),
     %% Everything the build acquires is held under this token until the build
     %% succeeds. A ledger threaded through `build/5' was lost the moment the
     %% build threw, because the exception carries the error and not the newest
@@ -75,6 +74,10 @@ new(M, Imports, Opts) ->
     ok = wasm_keeper:set_limit(
            Build, maps:get(max_memory_pages,
                            maps:merge(?DEFAULT_LIMITS, Opts), infinity)),
+    %% After the ceiling and under the build token, so the heap is bounded by
+    %% the same `max_memory_pages` as everything else this instance reaches and
+    %% moves to the instance with the rest on success.
+    {Heap, Owned} = heap_for(M, Opts, Build),
     case wasm_error:capture(fun() -> {ok, build(M, Imports, Opts, Heap, Build)} end) of
         {ok, Inst} ->
             %% One step, so there is no window in which the resources belong to
@@ -110,14 +113,18 @@ new(M, Imports, Opts) ->
 %% hands out a table, a memory or a cell, none of which names its origin.
 %% Guessing would work for some import kinds and not others, which is worse
 %% than one rule that always holds.
-heap_for(M, Opts) ->
+heap_for(M, Opts, Token) ->
     case maps:get(link, Opts, undefined) of
         undefined ->
             {case allocates(M) of
                  false -> undefined;
-                 true -> wasm_heap:new()
+                 true -> wasm_heap:new(Token, self())
              end, true};
         #inst{heap = Shared} ->
+            %% A holder, not an owner. The heap belongs to whoever made it and
+            %% goes when the last of them lets go, which is the same rule an
+            %% imported memory follows.
+            ok = wasm_heap:acquire(Shared, Token, self()),
             {Shared, false}
     end.
 

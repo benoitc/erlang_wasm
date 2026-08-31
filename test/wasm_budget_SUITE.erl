@@ -21,7 +21,8 @@ directly, and every limit has to see it that way.
          growth_past_the_ceiling_returns_minus_one/1,
          an_imported_memory_counts_against_the_ceiling/1,
          the_strictest_holder_bounds_a_shared_memory/1,
-         two_slots_on_one_memory_count_once/1]).
+         two_slots_on_one_memory_count_once/1,
+         a_limit_that_is_not_a_number_is_refused/1]).
 
 all() ->
     [an_import_called_in_a_loop_is_stopped,
@@ -33,7 +34,8 @@ all() ->
      growth_past_the_ceiling_returns_minus_one,
      an_imported_memory_counts_against_the_ceiling,
      the_strictest_holder_bounds_a_shared_memory,
-     two_slots_on_one_memory_count_once].
+     two_slots_on_one_memory_count_once,
+     a_limit_that_is_not_a_number_is_refused].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -241,3 +243,40 @@ drain(Tag, N) ->
     receive Tag -> drain(Tag, N + 1)
     after 0 -> N
     end.
+
+%% A limit that cannot mean what it says is refused, not ignored.
+%%
+%% `wasm_limits:validate/1` could always answer this and nothing called it, so a
+%% bad value was simply not enforced. `#{max_depth => lots}` is the sharp one
+%% and it failed *open*: the guard is `Depth >= MaxDepth`, every integer sorts
+%% before every atom in Erlang term order, so the test was never true and a
+%% guest recursed a million frames under a ceiling the embedder believed it had
+%% set. Every other bad value already failed closed, which is what made this one
+%% easy to miss.
+a_limit_that_is_not_a_number_is_refused(_Config) ->
+    Mod = recursive(),
+    Bad = [{max_depth, lots}, {fuel, lots}, {max_memory_pages, -1},
+           {max_depth, 0}, {max_heap_words, 0}],
+    [?assertMatch({error, #{class := link, kind := invalid_limits,
+                            ctx := #{keys := [K]}}},
+                  wasm:instantiate(Mod, #{}, #{K => V}))
+     || {K, V} <- Bad],
+    %% And per call, where a limits map also lands.
+    {ok, Inst} = wasm:instantiate(Mod, #{}, #{}),
+    ?assertMatch({error, #{class := link, kind := invalid_limits}},
+                 wasm:call(Inst, ~"r", [10], #{max_depth => lots})),
+    %% The limit that used to vanish now bites, and a valid one still works.
+    ?assertMatch({error, #{class := exhaustion, kind := call_stack_exhausted}},
+                 wasm:call(Inst, ~"r", [100000], #{max_depth => 64})),
+    ?assertEqual({ok, [0]}, wasm:call(Inst, ~"r", [10])),
+    ok = wasm:destroy(Inst).
+
+recursive() ->
+    {ok, M} = wasm:compile({wat, ~"""
+    (module
+      (func $r (export "r") (param i32) (result i32)
+        (if (result i32) (i32.eqz (local.get 0))
+          (then (i32.const 0))
+          (else (call $r (i32.sub (local.get 0) (i32.const 1)))))))
+    """}),
+    M.

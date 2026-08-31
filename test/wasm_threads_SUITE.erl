@@ -40,7 +40,8 @@ all() ->
      a_notifier_that_dies_holding_a_wakeup_does_not_fake_one,
      the_waiter_table_never_belongs_to_a_waiter,
      wait_on_an_unshared_memory_traps,
-     a_shared_memory_outlives_the_process_that_made_it].
+     a_shared_memory_outlives_the_process_that_made_it,
+     a_fence_validates_and_runs].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -369,13 +370,46 @@ a_notifier_that_dies_holding_a_wakeup_does_not_fake_one(_Config) ->
 %% a fallback that created it in whichever agent got there first, taken when
 %% the application was not running; it is gone, and an unsupervised engine is
 %% started on demand instead.
+%%
+%% `wasm_store` owns it now, with `wasm_store_sup` as its heir, so the list of
+%% acceptable owners is those two plus the engine that creates it when there is
+%% no application at all. What the case is really about is the last line.
 the_waiter_table_never_belongs_to_a_waiter(_Config) ->
     MemId = make_ref(),
     %% Force the table into existence through the ordinary path.
     0 = wasm_wait:notify(MemId, 0, 1),
     Owner = ets:info(wasm_waiters, owner),
-    ?assert(Owner =:= whereis(wasm_sup) orelse Owner =:= whereis(wasm_engine)),
+    ?assert(lists:member(Owner, [whereis(wasm_store), whereis(wasm_store_sup),
+                                 whereis(wasm_engine)])),
     ?assertNotEqual(self(), Owner).
+
+%% `atomic.fence` is the one instruction in the `0xFE` space that is a bare
+%% atom rather than a memory access, so it reached neither the atomic table nor
+%% anything else, and every module carrying one was rejected as invalid. The
+%% decoder and the interpreter both knew it; only the validator did not.
+%%
+%% Nothing upstream covers it: `proposals/threads/atomic.wast` contains no
+%% `atomic.fence`, which is why a baseline keyed to the specification suite ran
+%% green over this for as long as it did. Both shapes are here because a fence
+%% needs no memory to be valid, and requiring one would be the obvious wrong
+%% fix.
+a_fence_validates_and_runs(_Config) ->
+    WithMemory = ~"""
+    (module (memory 1 1 shared)
+      (func (export "f") (result i32)
+        atomic.fence
+        (i32.atomic.store (i32.const 0) (i32.const 7))
+        atomic.fence
+        (i32.atomic.load (i32.const 0))))
+    """,
+    WithoutMemory = ~"(module (func (export \"f\") (result i32) atomic.fence i32.const 42))",
+    ?assertEqual({ok, [7]}, run(WithMemory)),
+    ?assertEqual({ok, [42]}, run(WithoutMemory)).
+
+run(Wat) ->
+    {ok, Mod} = wasm:compile({wat, Wat}),
+    {ok, Inst} = wasm:instantiate(Mod, #{}),
+    try wasm:call(Inst, ~"f", []) after wasm:destroy(Inst) end.
 
 %%% ---------------------------------------------------------------- setup ---
 

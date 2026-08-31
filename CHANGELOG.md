@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+The supervision tree is one supervisor per subsystem. Five servers under one
+`intensity => 5, period => 10` shared a budget, so losing the module cache
+repeatedly could take the engine, the keeper and the code slots with it, and
+the tables went too. Each subsystem now has its own supervisor and its own
+`10 in 60`, and `wasm_store` owns the long-lived tables.
+
+A wrong-typed call argument answers `{link, argument_type}` where it used to
+answer `{malformed, internal}`. `malformed` is the decode class and an argument
+is not a decode concern; the kind is new, the class has changed, and anything
+matching on the old pair needs updating.
+
+### Fixed
+
+- **`atomic.fence` was rejected as invalid.** The decoder and the interpreter
+  both knew it and the validator had no clause, so every module carrying a
+  fence failed to load. The specification suite does not exercise it.
+- **A tree death leaked the node page budget permanently.** The counter lives
+  in `persistent_term` and outlives the supervision tree; the registry that
+  says who holds those pages does not. Pages charged when the tree died could
+  never be released, and it accumulated across application restarts.
+  `wasm_keeper` now reconciles the two when it starts.
+- **A limits map that could not mean what it said was ignored.**
+  `#{max_depth => lots}` failed open, because every integer sorts before every
+  atom, so a guest could recurse a million frames under a ceiling the embedder
+  believed it had set. `wasm_limits:validate/1` existed and nothing called it.
+- **The compiled tier computed on ill-typed arguments.** `wasm_exec` checks
+  arity and the tier never reaches it, so the same call answered differently
+  depending on whether the function was hot; and a float passed for an `i32`
+  was rejected by the interpreter and had `i32.add` run on it by the tier.
+  Both are checked once now, before either engine is chosen.
+
 ## 0.1.1
 
 `wasm:compile/1` takes the text format:

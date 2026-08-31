@@ -40,7 +40,8 @@ all() ->
      a_caller_that_never_destroys_keeps_a_bounded_entry_cache,
      a_module_split_across_shards_answers_the_same,
      a_profile_sets_what_you_did_not,
-     an_unknown_profile_is_a_value_not_a_crash].
+     an_unknown_profile_is_a_value_not_a_crash,
+     both_engines_answer_the_same_bad_arguments].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -212,9 +213,15 @@ the_compiler_is_supervised(_) ->
     %% A process nothing can see is a process nothing can stop, bound or count.
     %% Compiling used to be a bare `spawn/1`: invisible to the tree, outliving
     %% `application:stop(wasm)`, and unbounded.
-    Children = supervisor:which_children(wasm_sup),
+    %% Under `wasm_code_sup` rather than the root: the slot manager and the
+    %% compilers that reserve slots from it share one subsystem, and one
+    %% restart budget, on purpose. See `wasm_sup`.
+    ?assertMatch({wasm_code_sup, _, supervisor, _},
+                 lists:keyfind(wasm_code_sup, 1,
+                               supervisor:which_children(wasm_sup))),
     ?assertMatch({wasm_jit_sup, _, supervisor, _},
-                 lists:keyfind(wasm_jit_sup, 1, Children)),
+                 lists:keyfind(wasm_jit_sup, 1,
+                               supervisor:which_children(wasm_code_sup))),
     %% Started empty and told what to compile afterwards, so the instance is
     %% copied to the child and not through the supervisor as well.
     {ok, Pid} = supervisor:start_child(wasm_jit_sup, []),
@@ -611,6 +618,53 @@ serve() ->
     end.
 
 %%% -------------------------------------------------------------- helpers ---
+
+%% The two engines answer a bad argument the same way.
+%%
+%% `wasm_exec:check_arity/2` guards the interpreter and the compiled tier never
+%% reaches it, so the same mistake used to answer `{link, argument_arity}`
+%% interpreted and `{malformed, internal}` compiled, and which one an embedder
+%% saw depended on whether the function was hot yet. Types were checked on
+%% neither: a float where an i32 belonged crashed the interpreter into a
+%% captured error, and the tier ran `i32.add` on it and answered `{ok, [-2.5]}`.
+%%
+%% Both arms call with a valid argument first, which is what makes the second
+%% arm compiled at all. The counter assertion is the non-vacuity half: without
+%% it this passes just as well with the tier switched off, comparing the
+%% interpreter against itself.
+both_engines_answer_the_same_bad_arguments(_Config) ->
+    %% Straight-line, not `loop_wat/0`. Before the check existed the tier ran
+    %% `i32.eqz` against a float, never matched, and spun for ever: the first
+    %% version of this case did not fail against the parent commit, it hung.
+    M = build(~"(module (func (export \"f\") (param i32) (result i32)
+                  local.get 0 i32.const 1 i32.add))"),
+    Bad = [[], [1, 2], [1.5], [-3.5], [<<"x">>], [null]],
+    Interp = answers(M, #{}, Bad),
+    wasm_jit:reset_counts(),
+    Jit = answers(M, sync_opts(), Bad),
+    #{entered := Entered} = wasm_jit:counts(),
+    ?assert(Entered > 0, "the compiled tier was never entered, so this case "
+                         "compared the interpreter with itself"),
+    ?assertEqual(Interp, Jit),
+    %% And every one of them is a link error naming the problem, rather than an
+    %% internal one or, worse, an answer.
+    [?assertMatch({link, K} when K =:= argument_arity orelse
+                                 K =:= argument_type, A)
+     || A <- Interp].
+
+%% One instance, a valid call to make it hot, then each bad argument list.
+answers(M, Opts, Argss) ->
+    {ok, I} = wasm:instantiate(M, #{}, Opts),
+    try
+        {ok, [11]} = wasm:call(I, ~"f", [10]),
+        {ok, [11]} = wasm:call(I, ~"f", [10]),
+        [case wasm:call(I, ~"f", A) of
+             {ok, V} -> {ok, V};
+             {error, #{class := C, kind := K}} -> {C, K}
+         end || A <- Argss]
+    after
+        wasm:destroy(I)
+    end.
 
 opts() -> #{compile => true, compile_after => 1}.
 

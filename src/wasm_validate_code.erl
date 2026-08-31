@@ -822,6 +822,18 @@ instr({Op, {Align, Offset, M}}, S0) when is_atom(Op) ->
         Shape -> load_store_instr(Shape, Align, Offset, M, S0)
     end;
 
+%% The one instruction in the `0xFE' space that is a bare atom. It names no
+%% memory, so it never reaches `atomic_instr/5' above, and it needs no memory to
+%% exist: a module with a fence and no memory at all is valid. Takes nothing off
+%% the stack and puts nothing back.
+%%
+%% Missing until a generated module found it. `wasm_decode_atomic' decodes it
+%% and `wasm_exec' runs it, so only this clause was absent, and every module
+%% carrying a fence was rejected `unknown_operator'. The specification suite
+%% cannot catch that: `proposals/threads/atomic.wast' has no `atomic.fence' in
+%% it, so the baseline had nothing to fail on.
+instr(atomic_fence, S) -> S;
+
 %% - numeric ---------------------------------------------------------------
 instr(Op, S0) when is_atom(Op) ->
     case numeric(Op) of

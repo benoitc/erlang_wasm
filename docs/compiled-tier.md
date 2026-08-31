@@ -65,6 +65,17 @@ globals that are not shared cells, direct and indirect calls, bulk memory
 set, and the whole SIMD set. Not exceptions, not the GC types, and not
 memory64.
 
+**Exporting a mutable global costs you every function that reads it.** An
+exported mutable global becomes a reference cell rather than a value, and a
+function reading one is refused with `{unsupported, global_get_ref}`. That is
+the "globals that are not shared cells" clause above, and it is easy to trip
+without noticing, because nothing about the module looks different and the
+interpreter answers correctly either way. It is worth checking against
+`subset.erl` if your eligible-function count is lower than the instruction list
+above suggests: on a corpus of generated modules that exported everything, it
+took 121 eligible functions to none, and removing only the global exports put
+all 121 back.
+
 **Only the functions your workload actually ran are compiled**, which for
 QuickJS is 223 of 1666 and about 23 seconds of a core in the background. A
 function left out is interpreted and can still call back into compiled code.

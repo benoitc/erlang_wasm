@@ -3,13 +3,16 @@
 Application callback.
 
 Start the application before you load or instantiate anything: it owns the
-module cache and the node page budget. The supervision tree is deliberately
-shallow at this stage. Milestones M0-M4
-cover decoding, validation, execution and linear memory, none of which owns
-long-lived mutable state outside a caller's process. `wasm_engine` exists
-from the start only because node-wide page accounting must be in place
-before linear memory can grow (M4): `atomics` pages are off-heap and
-invisible to `max_heap_size`, so nothing else would bound them.
+module cache and the node page budget.
+
+The tree is one supervisor per subsystem, so a restart budget is shared only by
+things that belong together; `wasm_sup` draws it. It was flat until a stress run
+showed what that costs: five servers under one `intensity => 5, period => 10`
+meant losing the module cache repeatedly could take the engine and the keeper
+with it, and the tables went too. `wasm_engine` still starts before anything
+that allocates, because node-wide page accounting must be in place before linear
+memory can grow: `atomics` pages are off-heap and invisible to `max_heap_size`,
+so nothing else would bound them.
 """.
 -behaviour(application).
 

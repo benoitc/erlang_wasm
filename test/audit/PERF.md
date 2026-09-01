@@ -3055,3 +3055,36 @@ row size at the old 4,095 constant cost 161.6 on the same measurement and
 charging one word cost 150.5, so the figure tracks how often the store is
 measured and not what a call does. It is 2.9% on a call that returns a fresh
 reference and holds it, which is the shape that keeps the store growing.
+
+## Covering the paths that reached no counter, and inlining to pay for it
+
+`struct.set` writes a field in place and `pin/2` inserts a row, and neither
+called `wrote/2` at all: field writes took a store from 10.4 MB to 16.8 MB and
+a hundred thousand pins from 123 pages to 257, both with the charge unmoved.
+Both now count. Nothing cheaper works -- bounded per operation and unbounded per
+program is not a bound -- so the question was only what it costs.
+
+`wrote/2`, `touched/2` and `crossed/2` are `-compile({inline, ...})`. As calls
+they cost two reductions on **every** mutation in the runtime, which is more
+than the arithmetic they wrap. Inlined, against `16c109e`:
+
+| operation | `16c109e` | this branch | change |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 62.094 | 60.087 | **-2.01, -3.2%** |
+| `array.new_default` | 58.094 | 56.089 | **-2.01, -3.5%** |
+| `array.set` | 48.042 | 46.039 | **-2.00, -4.2%** |
+| `struct.set` | 63.025 | 64.040 | **+1.02, +1.6%** |
+| a call returning a reference | 150.539 | 163.9 | **+13.4, +8.9%** |
+
+Three paths are *faster* than before the review, because inlining gave back more
+than the wider interval cost. `struct.set` pays one reduction for a counter it
+did not have.
+
+The last row is the price, and it is worth being exact about where it comes
+from. Counting a pin as one word costs 152.0 and counting it as a row's twelve
+costs 163.9, so none of it is the counting: it is the store being *measured*
+more often, which is the thing that makes the growth visible. The shape is a
+call returning a freshly allocated reference that the embedder never releases,
+so every pin is a new row; a call returning numbers reaches
+`pin(_H, _Other) -> ok` and pays nothing, and one that reuses a reference
+increments a counter on a row that already exists.

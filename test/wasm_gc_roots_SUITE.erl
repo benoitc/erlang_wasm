@@ -34,6 +34,8 @@ all() ->
      a_wide_struct_cannot_outrun_its_ceiling,
      a_refused_allocation_leaves_no_row,
      a_refused_write_leaves_no_row,
+     a_struct_field_write_is_charged,
+     pins_are_charged_and_released,
      a_refused_charge_still_records_what_is_held,
      a_whole_array_fill_gives_its_pages_back,
      concurrent_reconciles_never_lower_a_live_charge,
@@ -712,13 +714,43 @@ wide_struct(N) ->
              "    (drop (struct.new_default $w)) (i32.const 0)))"])).
 
 %% Allocates and never writes an element, so only the allocation path runs.
+%% `mk` hands the reference back, which is what pins it.
 maker() ->
     build(~"""
     (module
       (type $s (struct (field i64) (field i64)))
       (func (export "make") (result i32)
         (drop (struct.new_default $s))
-        (i32.const 0)))
+        (i32.const 0))
+      (func (export "mk") (result (ref $s)) (struct.new_default $s)))
+    """).
+
+%% Allocates structs, then writes their fields without allocating anything.
+fattener() ->
+    build(~"""
+    (module
+      (type $s (struct (field (mut i64)) (field (mut i64))))
+      (type $r (array (mut (ref null $s))))
+      (global $h (mut (ref null $r)) (ref.null $r))
+      (func (export "make") (param i32) (result i32) (local $i i32)
+        (global.set $h (array.new_default $r (local.get 0)))
+        (block $o (loop $l
+          (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
+          (array.set $r (global.get $h) (local.get $i)
+                        (struct.new_default $s))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (local.get $i))
+      (func (export "fatten") (param i32) (result i32) (local $i i32)
+        (block $o (loop $l
+          (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
+          (struct.set $s 0 (array.get $r (global.get $h) (local.get $i))
+                           (i64.const 4611686018427387904))
+          (struct.set $s 1 (array.get $r (global.get $h) (local.get $i))
+                           (i64.const 4611686018427387904))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (local.get $i)))
     """).
 
 build(Src) ->
@@ -837,6 +869,56 @@ a_refused_charge_still_records_what_is_held(_Config) ->
     %% half -- that a refusal writes down what the tables hold.
     ?assert(Held > 1, {nothing_was_written, Held}),
     ?assertEqual(Held, wasm_keeper:charge_of(Res), {charged, Held}),
+    ok = wasm:destroy(I).
+
+%% A field write reaches no allocator, so it counted nowhere.
+%%
+%% `struct.set` replaces a field in place: no new row, and `wrote/2` was never
+%% called. Replacing small fields with boxed values grew a store from 10.4 MB to
+%% 16.8 MB while its charge stayed where it was. Bounded per write and unbounded
+%% per program is not a bound.
+a_struct_field_write_is_charged(_Config) ->
+    Mod = fattener(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(I, ~"make", [20000]),
+    %% The ceiling is set after the structs exist and just above them, so what
+    %% the case is about -- writing fields and nothing else -- is the only thing
+    %% that can cross it.
+    {wasm_heap, Objs, _, _} = wasm_instance:heap(I),
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    [Token] = wasm_keeper:holders_of(Res),
+    ok = wasm_keeper:set_limit(Token, wasm_keeper:charge_of(Res) + 2),
+    ?assertMatch({error, #{kind := heap_limit}},
+                 wasm:call(I, ~"fatten", [20000]),
+                 field_writes_ran_past_the_ceiling_uncharged),
+    ok = wasm:destroy(I).
+
+%% And neither did a pin, in either direction.
+%%
+%% A pin is a row in the elements table. A hundred thousand of them took a store
+%% from 123 pages to 257 while the charge stayed at 123, and `unpin_all/1` gave
+%% the 134 pages back without the charge hearing about that either.
+%%
+%% Counted, not refused: `wasm:pin/2` and `get_global/2` reach `pin/2` from
+%% outside `wasm_error:capture/1`, so a trap there would leave the runtime as a
+%% raw term. What it buys is that the size becomes visible, and the guest's own
+%% next allocation carries the refusal.
+pins_are_charged_and_released(_Config) ->
+    Mod = maker(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    H = wasm_instance:heap(I),
+    {wasm_heap, Objs, _, _} = H,
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    Refs = [begin {ok, [R]} = wasm:call(I, ~"mk", []), R end
+            || _ <- lists:seq(1, 40000)],
+    ok = wasm_heap:unpin_all(H),
+    Base = wasm_keeper:charge_of(Res),
+    [ok = wasm_heap:pin(H, R) || R <- Refs],
+    Pinned = wasm_keeper:charge_of(Res),
+    ?assert(Pinned > Base, {pins_were_free, Base, Pinned}),
+    ok = wasm_heap:unpin_all(H),
+    ?assert(wasm_keeper:charge_of(Res) < Pinned,
+            {unpinning_gave_nothing_back, Pinned}),
     ok = wasm:destroy(I).
 
 %% A fill that replaces the whole array deletes every element row, and the

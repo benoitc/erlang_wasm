@@ -134,6 +134,9 @@ silently name a different live object instead.
 %% What one row of the elements table costs, near enough to bound bytes with.
 %% Measured at 91 bytes an element, which is between eleven and twelve words.
 -define(ELEM_WORDS, 12).
+%% And what writing one struct field can add to a row: an immediate costs
+%% nothing extra, a boxed float or bignum a handful of words.
+-define(FIELD_WORDS, 4).
 -define(DEFAULT_MAJOR_RATIO, 2).
 %% No major collection below this many objects: tracing a store of forty costs
 %% less than deciding not to, and a program that never grows never needs one.
@@ -360,7 +363,12 @@ get_field({wasm_heap, Objs, _, _}, {objref, Id} = Ref, Idx) ->
 
 -spec set_field(undefined | heap(), term(), non_neg_integer(), term()) -> ok.
 set_field(undefined, Ref, _Idx, _Value) -> foreign(Ref);
-set_field({wasm_heap, Objs, Elems, Ctr}, {objref, Id} = Ref, Idx, Value) ->
+set_field({wasm_heap, Objs, Elems, Ctr} = H, {objref, Id} = Ref, Idx, Value) ->
+    %% A field write reaches no allocator and adds no row, so it counted
+    %% nowhere: replacing four small fields with boxed values grew a store from
+    %% 10.4 MB to 16.8 MB while its charge did not move. Bounded per write and
+    %% unbounded per program is not a bound.
+    ok = wrote(H, ?FIELD_WORDS),
     case ets:update_element(Objs, Id, {4 + Idx, Value}) of
         true -> remember(Elems, Ctr, Id, Value);
         false -> foreign(Ref)
@@ -569,19 +577,41 @@ refuse_if_over({wasm_heap, _, _, Ctr}, {error, Why}) ->
     atomics:put(Ctr, ?WRITES, ?RECONCILE_MASK),
     wasm_error:exhaustion(heap_limit, #{reason => Why}).
 
-%% `N` words of mutation, and a reconcile every `?RECONCILE_MASK` + 1 of them.
+%% Inlined: as a call it cost two reductions on every mutation in the runtime,
+%% which is more than the arithmetic it wraps.
+-compile({inline, [crossed/2, touched/2, wrote/2]}).
+
+%% Whether `N` more words crosses the next reconcile boundary.
 %%
-%% *Crossed* a boundary, not landed on one. `band ... =:= 0` asks the second
-%% question, which is the same as the first only while every caller passes one:
-%% add ten at 4090 and it lands on 4100, and the check does not happen at all.
-%% `new_struct/3` is what makes that live.
+%% *Crossed*, not landed on: `band ... =:= 0` asks the second question, which is
+%% the same as the first only while every caller passes one. Add ten at 4090 and
+%% it lands on 4100, and the check does not happen at all.
+crossed(Ctr, N) ->
+    atomics:add_get(Ctr, ?WRITES, N) band ?RECONCILE_MASK < N.
+
+%% `N` words the embedder added or freed. Counted, never refused.
+%%
+%% Pinning is the embedder holding a reference, not the guest allocating, and
+%% `wasm:pin/2` and `get_global/2` reach it from outside `wasm_error:capture/1`,
+%% where a trap leaves the runtime as a raw term rather than a value. So this
+%% makes the store's size visible and lets the guest's own next mutation carry
+%% the refusal. Freeing is the same call because a shrink the charge never hears
+%% about is a charge that never falls: `unpin_all/1` gave back 134 pages that
+%% stayed charged until something else happened to reconcile.
+touched({wasm_heap, _, _, Ctr} = H, N) ->
+    case crossed(Ctr, N) of
+        true -> _ = charge(H), ok;
+        false -> ok
+    end.
+
+%% `N` words of mutation, and a reconcile every `?RECONCILE_MASK` + 1 of them.
 %%
 %% `N` travels on to the keeper as the size of what is *about* to be written,
 %% because the reconcile measures tables that do not hold it yet. Without that
 %% the first wide row is admitted whatever the ceiling says, and only the next
 %% mutation is refused.
 wrote({wasm_heap, _, _, Ctr} = H, N) ->
-    case atomics:add_get(Ctr, ?WRITES, N) band ?RECONCILE_MASK < N of
+    case crossed(Ctr, N) of
         true -> refuse_if_over(H, charge(H, N));
         false -> ok
     end.
@@ -1090,9 +1120,9 @@ list rebuilt with `lists:usort/1` per call that never shrank.
 """.
 -spec pin(undefined | heap(), term()) -> ok.
 pin(undefined, _Ref) -> ok;
-pin({wasm_heap, _, Elems, _}, {objref, Id}) ->
+pin({wasm_heap, _, Elems, _} = H, {objref, Id}) ->
     _ = ets:update_counter(Elems, {pinned, Id}, {2, 1}, {{pinned, Id}, 0}),
-    ok;
+    touched(H, ?ELEM_WORDS);
 pin(_H, _Other) -> ok.
 
 -doc """
@@ -1103,10 +1133,10 @@ everything you have seen without remembering which ones counted.
 """.
 -spec unpin(undefined | heap(), term()) -> ok.
 unpin(undefined, _Ref) -> ok;
-unpin({wasm_heap, _, Elems, _}, {objref, Id}) ->
+unpin({wasm_heap, _, Elems, _} = H, {objref, Id}) ->
     Key = {pinned, Id},
     try ets:update_counter(Elems, Key, {2, -1}) of
-        N when N =< 0 -> true = ets:delete(Elems, Key), ok;
+        N when N =< 0 -> true = ets:delete(Elems, Key), touched(H, ?ELEM_WORDS);
         _ -> ok
     catch
         error:badarg -> ok
@@ -1116,15 +1146,18 @@ unpin(_H, _Other) -> ok.
 -doc "Release every pin, for when you scope references to a request.".
 -spec unpin_all(undefined | heap()) -> ok.
 unpin_all(undefined) -> ok;
-unpin_all({wasm_heap, _, Elems, _}) ->
-    unpin_all_from(Elems, ets:next(Elems, {pinned, -1})).
+unpin_all({wasm_heap, _, Elems, _} = H) ->
+    %% What it freed, counted once rather than per row: this is the only path
+    %% that can give back a hundred thousand rows in one call.
+    touched(H, ?ELEM_WORDS * unpin_all_from(Elems,
+                                            ets:next(Elems, {pinned, -1}), 0)).
 
-unpin_all_from(Elems, {pinned, _} = Key) ->
+unpin_all_from(Elems, {pinned, _} = Key, N) ->
     Next = ets:next(Elems, Key),
     true = ets:delete(Elems, Key),
-    unpin_all_from(Elems, Next);
-unpin_all_from(_Elems, _Other) ->
-    ok.
+    unpin_all_from(Elems, Next, N + 1);
+unpin_all_from(_Elems, _Other, N) ->
+    N.
 
 -doc "Every pinned reference, as collection roots.".
 -spec pins(undefined | heap()) -> [term()].

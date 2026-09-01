@@ -595,6 +595,7 @@ handle_call({transfer, From, To, Owner}, {Pid, _}, #{held := Held} = State) ->
     {reply, ok, S2};
 
 handle_call({reconcile, Res, Ceiling}, _From, State) ->
+    ok = hook(charge_entry),
     case ets:lookup(?TAB, Res) of
         [{Res, {heap, Objs, Elems}, _Pages, _Holders}] ->
             Words = words_of(Objs) + words_of(Elems),
@@ -608,6 +609,7 @@ handle_call({reconcile, Res, Ceiling}, _From, State) ->
     end;
 
 handle_call({resize, Res, Want, Ceiling}, _From, State) ->
+    ok = hook(charge_entry),
     {reply, R, S1} = do_resize(Res, Want, Ceiling, request, State),
     {reply, R, S1};
 
@@ -941,6 +943,26 @@ grow(Res, Meta, Want, Delta, Holders, Toks, Ceil, Mode, State) ->
 
 first_error(ok, R) -> R;
 first_error({error, _} = E, _R) -> E.
+
+-ifdef(TEST).
+%% A sync point at the top of the transaction that sets a heap's charge.
+%%
+%% `wasm_heap:charge/1` used to measure the two tables and *then* call here, so
+%% an older, smaller sample could land after a newer, larger one and release the
+%% pages of rows that still existed. A test cannot land in that window by
+%% racing, and the one written for it passed whether the defect was there or
+%% not. Holding a process here instead makes the schedule exact: the store grows
+%% while a charge is in flight, and where the measurement happens decides the
+%% answer. Both clauses carry it because the defect put the measurement on the
+%% other side of this line. Never compiled into a release.
+hook(Where) ->
+    case application:get_env(wasm, keeper_hook) of
+        {ok, F} when is_function(F, 1) -> _ = F(Where), ok;
+        _ -> ok
+    end.
+-else.
+hook(_Where) -> ok.
+-endif.
 
 %% The reservation an abandoned growth took, given back without publishing
 %% anything. The delta is the growth's own, not a difference between the charge

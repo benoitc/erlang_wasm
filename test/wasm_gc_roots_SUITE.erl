@@ -35,7 +35,8 @@ all() ->
      a_refused_write_leaves_no_row,
      a_refused_charge_still_records_what_is_held,
      a_whole_array_fill_gives_its_pages_back,
-     concurrent_reconciles_never_lower_a_live_charge].
+     concurrent_reconciles_never_lower_a_live_charge,
+     many_processes_on_one_store_stay_charged].
 
 %% The collector reads its roots through `wasm_instance:mut_of/1', which is
 %% handed a root view rather than an instance: four fields, no `#inst{}'. A
@@ -821,16 +822,59 @@ a_whole_array_fill_gives_its_pages_back(_Config) ->
     ?assert(After < Base + 10, {still_charged_for_deleted_rows, Base, After}),
     ok = wasm:destroy(I).
 
-%% Two processes on one shared store must never leave it charged for less than
-%% it holds.
+%% A store that grows while a reconcile is in flight must not be charged for the
+%% size it had when that reconcile started.
 %%
-%% `charge/1` used to measure the tables and then call the keeper, so an older,
-%% smaller sample could land after a newer, larger one and release the pages of
-%% rows that still existed. The keeper measures inside the callback that applies
-%% the result now, which makes the interleaving unrepresentable rather than
-%% unlikely; this hammers it and checks the invariant, which is the most a test
-%% can do against a race that no longer has a window.
+%% `charge/1` used to measure the two tables and then call the keeper, so an
+%% older, smaller sample could land after a newer, larger one and release the
+%% pages of rows that still existed. The keeper measures inside the callback
+%% that applies the result now.
+%%
+%% The first version of this case hammered two processes and asserted the
+%% invariant, which passed against the defect: the window is a handful of
+%% instructions and no amount of racing lands in it. The keeper's `resize_entry`
+%% hook makes the schedule exact instead -- a reconcile is held at the top of
+%% the transaction, the store grows underneath it, and where the measurement
+%% happens decides the answer.
 concurrent_reconciles_never_lower_a_live_charge(_Config) ->
+    Mod = filler(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(I, ~"fill", [100]),
+    {wasm_heap, Objs, Elems, _} = wasm_instance:heap(I),
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    Self = self(),
+    Once = atomics:new(1, []),
+    ok = application:set_env(wasm, keeper_hook,
+                             fun(_Where) ->
+                                 case atomics:add_get(Once, 1, 1) of
+                                     1 ->
+                                         Self ! at_the_hook,
+                                         receive go -> ok after 30000 -> ok end;
+                                     _ ->
+                                         ok
+                                 end
+                             end),
+    _ = spawn_link(fun() ->
+                       _ = wasm_heap:charge(wasm_instance:heap(I)),
+                       Self ! reconciled
+                   end),
+    receive at_the_hook -> ok after 30000 -> ct:fail(hook_never_fired) end,
+    %% Straight into the table, which needs no keeper, so this cannot deadlock
+    %% behind the reconcile it is racing.
+    [true = ets:insert(Elems, {{9999, N}, N}) || N <- lists:seq(1, 40000)],
+    _ = erlang:send(whereis(wasm_keeper), go),
+    receive reconciled -> ok after 30000 -> ct:fail(reconcile_stuck) end,
+    ok = application:unset_env(wasm, keeper_hook),
+    Words = ets:info(Objs, memory) + ets:info(Elems, memory),
+    Held = (Words * erlang:system_info(wordsize) + 65535) div 65536,
+    ?assert(Held > 1, {nothing_to_measure, Held}),
+    ?assertEqual(Held, wasm_keeper:charge_of(Res),
+                 charged_for_the_size_it_had_before_the_growth),
+    ok = wasm:destroy(I).
+
+%% And the same invariant under load, which is a stress check and not the
+%% regression above: it cannot fail on the defect, only on a new one.
+many_processes_on_one_store_stay_charged(_Config) ->
     Mod = filler(),
     {ok, A} = wasm:instantiate(Mod, #{}),
     {ok, B} = wasm:instantiate(Mod, #{}, #{link => A}),

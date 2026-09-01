@@ -695,7 +695,12 @@ every heap size, which was the right answer for the wrong reason.
 ### Two generations
 
 A collection is **minor** unless the store has grown past `gc_major_ratio` times
-its size after the last major (default 2).
+what it was after the last major (default 2), measured in objects *or* in bytes.
+
+Both units, because a store can be enormous and hold five objects. A workload
+replacing one large array per call never passes the object floor, and without
+the byte rule it never gets a major collection at all, so nothing it drops is
+ever reclaimed. The byte floor is `gc_min_major_pages`, default 16 pages.
 
 A minor collection never traces an old object. That is what makes the pause
 proportional to what was just allocated rather than to everything alive:

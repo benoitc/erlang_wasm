@@ -2952,3 +2952,35 @@ attributable instruction by instruction, and does not scale with heap size.
 
 The reconcile itself is not on the path: `ets:info(memory)` on both tables is
 1.78 microseconds for the pair, once per 4096 operations.
+
+## Giving the collector a byte-side trigger
+
+`major_due/1` and `should_collect/1` both counted objects, so a store of few
+large objects was never collected at all: four rounds of a fifty thousand
+element array left all four, sixteen megabytes, with one reachable. Making both
+rules see bytes as well as rows means collections that never used to happen now
+do, and that is work.
+
+Reductions, the instrument the section above settles on, against `67a4e83`:
+
+| operation | before | after | added |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 70.09 | 80.10 | **+10.01, +14.3%** |
+| `array.set` | 47.24 | 50.26 | **+3.02, +6.4%** |
+
+Both workloads allocate twenty thousand objects in one call and keep none, so
+before this they leaked two megabytes a call and collected nothing. The added
+reductions are the collector doing the work it was skipping, not overhead around
+it: the triggers are two `atomics:get` each and they run once per outermost
+call, not per allocation, so at twenty thousand allocations a call their share
+rounds to nothing.
+
+Nothing was added to a collection itself. `major/3` and `minor/3` are untouched;
+`collect/2` gains two `atomics:put`. What changed is how often a major is due,
+which is the whole point, and what it buys is a bound: the same workload's store
+now oscillates between one and two arrays instead of growing without end.
+
+The trade is explicit. A workload that allocates heavily and keeps nothing pays
+about fourteen per cent more work to stop leaking. One with a stable live set is
+unaffected, because neither rule fires: both are doublings, and a store that
+does not grow does not double.

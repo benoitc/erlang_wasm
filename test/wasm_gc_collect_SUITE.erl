@@ -26,7 +26,9 @@ all() ->
      the_write_barrier_keeps_a_young_object_alive,
      a_released_reference_is_collected,
      release_all_drops_every_pin,
-     a_global_read_by_the_embedder_is_pinned].
+     a_global_read_by_the_embedder_is_pinned,
+     a_store_of_few_large_objects_is_collected,
+     a_major_is_due_on_bytes_not_only_rows].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -45,6 +47,7 @@ init_per_testcase(_Case, Config) ->
 end_per_testcase(_Case, _Config) ->
     application:unset_env(wasm, gc_alloc_threshold),
     application:unset_env(wasm, gc_min_major_size),
+    application:unset_env(wasm, gc_min_major_pages),
     application:unset_env(wasm, gc_major_ratio),
     ok.
 
@@ -231,12 +234,19 @@ a_global_read_by_the_embedder_is_pinned(_Config) ->
 %% garbage lying around and the counts stop meaning what they say.
 collect_every_call() -> application:set_env(wasm, gc_alloc_threshold, 1).
 
-never_major() -> application:set_env(wasm, gc_min_major_size, 1 bsl 40).
+%% Both floors. A major is due on rows *or* on bytes since `major_due/1` learned
+%% to see a store that is large without holding many rows, so a control that
+%% raises only the row floor stops controlling anything the moment a test's
+%% store passes a megabyte.
+never_major() ->
+    application:set_env(wasm, gc_min_major_size, 1 bsl 40),
+    application:set_env(wasm, gc_min_major_pages, 1 bsl 40).
 %% Both settings, not just the floor: with the default ratio a major only runs
 %% once the store has doubled since the last one, so a test that wants every
 %% collection to trace everything has to say so.
 always_major() ->
     application:set_env(wasm, gc_min_major_size, 0),
+    application:set_env(wasm, gc_min_major_pages, 0),
     application:set_env(wasm, gc_major_ratio, 1).
 
 instantiate(Bin) ->
@@ -327,3 +337,65 @@ module_with_gc() ->
 body(Locals, Code) ->
     Bin = <<Locals/binary, Code/binary>>,
     [wasm_asm:uleb(byte_size(Bin)), Bin].
+
+%%% ------------------------------------------------------- large and few ---
+
+%% A store can be enormous and hold five rows, and until this it was then never
+%% collected at all.
+%%
+%% Every heuristic here counted objects. `major_due/1` compares `size/1`, a row
+%% count, against a floor of four thousand, so a workload replacing one large
+%% array per call never reached it and never got a major collection; a minor one
+%% leaves the old generation alone by design, which is what
+%% `a_minor_collection_leaves_old_garbage` above asserts. So the arrays piled up
+%% while exactly one was reachable: four rounds of a fifty thousand element
+%% array left all four, sixteen megabytes.
+%%
+%% Invisible until the store was charged against the node page budget, because
+%% nothing measured bytes. Then it stopped being a leak and became a refusal.
+a_store_of_few_large_objects_is_collected(_Config) ->
+    {ok, Inst} = wasm:instantiate(big_array_module(), #{}),
+    Heap = wasm_instance:heap(Inst),
+    Rounds = [begin
+                  {ok, [_]} = wasm:call(Inst, ~"replace", [20000]),
+                  wasm_heap:size(Heap)
+              end || _ <- lists:seq(1, 8)],
+    ct:log("store size per round: ~p", [Rounds]),
+    %% Bounded, not monotonic. One array is reachable at a time, so the store
+    %% holds one or two of them and never eight.
+    ?assert(lists:max(Rounds) =< 4,
+            {store_grew_without_bound, Rounds}),
+    ok = wasm:destroy(Inst).
+
+%% The rule itself, without a workload around it: under the row floor and over
+%% the page floor answers true.
+a_major_is_due_on_bytes_not_only_rows(_Config) ->
+    never_major(),                       % raises both floors out of the way
+    {ok, Inst} = wasm:instantiate(big_array_module(), #{}),
+    Heap = wasm_instance:heap(Inst),
+    {ok, [_]} = wasm:call(Inst, ~"replace", [20000]),
+    ?assert(wasm_heap:size(Heap) < 4096,
+            {not_the_case_this_is_about, wasm_heap:size(Heap)}),
+    ?assertNot(wasm_heap:major_due(Heap)),
+    %% Now let the page floor apply. The store is megabytes, so it is due.
+    application:set_env(wasm, gc_min_major_pages, 1),
+    ?assert(wasm_heap:major_due(Heap)),
+    ok = wasm:destroy(Inst).
+
+%% One array per call, each replacing the last, so only one is ever reachable
+%% and the store grows only if nothing collects it.
+big_array_module() ->
+    {ok, M} = wasm:compile({wat, ~"""
+    (module
+      (type $a (array (mut i64)))
+      (global $k (mut (ref null $a)) (ref.null $a))
+      (func (export "replace") (param i32) (result i32) (local $i i32)
+        (global.set $k (array.new_default $a (local.get 0)))
+        (block $o (loop $l
+          (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
+          (array.set $a (global.get $k) (local.get $i) (i64.const 7))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (local.get $i)))
+    """}),
+    M.

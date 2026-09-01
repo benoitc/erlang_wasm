@@ -30,6 +30,16 @@ matching on the old pair needs updating.
 
 ### Fixed
 
+- **A store of few large objects was never collected.** Every rule in
+  `wasm_heap` counted objects: `major_due/1` compared a row count against a
+  floor of 4096, so a workload replacing one large array per call never got a
+  major collection, and a minor one leaves the old generation alone by design.
+  Four rounds of a fifty thousand element array left all four, sixteen
+  megabytes, with one reachable. Both `major_due/1` and `should_collect/1` now
+  read bytes as well as rows, with a `gc_min_major_pages` floor. A workload that
+  allocates heavily and keeps nothing does about 14% more work and stops
+  leaking; one with a stable live set is unaffected.
+
 - **`atomic.fence` was rejected as invalid.** The decoder and the interpreter
   both knew it and the validator had no clause, so every module carrying a
   fence failed to load. The specification suite does not exercise it.

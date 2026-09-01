@@ -611,12 +611,26 @@ a_heap_gives_its_pages_back_when_collected(_Config) ->
     %% allocations and the fill made one. Lowering the threshold is what makes
     %% this a test of the charge coming back rather than of the collector's
     %% schedule.
+    %% Every collection, and every one of them major.
+    %%
+    %% The threshold alone is not enough. Garbage that appears without the store
+    %% growing does not make a major due -- the byte-side rule in `major_due/1`
+    %% is a doubling, like the row-side one -- and a minor collection leaves the
+    %% old generation alone by design. Dropping the only reference to an array
+    %% is exactly that shape, so this says which collection it wants rather than
+    %% relying on the schedule.
     ok = application:set_env(wasm, gc_alloc_threshold, 1),
+    ok = application:set_env(wasm, gc_min_major_size, 0),
+    ok = application:set_env(wasm, gc_min_major_pages, 0),
+    ok = application:set_env(wasm, gc_major_ratio, 1),
     try
         {ok, [0]} = wasm:call(I, ~"drop", []),
         wait_until(fun() -> wasm_engine:pages_in_use() < Charged end, 5000)
     after
-        ok = application:unset_env(wasm, gc_alloc_threshold)
+        ok = application:unset_env(wasm, gc_alloc_threshold),
+        ok = application:unset_env(wasm, gc_min_major_size),
+        ok = application:unset_env(wasm, gc_min_major_pages),
+        ok = application:unset_env(wasm, gc_major_ratio)
     end,
     ok = wasm:destroy(I),
     wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 5000).
@@ -649,9 +663,14 @@ filler() ->
     (module
       (type $a (array (mut i64)))
       (global $keep (mut (ref null $a)) (ref.null $a))
+      ;; Into the global, not a local. A local is unreachable the moment the
+      ;; call returns, and the byte-side collection trigger now fires at that
+      ;; boundary, so the array was already gone before the charge was read and
+      ;; there was nothing left for `drop` to release.
       (func (export "fill") (param i32) (result i32)
         (local $r (ref $a)) (local $i i32)
         (local.set $r (array.new_default $a (local.get 0)))
+        (global.set $keep (local.get $r))
         (block $o (loop $l
           (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
           (array.set $a (local.get $r) (local.get $i)

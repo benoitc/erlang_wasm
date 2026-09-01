@@ -87,6 +87,13 @@ silently name a different live object instead.
 -define(REQUEST, 5).
 %% Element writes since the charge was last reconciled. See `charge/1'.
 -define(WRITES, 6).
+%% Pages as of the last reconcile, written by `charge/1', and as of the last
+%% major collection. The pair is the byte-side twin of `?LAST_MAJOR', and what
+%% lets `major_due/1' see a store that is large without holding many rows.
+-define(CHARGED, 7).
+-define(MAJOR_PAGES, 8).
+%% And as of the last collection of any kind, for `should_collect/1'.
+-define(COLLECTED_AT, 9).
 %% Set by a collector holding the store exclusively. Above any plausible reader
 %% count, and added rather than assigned so a reader that arrives mid-collection
 %% and steps back out cannot lose its own decrement.
@@ -113,6 +120,11 @@ silently name a different live object instead.
 %% No major collection below this many objects: tracing a store of forty costs
 %% less than deciding not to, and a program that never grows never needs one.
 -define(DEFAULT_MIN_MAJOR, 4096).
+%% And the same floor in pages. A heap of a megabyte is not worth a major
+%% collection however much it has doubled, and without a floor every small store
+%% starts taking them: `wasm_gc_collect_SUITE' runs with a handful of objects
+%% and depends on old garbage surviving a minor collection.
+-define(DEFAULT_MIN_MAJOR_PAGES, 16).
 
 %% Returned by `ets:lookup_element/4' when the row is not there. No WebAssembly
 %% value is an atom other than `null', so this cannot collide with one, and the
@@ -175,7 +187,7 @@ new(Token, Owner) ->
         %% every other resource does when the keeper is away.
         {error, _} -> ok
     end,
-    {wasm_heap, Objs, Elems, atomics:new(6, [{signed, false}])}.
+    {wasm_heap, Objs, Elems, atomics:new(9, [{signed, false}])}.
 
 %% The keeper resource, or `undefined` for a heap made without one.
 resource(Objs) ->
@@ -445,7 +457,23 @@ tracing. A call that allocates nothing answers in two `atomics` reads.
 """.
 -spec should_collect(undefined | heap()) -> boolean().
 should_collect(undefined) -> false;
-should_collect(H) -> allocs(H) >= threshold().
+should_collect({wasm_heap, _, _, Ctr} = H) ->
+    allocs(H) >= threshold() orelse grew_since_collect(Ctr).
+
+%% Whether to collect at all, in bytes.
+%%
+%% `allocs/1' counts objects since the last collection, and a workload that
+%% replaces one large array per call allocates once a call: a hundred thousand
+%% calls separate collections while every array but one is garbage. Without this
+%% the byte-side `major_due/1' never gets asked, because no collection happens
+%% for it to answer.
+%%
+%% Doubling, like everything else here, with the same floor: a store under a
+%% megabyte is left to the allocation counter.
+grew_since_collect(Ctr) ->
+    Pages = atomics:get(Ctr, ?CHARGED),
+    Pages >= max(atomics:get(Ctr, ?COLLECTED_AT) * major_ratio(),
+                 min_major_pages()).
 
 threshold() ->
     application:get_env(wasm, gc_alloc_threshold, ?DEFAULT_ALLOC_THRESHOLD).
@@ -500,13 +528,14 @@ specification gives it one, and `array.set` does not.
 """.
 -spec charge(undefined | heap()) -> ok.
 charge(undefined) -> ok;
-charge({wasm_heap, Objs, Elems, _Ctr}) ->
+charge({wasm_heap, Objs, Elems, Ctr}) ->
     case resource(Objs) of
         undefined ->
             ok;
         Res ->
             Words = words(Objs) + words(Elems),
             Pages = (Words * erlang:system_info(wordsize) + 65535) div 65536,
+            atomics:put(Ctr, ?CHARGED, Pages),
             case wasm_keeper:resize(Res, Pages, infinity) of
                 ok -> ok;
                 %% The keeper being away leaves the charge where it was, which
@@ -860,8 +889,16 @@ sound because an old object can only point at a young one through a write made
 since the last collection, and `set_field/4` and `array_set/4` record those.
 
 **Major.** Traces and sweeps everything, and is where the long pause lives. It
-runs when the store has grown past `gc_major_ratio` times its size after the
+runs when the store has grown past `gc_major_ratio` times what it was after the
 last major (default 2), so a program with a stable live set almost never has one.
+
+That is measured in **rows and in bytes**, because a store can be enormous and
+hold five of them. `size/1` is a row count, and a workload replacing one large
+array per call never reached the row floor, never got a major collection, and so
+never had anything reclaimed: a minor one leaves the old generation alone by
+design. Four rounds of a fifty thousand element array left all four in the
+store, sixteen megabytes, with one reachable. The page count `charge/1` already
+computes serves as the second unit, with its own floor, `gc_min_major_pages`.
 
 Mark and sweep rather than copying, because object ids are handed out and
 compared by `ref.eq`, so they must not move. The mark set is an `atomics` bitmap
@@ -873,7 +910,8 @@ map alone and growing the *calling process's* BEAM heap by 8.5 words per object.
 collect(undefined, _Roots) -> ok;
 collect({wasm_heap, _, Elems, Ctr} = H, Roots) ->
     Next = atomics:get(Ctr, ?NEXT_ID),
-    case major_due(H) of
+    Major = major_due(H),
+    case Major of
         true -> major(H, Roots, Next);
         false -> minor(H, Roots, Next)
     end,
@@ -888,7 +926,13 @@ collect({wasm_heap, _, Elems, Ctr} = H, Roots) ->
     %% What a collection freed is pages the node can have back. Reconciling here
     %% rather than waiting for the next write is what makes a heap that grows
     %% and shrinks stay honest instead of ratcheting.
-    charge(H),
+    _ = charge(H),
+    %% After the charge, so this is what the store costs once the sweep has
+    %% been paid for, and only for a major: a minor leaves old objects behind
+    %% by design, so its result is not a baseline to double from.
+    Charged = atomics:get(Ctr, ?CHARGED),
+    atomics:put(Ctr, ?COLLECTED_AT, Charged),
+    Major andalso atomics:put(Ctr, ?MAJOR_PAGES, Charged),
     ok.
 
 -doc "Whether the next collection will trace the whole store.".
@@ -896,7 +940,27 @@ collect({wasm_heap, _, Elems, Ctr} = H, Roots) ->
 major_due(undefined) -> false;
 major_due({wasm_heap, _, _, Ctr} = H) ->
     Baseline = atomics:get(Ctr, ?LAST_MAJOR),
-    ?MODULE:size(H) >= max(Baseline * major_ratio(), min_major()).
+    ?MODULE:size(H) >= max(Baseline * major_ratio(), min_major())
+        orelse grown_in_bytes(Ctr).
+
+%% The same rule in the other unit, because a store can be enormous and still
+%% hold five rows.
+%%
+%% `size/1' counts object rows, so a workload of few large objects never reaches
+%% `min_major()' and never gets a major collection at all. A minor one traces
+%% only above the watermark and assumes everything older is live, which is the
+%% whole point of it, so an array replaced once a call survives its first
+%% collection and is then never looked at again: four rounds of a fifty thousand
+%% element array left all four in the store, sixteen megabytes, with one
+%% reachable.
+%%
+%% That predates charging the store and was invisible without it, because
+%% nothing measured bytes. The page count is already computed by `charge/1',
+%% once per 4096 operations, so this is two `atomics' reads and no measurement.
+grown_in_bytes(Ctr) ->
+    Pages = atomics:get(Ctr, ?CHARGED),
+    Pages >= max(atomics:get(Ctr, ?MAJOR_PAGES) * major_ratio(),
+                 min_major_pages()).
 
 major({wasm_heap, Objs, Elems, Ctr} = H, Roots, Next) ->
     Marks = bitmap(0, Next),
@@ -922,6 +986,9 @@ major_ratio() ->
 
 min_major() ->
     application:get_env(wasm, gc_min_major_size, ?DEFAULT_MIN_MAJOR).
+
+min_major_pages() ->
+    application:get_env(wasm, gc_min_major_pages, ?DEFAULT_MIN_MAJOR_PAGES).
 
 %%% ----------------------------------------------------------------- pins ---
 

@@ -31,6 +31,7 @@ all() ->
      a_heap_gives_its_pages_back_when_collected,
      a_shared_heap_is_charged_once,
      a_linked_instance_over_its_ceiling_is_refused,
+     a_refused_allocation_leaves_no_row,
      a_refused_write_leaves_no_row,
      a_whole_array_fill_gives_its_pages_back,
      concurrent_reconciles_never_lower_a_live_charge].
@@ -699,6 +700,16 @@ filler() ->
         (i32.const 0)))
     """).
 
+%% Allocates and never writes an element, so only the allocation path runs.
+maker() ->
+    build(~"""
+    (module
+      (type $s (struct (field i64) (field i64)))
+      (func (export "make") (result i32)
+        (drop (struct.new_default $s))
+        (i32.const 0)))
+    """).
+
 build(Src) ->
     {ok, P} = wasm_wat:module(Src),
     {ok, M} = wasm_validate:module(P),
@@ -731,6 +742,26 @@ a_linked_instance_over_its_ceiling_is_refused(_Config) ->
     %% And the refusal left nothing behind: still one holder, still charged.
     ?assertEqual(Charged, wasm_engine:pages_in_use()),
     ok = wasm:destroy(A).
+
+%% Neither must an allocation the charge refuses.
+%%
+%% The allocation path inserted its row and charged afterwards, so a refused
+%% allocation left the row behind. Worse, its reconcile cadence rode the id the
+%% allocator had taken -- `Id band ?RECONCILE_MASK' -- and a refusal rewinds the
+%% *write* counter, which that path never read. So a workload that only
+%% allocates was refused once and then let through 4095 more. Both halves are
+%% here: no row, and the next allocation refused too.
+a_refused_allocation_leaves_no_row(_Config) ->
+    Mod = maker(),
+    {ok, I} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 0}),
+    {wasm_heap, Objs, _, _} = wasm_instance:heap(I),
+    Rows = ets:info(Objs, size),
+    ?assertMatch({error, #{kind := heap_limit}}, wasm:call(I, ~"make", [])),
+    ?assertEqual(Rows, ets:info(Objs, size), rows_after_a_refused_allocation),
+    ?assertMatch({error, #{kind := heap_limit}}, wasm:call(I, ~"make", []),
+                 the_next_allocation_was_admitted),
+    ?assertEqual(Rows, ets:info(Objs, size)),
+    ok = wasm:destroy(I).
 
 %% A write the charge refuses must not have happened.
 %%

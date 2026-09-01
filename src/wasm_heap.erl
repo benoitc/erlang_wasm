@@ -118,11 +118,10 @@ silently name a different live object instead.
 %%
 %% A constant, and a power of two, unlike `gc_alloc_threshold' beside it. That
 %% one is read from the application environment because `should_collect/1' asks
-%% once per outermost call; this is asked once per *allocation*, and
+%% once per outermost call; this is asked once per *mutation*, and
 %% `application:get_env/3' is an ETS lookup. Reading it there cost `struct.new'
 %% 37% and a partial `array.fill' 42%; caching it in an `atomics' slot still
-%% cost 17%. A `band' against a literal costs nothing and needs no counter of
-%% its own on the allocation path, which already has the id in hand.
+%% cost 17%. A `band' against a literal costs nothing.
 -define(RECONCILE_MASK, 16#FFF).
 -define(DEFAULT_MAJOR_RATIO, 2).
 %% No major collection below this many objects: tracing a store of forty costs
@@ -198,6 +197,10 @@ new(Token, Owner) ->
     Ctr = atomics:new(10, [{signed, false}]),
     %% Without a floor here the trigger starts at zero and every call collects.
     atomics:put(Ctr, ?TRIGGER, min_major_pages()),
+    %% At the mask, so the *first* mutation reconciles rather than the 4096th.
+    %% A heap linked into an instance already over its ceiling has to be refused
+    %% at the first thing it does, not after an interval of grace.
+    atomics:put(Ctr, ?WRITES, ?RECONCILE_MASK),
     {wasm_heap, Objs, Elems, Ctr}.
 
 %% The keeper resource, or `undefined` for a heap made without one.
@@ -295,8 +298,10 @@ is_heap(_) -> false.
 -spec new_struct(heap(), non_neg_integer(), [term()]) -> {objref, non_neg_integer()}.
 new_struct({wasm_heap, Objs, _, Ctr} = H, TypeIdx, Fields) ->
     Id = atomics:add_get(Ctr, ?NEXT_ID, 1) - 1,
+    %% Before the insert, as on the write path and for the same reason: a
+    %% refusal arriving after the row is in leaves the row, uncharged.
+    ok = wrote(H, 1),
     true = ets:insert(Objs, list_to_tuple([Id, s, TypeIdx | Fields])),
-    allocated(H, Id),
     {objref, Id}.
 
 -doc """
@@ -313,8 +318,8 @@ is the kind of work worth not doing.
 new_array({wasm_heap, Objs, _, Ctr} = H, TypeIdx, Len, Default, Traced) ->
     Id = atomics:add_get(Ctr, ?NEXT_ID, 1) - 1,
     Kind = case Traced of true -> a; false -> n end,
+    ok = wrote(H, 1),
     true = ets:insert(Objs, {Id, Kind, TypeIdx, Len, Default}),
-    allocated(H, Id),
     {objref, Id}.
 
 %%% --------------------------------------------------------------- access ---
@@ -517,19 +522,15 @@ threshold() ->
 %% The obvious hook is not one. `should_collect/1` tests the allocation counter,
 %% and `?NEXT_ID` moves only in `new_struct/3` and `new_array/5`: filling an
 %% array is one allocation and a million writes, so nothing on the path that
-%% spends the memory ever asks. Hence a second counter, and a reconcile when it
-%% crosses a threshold.
-
-%% A workload that allocates without writing elements -- structs, or arrays left
-%% at their default -- reaches no `wrote/2`, so allocation carries the same
-%% trigger. It rides the id the allocator has already taken rather than taking a
-%% second counter: two atomic increments on the allocation path would be
-%% measurable where a remainder is not.
-allocated(H, Id) ->
-    case Id band ?RECONCILE_MASK of
-        0 -> refuse_if_over(H, charge(H));
-        _ -> ok
-    end.
+%% spends the memory ever asks. Hence a second counter, `?WRITES`, and a
+%% reconcile when it crosses a threshold.
+%%
+%% Every mutation counts on that one counter, allocations included. Allocation
+%% used to ride the id it had already taken -- `Id band ?RECONCILE_MASK` -- to
+%% save an atomic increment. That is what `refuse_if_over/2` cannot rewind: it
+%% puts `?WRITES` at the mask so the *next* mutation checks, and an allocation
+%% reading the id instead went another 4095 unchecked. A workload that only
+%% allocates was refused once and then let through. One counter, one rewind.
 
 %% Only a guest allocating is refused.
 %%
@@ -540,8 +541,8 @@ allocated(H, Id) ->
 %% business refusing anything.
 refuse_if_over(_H, ok) -> ok;
 refuse_if_over({wasm_heap, _, _, Ctr}, {error, Why}) ->
-    %% Rewind the counter so the *next* write checks too, rather than the next
-    %% one four thousand writes from here. Without this a refusal stops one
+    %% Rewind the counter so the *next* mutation checks too, rather than the
+    %% next one four thousand from here. Without this a refusal stops one
     %% write and lets the rest of the interval through, and the store grows a
     %% reconcile interval at a time for as long as the guest keeps writing.
     %% `(?RECONCILE_MASK + 1) band ?RECONCILE_MASK` is zero, so the next
@@ -549,7 +550,8 @@ refuse_if_over({wasm_heap, _, _, Ctr}, {error, Why}) ->
     atomics:put(Ctr, ?WRITES, ?RECONCILE_MASK),
     wasm_error:exhaustion(heap_limit, #{reason => Why}).
 
-%% One write, and a reconcile every `?DEFAULT_RECONCILE_WRITES` of them.
+%% One mutation -- a write or an allocation -- and a reconcile every
+%% `?RECONCILE_MASK` + 1 of them.
 wrote({wasm_heap, _, _, Ctr} = H, N) ->
     case atomics:add_get(Ctr, ?WRITES, N) band ?RECONCILE_MASK of
         0 -> refuse_if_over(H, charge(H));

@@ -3004,3 +3004,23 @@ lookups the review found on that path are gone: `gc_major_ratio` and
 `gc_min_major_pages` are read where collections are decided and the answer is
 kept in an `atomics` slot, so the per-call check is two `atomics:get` and a
 comparison.
+
+## One reconcile cadence for writes and allocations
+
+A second review found that a refused allocation left its row and then went 4095
+allocations unchecked: the allocation path rode the id it had already taken,
+`Id band ?RECONCILE_MASK`, and a refusal rewinds `?WRITES`, which that path never
+read. Allocations now count on `?WRITES` like every other mutation, which costs
+the `atomics:add_get` the id trick existed to avoid.
+
+Reductions, against `401b91c`, three runs each, identical to three decimals:
+
+| operation | before | after | added |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 61.103 reductions | 62.128 | **+1.025, +1.7%** |
+| `array.new_default` | 57.129 | 58.132 | **+1.003, +1.8%** |
+
+One reduction, which is the one BIF call. The measurement that argued for the id
+trick priced *reading `gc_alloc_threshold` from the environment* at 37%, an ETS
+lookup rather than an atomic; it does not transfer, and the number above is what
+the alternative actually costs.

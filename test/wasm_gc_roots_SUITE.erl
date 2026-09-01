@@ -29,7 +29,11 @@ all() ->
      a_root_view_of_a_destroyed_instance_is_not_a_crash,
      a_guest_cannot_outgrow_the_node_budget,
      a_heap_gives_its_pages_back_when_collected,
-     a_shared_heap_is_charged_once].
+     a_shared_heap_is_charged_once,
+     a_linked_instance_over_its_ceiling_is_refused,
+     a_refused_write_leaves_no_row,
+     a_whole_array_fill_gives_its_pages_back,
+     concurrent_reconciles_never_lower_a_live_charge].
 
 %% The collector reads its roots through `wasm_instance:mut_of/1', which is
 %% handed a root view rather than an instance: four fields, no `#inst{}'. A
@@ -678,6 +682,15 @@ filler() ->
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $l)))
         (array.len (local.get $r)))
+      ;; One element, for asking whether a refused write left a row behind.
+      (func (export "poke") (param i32) (result i32)
+        (array.set $a (global.get $keep) (local.get 0) (i64.const 9))
+        (i32.const 0))
+      ;; Replaces the whole array, which deletes every element row.
+      (func (export "fillall") (result i32)
+        (array.fill $a (global.get $keep) (i32.const 0) (i64.const 0)
+                    (array.len (global.get $keep)))
+        (i32.const 0))
       (func (export "drop") (result i32)
         ;; Allocates, so a collection is due when the threshold is low, and
         ;; keeps nothing, so what the fill made is unreachable.
@@ -697,3 +710,93 @@ wait_until(Pred, Ms) ->
         true -> ok;
         false -> timer:sleep(20), wait_until(Pred, erlang:max(Ms - 20, 0))
     end.
+
+%%% -------------------------------------------- what a refusal must not do ---
+
+%% Linking to a store bigger than this instance may reach is a link failure.
+%%
+%% `wasm_heap:acquire/3` used to discard the keeper's answer, so a one-page
+%% instance linked to a 269-page store instantiated cleanly, never became a
+%% holder of it, and destroying the instance that *made* the store released the
+%% whole charge while the linked one was still running on it.
+a_linked_instance_over_its_ceiling_is_refused(_Config) ->
+    Mod = filler(),
+    {ok, A} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(A, ~"fill", [200000]),
+    Charged = wasm_engine:pages_in_use(),
+    ?assert(Charged > 8, {nothing_charged, Charged}),
+    ?assertMatch({error, #{class := link, kind := shared_heap_refused}},
+                 wasm:instantiate(Mod, #{}, #{link => A,
+                                              max_memory_pages => 1})),
+    %% And the refusal left nothing behind: still one holder, still charged.
+    ?assertEqual(Charged, wasm_engine:pages_in_use()),
+    ok = wasm:destroy(A).
+
+%% A write the charge refuses must not have happened.
+%%
+%% The insert used to come first and the charge second, so a refused write left
+%% its row and, because the charge was refused, the row was never recorded
+%% either: twenty writes grew the store by megabytes while the page count did
+%% not move. A refusal also has to make the *next* write check, or it stops one
+%% write and lets the rest of the reconcile interval through.
+a_refused_write_leaves_no_row(_Config) ->
+    Mod = filler(),
+    {ok, I} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 8}),
+    %% Fills until the ceiling refuses it; the refusal is a value.
+    _ = wasm:call(I, ~"fill", [200000]),
+    {wasm_heap, _, Elems, _} = wasm_instance:heap(I),
+    Rows = ets:info(Elems, size),
+    Pages = wasm_engine:pages_in_use(),
+    Answers = [wasm:call(I, ~"poke", [N * 907]) || N <- lists:seq(1, 20)],
+    ?assertEqual(20, length([x || {error, #{kind := heap_limit}} <- Answers]),
+                 {not_all_refused, Answers}),
+    ?assertEqual(Rows, ets:info(Elems, size)),
+    ?assertEqual(Pages, wasm_engine:pages_in_use()),
+    ok = wasm:destroy(I).
+
+%% A fill that replaces the whole array deletes every element row, and the
+%% charge has to follow it down. Nothing else on that path counts a write, so
+%% the store stayed charged for rows that no longer existed.
+a_whole_array_fill_gives_its_pages_back(_Config) ->
+    Mod = filler(),
+    Base = wasm_engine:pages_in_use(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(I, ~"fill", [200000]),
+    Charged = wasm_engine:pages_in_use(),
+    ?assert(Charged > Base + 100, {nothing_charged, Base, Charged}),
+    {ok, [0]} = wasm:call(I, ~"fillall", []),
+    After = wasm_engine:pages_in_use(),
+    ?assert(After < Base + 10, {still_charged_for_deleted_rows, Base, After}),
+    ok = wasm:destroy(I).
+
+%% Two processes on one shared store must never leave it charged for less than
+%% it holds.
+%%
+%% `charge/1` used to measure the tables and then call the keeper, so an older,
+%% smaller sample could land after a newer, larger one and release the pages of
+%% rows that still existed. The keeper measures inside the callback that applies
+%% the result now, which makes the interleaving unrepresentable rather than
+%% unlikely; this hammers it and checks the invariant, which is the most a test
+%% can do against a race that no longer has a window.
+concurrent_reconciles_never_lower_a_live_charge(_Config) ->
+    Mod = filler(),
+    {ok, A} = wasm:instantiate(Mod, #{}),
+    {ok, B} = wasm:instantiate(Mod, #{}, #{link => A}),
+    Self = self(),
+    Ps = [spawn_link(fun() ->
+                         [{ok, [_]} = wasm:call(Inst, ~"fill", [20000])
+                          || _ <- lists:seq(1, 8)],
+                         Self ! {done, self()}
+                     end) || Inst <- [A, B]],
+    [receive {done, P} -> ok after 60000 -> ct:fail({stuck, P}) end || P <- Ps],
+    {wasm_heap, Objs, Elems, _} = wasm_instance:heap(A),
+    Words = ets:info(Objs, memory) + ets:info(Elems, memory),
+    Held = (Words * erlang:system_info(wordsize) + 65535) div 65536,
+    Charged = wasm_engine:pages_in_use(),
+    ?assert(Charged >= Held,
+            {charged_for_less_than_it_holds, Charged, Held}),
+    ok = wasm:destroy(B),
+    ok = wasm:destroy(A).
+
+%% Writes elements so the cost lands in `wasm_heap_elements`, keeps the array in
+%% a global so it stays live, and offers a single write and a whole-array fill.

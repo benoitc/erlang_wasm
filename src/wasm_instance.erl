@@ -77,7 +77,15 @@ new(M, Imports, Opts) ->
     %% After the ceiling and under the build token, so the heap is bounded by
     %% the same `max_memory_pages` as everything else this instance reaches and
     %% moves to the instance with the rest on success.
-    {Heap, Owned} = heap_for(M, Opts, Build),
+    case heap_for(M, Opts, Build) of
+        {error, _} = HeapError ->
+            ok = wasm_keeper:discard(Build),
+            HeapError;
+        {ok, Heap, Owned} ->
+            new_1(M, Imports, Opts, Build, Heap, Owned)
+    end.
+
+new_1(M, Imports, Opts, Build, Heap, Owned) ->
     case wasm_error:capture(fun() -> {ok, build(M, Imports, Opts, Heap, Build)} end) of
         {ok, Inst} ->
             %% One step, so there is no window in which the resources belong to
@@ -116,16 +124,33 @@ new(M, Imports, Opts) ->
 heap_for(M, Opts, Token) ->
     case maps:get(link, Opts, undefined) of
         undefined ->
-            {case allocates(M) of
-                 false -> undefined;
-                 true -> wasm_heap:new(Token, self())
-             end, true};
+            {ok, case allocates(M) of
+                     false -> undefined;
+                     true -> wasm_heap:new(Token, self())
+                 end, true};
         #inst{heap = Shared} ->
             %% A holder, not an owner. The heap belongs to whoever made it and
             %% goes when the last of them lets go, which is the same rule an
-            %% imported memory follows.
-            ok = wasm_heap:acquire(Shared, Token, self()),
-            {Shared, false}
+            %% imported memory follows -- including that a ceiling can refuse
+            %% it. Linking to a store already larger than this instance is
+            %% allowed to reach is a link failure, not a silent admission.
+            case wasm_heap:acquire(Shared, Token, self()) of
+                ok ->
+                    {ok, Shared, false};
+                {error, Why} ->
+                    %% `link_error/3` throws, which is the idiom everywhere
+                    %% else in this module; here the answer has to be a value,
+                    %% because this runs before the capture that `build/5` is
+                    %% wrapped in.
+                    wasm_error:capture(
+                      fun() ->
+                          wasm_error:link_error(
+                            shared_heap_refused,
+                            <<"linked object store is past this instance's "
+                              "ceiling">>,
+                            #{reason => Why})
+                      end)
+            end
     end.
 
 %% Whether the module can allocate at all. One declaring no struct and no array

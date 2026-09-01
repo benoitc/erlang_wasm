@@ -94,6 +94,14 @@ silently name a different live object instead.
 -define(MAJOR_PAGES, 8).
 %% And as of the last collection of any kind, for `should_collect/1'.
 -define(COLLECTED_AT, 9).
+%% The page count at which the next collection is due, precomputed.
+%%
+%% `should_collect/1' is asked once per outermost call, and deriving this from
+%% `gc_major_ratio' and `gc_min_major_pages' there meant two
+%% `application:get_env/3' -- two ETS lookups -- on every call of every
+%% GC-using instance. The knobs are read where collections are *decided*
+%% instead, and the answer left here.
+-define(TRIGGER, 10).
 %% Set by a collector holding the store exclusively. Above any plausible reader
 %% count, and added rather than assigned so a reader that arrives mid-collection
 %% and steps back out cannot lose its own decrement.
@@ -180,14 +188,17 @@ new(Token, Owner) ->
     true = ets:insert(Objs, {?REGISTRY, #{}}),
     %% Zero pages: an empty heap costs two empty tables and is charged for what
     %% it grows into, measured, rather than for what it might.
-    case wasm_keeper:reserve(0, heap, Token, Owner) of
+    case wasm_keeper:reserve(0, {heap, Objs, Elems}, Token, Owner) of
         {ok, Res} -> true = ets:insert(Objs, {?RESOURCE, Res});
         %% No keeper is the no-application path the conformance suite and
         %% escript embedding use. Uncharged rather than refused, which is what
         %% every other resource does when the keeper is away.
         {error, _} -> ok
     end,
-    {wasm_heap, Objs, Elems, atomics:new(9, [{signed, false}])}.
+    Ctr = atomics:new(10, [{signed, false}]),
+    %% Without a floor here the trigger starts at zero and every call collects.
+    atomics:put(Ctr, ?TRIGGER, min_major_pages()),
+    {wasm_heap, Objs, Elems, Ctr}.
 
 %% The keeper resource, or `undefined` for a heap made without one.
 resource(Objs) ->
@@ -220,12 +231,17 @@ Linked instances share one store, so a heap has holders exactly as a shared
 memory does, and the keeper's rule that the strictest holder bounds it then
 applies without anything here knowing about ceilings.
 """.
--spec acquire(undefined | heap(), wasm_keeper:token(), pid() | none) -> ok.
+-spec acquire(undefined | heap(), wasm_keeper:token(), pid() | none) ->
+          ok | {error, gone | instance_limit | keeper_unavailable}.
 acquire(undefined, _Token, _Owner) -> ok;
 acquire({wasm_heap, Objs, _, _}, Token, Owner) ->
     case resource(Objs) of
         undefined -> ok;
-        Res -> _ = wasm_keeper:acquire(Res, Token, Owner), ok
+        %% Answered, not swallowed. Discarding this let a one-page instance
+        %% link to a 269-page store: it instantiated cleanly, never became a
+        %% holder, and destroying the instance that made the store released the
+        %% whole charge while the linked one was still using it.
+        Res -> wasm_keeper:acquire(Res, Token, Owner)
     end.
 
 -doc "Every instance registered with this heap.".
@@ -363,9 +379,13 @@ array_set(undefined, Ref, _Idx, _Value) -> foreign(Ref);
 array_set({wasm_heap, _, Elems, Ctr} = H, {objref, Id} = Ref, Idx, Value) ->
     case array_len(H, Ref) of
         Len when Idx < Len ->
+            %% Before the insert, not after. A write charged afterwards has
+            %% already happened when the charge refuses it, so the row stays and
+            %% is never recorded: twenty writes grew the store by megabytes
+            %% while the page count did not move.
+            ok = wrote(H, 1),
             true = ets:insert(Elems, {{Id, Idx}, Value}),
-            ok = remember(Elems, Ctr, Id, Value),
-            wrote(H, 1);
+            remember(Elems, Ctr, Id, Value);
         Len ->
             wasm_error:trap(out_of_bounds_array_access,
                             #{index => Idx, length => Len})
@@ -380,9 +400,9 @@ table operations to answer a question already answered.
 """.
 -spec array_set_unchecked(heap(), term(), non_neg_integer(), term()) -> ok.
 array_set_unchecked({wasm_heap, _, Elems, Ctr} = H, {objref, Id}, Idx, Value) ->
+    ok = wrote(H, 1),
     true = ets:insert(Elems, {{Id, Idx}, Value}),
-    ok = remember(Elems, Ctr, Id, Value),
-    wrote(H, 1).
+    remember(Elems, Ctr, Id, Value).
 
 -doc """
 Fill a range with one value.
@@ -401,7 +421,13 @@ array_fill({wasm_heap, Objs, Elems, Ctr} = H, {objref, Id} = Ref, 0, Len, Value)
         Len ->
             true = ets:update_element(Objs, Id, {5, Value}),
             ok = delete_elements(Elems, Id),
-            remember(Elems, Ctr, Id, Value);
+            ok = remember(Elems, Ctr, Id, Value),
+            %% Every element row of this array has just gone. Nothing else on
+            %% this path counts a write, so without reconciling here the store
+            %% stays charged for rows that no longer exist: a probe sat at 265
+            %% pages until something else happened to reconcile it.
+            _ = charge(H),
+            ok;
         _ ->
             fill_each(H, Ref, 0, Len, Value)
     end;
@@ -471,9 +497,7 @@ should_collect({wasm_heap, _, _, Ctr} = H) ->
 %% Doubling, like everything else here, with the same floor: a store under a
 %% megabyte is left to the allocation counter.
 grew_since_collect(Ctr) ->
-    Pages = atomics:get(Ctr, ?CHARGED),
-    Pages >= max(atomics:get(Ctr, ?COLLECTED_AT) * major_ratio(),
-                 min_major_pages()).
+    atomics:get(Ctr, ?CHARGED) >= atomics:get(Ctr, ?TRIGGER).
 
 threshold() ->
     application:get_env(wasm, gc_alloc_threshold, ?DEFAULT_ALLOC_THRESHOLD).
@@ -503,14 +527,32 @@ threshold() ->
 %% measurable where a remainder is not.
 allocated(H, Id) ->
     case Id band ?RECONCILE_MASK of
-        0 -> charge(H);
+        0 -> refuse_if_over(H, charge(H));
         _ -> ok
     end.
+
+%% Only a guest allocating is refused.
+%%
+%% A collection charges too, and it must never trap: it runs from the `after` of
+%% an invocation, outside the `capture/1` that turns faults into values, and
+%% raising there took the whole `{wasm_error, ...}` term out of the runtime
+%% uncaught. It is also the thing that makes the charge *fall*, so it has no
+%% business refusing anything.
+refuse_if_over(_H, ok) -> ok;
+refuse_if_over({wasm_heap, _, _, Ctr}, {error, Why}) ->
+    %% Rewind the counter so the *next* write checks too, rather than the next
+    %% one four thousand writes from here. Without this a refusal stops one
+    %% write and lets the rest of the interval through, and the store grows a
+    %% reconcile interval at a time for as long as the guest keeps writing.
+    %% `(?RECONCILE_MASK + 1) band ?RECONCILE_MASK` is zero, so the next
+    %% increment lands on a check.
+    atomics:put(Ctr, ?WRITES, ?RECONCILE_MASK),
+    wasm_error:exhaustion(heap_limit, #{reason => Why}).
 
 %% One write, and a reconcile every `?DEFAULT_RECONCILE_WRITES` of them.
 wrote({wasm_heap, _, _, Ctr} = H, N) ->
     case atomics:add_get(Ctr, ?WRITES, N) band ?RECONCILE_MASK of
-        0 -> charge(H);
+        0 -> refuse_if_over(H, charge(H));
         _ -> ok
     end.
 
@@ -522,38 +564,39 @@ the tables report is the truth and the keeper is told to match it. That is the
 same shape `wasm_keeper:init/1` uses to repair the page counter after a
 registry loss, and for the same reason.
 
-Traps `exhaustion` when the node budget or a holder's ceiling refuses the new
-size. There is no -1 to answer with here: `memory.grow` has one because the
-specification gives it one, and `array.set` does not.
+Answers `{error, Why}` when the node budget or a holder's ceiling refuses the
+new size, and **raises nothing**. Whether a refusal is a trap depends on who is
+asking: a guest allocating gets one, and a collection must not, because it runs
+from the `after` of an invocation where an exception escapes
+`wasm_error:capture/1` and leaves the runtime as a raw `{wasm_error, _}` rather
+than a value. `refuse_if_over/1` is the mutation path's half of that.
 """.
--spec charge(undefined | heap()) -> ok.
+-spec charge(undefined | heap()) -> ok | {error, term()}.
 charge(undefined) -> ok;
-charge({wasm_heap, Objs, Elems, Ctr}) ->
+charge({wasm_heap, Objs, _Elems, Ctr}) ->
     case resource(Objs) of
         undefined ->
             ok;
         Res ->
-            Words = words(Objs) + words(Elems),
-            Pages = (Words * erlang:system_info(wordsize) + 65535) div 65536,
-            atomics:put(Ctr, ?CHARGED, Pages),
-            case wasm_keeper:resize(Res, Pages, infinity) of
+            %% The keeper measures. It knows which tables this resource is from
+            %% `reserve/4`, and doing it inside its callback is what stops an
+            %% older sample overwriting a newer charge.
+            R = wasm_keeper:reconcile(Res, infinity),
+            %% What the keeper recorded, read straight from the registry row
+            %% rather than remeasured, so the trigger and the charge can never
+            %% disagree about the same store.
+            atomics:put(Ctr, ?CHARGED, wasm_keeper:charge_of(Res)),
+            case R of
                 ok -> ok;
                 %% The keeper being away leaves the charge where it was, which
                 %% is the same answer every other resource gives.
                 {error, keeper_unavailable} -> ok;
                 {error, gone} -> ok;
-                {error, Why} ->
-                    wasm_error:exhaustion(heap_limit,
-                                          #{pages => Pages, reason => Why})
+                {error, _Why} = E ->
+                    E
             end
     end.
 
-words(undefined) -> 0;
-words(T) ->
-    case ets:info(T, memory) of
-        undefined -> 0;
-        N -> N
-    end.
 
 %%% --------------------------------------------------------------- leases ---
 %%
@@ -932,6 +975,7 @@ collect({wasm_heap, _, Elems, Ctr} = H, Roots) ->
     %% by design, so its result is not a baseline to double from.
     Charged = atomics:get(Ctr, ?CHARGED),
     atomics:put(Ctr, ?COLLECTED_AT, Charged),
+    atomics:put(Ctr, ?TRIGGER, max(Charged * major_ratio(), min_major_pages())),
     Major andalso atomics:put(Ctr, ?MAJOR_PAGES, Charged),
     ok.
 

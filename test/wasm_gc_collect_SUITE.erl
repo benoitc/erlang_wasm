@@ -28,7 +28,8 @@ all() ->
      release_all_drops_every_pin,
      a_global_read_by_the_embedder_is_pinned,
      a_store_of_few_large_objects_is_collected,
-     a_major_is_due_on_bytes_not_only_rows].
+     a_major_is_due_on_bytes_not_only_rows,
+     a_charge_that_is_refused_answers_a_value].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -399,3 +400,46 @@ big_array_module() ->
         (local.get $i)))
     """}),
     M.
+
+%% `wasm_heap:charge/1` answers a value. It must not raise.
+%%
+%% It used to call `wasm_error:exhaustion/2`, and `collect/2` called it as
+%% `_ = charge(H)`, which discards a return *value* and not an exception. A
+%% collection runs from `wasm:collect_committed/1` in the `after` of an
+%% invocation, outside the `capture/1` that turns faults into values, so a
+%% refusal there took the whole `{wasm_error, ...}` term out of the runtime
+%% uncaught.
+%%
+%% Asserted on `charge/1` itself rather than through a guest, because that is
+%% the contract that was broken and it can be stated exactly. Reaching it from
+%% the outside needs a store past a ceiling *and* a collection that grows the
+%% recorded charge, and the route the original probe used -- linking an instance
+%% over its ceiling -- no longer exists now that `acquire/3` refuses one.
+%%
+%% The refusal needs the measurement to come out *above* what is recorded, so
+%% the rows are added below the reconcile interval where nothing charges them.
+a_charge_that_is_refused_answers_a_value(_Config) ->
+    {ok, Inst} = wasm:instantiate(big_array_module(), #{}),
+    {ok, [_]} = wasm:call(Inst, ~"replace", [50000]),
+    {wasm_heap, Objs, Elems, _} = Heap = wasm_instance:heap(Inst),
+    %% The heap's own resource and the token actually holding it.
+    %% `wasm_instance:identity/1` is the *module's* identity, not the instance
+    %% id the keeper keys on, and using it tightened a ceiling belonging to
+    %% nobody: the charge was never refused and the case passed on the defect.
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2, undefined),
+    ?assertNotEqual(undefined, Res),
+    [Token | _] = wasm_keeper:holders_of(Res),
+    ok = wasm_keeper:set_limit(Token, 1),
+    Id = hd([I || {{I, _}, _} <- ets:tab2list(Elems), is_integer(I)]),
+    %% Enough to cross a page boundary, or the measurement rounds to what is
+    %% already recorded and the resize takes the shrink path, which never
+    %% refuses: at five hundred rows both the defect and the fix answered `ok`
+    %% and the case failed for the wrong reason on each.
+    _ = [ets:insert(Elems, {{Id, 100000 + N}, N}) || N <- lists:seq(1, 40000)],
+    R = try wasm_heap:charge(Heap) of
+            V -> V
+        catch
+            Class:Reason -> {raised, Class, Reason}
+        end,
+    ?assertMatch({error, _}, R, {charge_raised_instead_of_answering, R}),
+    ok = wasm:destroy(Inst).

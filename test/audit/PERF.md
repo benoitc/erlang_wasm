@@ -2981,6 +2981,26 @@ which is the whole point, and what it buys is a bound: the same workload's store
 now oscillates between one and two arrays instead of growing without end.
 
 The trade is explicit. A workload that allocates heavily and keeps nothing pays
-about fourteen per cent more work to stop leaking. One with a stable live set is
-unaffected, because neither rule fires: both are doublings, and a store that
-does not grow does not double.
+about fourteen per cent more work to stop leaking.
+
+**A stable live set is not free, and the claim that it was is withdrawn.** Both
+triggers are read once per outermost call, and the benchmark above does twenty
+thousand operations *inside* one call, which amortises a per-call check to
+nothing and cannot say anything about it. A review pointed that out and it was
+right.
+
+Measured properly -- a hundred thousand short calls on a GC instance whose live
+set is one struct:
+
+| tree | per short call |
+| --- | ---: |
+| before the charge | 171.461 reductions |
+| charge only | 173.465 |
+| charge, byte triggers and the review fixes | 176.310 |
+
+So **+2.8%** per call on a stable live set, not nothing. What it buys is that the
+store cannot grow without bound, which it previously could. The two environment
+lookups the review found on that path are gone: `gc_major_ratio` and
+`gc_min_major_pages` are read where collections are decided and the answer is
+kept in an `atomics` slot, so the per-call check is two `atomics:get` and a
+comparison.

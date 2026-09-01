@@ -64,7 +64,7 @@ now rather than the size the handle was made at.
 -export([reserve/4, acquire/3, release/2, transfer/3, discard/1]).
 -export([set_limit/2, total_of/1]).
 -export([grow_begin/3, grow_commit/4, grow_abort/2]).
--export([resize/3]).
+-export([resize/3, reconcile/2]).
 -export([charge_of/1, holders_of/1, resources/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -93,7 +93,11 @@ thing, not two that have to be kept in step.
 -type meta() :: {memory, undefined | reference(),
                  undefined | atomics:atomics_ref()}
               | cell
-              | heap.
+              %% A garbage-collected object store, and the two ETS tables it
+              %% is. They are recorded here rather than passed to `reconcile/2`
+              %% so the keeper measures the tables it was told about at
+              %% `reserve/4` and never a table identifier a caller handed it.
+              | {heap, ets:tid(), ets:tid()}.
 
 -export_type([token/0, resource/0]).
 
@@ -213,6 +217,25 @@ discard(Token) ->
         ok -> ok;
         {error, keeper_unavailable} -> ok
     end.
+
+-doc """
+Charge a heap for what its tables currently hold.
+
+The measurement happens *here*, inside the callback that applies it, because a
+caller that measures and then calls has already lost: two processes sharing a
+linked store can interleave so that an older, smaller sample lands after a newer,
+larger one and releases the pages of rows that still exist.
+
+Answers `{error, limit}` or `{error, instance_limit}` when what the store holds
+is past a ceiling. The charge is still recorded: the rows exist whether or not a
+ceiling likes them, and refusing to write down memory that has already been
+spent is how growth became invisible. Recording it is a fact; the error is a
+decision about whether the guest may continue.
+""".
+-spec reconcile(resource(), non_neg_integer() | infinity) ->
+          ok | {error, limit | instance_limit | gone | keeper_unavailable}.
+reconcile(Resource, Ceiling) ->
+    call({reconcile, Resource, Ceiling}).
 
 -doc """
 Set a resource's charge to `Pages`, up or down, in one call.
@@ -571,6 +594,17 @@ handle_call({transfer, From, To, Owner}, {Pid, _}, #{held := Held} = State) ->
                      S1, Moved),
     {reply, ok, S2};
 
+handle_call({reconcile, Res, Ceiling}, _From, State) ->
+    case ets:lookup(?TAB, Res) of
+        [{Res, {heap, Objs, Elems}, _Pages, _Holders}] ->
+            Words = words_of(Objs) + words_of(Elems),
+            Pages = (Words * erlang:system_info(wordsize) + 65535) div 65536,
+            {reply, R, S1} = do_resize(Res, Pages, Ceiling, State),
+            {reply, R, S1};
+        _ ->
+            {reply, {error, gone}, State}
+    end;
+
 handle_call({resize, Res, Want, Ceiling}, _From, State) ->
     {reply, R, S1} = do_resize(Res, Want, Ceiling, State),
     {reply, R, S1};
@@ -780,7 +814,15 @@ forget_meta(Res, cell) -> wasm_engine:cell_forget(Res);
 %% Nothing in the shared store belongs to a heap: it owns its own two ETS
 %% tables and `wasm_heap:drop_tables/2` deletes them. The registry row and the
 %% charge are all there is to reclaim here.
-forget_meta(_Res, heap) -> ok.
+forget_meta(_Res, {heap, _, _}) -> ok.
+
+%% A table that has already gone answers `undefined`, which is a heap being torn
+%% down while a reconcile was in flight.
+words_of(Tab) ->
+    case ets:info(Tab, memory) of
+        undefined -> 0;
+        N -> N
+    end.
 
 %%% --------------------------------------------------------------- growth ---
 

@@ -40,8 +40,13 @@ all() ->
      pins_are_charged_and_released,
      a_refused_charge_still_records_what_is_held,
      a_whole_array_fill_gives_its_pages_back,
-     concurrent_reconciles_never_lower_a_live_charge,
-     many_processes_on_one_store_stay_charged].
+     concurrent_reconciles_never_lower_a_live_charge].
+
+%% Not in `all/0`, because it cannot fail against the defect it describes and a
+%% test that cannot fail is worse than none. `wasm_bench_SUITE` keeps its
+%% measurements out of a plain run the same way. `rebar3 ct --group stress`.
+groups() ->
+    [{stress, [], [many_processes_on_one_store_stay_charged]}].
 
 %% The collector reads its roots through `wasm_instance:mut_of/1', which is
 %% handed a root view rather than an instance: four fields, no `#inst{}'. A
@@ -104,7 +109,18 @@ end_per_testcase(_Case, _Config) ->
     application:unset_env(wasm, gc_alloc_threshold),
     application:unset_env(wasm, gc_major_ratio),
     application:unset_env(wasm, gc_min_major_size),
+    release_the_keeper(),
     ok.
+
+%% Unconditional, because a case that throws while the keeper is parked inside
+%% the hook leaves it parked, and the next case waits thirty seconds for a
+%% registry call that will not come.
+release_the_keeper() ->
+    application:unset_env(wasm, keeper_hook),
+    case whereis(wasm_keeper) of
+        undefined -> ok;
+        Pid -> Pid ! go, ok
+    end.
 
 %%% ------------------------------------------------------------------ rule ---
 
@@ -1021,6 +1037,25 @@ concurrent_reconciles_never_lower_a_live_charge(_Config) ->
                                          ok
                                  end
                              end),
+    %% Whatever happens below, the hook comes off and the keeper is let go.
+    %% Leaving it installed blocks the keeper for thirty seconds and takes every
+    %% later case in the suite with it, so a failed assertion here used to
+    %% produce a page of unrelated failures. `end_per_testcase/2` repeats both,
+    %% for the assertion that throws before reaching this.
+    Held = try
+               charge_while_the_store_grows(I, Elems),
+               Words = ets:info(Objs, memory) + ets:info(Elems, memory),
+               (Words * erlang:system_info(wordsize) + 65535) div 65536
+           after
+               release_the_keeper()
+           end,
+    ?assert(Held > 1, {nothing_to_measure, Held}),
+    ?assertEqual(Held, wasm_keeper:charge_of(Res),
+                 charged_for_the_size_it_had_before_the_growth),
+    ok = wasm:destroy(I).
+
+charge_while_the_store_grows(I, Elems) ->
+    Self = self(),
     _ = spawn_link(fun() ->
                        _ = wasm_heap:charge(wasm_instance:heap(I)),
                        Self ! reconciled
@@ -1030,14 +1065,7 @@ concurrent_reconciles_never_lower_a_live_charge(_Config) ->
     %% behind the reconcile it is racing.
     [true = ets:insert(Elems, {{9999, N}, N}) || N <- lists:seq(1, 40000)],
     _ = erlang:send(whereis(wasm_keeper), go),
-    receive reconciled -> ok after 30000 -> ct:fail(reconcile_stuck) end,
-    ok = application:unset_env(wasm, keeper_hook),
-    Words = ets:info(Objs, memory) + ets:info(Elems, memory),
-    Held = (Words * erlang:system_info(wordsize) + 65535) div 65536,
-    ?assert(Held > 1, {nothing_to_measure, Held}),
-    ?assertEqual(Held, wasm_keeper:charge_of(Res),
-                 charged_for_the_size_it_had_before_the_growth),
-    ok = wasm:destroy(I).
+    receive reconciled -> ok after 30000 -> ct:fail(reconcile_stuck) end.
 
 %% The same store under load, which is a stress check and not the regression
 %% above: it cannot fail on that defect, only on a new one.

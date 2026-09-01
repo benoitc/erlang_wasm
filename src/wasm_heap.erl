@@ -191,13 +191,22 @@ reconciliation that stop exactly that.
 """.
 -spec new(wasm_keeper:token(), pid() | none) -> heap().
 new(Token, Owner) ->
-    Objs = ets:new(wasm_heap_objects, [set, public, {read_concurrency, true}]),
+    %% The tables belong to whoever instantiates, and holders are the keeper's
+    %% business, so killing the creating process destroyed the store under a
+    %% linked instance still running on it. The keeper inherits instead, and
+    %% deletes when the last holder goes.
+    Heir = case whereis(wasm_keeper) of
+               undefined -> [];
+               Keeper -> [{heir, Keeper, wasm_heap}]
+           end,
+    Objs = ets:new(wasm_heap_objects,
+                   [set, public, {read_concurrency, true} | Heir]),
     %% The second table holds array elements *and* the write barrier's
     %% remembered set, so every heap needs it. A struct-only module briefly got
     %% away without one, which saved about a microsecond of instantiation; the
     %% remembered set has to live somewhere and a third table would cost more.
     Elems = ets:new(wasm_heap_elements,
-                    [ordered_set, public, {read_concurrency, true}]),
+                    [ordered_set, public, {read_concurrency, true} | Heir]),
     true = ets:insert(Objs, {?REGISTRY, #{}}),
     %% Zero pages: an empty heap costs two empty tables and is charged for what
     %% it grows into, measured, rather than for what it might.
@@ -281,21 +290,36 @@ Idempotent: `wasm:destroy/1` is documented as safe to call twice.
 -spec delete(undefined | heap(), term()) -> ok.
 delete(undefined, _Key) -> ok;
 delete({wasm_heap, Objs, Elems, _}, Key) ->
-    %% Before the tables go, so the charge is given back while the row that
-    %% names it is still readable. A failed instantiation passes `undefined`
-    %% and is covered by `wasm_keeper:discard/1` on its build token instead.
-    Key =:= undefined orelse release_hold(Objs, {instance, Key}),
     Remaining = maps:remove(Key, registry(Objs)),
-    case map_size(Remaining) of
-        0 -> drop_tables(Objs, Elems);
-        _ -> true = ets:insert(Objs, {?REGISTRY, Remaining}), ok
+    case resource(Objs) of
+        undefined ->
+            %% No keeper, so the registry map is the whole lifetime there is.
+            case map_size(Remaining) of
+                0 -> drop_tables(Objs, Elems);
+                _ -> keep_registry(Objs, Remaining)
+            end;
+        Res ->
+            %% The keeper decides, and this does not. A registered instance is
+            %% one kind of holder: a build between `acquire/3` and `register/3`
+            %% is another, and so is a linked instance in another process.
+            %% Dropping the tables on the registry map emptying deleted a store
+            %% that a build still held, charged, and was about to use.
+            %%
+            %% The registry row goes first, because the release may be the last
+            %% holder and the keeper deletes the tables inside it.
+            keep_registry(Objs, Remaining),
+            release_hold(Res, Key)
     end.
 
-release_hold(Objs, Token) ->
-    case resource(Objs) of
-        undefined -> ok;
-        Res -> ok = wasm_keeper:release(Res, Token)
+keep_registry(Objs, Remaining) ->
+    try ets:insert(Objs, {?REGISTRY, Remaining}) of _ -> ok
+    catch error:badarg -> ok
     end.
+
+%% A failed instantiation passes `undefined`: it registered nothing, and
+%% `wasm_keeper:discard/1` on its build token has already released everything.
+release_hold(_Res, undefined) -> ok;
+release_hold(Res, Key) -> wasm_keeper:release(Res, {instance, Key}).
 
 drop_tables(Objs, Elems) ->
     try ets:delete(Objs) catch error:badarg -> true end,

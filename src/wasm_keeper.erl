@@ -702,6 +702,13 @@ handle_info({'DOWN', MonRef, process, Pid, _Reason},
            end, State, Aborted),
     {noreply, forget_holder(Pid, S1)};
 
+%% A heap whose creating process died. Named as heir by `wasm_heap:new/2` so
+%% the store outlives the process that made it, which a linked instance in
+%% another process may still be running on. It is deleted at the last holder,
+%% like any other, so nothing more is needed here than owning it.
+handle_info({'ETS-TRANSFER', _Tab, _From, wasm_heap}, State) ->
+    {noreply, State};
+
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -834,10 +841,21 @@ reclaim(Res, Meta, Pages) ->
 forget_meta(_Res, {memory, undefined, _}) -> ok;
 forget_meta(_Res, {memory, CRef, _}) -> wasm_engine:cell_forget(CRef);
 forget_meta(Res, cell) -> wasm_engine:cell_forget(Res);
-%% Nothing in the shared store belongs to a heap: it owns its own two ETS
-%% tables and `wasm_heap:drop_tables/2` deletes them. The registry row and the
-%% charge are all there is to reclaim here.
-forget_meta(_Res, {heap, _, _}) -> ok.
+%% A heap's two tables, which nothing else is left to delete.
+%%
+%% They used to be dropped by `wasm_heap:delete/2` when the *instance registry
+%% map* emptied, which is a different question from whether anything still holds
+%% the resource: a build holding it between `acquire/3` and `register/3` was
+%% left with both tables gone and its pages still charged. It is also the only
+%% place that covers a last holder whose process simply died, where no
+%% `delete/2` is ever called.
+%%
+%% Deleting a table from a process that does not own it is allowed while it is
+%% `public`, which both of these are.
+forget_meta(_Res, {heap, Objs, Elems}) ->
+    try ets:delete(Objs) catch error:badarg -> true end,
+    try ets:delete(Elems) catch error:badarg -> true end,
+    ok.
 
 %% A table that has already gone answers `undefined`, which is a heap being torn
 %% down while a reconcile was in flight.

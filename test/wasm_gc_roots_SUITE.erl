@@ -22,6 +22,8 @@ all() ->
      another_instances_global_is_a_root,
      an_unlinked_reference_traps,
      a_shared_store_outlives_one_instance,
+     a_heap_outlives_a_holder_that_is_not_an_instance,
+     a_linked_instance_survives_its_creators_death,
      destroy_releases_the_state_and_repeats_safely,
      an_array_of_numbers_is_never_walked,
      a_reentrant_call_keeps_its_writes,
@@ -764,6 +766,57 @@ wait_until(Pred, Ms) ->
         true -> ok;
         false -> timer:sleep(20), wait_until(Pred, erlang:max(Ms - 20, 0))
     end.
+
+%%% ---------------------------------------------- who a store belongs to ---
+
+%% The registry map is not the holder set.
+%%
+%% `ets:new` runs in the instantiating process and `delete/2` dropped the tables
+%% when the *instance registry map* emptied. A build between `acquire/3` and
+%% `register/3` is a holder and is in no registry, so destroying the only
+%% registered instance deleted the store out from under it: both tables gone,
+%% the build still a holder, 27 pages still charged. The keeper decides now.
+a_heap_outlives_a_holder_that_is_not_an_instance(_Config) ->
+    Mod = filler(),
+    {ok, A} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(A, ~"fill", [20000]),
+    {wasm_heap, Objs, Elems, _} = H = wasm_instance:heap(A),
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    %% A holder that is not a registered instance, exactly as a build is.
+    Build = {build, make_ref()},
+    ok = wasm_heap:acquire(H, Build, self()),
+    ok = wasm:destroy(A),
+    ?assertNotEqual(undefined, ets:info(Objs, size),
+                    the_store_was_deleted_under_a_live_holder),
+    ?assertEqual([Build], wasm_keeper:holders_of(Res)),
+    ?assert(wasm_keeper:charge_of(Res) > 1),
+    %% And the last holder going is what takes it.
+    ok = wasm_keeper:release(Res, Build),
+    ?assertEqual(undefined, ets:info(Objs, size)),
+    ?assertEqual(undefined, ets:info(Elems, size)),
+    ?assertEqual(0, wasm_keeper:charge_of(Res)).
+
+%% And the tables outlive the process that made them.
+%%
+%% They belonged to the instantiating process, so killing it destroyed the store
+%% while a linked instance in another process was still running on it. The
+%% keeper is their heir.
+a_linked_instance_survives_its_creators_death(_Config) ->
+    Mod = filler(),
+    Self = self(),
+    Maker = spawn(fun() ->
+                      {ok, A} = wasm:instantiate(Mod, #{}),
+                      {ok, [_]} = wasm:call(A, ~"fill", [2000]),
+                      Self ! {made, A},
+                      receive stop -> ok end
+                  end),
+    A = receive {made, X} -> X after 30000 -> ct:fail(no_instance) end,
+    {ok, B} = wasm:instantiate(Mod, #{}, #{link => A}),
+    Maker ! stop,
+    wait_until(fun() -> not is_process_alive(Maker) end, 5000),
+    ?assertMatch({ok, [_]}, wasm:call(B, ~"fill", [100]),
+                 the_store_died_with_the_process_that_made_it),
+    ok = wasm:destroy(B).
 
 %%% -------------------------------------------- what a refusal must not do ---
 

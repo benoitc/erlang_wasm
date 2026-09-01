@@ -3088,3 +3088,11 @@ call returning a freshly allocated reference that the embedder never releases,
 so every pin is a new row; a call returning numbers reaches
 `pin(_H, _Other) -> ok` and pays nothing, and one that reuses a reference
 increments a counter on a row that already exists.
+
+And a module that uses no GC types still pays nothing at all, which is the
+number the whole branch has to keep flat:
+
+| operation | `16c109e` | this branch |
+| --- | ---: | ---: |
+| a loop iteration with a memory store | 44.035 | 44.035 |
+| a short call | 84.811 -- 84.826 | 84.794 |

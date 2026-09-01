@@ -3009,9 +3009,9 @@ comparison.
 
 A second review found that a refused allocation left its row and then went 4095
 allocations unchecked: the allocation path rode the id it had already taken,
-`Id band ?RECONCILE_MASK`, and a refusal rewinds `?WRITES`, which that path never
-read. Allocations now count on `?WRITES` like every other mutation, which costs
-the `atomics:add_get` the id trick existed to avoid.
+`Id band ?RECONCILE_MASK`, and a refusal rewinds `?WRITES`, which that path
+never read. Allocations now count on `?WRITES` like every other mutation, which
+costs the `atomics:add_get` the id trick existed to avoid.
 
 Reductions, against `401b91c`, three runs each, identical to three decimals:
 

@@ -40,14 +40,22 @@ call inside a worker.
 | `max_depth` | WebAssembly call depth |
 | `max_heap_words` | Erlang terms on the owning process's own heap, applied by it. Not linear memory, not the object store |
 | `max_host_calls` | calls out through an import, per invocation |
-| `max_memory_pages` | every memory one instance can reach, imports included |
-| node page budget | linear memory across every instance |
+| `max_memory_pages` | every memory one instance can reach, imports included, and the object store it shares |
+| node page budget | linear memory and object stores across every instance |
 | `max_rec_groups` | distinct recursive type groups interned node-wide |
 
 `max_memory_pages` counts an imported memory, because a module that imports one
 can address every page of it, and it counts a memory once however many import
 slots name it. A memory two instances share grows only as far as the stricter
 of their ceilings allows.
+
+It counts the garbage-collected object store the same way, because a struct or
+an array is an ETS row and ETS is not process heap: `max_heap_words` cannot see
+it and neither can the BEAM. A store is *measured* rather than requested, so its
+charge follows what it holds, and linked instances share one store and bound it
+by the stricter of their ceilings. `pages_in_use` can therefore read a little
+above the node budget: pages already spent are counted whether or not the budget
+likes them, and everything further is refused while it is over.
 
 `max_rec_groups` bounds a table whose rows can never be removed: a type id is
 compared by `ref.eq` and by import matching, so dropping one would make two

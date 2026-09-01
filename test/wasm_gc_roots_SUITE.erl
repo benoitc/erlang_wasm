@@ -918,8 +918,8 @@ a_refused_write_leaves_no_row(_Config) ->
 
 %% A refusal is not a reason to forget the pages.
 %%
-%% `do_resize/4` returned `{error, instance_limit}` without touching the registry
-%% row, the holder totals or the node counter. For a request that is right --
+%% `do_resize/4` returned `{error, instance_limit}` without touching the
+%% registry row, the holder totals or the node counter. For a request that is right --
 %% nobody took the memory. For a *reconcile* it is not: the store is measured,
 %% so by the time the keeper hears the number the rows already exist. A store
 %% holding twelve pages was charged for six, once per heap on the node.

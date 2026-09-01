@@ -3024,3 +3024,34 @@ One reduction, which is the one BIF call. The measurement that argued for the id
 trick priced *reading `gc_alloc_threshold` from the environment* at 37%, an ETS
 lookup rather than an atomic; it does not transfer, and the number above is what
 the alternative actually costs.
+
+## The reconcile counter counts words, not operations
+
+A third review found that the interval bounds *bytes* only while every row is
+the same size, and a struct row is as wide as its type declares. Nothing caps a
+struct's field count, so one `struct.new_default` of a hundred thousand fields
+was one mutation on the cadence and an 800 KB row, admitted whole at a one-page
+ceiling. The counter now takes each row's word cost and `?RECONCILE_MASK` goes
+from 4,095 operations to 65,535 words, which is half a megabyte of overshoot
+against the 370 KB the old constant was chosen for.
+
+Reductions against `16c109e`, two runs each, stable to three decimals:
+
+| operation | before | after | change |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 62.094 -- 62.127 | 62.096 | flat |
+| `array.new_default` | 58.094 | 58.089 | flat |
+| `array.set` | 48.042 | 48.040 | flat |
+| a call returning a reference | 150.539 | 155.018 | **+4.48, +2.9%** |
+
+Flat where the work is, because a five-word struct row now reconciles every
+13,107 allocations where operations reconciled every 4,096, and an element row
+at twelve words every 5,461 where it was 4,096. Fewer reconciles paid for the
+`tuple_size` and the changed comparison.
+
+The last row is the one that moved, and it is reconcile *timing* rather than
+work added to the call: nothing on that path gained an instruction. Charging the
+row size at the old 4,095 constant cost 161.6 on the same measurement and
+charging one word cost 150.5, so the figure tracks how often the store is
+measured and not what a call does. It is 2.9% on a call that returns a fresh
+reference and holds it, which is the shape that keeps the store growing.

@@ -108,13 +108,21 @@ silently name a different live object instead.
 -define(EXCL, (1 bsl 32)).
 
 -define(DEFAULT_ALLOC_THRESHOLD, 100000).
-%% Element writes and allocations between reconciliations of the heap's charge.
+%% Words of store written between reconciliations of the heap's charge.
 %%
 %% The number is a trade between how far a hostile guest may overshoot its
 %% ceiling and what the write path pays. Reading both tables' sizes costs 1.78
-%% microseconds for the pair, so once per 4096 is nothing and once per write
-%% would be most of the cost of a write. At the 91 bytes an element measures,
-%% the overshoot this admits is about 370 KB.
+%% microseconds for the pair, so once per 64K words is nothing and once per
+%% write would be most of the cost of a write. The overshoot this admits is
+%% half a megabyte.
+%%
+%% **Words, not operations.** It counted operations, which bounds bytes only
+%% while every row is the same size. A struct row is as wide as its type
+%% declares and nothing declares a maximum, so one `struct.new_default' was one
+%% operation and 800 KB. Counting what each row costs is what makes the
+%% interval a bound on memory rather than on instructions, and it is also
+%% *cheaper*: a five-word struct row now reconciles every 13,107 allocations
+%% where operations reconciled every 4,096.
 %%
 %% A constant, and a power of two, unlike `gc_alloc_threshold' beside it. That
 %% one is read from the application environment because `should_collect/1' asks
@@ -122,7 +130,10 @@ silently name a different live object instead.
 %% `application:get_env/3' is an ETS lookup. Reading it there cost `struct.new'
 %% 37% and a partial `array.fill' 42%; caching it in an `atomics' slot still
 %% cost 17%. A `band' against a literal costs nothing.
--define(RECONCILE_MASK, 16#FFF).
+-define(RECONCILE_MASK, 16#FFFF).
+%% What one row of the elements table costs, near enough to bound bytes with.
+%% Measured at 91 bytes an element, which is between eleven and twelve words.
+-define(ELEM_WORDS, 12).
 -define(DEFAULT_MAJOR_RATIO, 2).
 %% No major collection below this many objects: tracing a store of forty costs
 %% less than deciding not to, and a program that never grows never needs one.
@@ -298,10 +309,16 @@ is_heap(_) -> false.
 -spec new_struct(heap(), non_neg_integer(), [term()]) -> {objref, non_neg_integer()}.
 new_struct({wasm_heap, Objs, _, Ctr} = H, TypeIdx, Fields) ->
     Id = atomics:add_get(Ctr, ?NEXT_ID, 1) - 1,
+    Row = list_to_tuple([Id, s, TypeIdx | Fields]),
+    %% By the row's size, not by one. Nothing bounds a struct's field count --
+    %% `wasm_decode:comptype/1` reads a plain vector -- so one
+    %% `struct.new_default` of a hundred thousand fields is one mutation on the
+    %% cadence and an 800 KB row. It was admitted at a one-page ceiling.
+    %%
     %% Before the insert, as on the write path and for the same reason: a
     %% refusal arriving after the row is in leaves the row, uncharged.
-    ok = wrote(H, 1),
-    true = ets:insert(Objs, list_to_tuple([Id, s, TypeIdx | Fields])),
+    ok = wrote(H, tuple_size(Row)),
+    true = ets:insert(Objs, Row),
     {objref, Id}.
 
 -doc """
@@ -318,7 +335,9 @@ is the kind of work worth not doing.
 new_array({wasm_heap, Objs, _, Ctr} = H, TypeIdx, Len, Default, Traced) ->
     Id = atomics:add_get(Ctr, ?NEXT_ID, 1) - 1,
     Kind = case Traced of true -> a; false -> n end,
-    ok = wrote(H, 1),
+    %% Five words whatever the length: elements are lazy, so this row is the
+    %% same for a million-element array and for a two-element one.
+    ok = wrote(H, 5),
     true = ets:insert(Objs, {Id, Kind, TypeIdx, Len, Default}),
     {objref, Id}.
 
@@ -388,7 +407,7 @@ array_set({wasm_heap, _, Elems, Ctr} = H, {objref, Id} = Ref, Idx, Value) ->
             %% already happened when the charge refuses it, so the row stays and
             %% is never recorded: twenty writes grew the store by megabytes
             %% while the page count did not move.
-            ok = wrote(H, 1),
+            ok = wrote(H, ?ELEM_WORDS),
             true = ets:insert(Elems, {{Id, Idx}, Value}),
             remember(Elems, Ctr, Id, Value);
         Len ->
@@ -405,7 +424,7 @@ table operations to answer a question already answered.
 """.
 -spec array_set_unchecked(heap(), term(), non_neg_integer(), term()) -> ok.
 array_set_unchecked({wasm_heap, _, Elems, Ctr} = H, {objref, Id}, Idx, Value) ->
-    ok = wrote(H, 1),
+    ok = wrote(H, ?ELEM_WORDS),
     true = ets:insert(Elems, {{Id, Idx}, Value}),
     remember(Elems, Ctr, Id, Value).
 
@@ -550,12 +569,21 @@ refuse_if_over({wasm_heap, _, _, Ctr}, {error, Why}) ->
     atomics:put(Ctr, ?WRITES, ?RECONCILE_MASK),
     wasm_error:exhaustion(heap_limit, #{reason => Why}).
 
-%% One mutation -- a write or an allocation -- and a reconcile every
-%% `?RECONCILE_MASK` + 1 of them.
+%% `N` words of mutation, and a reconcile every `?RECONCILE_MASK` + 1 of them.
+%%
+%% *Crossed* a boundary, not landed on one. `band ... =:= 0` asks the second
+%% question, which is the same as the first only while every caller passes one:
+%% add ten at 4090 and it lands on 4100, and the check does not happen at all.
+%% `new_struct/3` is what makes that live.
+%%
+%% `N` travels on to the keeper as the size of what is *about* to be written,
+%% because the reconcile measures tables that do not hold it yet. Without that
+%% the first wide row is admitted whatever the ceiling says, and only the next
+%% mutation is refused.
 wrote({wasm_heap, _, _, Ctr} = H, N) ->
-    case atomics:add_get(Ctr, ?WRITES, N) band ?RECONCILE_MASK of
-        0 -> refuse_if_over(H, charge(H));
-        _ -> ok
+    case atomics:add_get(Ctr, ?WRITES, N) band ?RECONCILE_MASK < N of
+        true -> refuse_if_over(H, charge(H, N));
+        false -> ok
     end.
 
 -doc """
@@ -574,8 +602,17 @@ from the `after` of an invocation where an exception escapes
 than a value. `refuse_if_over/1` is the mutation path's half of that.
 """.
 -spec charge(undefined | heap()) -> ok | {error, term()}.
-charge(undefined) -> ok;
-charge({wasm_heap, Objs, _Elems, Ctr}) ->
+charge(H) -> charge(H, 0).
+
+-doc """
+As `charge/1`, deciding as though `Extra` words were already written.
+
+The keeper still records what it measures. `Extra` only moves the *refusal*, so
+a row too big for the ceiling is refused before it exists rather than after.
+""".
+-spec charge(undefined | heap(), non_neg_integer()) -> ok | {error, term()}.
+charge(undefined, _Extra) -> ok;
+charge({wasm_heap, Objs, _Elems, Ctr}, Extra) ->
     case resource(Objs) of
         undefined ->
             ok;
@@ -583,7 +620,7 @@ charge({wasm_heap, Objs, _Elems, Ctr}) ->
             %% The keeper measures. It knows which tables this resource is from
             %% `reserve/4`, and doing it inside its callback is what stops an
             %% older sample overwriting a newer charge.
-            R = wasm_keeper:reconcile(Res, infinity),
+            R = wasm_keeper:reconcile(Res, infinity, Extra),
             %% What the keeper recorded, read straight from the registry row
             %% rather than remeasured, so the trigger and the charge can never
             %% disagree about the same store.

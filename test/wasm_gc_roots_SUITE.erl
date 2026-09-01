@@ -31,6 +31,7 @@ all() ->
      a_heap_gives_its_pages_back_when_collected,
      a_shared_heap_is_charged_once,
      a_linked_instance_over_its_ceiling_is_refused,
+     a_wide_struct_cannot_outrun_its_ceiling,
      a_refused_allocation_leaves_no_row,
      a_refused_write_leaves_no_row,
      a_refused_charge_still_records_what_is_held,
@@ -702,6 +703,14 @@ filler() ->
         (i32.const 0)))
     """).
 
+%% A struct wide enough that one `struct.new_default` of it is several pages.
+wide_struct(N) ->
+    Fields = lists:duplicate(N, <<"(field (mut i64))">>),
+    build(iolist_to_binary(
+            ["(module (type $w (struct ", Fields, "))\n",
+             "  (func (export \"make\") (result i32)\n",
+             "    (drop (struct.new_default $w)) (i32.const 0)))"])).
+
 %% Allocates and never writes an element, so only the allocation path runs.
 maker() ->
     build(~"""
@@ -744,6 +753,25 @@ a_linked_instance_over_its_ceiling_is_refused(_Config) ->
     %% And the refusal left nothing behind: still one holder, still charged.
     ?assertEqual(Charged, wasm_engine:pages_in_use()),
     ok = wasm:destroy(A).
+
+%% A row can be arbitrarily large, and the cadence counted rows.
+%%
+%% Nothing bounds a struct's field count: `wasm_decode:comptype/1` reads a plain
+%% vector and no validator rule caps it. So one `struct.new_default` was one
+%% mutation on the reconcile cadence and an 800 KB row, and a one-page instance
+%% allocated thirteen pages in a single instruction. Two things fix it and the
+%% case needs both: the cadence counts the row's words, and the keeper is told
+%% what is about to be written, because a measurement cannot see a row that does
+%% not exist yet.
+a_wide_struct_cannot_outrun_its_ceiling(_Config) ->
+    Mod = wide_struct(50000),
+    {ok, I} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 1}),
+    {wasm_heap, Objs, _, _} = wasm_instance:heap(I),
+    Rows = ets:info(Objs, size),
+    ?assertMatch({error, #{kind := heap_limit}}, wasm:call(I, ~"make", []),
+                 one_instruction_walked_through_the_ceiling),
+    ?assertEqual(Rows, ets:info(Objs, size), the_refused_row_is_still_there),
+    ok = wasm:destroy(I).
 
 %% Neither must an allocation the charge refuses.
 %%
@@ -803,7 +831,11 @@ a_refused_charge_still_records_what_is_held(_Config) ->
     Words = ets:info(Objs, memory) + ets:info(Elems, memory),
     Held = (Words * erlang:system_info(wordsize) + 65535) div 65536,
     Res = ets:lookup_element(Objs, '$wasm_resource', 2),
-    ?assert(Held > 8, {refusal_came_too_early, Held}),
+    %% Not "past the ceiling": the keeper is told the size of the write that is
+    %% coming, so the store now stops *at* its ceiling instead of overshooting
+    %% by whatever the interval allowed. What this case is about is the other
+    %% half -- that a refusal writes down what the tables hold.
+    ?assert(Held > 1, {nothing_was_written, Held}),
     ?assertEqual(Held, wasm_keeper:charge_of(Res), {charged, Held}),
     ok = wasm:destroy(I).
 

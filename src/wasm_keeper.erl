@@ -64,7 +64,7 @@ now rather than the size the handle was made at.
 -export([reserve/4, acquire/3, release/2, transfer/3, discard/1]).
 -export([set_limit/2, total_of/1]).
 -export([grow_begin/3, grow_commit/4, grow_abort/2]).
--export([resize/3, reconcile/2]).
+-export([resize/3, reconcile/2, reconcile/3]).
 -export([charge_of/1, holders_of/1, resources/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -226,16 +226,33 @@ caller that measures and then calls has already lost: two processes sharing a
 linked store can interleave so that an older, smaller sample lands after a newer,
 larger one and releases the pages of rows that still exist.
 
-Answers `{error, limit}` or `{error, instance_limit}` when what the store holds
-is past a ceiling. The charge is still recorded: the rows exist whether or not a
-ceiling likes them, and refusing to write down memory that has already been
-spent is how growth became invisible. Recording it is a fact; the error is a
-decision about whether the guest may continue.
+Answers `{error, limit}`, `{error, instance_limit}` or, for a finite `Ceiling`,
+`{error, exceeds_max}` when what the store holds is past a ceiling. The charge
+is still recorded: the rows exist whether or not a ceiling likes them, and
+refusing to write down memory that has already been spent is how growth became
+invisible. Recording it is a fact; the error is a decision about whether the
+guest may continue.
 """.
 -spec reconcile(resource(), non_neg_integer() | infinity) ->
-          ok | {error, limit | instance_limit | gone | keeper_unavailable}.
+          ok | {error, limit | instance_limit | exceeds_max | gone
+                     | keeper_unavailable}.
 reconcile(Resource, Ceiling) ->
-    call({reconcile, Resource, Ceiling}).
+    reconcile(Resource, Ceiling, 0).
+
+-doc """
+As `reconcile/2`, refusing as though `Extra` words were already written.
+
+What is recorded is still what the tables hold. `Extra` moves only the refusal,
+so a caller about to write one very large row can be told no before the row
+exists rather than after: a store is measured, and a measurement cannot see what
+has not happened yet. One `struct.new_default` of a hundred thousand fields
+walked through a one-page ceiling that way.
+""".
+-spec reconcile(resource(), non_neg_integer() | infinity, non_neg_integer()) ->
+          ok | {error, limit | instance_limit | exceeds_max | gone
+                     | keeper_unavailable}.
+reconcile(Resource, Ceiling, Extra) ->
+    call({reconcile, Resource, Ceiling, Extra}).
 
 -doc """
 Set a resource's charge to `Pages`, up or down, in one call.
@@ -594,15 +611,17 @@ handle_call({transfer, From, To, Owner}, {Pid, _}, #{held := Held} = State) ->
                      S1, Moved),
     {reply, ok, S2};
 
-handle_call({reconcile, Res, Ceiling}, _From, State) ->
+handle_call({reconcile, Res, Ceiling, Extra}, _From, State) ->
     ok = hook(charge_entry),
     case ets:lookup(?TAB, Res) of
         [{Res, {heap, Objs, Elems}, _Pages, _Holders}] ->
             Words = words_of(Objs) + words_of(Elems),
-            Pages = (Words * erlang:system_info(wordsize) + 65535) div 65536,
+            Pages = pages_of(Words),
             %% `record`: these pages are spent, and the answer is only whether
-            %% that put the holder or the node over.
-            {reply, R, S1} = do_resize(Res, Pages, Ceiling, record, State),
+            %% that, plus what the caller is about to write, put the holder or
+            %% the node over.
+            {reply, R, S1} =
+                do_resize(Res, Pages, Ceiling, pages_of(Extra), record, State),
             {reply, R, S1};
         _ ->
             {reply, {error, gone}, State}
@@ -610,7 +629,7 @@ handle_call({reconcile, Res, Ceiling}, _From, State) ->
 
 handle_call({resize, Res, Want, Ceiling}, _From, State) ->
     ok = hook(charge_entry),
-    {reply, R, S1} = do_resize(Res, Want, Ceiling, request, State),
+    {reply, R, S1} = do_resize(Res, Want, Ceiling, 0, request, State),
     {reply, R, S1};
 
 handle_call({grow_begin, Res, Delta, Ceiling}, From,
@@ -884,7 +903,10 @@ start_growth(Res, Delta, Ceiling, {Pid, _} = _From, State) ->
 %% will ever give back, and `wasm_engine`'s moduledoc is explicit that a counter
 %% which disagrees with the registry eventually refuses every allocation on the
 %% node.
-do_resize(Res, Want, Ceiling, Mode, State) ->
+pages_of(Words) ->
+    (Words * erlang:system_info(wordsize) + 65535) div 65536.
+
+do_resize(Res, Want, Ceiling, Extra, Mode, State) ->
     case ets:lookup(?TAB, Res) of
         [] ->
             {reply, {error, gone}, State};
@@ -904,17 +926,24 @@ do_resize(Res, Want, Ceiling, Mode, State) ->
             Delta = Want - Pages,
             Toks = maps:keys(Holders),
             grow(Res, Meta, Want, Delta, Holders, Toks,
-                 ceilings(Want, Ceiling, Delta, Toks, State), Mode, State)
+                 ceilings(Want, Ceiling, Delta, Extra, Toks, State),
+                 Extra, Mode, State)
     end.
 
 %% Which ceiling refuses this growth, if any. Asked before the node budget so a
 %% `record` resize can know all of it and still commit.
-ceilings(Want, Ceiling, Delta, Toks, State) ->
-    AllFit = lists:all(fun(T) -> within(T, Delta, State) end, Toks),
+%%
+%% `Extra` is what the caller is about to write and the tables cannot show yet.
+%% It counts against every ceiling and is recorded nowhere.
+ceilings(Want, Ceiling, Delta, Extra, Toks, State) ->
+    AllFit = lists:all(fun(T) -> within(T, Delta + Extra, State) end, Toks),
     if
-        Ceiling =/= infinity andalso Want > Ceiling -> {error, exceeds_max};
-        not AllFit -> {error, instance_limit};
-        true -> ok
+        Ceiling =/= infinity andalso Want + Extra > Ceiling ->
+            {error, exceeds_max};
+        not AllFit ->
+            {error, instance_limit};
+        true ->
+            ok
     end.
 
 %% `request` may refuse and change nothing: nobody has taken the memory yet.
@@ -923,13 +952,13 @@ ceilings(Want, Ceiling, Delta, Toks, State) ->
 %% likes them, so the registry row, the holder totals and the node counter all
 %% move to the measured size and the refusal is only the *answer*. Leaving them
 %% behind was how a heap sat at twelve pages charged for six, once per heap.
-grow(_Res, _Meta, _Want, _Delta, _Holders, _Toks, {error, Why}, request,
-     State) ->
+grow(_Res, _Meta, _Want, _Delta, _Holders, _Toks, {error, Why}, _Extra,
+     request, State) ->
     {reply, {error, Why}, State};
-grow(Res, Meta, Want, Delta, Holders, Toks, Ceil, Mode, State) ->
+grow(Res, Meta, Want, Delta, Holders, Toks, Ceil, Extra, Mode, State) ->
     Node = case Mode of
-               request -> wasm_engine:reserve_pages(Delta);
-               record -> wasm_engine:charge_pages(Delta)
+               request -> wasm_engine:reserve_pages(Delta + Extra);
+               record -> wasm_engine:charge_pages(Delta, Extra)
            end,
     case {Node, Mode} of
         {{error, limit}, request} ->

@@ -39,7 +39,8 @@ eventually refuses every allocation on the node.
 
 -export([start_link/0]).
 -export([table_grow_limit/0]).
--export([reserve_pages/1, charge_pages/1, release_pages/1, pages_in_use/0,
+-export([reserve_pages/1, charge_pages/1, charge_pages/2,
+         release_pages/1, pages_in_use/0,
          page_limit/0, set_pages_in_use/1,
          set_page_limit/1, stats/0]).
 -export([table_put/2, table_get/1, table_forget/1]).
@@ -135,11 +136,23 @@ same `release_pages/1` as any other.
 Call this from `wasm_keeper` reconciliation and nowhere else.
 """.
 -spec charge_pages(non_neg_integer()) -> ok | {error, limit}.
-charge_pages(0) -> ok;
-charge_pages(N) when is_integer(N), N > 0 ->
+charge_pages(N) -> charge_pages(N, 0).
+
+-doc """
+As `charge_pages/1`, refusing as though `Extra` more pages were also spent.
+
+Only the answer moves: `Extra` is memory the caller is about to take and this
+counter has no business recording before it exists.
+""".
+-spec charge_pages(non_neg_integer(), non_neg_integer()) -> ok | {error, limit}.
+charge_pages(0, 0) -> ok;
+charge_pages(N, Extra) when is_integer(N), N >= 0, is_integer(Extra) ->
     Ref = counters_ref(),
-    New = atomics:add_get(Ref, ?SLOT_PAGES, N),
-    case New > atomics:get(Ref, ?SLOT_LIMIT) of
+    New = case N of
+              0 -> atomics:get(Ref, ?SLOT_PAGES);
+              _ -> atomics:add_get(Ref, ?SLOT_PAGES, N)
+          end,
+    case New + Extra > atomics:get(Ref, ?SLOT_LIMIT) of
         true -> {error, limit};
         false -> ok
     end.

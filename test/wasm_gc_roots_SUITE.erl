@@ -872,8 +872,15 @@ concurrent_reconciles_never_lower_a_live_charge(_Config) ->
                  charged_for_the_size_it_had_before_the_growth),
     ok = wasm:destroy(I).
 
-%% And the same invariant under load, which is a stress check and not the
-%% regression above: it cannot fail on the defect, only on a new one.
+%% The same store under load, which is a stress check and not the regression
+%% above: it cannot fail on that defect, only on a new one.
+%%
+%% What it may *not* assert is that the charge matches at any instant. The
+%% charge is reconciled once per `?RECONCILE_MASK` mutations by design, so up to
+%% one interval of writes is always uncharged, and asserting otherwise made this
+%% case fail on CI at 107 pages against 108 held. It asserts the two agree once
+%% the writing has stopped and one more reconcile has run, which is the state
+%% that has to be right.
 many_processes_on_one_store_stay_charged(_Config) ->
     Mod = filler(),
     {ok, A} = wasm:instantiate(Mod, #{}),
@@ -885,12 +892,14 @@ many_processes_on_one_store_stay_charged(_Config) ->
                          Self ! {done, self()}
                      end) || Inst <- [A, B]],
     [receive {done, P} -> ok after 60000 -> ct:fail({stuck, P}) end || P <- Ps],
-    {wasm_heap, Objs, Elems, _} = wasm_instance:heap(A),
+    {wasm_heap, Objs, Elems, _} = H = wasm_instance:heap(A),
+    ok = wasm_heap:charge(H),
     Words = ets:info(Objs, memory) + ets:info(Elems, memory),
     Held = (Words * erlang:system_info(wordsize) + 65535) div 65536,
-    Charged = wasm_engine:pages_in_use(),
-    ?assert(Charged >= Held,
-            {charged_for_less_than_it_holds, Charged, Held}),
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    ?assert(Held > 8, {nothing_to_measure, Held}),
+    ?assertEqual(Held, wasm_keeper:charge_of(Res),
+                 {charged_for_less_than_it_holds, Held}),
     ok = wasm:destroy(B),
     ok = wasm:destroy(A).
 

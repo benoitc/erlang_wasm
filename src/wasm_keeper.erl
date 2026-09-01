@@ -64,7 +64,7 @@ now rather than the size the handle was made at.
 -export([reserve/4, acquire/3, release/2, transfer/3, discard/1]).
 -export([set_limit/2, total_of/1]).
 -export([grow_begin/3, grow_commit/4, grow_abort/2]).
--export([resize/3, reconcile/2, reconcile/3]).
+-export([reconcile/2, reconcile/3]).
 -export([charge_of/1, holders_of/1, resources/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -253,26 +253,6 @@ walked through a one-page ceiling that way.
                      | keeper_unavailable}.
 reconcile(Resource, Ceiling, Extra) ->
     call({reconcile, Resource, Ceiling, Extra}).
-
--doc """
-Set a resource's charge to `Pages`, up or down, in one call.
-
-For a resource whose size is *discovered* rather than requested. A memory grows
-by a delta the guest asked for, and allocating its chunks has to happen outside
-this process, which is what `grow_begin/3` and `grow_commit/4` are for. A
-garbage-collected heap has no chunks to publish and its rows already exist by
-the time anyone measures them: what changes is only the number, and it can fall
-as well as rise.
-
-A decrease is always allowed and cannot fail. An increase is checked against
-every holder's ceiling and the node budget, exactly as a growth is, so a heap
-shared by two instances is bounded by the stricter of them.
-""".
--spec resize(resource(), non_neg_integer(), non_neg_integer() | infinity) ->
-          ok | {error, limit | instance_limit | exceeds_max | gone
-                     | keeper_unavailable}.
-resize(Resource, Pages, Ceiling) ->
-    call({resize, Resource, Pages, Ceiling}).
 
 -doc """
 Claim the right to grow `Resource` by `Delta`, up to `Ceiling` pages.
@@ -617,20 +597,15 @@ handle_call({reconcile, Res, Ceiling, Extra}, _From, State) ->
         [{Res, {heap, Objs, Elems}, _Pages, _Holders}] ->
             Words = words_of(Objs) + words_of(Elems),
             Pages = pages_of(Words),
-            %% `record`: these pages are spent, and the answer is only whether
-            %% that, plus what the caller is about to write, put the holder or
-            %% the node over.
+            %% These pages are spent, and the answer is only whether that,
+            %% plus what the caller is about to write, put the holder or the
+            %% node over.
             {reply, R, S1} =
-                do_resize(Res, Pages, Ceiling, pages_of(Extra), record, State),
+                do_resize(Res, Pages, Ceiling, pages_of(Extra), State),
             {reply, R, S1};
         _ ->
             {reply, {error, gone}, State}
     end;
-
-handle_call({resize, Res, Want, Ceiling}, _From, State) ->
-    ok = hook(charge_entry),
-    {reply, R, S1} = do_resize(Res, Want, Ceiling, 0, request, State),
-    {reply, R, S1};
 
 handle_call({grow_begin, Res, Delta, Ceiling}, From,
             #{growing := Growing} = State) ->
@@ -924,7 +899,13 @@ start_growth(Res, Delta, Ceiling, {Pid, _} = _From, State) ->
 pages_of(Words) ->
     (Words * erlang:system_info(wordsize) + 65535) div 65536.
 
-do_resize(Res, Want, Ceiling, Extra, Mode, State) ->
+%% Up or down to what the tables were just measured at.
+%%
+%% There used to be a second caller, `resize/3`, taking an absolute size from
+%% whoever asked. That is the shape this function was moved here to make
+%% unrepresentable: it could set a live fourteen-page store to zero without
+%% looking at it. Nothing used it.
+do_resize(Res, Want, Ceiling, Extra, State) ->
     case ets:lookup(?TAB, Res) of
         [] ->
             {reply, {error, gone}, State};
@@ -945,11 +926,11 @@ do_resize(Res, Want, Ceiling, Extra, Mode, State) ->
             Toks = maps:keys(Holders),
             grow(Res, Meta, Want, Delta, Holders, Toks,
                  ceilings(Want, Ceiling, Delta, Extra, Toks, State),
-                 Extra, Mode, State)
+                 Extra, State)
     end.
 
-%% Which ceiling refuses this growth, if any. Asked before the node budget so a
-%% `record` resize can know all of it and still commit.
+%% Which ceiling refuses this growth, if any. Asked before the node budget so
+%% the answer can name a reason and the charge still be recorded.
 %%
 %% `Extra` is what the caller is about to write and the tables cannot show yet.
 %% It counts against every ceiling and is recorded nowhere.
@@ -964,29 +945,15 @@ ceilings(Want, Ceiling, Delta, Extra, Toks, State) ->
             ok
     end.
 
-%% `request` may refuse and change nothing: nobody has taken the memory yet.
-%%
-%% `record` is for memory already spent. The rows exist whether or not a ceiling
-%% likes them, so the registry row, the holder totals and the node counter all
-%% move to the measured size and the refusal is only the *answer*. Leaving them
-%% behind was how a heap sat at twelve pages charged for six, once per heap.
-grow(_Res, _Meta, _Want, _Delta, _Holders, _Toks, {error, Why}, _Extra,
-     request, State) ->
-    {reply, {error, Why}, State};
-grow(Res, Meta, Want, Delta, Holders, Toks, Ceil, Extra, Mode, State) ->
-    Node = case Mode of
-               request -> wasm_engine:reserve_pages(Delta + Extra);
-               record -> wasm_engine:charge_pages(Delta, Extra)
-           end,
-    case {Node, Mode} of
-        {{error, limit}, request} ->
-            {reply, {error, limit}, State};
-        _ ->
-            true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
-            S1 = lists:foldl(fun(T, S) -> add_total(T, Delta, S) end,
-                             State, Toks),
-            {reply, first_error(Ceil, Node), S1}
-    end.
+%% This memory is already spent. The rows exist whether or not a ceiling likes
+%% them, so the registry row, the holder totals and the node counter all move to
+%% the measured size and the refusal is only the *answer*. Leaving them behind
+%% was how a heap sat at twelve pages charged for six, once per heap.
+grow(Res, Meta, Want, Delta, Holders, Toks, Ceil, Extra, State) ->
+    Node = wasm_engine:charge_pages(Delta, Extra),
+    true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
+    S1 = lists:foldl(fun(T, S) -> add_total(T, Delta, S) end, State, Toks),
+    {reply, first_error(Ceil, Node), S1}.
 
 first_error(ok, R) -> R;
 first_error({error, _} = E, _R) -> E.

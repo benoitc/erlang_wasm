@@ -599,14 +599,16 @@ handle_call({reconcile, Res, Ceiling}, _From, State) ->
         [{Res, {heap, Objs, Elems}, _Pages, _Holders}] ->
             Words = words_of(Objs) + words_of(Elems),
             Pages = (Words * erlang:system_info(wordsize) + 65535) div 65536,
-            {reply, R, S1} = do_resize(Res, Pages, Ceiling, State),
+            %% `record`: these pages are spent, and the answer is only whether
+            %% that put the holder or the node over.
+            {reply, R, S1} = do_resize(Res, Pages, Ceiling, record, State),
             {reply, R, S1};
         _ ->
             {reply, {error, gone}, State}
     end;
 
 handle_call({resize, Res, Want, Ceiling}, _From, State) ->
-    {reply, R, S1} = do_resize(Res, Want, Ceiling, State),
+    {reply, R, S1} = do_resize(Res, Want, Ceiling, request, State),
     {reply, R, S1};
 
 handle_call({grow_begin, Res, Delta, Ceiling}, From,
@@ -880,11 +882,11 @@ start_growth(Res, Delta, Ceiling, {Pid, _} = _From, State) ->
 %% will ever give back, and `wasm_engine`'s moduledoc is explicit that a counter
 %% which disagrees with the registry eventually refuses every allocation on the
 %% node.
-do_resize(Res, Want, Ceiling, State) ->
+do_resize(Res, Want, Ceiling, Mode, State) ->
     case ets:lookup(?TAB, Res) of
         [] ->
             {reply, {error, gone}, State};
-        [{Res, Meta, Pages, Holders}] when Want =< Pages ->
+        [{Res, Meta, Pages, Holders}] when Want < Pages ->
             %% Giving pages back never fails and never consults a ceiling.
             Back = Pages - Want,
             ok = wasm_engine:release_pages(Back),
@@ -892,28 +894,53 @@ do_resize(Res, Want, Ceiling, State) ->
             S1 = lists:foldl(fun(T, S) -> sub_total(T, Back, S) end,
                              State, maps:keys(Holders)),
             {reply, ok, S1};
+        %% Including `Want =:= Pages`, which is not a no-op: a resource that
+        %% is *already* over a holder's ceiling has to keep saying so, or a
+        %% guest whose next interval happens not to move the page count is let
+        %% through. `within/3` asks about the total, not about the delta.
         [{Res, Meta, Pages, Holders}] ->
             Delta = Want - Pages,
             Toks = maps:keys(Holders),
-            AllFit = lists:all(fun(T) -> within(T, Delta, State) end, Toks),
-            if
-                Ceiling =/= infinity andalso Want > Ceiling ->
-                    {reply, {error, exceeds_max}, State};
-                not AllFit ->
-                    {reply, {error, instance_limit}, State};
-                true ->
-                    case wasm_engine:reserve_pages(Delta) of
-                        {error, limit} ->
-                            {reply, {error, limit}, State};
-                        ok ->
-                            true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
-                            S1 = lists:foldl(
-                                   fun(T, S) -> add_total(T, Delta, S) end,
-                                   State, Toks),
-                            {reply, ok, S1}
-                    end
-            end
+            grow(Res, Meta, Want, Delta, Holders, Toks,
+                 ceilings(Want, Ceiling, Delta, Toks, State), Mode, State)
     end.
+
+%% Which ceiling refuses this growth, if any. Asked before the node budget so a
+%% `record` resize can know all of it and still commit.
+ceilings(Want, Ceiling, Delta, Toks, State) ->
+    AllFit = lists:all(fun(T) -> within(T, Delta, State) end, Toks),
+    if
+        Ceiling =/= infinity andalso Want > Ceiling -> {error, exceeds_max};
+        not AllFit -> {error, instance_limit};
+        true -> ok
+    end.
+
+%% `request` may refuse and change nothing: nobody has taken the memory yet.
+%%
+%% `record` is for memory already spent. The rows exist whether or not a ceiling
+%% likes them, so the registry row, the holder totals and the node counter all
+%% move to the measured size and the refusal is only the *answer*. Leaving them
+%% behind was how a heap sat at twelve pages charged for six, once per heap.
+grow(_Res, _Meta, _Want, _Delta, _Holders, _Toks, {error, Why}, request,
+     State) ->
+    {reply, {error, Why}, State};
+grow(Res, Meta, Want, Delta, Holders, Toks, Ceil, Mode, State) ->
+    Node = case Mode of
+               request -> wasm_engine:reserve_pages(Delta);
+               record -> wasm_engine:charge_pages(Delta)
+           end,
+    case {Node, Mode} of
+        {{error, limit}, request} ->
+            {reply, {error, limit}, State};
+        _ ->
+            true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
+            S1 = lists:foldl(fun(T, S) -> add_total(T, Delta, S) end,
+                             State, Toks),
+            {reply, first_error(Ceil, Node), S1}
+    end.
+
+first_error(ok, R) -> R;
+first_error({error, _} = E, _R) -> E.
 
 %% The reservation an abandoned growth took, given back without publishing
 %% anything. The delta is the growth's own, not a difference between the charge

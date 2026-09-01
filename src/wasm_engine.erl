@@ -21,6 +21,13 @@ accounting has to be explicit, and it has to be node-wide rather than
 per-instance, because a thousand small instances are as much of a threat as one
 large one.
 
+The counter can read above the limit. It is the sum of what the registry holds,
+and the object store is *measured* rather than requested: by the time the keeper
+hears a number, the rows exist, and refusing to record them hides them instead of
+giving them back. So already-spent pages are recorded whatever the budget says,
+through `charge_pages/1`, and every `reserve_pages/1` refuses while the node is
+over. A limit bounds what a guest may take next, not what it has taken.
+
 Reading the counter is a lock-free `atomics` get, which is what keeps it off the
 cost of an access. *Moving* it is not: reservation and release happen inside a
 `wasm_keeper` transaction, together with the registry row that says whose pages
@@ -32,8 +39,8 @@ eventually refuses every allocation on the node.
 
 -export([start_link/0]).
 -export([table_grow_limit/0]).
--export([reserve_pages/1, release_pages/1, pages_in_use/0, page_limit/0,
-         set_pages_in_use/1,
+-export([reserve_pages/1, charge_pages/1, release_pages/1, pages_in_use/0,
+         page_limit/0, set_pages_in_use/1,
          set_page_limit/1, stats/0]).
 -export([table_put/2, table_get/1, table_forget/1]).
 -export([cell_put/2, cell_get/1, cell_forget/1]).
@@ -107,6 +114,34 @@ reserve_loop(Ref, N, Limit) ->
                 ok -> ok;
                 _Actual -> reserve_loop(Ref, N, Limit)
             end
+    end.
+
+-doc """
+Count `N` pages that have already been spent, over the limit if need be.
+
+`reserve_pages/1` asks permission for memory nobody has taken yet, and refusing
+it costs nothing. This is for memory that is *already there*: the object store
+is measured rather than requested, and by the time the keeper hears the number
+the ETS rows exist. Refusing to record them does not give them back, it only
+hides them, and a review found exactly that -- a heap sitting at twelve pages
+charged for six, once per heap on the node.
+
+So the count always moves and the answer only says whether it went over. It can
+therefore read above `page_limit/0`, which is the truth: `pages_in_use/0` is the
+sum of what the registry holds. While it is over, every `reserve_pages/1` on the
+node refuses, which is the point, and the pages come back on destroy through the
+same `release_pages/1` as any other.
+
+Call this from `wasm_keeper` reconciliation and nowhere else.
+""".
+-spec charge_pages(non_neg_integer()) -> ok | {error, limit}.
+charge_pages(0) -> ok;
+charge_pages(N) when is_integer(N), N > 0 ->
+    Ref = counters_ref(),
+    New = atomics:add_get(Ref, ?SLOT_PAGES, N),
+    case New > atomics:get(Ref, ?SLOT_LIMIT) of
+        true -> {error, limit};
+        false -> ok
     end.
 
 -spec release_pages(non_neg_integer()) -> ok.

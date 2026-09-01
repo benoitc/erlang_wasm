@@ -33,6 +33,7 @@ all() ->
      a_linked_instance_over_its_ceiling_is_refused,
      a_refused_allocation_leaves_no_row,
      a_refused_write_leaves_no_row,
+     a_refused_charge_still_records_what_is_held,
      a_whole_array_fill_gives_its_pages_back,
      concurrent_reconciles_never_lower_a_live_charge].
 
@@ -783,6 +784,26 @@ a_refused_write_leaves_no_row(_Config) ->
                  {not_all_refused, Answers}),
     ?assertEqual(Rows, ets:info(Elems, size)),
     ?assertEqual(Pages, wasm_engine:pages_in_use()),
+    ok = wasm:destroy(I).
+
+%% A refusal is not a reason to forget the pages.
+%%
+%% `do_resize/4` returned `{error, instance_limit}` without touching the registry
+%% row, the holder totals or the node counter. For a request that is right --
+%% nobody took the memory. For a *reconcile* it is not: the store is measured,
+%% so by the time the keeper hears the number the rows already exist. A store
+%% holding twelve pages was charged for six, once per heap on the node.
+a_refused_charge_still_records_what_is_held(_Config) ->
+    Mod = filler(),
+    {ok, I} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 8}),
+    ?assertMatch({error, #{kind := heap_limit}},
+                 wasm:call(I, ~"fill", [200000])),
+    {wasm_heap, Objs, Elems, _} = wasm_instance:heap(I),
+    Words = ets:info(Objs, memory) + ets:info(Elems, memory),
+    Held = (Words * erlang:system_info(wordsize) + 65535) div 65536,
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    ?assert(Held > 8, {refusal_came_too_early, Held}),
+    ?assertEqual(Held, wasm_keeper:charge_of(Res), {charged, Held}),
     ok = wasm:destroy(I).
 
 %% A fill that replaces the whole array deletes every element row, and the

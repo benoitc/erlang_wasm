@@ -92,8 +92,12 @@ silently name a different live object instead.
 %% lets `major_due/1' see a store that is large without holding many rows.
 -define(CHARGED, 7).
 -define(MAJOR_PAGES, 8).
-%% And as of the last collection of any kind, for `should_collect/1'.
--define(COLLECTED_AT, 9).
+%% How many rows of this store are not objects: the instance registry, and the
+%% keeper resource when there is one. `new/2' writes it once.
+%%
+%% This slot held `?COLLECTED_AT', which was written at every collection and
+%% read nowhere.
+-define(META_ROWS, 9).
 %% The page count at which the next collection is due, precomputed.
 %%
 %% `should_collect/1' is asked once per outermost call, and deriving this from
@@ -210,14 +214,16 @@ new(Token, Owner) ->
     true = ets:insert(Objs, {?REGISTRY, #{}}),
     %% Zero pages: an empty heap costs two empty tables and is charged for what
     %% it grows into, measured, rather than for what it might.
-    case wasm_keeper:reserve(0, {heap, Objs, Elems}, Token, Owner) of
-        {ok, Res} -> true = ets:insert(Objs, {?RESOURCE, Res});
-        %% No keeper is the no-application path the conformance suite and
-        %% escript embedding use. Uncharged rather than refused, which is what
-        %% every other resource does when the keeper is away.
-        {error, _} -> ok
-    end,
+    Meta = case wasm_keeper:reserve(0, {heap, Objs, Elems}, Token, Owner) of
+               {ok, Res} -> true = ets:insert(Objs, {?RESOURCE, Res}), 2;
+               %% No keeper is the no-application path the conformance suite
+               %% and escript embedding use. Uncharged rather than refused,
+               %% which is what every other resource does when the keeper is
+               %% away. One metadata row then, not two.
+               {error, _} -> 1
+           end,
     Ctr = atomics:new(10, [{signed, false}]),
+    atomics:put(Ctr, ?META_ROWS, Meta),
     %% Without a floor here the trigger starts at zero and every call collects.
     atomics:put(Ctr, ?TRIGGER, min_major_pages()),
     %% At the mask, so the *first* mutation reconciles rather than the 4096th.
@@ -515,12 +521,20 @@ type_of({wasm_heap, Objs, _, _}, {objref, Id} = Ref) ->
 -doc "How many objects the store holds. For tests and diagnostics.".
 -spec size(undefined | heap()) -> non_neg_integer().
 size(undefined) -> 0;
-size({wasm_heap, Objs, _, _}) ->
-    %% Minus the registry and resource rows, and minus the collector row when
-    %% there is one:
-    %% neither is an object, and `major_due/1` compares this against a live-set
+size({wasm_heap, Objs, _, Ctr}) ->
+    %% Minus the metadata rows, and minus the collector row when there is one:
+    %% none is an object, and `major_due/1` compares this against a live-set
     %% baseline that must not drift because a collection is in progress.
-    ets:info(Objs, size) - 2 - collector_rows(Objs).
+    %%
+    %% Counted rather than assumed to be two. A heap made with no keeper has no
+    %% resource row, so subtracting two answered **-1** for an empty one,
+    %% against a `non_neg_integer()` spec.
+    %%
+    %% No test covers it, deliberately: `wasm_keeper:call/1` starts an orphan
+    %% keeper when none is registered, so `reserve/4` does not fail from a live
+    %% node and the branch below in `new/2` is defensive. A case for it would
+    %% pass whether this line is right or wrong, which is worse than none.
+    ets:info(Objs, size) - atomics:get(Ctr, ?META_ROWS) - collector_rows(Objs).
 
 collector_rows(Objs) ->
     case lookup_collector(Objs) of
@@ -1067,7 +1081,6 @@ collect({wasm_heap, _, Elems, Ctr} = H, Roots) ->
     %% been paid for, and only for a major: a minor leaves old objects behind
     %% by design, so its result is not a baseline to double from.
     Charged = atomics:get(Ctr, ?CHARGED),
-    atomics:put(Ctr, ?COLLECTED_AT, Charged),
     atomics:put(Ctr, ?TRIGGER, max(Charged * major_ratio(), min_major_pages())),
     Major andalso atomics:put(Ctr, ?MAJOR_PAGES, Charged),
     ok.

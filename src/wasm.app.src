@@ -4,7 +4,7 @@
     %% `wasm' on hex.pm is not ours. Depend on it as
     %% {deps, [{wasm, {pkg, erlang_wasm}}]}.
     {pkg_name, erlang_wasm},
-    {vsn, "0.2.1"},
+    {vsn, "0.2.2"},
     {registered, [wasm_sup, wasm_engine, wasm_module_cache]},
     {mod, {wasm_app, []}},
     {applications, [kernel, stdlib, crypto]},

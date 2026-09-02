@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.2
+
+Documentation only. No code changed.
+
+### Documentation
+
+A guide for talking to a guest while it runs, [Streams](docs/streams.md). You
+need it when the module you are running is a server rather than a function: a
+script with its own read loop, a language runtime answering one request at a
+time, or a program whose output you want as it is produced.
+
+There is no new API for this, which is the point of the page. A `stdin`
+capability may be a fun and a fun is allowed to block, so `fd_read` waits until
+you answer; a `stdout` capability may be a pid, which receives
+`{wasi_output, RunnerPid, Bytes}` per write. Both were one table cell each in
+the WASI guide, so the recipe was not findable. The WASI and Workers guides now
+point at it, and it states the two things that bite: the fun blocks the process
+running the call, so the process feeding the guest has to be a different one,
+and it needs an `after` or a guest parked on a read holds a worker for ever.
+
+The README says that the project is developed with strong AI assistance, and
+what that process is: humans lead the architecture, semantics, testing and
+benchmarking, generated code is a proposal rather than evidence, and changes
+are validated against the specification suite, real toolchain output and
+repeatable benchmarks.
+
 ## 0.2.1
 
 ### Changed

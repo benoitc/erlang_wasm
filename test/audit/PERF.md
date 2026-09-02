@@ -3934,3 +3934,32 @@ process, one `_start`, exit. Such a worker cannot warm anything, not even for
 the next process, which is why priming in `bench/paths/pyarms.erl` runs in the
 process that outlives it. Any prewarming design has to hold the asking process
 open until the compiler has the work.
+
+### A fresh instance that adopts before its first `_start` allocates 1.9% as much
+
+QuickJS, same guest and same request, measured the same way. The first arm is
+the cold interpreted run; the second is a fresh instance in a fresh process,
+after the module has been compiled, entering generated code on its **first and
+only** call:
+
+| | cold, interpreted | adopted before `_start` |
+| --- | ---: | ---: |
+| allocated | 28,145,449 | **532,789** |
+| collections | 32 minor, 14 major | 0 minor, 1 major |
+| clean wall | 53 ms | **16 ms** |
+| `entered` | 0 | **1** |
+
+**98.1% of the allocation is gone**, and the wall with it, 3.3x. The arm is not
+readable from the wall alone, which is why `entered` is in the table: it is 1,
+so this instance ran generated code on its first call, which is the thing that
+was in doubt.
+
+Compiling 402 functions took **165 seconds** and produced a 13.5 MB `.beam`,
+written to the on-disk cache. The cost is paid once per module, per runtime and
+per OTP version; the second emulator to see that module reads it back.
+
+This is the answer to the allocation question the whole investigation has been
+asking. The 5.45 G words CPython allocates are the interpreter executing 383
+million operations, and generated code does not allocate them. Nothing else
+measured -- lowering, decoding, validation, instantiation, the request itself --
+is worth one per cent.

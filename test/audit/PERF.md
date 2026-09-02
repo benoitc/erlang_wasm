@@ -4016,3 +4016,30 @@ interpreted dispatch, and generated code does not allocate it.
 | wall | 53 ms to 16 ms | 19.2 s to 4.9 s |
 | functions compiled | 402 | 2,333 |
 | compile time, once | 165 s | 464 s |
+
+### The disk cache saves 4% of a sharded compile
+
+Sharding is what gets CPython compiled, and it is also what stops the artifact
+being reusable. `wasm_jit:artifact/8` caches a unit only when it is the last in
+the chain:
+
+    %% Not cached when it is one of several. The key would have to carry which
+    %% module the chain points at next, and a shard set is only reproducible if
+    %% the same split falls out of the same workload, which nothing promises.
+
+Four shards, so one is written and three are rebuilt on every emulator. Measured
+by running the same arm twice against the same cache directory:
+
+| | cold cache | warm cache |
+| --- | ---: | ---: |
+| time to compiled | 464 s | **446 s** |
+| `cached` | 0 | 1 |
+| files in the cache directory | 1 | 1 |
+
+Which makes the on-disk cache worth **4%** here, and the whole 464 seconds is
+paid again by every node that runs this guest. For QuickJS, which fits in one
+unit, the same cache is worth the entire 165 seconds.
+
+So the two mechanisms that would make a large guest cheap are mutually
+exclusive as they stand: a module small enough to cache is one that fits under
+`?MAX_FUNS`, and a module that needs sharding to fit cannot be cached.

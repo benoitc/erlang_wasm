@@ -3293,3 +3293,62 @@ to nanoseconds and an ETS BIF is the case where they come apart furthest.
 Six per cent, against a design that needs the keeper to reserve prospective
 words rather than only check them. `ATTEMPTS.md` has the three ways the cheap
 version is wrong and why the correct one waits.
+
+## What `uns(64, _)` costs: nothing on a comparison, 43x on a shift
+
+`wasm_core:uns(64, E)` is `band 16#FFFFFFFFFFFFFFFF`, a literal past the 60-bit
+immediate range, applied to values already held in `[-2^63, 2^63)`. It is
+reached by `i64.shr_u` and by every unsigned 64-bit comparison, and **not** by
+`i64.div_u` or `i64.rem_u`: neither has an `inline/1` clause, so both generate a
+call to `wasm_exec:op2/3`.
+
+Each unsigned form measured next to its signed twin, which is the same
+instruction without the mask. Generated code, load average 4, `perinstr`:
+
+| snippet | ns/snippet |
+| --- | ---: |
+| `i64.lt_s`, small | 0.99 |
+| `i64.lt_u`, small | 1.05 |
+| `i64.lt_s`, high bit | 0.98 |
+| `i64.lt_u`, high bit | 0.85 |
+| `i64.ge_s`, high bit | 1.12 |
+| `i64.ge_u`, high bit | 0.87 |
+| `i64.shr_s`, small | 0.64 |
+| `i64.shr_u`, small | 0.55 |
+| `i64.shr_s`, high bit | 0.74 |
+| **`i64.shr_u`, high bit** | **30.71** |
+
+Three runs of the last row: 30.71, 31.18, 30.81, against 0.71 to 0.74 for its
+signed twin. Everything else is a wash.
+
+**The comparisons are free and the shift is not**, and the shape says why:
+`i64.shr_u` is `wrap(64, bsr(uns(64, A), _))`, so a negative `A` becomes a
+bignum in `uns/2` and then goes through `wrap/2`'s `band`, `bxor` and `-`,
+which are three more. A comparison masks and then compares once.
+
+So the change worth making is to `i64.shr_u` and not to `uns/2` in general, and
+it is not made here. The cheap form has to case on the shift amount: the
+identity that avoids the bignum is `(A bsr S) + (1 bsl (64 - S))` for a
+negative `A`, and `1 bsl (64 - S)` is itself past the immediate range until `S`
+reaches 5. That is a real piece of code generation with a silent failure mode,
+it is not the bulk array path this branch is about, and it now has a number to
+justify it.
+
+### It took three tries to make the probe measure anything
+
+Every row read 0.00 twice before it read 30.71, and each time for a different
+reason. This is the failure ATTEMPTS.md names, met three ways in one afternoon:
+
+1. **`(drop (i64.lt_u ...))`.** A computation whose result is dropped is dead
+   and the SSA pass deletes it.
+2. **A loop-invariant operand.** `(i64.lt_u (local.get $h) (i64.const 5))` with
+   `$h` set before the loop is hoisted out of it entirely.
+3. **Repeated `local.set $t`.** Forty independent writes to one local are
+   thirty-nine dead stores; only the last survives.
+
+The fix is what `i32.add` had been doing all along, which is why it was the row
+that reported a number while `i32.shl` reported zero: accumulate into the local
+you read, and xor one operand with the loop counter. `run_case/3` now prints
+`<- eliminated, or below the noise floor` beside any row under 0.05 ns, so the
+next reader does not have to notice a zero. It fires on four rows that were
+already in the file.

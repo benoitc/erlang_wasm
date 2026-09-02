@@ -1,6 +1,26 @@
 -module(perinstr).
 -export([main/1]).
 
+%% Two things have to be true of a snippet repeated K times before it measures
+%% anything, and this file has now got each of them wrong once:
+%%
+%%   - the result must be used, or it is dead code and the SSA pass drops it;
+%%   - each copy must depend on the copy before it. Forty `local.set $t' from
+%%     independent expressions are thirty-nine dead stores, and one operand
+%%     that does not change across iterations is hoisted out of the loop.
+%%
+%% So the result accumulates into the local it reads, and one operand is xored
+%% with the loop counter. That is what `i32.add' has always done, which is why
+%% it was the row that reported a number while `i32.shl' reported zero.
+-define(VARY(Op, Operand),
+        "(local.set $t (i32.add (local.get $t) (" Op
+        " (i64.xor (local.get " Operand
+        ") (i64.extend_i32_u (local.get $i))) (i64.const 5))))").
+-define(VARYSH(Op, Operand),
+        "(local.set $u (i64.add (local.get $u) (" Op
+        " (i64.xor (local.get " Operand
+        ") (i64.extend_i32_u (local.get $i))) (i64.const 1))))").
+
 %% The marginal cost of one instruction: build the same loop with K copies of a
 %% snippet and with 2K, and take the difference. Everything the two runs share,
 %% loop overhead included, cancels.
@@ -12,7 +32,10 @@
 %% The tier arm is the one that matters now. A warm QuickJS run makes *zero*
 %% `wasm_exec:run/3` calls (`bench/paths/tiered.erl`), so nothing it does is
 %% interpreted and only these prices explain where its time goes.
-main([Tier]) ->
+%% An optional second argument runs only the cases whose name contains it, so
+%% a probe into one instruction does not pay for `memory.copy 1024B' twice.
+main([Tier]) -> main([Tier, ""]);
+main([Tier, Only]) ->
     {ok, _} = application:ensure_all_started(wasm),
     Opts = case Tier of
                "off" -> #{};
@@ -65,11 +88,47 @@ main([Tier]) ->
          %% deep nest of them, and every dispatch re-enters the whole nest.
          {"block, empty           ", "(block (nop))", 1},
          {"block x8 nested        ", "(block (block (block (block (block (block (block (block (nop)))))))))", 8},
+         %% What `wasm_core:uns(64, _)' costs. It is `band 16#FFFFFFFFFFFFFFFF',
+         %% a literal past the 60-bit immediate range, on values already held
+         %% in [-2^63, 2^63), and it is reached by `i64.shr_u' and by every
+         %% unsigned 64-bit comparison. Not by `i64.div_u' or `i64.rem_u':
+         %% neither has an `inline/1' clause, so both call `wasm_exec:op2/3'.
+         %%
+         %% Each unsigned form sits next to its signed twin, which does no
+         %% masking at all, and each pair runs twice: on a value that is small
+         %% and non-negative, and on one with the top bit set, because a range
+         %% test would treat those two differently and a mask does not.
+         %% `$h' comes from the loop bound so it cannot be folded away.
+         %% `local.set' and not `drop': every one of these measured 0.00 in the
+         %% `drop' form, because a computation whose result is dropped is dead
+         %% and the SSA pass removes it. `$t' and `$u' are locals, and a
+         %% `local.set' to a local nothing reads survives, which is why the
+         %% rows above are written that way too.
+         %% Read these as *pairs*: each unsigned form sits next to its signed
+         %% twin, which is the same instruction without the mask, and the
+         %% difference between the two is what `uns/2' costs. Neither absolute
+         %% number means much, because both carry the `xor' and the extend.
+         %%
+         %% Those two are what make the operand vary. Written against a
+         %% loop-invariant local the whole expression is hoisted out of the
+         %% loop and every row reads 0.00, which is how the first version of
+         %% these rows reported that unsigned comparison is free.
+         {"i64.lt_s, small       ", ?VARY("i64.lt_s", "$sm"), 9},
+         {"i64.lt_u, small       ", ?VARY("i64.lt_u", "$sm"), 9},
+         {"i64.lt_s, high bit    ", ?VARY("i64.lt_s", "$h"), 9},
+         {"i64.lt_u, high bit    ", ?VARY("i64.lt_u", "$h"), 9},
+         {"i64.ge_s, high bit    ", ?VARY("i64.ge_s", "$h"), 9},
+         {"i64.ge_u, high bit    ", ?VARY("i64.ge_u", "$h"), 9},
+         {"i64.shr_s, small      ", ?VARYSH("i64.shr_s", "$sm"), 9},
+         {"i64.shr_u, small      ", ?VARYSH("i64.shr_u", "$sm"), 9},
+         {"i64.shr_s, high bit   ", ?VARYSH("i64.shr_s", "$h"), 9},
+         {"i64.shr_u, high bit   ", ?VARYSH("i64.shr_u", "$h"), 9},
          {"br_table 4 of 8 nested ",
           "(block $a (block $b (block $c (block $d (block $e (block $f (block $g (block $h (br_table $a $b $c $d $e $f $g $h (local.get $i))))))))))",
           9}],
     io:format("~-24s ~10s ~10s~n", ["snippet", "ns/snip", "ns/instr"]),
-    [run_case(Name, Snip, Instrs) || {Name, Snip, Instrs} <- Cases],
+    [run_case(Name, Snip, Instrs) || {Name, Snip, Instrs} <- Cases,
+                                     string:find(Name, Only) =/= nomatch],
     init:stop().
 
 run_case(Name, Snippet, Instrs) ->
@@ -77,7 +136,14 @@ run_case(Name, Snippet, Instrs) ->
     T1 = time_for(Snippet, K),
     T2 = time_for(Snippet, 2 * K),
     Per = (T2 - T1) / K,
-    io:format("~-24s ~10.2f ~10.2f~n", [Name, Per, Per / Instrs]).
+    io:format("~-24s ~10.2f ~10.2f~s~n", [Name, Per, Per / Instrs, note(Per)]).
+
+%% A snippet that costs nothing usually was not run. Ten of them were added to
+%% this file in the `(drop ...)' form, which is dead code the SSA pass removes,
+%% and every one reported 0.00 as though the instruction were free. Say so in
+%% the row rather than leaving a reader to notice the zero.
+note(Per) when Per < 0.05 -> "   <- eliminated, or below the noise floor";
+note(_Per) -> "".
 
 %% ns per iteration for a loop whose body holds `K' copies of the snippet
 time_for(Snippet, K) ->
@@ -105,6 +171,12 @@ source(Snippet, K) ->
        " (global $g (mut i32) (i32.const 0))\n",
        " (func (export \"bench\") (param $n i32) (result i32)\n",
        "  (local $i i32) (local $t i32) (local $u i64) (local $f f64)\n",
+       "  (local $h i64) (local $sm i64)\n",
+       %% Every bit set above the loop bound, so `$h' is high-bit unsigned and
+       %% comes from a parameter: a constant would be propagated into the loop
+       %% and the masks folded away with it.
+       "  (local.set $h (i64.sub (i64.const 0) (i64.extend_i32_u (local.get $n))))\n",
+       "  (local.set $sm (i64.extend_i32_u (local.get $n)))\n",
        "  (block $done (loop $l\n",
        "    (br_if $done (i32.ge_u (local.get $i) (local.get $n)))\n        ",
        Body,

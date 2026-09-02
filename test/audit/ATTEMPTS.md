@@ -402,3 +402,12 @@ element, so it waits for a reason better than that.
 
 Measure the null before designing the optimisation. Deleting the thing you
 mean to make cheaper takes one edit and bounds the whole design's value.
+
+A per-instruction snippet measures nothing unless the optimiser cannot remove
+it, and there are three separate ways it can. `perinstr` reported 0.00 for ten
+new rows twice running: once because `(drop ...)` is dead code, once because a
+loop-invariant operand is hoisted out of the loop, and once because forty
+independent `local.set $t` are thirty-nine dead stores. Accumulate into the
+local you read, and xor an operand with the loop counter. The same reading
+says four rows already in that file measure nothing, which is why `run_case/3`
+now flags anything under 0.05 ns instead of printing a bare zero.

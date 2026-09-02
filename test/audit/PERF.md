@@ -3182,3 +3182,38 @@ time. The three together are 57% of the reductions a copied element cost.
 
 The fill arms do not move, which is what says the change is where it claims to
 be: sparse stays at 7.8 reductions an element and dense at 7.8.
+
+## Direction decides an overlapping array.copy, so nothing is materialised
+
+`array_copy/6` read the whole source into a list before writing any of it, so
+that an overlapping copy behaved as though an intermediate copy were taken.
+That is one way to get the answer and it costs a list per copy. The other is
+the direction: downwards when the destination starts later inside the same
+array, upwards everywhere else, which is what `memmove` does and what the
+specification's "as if an intermediate copy" means.
+
+Ten thousand elements, two runs each:
+
+| | `f94e5b4` | this commit |
+| --- | ---: | ---: |
+| reductions per element | 8.6, 8.6 | **7.0, 7.0** |
+| words reclaimed per element | 11.8, 11.9 | **9.9, 9.4** |
+
+Times are not quoted: the box went from load 5 to load 14 between the two
+measurements and the column is unreadable across that.
+
+**It cost 0.4 reductions an element before `elem_at/2` was inlined**, at 9.0
+against the 8.6 it started from, which is more than the lookup it wraps. As a
+loop body it was inline already; pulling it into a function so both directions
+could share it is what put the call there. `-compile({inline, ...})` is the
+same answer `wrote/2` and `crossed/2` needed, and for the same reason.
+
+No new case pins this. Commit `f94e5b4` keeps a full snapshot, so it is already
+right for every overlap direction and a new overlap case would pass against it,
+which is the vacuous test AGENTS.md forbids. `testsuite/array_copy.wast` is
+what pins it: 35 assertions, 0 fail, 0 skip, two of them the overlap cases,
+inside the 65,481 the floor asserts.
+
+A copied element is now cheaper than a filled one, 7.0 against `array.fill`
+sparse at 7.8, which is the next thing to look at: the fill loop still runs
+`lists:foreach` over a `lists:seq`.

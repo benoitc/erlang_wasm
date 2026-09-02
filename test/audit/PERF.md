@@ -3524,3 +3524,32 @@ traps, because both produced plausible numbers rather than obvious failures:
   looks like. Print something that proves the branch was taken: this one now
   prints whether the module is a handle or inline, and the 22 MB peak heap says
   so too.
+
+### The baseline, on an instrument that was proved first
+
+`bench/paths/allocwords.erl` derives one process's allocation from its own
+collection trace: `wordsize` summed over the end events between two forced
+majors, plus the change in live words. It is proved before use, against a list
+of N cons cells retained (which exercises the live-set half) and discarded
+(which exercises the reclaimed half), and agrees to 0.0% at N up to four
+million. `bench/paths/guestarm.erl` runs the pinned CPython through it.
+
+One start-up plus one request, worker positions reported separately because the
+first run in an emulator is not the second:
+
+| | `compile/1` w1 | `compile/1` w2 | `load/1` w1 | `load/1` w2 |
+| --- | ---: | ---: | ---: | ---: |
+| wall ms | 39,177 | 18,397 | 49,897 | 63,606 |
+| **allocated words** | 5,452,429,940 | 5,433,402,532 | 5,446,956,230 | 5,440,531,391 |
+| collections | 1,297 | 880 | 18,073 | 17,790 |
+| live at end | 23,777,394 | 23,777,394 | 342,430 | 342,430 |
+
+**Allocation is the same to within 0.1% across all four.** The live set differs
+by 69x and the collection count by 20x. That is the mechanism above, measured
+per process rather than inferred from a node-wide counter, and it is now the
+baseline any change is judged against.
+
+**The figure to beat is 5.45 G words, not 4.8 G.** The 4.8 G quoted earlier in
+this file came from `erlang:statistics(garbage_collection)`, which counts the
+node; it was about 12% low. Every allocation number here from now on comes from
+`allocwords`.

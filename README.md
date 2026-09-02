@@ -23,6 +23,16 @@ Nothing raises. A malformed binary, an ill-typed module, a trap and a resource
 limit all come back as `{error, Error}` carrying a class, a machine-readable
 kind, the specification's message text, and context.
 
+## AI-assisted development
+
+This software is developed with **strong assistance from GPT 5.6, Claude Opus 5, and Fable**, with humans leading the architecture, semantics, testing, benchmarking, and debugging.
+
+We say this openly because it shaped how the project was built. If you are not comfortable using AI-developed code, this software may not be for you.
+
+The development process is not prompt-and-accept. Humans define the design, architecture, expected behaviour, and correctness criteria. AI agents are used extensively for implementation, refactoring, test generation, code analysis, and exploring alternative approaches.
+
+Generated code is treated as a proposal, not as evidence of correctness. Changes are validated through the WebAssembly specification test suite, real toolchain output, differential testing against established runtimes where applicable, and repeatable performance benchmarks. Unexpected results are investigated rather than accepted because an agent produced plausible code.
+
 ## Status
 
 Runs unmodified real-toolchain output: a Rust `wasm32-wasip1` `std` binary

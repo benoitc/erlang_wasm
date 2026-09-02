@@ -3908,32 +3908,49 @@ pay for more than a rounding error of a CPython cold start. The only lever with
 the right order of magnitude is not executing those 383 million operations
 interpreted.
 
-### The ask does not survive the process that raised it
+### The compiled tier refuses CPython, silently, at function 2049
 
-A one-call guest asks for compilation when `_start` finishes. If the process
-that made that call then exits, **nothing is compiled**, and nothing reaches the
-on-disk cache either.
+CPython never runs compiled, and the reason is neither the `_start` shape nor
+the one function refused for `too_many_locals`. The compilation is attempted,
+runs, and **throws**:
 
-Three variants of the same QuickJS priming call, watched through
-`supervisor:count_children(wasm_jit_sup)` and a call trace on `wasm_jit:compile/4`
-and `wasm_instance:release_ask/1`:
+    wasm_jit:compile/4 threw {error, {limit, too_many_functions}}
 
-| priming call runs in | workers after 30 s | `compile/4` entered | compiled |
-| --- | ---: | --- | --- |
-| the process that stays alive | 1, still 1 at 105 s | yes | yes |
-| a spawned process kept alive | 1, still 1 at 105 s | yes | yes |
-| a spawned process that exits | **0** | **never** | **no** |
+`wasm_core` pre-generates every atom a compiled unit can use, because nothing a
+guest supplies may become an atom. `?MAX_FUNS` is **2048**, and its comment says
+what it was sized against: "qjs has 1666 compilable functions". One CPython
+request reaches **2,333**. `fun_name/1` raises at the 2049th, part way through a
+compile that has already done its work, although `limits/0` exists so that "a
+caller can refuse before it starts rather than part way".
 
-The worker is started -- `spawn_compile/2` gets its `{ok, Pid}` -- and then never
-receives its work, exiting on `compiler_loop/0`'s 30-second `after`. It is not a
-compile that failed: `compile/4` is never entered and `release_ask/1` is never
-called, so the ask is not given back either.
+What makes it invisible is what happens next. `compiler_loop/0` catches
+everything, gives the ask back and exits:
 
-This is exactly the shape of every `wasm32-wasi` command-line worker: one
-process, one `_start`, exit. Such a worker cannot warm anything, not even for
-the next process, which is why priming in `bench/paths/pyarms.erl` runs in the
-process that outlives it. Any prewarming design has to hold the asking process
-open until the compiler has the work.
+| | |
+| --- | --- |
+| logged | nothing |
+| `wasm_jit:counts()` | unchanged, all zeros |
+| next hot call | asks again, and the whole thing repeats |
+
+So a caller sees a compiled tier that is enabled, asks for compilation on every
+call, and never reports an error or a compilation. Only an exception trace on
+`compile/4` says why.
+
+**A correction, and the trap that caused it.** An earlier version of this
+section said the ask does not survive the process that raised it, on the
+evidence that a spawned priming process left `workers` at 0 while a surviving
+one kept a compiler running. That was wrong twice over. The trace patterns that
+were supposed to show `compile/4` being entered had matched **nothing**, because
+`erlang:trace_pattern/3` on a module the emulator has not loaded answers 0 and
+`trace_info/2` then reads `undefined` -- the same trap this file already records
+for the dispatch counter, hit a second time in the same session. And the
+difference between the arms was the watch, not the runtime: QuickJS takes 165
+seconds to compile, and the failing arm had been given 60. With the patterns
+actually set, the spawned arm enters `compile/4` and its compiler is still
+running at 45 seconds.
+
+Set the pattern, then check it returned 1. A trace that matches nothing looks
+exactly like a runtime that does nothing.
 
 ### A fresh instance that adopts before its first `_start` allocates 1.9% as much
 

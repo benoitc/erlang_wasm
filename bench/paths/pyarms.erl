@@ -126,13 +126,9 @@ clean(Mod, Dir, Reqs, Setup, Compile) ->
 %% One full interpreted call, only to raise the ask that lets the compiler fill
 %% a slot -- from the disk cache when it is warm. Nothing here is measured.
 %%
-%% In *this* process, and that is not a detail. Priming from a throwaway
-%% process compiles nothing at all: the worker starts, never receives its work
-%% and exits on `compiler_loop/0`'s 30-second timeout, with `compile/4` never
-%% entered and `release_ask/1` never called. Keeping the same spawned process
-%% alive instead, the compiler is still running at 105 seconds. So the ask does
-%% not survive the process that raised it, which is the shape every one-shot
-%% `wasm32-wasi` worker has.
+%% In this process rather than a spawned one, which costs nothing and removes a
+%% variable: compiling QuickJS takes 165 seconds, so a wait that is too short
+%% reads exactly like an ask that went nowhere.
 prime(Mod, Dir) ->
     I = inst(Mod, Dir, [?REQ1], true),
     {T, {R, _, _}} = call(I, false),

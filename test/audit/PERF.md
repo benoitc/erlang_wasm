@@ -3348,3 +3348,42 @@ you read, and vary a part of the operand the instruction actually keeps.
 `run_case/3` prints `<- eliminated, or below the noise floor` beside any row
 under 0.05 ns, which catches the first three but not the fourth. Nothing
 catches the fourth except reading the pair.
+
+## Four rows of the price table had stopped measuring anything
+
+`PERF.md`'s compiled price table above has `i32.mul` at 2.45 ns, `i32.shl` at
+1.95, `i64.shl` at 24.99 and `f64.convert_i32_u` at 4.73. Re-running the arm
+that produced them now gives 0.02, 0.00, -0.01 and -0.00. The snippets had not
+changed. The compile quality default has moved to `full` since they were taken,
+and `full` collapses forty shifts of one local into one shift and drops
+thirty-nine stores to a local nothing reads.
+
+Each snippet now xors the loop counter into its operand, or accumulates, so no
+copy is the same computation as the one before it. Two passes, load average 10:
+
+| snippet | ns | what else is in it |
+| --- | ---: | --- |
+| `i32.xor`, the null arm | 0.52, 0.53 | the loop, and the xor |
+| `i32.add`, for scale | 0.69 | nothing |
+| `i32.mul` | 2.71, 2.97 | the xor |
+| `i32.shl` | 2.99, 2.95 | the xor |
+| **`i64.shl`** | **30.97, 28.90** | the xor, and an `i64.extend_i32_u` |
+| `f64.convert_i32_u` | 10.29, 10.47 | an `f64.add`, which is 6.57 |
+
+Net of what each carries, that is about 2.3 for `i32.mul`, 2.4 for `i32.shl`
+and 3.7 for `f64.convert_i32_u`, against the 2.45, 1.95 and 4.73 the table
+records. The rows reproduce, which is what says the zeros were the artefact and
+not a change in the runtime.
+
+**`i64.shl` does not reproduce so much as persist: about 29 ns against
+`i32.shl`'s 2.4, a 12x gap.** It is the last of the i64 constructs the 60-bit
+work did not reach, and for a reason: `wrap(64, bsl(A, Sh))` shifts *before* it
+masks, so the intermediate is up to 2^126 whatever the answer turns out to be.
+Masking first, `(A band (2^64-1 bsr Sh)) bsl Sh`, keeps the intermediate inside
+64 bits but needs a bignum literal of its own.
+
+That is a real number and it is not acted on here. The `i64.shr_u` attempt
+recorded in `ATTEMPTS.md` was also a correct rewrite of a genuinely masked
+path, and it was two to three times slower, because a guarded form stops the
+SSA pass doing better than the guard. Anything done to `i64.shl` gets measured
+against that expectation, interleaved, before it is believed.

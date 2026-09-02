@@ -3294,7 +3294,7 @@ Six per cent, against a design that needs the keeper to reserve prospective
 words rather than only check them. `ATTEMPTS.md` has the three ways the cheap
 version is wrong and why the correct one waits.
 
-## What `uns(64, _)` costs: nothing on a comparison, 43x on a shift
+## What `uns(64, _)` costs: about 3.5 nanoseconds, and not worth a change
 
 `wasm_core:uns(64, E)` is `band 16#FFFFFFFFFFFFFFFF`, a literal past the 60-bit
 immediate range, applied to values already held in `[-2^63, 2^63)`. It is
@@ -3303,52 +3303,48 @@ reached by `i64.shr_u` and by every unsigned 64-bit comparison, and **not** by
 call to `wasm_exec:op2/3`.
 
 Each unsigned form measured next to its signed twin, which is the same
-instruction without the mask. Generated code, load average 4, `perinstr`:
+instruction without the mask, so the *difference* between a pair is what the
+mask costs. Generated code, `perinstr`, interleaved:
 
-| snippet | ns/snippet |
-| --- | ---: |
-| `i64.lt_s`, small | 0.99 |
-| `i64.lt_u`, small | 1.05 |
-| `i64.lt_s`, high bit | 0.98 |
-| `i64.lt_u`, high bit | 0.85 |
-| `i64.ge_s`, high bit | 1.12 |
-| `i64.ge_u`, high bit | 0.87 |
-| `i64.shr_s`, small | 0.64 |
-| `i64.shr_u`, small | 0.55 |
-| `i64.shr_s`, high bit | 0.74 |
-| **`i64.shr_u`, high bit** | **30.71** |
+| pair | signed | unsigned | the mask |
+| --- | ---: | ---: | ---: |
+| `i64.lt`, small | 0.99 | 1.05 | nothing |
+| `i64.lt`, high bit | 0.98 | 0.85 | nothing |
+| `i64.ge`, high bit | 1.12 | 0.87 | nothing |
+| `i64.shr`, high bit, by 1 | 26.05, 27.14 | 30.16, 30.17 | **~3.5 ns** |
+| `i64.shr`, high bit, by 47 | 0.42, 0.64 | 0.61, 0.67 | ~0.1 ns |
 
-Three runs of the last row: 30.71, 31.18, 30.81, against 0.71 to 0.74 for its
-signed twin. Everything else is a wash.
+Nothing here is worth a change, and one was attempted anyway. See
+`ATTEMPTS.md`: routing `i64.shr_u` through a three-clause case that avoids the
+mask for the two cases that can avoid it made every measured case **two to
+three times slower**, because the case is what stops the SSA pass doing better
+than any of it.
 
-**The comparisons are free and the shift is not**, and the shape says why:
-`i64.shr_u` is `wrap(64, bsr(uns(64, A), _))`, so a negative `A` becomes a
-bignum in `uns/2` and then goes through `wrap/2`'s `band`, `bxor` and `-`,
-which are three more. A comparison masks and then compares once.
+The shift rows are large for both signs because the snippet accumulates its
+results, and a value shifted right by one is around 2^62, which puts the
+accumulating `i64.add` on `wrap_sum/2`'s slow clause. That is the snippet, not
+the shift. It is why the pair matters and neither number does.
 
-So the change worth making is to `i64.shr_u` and not to `uns/2` in general, and
-it is not made here. The cheap form has to case on the shift amount: the
-identity that avoids the bignum is `(A bsr S) + (1 bsl (64 - S))` for a
-negative `A`, and `1 bsl (64 - S)` is itself past the immediate range until `S`
-reaches 5. That is a real piece of code generation with a silent failure mode,
-it is not the bulk array path this branch is about, and it now has a number to
-justify it.
+### It took four tries to make this probe measure anything
 
-### It took three tries to make the probe measure anything
+Every row read 0.00 twice, then the two shift rows disagreed by 43x, and only
+the fourth version measured the instruction. Each failure was a different way
+for the optimiser to be right about code that was not doing anything:
 
-Every row read 0.00 twice before it read 30.71, and each time for a different
-reason. This is the failure ATTEMPTS.md names, met three ways in one afternoon:
-
-1. **`(drop (i64.lt_u ...))`.** A computation whose result is dropped is dead
-   and the SSA pass deletes it.
+1. **`(drop (i64.lt_u ...))`.** A computation whose result is dropped is dead.
 2. **A loop-invariant operand.** `(i64.lt_u (local.get $h) (i64.const 5))` with
-   `$h` set before the loop is hoisted out of it entirely.
+   `$h` set before the loop is hoisted out of it.
 3. **Repeated `local.set $t`.** Forty independent writes to one local are
-   thirty-nine dead stores; only the last survives.
+   thirty-nine dead stores.
+4. **Variation the instruction discards.** Xoring the loop counter into the low
+   bits varies bits 0 to 17, and a shift of 47 throws them away, so the
+   expression was loop-invariant again. This one was the dangerous one: it did
+   not read 0.00, it read *0.74 for the signed row and 30.71 for the unsigned
+   one*, and that 43x was reported as a finding before the fourth version
+   showed the pair is 26.05 against 30.16.
 
-The fix is what `i32.add` had been doing all along, which is why it was the row
-that reported a number while `i32.shl` reported zero: accumulate into the local
-you read, and xor one operand with the loop counter. `run_case/3` now prints
-`<- eliminated, or below the noise floor` beside any row under 0.05 ns, so the
-next reader does not have to notice a zero. It fires on four rows that were
-already in the file.
+The fix is what `i32.add` had been doing all along: accumulate into the local
+you read, and vary a part of the operand the instruction actually keeps.
+`run_case/3` prints `<- eliminated, or below the noise floor` beside any row
+under 0.05 ns, which catches the first three but not the fourth. Nothing
+catches the fourth except reading the pair.

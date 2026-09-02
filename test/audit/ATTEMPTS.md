@@ -403,11 +403,36 @@ element, so it waits for a reason better than that.
 Measure the null before designing the optimisation. Deleting the thing you
 mean to make cheaper takes one edit and bounds the whole design's value.
 
+**Avoiding `uns(64, _)` in `i64.shr_u` with a case on the shift count.** Two of
+the three cases genuinely do not need the mask: a non-negative value shifts
+arithmetically, and a negative one shifted by six or more is
+`(A bsr Sh) + 2^(64-Sh)` exactly, with both the addend and the answer inside
+the immediate range. It is correct -- 187 pairs across every boundary agree
+with the interpreter, with generated code entered 187 times -- and it is **two
+to three times slower** than the mask it replaces: shift by 1 went 30.16 to
+63.73, shift by 47 went 0.61 to 1.15, and the signed control did not move.
+
+The three-clause case is what costs it. `wrap(64, bsr(uns(64, A), Sh))` is
+branch-free, and the SSA type pass evidently does better with it than with
+anything guarded. That is the same lesson as `wrap_sum/2` read backwards: a
+guard helps when it *tells* the compiler a range it could not infer, and hurts
+when it hides one it could.
+
+The measurement that justified trying was also wrong, which is the other half
+of this entry. See below.
+
 A per-instruction snippet measures nothing unless the optimiser cannot remove
-it, and there are three separate ways it can. `perinstr` reported 0.00 for ten
-new rows twice running: once because `(drop ...)` is dead code, once because a
-loop-invariant operand is hoisted out of the loop, and once because forty
-independent `local.set $t` are thirty-nine dead stores. Accumulate into the
-local you read, and xor an operand with the loop counter. The same reading
-says four rows already in that file measure nothing, which is why `run_case/3`
-now flags anything under 0.05 ns instead of printing a bare zero.
+it, and there are four separate ways it can. `perinstr` reported 0.00 for ten
+new rows twice running -- `(drop ...)` is dead code, a loop-invariant operand
+is hoisted out of the loop, forty independent `local.set $t` are thirty-nine
+dead stores -- and then, worse, reported a *number* for a row that was still
+loop-invariant: the counter was xored into bits 0 to 17 and the instruction
+under test shifted them away. That version read 0.74 signed against 30.71
+unsigned and the 43x was reported as a finding. The honest pair is 26.05
+against 30.16.
+
+Accumulate into the local you read, and vary a part of the operand the
+instruction keeps. `run_case/3` flags anything under 0.05 ns, which catches the
+first three failures and not the fourth; the fourth is caught only by reading
+each unsigned row against its signed twin, which is why they are laid out in
+pairs. Four rows already in that file trip the flag.

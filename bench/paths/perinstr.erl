@@ -16,10 +16,16 @@
         "(local.set $t (i32.add (local.get $t) (" Op
         " (i64.xor (local.get " Operand
         ") (i64.extend_i32_u (local.get $i))) (i64.const 5))))").
--define(VARYSH(Op, Operand),
+%% The counter is shifted up 40 before it is xored in. Xored in at the bottom
+%% it varies bits 0 to 17 only, which a shift of 47 discards, and the whole
+%% expression goes back to being loop-invariant: the `>> 47' rows read 0.79 ns
+%% on both sides of a change to exactly that code before this was noticed.
+-define(VARYSH(Op, Operand), ?VARYSH(Op, Operand, "1")).
+-define(VARYSH(Op, Operand, By),
         "(local.set $u (i64.add (local.get $u) (" Op
         " (i64.xor (local.get " Operand
-        ") (i64.extend_i32_u (local.get $i))) (i64.const 1))))").
+        ") (i64.shl (i64.extend_i32_u (local.get $i)) (i64.const 40)))"
+        " (i64.const " By "))))").
 
 %% The marginal cost of one instruction: build the same loop with K copies of a
 %% snippet and with 2K, and take the difference. Everything the two runs share,
@@ -119,10 +125,18 @@ main([Tier, Only]) ->
          {"i64.lt_u, high bit    ", ?VARY("i64.lt_u", "$h"), 9},
          {"i64.ge_s, high bit    ", ?VARY("i64.ge_s", "$h"), 9},
          {"i64.ge_u, high bit    ", ?VARY("i64.ge_u", "$h"), 9},
-         {"i64.shr_s, small      ", ?VARYSH("i64.shr_s", "$sm"), 9},
-         {"i64.shr_u, small      ", ?VARYSH("i64.shr_u", "$sm"), 9},
-         {"i64.shr_s, high bit   ", ?VARYSH("i64.shr_s", "$h"), 9},
-         {"i64.shr_u, high bit   ", ?VARYSH("i64.shr_u", "$h"), 9},
+         {"i64.shr_s, small      ", ?VARYSH("i64.shr_s", "$sm"), 11},
+         {"i64.shr_u, small      ", ?VARYSH("i64.shr_u", "$sm"), 11},
+         {"i64.shr_s, high bit   ", ?VARYSH("i64.shr_s", "$h"), 11},
+         {"i64.shr_u, high bit   ", ?VARYSH("i64.shr_u", "$h"), 11},
+         %% By 47 as well as by 1, because they are different code. A logical
+         %% shift of a high-bit value by less than six leaves an answer of at
+         %% least 2^58, which is past the immediate range whatever the
+         %% generator does; by six or more the answer fits, and a toolchain
+         %% pulling a tag out of a NaN-boxed word shifts by far more than six.
+         {"i64.shr_s, high >> 47 ", ?VARYSH("i64.shr_s", "$h", "47"), 11},
+         {"i64.shr_u, high >> 47 ", ?VARYSH("i64.shr_u", "$h", "47"), 11},
+         {"i64.shr_u, small >> 47", ?VARYSH("i64.shr_u", "$sm", "47"), 11},
          {"br_table 4 of 8 nested ",
           "(block $a (block $b (block $c (block $d (block $e (block $f (block $g (block $h (br_table $a $b $c $d $e $f $g $h (local.get $i))))))))))",
           9}],

@@ -29,11 +29,41 @@ should be run on any machine before the numbers here are believed.
         -run allocwords main
 """.
 
--export([measure/1, measure/2, validate/0, main/1]).
+-export([measure/1, measure/2, measure/3, validate/0, main/1]).
 
 -doc "Run `F' in a fresh process and report what it allocated.".
 -spec measure(fun(() -> term())) -> map().
 measure(F) -> measure(F, 300000).
+
+-doc """
+As `measure/2`, with a setup that runs in the same process and outside the
+window.
+
+Some costs can only be moved out of a measurement by doing them first *in the
+process that will be measured*: the interpreter's lowered-IR cache is keyed on
+the instance and lives in the process dictionary, so pre-lowering has to happen
+there. Tracing starts once `Setup` has returned, so nothing it allocates is
+counted.
+""".
+-spec measure(fun(() -> term()), fun((term()) -> term()), timeout()) -> map().
+measure(Setup, Body, Timeout) ->
+    Parent = self(),
+    Pid = spawn(fun() ->
+                    receive go -> ok end,
+                    S = Setup(),
+                    %% Setup is done and untraced; ask for the window now.
+                    Parent ! {ready, self()},
+                    receive traced -> ok end,
+                    erlang:garbage_collect(),
+                    R = Body(S),
+                    erlang:garbage_collect(),
+                    Parent ! {done, self(), R}
+                end),
+    Pid ! go,
+    receive {ready, Pid} -> ok after Timeout -> erlang:error(setup_timeout) end,
+    erlang:trace(Pid, true, [garbage_collection]),
+    Pid ! traced,
+    collect(Pid, Timeout).
 
 -spec measure(fun(() -> term()), timeout()) -> map().
 measure(F, Timeout) ->
@@ -51,6 +81,9 @@ measure(F, Timeout) ->
                 end),
     erlang:trace(Pid, true, [garbage_collection]),
     Pid ! go,
+    collect(Pid, Timeout).
+
+collect(Pid, Timeout) ->
     Result = receive {done, Pid, R} -> R
              after Timeout -> erlang:error(measure_timeout)
              end,

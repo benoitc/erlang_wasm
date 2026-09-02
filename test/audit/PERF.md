@@ -3745,3 +3745,48 @@ That reorders the candidates in the plan's step 3. Not rebuilding `#st{}` per
 instruction is a real cost and the right target for a long-running guest; for a
 one-shot `wasm32-wasi` command, which is most of what a toolchain emits, it is
 under two per cent and the one-time path is the whole thing.
+
+### Lowering is 39% of a request, and sizing its output misses that by 28x
+
+Counting `wasm_instance:body_of/2` cache misses says how often lowering happens
+and nothing about what it costs, and sizing the IR it produces with
+`erts_debug:size/1` measures only what it *keeps*. On QuickJS that retained
+figure is 725,535 words over 402 functions, which is 2% of the run and looks
+like an answer.
+
+Isolating it properly means moving it out of the window rather than measuring
+it: discover which functions a deterministic request reaches, then on a fresh
+instance lower exactly those **before the window opens**, in the same process,
+because the IR cache is keyed on the instance and lives in the process
+dictionary. Both arms then pay the guest's own start-up and the interpreter's
+dispatch, and only the cold one pays lowering.
+
+| arm | words |
+| --- | ---: |
+| cold, lowering inside the window | 52,837,237 |
+| warm, reached set pre-lowered | 32,231,161 |
+| **lowering** | **20,606,076, 39.0% of the run** |
+
+**Lowering allocates about twenty-eight words of garbage for every word of IR
+it retains.** Nothing that sizes the result can see that, which is why the
+retained figure is in this file as a trap and not as a measurement.
+
+`allocwords:measure/3` exists for this: it runs a setup in the measured process
+with tracing off, and opens the window only once the setup has returned. The
+first attempt at this experiment put the pre-lowering inside the measured fun,
+so both arms paid it and the difference came out at **4,176 words, 0.0%** -- a
+confident null result produced by a window that was open too early.
+
+### Where the run goes, so far
+
+| component | words | share | how it was separated |
+| --- | ---: | ---: | --- |
+| lowering | 20.6 M | 39% | pre-lowered outside the window |
+| dispatch, `#st{}` at 11 a time | 16.7 M | 32% | executed histogram times measured price |
+| retained IR, inside the 20.6 M above | 0.7 M | 2% | `erts_debug:size/1` |
+| instantiation | 0.14 M | 0.4% | staged measurement |
+| **accounted** | **37.3 M** | **~71%** | |
+
+Against the plan's 80% bar this is not finished, and the remainder is not yet
+named. What it does settle is the ranking: lowering first, dispatch second, and
+both of them ahead of anything else that has been proposed.

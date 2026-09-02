@@ -3700,3 +3700,48 @@ instruction implies about 270 M instructions, which at 35 seconds interpreted is
 the 80% the plan requires, and no change should be made on the strength of this
 table alone. What it does say is which candidate to price first: not rebuilding
 interpreter state per instruction.
+
+### The model closes at 50%, and the missing half is not dispatch at all
+
+Price times frequency, on QuickJS serving one JSON line. The histogram comes
+from a throwaway `wasm_exec` whose 123 `run/3` clause heads are renamed and
+wrapped by a counting one, so every dispatch is counted and the tail calls are
+kept:
+
+| | words |
+| --- | ---: |
+| measured allocation | 33,128,640 |
+| model, 11 a dispatch and 7 a block | 16,660,622 |
+| **closure** | **50.3%** |
+
+1,618,706 dispatches over 89 distinct opcodes, `block` the largest single one at
+17.69%. The plan's bar is 80%, so by its own rule nothing gets optimised on
+this.
+
+**Where the other half is.** Three stages, each a fresh process, each doing
+strictly more than the last, so every component is a difference:
+
+| stage | words |
+| --- | ---: |
+| instantiate only | 137,673 |
+| instantiate + one request | 33,138,857 |
+| instantiate + two requests | 33,744,447 |
+| **marginal second request** | **605,590** |
+| **premium paid by the first request** | **32,395,594** |
+
+**A second identical request costs 605 K words against the first request's
+33 M.** Ninety-eight per cent of what a `_start` guest allocates is paid once,
+and the steady state the dispatch model prices is under two per cent of it.
+
+**What the 32.4 M is, and what it is not.** `_start` is one call that serves
+every line and exits, so "two requests" is one start-up serving two, and the
+premium is everything the first request pays that the second does not: this
+runtime's lazy IR lowering *and* QuickJS parsing `worker.js` and building its
+own JS runtime. **This experiment cannot separate those two**, and the earlier
+line in this file calling it "lowering" would be wrong. Separating them needs
+lowering counted where it happens, in `wasm_instance:body_of/2`.
+
+That reorders the candidates in the plan's step 3. Not rebuilding `#st{}` per
+instruction is a real cost and the right target for a long-running guest; for a
+one-shot `wasm32-wasi` command, which is most of what a toolchain emits, it is
+under two per cent and the one-time path is the whole thing.

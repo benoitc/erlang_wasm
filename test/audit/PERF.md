@@ -3483,3 +3483,44 @@ was built from is heap data or a literal.
 **Until it is, `load/1`'s doc oversells itself on a large module.** It is right
 about what it was written about, which is not paying to decode the same bytes
 twice; it is wrong if read as advice for the steady state.
+
+### The mechanism: the decoded module is ballast the collector sizes the heap from
+
+The section above left this open. It is not the module cache, the allocator or
+the binary vheap on their own. **The collector sizes a process's heap, and its
+binary vheap threshold, from that process's live set, and the decoded module is
+live data the hot loop never reads.** On the heap it is ballast that buys a
+large heap; off the heap the same churn collects into a small one.
+
+`garbage_collection` trace on the worker, one CPython start-up, medians over
+every collection:
+
+| | `compile/1` | `load/1` | `load/1` + `min_heap_size` |
+| --- | ---: | ---: | ---: |
+| collections | 1,057 | **17,648** | **344** |
+| `heap_size` | 5,048,040 | 311,549 | 18,062,236 |
+| `old_heap_size` | 24,834,443 | 1,360,290 | 1,310,226 |
+| `bin_vheap_block_size` | 3,387,320 | **46,422**, the default | 923,153 |
+
+Read the last two columns together. Under `load/1` the live set is 1.36 M words
+against 24.8 M, so every threshold the collector derives from it stays at or
+near its default, and the interpreter's 4.8 G words of churn cross that
+threshold 17,648 times instead of 1,057. Over half of those are fullsweeps.
+
+**`min_heap_size` gives the ballast back without the live set**: 344
+collections, fewer than `compile/1` manages, with an `old_heap_size` still at
+1.31 M. The floor is doing exactly what the module was doing by accident.
+
+What is not measured yet is the wall time of that third column, cleanly. Two of
+the measurements on the way to this table were wrong and are worth recording as
+traps, because both produced plausible numbers rather than obvious failures:
+
+- **A node-wide counter for a per-process question.** `erlang:statistics(
+  garbage_collection)` counts the whole node, and it reported no change from
+  `min_heap_size` while the worker's own collections fell 51x. Trace the
+  process.
+- **A stale `.beam`.** A three-way comparison returned byte-identical rows for
+  all three configurations, which is what a harness that never took the branch
+  looks like. Print something that proves the branch was taken: this one now
+  prints whether the module is a handle or inline, and the 22 MB peak heap says
+  so too.

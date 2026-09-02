@@ -3096,3 +3096,58 @@ number the whole branch has to keep flat:
 | --- | ---: | ---: |
 | a loop iteration with a memory store | 44.035 | 44.035 |
 | a short call | 84.811 -- 84.826 | 84.794 |
+
+## The bulk array arm could not fail, and now reports allocation
+
+`bulk_array_ops` asserted `{ok, []}` on `alloc` and then handed `wasm:call/3`
+to `best_ms/1`, which discards the result. A call refused on its first
+instruction was timed exactly as a call that filled the array was, and reported
+a much better number. Checking the destination afterwards would not have caught
+it either: the fixture filled the whole array with 7, which the shortcut turns
+into a new default, then measured a partial fill writing 7 over 7, and a copy
+whose destination equalled its source from the second round on.
+
+The arm now writes a value the destination does not already hold, over an
+interior range with a sentinel at each end, and reads it back through
+`wasm:get_global/2` and `wasm_heap:array_get/3` outside the timed region. Three
+injections, each reverted after:
+
+| what was skipped | what the arm said |
+| --- | --- |
+| the `array_fill` clause's call into `wasm_heap` | `{array_not_written, src, 0, 7, 0}` |
+| `fill_each/5`, the partial-fill loop alone | `{array_not_written, src, 1, 7, 0}` |
+| the writes in the `array_copy` clause | `{array_not_written, dst, 0, 7, 0}` |
+
+The second one is the sharpest: it gets past the whole-array arm and is caught
+at index 1, which is what the interior range and its two sentinels are for. A
+range ending at the array boundary would hide a loop writing an invisible row
+at `Len`.
+
+Sparse and dense are separate arms because they are different operations: one
+creates an element row per index and the other replaces one.
+
+### Reductions, not nanoseconds
+
+Two runs of the arm, ten thousand elements, load average 4:
+
+| arm | ns | reductions | words reclaimed |
+| --- | ---: | ---: | ---: |
+| `array.fill` whole | 0.5, 0.6 | 0.0 | 0.0 |
+| `array.fill` sparse | 185.6, 184.2 | 7.8, 7.9 | 8.8 |
+| `array.fill` dense | 160.5, 163.1 | 7.8 | 8.1, 8.0 |
+| `array.copy` | 282.4, 294.5 | 19.9 | 18.4, 18.8 |
+
+The time column moves 4% between two runs of the same code at the same load,
+and at a hundred elements it moves 60%. The reduction column does not move.
+Every claim about this path comes from that column, with the time beside it for
+scale.
+
+Reclaimed words come from `erlang:statistics(garbage_collection)` around an
+isolated worker with a forced collection either side. That counter is
+node-wide, so the figure is only readable on a quiet box. Neither reductions
+nor a collection count would say it alone: a ten-thousand element temporary
+list can fit in the heap the process already has and provoke no collection at
+all.
+
+Per element means per element *written*, so an interior fill divides by
+`Len - 2` and not by the array's length.

@@ -62,7 +62,7 @@ silently name a different live object instead.
 -export([new_struct/3, new_array/5]).
 -export([get_field/3, set_field/4]).
 -export([array_len/2, array_get/3, array_set/4, array_set_unchecked/4]).
--export([array_default/2, array_fill/5]).
+-export([array_default/2, array_fill/5, array_copy/6]).
 -export([type_of/2]).
 -export([size/1, allocs/1, should_collect/1, collect/2, major_due/1]).
 -export([new/2, acquire/3, charge/1]).
@@ -496,9 +496,73 @@ array_fill({wasm_heap, Objs, Elems, Ctr} = H, {objref, Id} = Ref, 0, Len, Value)
 array_fill(H, Ref, Start, Len, Value) ->
     fill_each(H, Ref, Start, Len, Value).
 
-fill_each(H, Ref, Start, Len, Value) ->
-    lists:foreach(fun(I) -> array_set_unchecked(H, Ref, Start + I, Value) end,
-                  lists:seq(0, Len - 1)).
+%% Counting down rather than over `lists:seq(0, Len - 1)': the sequence was one
+%% cons cell per element of an array the caller never sees, and the fun one
+%% call on top of the write.
+fill_each(_H, _Ref, _Idx, 0, _Value) -> ok;
+fill_each(H, Ref, Idx, N, Value) ->
+    ok = array_set_unchecked(H, Ref, Idx, Value),
+    fill_each(H, Ref, Idx + 1, N - 1, Value).
+
+-doc """
+Copy a range of elements from one array to another.
+
+Both ranges are already checked, as they are for `array_fill/5`, so this does
+not ask again. `wasm_exec` used to hold the loop, and it read each element
+through `array_get/3`, which calls `array_len/2`, which is a table lookup per
+element re-answering the question the range check had just answered.
+
+The source's default is read once rather than per element. Most elements of an
+array have no row of their own, so `array_get/3` reaches the object table for
+every one of them, and a copy out of a defaulted array is that lookup and
+nothing else. The cost is that a whole-array fill of the source running
+concurrently, the only thing that changes a default, is not observed part way
+through a copy. Two processes writing one array while a third copies it is
+already unordered, and the snapshot below has the same property.
+
+An overlapping copy behaves as though an intermediate copy were taken, which is
+what the specification asks for, and it does not take one: the direction
+decides it. Reading the whole source into a list first was the other way to get
+that answer, and it costs a list per copy.
+""".
+-spec array_copy(heap(), term(), non_neg_integer(), term(),
+                 non_neg_integer(), non_neg_integer()) -> ok.
+array_copy({wasm_heap, Objs, Elems, _} = H, {objref, DstId} = DstRef, DstStart,
+           {objref, SrcId}, SrcStart, Len) ->
+    Src = {Elems, SrcId, ets:lookup_element(Objs, SrcId, 5)},
+    %% Downwards when the destination starts later inside the same array, since
+    %% copying up would overwrite source elements before they are read. Every
+    %% other case, including two different arrays and ranges that do not
+    %% overlap at all, is safe upwards.
+    case DstId =:= SrcId andalso DstStart > SrcStart of
+        true -> copy_down(H, DstRef, DstStart + Len - 1, Src,
+                          SrcStart + Len - 1, Len);
+        false -> copy_up(H, DstRef, DstStart, Src, SrcStart, Len)
+    end.
+
+copy_up(_H, _Ref, _Dst, _Src, _S, 0) -> ok;
+copy_up(H, Ref, Dst, Src, S, N) ->
+    ok = array_set_unchecked(H, Ref, Dst, elem_at(Src, S)),
+    copy_up(H, Ref, Dst + 1, Src, S + 1, N - 1).
+
+copy_down(_H, _Ref, _Dst, _Src, _S, 0) -> ok;
+copy_down(H, Ref, Dst, Src, S, N) ->
+    ok = array_set_unchecked(H, Ref, Dst, elem_at(Src, S)),
+    copy_down(H, Ref, Dst - 1, Src, S - 1, N - 1).
+
+%% An element with no row of its own is the array's default, which was read
+%% once by the caller and travels in `Src'.
+%%
+%% Inlined: as a call it cost 0.4 reductions on every element copied, which is
+%% more than the lookup it wraps and enough to give back what dropping the
+%% intermediate list had just bought.
+-compile({inline, [elem_at/2]}).
+
+elem_at({Elems, Id, Default}, Idx) ->
+    case ets:lookup(Elems, {Id, Idx}) of
+        [{_, V}] -> V;
+        [] -> Default
+    end.
 
 -doc """
 The kind and declared type of an object, for `ref.test` and `ref.cast`.

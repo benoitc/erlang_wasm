@@ -3096,3 +3096,294 @@ number the whole branch has to keep flat:
 | --- | ---: | ---: |
 | a loop iteration with a memory store | 44.035 | 44.035 |
 | a short call | 84.811 -- 84.826 | 84.794 |
+
+## The bulk array arm could not fail, and now reports allocation
+
+`bulk_array_ops` asserted `{ok, []}` on `alloc` and then handed `wasm:call/3`
+to `best_ms/1`, which discards the result. A call refused on its first
+instruction was timed exactly as a call that filled the array was, and reported
+a much better number. Checking the destination afterwards would not have caught
+it either: the fixture filled the whole array with 7, which the shortcut turns
+into a new default, then measured a partial fill writing 7 over 7, and a copy
+whose destination equalled its source from the second round on.
+
+The arm now writes a value the destination does not already hold, over an
+interior range with a sentinel at each end, and reads it back through
+`wasm:get_global/2` and `wasm_heap:array_get/3` outside the timed region. Three
+injections, each reverted after:
+
+| what was skipped | what the arm said |
+| --- | --- |
+| the `array_fill` clause's call into `wasm_heap` | `{array_not_written, src, 0, 7, 0}` |
+| `fill_each/5`, the partial-fill loop alone | `{array_not_written, src, 1, 7, 0}` |
+| the writes in the `array_copy` clause | `{array_not_written, dst, 0, 7, 0}` |
+
+The second one is the sharpest: it gets past the whole-array arm and is caught
+at index 1, which is what the interior range and its two sentinels are for. A
+range ending at the array boundary would hide a loop writing an invisible row
+at `Len`.
+
+Sparse and dense are separate arms because they are different operations: one
+creates an element row per index and the other replaces one.
+
+### Reductions, not nanoseconds
+
+Two runs of the arm, ten thousand elements, load average 4:
+
+| arm | ns | reductions | words reclaimed |
+| --- | ---: | ---: | ---: |
+| `array.fill` whole | 0.5, 0.6 | 0.0 | 0.0 |
+| `array.fill` sparse | 185.6, 184.2 | 7.8, 7.9 | 8.8 |
+| `array.fill` dense | 160.5, 163.1 | 7.8 | 8.1, 8.0 |
+| `array.copy` | 282.4, 294.5 | 19.9 | 18.4, 18.8 |
+
+The time column moves 4% between two runs of the same code at the same load,
+and at a hundred elements it moves 60%. The reduction column does not move.
+Every claim about this path comes from that column, with the time beside it for
+scale.
+
+Reclaimed words come from `erlang:statistics(garbage_collection)` around an
+isolated worker with a forced collection either side. That counter is
+node-wide, so the figure is only readable on a quiet box. Neither reductions
+nor a collection count would say it alone: a ten-thousand element temporary
+list can fit in the heap the process already has and provoke no collection at
+all.
+
+Per element means per element *written*, so an interior fill divides by
+`Len - 2` and not by the array's length.
+
+## The array.copy loop moves next to the accounting
+
+`wasm_exec`'s `array_copy` clause built three lists per copy and did a table
+lookup per element that the range check had already answered:
+`lists:seq(0, Len - 1)`, a `Vals` list from it, and then a third list of index
+pairs inside `write_elements/4` through `lists:enumerate/2`. Every read went
+through `array_get/3`, which calls `array_len/2`, which is
+`ets:lookup_element` on the object table, once per element, to re-check a range
+`check_array_range/4` had just checked.
+
+`wasm_heap:array_copy/6` holds the loop instead, beside the accounting it has
+to go through anyway. It reads the source's default *once*: most elements of an
+array have no row of their own, so a copy out of a defaulted array was that
+second lookup and nothing else.
+
+Ten thousand elements, load average 5, two runs each:
+
+| | `858b2fe` | this commit |
+| --- | ---: | ---: |
+| reductions per element | 19.9, 19.9 | **8.6, 8.6** |
+| words reclaimed per element | 18.4, 18.8 | **11.8, 11.9** |
+| ns per element | 282.4, 294.5 | 201.3, 193.5 |
+
+**This is not an isolated measurement of the table lookup**, and it cannot be
+made into one without exporting the raw getter for one commit and making it
+private again in the next. Moving the loop removes the two lists at the same
+time. The three together are 57% of the reductions a copied element cost.
+
+The fill arms do not move, which is what says the change is where it claims to
+be: sparse stays at 7.8 reductions an element and dense at 7.8.
+
+## Direction decides an overlapping array.copy, so nothing is materialised
+
+`array_copy/6` read the whole source into a list before writing any of it, so
+that an overlapping copy behaved as though an intermediate copy were taken.
+That is one way to get the answer and it costs a list per copy. The other is
+the direction: downwards when the destination starts later inside the same
+array, upwards everywhere else, which is what `memmove` does and what the
+specification's "as if an intermediate copy" means.
+
+Ten thousand elements, two runs each:
+
+| | `f94e5b4` | this commit |
+| --- | ---: | ---: |
+| reductions per element | 8.6, 8.6 | **7.0, 7.0** |
+| words reclaimed per element | 11.8, 11.9 | **9.9, 9.4** |
+
+Times are not quoted: the box went from load 5 to load 14 between the two
+measurements and the column is unreadable across that.
+
+**It cost 0.4 reductions an element before `elem_at/2` was inlined**, at 9.0
+against the 8.6 it started from, which is more than the lookup it wraps. As a
+loop body it was inline already; pulling it into a function so both directions
+could share it is what put the call there. `-compile({inline, ...})` is the
+same answer `wrote/2` and `crossed/2` needed, and for the same reason.
+
+No new case pins this. Commit `f94e5b4` keeps a full snapshot, so it is already
+right for every overlap direction and a new overlap case would pass against it,
+which is the vacuous test AGENTS.md forbids. `testsuite/array_copy.wast` is
+what pins it: 35 assertions, 0 fail, 0 skip, two of them the overlap cases,
+inside the 65,481 the floor asserts.
+
+A copied element is now cheaper than a filled one, 7.0 against `array.fill`
+sparse at 7.8, which is the next thing to look at: the fill loop still runs
+`lists:foreach` over a `lists:seq`.
+
+## The partial fill loop stops building a list of the indices it will use
+
+`fill_each/5` was `lists:foreach` over `lists:seq(0, Len - 1)`: one cons cell
+per element of a list nothing outside the loop ever sees, and a fun call on top
+of each write. It counts down instead.
+
+Ten thousand elements, load average 7, two runs each:
+
+| | `ca58eb5` | this commit |
+| --- | ---: | ---: |
+| `array.fill` sparse, reductions | 7.8, 7.8 | **6.0, 6.0** |
+| `array.fill` sparse, words reclaimed | 8.8, 8.6 | **6.7, 6.8** |
+| `array.fill` dense, reductions | 7.8, 7.8 | **6.0, 6.0** |
+| `array.fill` dense, words reclaimed | 8.1, 8.1 | **6.0, 6.1** |
+| `array.copy`, the control | 7.0 | 7.0 |
+
+`array.copy` not moving is what says this landed where it claims to: it shares
+`array_set_unchecked/4` with the fill and nothing else.
+
+### Where the bulk array path stands
+
+Reductions per element written, ten thousand elements, across the four commits:
+
+| | `16c109e` baseline | now | change |
+| --- | ---: | ---: | ---: |
+| `array.copy` | 19.9 | **7.0** | **-65%** |
+| `array.fill` sparse | 7.8 | **6.0** | **-23%** |
+| `array.fill` dense | 7.8 | **6.0** | **-23%** |
+| `array.fill` whole | 0.0 | 0.0 | the row-update shortcut |
+
+What is left in an element is two ETS operations and one `atomics:add_get`.
+Whether the atomic is worth removing is the next measurement, not the next
+change: see the bulk plan's fourth step for why a block reservation as it
+stands would be a false refusal waiting to happen.
+
+## What the per-element charge costs, measured by deleting it
+
+The fourth step of the bulk plan was block accounting. It is a measurement
+instead, and the measurement is the answer.
+
+**The null experiment.** `array_set_unchecked/4`'s `wrote(H, ?ELEM_WORDS)`
+removed altogether, which is the ceiling on what any block scheme could
+recover. Ten thousand elements, load average 4, two runs:
+
+| arm | charged | uncharged |
+| --- | ---: | ---: |
+| `array.fill` sparse, reductions | 6.0 | 5.0 |
+| `array.fill` dense, reductions | 6.0 | 5.0 |
+| `array.copy`, reductions | 7.0 | 6.0 |
+| words reclaimed, every arm | unchanged | unchanged |
+
+Exactly one reduction an element, and no allocation at all.
+
+**And in time**, from `store_primitives`, which now has the row it was missing:
+
+| operation | ns/op net |
+| --- | ---: |
+| `ets:lookup_element` | 37.0 |
+| `ets:lookup`, whole row | 36.3 |
+| **`atomics:add_get`** | **4.8** |
+| null arm, the loop alone | 2.8 gross |
+
+The primitives table in this file had `atomics:get` at 4.66 to 4.93 and
+`atomics:put` at 5.77 and nothing for the read-modify-write the mutation
+counter actually is, so its cost could be reasoned about and not read. It is
+4.8, against the two table operations beside it at about 36 each: **the charge
+is about 6% of a bulk element.**
+
+The two views disagree in proportion, 17% of the reductions against 6% of the
+time, and the time is the one to believe here. A reduction is not proportional
+to nanoseconds and an ETS BIF is the case where they come apart furthest.
+
+Six per cent, against a design that needs the keeper to reserve prospective
+words rather than only check them. `ATTEMPTS.md` has the three ways the cheap
+version is wrong and why the correct one waits.
+
+## What `uns(64, _)` costs: about 3.5 nanoseconds, and not worth a change
+
+`wasm_core:uns(64, E)` is `band 16#FFFFFFFFFFFFFFFF`, a literal past the 60-bit
+immediate range, applied to values already held in `[-2^63, 2^63)`. It is
+reached by `i64.shr_u` and by every unsigned 64-bit comparison, and **not** by
+`i64.div_u` or `i64.rem_u`: neither has an `inline/1` clause, so both generate a
+call to `wasm_exec:op2/3`.
+
+Each unsigned form measured next to its signed twin, which is the same
+instruction without the mask, so the *difference* between a pair is what the
+mask costs. Generated code, `perinstr`, interleaved:
+
+| pair | signed | unsigned | the mask |
+| --- | ---: | ---: | ---: |
+| `i64.lt`, small | 0.99 | 1.05 | nothing |
+| `i64.lt`, high bit | 0.98 | 0.85 | nothing |
+| `i64.ge`, high bit | 1.12 | 0.87 | nothing |
+| `i64.shr`, high bit, by 1 | 26.05, 27.14 | 30.16, 30.17 | **~3.5 ns** |
+| `i64.shr`, high bit, by 47 | 0.42, 0.64 | 0.61, 0.67 | ~0.1 ns |
+
+Nothing here is worth a change, and one was attempted anyway. See
+`ATTEMPTS.md`: routing `i64.shr_u` through a three-clause case that avoids the
+mask for the two cases that can avoid it made every measured case **two to
+three times slower**, because the case is what stops the SSA pass doing better
+than any of it.
+
+The shift rows are large for both signs because the snippet accumulates its
+results, and a value shifted right by one is around 2^62, which puts the
+accumulating `i64.add` on `wrap_sum/2`'s slow clause. That is the snippet, not
+the shift. It is why the pair matters and neither number does.
+
+### It took four tries to make this probe measure anything
+
+Every row read 0.00 twice, then the two shift rows disagreed by 43x, and only
+the fourth version measured the instruction. Each failure was a different way
+for the optimiser to be right about code that was not doing anything:
+
+1. **`(drop (i64.lt_u ...))`.** A computation whose result is dropped is dead.
+2. **A loop-invariant operand.** `(i64.lt_u (local.get $h) (i64.const 5))` with
+   `$h` set before the loop is hoisted out of it.
+3. **Repeated `local.set $t`.** Forty independent writes to one local are
+   thirty-nine dead stores.
+4. **Variation the instruction discards.** Xoring the loop counter into the low
+   bits varies bits 0 to 17, and a shift of 47 throws them away, so the
+   expression was loop-invariant again. This one was the dangerous one: it did
+   not read 0.00, it read *0.74 for the signed row and 30.71 for the unsigned
+   one*, and that 43x was reported as a finding before the fourth version
+   showed the pair is 26.05 against 30.16.
+
+The fix is what `i32.add` had been doing all along: accumulate into the local
+you read, and vary a part of the operand the instruction actually keeps.
+`run_case/3` prints `<- eliminated, or below the noise floor` beside any row
+under 0.05 ns, which catches the first three but not the fourth. Nothing
+catches the fourth except reading the pair.
+
+## Four rows of the price table had stopped measuring anything
+
+`PERF.md`'s compiled price table above has `i32.mul` at 2.45 ns, `i32.shl` at
+1.95, `i64.shl` at 24.99 and `f64.convert_i32_u` at 4.73. Re-running the arm
+that produced them now gives 0.02, 0.00, -0.01 and -0.00. The snippets had not
+changed. The compile quality default has moved to `full` since they were taken,
+and `full` collapses forty shifts of one local into one shift and drops
+thirty-nine stores to a local nothing reads.
+
+Each snippet now xors the loop counter into its operand, or accumulates, so no
+copy is the same computation as the one before it. Two passes, load average 10:
+
+| snippet | ns | what else is in it |
+| --- | ---: | --- |
+| `i32.xor`, the null arm | 0.52, 0.53 | the loop, and the xor |
+| `i32.add`, for scale | 0.69 | nothing |
+| `i32.mul` | 2.71, 2.97 | the xor |
+| `i32.shl` | 2.99, 2.95 | the xor |
+| **`i64.shl`** | **30.97, 28.90** | the xor, and an `i64.extend_i32_u` |
+| `f64.convert_i32_u` | 10.29, 10.47 | an `f64.add`, which is 6.57 |
+
+Net of what each carries, that is about 2.3 for `i32.mul`, 2.4 for `i32.shl`
+and 3.7 for `f64.convert_i32_u`, against the 2.45, 1.95 and 4.73 the table
+records. The rows reproduce, which is what says the zeros were the artefact and
+not a change in the runtime.
+
+**`i64.shl` does not reproduce so much as persist: about 29 ns against
+`i32.shl`'s 2.4, a 12x gap.** It is the last of the i64 constructs the 60-bit
+work did not reach, and for a reason: `wrap(64, bsl(A, Sh))` shifts *before* it
+masks, so the intermediate is up to 2^126 whatever the answer turns out to be.
+Masking first, `(A band (2^64-1 bsr Sh)) bsl Sh`, keeps the intermediate inside
+64 bits but needs a bignum literal of its own.
+
+That is a real number and it is not acted on here. The `i64.shr_u` attempt
+recorded in `ATTEMPTS.md` was also a correct rewrite of a genuinely masked
+path, and it was two to three times slower, because a guarded form stops the
+SSA pass doing better than the guard. Anything done to `i64.shl` gets measured
+against that expectation, interleaved, before it is believed.

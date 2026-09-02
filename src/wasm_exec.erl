@@ -716,13 +716,10 @@ run([{array_copy, D, _Src} | Rest], Ctrl,
     check_array_range(H, SrcR, SrcStart, Len),
     check_array_range(H, DstR, DstStart, Len),
     _ = D,
-    %% Read every source element before writing any of them, so an overlapping
-    %% copy behaves. The list is then consumed in order rather than indexed with
-    %% `lists:nth/2', which made this quadratic: 127, then 416, then 4604 ns per
-    %% element as the length went 100, 1000, 10000.
-    Vals = [wasm_heap:array_get(H, SrcR, SrcStart + I)
-            || I <- lists:seq(0, Len - 1)],
-    ok = write_elements(H, DstR, DstStart, Vals),
+    %% The loop lives in `wasm_heap' beside the accounting it has to go
+    %% through. Reading every source element before writing any of them, so an
+    %% overlapping copy behaves, is its job now and not this clause's.
+    ok = wasm_heap:array_copy(H, DstR, DstStart, SrcR, SrcStart, Len),
     run(Rest, Ctrl, St#st{stack = S});
 
 %% An array built from a data or element segment. The segment is read as the

@@ -368,3 +368,71 @@ generator. Every trap, bound and width then has one definition, and the
 conformance suite checks both paths at once.
 
 Check the load average first. This box swings between 4 and 84.
+
+## Block accounting for bulk array operations
+
+**Charging a whole chunk of a bulk operation with one `wrote/2' instead of one
+per element.** Measured before designing it, and the measurement is why it did
+not get designed. Removing the per-element charge *entirely* is worth exactly
+**1.0 reduction an element** on all three arms (`array.fill' sparse and dense
+6.0 to 5.0, `array.copy' 7.0 to 6.0) and nothing at all in reclaimed words. In
+time that is `atomics:add_get' at **4.8 ns net** against the two ETS operations
+beside it at about 36 ns each, so the counter is about 6% of an element.
+
+That 1.0 is a ceiling, not a saving: a chunk scheme still has per-chunk work.
+And the version that just calls `wrote(H, Words)' once per chunk is wrong three
+ways, none of which the interval size fixes:
+
+- **`Extra' is checked and never reserved.** `wasm_keeper:ceilings/6' says so
+  itself. Two callers can have chunks approved against the same pre-write
+  measurement and then both write them. Per-element charging bounds each
+  unreserved approval at 12 words; a chunk raises it to the chunk.
+- **A chunk overestimates a dense overwrite.** A fill over rows that already
+  exist adds little or no ETS memory, and a chunk-sized `Extra' asks the keeper
+  to refuse as though all of it were new. That is a false refusal the current
+  path does not have, and the dense arm exists to keep it visible.
+- **A chunk size does not place a reconcile.** `crossed/2' depends on the
+  counter's phase, so a chunk no larger than the interval does not guarantee a
+  crossing inside it. A block scheme has to say how it aligns to the counter,
+  not only how big it is.
+
+The only correct shape is a keeper reserve, commit and abort for prospective
+heap words, which changes the keeper's protocol. It is worth 6% of a bulk
+element, so it waits for a reason better than that.
+
+Measure the null before designing the optimisation. Deleting the thing you
+mean to make cheaper takes one edit and bounds the whole design's value.
+
+**Avoiding `uns(64, _)` in `i64.shr_u` with a case on the shift count.** Two of
+the three cases genuinely do not need the mask: a non-negative value shifts
+arithmetically, and a negative one shifted by six or more is
+`(A bsr Sh) + 2^(64-Sh)` exactly, with both the addend and the answer inside
+the immediate range. It is correct -- 187 pairs across every boundary agree
+with the interpreter, with generated code entered 187 times -- and it is **two
+to three times slower** than the mask it replaces: shift by 1 went 30.16 to
+63.73, shift by 47 went 0.61 to 1.15, and the signed control did not move.
+
+The three-clause case is what costs it. `wrap(64, bsr(uns(64, A), Sh))` is
+branch-free, and the SSA type pass evidently does better with it than with
+anything guarded. That is the same lesson as `wrap_sum/2` read backwards: a
+guard helps when it *tells* the compiler a range it could not infer, and hurts
+when it hides one it could.
+
+The measurement that justified trying was also wrong, which is the other half
+of this entry. See below.
+
+A per-instruction snippet measures nothing unless the optimiser cannot remove
+it, and there are four separate ways it can. `perinstr` reported 0.00 for ten
+new rows twice running -- `(drop ...)` is dead code, a loop-invariant operand
+is hoisted out of the loop, forty independent `local.set $t` are thirty-nine
+dead stores -- and then, worse, reported a *number* for a row that was still
+loop-invariant: the counter was xored into bits 0 to 17 and the instruction
+under test shifted them away. That version read 0.74 signed against 30.71
+unsigned and the 43x was reported as a finding. The honest pair is 26.05
+against 30.16.
+
+Accumulate into the local you read, and vary a part of the operand the
+instruction keeps. `run_case/3` flags anything under 0.05 ns, which catches the
+first three failures and not the fourth; the fourth is caught only by reading
+each unsigned row against its signed twin, which is why they are laid out in
+pairs. Four rows already in that file trip the flag.

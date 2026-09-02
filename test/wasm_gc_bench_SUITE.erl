@@ -39,6 +39,15 @@
 %% (ref null $s), where $s is type index 0 in each module below.
 -define(REF0, [16#63, 0]).
 
+%% Two fill values, so a round always writes something the array does not
+%% already hold and a skipped operation cannot look like a done one. Neither is
+%% 0, which is what `array.new_default' leaves and what the sentinels stay at.
+-define(FILL_A, 7).
+-define(FILL_B, 8).
+
+%% How many rounds every measurement here takes the best of.
+-define(ROUNDS, 5).
+
 %% Empty on purpose. Every case here logs a number and asserts nothing, so a
 %% plain `rebar3 ct' would spend minutes on measurements that cannot fail and
 %% would report them as passing tests. They live in a group instead, which is
@@ -240,26 +249,144 @@ field_index_cost(_Config) ->
            [Per(~"first") - Empty, Per(~"last") - Empty, Empty]),
     ok = wasm:destroy(Inst).
 
-%% `array.fill' and `array.copy' at growing lengths, reported per element.
+%% `array.fill' and `array.copy' at growing lengths, per element.
 %%
-%% Per-element cost that grows with length is the signature of a quadratic, and
-%% `array.copy' materialises its source as a list and then indexes it with
-%% `lists:nth/2' inside the fold.
+%% Four arms, and every one of them can fail. The version this replaces handed
+%% `wasm:call/3' to `best_ms/1', which throws the result away, so a call
+%% refused on its first instruction was timed as though it had filled the
+%% array. Checking the destination afterwards would not have caught it either:
+%% the fixture filled the whole array with 7, which the shortcut turns into a
+%% new default, and then measured a partial fill writing 7 over 7, and a copy
+%% whose destination equalled its source from the second round on. Every arm
+%% below writes a value the destination does not already hold and checks it
+%% outside the timed region.
+%%
+%% Sparse and dense are separate because they are different operations: the
+%% first creates an element row per index and the second replaces one. Step 4
+%% of the bulk plan is about the difference between them.
 bulk_array_ops(_Config) ->
-    lists:foreach(
-      fun(Len) ->
-          {ok, Inst} = instantiate(array_module()),
-          {ok, []} = wasm:call(Inst, ~"alloc", [Len]),
-          Fill = best_ms(fun() -> wasm:call(Inst, ~"fill", [Len]) end),
-          Part = best_ms(fun() -> wasm:call(Inst, ~"fill_part", [Len]) end),
-          Copy = best_ms(fun() -> wasm:call(Inst, ~"copy", [Len]) end),
-          ct:log("~6w elements: array.fill whole ~8.1f | part ~8.1f | "
-                 "array.copy ~8.1f ns/element",
-                 [Len, Fill * 1000000 / Len, Part * 1000000 / Len,
-                  Copy * 1000000 / Len]),
-          ok = wasm:destroy(Inst)
-      end, [100, 1000, 10000]),
+    lists:foreach(fun bulk_array_len/1, [100, 1000, 10000]),
     ok.
+
+bulk_array_len(Len) ->
+    Alloc = fun(I) -> called(I, ~"alloc", [Len]) end,
+    Part = fun(V) -> fun(I) -> called(I, ~"fill_part", [Len, V]) end end,
+    Whole = fun(V) -> fun(I) -> called(I, ~"fill", [Len, V]) end end,
+    %% The whole-array fill is the constant-time row update, so it is reported
+    %% for the contrast and not because there is anything in it to remove.
+    W = arm(Alloc, Whole(?FILL_A), whole_is(Len, ?FILL_A)),
+    %% Interior, so index 0 and index `Len - 1' are sentinels the fill must not
+    %% touch. A range ending at the boundary hides an off-by-one that writes an
+    %% invisible row at `Len'.
+    S = arm(Alloc, Part(?FILL_A), part_is(Len, ?FILL_A)),
+    D = arm(fun(I) -> Alloc(I), (Part(?FILL_A))(I) end,
+            Part(?FILL_B), part_is(Len, ?FILL_B)),
+    C = arm(fun(I) -> Alloc(I), (Whole(?FILL_A))(I) end,
+            fun(I) -> called(I, ~"copy", [Len]) end, copy_is(Len, ?FILL_A)),
+    log_arm(Len, "array.fill whole    ", Len, W),
+    log_arm(Len, "array.fill sparse   ", Len - 2, S),
+    log_arm(Len, "array.fill dense    ", Len - 2, D),
+    log_arm(Len, "array.copy          ", Len, C).
+
+%% The denominator is what the operation actually wrote, which for an interior
+%% fill is two fewer than the array is long.
+log_arm(Len, What, N, #{ns := Ns, reds := Reds, words := Words, gcs := GCs}) ->
+    ct:log("~6w elements: ~s ~8.1f ns | ~8.1f reductions | "
+           "~8.1f words reclaimed per element (~w collections)",
+           [Len, What, Ns / N, Reds / N, Words / N, GCs]).
+
+%% One arm. `Setup' runs before every round and is not timed, `Op' is what is
+%% timed, `Check' runs after it and fails the case when the operation did not
+%% happen.
+%%
+%% In a process of its own, because repeating a real module in one process
+%% makes it bimodal on collection time, and because `statistics(
+%% garbage_collection)' counts the whole node: a round has to be the only thing
+%% this process is doing, and the box has to be quiet, which
+%% `bench/paths/README.md' asks for anyway.
+%% Monitored, not plain `spawn': `Check' fails by raising, in the worker, and
+%% without the monitor the only symptom the case has is the receive timing out
+%% five minutes later under a reason that says nothing.
+arm(Setup, Op, Check) ->
+    Parent = self(),
+    {Pid, Mon} =
+        spawn_monitor(fun() ->
+                          {ok, Inst} = instantiate(array_module()),
+                          Rounds = [round_of(Inst, Setup, Op, Check)
+                                    || _ <- lists:seq(1, ?ROUNDS)],
+                          ok = wasm:destroy(Inst),
+                          Parent ! {self(), fastest(Rounds)}
+                      end),
+    receive
+        {Pid, R} -> erlang:demonitor(Mon, [flush]), R;
+        {'DOWN', Mon, process, Pid, Why} -> ct:fail(Why)
+    after 300000 -> ct:fail(bulk_array_arm_timeout)
+    end.
+
+round_of(Inst, Setup, Op, Check) ->
+    ok = Setup(Inst),
+    %% The setup's garbage goes before the counters and the operation's after
+    %% them, so the reclaimed words bracket the timed region and nothing else.
+    %% Neither reductions nor a collection count would say this on its own: a
+    %% ten-thousand element temporary list can fit in the heap the process
+    %% already has and provoke no collection at all.
+    _ = erlang:garbage_collect(),
+    {GC0, Words0, _} = erlang:statistics(garbage_collection),
+    {reductions, R0} = erlang:process_info(self(), reductions),
+    T0 = erlang:monotonic_time(nanosecond),
+    ok = Op(Inst),
+    T1 = erlang:monotonic_time(nanosecond),
+    {reductions, R1} = erlang:process_info(self(), reductions),
+    _ = erlang:garbage_collect(),
+    {GC1, Words1, _} = erlang:statistics(garbage_collection),
+    ok = Check(Inst),
+    #{ns => T1 - T0, reds => R1 - R0,
+      words => Words1 - Words0, gcs => GC1 - GC0}.
+
+%% The fastest round with its own counters, rather than the minimum of each
+%% column: reductions from one round beside a time from another describe a run
+%% that did not happen.
+fastest(Rounds) ->
+    hd(lists:sort(fun(#{ns := A}, #{ns := B}) -> A =< B end, Rounds)).
+
+called(Inst, Name, Args) ->
+    {ok, []} = wasm:call(Inst, Name, Args),
+    ok.
+
+%% What each arm asserts afterwards. Read back through `wasm:get_global/2' and
+%% `wasm_heap:array_get/3', so a check cannot pass on a row the runtime would
+%% not return.
+whole_is(Len, V) -> fun(I) -> elements_are(I, ~"src", 0, Len, V) end.
+
+copy_is(Len, V) -> fun(I) -> elements_are(I, ~"dst", 0, Len, V) end.
+
+part_is(Len, V) ->
+    fun(I) ->
+        %% Both ends, so an overrun in either direction is caught.
+        ok = element_is(I, ~"src", 0, 0),
+        ok = element_is(I, ~"src", Len - 1, 0),
+        elements_are(I, ~"src", 1, Len - 2, V)
+    end.
+
+elements_are(Inst, Global, Start, N, V) ->
+    Ref = global(Inst, Global),
+    H = wasm_instance:heap(Inst),
+    case [I || I <- lists:seq(Start, Start + N - 1),
+               wasm_heap:array_get(H, Ref, I) =/= V] of
+        [] -> ok;
+        [I | _] -> ct:fail({array_not_written, Global, I, V,
+                            wasm_heap:array_get(H, Ref, I)})
+    end.
+
+element_is(Inst, Global, I, V) ->
+    case wasm_heap:array_get(wasm_instance:heap(Inst), global(Inst, Global), I) of
+        V -> ok;
+        Other -> ct:fail({sentinel_overwritten, Global, I, V, Other})
+    end.
+
+global(Inst, Name) ->
+    {ok, [Ref]} = wasm:get_global(Inst, Name),
+    Ref.
 
 %% How much BEAM heap the collecting process grows by while collecting.
 %%
@@ -309,6 +436,12 @@ store_primitives(_Config) ->
             {"ets:update_element",
              fun(I) -> ets:update_element(Tab, I, {4, {I, null}}) end},
             {"atomics mark bit", fun(I) -> mark_bit(Bits, I) end},
+            %% What every element of a bulk array operation pays to be counted.
+            %% The primitives table in `PERF.md' had `atomics:get' and
+            %% `atomics:put' and nothing for the read-modify-write the mutation
+            %% counter is, so the cost of that counter could only be reasoned
+            %% about and not read.
+            {"atomics:add_get", fun(_) -> atomics:add_get(Bits, 1, 1) end},
             {"map live-set insert", fun(I) -> live_insert(I) end}],
     ct:log("null arm (loop only): ~7.1f ns/op", [Null]),
     lists:foreach(
@@ -322,8 +455,6 @@ store_primitives(_Config) ->
     ok.
 
 %%% ---------------------------------------------------------------- timing ---
-
--define(ROUNDS, 5).
 
 %% Minimum of several rounds. A single sample of anything on this box is
 %% worthless: repeated runs of the *same* arm span more than 3x.
@@ -540,24 +671,30 @@ countdown() -> <<16#20, 0, 16#41, 1, 16#6B, 16#22, 0, 16#0D, 0>>.
 %% ```
 array_module() ->
     Types = wasm_asm:section(
-              1, [wasm_asm:uleb(2),
+              1, [wasm_asm:uleb(3),
                   [16#5E, ?I32, 1],
-                  [16#60, wasm_asm:uleb(1), ?I32, wasm_asm:uleb(0)]]),
+                  [16#60, wasm_asm:uleb(1), ?I32, wasm_asm:uleb(0)],
+                  [16#60, wasm_asm:uleb(2), ?I32, ?I32, wasm_asm:uleb(0)]]),
     Alloc = <<16#20, 0, ?FB, 7, 0, 16#24, 0,
               16#20, 0, ?FB, 7, 0, 16#24, 1, 16#0B>>,
-    Fill = <<16#23, 0, 16#41, 0, 16#41, 7, 16#20, 0, ?FB, 16, 0, 16#0B>>,
-    %% From index 1, so it cannot become a new default and has to write every
-    %% element. Without this arm the benchmark would only ever measure the
-    %% whole-array shortcut.
-    Part = <<16#23, 0, 16#41, 1, 16#41, 7,
-             16#20, 0, 16#41, 1, 16#6B, ?FB, 16, 0, 16#0B>>,
+    %% `(len, v)'. The whole array, which is the row-update shortcut.
+    Fill = <<16#23, 0, 16#41, 0, 16#20, 1, 16#20, 0, ?FB, 16, 0, 16#0B>>,
+    %% `(len, v)'. From index 1 for `len - 2', so it cannot become a new
+    %% default, it has to write every element, and index 0 and index `len - 1'
+    %% are sentinels an off-by-one in either direction disturbs. Without this
+    %% arm the benchmark would only ever measure the whole-array shortcut.
+    Part = <<16#23, 0, 16#41, 1, 16#20, 1,
+             16#20, 0, 16#41, 2, 16#6B, ?FB, 16, 0, 16#0B>>,
     Copy = <<16#23, 1, 16#41, 0, 16#23, 0, 16#41, 0, 16#20, 0,
              ?FB, 17, 0, 0, 16#0B>>,
     wasm_asm:module(
       [Types,
-       wasm_asm:func_section([1, 1, 1, 1]),
+       wasm_asm:func_section([1, 2, 1, 2]),
        wasm_asm:global_section([{?REF0, true, <<16#D0, 0>>},
                                 {?REF0, true, <<16#D0, 0>>}]),
+       %% The two globals are exported so a check can read the arrays back
+       %% through the runtime rather than reaching into the tables.
        wasm_asm:export_section([{~"alloc", 0, 0}, {~"fill", 0, 1},
-                                {~"copy", 0, 2}, {~"fill_part", 0, 3}]),
+                                {~"copy", 0, 2}, {~"fill_part", 0, 3},
+                                {~"src", 3, 0}, {~"dst", 3, 1}]),
        wasm_asm:code_section([Alloc, Fill, Copy, Part])]).

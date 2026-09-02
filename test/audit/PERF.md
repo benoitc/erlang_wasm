@@ -3835,3 +3835,75 @@ dominant allocator and lowering is a rounding error next to it**, the reverse of
 what this file said before the instrument was taken out of the window. Against
 the plan's 80% bar the model is further from closing than the inflated version
 appeared to be, and the missing 38% is not yet named.
+
+### CPython: lowering is 0.03% of the run, and the second request is free
+
+The same four arms on CPython 3.12, which is the workload the investigation
+started from. Every arm is its own emulator, the reply is asserted, and the
+walls are from the untraced repetition because the GC trace itself doubles them.
+
+| arm | allocated | clean wall |
+| --- | ---: | ---: |
+| cold, one request | 5,447,952,387 | 19,220 ms |
+| pre-lowered, all 11,448 functions lowered in the setup | 5,446,176,895 | 23,774 ms |
+| two requests to one instance | 5,446,975,427 | 18,963 ms |
+| instantiation inside the window | 5,455,801,206 | -- |
+
+Read as differences:
+
+| | words | share of the run |
+| --- | ---: | ---: |
+| lowering | 1,775,492 | **0.033%** |
+| instantiation | 7,848,819 | 0.14% |
+| second request | below zero, inside run-to-run noise | **~0%** |
+
+**Lowering every one of CPython's 11,448 functions takes 249 ms and 12,114,304
+words**, priced on its own in a window holding nothing else. That is 0.22% of a
+run. On the 25 MB guest the whole lazy-lowering design is worth a fifth of one
+per cent, and pre-lowering it makes the run *slower*: 23.8 s against 19.2 s,
+because the 6.8 M words of IR it retains enlarge the live set every major
+collection then has to walk.
+
+**The second request is free.** Two requests allocate what one does, to within
+run-to-run noise, and produce both replies. `_start` serves every line, so a
+prewarmed instance answers out of a Python interpreter that is already up.
+Nothing in the request path is worth optimising; all 5.45 G words are Python
+starting.
+
+That is the whole shape of the problem restated: for a `wasm32-wasi` command
+guest, essentially everything is start-up, and start-up is the interpreter
+executing the guest's own initialisation.
+
+### 383 million dispatches, and the model closes to 78%
+
+`call_count` tracing on `wasm_exec:run/3` counts one CPython request at
+**383,284,913 dispatches**. The instrument is a counter in the emulator and not
+a wrapper in the module, so unlike the sizing call it does not distort what it
+measures: the counted run allocated 5,454,869,254 words against the uncounted
+5,447,952,387, a difference of 0.13%.
+
+`trace_pattern/3` needs the module loaded first. On a module the emulator has
+not reached yet it matches nothing and answers 0, and `trace_info/2` then reads
+`undefined`, so the count comes back missing rather than failing.
+`bench/paths/tiered.erl` never hit this because it warms the workload before
+setting the pattern.
+
+At the measured 11 words an interpreted operation:
+
+| component | words | share |
+| --- | ---: | ---: |
+| dispatch, 383,284,913 at 11 | 4,216,134,043 | **77.4%** |
+| instantiation | 7,848,819 | 0.14% |
+| lowering | 1,775,492 | 0.03% |
+| **accounted** | **4,225,758,354** | **77.6%** |
+
+Against the plan's 80% bar that is close and not there. It is also a different
+answer from QuickJS, where the same model reaches 62%, and the gap between the
+two workloads is itself unexplained.
+
+What it settles is what to do next. Everything that is not the interpreter
+running the guest's instructions is under half a per cent: lowering, decoding,
+validating, instantiating and the request itself, all of them together, cannot
+pay for more than a rounding error of a CPython cold start. The only lever with
+the right order of magnitude is not executing those 383 million operations
+interpreted.

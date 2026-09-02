@@ -138,14 +138,26 @@ prime(Mod, Dir) ->
     after 1800000 -> erlang:error(prime_timeout)
     end,
     io:format("waiting for the compiler~n"),
-    W = wait_compiled(2400),
+    W = wait_compiled(3600, 0),
     io:format("compiled after ~w s, ~p~n", [W, wasm_jit:counts()]).
 
-wait_compiled(0) -> erlang:error(never_compiled);
-wait_compiled(N) ->
+%% Long, and reported as it waits. Compiling CPython from cold took more than
+%% ten minutes on this box, and a deadline shorter than that reads as "the ask
+%% never reached the compiler" when the compiler is in fact running. The
+%% children count is what tells those two apart.
+wait_compiled(0, _) -> erlang:error(never_compiled);
+wait_compiled(N, Sec) ->
     case wasm_jit:counts() of
-        #{compiled := C} when C > 0 -> (2400 - N) div 4;
-        _ -> timer:sleep(250), wait_compiled(N - 1)
+        #{compiled := C} when C > 0 -> Sec;
+        _ ->
+            Sec rem 30 =:= 0 andalso
+                io:format("  ~w s ~p workers ~p~n",
+                          [Sec, wasm_jit:counts(),
+                           proplists:get_value(
+                             active,
+                             supervisor:count_children(wasm_jit_sup))]),
+            timer:sleep(1000),
+            wait_compiled(N - 1, Sec + 1)
     end.
 
 %%% ------------------------------------------------------------------ guests ---

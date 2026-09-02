@@ -23,6 +23,10 @@ right answer for trusted code you call synchronously. It also means:
 
 If none of those rows worry you, call inline and skip this page.
 
+A worker that answers *one request per call* is this page. A guest that keeps
+running between requests, reading its own stdin, is [streams.md](streams.md);
+it uses the same process boundary for the same reasons.
+
 ## The request path
 
 ```

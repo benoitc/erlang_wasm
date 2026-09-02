@@ -45,6 +45,10 @@ module can tell "you were not granted this" from "the operating system refused".
 | `stdin` | a binary or a fun | end of file |
 | `net` | sockets, to the addresses named | **no network at all** |
 
+A `stdin` fun may block, and a `stdout` pid or fun receives every write as it
+happens, which is all a long-running guest needs to exchange messages with you.
+[streams.md](streams.md) has that recipe.
+
 `dirs` is the one that surprises people. No `dirs` does not mean "the working
 directory" or "read-only everywhere". It means the module has no filesystem, and
 no descriptor to open anything relative to.

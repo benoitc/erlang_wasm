@@ -134,6 +134,7 @@ pattern with a tested example in `examples/wasm_worker.erl`.
 - [Host functions](docs/host-functions.md)
 - [WASI](docs/wasi.md): capabilities and preopens
 - [Workers](docs/worker.md): request isolation, timeouts, pools
+- [Streams](docs/streams.md): talk to a guest while it runs
 - [The compiled tier](docs/compiled-tier.md): what `compile => true` buys, and when
 - [Security](docs/security.md): the threat model
 - [Features and conformance](docs/features.md)

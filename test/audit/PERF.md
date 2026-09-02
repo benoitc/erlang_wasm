@@ -3907,3 +3907,30 @@ validating, instantiating and the request itself, all of them together, cannot
 pay for more than a rounding error of a CPython cold start. The only lever with
 the right order of magnitude is not executing those 383 million operations
 interpreted.
+
+### The ask does not survive the process that raised it
+
+A one-call guest asks for compilation when `_start` finishes. If the process
+that made that call then exits, **nothing is compiled**, and nothing reaches the
+on-disk cache either.
+
+Three variants of the same QuickJS priming call, watched through
+`supervisor:count_children(wasm_jit_sup)` and a call trace on `wasm_jit:compile/4`
+and `wasm_instance:release_ask/1`:
+
+| priming call runs in | workers after 30 s | `compile/4` entered | compiled |
+| --- | ---: | --- | --- |
+| the process that stays alive | 1, still 1 at 105 s | yes | yes |
+| a spawned process kept alive | 1, still 1 at 105 s | yes | yes |
+| a spawned process that exits | **0** | **never** | **no** |
+
+The worker is started -- `spawn_compile/2` gets its `{ok, Pid}` -- and then never
+receives its work, exiting on `compiler_loop/0`'s 30-second `after`. It is not a
+compile that failed: `compile/4` is never entered and `release_ask/1` is never
+called, so the ask is not given back either.
+
+This is exactly the shape of every `wasm32-wasi` command-line worker: one
+process, one `_start`, exit. Such a worker cannot warm anything, not even for
+the next process, which is why priming in `bench/paths/pyarms.erl` runs in the
+process that outlives it. Any prewarming design has to hold the asking process
+open until the compiler has the work.

@@ -123,20 +123,20 @@ clean(Mod, Dir, Reqs, Setup, Compile) ->
 
 %%% ----------------------------------------------------------------- priming ---
 
-%% One full interpreted call, in a process of its own, only to raise the ask
-%% that lets the compiler fill a slot -- from the disk cache when it is warm.
-%% Nothing here is measured.
+%% One full interpreted call, only to raise the ask that lets the compiler fill
+%% a slot -- from the disk cache when it is warm. Nothing here is measured.
+%%
+%% In *this* process, and that is not a detail. Priming from a throwaway
+%% process compiles nothing at all: the worker starts, never receives its work
+%% and exits on `compiler_loop/0`'s 30-second timeout, with `compile/4` never
+%% entered and `release_ask/1` never called. Keeping the same spawned process
+%% alive instead, the compiler is still running at 105 seconds. So the ask does
+%% not survive the process that raised it, which is the shape every one-shot
+%% `wasm32-wasi` worker has.
 prime(Mod, Dir) ->
-    Parent = self(),
-    P = spawn(fun() ->
-                  I = inst(Mod, Dir, [?REQ1], true),
-                  {T, {L, _, _}} = call(I, false),
-                  Parent ! {primed, self(), T, L}
-              end),
-    receive {primed, P, T, R} ->
-        io:format("priming call ~w ms, reply ~p~n", [T, R])
-    after 1800000 -> erlang:error(prime_timeout)
-    end,
+    I = inst(Mod, Dir, [?REQ1], true),
+    {T, {R, _, _}} = call(I, false),
+    io:format("priming call ~w ms, reply ~p~n", [T, R]),
     io:format("waiting for the compiler~n"),
     W = wait_compiled(3600, 0),
     io:format("compiled after ~w s, ~p~n", [W, wasm_jit:counts()]).

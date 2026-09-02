@@ -4,7 +4,7 @@ This page records what the runtime implements, how it scores against the
 official WebAssembly specification test suite, and what it measures. Use it to
 find out whether a module you care about will run, and what it will cost.
 
-Status as of **0.2.0**.
+Status as of **0.2.1**.
 
 ## What works
 
@@ -779,20 +779,30 @@ lost anyway, because an `array` has to be written back somewhere to be shared
 and writing it back copies it. The number that matters is per call, not per
 operation.
 
-**Bulk array operations**, per element:
+**Bulk array operations**, per element written. Reductions first, because this
+box has been seen between load 4 and 84 and the nanosecond column moves by more
+than the change it is meant to show; the times beside them were taken at load
+average 3.5.
 
-| elements | `array.copy` before | now | `array.fill` before | whole array | partial |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 127.1 ns | 205.0 ns | 61.7 ns | 2.9 ns | 85.0 ns |
-| 1,000 | 416.2 ns | 257.5 ns | 54.2 ns | 0.3 ns | 106.0 ns |
-| 10,000 | 4603.7 ns | **296.4 ns** | 42.2 ns | 0.0 ns | 128.1 ns |
+| elements | `array.copy` | `array.fill` whole | `array.fill` sparse | `array.fill` dense |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 | 9.2 reds, 281 ns | 2.0 reds, 66 ns | 8.1 reds, 215 ns | 7.7 reds, 123 ns |
+| 1,000 | 7.2 reds, 259 ns | 0.2 reds, 9 ns | 6.2 reds, 175 ns | 6.3 reds, 152 ns |
+| 10,000 | **7.0 reds, 279 ns** | 0.0 reds, 0.6 ns | 6.0 reds, 174 ns | 6.0 reds, 146 ns |
 
-`array.copy` was quadratic: it materialised the source as a list and then
-indexed it with `lists:nth/2` inside the fold. A fill covering the whole array
-is now one row update, because every element becoming the same value is what an
-array's default means here. A *partial* fill still writes every element and is
-3x slower than before, which is the honest cost of an element write that is
-O(1) in the array's length instead of a path copy.
+A fill covering the whole array is one row update, because every element
+becoming the same value is what an array's default means here. A *partial* fill
+writes every element, and the two partial columns are separate because they are
+different operations: a sparse fill creates a row per index and a dense one
+replaces a row that exists.
+
+`array.copy` was 19.9 reductions an element before it moved into `wasm_heap`.
+It built three lists per copy, and read the array's length from the object
+table once per element to re-answer what the range check had already answered.
+It reads the source's default once now, and decides an overlapping copy by
+direction rather than by taking a snapshot, which is why nothing is
+materialised. What is left in an element is two table operations and one
+`atomics:add_get`, and the atomic is about 6% of it.
 
 **An array whose elements cannot be references is never walked.** The collector
 marks it and stops, because an `i32` or `i8` element cannot point at anything.

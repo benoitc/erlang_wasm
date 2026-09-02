@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1
+
+### Changed
+
+`array.copy` and `array.fill` do less work per element. Over ten thousand
+elements, a copied element costs 7.0 reductions where it cost 19.9, and a
+filled one 6.0 where it cost 7.8.
+
+`array.copy` built three lists per copy and read the array's length from the
+object table once per element, re-answering what the range check had already
+answered. The loop lives in `wasm_heap` now, beside the accounting it has to go
+through: it reads the source array's default once rather than per element, and
+decides an overlapping copy by direction instead of taking a snapshot of the
+source. A partial `array.fill` counts down rather than walking a list of the
+indices it is about to use.
+
+Behaviour does not change, including the rule that an overlapping `array.copy`
+behaves as though an intermediate copy were taken.
+
 ## 0.2.0
 
 ### Changed

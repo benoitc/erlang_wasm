@@ -4,7 +4,7 @@ This page records what the runtime implements, how it scores against the
 official WebAssembly specification test suite, and what it measures. Use it to
 find out whether a module you care about will run, and what it will cost.
 
-Status as of **0.1.0**.
+Status as of **0.2.0**.
 
 ## What works
 

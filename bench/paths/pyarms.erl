@@ -34,9 +34,12 @@ The arms:
 -define(REQ1, <<"{\"name\": \"ada\"}\n">>).
 -define(REQ2, <<"{\"name\": \"bob\"}\n">>).
 
-main([Guest, Dir, Arm]) -> main([Guest, Dir, Arm, "", "nocount"]);
-main([Guest, Dir, Arm, Cache]) -> main([Guest, Dir, Arm, Cache, "nocount"]);
+main([Guest, Dir, Arm]) -> main([Guest, Dir, Arm, "", "nocount", "1"]);
+main([Guest, Dir, Arm, Cache]) -> main([Guest, Dir, Arm, Cache, "nocount", "1"]);
 main([Guest, Dir, Arm, Cache, Count]) ->
+    main([Guest, Dir, Arm, Cache, Count, "1"]);
+main([Guest, Dir, Arm, Cache, Count, Shards]) ->
+    persistent_term:put({?MODULE, shards}, list_to_integer(Shards)),
     {ok, _} = application:ensure_all_started(wasm),
     Cache =:= "" orelse application:set_env(wasm, code_cache_dir, Cache),
     {ok, Bin} = file:read_file(Guest),
@@ -167,7 +170,9 @@ inst(Mod, Dir, Reqs, Compile) ->
              stderr => fun(_) -> ok end},
     Limits = case Compile of
                  true -> #{max_memory_pages => 4096, compile => true,
-                           compile_after => 1};
+                           compile_after => 1,
+                           compile_shards =>
+                               persistent_term:get({?MODULE, shards}, 1)};
                  false -> #{max_memory_pages => 4096}
              end,
     {ok, I} = wasm:instantiate(Mod, wasi_preview1:imports(Wasi), Limits),

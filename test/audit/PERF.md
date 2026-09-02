@@ -3980,3 +3980,39 @@ asking. The 5.45 G words CPython allocates are the interpreter executing 383
 million operations, and generated code does not allocate them. Nothing else
 measured -- lowering, decoding, validation, instantiation, the request itself --
 is worth one per cent.
+
+### CPython compiled: 4.9 seconds instead of 19.2, and 94% of the allocation gone
+
+`compile_shards => 4` is enough to get CPython past `?MAX_FUNS`. The split is by
+size, so 2,333 functions become four units of a few hundred each and
+`fun_name/1` is never asked for a 2049th name. **This needs no change to the
+runtime**: it is an existing limit, and the default is one shard.
+
+Fresh instance, fresh process, generated code adopted before its first and only
+`_start`:
+
+| | cold, interpreted | adopted, four shards |
+| --- | ---: | ---: |
+| allocated | 5,447,952,387 | **305,591,745** |
+| collections | 1102 minor, 171 major | 47 minor, 24 major |
+| GC share of the traced wall | 59.3% | 37.3% |
+| clean wall | 19,220 ms | **4,851 ms** |
+| `entered` | 0 | **1** |
+
+**94.4% of the allocation is gone and the cold start is 4.0x faster**, on a box
+that was at load average 13 for the compiled arm and 9.9 for the interpreted
+one, so the wall is if anything pessimistic.
+
+Compiling the 2,333 reached functions took **464 seconds** and wrote a 19.8 MB
+`.beam`.
+
+Both guests now say the same thing, and it is the answer the whole
+investigation was after: an interpreted `wasm32-wasi` start-up is dominated by
+interpreted dispatch, and generated code does not allocate it.
+
+| | QuickJS | CPython |
+| --- | ---: | ---: |
+| allocation removed | 98.1% | 94.4% |
+| wall | 53 ms to 16 ms | 19.2 s to 4.9 s |
+| functions compiled | 402 | 2,333 |
+| compile time, once | 165 s | 464 s |

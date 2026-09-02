@@ -3653,3 +3653,50 @@ end of file at once and returned in 19 ms with no reply: a 16x speedup that was
 a guest doing nothing, which is why the reply assertion is in the harness. And
 an earlier diagnosis that "the ask dies with the process" was wrong:
 `wasm:call/3` runs `after_call/2` at depth 0 before the caller moves on.
+
+## Where the words go: an 11-word record, rebuilt once per instruction
+
+The price half of the attribution. `bench/paths/perinstr.erl` gained the same K
+against 2K differential on **allocated words**, taken from `allocwords` rather
+than the node-wide counter. Interpreter, words per snippet and per instruction:
+
+| snippet | words/snip | words/instr |
+| --- | ---: | ---: |
+| `nop` | **0.00** | **0.00** |
+| `block`, empty | 7.00 | 7.00 |
+| `block` x8 nested | 56.00 | 7.00 |
+| `local.get` + `drop` | 24.00 | 12.00 |
+| `i32.const` + `drop` | 24.00 | 12.00 |
+| `i32.add` | 19.00 | 4.75 |
+| `i32.mul` | 19.00 | 3.17 |
+| `i32.load` | 19.00 | 6.33 |
+| `i64.load` | 45.00 | 15.00 |
+| `global.set` | 40.00 | 20.00 |
+| `call`, empty function | 34.00 | 34.00 |
+| `call_indirect` | 67.00 | 33.50 |
+| `memory.copy`, 8 B and 1024 B | 55.00 | 13.75 |
+
+**`nop` allocates nothing and everything else allocates about twelve words an
+instruction, whatever it computes.** That rules out dispatch, the arithmetic and
+the operand stack in one reading: a cons cell is two words, and a push with a
+pop costs twenty-four.
+
+`#st{}` has ten fields, so `St#st{stack = S}` allocates **eleven words**, the
+tag and ten fields, and the interpreter writes one per instruction. That is the
+floor the table is made of. `memory.copy` costing the same for 8 bytes as for
+1024 is the same story from the other side: the copy is not on the process heap
+and the record update is.
+
+Blocks are cheaper because a control frame is not a whole `#st{}`, and they are
+the ones that add up: `PERF.md` records QuickJS entering **132,583,392 blocks**
+in a run, which at seven words is 928 M words from `block` alone.
+
+Against the measured 5.45 G words for a CPython start-up, twenty words an
+instruction implies about 270 M instructions, which at 35 seconds interpreted is
+130 ns each and agrees with the timing table.
+
+**This is the price half only.** The executed histogram keyed by
+`{FunctionIndex, OpcodeTag}` is not built yet, so the model does not close to
+the 80% the plan requires, and no change should be made on the strength of this
+table alone. What it does say is which candidate to price first: not rebuilding
+interpreter state per instruction.

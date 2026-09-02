@@ -3217,3 +3217,38 @@ inside the 65,481 the floor asserts.
 A copied element is now cheaper than a filled one, 7.0 against `array.fill`
 sparse at 7.8, which is the next thing to look at: the fill loop still runs
 `lists:foreach` over a `lists:seq`.
+
+## The partial fill loop stops building a list of the indices it will use
+
+`fill_each/5` was `lists:foreach` over `lists:seq(0, Len - 1)`: one cons cell
+per element of a list nothing outside the loop ever sees, and a fun call on top
+of each write. It counts down instead.
+
+Ten thousand elements, load average 7, two runs each:
+
+| | `ca58eb5` | this commit |
+| --- | ---: | ---: |
+| `array.fill` sparse, reductions | 7.8, 7.8 | **6.0, 6.0** |
+| `array.fill` sparse, words reclaimed | 8.8, 8.6 | **6.7, 6.8** |
+| `array.fill` dense, reductions | 7.8, 7.8 | **6.0, 6.0** |
+| `array.fill` dense, words reclaimed | 8.1, 8.1 | **6.0, 6.1** |
+| `array.copy`, the control | 7.0 | 7.0 |
+
+`array.copy` not moving is what says this landed where it claims to: it shares
+`array_set_unchecked/4` with the fill and nothing else.
+
+### Where the bulk array path stands
+
+Reductions per element written, ten thousand elements, across the four commits:
+
+| | `16c109e` baseline | now | change |
+| --- | ---: | ---: | ---: |
+| `array.copy` | 19.9 | **7.0** | **-65%** |
+| `array.fill` sparse | 7.8 | **6.0** | **-23%** |
+| `array.fill` dense | 7.8 | **6.0** | **-23%** |
+| `array.fill` whole | 0.0 | 0.0 | the row-update shortcut |
+
+What is left in an element is two ETS operations and one `atomics:add_get`.
+Whether the atomic is worth removing is the next measurement, not the next
+change: see the bulk plan's fourth step for why a block reservation as it
+stands would be a false refusal waiting to happen.

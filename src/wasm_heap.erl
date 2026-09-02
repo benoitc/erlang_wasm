@@ -496,9 +496,13 @@ array_fill({wasm_heap, Objs, Elems, Ctr} = H, {objref, Id} = Ref, 0, Len, Value)
 array_fill(H, Ref, Start, Len, Value) ->
     fill_each(H, Ref, Start, Len, Value).
 
-fill_each(H, Ref, Start, Len, Value) ->
-    lists:foreach(fun(I) -> array_set_unchecked(H, Ref, Start + I, Value) end,
-                  lists:seq(0, Len - 1)).
+%% Counting down rather than over `lists:seq(0, Len - 1)': the sequence was one
+%% cons cell per element of an array the caller never sees, and the fun one
+%% call on top of the write.
+fill_each(_H, _Ref, _Idx, 0, _Value) -> ok;
+fill_each(H, Ref, Idx, N, Value) ->
+    ok = array_set_unchecked(H, Ref, Idx, Value),
+    fill_each(H, Ref, Idx + 1, N - 1, Value).
 
 -doc """
 Copy a range of elements from one array to another.

@@ -31,6 +31,11 @@ should be run on any machine before the numbers here are believed.
 
 -export([measure/1, measure/2, measure/3, validate/0, main/1]).
 
+%% Timestamped, because a run's GC *time* is the number the plan gates on and
+%% no counter carries it. Collections do not nest in one process, so a start
+%% and the end after it are one collection.
+-define(FLAGS, [garbage_collection, monotonic_timestamp]).
+
 -doc "Run `F' in a fresh process and report what it allocated.".
 -spec measure(fun(() -> term())) -> map().
 measure(F) -> measure(F, 300000).
@@ -61,7 +66,7 @@ measure(Setup, Body, Timeout) ->
                 end),
     Pid ! go,
     receive {ready, Pid} -> ok after Timeout -> erlang:error(setup_timeout) end,
-    erlang:trace(Pid, true, [garbage_collection]),
+    erlang:trace(Pid, true, ?FLAGS),
     Pid ! traced,
     collect(Pid, Timeout).
 
@@ -79,7 +84,7 @@ measure(F, Timeout) ->
                     erlang:garbage_collect(),
                     Parent ! {done, self(), R}
                 end),
-    erlang:trace(Pid, true, [garbage_collection]),
+    erlang:trace(Pid, true, ?FLAGS),
     Pid ! go,
     collect(Pid, Timeout).
 
@@ -93,26 +98,48 @@ collect(Pid, Timeout) ->
     receive {trace_delivered, Pid, Ref} -> ok end,
     %% No untrace: the process has already exited, and tracing a dead pid is a
     %% badarg rather than a no-op.
-    Ends = [I || {trace, _, K, I} <- drain(),
-                 K =:= gc_minor_end orelse K =:= gc_major_end],
-    report(Ends, Result).
+    Events = drain(),
+    %% The opening forced major is the boundary in the timing too, not only in
+    %% the words: drop its pair before summing.
+    report([{K, I} || {K, I, _} <- Events,
+                      K =:= gc_minor_end orelse K =:= gc_major_end],
+           us(gc_time(drop_pair(Events))), Result).
 
-report([], Result) ->
+%% One collection is a start and the end that follows it.
+gc_time(Events) -> gc_time(Events, 0).
+
+gc_time([{S, _, T0}, {E, _, T1} | Rest], Acc)
+  when (S =:= gc_minor_start orelse S =:= gc_major_start) andalso
+       (E =:= gc_minor_end orelse E =:= gc_major_end) ->
+    gc_time(Rest, Acc + (T1 - T0));
+gc_time([_ | Rest], Acc) -> gc_time(Rest, Acc);
+gc_time([], Acc) -> Acc.
+
+drop_pair([_, _ | Rest]) -> Rest;
+drop_pair(_) -> [].
+
+us(T) -> erlang:convert_time_unit(T, native, microsecond).
+
+report([], _GcUs, Result) ->
     #{allocated => 0, reclaimed => 0, collections => 0, result => Result,
       note => no_collections};
-report([Open | Rest], Result) ->
+report([{_, Open} | Rest], GcUs, Result) ->
     Live0 = live(Open),
-    Live1 = case Rest of [] -> Live0; _ -> live(lists:last(Rest)) end,
-    Reclaimed = lists:sum([w(I, wordsize) || I <- Rest]),
+    Live1 = case Rest of [] -> Live0; _ -> live(element(2, lists:last(Rest))) end,
+    Reclaimed = lists:sum([w(I, wordsize) || {_, I} <- Rest]),
     #{allocated => Reclaimed + Live1 - Live0,
       reclaimed => Reclaimed,
       live_before => Live0,
       live_after => Live1,
       collections => length(Rest),
+      minor => length([x || {gc_minor_end, _} <- Rest]),
+      major => length([x || {gc_major_end, _} <- Rest]),
+      gc_us => GcUs,
       %% Zero at both boundaries or the accounting has to explain them.
       mbuf => {w(Open, mbuf_size), case Rest of
                                        [] -> w(Open, mbuf_size);
-                                       _ -> w(lists:last(Rest), mbuf_size)
+                                       _ -> w(element(2, lists:last(Rest)),
+                                              mbuf_size)
                                    end},
       result => Result}.
 
@@ -123,7 +150,7 @@ w(Info, Key) -> proplists:get_value(Key, Info, 0).
 drain() -> drain([]).
 
 drain(Acc) ->
-    receive {trace, _, _, _} = T -> drain([T | Acc])
+    receive {trace_ts, _, Kind, Info, Ts} -> drain([{Kind, Info, Ts} | Acc])
     after 0 -> lists:reverse(Acc)
     end.
 

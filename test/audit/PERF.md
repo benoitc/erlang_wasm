@@ -3746,47 +3746,92 @@ instruction is a real cost and the right target for a long-running guest; for a
 one-shot `wasm32-wasi` command, which is most of what a toolchain emits, it is
 under two per cent and the one-time path is the whole thing.
 
-### Lowering is 39% of a request, and sizing its output misses that by 28x
+### Lowering is 2.7% of a request, and the 39% was the instrument
 
-Counting `wasm_instance:body_of/2` cache misses says how often lowering happens
-and nothing about what it costs, and sizing the IR it produces with
-`erts_debug:size/1` measures only what it *keeps*. On QuickJS that retained
-figure is 725,535 words over 402 functions, which is 2% of the run and looks
-like an answer.
+An earlier version of this section reported lowering at **20,606,076 words,
+39.0% of a QuickJS request**, and said lowering allocates twenty-eight words of
+garbage per word of IR it keeps. **Both numbers were the measuring instrument.**
+They are kept here with the correction because the way they went wrong is the
+useful part.
 
-Isolating it properly means moving it out of the window rather than measuring
-it: discover which functions a deterministic request reaches, then on a fresh
-instance lower exactly those **before the window opens**, in the same process,
-because the IR cache is keyed on the instance and lives in the process
-dictionary. Both arms then pay the guest's own start-up and the interpreter's
-dispatch, and only the cold one pays lowering.
+The isolation itself was right: discover which functions a deterministic request
+reaches, then on a fresh instance lower exactly those **before the window
+opens**, in the same process, because the IR cache is keyed on the instance and
+lives in the process dictionary. What was wrong is that the run carried an
+instrumented `wasm_instance` whose `body_of/2` called `erts_debug:size/1` on
+every lowered body, to report how many words the IR retained. In the cold arm
+that call is inside the window. In the pre-lowered arm it is inside the setup,
+where nothing is counted. The difference between the arms was therefore mostly
+the instrument.
+
+**`erts_debug:size/1` allocates, and not a little.** Ten calls on a
+200,000-word list, measured with `allocwords`:
+
+| | |
+| --- | ---: |
+| term walked | 200,000 words |
+| allocated per call | 34,490,334 words |
+| **per word of term** | **172 words** |
+
+At 725,535 words of retained IR that is enough to account for the whole
+20.6 M, and the "twenty-eight words per word kept" ratio was reading the
+instrument's own cost back as the runtime's.
+
+**The clean numbers.** Same harness, same arms, `bench/paths/pyarms.erl`, with
+nothing instrumented in the window:
 
 | arm | words |
 | --- | ---: |
-| cold, lowering inside the window | 52,837,237 |
-| warm, reached set pre-lowered | 32,231,161 |
-| **lowering** | **20,606,076, 39.0% of the run** |
+| cold, lowering inside the window | 28,145,449 |
+| pre-lowered, every function lowered in the setup | 27,380,916 |
+| **lowering of the reached set** | **764,533, 2.7% of the run** |
 
-**Lowering allocates about twenty-eight words of garbage for every word of IR
-it retains.** Nothing that sizes the result can see that, which is why the
-retained figure is in this file as a trap and not as a measurement.
+Which agrees with the retained figure it was supposed to contradict: 764,533
+allocated against 725,535 retained for the same 402 functions. Lowering keeps
+almost everything it allocates.
 
-`allocwords:measure/3` exists for this: it runs a setup in the measured process
-with tracing off, and opens the window only once the setup has returned. The
-first attempt at this experiment put the pre-lowering inside the measured fun,
-so both arms paid it and the difference came out at **4,176 words, 0.0%** -- a
-confident null result produced by a window that was open too early.
+Priced on its own, in a window holding nothing else, all 1530 QuickJS functions
+lower for **2,005,901 words** and retain 1,103,338 of them. Transient garbage is
+0.8 words per word kept, not 28.
+
+**The old numbers reproduce exactly when the instrumented modules are put
+back.** Same `pyarms` arms, `-pa` pointed at the instrumented build:
+
+| arm | clean | instrumented |
+| --- | ---: | ---: |
+| cold | 28,145,449 | 52,832,905 |
+| pre-lowered | 27,380,916 | 32,209,799 |
+| difference | 764,533 | 20,623,106 |
+
+against the 20,606,076 the original experiment reported. That is the same
+number, so the correction is not a difference of runs.
+
+**The rule this leaves.** A module loaded into the window is part of the
+measurement, and `-pa` is enough to make one so. `pyarms` prints `code:which/1`
+for `wasm_exec`, `wasm_instance` and `wasm_jit` on every arm for this reason.
+Counting instrumentation belongs outside the window or in its own arm, never
+inside the one being subtracted from.
+
+`allocwords:measure/3` is still what makes the isolation possible: it runs a
+setup in the measured process with tracing off, and opens the window only once
+the setup has returned. The first attempt at this experiment put the
+pre-lowering inside the measured fun, so both arms paid it and the difference
+came out at **4,176 words, 0.0%** -- a confident null produced by a window that
+was open too early.
 
 ### Where the run goes, so far
 
+Against the clean 28,145,449-word QuickJS request:
+
 | component | words | share | how it was separated |
 | --- | ---: | ---: | --- |
-| lowering | 20.6 M | 39% | pre-lowered outside the window |
-| dispatch, `#st{}` at 11 a time | 16.7 M | 32% | executed histogram times measured price |
-| retained IR, inside the 20.6 M above | 0.7 M | 2% | `erts_debug:size/1` |
-| instantiation | 0.14 M | 0.4% | staged measurement |
-| **accounted** | **37.3 M** | **~71%** | |
+| dispatch, `#st{}` at 11 a time | 16.7 M | 59% | executed histogram times measured price |
+| lowering, reached set | 0.76 M | 2.7% | pre-lowered outside the window |
+| instantiation | 0.13 M | 0.5% | `inwin` arm against `cold` |
+| **accounted** | **17.6 M** | **~62%** | |
 
-Against the plan's 80% bar this is not finished, and the remainder is not yet
-named. What it does settle is the ranking: lowering first, dispatch second, and
-both of them ahead of anything else that has been proposed.
+The correction reorders the ranking it used to support. **Dispatch is the
+dominant allocator and lowering is a rounding error next to it**, the reverse of
+what this file said before the instrument was taken out of the window. Against
+the plan's 80% bar the model is further from closing than the inflated version
+appeared to be, and the missing 38% is not yet named.

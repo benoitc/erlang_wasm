@@ -442,3 +442,30 @@ instruction keeps. `run_case/3` flags anything under 0.05 ns, which catches the
 first three failures and not the fourth; the fourth is caught only by reading
 each unsigned row against its signed twin, which is why they are laid out in
 pairs. Four rows already in that file trip the flag.
+
+**Measuring lowering with the sizing instrument still in the window.** The
+experiment that reported lowering at 39% of a QuickJS request had the isolation
+right and the build wrong: the cold arm ran an instrumented `wasm_instance`
+whose `body_of/2` called `erts_debug:size/1` on every lowered body, and the
+pre-lowered arm ran the same call in its setup, where nothing is counted. The
+difference between the arms was the instrument, not the runtime.
+
+`erts_debug:size/1` allocates 172 words for every word of term it walks:
+34,490,334 words a call on a 200,000-word list. On 725,535 words of retained IR
+that is the whole 20.6 M the experiment attributed to lowering. Clean, lowering
+is 764,533 words, 2.7%.
+
+Nothing in the run looked wrong. Both arms produced the right reply, the
+estimator validates to 0.0%, the pre-lowering demonstrably happened, and the
+two numbers were 20 M apart. A subtraction between two arms is only as clean as
+the code they *both* load: a module reached through `-pa` is part of the
+measurement. `bench/paths/pyarms.erl` prints `code:which/1` for `wasm_exec`,
+`wasm_instance` and `wasm_jit` on every arm, and reproduces both the wrong and
+the right numbers by that path alone.
+
+**`erlang:trace_pattern/3` on a module the emulator has not loaded matches
+nothing.** It answers 0 rather than an error, and `trace_info/2` then reads
+`undefined`, so a dispatch count comes back as a missing value instead of a
+failure. `bench/paths/tiered.erl` never hit this because it warms the workload
+first; anything that sets the pattern before the first call has to
+`code:ensure_loaded/1` and match the 1 that `trace_pattern/3` returns.

@@ -2895,3 +2895,204 @@ an empty map and does no work, and the argument check runs once per embedder
 call: this workload makes one, then runs 30,000 JavaScript iterations inside it.
 
 Worth re-running on a quiet box before any claim leans on the 0.36%.
+
+## Charging the object store, and two versions that were too expensive
+
+Garbage-collected objects are ETS rows, so neither `max_heap_size` nor the page
+budget could see them: a guest filled a twenty-million element array and took
+1.8 GB with every limit reading zero. Charging the heap against the node page
+budget puts a check on the allocation and array-write paths, which is exactly
+where this project has been bitten before, so it was priced three times.
+
+`wasm_gc_bench_SUITE`, `allocation_throughput` and `bulk_array_ops`, against
+`05720c4`.
+
+| version of the check | struct.new | array.fill part, 100 |
+| --- | ---: | ---: |
+| base, no charge | 171.9 ns/object | 84.6 ns/element |
+| `application:get_env/3` per operation | 234.9 (+37%) | 120.0 (+42%) |
+| interval cached in an `atomics` slot | 200.6 (+17%) | 92.9 (+10%) |
+| `band` against a literal mask | 181.4 (+5.5%) | 92.9 (+10%) |
+
+The first two are the finding. `application:get_env/3` is an ETS lookup, and
+`gc_alloc_threshold` beside it gets away with being read from the environment
+only because `should_collect/1` asks once per outermost call; this is asked once
+per *allocation*. Caching it in the counter array removed the lookup and still
+cost 17%, because it is another read on a path whose whole body is one
+`ets:insert`. A power-of-two constant needs no read at all, and the allocation
+path already has the id in hand, so `Id band 16#FFF` replaces both.
+
+**The third row, priced properly.** Timing could not resolve it: ten interleaved
+pairs of `allocation_throughput` gave base 189.4 to 244.7 ns and branch 185.9 to
+274.1, a 29% and 47% spread against a difference of a few per cent, and the
+minimum said -1.8% while the median said +8.8%. The null experiment settled that
+it was noise and not the change: removing the hook from `new_struct/3` entirely
+and repeating gave 182.0 / 186.3, 211.2 / 222.4 and 216.0 / **170.0**, the arm
+with nothing in it winning a pair by 21%. Load average was 21 to 26, and starting
+at 4.6 did not help because running all ten arms twice a pair drives it there.
+
+So the instrument was wrong. Reductions are a *count*, immune to whatever else
+the box is doing, and they are what this change should be measured in:
+
+| operation | base | branch | added |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 68.11 reductions | 70.09 | **+1.98, +2.9%** |
+| `array.set` | 44.10 reductions | 47.24 | **+3.14, +7.1%** |
+
+Identical to two decimal places across three runs on both trees, at load 5.8,
+and exactly what the code adds: a call, a `band` and a compare on the allocation
+path; an `atomics:add_get`, a `band` and a compare on the write path. Dropping
+the `ok =` match beside the write changed nothing, so those three are
+irreducible for what they do.
+
+Read it as work and not as time. Reductions overstate a BIF's share, and the
+dominant cost of both operations is an `ets:insert` the VM charges lightly and
+the clock does not. What can be said is that the added work is small, bounded,
+attributable instruction by instruction, and does not scale with heap size.
+
+The reconcile itself is not on the path: `ets:info(memory)` on both tables is
+1.78 microseconds for the pair, once per 4096 operations.
+
+## Giving the collector a byte-side trigger
+
+`major_due/1` and `should_collect/1` both counted objects, so a store of few
+large objects was never collected at all: four rounds of a fifty thousand
+element array left all four, sixteen megabytes, with one reachable. Making both
+rules see bytes as well as rows means collections that never used to happen now
+do, and that is work.
+
+Reductions, the instrument the section above settles on, against `67a4e83`:
+
+| operation | before | after | added |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 70.09 | 80.10 | **+10.01, +14.3%** |
+| `array.set` | 47.24 | 50.26 | **+3.02, +6.4%** |
+
+Both workloads allocate twenty thousand objects in one call and keep none, so
+before this they leaked two megabytes a call and collected nothing. The added
+reductions are the collector doing the work it was skipping, not overhead around
+it: the triggers are two `atomics:get` each and they run once per outermost
+call, not per allocation, so at twenty thousand allocations a call their share
+rounds to nothing.
+
+Nothing was added to a collection itself. `major/3` and `minor/3` are untouched;
+`collect/2` gains two `atomics:put`. What changed is how often a major is due,
+which is the whole point, and what it buys is a bound: the same workload's store
+now oscillates between one and two arrays instead of growing without end.
+
+The trade is explicit. A workload that allocates heavily and keeps nothing pays
+about fourteen per cent more work to stop leaking.
+
+**A stable live set is not free, and the claim that it was is withdrawn.** Both
+triggers are read once per outermost call, and the benchmark above does twenty
+thousand operations *inside* one call, which amortises a per-call check to
+nothing and cannot say anything about it. A review pointed that out and it was
+right.
+
+Measured properly -- a hundred thousand short calls on a GC instance whose live
+set is one struct:
+
+| tree | per short call |
+| --- | ---: |
+| before the charge | 171.461 reductions |
+| charge only | 173.465 |
+| charge, byte triggers and the review fixes | 176.310 |
+
+So **+2.8%** per call on a stable live set, not nothing. What it buys is that the
+store cannot grow without bound, which it previously could. The two environment
+lookups the review found on that path are gone: `gc_major_ratio` and
+`gc_min_major_pages` are read where collections are decided and the answer is
+kept in an `atomics` slot, so the per-call check is two `atomics:get` and a
+comparison.
+
+## One reconcile cadence for writes and allocations
+
+A second review found that a refused allocation left its row and then went 4095
+allocations unchecked: the allocation path rode the id it had already taken,
+`Id band ?RECONCILE_MASK`, and a refusal rewinds `?WRITES`, which that path
+never read. Allocations now count on `?WRITES` like every other mutation, which
+costs the `atomics:add_get` the id trick existed to avoid.
+
+Reductions, against `401b91c`, three runs each, identical to three decimals:
+
+| operation | before | after | added |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 61.103 reductions | 62.128 | **+1.025, +1.7%** |
+| `array.new_default` | 57.129 | 58.132 | **+1.003, +1.8%** |
+
+One reduction, which is the one BIF call. The measurement that argued for the id
+trick priced *reading `gc_alloc_threshold` from the environment* at 37%, an ETS
+lookup rather than an atomic; it does not transfer, and the number above is what
+the alternative actually costs.
+
+## The reconcile counter counts words, not operations
+
+A third review found that the interval bounds *bytes* only while every row is
+the same size, and a struct row is as wide as its type declares. Nothing caps a
+struct's field count, so one `struct.new_default` of a hundred thousand fields
+was one mutation on the cadence and an 800 KB row, admitted whole at a one-page
+ceiling. The counter now takes each row's word cost and `?RECONCILE_MASK` goes
+from 4,095 operations to 65,535 words, which is half a megabyte of overshoot
+against the 370 KB the old constant was chosen for.
+
+Reductions against `16c109e`, two runs each, stable to three decimals:
+
+| operation | before | after | change |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 62.094 -- 62.127 | 62.096 | flat |
+| `array.new_default` | 58.094 | 58.089 | flat |
+| `array.set` | 48.042 | 48.040 | flat |
+| a call returning a reference | 150.539 | 155.018 | **+4.48, +2.9%** |
+
+Flat where the work is, because a five-word struct row now reconciles every
+13,107 allocations where operations reconciled every 4,096, and an element row
+at twelve words every 5,461 where it was 4,096. Fewer reconciles paid for the
+`tuple_size` and the changed comparison.
+
+The last row is the one that moved, and it is reconcile *timing* rather than
+work added to the call: nothing on that path gained an instruction. Charging the
+row size at the old 4,095 constant cost 161.6 on the same measurement and
+charging one word cost 150.5, so the figure tracks how often the store is
+measured and not what a call does. It is 2.9% on a call that returns a fresh
+reference and holds it, which is the shape that keeps the store growing.
+
+## Covering the paths that reached no counter, and inlining to pay for it
+
+`struct.set` writes a field in place and `pin/2` inserts a row, and neither
+called `wrote/2` at all: field writes took a store from 10.4 MB to 16.8 MB and
+a hundred thousand pins from 123 pages to 257, both with the charge unmoved.
+Both now count. Nothing cheaper works -- bounded per operation and unbounded per
+program is not a bound -- so the question was only what it costs.
+
+`wrote/2`, `touched/2` and `crossed/2` are `-compile({inline, ...})`. As calls
+they cost two reductions on **every** mutation in the runtime, which is more
+than the arithmetic they wrap. Inlined, against `16c109e`:
+
+| operation | `16c109e` | this branch | change |
+| --- | ---: | ---: | ---: |
+| `struct.new` | 62.094 | 60.087 | **-2.01, -3.2%** |
+| `array.new_default` | 58.094 | 56.089 | **-2.01, -3.5%** |
+| `array.set` | 48.042 | 46.039 | **-2.00, -4.2%** |
+| `struct.set` | 63.025 | 64.040 | **+1.02, +1.6%** |
+| a call returning a reference | 150.539 | 163.9 | **+13.4, +8.9%** |
+
+Three paths are *faster* than before the review, because inlining gave back more
+than the wider interval cost. `struct.set` pays one reduction for a counter it
+did not have.
+
+The last row is the price, and it is worth being exact about where it comes
+from. Counting a pin as one word costs 152.0 and counting it as a row's twelve
+costs 163.9, so none of it is the counting: it is the store being *measured*
+more often, which is the thing that makes the growth visible. The shape is a
+call returning a freshly allocated reference that the embedder never releases,
+so every pin is a new row; a call returning numbers reaches
+`pin(_H, _Other) -> ok` and pays nothing, and one that reuses a reference
+increments a counter on a row that already exists.
+
+And a module that uses no GC types still pays nothing at all, which is the
+number the whole branch has to keep flat:
+
+| operation | `16c109e` | this branch |
+| --- | ---: | ---: |
+| a loop iteration with a memory store | 44.035 | 44.035 |
+| a short call | 84.811 -- 84.826 | 84.794 |

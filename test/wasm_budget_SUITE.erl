@@ -22,7 +22,8 @@ directly, and every limit has to see it that way.
          an_imported_memory_counts_against_the_ceiling/1,
          the_strictest_holder_bounds_a_shared_memory/1,
          two_slots_on_one_memory_count_once/1,
-         a_limit_that_is_not_a_number_is_refused/1]).
+         a_limit_that_is_not_a_number_is_refused/1,
+         max_memory_pages_bounds_gc_objects_too/1]).
 
 all() ->
     [an_import_called_in_a_loop_is_stopped,
@@ -35,7 +36,8 @@ all() ->
      an_imported_memory_counts_against_the_ceiling,
      the_strictest_holder_bounds_a_shared_memory,
      two_slots_on_one_memory_count_once,
-     a_limit_that_is_not_a_number_is_refused].
+     a_limit_that_is_not_a_number_is_refused,
+     max_memory_pages_bounds_gc_objects_too].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -280,3 +282,38 @@ recursive() ->
           (else (call $r (i32.sub (local.get 0) (i32.const 1)))))))
     """}),
     M.
+
+%% `max_memory_pages` is the instance's ceiling on node memory, and a
+%% garbage-collected object is node memory.
+%%
+%% It reads as a ceiling on *linear* memory and that is what it used to be. A
+%% guest with no memory at all could take 1.8 GB in array elements under any
+%% value of it, because those live in ETS where neither this nor
+%% `max_heap_size` could see them. Charging the heap under the instance's own
+%% holder token is what makes one number bound both.
+max_memory_pages_bounds_gc_objects_too(_Config) ->
+    Mod = array_filler(),
+    {ok, Tight} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 64}),
+    ?assertMatch({error, #{class := exhaustion, kind := heap_limit}},
+                 wasm:call(Tight, ~"fill", [5000000])),
+    ok = wasm:destroy(Tight),
+    %% And a workload that fits still runs, so this is a ceiling and not a wall.
+    {ok, Roomy} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 4096}),
+    ?assertMatch({ok, [20000]}, wasm:call(Roomy, ~"fill", [20000])),
+    ok = wasm:destroy(Roomy).
+
+array_filler() ->
+    compile(~"""
+    (module
+      (type $a (array (mut i64)))
+      (func (export "fill") (param i32) (result i32)
+        (local $r (ref $a)) (local $i i32)
+        (local.set $r (array.new_default $a (local.get 0)))
+        (block $o (loop $l
+          (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
+          (array.set $a (local.get $r) (local.get $i)
+                        (i64.extend_i32_u (local.get $i)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (array.len (local.get $r))))
+    """).

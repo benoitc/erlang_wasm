@@ -64,6 +64,7 @@ now rather than the size the handle was made at.
 -export([reserve/4, acquire/3, release/2, transfer/3, discard/1]).
 -export([set_limit/2, total_of/1]).
 -export([grow_begin/3, grow_commit/4, grow_abort/2]).
+-export([reconcile/2, reconcile/3]).
 -export([charge_of/1, holders_of/1, resources/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -91,7 +92,12 @@ thing, not two that have to be kept in step.
 """.
 -type meta() :: {memory, undefined | reference(),
                  undefined | atomics:atomics_ref()}
-              | cell.
+              | cell
+              %% A garbage-collected object store, and the two ETS tables it
+              %% is. They are recorded here rather than passed to `reconcile/2`
+              %% so the keeper measures the tables it was told about at
+              %% `reserve/4` and never a table identifier a caller handed it.
+              | {heap, ets:tid(), ets:tid()}.
 
 -export_type([token/0, resource/0]).
 
@@ -211,6 +217,42 @@ discard(Token) ->
         ok -> ok;
         {error, keeper_unavailable} -> ok
     end.
+
+-doc """
+Charge a heap for what its tables currently hold.
+
+The measurement happens *here*, inside the callback that applies it, because a
+caller that measures and then calls has already lost: two processes sharing a
+linked store can interleave so that an older, smaller sample lands after a newer,
+larger one and releases the pages of rows that still exist.
+
+Answers `{error, limit}`, `{error, instance_limit}` or, for a finite `Ceiling`,
+`{error, exceeds_max}` when what the store holds is past a ceiling. The charge
+is still recorded: the rows exist whether or not a ceiling likes them, and
+refusing to write down memory that has already been spent is how growth became
+invisible. Recording it is a fact; the error is a decision about whether the
+guest may continue.
+""".
+-spec reconcile(resource(), non_neg_integer() | infinity) ->
+          ok | {error, limit | instance_limit | exceeds_max | gone
+                     | keeper_unavailable}.
+reconcile(Resource, Ceiling) ->
+    reconcile(Resource, Ceiling, 0).
+
+-doc """
+As `reconcile/2`, refusing as though `Extra` words were already written.
+
+What is recorded is still what the tables hold. `Extra` moves only the refusal,
+so a caller about to write one very large row can be told no before the row
+exists rather than after: a store is measured, and a measurement cannot see what
+has not happened yet. One `struct.new_default` of a hundred thousand fields
+walked through a one-page ceiling that way.
+""".
+-spec reconcile(resource(), non_neg_integer() | infinity, non_neg_integer()) ->
+          ok | {error, limit | instance_limit | exceeds_max | gone
+                     | keeper_unavailable}.
+reconcile(Resource, Ceiling, Extra) ->
+    call({reconcile, Resource, Ceiling, Extra}).
 
 -doc """
 Claim the right to grow `Resource` by `Delta`, up to `Ceiling` pages.
@@ -549,6 +591,22 @@ handle_call({transfer, From, To, Owner}, {Pid, _}, #{held := Held} = State) ->
                      S1, Moved),
     {reply, ok, S2};
 
+handle_call({reconcile, Res, Ceiling, Extra}, _From, State) ->
+    ok = hook(charge_entry),
+    case ets:lookup(?TAB, Res) of
+        [{Res, {heap, Objs, Elems}, _Pages, _Holders}] ->
+            Words = words_of(Objs) + words_of(Elems),
+            Pages = pages_of(Words),
+            %% These pages are spent, and the answer is only whether that,
+            %% plus what the caller is about to write, put the holder or the
+            %% node over.
+            {reply, R, S1} =
+                do_resize(Res, Pages, Ceiling, pages_of(Extra), State),
+            {reply, R, S1};
+        _ ->
+            {reply, {error, gone}, State}
+    end;
+
 handle_call({grow_begin, Res, Delta, Ceiling}, From,
             #{growing := Growing} = State) ->
     case maps:is_key(Res, Growing) of
@@ -618,6 +676,13 @@ handle_info({'DOWN', MonRef, process, Pid, _Reason},
                next_growth(Res, unreserve(Res, Delta, S#{growing := Left}))
            end, State, Aborted),
     {noreply, forget_holder(Pid, S1)};
+
+%% A heap whose creating process died. Named as heir by `wasm_heap:new/2` so
+%% the store outlives the process that made it, which a linked instance in
+%% another process may still be running on. It is deleted at the last holder,
+%% like any other, so nothing more is needed here than owning it.
+handle_info({'ETS-TRANSFER', _Tab, _From, wasm_heap}, State) ->
+    {noreply, State};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -750,7 +815,30 @@ reclaim(Res, Meta, Pages) ->
 
 forget_meta(_Res, {memory, undefined, _}) -> ok;
 forget_meta(_Res, {memory, CRef, _}) -> wasm_engine:cell_forget(CRef);
-forget_meta(Res, cell) -> wasm_engine:cell_forget(Res).
+forget_meta(Res, cell) -> wasm_engine:cell_forget(Res);
+%% A heap's two tables, which nothing else is left to delete.
+%%
+%% They used to be dropped by `wasm_heap:delete/2` when the *instance registry
+%% map* emptied, which is a different question from whether anything still holds
+%% the resource: a build holding it between `acquire/3` and `register/3` was
+%% left with both tables gone and its pages still charged. It is also the only
+%% place that covers a last holder whose process simply died, where no
+%% `delete/2` is ever called.
+%%
+%% Deleting a table from a process that does not own it is allowed while it is
+%% `public`, which both of these are.
+forget_meta(_Res, {heap, Objs, Elems}) ->
+    try ets:delete(Objs) catch error:badarg -> true end,
+    try ets:delete(Elems) catch error:badarg -> true end,
+    ok.
+
+%% A table that has already gone answers `undefined`, which is a heap being torn
+%% down while a reconcile was in flight.
+words_of(Tab) ->
+    case ets:info(Tab, memory) of
+        undefined -> 0;
+        N -> N
+    end.
 
 %%% --------------------------------------------------------------- growth ---
 
@@ -800,6 +888,95 @@ start_growth(Res, Delta, Ceiling, {Pid, _} = _From, State) ->
                     end
             end
     end.
+
+%% Up or down to an absolute number, in one transaction with the registry row.
+%%
+%% The counter and the row move together here for the same reason they do in
+%% `start_growth/5`: a charge recorded against no resource is a charge nothing
+%% will ever give back, and `wasm_engine`'s moduledoc is explicit that a counter
+%% which disagrees with the registry eventually refuses every allocation on the
+%% node.
+pages_of(Words) ->
+    (Words * erlang:system_info(wordsize) + 65535) div 65536.
+
+%% Up or down to what the tables were just measured at.
+%%
+%% There used to be a second caller, `resize/3`, taking an absolute size from
+%% whoever asked. That is the shape this function was moved here to make
+%% unrepresentable: it could set a live fourteen-page store to zero without
+%% looking at it. Nothing used it.
+do_resize(Res, Want, Ceiling, Extra, State) ->
+    case ets:lookup(?TAB, Res) of
+        [] ->
+            {reply, {error, gone}, State};
+        [{Res, Meta, Pages, Holders}] when Want < Pages ->
+            %% Giving pages back never fails and never consults a ceiling.
+            Back = Pages - Want,
+            ok = wasm_engine:release_pages(Back),
+            true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
+            S1 = lists:foldl(fun(T, S) -> sub_total(T, Back, S) end,
+                             State, maps:keys(Holders)),
+            {reply, ok, S1};
+        %% Including `Want =:= Pages`, which is not a no-op: a resource that
+        %% is *already* over a holder's ceiling has to keep saying so, or a
+        %% guest whose next interval happens not to move the page count is let
+        %% through. `within/3` asks about the total, not about the delta.
+        [{Res, Meta, Pages, Holders}] ->
+            Delta = Want - Pages,
+            Toks = maps:keys(Holders),
+            grow(Res, Meta, Want, Delta, Holders, Toks,
+                 ceilings(Want, Ceiling, Delta, Extra, Toks, State),
+                 Extra, State)
+    end.
+
+%% Which ceiling refuses this growth, if any. Asked before the node budget so
+%% the answer can name a reason and the charge still be recorded.
+%%
+%% `Extra` is what the caller is about to write and the tables cannot show yet.
+%% It counts against every ceiling and is recorded nowhere.
+ceilings(Want, Ceiling, Delta, Extra, Toks, State) ->
+    AllFit = lists:all(fun(T) -> within(T, Delta + Extra, State) end, Toks),
+    if
+        Ceiling =/= infinity andalso Want + Extra > Ceiling ->
+            {error, exceeds_max};
+        not AllFit ->
+            {error, instance_limit};
+        true ->
+            ok
+    end.
+
+%% This memory is already spent. The rows exist whether or not a ceiling likes
+%% them, so the registry row, the holder totals and the node counter all move to
+%% the measured size and the refusal is only the *answer*. Leaving them behind
+%% was how a heap sat at twelve pages charged for six, once per heap.
+grow(Res, Meta, Want, Delta, Holders, Toks, Ceil, Extra, State) ->
+    Node = wasm_engine:charge_pages(Delta, Extra),
+    true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
+    S1 = lists:foldl(fun(T, S) -> add_total(T, Delta, S) end, State, Toks),
+    {reply, first_error(Ceil, Node), S1}.
+
+first_error(ok, R) -> R;
+first_error({error, _} = E, _R) -> E.
+
+-ifdef(TEST).
+%% A sync point at the top of the transaction that sets a heap's charge.
+%%
+%% `wasm_heap:charge/1` used to measure the two tables and *then* call here, so
+%% an older, smaller sample could land after a newer, larger one and release the
+%% pages of rows that still existed. A test cannot land in that window by
+%% racing, and the one written for it passed whether the defect was there or
+%% not. Holding a process here instead makes the schedule exact: the store grows
+%% while a charge is in flight, and where the measurement happens decides the
+%% answer. Both clauses carry it because the defect put the measurement on the
+%% other side of this line. Never compiled into a release.
+hook(Where) ->
+    case application:get_env(wasm, keeper_hook) of
+        {ok, F} when is_function(F, 1) -> _ = F(Where), ok;
+        _ -> ok
+    end.
+-else.
+hook(_Where) -> ok.
+-endif.
 
 %% The reservation an abandoned growth took, given back without publishing
 %% anything. The delta is the growth's own, not a difference between the charge

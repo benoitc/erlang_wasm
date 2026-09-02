@@ -38,16 +38,24 @@ call inside a worker.
 | --- | --- |
 | `fuel` | execution work, charged at calls and loop back-edges |
 | `max_depth` | WebAssembly call depth |
-| `max_heap_words` | Erlang term allocation, applied by the owning process |
+| `max_heap_words` | Erlang terms on the owning process's own heap, applied by it. Not linear memory, not the object store |
 | `max_host_calls` | calls out through an import, per invocation |
-| `max_memory_pages` | every memory one instance can reach, imports included |
-| node page budget | linear memory across every instance |
+| `max_memory_pages` | every memory one instance can reach, imports included, and the object store it shares |
+| node page budget | linear memory and object stores across every instance |
 | `max_rec_groups` | distinct recursive type groups interned node-wide |
 
 `max_memory_pages` counts an imported memory, because a module that imports one
 can address every page of it, and it counts a memory once however many import
 slots name it. A memory two instances share grows only as far as the stricter
 of their ceilings allows.
+
+It counts the garbage-collected object store the same way, because a struct or
+an array is an ETS row and ETS is not process heap: `max_heap_words` cannot see
+it and neither can the BEAM. A store is *measured* rather than requested, so its
+charge follows what it holds, and linked instances share one store and bound it
+by the stricter of their ceilings. `pages_in_use` can therefore read a little
+above the node budget: pages already spent are counted whether or not the budget
+likes them, and everything further is refused while it is over.
 
 `max_rec_groups` bounds a table whose rows can never be removed: a type id is
 compared by `ref.eq` and by import matching, so dropping one would make two
@@ -65,6 +73,13 @@ one that recursed directly.
 Stated plainly, because "each instance is in a process, so it is isolated" is
 the most tempting wrong claim available about this design. A process is a
 **fault and lifecycle** boundary, not a security boundary.
+
+1. **Neither linear memory nor the object store is on any process heap, so
+   `max_heap_size` bounds neither.** Linear memory is `atomics`; a struct or an
+   array is a row in ETS. Both are counted explicitly by `wasm_engine` instead,
+   which is what `max_memory_pages` and the node page budget bound. A guest
+   filling a twenty-million element array took 1.8 GB before the object store
+   was counted, with every limit reading zero.
 
 1. **Linear memory is invisible to `max_heap_size`.** It is `atomics`, which is
    off-heap. A module can exhaust node memory without its process heap moving.

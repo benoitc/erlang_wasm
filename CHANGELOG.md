@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 ### Changed
 
@@ -15,7 +15,30 @@ answer `{malformed, internal}`. `malformed` is the decode class and an argument
 is not a decode concern; the kind is new, the class has changed, and anything
 matching on the old pair needs updating.
 
+- **`max_memory_pages` now covers garbage-collected objects as well as linear
+  memory.** A workload under a tight ceiling that allocates structs or arrays
+  can be refused where it was not. The node page budget widens the same way, so
+  `memory.grow` can return -1 because a guest filled the object store. Both were
+  unbounded before: a guest filling a twenty-million element array took 1.8 GB
+  with `max_heap_words` set, `process_flag(max_heap_size, ...)` set on the
+  process running it, and `pages_in_use` reading zero throughout, because a
+  struct or an array is a row in ETS and ETS is not process heap.
+
+  `max_heap_words` is documented as what it always was: a ceiling on terms on
+  the *caller's own heap*, applied by the caller. It never covered guest memory
+  of either kind, and no longer reads as though it might.
+
 ### Fixed
+
+- **A store of few large objects was never collected.** Every rule in
+  `wasm_heap` counted objects: `major_due/1` compared a row count against a
+  floor of 4096, so a workload replacing one large array per call never got a
+  major collection, and a minor one leaves the old generation alone by design.
+  Four rounds of a fifty thousand element array left all four, sixteen
+  megabytes, with one reachable. Both `major_due/1` and `should_collect/1` now
+  read bytes as well as rows, with a `gc_min_major_pages` floor. A workload that
+  allocates heavily and keeps nothing does about 14% more work and stops
+  leaking; one with a stable live set is unaffected.
 
 - **`atomic.fence` was rejected as invalid.** The decoder and the interpreter
   both knew it and the validator had no clause, so every module carrying a

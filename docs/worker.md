@@ -16,7 +16,8 @@ right answer for trusted code you call synchronously. It also means:
 | --- | --- | --- |
 | module loops forever | hangs you, unkillable without killing yourself | `exit(Pid, kill)` |
 | request timeout | impossible; the call is synchronous | `gen_server:call` timeout, then kill |
-| runaway allocation | grows *your* heap | `max_heap_size` kills the worker |
+| runaway allocation, terms | grows *your* heap | `max_heap_size` kills the worker |
+| runaway allocation, guest memory | grows linear memory or the object store, neither on your heap | `max_memory_pages` refuses it |
 | two callers at once | racy: both read-modify-write the state | serialised by the mailbox |
 | visible in `observer` | no | labelled process |
 

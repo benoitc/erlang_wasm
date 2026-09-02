@@ -10,13 +10,23 @@ wasm_engine:set_page_limit(16384),          % 1 GiB
 #{pages_in_use := N} = wasm_engine:stats().
 ```
 
-Set the cap. Linear memory is backed by `atomics` arrays, which live outside the
-process heap. That is what makes them fast (see the benchmark table in the
+The budget covers every kind of memory a guest can take that the BEAM cannot see
+for it: linear memory, and the garbage-collected object store. Set the cap.
+Linear memory is backed by `atomics` arrays, which live outside the process
+heap, and a struct or an array is a row in ETS, which is not process heap
+either. That is what makes them fast (see the benchmark table in the
 design notes), but it also means `max_heap_size` cannot see them: a module can
 exhaust node memory without its owning process's heap ever moving. So page
 accounting has to be explicit, and it has to be node-wide rather than
 per-instance, because a thousand small instances are as much of a threat as one
 large one.
+
+The counter can read above the limit. It is the sum of what the registry holds,
+and the object store is *measured* rather than requested: by the time the keeper
+hears a number, the rows exist, and refusing to record them hides them instead of
+giving them back. So already-spent pages are recorded whatever the budget says,
+through `charge_pages/1`, and every `reserve_pages/1` refuses while the node is
+over. A limit bounds what a guest may take next, not what it has taken.
 
 Reading the counter is a lock-free `atomics` get, which is what keeps it off the
 cost of an access. *Moving* it is not: reservation and release happen inside a
@@ -29,8 +39,9 @@ eventually refuses every allocation on the node.
 
 -export([start_link/0]).
 -export([table_grow_limit/0]).
--export([reserve_pages/1, release_pages/1, pages_in_use/0, page_limit/0,
-         set_pages_in_use/1,
+-export([reserve_pages/1, charge_pages/1, charge_pages/2,
+         release_pages/1, pages_in_use/0,
+         page_limit/0, set_pages_in_use/1,
          set_page_limit/1, stats/0]).
 -export([table_put/2, table_get/1, table_forget/1]).
 -export([cell_put/2, cell_get/1, cell_forget/1]).
@@ -104,6 +115,46 @@ reserve_loop(Ref, N, Limit) ->
                 ok -> ok;
                 _Actual -> reserve_loop(Ref, N, Limit)
             end
+    end.
+
+-doc """
+Count `N` pages that have already been spent, over the limit if need be.
+
+`reserve_pages/1` asks permission for memory nobody has taken yet, and refusing
+it costs nothing. This is for memory that is *already there*: the object store
+is measured rather than requested, and by the time the keeper hears the number
+the ETS rows exist. Refusing to record them does not give them back, it only
+hides them, and a review found exactly that -- a heap sitting at twelve pages
+charged for six, once per heap on the node.
+
+So the count always moves and the answer only says whether it went over. It can
+therefore read above `page_limit/0`, which is the truth: `pages_in_use/0` is the
+sum of what the registry holds. While it is over, every `reserve_pages/1` on the
+node refuses, which is the point, and the pages come back on destroy through the
+same `release_pages/1` as any other.
+
+Call this from `wasm_keeper` reconciliation and nowhere else.
+""".
+-spec charge_pages(non_neg_integer()) -> ok | {error, limit}.
+charge_pages(N) -> charge_pages(N, 0).
+
+-doc """
+As `charge_pages/1`, refusing as though `Extra` more pages were also spent.
+
+Only the answer moves: `Extra` is memory the caller is about to take and this
+counter has no business recording before it exists.
+""".
+-spec charge_pages(non_neg_integer(), non_neg_integer()) -> ok | {error, limit}.
+charge_pages(0, 0) -> ok;
+charge_pages(N, Extra) when is_integer(N), N >= 0, is_integer(Extra) ->
+    Ref = counters_ref(),
+    New = case N of
+              0 -> atomics:get(Ref, ?SLOT_PAGES);
+              _ -> atomics:add_get(Ref, ?SLOT_PAGES, N)
+          end,
+    case New + Extra > atomics:get(Ref, ?SLOT_LIMIT) of
+        true -> {error, limit};
+        false -> ok
     end.
 
 -spec release_pages(non_neg_integer()) -> ok.

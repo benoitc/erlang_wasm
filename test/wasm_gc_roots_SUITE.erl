@@ -22,11 +22,31 @@ all() ->
      another_instances_global_is_a_root,
      an_unlinked_reference_traps,
      a_shared_store_outlives_one_instance,
+     a_heap_outlives_a_holder_that_is_not_an_instance,
+     a_linked_instance_survives_its_creators_death,
      destroy_releases_the_state_and_repeats_safely,
      an_array_of_numbers_is_never_walked,
      a_reentrant_call_keeps_its_writes,
      a_root_view_works_from_a_process_with_a_cold_cache,
-     a_root_view_of_a_destroyed_instance_is_not_a_crash].
+     a_root_view_of_a_destroyed_instance_is_not_a_crash,
+     a_guest_cannot_outgrow_the_node_budget,
+     a_heap_gives_its_pages_back_when_collected,
+     a_shared_heap_is_charged_once,
+     a_linked_instance_over_its_ceiling_is_refused,
+     a_wide_struct_cannot_outrun_its_ceiling,
+     a_refused_allocation_leaves_no_row,
+     a_refused_write_leaves_no_row,
+     a_struct_field_write_is_charged,
+     pins_are_charged_and_released,
+     a_refused_charge_still_records_what_is_held,
+     a_whole_array_fill_gives_its_pages_back,
+     concurrent_reconciles_never_lower_a_live_charge].
+
+%% Not in `all/0`, because it cannot fail against the defect it describes and a
+%% test that cannot fail is worse than none. `wasm_bench_SUITE` keeps its
+%% measurements out of a plain run the same way. `rebar3 ct --group stress`.
+groups() ->
+    [{stress, [], [many_processes_on_one_store_stay_charged]}].
 
 %% The collector reads its roots through `wasm_instance:mut_of/1', which is
 %% handed a root view rather than an instance: four fields, no `#inst{}'. A
@@ -89,7 +109,18 @@ end_per_testcase(_Case, _Config) ->
     application:unset_env(wasm, gc_alloc_threshold),
     application:unset_env(wasm, gc_major_ratio),
     application:unset_env(wasm, gc_min_major_size),
+    release_the_keeper(),
     ok.
+
+%% Unconditional, because a case that throws while the keeper is parked inside
+%% the hook leaves it parked, and the next case waits thirty seconds for a
+%% registry call that will not come.
+release_the_keeper() ->
+    application:unset_env(wasm, keeper_hook),
+    case whereis(wasm_keeper) of
+        undefined -> ok;
+        Pid -> Pid ! go, ok
+    end.
 
 %%% ------------------------------------------------------------------ rule ---
 
@@ -561,3 +592,511 @@ garbage_body() ->
         16#20, 0, 16#41, 1, 16#6B, 16#22, 0, 16#0D, 0,
       16#0B,
       16#0B>>.
+
+%%% -------------------------------------------------------------- charging ---
+
+%% A guest's objects are node memory, and until they were charged nothing
+%% bounded them.
+%%
+%% They live in ETS (`wasm_heap:new/2'), and ETS is not process heap, so
+%% `max_heap_size` cannot see them and neither could the page budget, which
+%% counts `atomics`. Filling a twenty-million element array took 1.8 GB with
+%% `max_heap_words` set, `process_flag(max_heap_size, ...)` set on the process
+%% running it, and `pages_in_use` reading zero throughout. A differential oracle
+%% found it: V8 refused the same call with an array-size cap of its own.
+a_guest_cannot_outgrow_the_node_budget(_Config) ->
+    Mod = filler(),
+    Old = wasm_engine:page_limit(),
+    Base = wasm_engine:pages_in_use(),
+    try
+        wasm_engine:set_page_limit(Base + 512),          % 32 MiB of headroom
+        {ok, I} = wasm:instantiate(Mod, #{}),
+        Ets = erlang:memory(ets),
+        ?assertMatch({error, #{class := exhaustion, kind := heap_limit}},
+                     wasm:call(I, ~"fill", [20000000])),
+        %% Refused near the ceiling rather than somewhere past it. The bound is
+        %% the budget plus one reconcile interval's overshoot, and 1.8 GB was
+        %% what this took before.
+        ?assert((erlang:memory(ets) - Ets) < 64 * 1024 * 1024),
+        ok = wasm:destroy(I)
+    after
+        wasm_engine:set_page_limit(Old)
+    end,
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 5000).
+
+%% What a collection frees is pages the node gets back, rather than a charge
+%% that only ever ratchets up.
+a_heap_gives_its_pages_back_when_collected(_Config) ->
+    Mod = filler(),
+    Base = wasm_engine:pages_in_use(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(I, ~"fill", [200000]),
+    Charged = wasm_engine:pages_in_use(),
+    ?assert(Charged > Base, {nothing_charged, Base, Charged}),
+    %% The array the fill made is unreachable the moment the call returns: it
+    %% lived in a local and nothing else names it. What it is not is
+    %% *collected*, because a collection is due every hundred thousand
+    %% allocations and the fill made one. Lowering the threshold is what makes
+    %% this a test of the charge coming back rather than of the collector's
+    %% schedule.
+    %% Every collection, and every one of them major.
+    %%
+    %% The threshold alone is not enough. Garbage that appears without the store
+    %% growing does not make a major due -- the byte-side rule in `major_due/1`
+    %% is a doubling, like the row-side one -- and a minor collection leaves the
+    %% old generation alone by design. Dropping the only reference to an array
+    %% is exactly that shape, so this says which collection it wants rather than
+    %% relying on the schedule.
+    ok = application:set_env(wasm, gc_alloc_threshold, 1),
+    ok = application:set_env(wasm, gc_min_major_size, 0),
+    ok = application:set_env(wasm, gc_min_major_pages, 0),
+    ok = application:set_env(wasm, gc_major_ratio, 1),
+    try
+        {ok, [0]} = wasm:call(I, ~"drop", []),
+        wait_until(fun() -> wasm_engine:pages_in_use() < Charged end, 5000)
+    after
+        ok = application:unset_env(wasm, gc_alloc_threshold),
+        ok = application:unset_env(wasm, gc_min_major_size),
+        ok = application:unset_env(wasm, gc_min_major_pages),
+        ok = application:unset_env(wasm, gc_major_ratio)
+    end,
+    ok = wasm:destroy(I),
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 5000).
+
+%% Two instances sharing one store are two holders of one resource, exactly as
+%% two instances importing one memory are. Charging per instance would count the
+%% same rows twice and refuse at half the real ceiling.
+a_shared_heap_is_charged_once(_Config) ->
+    Mod = filler(),
+    Base = wasm_engine:pages_in_use(),
+    {ok, A} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(A, ~"fill", [200000]),
+    One = wasm_engine:pages_in_use(),
+    %% Before comparing, establish there is something to compare. Without this
+    %% the case passes against a runtime that charges nothing at all, because
+    %% every reading is then equal at zero, and it did.
+    ?assert(One > Base, {nothing_charged, Base, One}),
+    {ok, B} = wasm:instantiate(Mod, #{}, #{link => A}),
+    ?assertEqual(One, wasm_engine:pages_in_use()),
+    %% And it survives the instance that made it.
+    ok = wasm:destroy(A),
+    ?assertEqual(One, wasm_engine:pages_in_use()),
+    ok = wasm:destroy(B),
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 5000).
+
+%% Writes elements, so the cost lands in `wasm_heap_elements' rather than in one
+%% array header: `array.new_default' of a hundred million is a single row.
+filler() ->
+    build(~"""
+    (module
+      (type $a (array (mut i64)))
+      (global $keep (mut (ref null $a)) (ref.null $a))
+      ;; Into the global, not a local. A local is unreachable the moment the
+      ;; call returns, and the byte-side collection trigger now fires at that
+      ;; boundary, so the array was already gone before the charge was read and
+      ;; there was nothing left for `drop` to release.
+      (func (export "fill") (param i32) (result i32)
+        (local $r (ref $a)) (local $i i32)
+        (local.set $r (array.new_default $a (local.get 0)))
+        (global.set $keep (local.get $r))
+        (block $o (loop $l
+          (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
+          (array.set $a (local.get $r) (local.get $i)
+                        (i64.extend_i32_u (local.get $i)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (array.len (local.get $r)))
+      ;; One element, for asking whether a refused write left a row behind.
+      (func (export "poke") (param i32) (result i32)
+        (array.set $a (global.get $keep) (local.get 0) (i64.const 9))
+        (i32.const 0))
+      ;; Replaces the whole array, which deletes every element row.
+      (func (export "fillall") (result i32)
+        (array.fill $a (global.get $keep) (i32.const 0) (i64.const 0)
+                    (array.len (global.get $keep)))
+        (i32.const 0))
+      (func (export "drop") (result i32)
+        ;; Allocates, so a collection is due when the threshold is low, and
+        ;; keeps nothing, so what the fill made is unreachable.
+        (global.set $keep (array.new_default $a (i32.const 1)))
+        (global.set $keep (ref.null $a))
+        (i32.const 0)))
+    """).
+
+%% A struct wide enough that one `struct.new_default` of it is several pages.
+wide_struct(N) ->
+    Fields = lists:duplicate(N, <<"(field (mut i64))">>),
+    build(iolist_to_binary(
+            ["(module (type $w (struct ", Fields, "))\n",
+             "  (func (export \"make\") (result i32)\n",
+             "    (drop (struct.new_default $w)) (i32.const 0)))"])).
+
+%% Allocates and never writes an element, so only the allocation path runs.
+%% `mk` hands the reference back, which is what pins it.
+maker() ->
+    build(~"""
+    (module
+      (type $s (struct (field i64) (field i64)))
+      (func (export "make") (result i32)
+        (drop (struct.new_default $s))
+        (i32.const 0))
+      (func (export "mk") (result (ref $s)) (struct.new_default $s)))
+    """).
+
+%% Allocates structs, then writes their fields without allocating anything.
+fattener() ->
+    build(~"""
+    (module
+      (type $s (struct (field (mut i64)) (field (mut i64))))
+      (type $r (array (mut (ref null $s))))
+      (global $h (mut (ref null $r)) (ref.null $r))
+      (func (export "make") (param i32) (result i32) (local $i i32)
+        (global.set $h (array.new_default $r (local.get 0)))
+        (block $o (loop $l
+          (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
+          (array.set $r (global.get $h) (local.get $i)
+                        (struct.new_default $s))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (local.get $i))
+      (func (export "fatten") (param i32) (result i32) (local $i i32)
+        (block $o (loop $l
+          (br_if $o (i32.ge_u (local.get $i) (local.get 0)))
+          (struct.set $s 0 (array.get $r (global.get $h) (local.get $i))
+                           (i64.const 4611686018427387904))
+          (struct.set $s 1 (array.get $r (global.get $h) (local.get $i))
+                           (i64.const 4611686018427387904))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (local.get $i)))
+    """).
+
+build(Src) ->
+    {ok, P} = wasm_wat:module(Src),
+    {ok, M} = wasm_validate:module(P),
+    M.
+
+wait_until(Pred, 0) -> Pred() orelse ct:fail({timeout_waiting, Pred()});
+wait_until(Pred, Ms) ->
+    case Pred() of
+        true -> ok;
+        false -> timer:sleep(20), wait_until(Pred, erlang:max(Ms - 20, 0))
+    end.
+
+%%% ---------------------------------------------- who a store belongs to ---
+
+%% The registry map is not the holder set.
+%%
+%% `ets:new` runs in the instantiating process and `delete/2` dropped the tables
+%% when the *instance registry map* emptied. A build between `acquire/3` and
+%% `register/3` is a holder and is in no registry, so destroying the only
+%% registered instance deleted the store out from under it: both tables gone,
+%% the build still a holder, 27 pages still charged. The keeper decides now.
+a_heap_outlives_a_holder_that_is_not_an_instance(_Config) ->
+    Mod = filler(),
+    {ok, A} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(A, ~"fill", [20000]),
+    {wasm_heap, Objs, Elems, _} = H = wasm_instance:heap(A),
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    %% A holder that is not a registered instance, exactly as a build is.
+    Build = {build, make_ref()},
+    ok = wasm_heap:acquire(H, Build, self()),
+    ok = wasm:destroy(A),
+    ?assertNotEqual(undefined, ets:info(Objs, size),
+                    the_store_was_deleted_under_a_live_holder),
+    ?assertEqual([Build], wasm_keeper:holders_of(Res)),
+    ?assert(wasm_keeper:charge_of(Res) > 1),
+    %% And the last holder going is what takes it.
+    ok = wasm_keeper:release(Res, Build),
+    ?assertEqual(undefined, ets:info(Objs, size)),
+    ?assertEqual(undefined, ets:info(Elems, size)),
+    ?assertEqual(0, wasm_keeper:charge_of(Res)).
+
+%% And the tables outlive the process that made them.
+%%
+%% They belonged to the instantiating process, so killing it destroyed the store
+%% while a linked instance in another process was still running on it. The
+%% keeper is their heir.
+a_linked_instance_survives_its_creators_death(_Config) ->
+    Mod = filler(),
+    Self = self(),
+    Maker = spawn(fun() ->
+                      {ok, A} = wasm:instantiate(Mod, #{}),
+                      {ok, [_]} = wasm:call(A, ~"fill", [2000]),
+                      Self ! {made, A},
+                      receive stop -> ok end
+                  end),
+    A = receive {made, X} -> X after 30000 -> ct:fail(no_instance) end,
+    {ok, B} = wasm:instantiate(Mod, #{}, #{link => A}),
+    Maker ! stop,
+    wait_until(fun() -> not is_process_alive(Maker) end, 5000),
+    ?assertMatch({ok, [_]}, wasm:call(B, ~"fill", [100]),
+                 the_store_died_with_the_process_that_made_it),
+    ok = wasm:destroy(B).
+
+%%% -------------------------------------------- what a refusal must not do ---
+
+%% Linking to a store bigger than this instance may reach is a link failure.
+%%
+%% `wasm_heap:acquire/3` used to discard the keeper's answer, so a one-page
+%% instance linked to a 269-page store instantiated cleanly, never became a
+%% holder of it, and destroying the instance that *made* the store released the
+%% whole charge while the linked one was still running on it.
+a_linked_instance_over_its_ceiling_is_refused(_Config) ->
+    Mod = filler(),
+    {ok, A} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(A, ~"fill", [200000]),
+    Charged = wasm_engine:pages_in_use(),
+    ?assert(Charged > 8, {nothing_charged, Charged}),
+    ?assertMatch({error, #{class := link, kind := shared_heap_refused}},
+                 wasm:instantiate(Mod, #{}, #{link => A,
+                                              max_memory_pages => 1})),
+    %% And the refusal left nothing behind: still one holder, still charged.
+    ?assertEqual(Charged, wasm_engine:pages_in_use()),
+    ok = wasm:destroy(A).
+
+%% A row can be arbitrarily large, and the cadence counted rows.
+%%
+%% Nothing bounds a struct's field count: `wasm_decode:comptype/1` reads a plain
+%% vector and no validator rule caps it. So one `struct.new_default` was one
+%% mutation on the reconcile cadence and an 800 KB row, and a one-page instance
+%% allocated thirteen pages in a single instruction. Two things fix it and the
+%% case needs both: the cadence counts the row's words, and the keeper is told
+%% what is about to be written, because a measurement cannot see a row that does
+%% not exist yet.
+a_wide_struct_cannot_outrun_its_ceiling(_Config) ->
+    Mod = wide_struct(50000),
+    {ok, I} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 1}),
+    {wasm_heap, Objs, _, _} = wasm_instance:heap(I),
+    Rows = ets:info(Objs, size),
+    ?assertMatch({error, #{kind := heap_limit}}, wasm:call(I, ~"make", []),
+                 one_instruction_walked_through_the_ceiling),
+    ?assertEqual(Rows, ets:info(Objs, size), the_refused_row_is_still_there),
+    ok = wasm:destroy(I).
+
+%% Neither must an allocation the charge refuses.
+%%
+%% The allocation path inserted its row and charged afterwards, so a refused
+%% allocation left the row behind. Worse, its reconcile cadence rode the id the
+%% allocator had taken -- `Id band ?RECONCILE_MASK' -- and a refusal rewinds the
+%% *write* counter, which that path never read. So a workload that only
+%% allocates was refused once and then let through 4095 more. Both halves are
+%% here: no row, and the next allocation refused too.
+a_refused_allocation_leaves_no_row(_Config) ->
+    Mod = maker(),
+    {ok, I} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 0}),
+    {wasm_heap, Objs, _, _} = wasm_instance:heap(I),
+    Rows = ets:info(Objs, size),
+    ?assertMatch({error, #{kind := heap_limit}}, wasm:call(I, ~"make", [])),
+    ?assertEqual(Rows, ets:info(Objs, size), rows_after_a_refused_allocation),
+    ?assertMatch({error, #{kind := heap_limit}}, wasm:call(I, ~"make", []),
+                 the_next_allocation_was_admitted),
+    ?assertEqual(Rows, ets:info(Objs, size)),
+    ok = wasm:destroy(I).
+
+%% A write the charge refuses must not have happened.
+%%
+%% The insert used to come first and the charge second, so a refused write left
+%% its row and, because the charge was refused, the row was never recorded
+%% either: twenty writes grew the store by megabytes while the page count did
+%% not move. A refusal also has to make the *next* write check, or it stops one
+%% write and lets the rest of the reconcile interval through.
+a_refused_write_leaves_no_row(_Config) ->
+    Mod = filler(),
+    {ok, I} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 8}),
+    %% Fills until the ceiling refuses it; the refusal is a value.
+    _ = wasm:call(I, ~"fill", [200000]),
+    {wasm_heap, _, Elems, _} = wasm_instance:heap(I),
+    Rows = ets:info(Elems, size),
+    Pages = wasm_engine:pages_in_use(),
+    Answers = [wasm:call(I, ~"poke", [N * 907]) || N <- lists:seq(1, 20)],
+    ?assertEqual(20, length([x || {error, #{kind := heap_limit}} <- Answers]),
+                 {not_all_refused, Answers}),
+    ?assertEqual(Rows, ets:info(Elems, size)),
+    ?assertEqual(Pages, wasm_engine:pages_in_use()),
+    ok = wasm:destroy(I).
+
+%% A refusal is not a reason to forget the pages.
+%%
+%% `do_resize/4` returned `{error, instance_limit}` without touching the
+%% registry row, the holder totals or the node counter. For a request that is right --
+%% nobody took the memory. For a *reconcile* it is not: the store is measured,
+%% so by the time the keeper hears the number the rows already exist. A store
+%% holding twelve pages was charged for six, once per heap on the node.
+a_refused_charge_still_records_what_is_held(_Config) ->
+    Mod = filler(),
+    {ok, I} = wasm:instantiate(Mod, #{}, #{max_memory_pages => 8}),
+    ?assertMatch({error, #{kind := heap_limit}},
+                 wasm:call(I, ~"fill", [200000])),
+    {wasm_heap, Objs, Elems, _} = wasm_instance:heap(I),
+    Words = ets:info(Objs, memory) + ets:info(Elems, memory),
+    Held = (Words * erlang:system_info(wordsize) + 65535) div 65536,
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    %% Not "past the ceiling": the keeper is told the size of the write that is
+    %% coming, so the store now stops *at* its ceiling instead of overshooting
+    %% by whatever the interval allowed. What this case is about is the other
+    %% half -- that a refusal writes down what the tables hold.
+    ?assert(Held > 1, {nothing_was_written, Held}),
+    ?assertEqual(Held, wasm_keeper:charge_of(Res), {charged, Held}),
+    ok = wasm:destroy(I).
+
+%% A field write reaches no allocator, so it counted nowhere.
+%%
+%% `struct.set` replaces a field in place: no new row, and `wrote/2` was never
+%% called. Replacing small fields with boxed values grew a store from 10.4 MB to
+%% 16.8 MB while its charge stayed where it was. Bounded per write and unbounded
+%% per program is not a bound.
+a_struct_field_write_is_charged(_Config) ->
+    Mod = fattener(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(I, ~"make", [20000]),
+    %% The ceiling is set after the structs exist and just above them, so what
+    %% the case is about -- writing fields and nothing else -- is the only thing
+    %% that can cross it.
+    {wasm_heap, Objs, _, _} = wasm_instance:heap(I),
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    [Token] = wasm_keeper:holders_of(Res),
+    ok = wasm_keeper:set_limit(Token, wasm_keeper:charge_of(Res) + 2),
+    ?assertMatch({error, #{kind := heap_limit}},
+                 wasm:call(I, ~"fatten", [20000]),
+                 field_writes_ran_past_the_ceiling_uncharged),
+    ok = wasm:destroy(I).
+
+%% And neither did a pin, in either direction.
+%%
+%% A pin is a row in the elements table. A hundred thousand of them took a store
+%% from 123 pages to 257 while the charge stayed at 123, and `unpin_all/1` gave
+%% the 134 pages back without the charge hearing about that either.
+%%
+%% Counted, not refused: `wasm:pin/2` and `get_global/2` reach `pin/2` from
+%% outside `wasm_error:capture/1`, so a trap there would leave the runtime as a
+%% raw term. What it buys is that the size becomes visible, and the guest's own
+%% next allocation carries the refusal.
+pins_are_charged_and_released(_Config) ->
+    Mod = maker(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    H = wasm_instance:heap(I),
+    {wasm_heap, Objs, _, _} = H,
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    Refs = [begin {ok, [R]} = wasm:call(I, ~"mk", []), R end
+            || _ <- lists:seq(1, 40000)],
+    ok = wasm_heap:unpin_all(H),
+    Base = wasm_keeper:charge_of(Res),
+    [ok = wasm_heap:pin(H, R) || R <- Refs],
+    Pinned = wasm_keeper:charge_of(Res),
+    ?assert(Pinned > Base, {pins_were_free, Base, Pinned}),
+    ok = wasm_heap:unpin_all(H),
+    ?assert(wasm_keeper:charge_of(Res) < Pinned,
+            {unpinning_gave_nothing_back, Pinned}),
+    ok = wasm:destroy(I).
+
+%% A fill that replaces the whole array deletes every element row, and the
+%% charge has to follow it down. Nothing else on that path counts a write, so
+%% the store stayed charged for rows that no longer existed.
+a_whole_array_fill_gives_its_pages_back(_Config) ->
+    Mod = filler(),
+    Base = wasm_engine:pages_in_use(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(I, ~"fill", [200000]),
+    Charged = wasm_engine:pages_in_use(),
+    ?assert(Charged > Base + 100, {nothing_charged, Base, Charged}),
+    {ok, [0]} = wasm:call(I, ~"fillall", []),
+    After = wasm_engine:pages_in_use(),
+    ?assert(After < Base + 10, {still_charged_for_deleted_rows, Base, After}),
+    ok = wasm:destroy(I).
+
+%% A store that grows while a reconcile is in flight must not be charged for the
+%% size it had when that reconcile started.
+%%
+%% `charge/1` used to measure the two tables and then call the keeper, so an
+%% older, smaller sample could land after a newer, larger one and release the
+%% pages of rows that still existed. The keeper measures inside the callback
+%% that applies the result now.
+%%
+%% The first version of this case hammered two processes and asserted the
+%% invariant, which passed against the defect: the window is a handful of
+%% instructions and no amount of racing lands in it. The keeper's `resize_entry`
+%% hook makes the schedule exact instead -- a reconcile is held at the top of
+%% the transaction, the store grows underneath it, and where the measurement
+%% happens decides the answer.
+concurrent_reconciles_never_lower_a_live_charge(_Config) ->
+    Mod = filler(),
+    {ok, I} = wasm:instantiate(Mod, #{}),
+    {ok, [_]} = wasm:call(I, ~"fill", [100]),
+    {wasm_heap, Objs, Elems, _} = wasm_instance:heap(I),
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    Self = self(),
+    Once = atomics:new(1, []),
+    ok = application:set_env(wasm, keeper_hook,
+                             fun(_Where) ->
+                                 case atomics:add_get(Once, 1, 1) of
+                                     1 ->
+                                         Self ! at_the_hook,
+                                         receive go -> ok after 30000 -> ok end;
+                                     _ ->
+                                         ok
+                                 end
+                             end),
+    %% Whatever happens below, the hook comes off and the keeper is let go.
+    %% Leaving it installed blocks the keeper for thirty seconds and takes every
+    %% later case in the suite with it, so a failed assertion here used to
+    %% produce a page of unrelated failures. `end_per_testcase/2` repeats both,
+    %% for the assertion that throws before reaching this.
+    Held = try
+               charge_while_the_store_grows(I, Elems),
+               Words = ets:info(Objs, memory) + ets:info(Elems, memory),
+               (Words * erlang:system_info(wordsize) + 65535) div 65536
+           after
+               release_the_keeper()
+           end,
+    ?assert(Held > 1, {nothing_to_measure, Held}),
+    ?assertEqual(Held, wasm_keeper:charge_of(Res),
+                 charged_for_the_size_it_had_before_the_growth),
+    ok = wasm:destroy(I).
+
+charge_while_the_store_grows(I, Elems) ->
+    Self = self(),
+    _ = spawn_link(fun() ->
+                       _ = wasm_heap:charge(wasm_instance:heap(I)),
+                       Self ! reconciled
+                   end),
+    receive at_the_hook -> ok after 30000 -> ct:fail(hook_never_fired) end,
+    %% Straight into the table, which needs no keeper, so this cannot deadlock
+    %% behind the reconcile it is racing.
+    [true = ets:insert(Elems, {{9999, N}, N}) || N <- lists:seq(1, 40000)],
+    _ = erlang:send(whereis(wasm_keeper), go),
+    receive reconciled -> ok after 30000 -> ct:fail(reconcile_stuck) end.
+
+%% The same store under load, which is a stress check and not the regression
+%% above: it cannot fail on that defect, only on a new one.
+%%
+%% What it may *not* assert is that the charge matches at any instant. The
+%% charge is reconciled once per `?RECONCILE_MASK` mutations by design, so up to
+%% one interval of writes is always uncharged, and asserting otherwise made this
+%% case fail on CI at 107 pages against 108 held. It asserts the two agree once
+%% the writing has stopped and one more reconcile has run, which is the state
+%% that has to be right.
+many_processes_on_one_store_stay_charged(_Config) ->
+    Mod = filler(),
+    {ok, A} = wasm:instantiate(Mod, #{}),
+    {ok, B} = wasm:instantiate(Mod, #{}, #{link => A}),
+    Self = self(),
+    Ps = [spawn_link(fun() ->
+                         [{ok, [_]} = wasm:call(Inst, ~"fill", [20000])
+                          || _ <- lists:seq(1, 8)],
+                         Self ! {done, self()}
+                     end) || Inst <- [A, B]],
+    [receive {done, P} -> ok after 60000 -> ct:fail({stuck, P}) end || P <- Ps],
+    {wasm_heap, Objs, Elems, _} = H = wasm_instance:heap(A),
+    ok = wasm_heap:charge(H),
+    Words = ets:info(Objs, memory) + ets:info(Elems, memory),
+    Held = (Words * erlang:system_info(wordsize) + 65535) div 65536,
+    Res = ets:lookup_element(Objs, '$wasm_resource', 2),
+    ?assert(Held > 8, {nothing_to_measure, Held}),
+    ?assertEqual(Held, wasm_keeper:charge_of(Res),
+                 {charged_for_less_than_it_holds, Held}),
+    ok = wasm:destroy(B),
+    ok = wasm:destroy(A).
+
+%% Writes elements so the cost lands in `wasm_heap_elements`, keeps the array in
+%% a global so it stays live, and offers a single write and a whole-array fill.

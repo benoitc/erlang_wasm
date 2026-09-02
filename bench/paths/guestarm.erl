@@ -31,8 +31,10 @@ run this repeatedly rather than raising `workers`.
 -define(REQUEST, <<"{\"name\": \"ada\"}\n">>).
 -define(EXPECT, <<"{\"name\": \"ADA\"}">>).
 
-main([Guest, Dir, Mode]) -> main([Guest, Dir, Mode, "2"]);
-main([Guest, Dir, Mode, Workers]) ->
+main([Guest, Dir, Mode]) -> main([Guest, Dir, Mode, "2", "off"]);
+main([Guest, Dir, Mode, Workers]) -> main([Guest, Dir, Mode, Workers, "off"]);
+main([Guest, Dir, Mode, Workers, Tier]) ->
+    put(tier, Tier),
     {ok, _} = application:ensure_all_started(wasm),
     {ok, Bin} = file:read_file(Guest),
     io:format("~s | ~w bytes | sha256 ~s~n",
@@ -48,7 +50,9 @@ main([Guest, Dir, Mode, Workers]) ->
     io:format("~n~-8s ~10s ~14s ~12s ~9s ~9s ~10s~n",
               ["worker", "wall ms", "allocated", "reclaimed", "colls",
                "live end", "reply"]),
+    io:format("tier ~s~n", [get(tier)]),
     [report(W, run(Mod, Dir)) || W <- lists:seq(1, list_to_integer(Workers))],
+    io:format("~p~n", [wasm_jit:counts()]),
     init:stop().
 
 report(W, #{wall := Wall, allocated := A, reclaimed := R, collections := C,
@@ -75,12 +79,22 @@ run(Mod, Dir) ->
                        stdout => fun(D) -> line(D) end,
                        stderr => fun(_) -> ok end},
               {ok, I} = wasm:instantiate(Mod, wasi_preview1:imports(Wasi),
-                                         #{max_memory_pages => 4096}),
+                                         opts()),
               _ = wasm:call(I, ~"_start", []),
               ok = wasm:destroy(I),
               get(line)
           end),
     M#{wall => erlang:monotonic_time(millisecond) - T0}.
+
+%% `compile_after => 1' so the tier takes the module on its first hot call, and
+%% the executed set decides what it compiles: `compile_whole' on CPython's
+%% 11,448 functions is not a thing anybody would wait for.
+opts() ->
+    Base = #{max_memory_pages => 4096},
+    case get(tier) of
+        "on" -> Base#{compile => true, compile_after => 1};
+        _ -> Base
+    end.
 
 once(Data) ->
     case get(sent) of

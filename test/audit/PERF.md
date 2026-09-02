@@ -3553,3 +3553,47 @@ baseline any change is judged against.
 this file came from `erlang:statistics(garbage_collection)`, which counts the
 node; it was about 12% low. Every allocation number here from now on comes from
 `allocwords`.
+
+### CPython compiles completely, and the tier still never runs it
+
+Before attributing the 5.45 G words, the cheap question: can the compiled tier
+take this guest? `bench/paths/coverage.erl` on the pinned CPython:
+
+```
+functions                             11448
+compilable                            11447  100.0%
+over a generator bound                    1
+    too_many_locals                       1
+```
+
+**One refusal in 11,448**, and it is a generator bound rather than a missing
+instruction. `PERF.md` records QuickJS at 1.0x when 93% of its functions compile
+and 9.0x at 100%, so on coverage alone this is the best case there is.
+
+The tier still does nothing. With `compile => true, compile_after => 1`:
+
+| | wall w1 | wall w2 | `wasm_jit:counts/0` |
+| --- | ---: | ---: | --- |
+| tier off | 39,177 | 18,397 | not applicable |
+| tier on | 33,825 | 15,493 | `compiled => 0, entered => 0` |
+
+Nothing was compiled and nothing was entered, so the two rows differ by run
+position and noise, not by tiering.
+
+**The reason is the adoption point, and `wasm_jit:maybe_adopt/3` states it:**
+"what to compile is read from what this process has run and at the start of a
+call it has run nothing", so a call that finds nothing resident sets an ask and
+interprets, and the module is adopted *on a later call*.
+
+CPython does all of its work in **one** `_start` call. It asks when that call
+ends, and there is no later call. That is not special to CPython: it is the
+shape of every `wasm32-wasi` command-line program, which is most of what a
+toolchain emits. The tier is built for a workload of many calls into a resident
+instance, and a `_start` guest is a workload of one.
+
+So coverage is 100% and reachability is zero, for a reason that has nothing to
+do with instruction support. Two ways out, neither measured yet: adopt at a
+function boundary inside a running call rather than at a call boundary, or let
+`wasm_code_cache` carry a profile across runs so a second run adopts at its
+first call. The second is what the cache is already for and is the cheaper
+experiment.

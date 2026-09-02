@@ -3597,3 +3597,59 @@ function boundary inside a running call rather than at a call boundary, or let
 `wasm_code_cache` carry a profile across runs so a second run adopts at its
 first call. The second is what the cache is already for and is the cheaper
 experiment.
+
+### A one-call guest can reach generated code, and keep it
+
+The section above found the tier unreachable for a `_start` guest, because
+`wasm_jit:maybe_adopt/3` adopts on a *later* call and such a guest has none.
+That is true of the call and false of the *instance*. `bench/paths/adopt.erl`
+runs one `_start`, watches `wasm_jit:counts/0` until the compiler lands, then
+runs a second instance of the same module. QuickJS, one JSON line in and out:
+
+| | cold cache | warm cache |
+| --- | ---: | ---: |
+| call 1, interpreted | 128 ms | 182 ms |
+| time until `compiled` | **150 s** | **1 s** |
+| call 2 | **28 ms** | **14 ms** |
+| counts after call 2 | `compiled 402, cached 0, entered 1` | `compiled 402, cached 1, entered 1` |
+
+The ask *is* raised by a one-call guest, 402 functions do get compiled, and a
+fresh instance adopts them at its first call. `entered => 1` is what says so;
+the wall time alone would not.
+
+**And the artifact persists**, which turns 150 seconds into 1. `cached => 1`
+is the proof it came off disk.
+
+### The fast layout and the cacheable one were only coupled by a default
+
+`wasm_code_cache:key/6` answers `undefined` for any identity that is not
+`{sha256, _}`, and `wasm:compile/1` leaves the identity unset, so nothing it
+compiles is ever kept. `wasm:load/1` hashes, and is also the path that puts the
+module in `persistent_term` -- which the sections above measured at **4.6x
+slower** on CPython, because the collector then sizes the heap for a live set
+the hot loop never reads.
+
+That reads like a trap with no way out: the only cacheable path is the slow one.
+It is not. `compile/2` already takes the identity, and its doc says why one
+would pass it. Passing the content hash gives both halves at once:
+
+```erlang
+wasm:compile(Bin, #{identity => {sha256, crypto:hash(sha256, Bin)}})
+```
+
+| | cold cache | warm cache |
+| --- | ---: | ---: |
+| time until `compiled` | 155 s | **0 s** |
+| call 2 | 18 ms | 16 ms, `cached => 1, entered => 1` |
+
+Module on the process heap, which is the layout that collects cheaply, and
+named by its content, which is what the cache needs. The five milliseconds of
+hashing that `compile/2`'s doc declines to spend by default buys a 150 second
+compile, once per machine rather than once per emulator.
+
+**Two harness bugs on the way here, both of which read as results.** A second
+call in the same process reused the stdin fun's "already sent" flag, so it hit
+end of file at once and returned in 19 ms with no reply: a 16x speedup that was
+a guest doing nothing, which is why the reply assertion is in the harness. And
+an earlier diagnosis that "the ask dies with the process" was wrong:
+`wasm:call/3` runs `after_call/2` at depth 0 before the caller moves on.

@@ -368,3 +368,37 @@ generator. Every trap, bound and width then has one definition, and the
 conformance suite checks both paths at once.
 
 Check the load average first. This box swings between 4 and 84.
+
+## Block accounting for bulk array operations
+
+**Charging a whole chunk of a bulk operation with one `wrote/2' instead of one
+per element.** Measured before designing it, and the measurement is why it did
+not get designed. Removing the per-element charge *entirely* is worth exactly
+**1.0 reduction an element** on all three arms (`array.fill' sparse and dense
+6.0 to 5.0, `array.copy' 7.0 to 6.0) and nothing at all in reclaimed words. In
+time that is `atomics:add_get' at **4.8 ns net** against the two ETS operations
+beside it at about 36 ns each, so the counter is about 6% of an element.
+
+That 1.0 is a ceiling, not a saving: a chunk scheme still has per-chunk work.
+And the version that just calls `wrote(H, Words)' once per chunk is wrong three
+ways, none of which the interval size fixes:
+
+- **`Extra' is checked and never reserved.** `wasm_keeper:ceilings/6' says so
+  itself. Two callers can have chunks approved against the same pre-write
+  measurement and then both write them. Per-element charging bounds each
+  unreserved approval at 12 words; a chunk raises it to the chunk.
+- **A chunk overestimates a dense overwrite.** A fill over rows that already
+  exist adds little or no ETS memory, and a chunk-sized `Extra' asks the keeper
+  to refuse as though all of it were new. That is a false refusal the current
+  path does not have, and the dense arm exists to keep it visible.
+- **A chunk size does not place a reconcile.** `crossed/2' depends on the
+  counter's phase, so a chunk no larger than the interval does not guarantee a
+  crossing inside it. A block scheme has to say how it aligns to the counter,
+  not only how big it is.
+
+The only correct shape is a keeper reserve, commit and abort for prospective
+heap words, which changes the keeper's protocol. It is worth 6% of a bulk
+element, so it waits for a reason better than that.
+
+Measure the null before designing the optimisation. Deleting the thing you
+mean to make cheaper takes one edit and bounds the whole design's value.

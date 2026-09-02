@@ -3252,3 +3252,44 @@ What is left in an element is two ETS operations and one `atomics:add_get`.
 Whether the atomic is worth removing is the next measurement, not the next
 change: see the bulk plan's fourth step for why a block reservation as it
 stands would be a false refusal waiting to happen.
+
+## What the per-element charge costs, measured by deleting it
+
+The fourth step of the bulk plan was block accounting. It is a measurement
+instead, and the measurement is the answer.
+
+**The null experiment.** `array_set_unchecked/4`'s `wrote(H, ?ELEM_WORDS)`
+removed altogether, which is the ceiling on what any block scheme could
+recover. Ten thousand elements, load average 4, two runs:
+
+| arm | charged | uncharged |
+| --- | ---: | ---: |
+| `array.fill` sparse, reductions | 6.0 | 5.0 |
+| `array.fill` dense, reductions | 6.0 | 5.0 |
+| `array.copy`, reductions | 7.0 | 6.0 |
+| words reclaimed, every arm | unchanged | unchanged |
+
+Exactly one reduction an element, and no allocation at all.
+
+**And in time**, from `store_primitives`, which now has the row it was missing:
+
+| operation | ns/op net |
+| --- | ---: |
+| `ets:lookup_element` | 37.0 |
+| `ets:lookup`, whole row | 36.3 |
+| **`atomics:add_get`** | **4.8** |
+| null arm, the loop alone | 2.8 gross |
+
+The primitives table in this file had `atomics:get` at 4.66 to 4.93 and
+`atomics:put` at 5.77 and nothing for the read-modify-write the mutation
+counter actually is, so its cost could be reasoned about and not read. It is
+4.8, against the two table operations beside it at about 36 each: **the charge
+is about 6% of a bulk element.**
+
+The two views disagree in proportion, 17% of the reductions against 6% of the
+time, and the time is the one to believe here. A reduction is not proportional
+to nanoseconds and an ETS BIF is the case where they come apart furthest.
+
+Six per cent, against a design that needs the keeper to reserve prospective
+words rather than only check them. `ATTEMPTS.md` has the three ways the cheap
+version is wrong and why the correct one waits.

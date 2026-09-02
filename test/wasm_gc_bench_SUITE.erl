@@ -436,6 +436,12 @@ store_primitives(_Config) ->
             {"ets:update_element",
              fun(I) -> ets:update_element(Tab, I, {4, {I, null}}) end},
             {"atomics mark bit", fun(I) -> mark_bit(Bits, I) end},
+            %% What every element of a bulk array operation pays to be counted.
+            %% The primitives table in `PERF.md' had `atomics:get' and
+            %% `atomics:put' and nothing for the read-modify-write the mutation
+            %% counter is, so the cost of that counter could only be reasoned
+            %% about and not read.
+            {"atomics:add_get", fun(_) -> atomics:add_get(Bits, 1, 1) end},
             {"map live-set insert", fun(I) -> live_insert(I) end}],
     ct:log("null arm (loop only): ~7.1f ns/op", [Null]),
     lists:foreach(

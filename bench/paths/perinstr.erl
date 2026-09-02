@@ -66,6 +66,16 @@ main([Tier, Only]) ->
          {"f64.add                ", "(local.set $f (f64.add (local.get $f) (f64.const 1)))", 3},
          {"i32.load               ", "(local.set $t (i32.load (i32.const 0)))", 3},
          {"call (empty func)      ", "(call $empty)", 1},
+         %% Four of the rows around here used to read 1.95 to 4.73 ns and now
+         %% read 0.00, and the snippets have not changed: the compile quality
+         %% default has moved between `baseline' and `full' since they were
+         %% written, and at `full' the SSA pass collapses forty shifts of one
+         %% local into one shift, and drops thirty-nine stores to a local
+         %% nothing reads. Each now xors the loop counter into the operand, or
+         %% accumulates, so no copy is the same computation as the one before
+         %% it. The numbers in `PERF.md''s price table predate this and were
+         %% taken at the other quality.
+         %%
          %% Everything below is here because QuickJS pays for it and the
          %% original set did not cover it.
          {"i32.store              ", "(i32.store (i32.const 0) (local.get $i))", 3},
@@ -75,13 +85,17 @@ main([Tier, Only]) ->
          {"i64.store              ", "(i64.store (i32.const 0) (local.get $u))", 3},
          {"f64.load               ", "(local.set $f (f64.load (i32.const 0)))", 3},
          {"f64.store              ", "(f64.store (i32.const 0) (local.get $f))", 3},
-         {"f64.convert_i32_u      ", "(local.set $f (f64.convert_i32_u (local.get $i)))", 3},
+         {"f64.convert_i32_u      ", "(local.set $f (f64.add (local.get $f) (f64.convert_i32_u (local.get $i))))", 5},
          {"i32.trunc_f64_u        ", "(local.set $t (i32.trunc_f64_u (local.get $f)))", 3},
          {"f64.mul                ", "(local.set $f (f64.mul (local.get $f) (local.get $f)))", 3},
-         {"i32.mul                ", "(local.set $t (i32.mul (local.get $t) (local.get $i)))", 4},
+         %% The null arm for the four rows that had to be repaired: they price
+         %% their instruction *and* the xor that keeps each copy dependent on
+         %% the one before it, so subtract this to read them.
+         {"i32.xor, the null arm ", "(local.set $t (i32.xor (local.get $t) (local.get $i)))", 4},
+         {"i32.mul                ", "(local.set $t (i32.mul (i32.xor (local.get $t) (local.get $i)) (local.get $i)))", 6},
          {"i32.div_u              ", "(local.set $t (i32.div_u (local.get $i) (i32.const 3)))", 4},
-         {"i32.shl                ", "(local.set $t (i32.shl (local.get $t) (i32.const 1)))", 4},
-         {"i64.shl                ", "(local.set $u (i64.shl (local.get $u) (i64.const 1)))", 4},
+         {"i32.shl                ", "(local.set $t (i32.shl (i32.xor (local.get $t) (local.get $i)) (i32.const 1)))", 6},
+         {"i64.shl                ", "(local.set $u (i64.shl (i64.xor (local.get $u) (i64.extend_i32_u (local.get $i))) (i64.const 1)))", 7},
          {"call_indirect          ", "(call_indirect (type $void) (i32.const 0))", 2},
          {"global.get + drop      ", "(drop (global.get $g))", 2},
          {"global.set             ", "(global.set $g (local.get $i))", 2},

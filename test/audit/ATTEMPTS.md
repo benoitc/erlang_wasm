@@ -369,6 +369,12 @@ conformance suite checks both paths at once.
 
 Check the load average first. This box swings between 4 and 84.
 
+State which run in the emulator a number came from. The first wasm run in a
+fresh emulator and the fourth are 2.4x apart on identical work, because the
+first one pays 183 major collections where the others pay one. A fresh process
+per iteration is not enough on its own; `benchlib:in_process/1' gives you that
+and not this.
+
 ## Block accounting for bulk array operations
 
 **Charging a whole chunk of a bulk operation with one `wrote/2' instead of one

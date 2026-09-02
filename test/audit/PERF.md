@@ -370,6 +370,10 @@ memory is itself the defect, and the per-process lowered-IR cache
 (`{wasm_ir, Id, Idx}` in `wasm_instance`) is the first place to look. Reducing
 that heap would make the collector's choice stop mattering.
 
+Sharpened later on a larger guest: the difference is 183 major collections
+against one, not collection time in general. See the CPython section at the end
+of this file.
+
 ## What the garbage collection is actually about: 1.4 billion words a run
 
 The section above found that collection time explains QuickJS. This is what
@@ -3387,3 +3391,53 @@ recorded in `ATTEMPTS.md` was also a correct rewrite of a genuinely masked
 path, and it was two to three times slower, because a guarded form stops the
 SSA pass doing better than the guard. Anything done to `i64.shl` gets measured
 against that expectation, interleaved, before it is believed.
+
+## The bimodality, caught on a bigger guest: 183 major collections against one
+
+`PERF.md` has had "why a run is bimodal rather than uniformly expensive" open
+since the tier work. CPython makes it easy to catch, because the run is long
+enough to trace: **the first CPython start-up in a fresh emulator costs 34
+seconds and every one after it costs 14, and the difference is entirely garbage
+collection.**
+
+The guest is CPython 3.12.0 built for `wasm32-wasi`, 25 MB, reading one JSON
+line from stdin and writing one back. Decode and validate is 643 ms and
+instantiate 554 ms, neither of which moves. What moves is the first request,
+which is CPython importing `encodings` and `site`.
+
+Garbage collection traced on the worker process itself, `garbage_collection`
+plus `monotonic_timestamp`, three runs in one emulator:
+
+| run | wall | in GC | minor | major | peak heap |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 32,989 ms | **20,575 ms, 62.4%** | 787 | **183** | 242 MB |
+| 2 | 13,763 ms | 867 ms, 6.3% | 1129 | **1** | 227 MB |
+| 3 | 14,172 ms | 915 ms, 6.5% | 1132 | 1 | 227 MB |
+
+The whole 19-second gap is the 20.6 seconds of collection, and the collection is
+183 fullsweeps of a heap that ends at the same size either way. A separate run
+with `msacc` and reduction counts says the work is the same: 3.239 G reductions
+against 3.149 G, 2.8% apart, and words reclaimed within 1%.
+
+**What it is not**, each ruled out by an experiment rather than an argument:
+
+- **Not per-module lowering, or any cache keyed on the module.** Compiling once
+  and sharing the handle across all three runs leaves run 1 at 33.0 seconds.
+- **Not the emulator obtaining and faulting in carriers.** Churning several
+  gigabytes through the allocator before the first wasm run leaves run 1 at
+  35.3 seconds.
+- **Not collection count.** The slow run does *fewer* collections, 970 against
+  1130. It does more *major* ones.
+
+So the open question is narrower than it was. It is not "collection time
+varies": it is why a fresh process in a warm emulator reaches a 227 MB heap
+with one fullsweep while the same code in a cold one takes 183. A heap that
+grows to 227 MB for a workload whose live data is a linear memory is still the
+underlying defect, and the direction in the older entry above stands.
+
+**And it is a trap for every measurement in this file.** A number taken from
+the first run in an emulator and a number taken from the fourth are 2.4x apart
+on identical work. `benchlib:in_process/1` gives each iteration a fresh
+*process*, which is right and is not enough; the emulator is the thing that has
+to be stated. Two `rebar3 eunit` runs of the same four cases came out at 16.8
+and 61.5 seconds before this was understood.

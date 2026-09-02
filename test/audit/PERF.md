@@ -3151,3 +3151,34 @@ all.
 
 Per element means per element *written*, so an interior fill divides by
 `Len - 2` and not by the array's length.
+
+## The array.copy loop moves next to the accounting
+
+`wasm_exec`'s `array_copy` clause built three lists per copy and did a table
+lookup per element that the range check had already answered:
+`lists:seq(0, Len - 1)`, a `Vals` list from it, and then a third list of index
+pairs inside `write_elements/4` through `lists:enumerate/2`. Every read went
+through `array_get/3`, which calls `array_len/2`, which is
+`ets:lookup_element` on the object table, once per element, to re-check a range
+`check_array_range/4` had just checked.
+
+`wasm_heap:array_copy/6` holds the loop instead, beside the accounting it has
+to go through anyway. It reads the source's default *once*: most elements of an
+array have no row of their own, so a copy out of a defaulted array was that
+second lookup and nothing else.
+
+Ten thousand elements, load average 5, two runs each:
+
+| | `858b2fe` | this commit |
+| --- | ---: | ---: |
+| reductions per element | 19.9, 19.9 | **8.6, 8.6** |
+| words reclaimed per element | 18.4, 18.8 | **11.8, 11.9** |
+| ns per element | 282.4, 294.5 | 201.3, 193.5 |
+
+**This is not an isolated measurement of the table lookup**, and it cannot be
+made into one without exporting the raw getter for one commit and making it
+private again in the next. Moving the loop removes the two lists at the same
+time. The three together are 57% of the reductions a copied element cost.
+
+The fill arms do not move, which is what says the change is where it claims to
+be: sparse stays at 7.8 reductions an element and dense at 7.8.

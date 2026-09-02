@@ -62,7 +62,7 @@ silently name a different live object instead.
 -export([new_struct/3, new_array/5]).
 -export([get_field/3, set_field/4]).
 -export([array_len/2, array_get/3, array_set/4, array_set_unchecked/4]).
--export([array_default/2, array_fill/5]).
+-export([array_default/2, array_fill/5, array_copy/6]).
 -export([type_of/2]).
 -export([size/1, allocs/1, should_collect/1, collect/2, major_due/1]).
 -export([new/2, acquire/3, charge/1]).
@@ -499,6 +499,49 @@ array_fill(H, Ref, Start, Len, Value) ->
 fill_each(H, Ref, Start, Len, Value) ->
     lists:foreach(fun(I) -> array_set_unchecked(H, Ref, Start + I, Value) end,
                   lists:seq(0, Len - 1)).
+
+-doc """
+Copy a range of elements from one array to another.
+
+Both ranges are already checked, as they are for `array_fill/5`, so this does
+not ask again. `wasm_exec` used to hold the loop, and it read each element
+through `array_get/3`, which calls `array_len/2`, which is a table lookup per
+element re-answering the question the range check had just answered.
+
+The source's default is read once rather than per element. Most elements of an
+array have no row of their own, so `array_get/3` reaches the object table for
+every one of them, and a copy out of a defaulted array is that lookup and
+nothing else. The cost is that a whole-array fill of the source running
+concurrently, the only thing that changes a default, is not observed part way
+through a copy. Two processes writing one array while a third copies it is
+already unordered, and the snapshot below has the same property.
+
+The source is read into a list before anything is written, so an overlapping
+copy behaves as though an intermediate copy were taken, which is what the
+specification asks for.
+""".
+-spec array_copy(heap(), term(), non_neg_integer(), term(),
+                 non_neg_integer(), non_neg_integer()) -> ok.
+array_copy({wasm_heap, Objs, Elems, _} = H, DstRef, DstStart,
+           {objref, SrcId}, SrcStart, Len) ->
+    Default = ets:lookup_element(Objs, SrcId, 5),
+    write_each(H, DstRef, DstStart,
+               read_each(Elems, SrcId, Default, SrcStart, Len, [])).
+
+%% Backwards, so the list comes out in index order without a reverse.
+read_each(_Elems, _Id, _Default, _Start, 0, Acc) -> Acc;
+read_each(Elems, Id, Default, Start, N, Acc) ->
+    Idx = Start + N - 1,
+    V = case ets:lookup(Elems, {Id, Idx}) of
+            [{_, Found}] -> Found;
+            [] -> Default
+        end,
+    read_each(Elems, Id, Default, Start, N - 1, [V | Acc]).
+
+write_each(_H, _Ref, _Idx, []) -> ok;
+write_each(H, Ref, Idx, [V | Rest]) ->
+    ok = array_set_unchecked(H, Ref, Idx, V),
+    write_each(H, Ref, Idx + 1, Rest).
 
 -doc """
 The kind and declared type of an object, for `ref.test` and `ref.cast`.

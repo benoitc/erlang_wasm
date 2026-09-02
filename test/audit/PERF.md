@@ -3441,3 +3441,45 @@ on identical work. `benchlib:in_process/1` gives each iteration a fresh
 *process*, which is right and is not enough; the emulator is the thing that has
 to be stated. Two `rebar3 eunit` runs of the same four cases came out at 16.8
 and 61.5 seconds before this was understood.
+
+## `load/1` is 4.6x slower than `compile/1` on a large guest
+
+The section above left the 227 MB process heap as the underlying defect, and
+the obvious fix is the one this runtime already implements: `wasm:load/1` puts
+the decoded module in `persistent_term`, where reads do not copy and the
+collector never scans it. `wasm.erl` says so too, in `load/1`'s own doc: "Use
+this rather than `compile/1`."
+
+On CPython that advice is expensive. Same harness, same guest, same three runs
+in one emulator, the only difference being which function built the module:
+
+| | `compile/1` | `load/1` |
+| --- | ---: | ---: |
+| peak process heap | 227 MB | **22 MB** |
+| wall, run 1 | 32,989 ms | 33,855 ms |
+| wall, run 2 | **13,763 ms** | 66,448 ms |
+| wall, run 3 | **14,172 ms** | 64,009 ms |
+| in GC, run 2 | 867 ms, 6.3% | 50,434 ms, **75.9%** |
+| minor, run 2 | 1,129 | 11,130 |
+| major, run 2 | **1** | **5,553** |
+
+**Getting the module off the process heap works, and costs 4.6x.** The heap
+does drop by ten times, exactly as the theory says. The collection it was
+supposed to save then arrives thirty times over: 5,553 major collections
+against one, and three quarters of the run spent collecting.
+
+It also inverts the cold and warm pattern the section above measured. Under
+`compile/1` the first run is the slow one and the rest are 2.4x faster; under
+`load/1` the first run is the *fast* one at 33.9 seconds and the later ones are
+64 to 66.
+
+So the 227 MB heap is not what the time is going on, and "keep the large term
+off the process heap" is the right general principle and the wrong fix here.
+The mechanism is not established. The per-process lowered-IR cache
+(`{wasm_ir, Id, Idx}`) is the first suspect, since it is the one thing that
+holds derived data per process and its contents depend on whether the module it
+was built from is heap data or a literal.
+
+**Until it is, `load/1`'s doc oversells itself on a large module.** It is right
+about what it was written about, which is not paying to decode the same bytes
+twice; it is wrong if read as advice for the steady state.

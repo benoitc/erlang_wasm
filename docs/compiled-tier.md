@@ -192,7 +192,7 @@ generated code having run.
 | option | what it changes |
 | --- | --- |
 | `compile_sync` | compile on the calling process, so the next call is already compiled |
-| `compile_whole` | compile every eligible function, not only the ones that have run |
+| `compile_whole` | compile every eligible function, not only the ones that have run. Honoured on the background path as well as under `compile_sync`; it silently was not, and compiled what had run instead |
 | `compile_force` | raise on a compile error instead of interpreting |
 
 `wasm_spec_SUITE:compiled_phase` sets all three and then asserts

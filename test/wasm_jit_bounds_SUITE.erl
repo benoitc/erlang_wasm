@@ -34,6 +34,7 @@ groups() ->
        a_forced_refusal_is_counted_once,
        the_shard_policy_splits_only_what_does_not_fit,
        a_module_under_the_bound_is_still_one_unit,
+       compile_whole_reaches_the_background_compiler,
        the_ring_keeps_only_the_newest,
        the_ring_normalises_what_it_is_given,
        normalising_never_builds_the_representation]},
@@ -200,6 +201,41 @@ a_module_under_the_bound_is_still_one_unit(_) ->
     ?assertEqual(1, wasm_jit:shards(I)),
     ok = wasm:destroy(I).
 
+%% `compile_whole` has to mean the same thing off the calling process.
+%%
+%% `spawn_compile/2` read `wasm_instance:executed/1` directly rather than going
+%% through `wanted/2`, so the background compiler compiled what had run and the
+%% option was honoured only under `compile_sync`.
+%%
+%% 257 functions and not fewer. At or below `?LAZY_THRESHOLD` a module is lowered
+%% eagerly, `executed/1` answers `[]`, and `[]` already means every function --
+%% so a smaller module passes this whether the bug is there or not.
+compile_whole_reaches_the_background_compiler(_) ->
+    N = 257,
+    M = build(many_wat(N)),
+    {ok, I} = wasm:instantiate(M, #{}, whole()),
+    try
+        %% One function called, every function wanted.
+        ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+        %% On the instance rather than on the global counter: `await/2` answers
+        %% as soon as *this* instance has adopted a slot, so a broken
+        %% implementation comes back having compiled the one function that ran
+        %% and the count below fails at once, instead of a poll timing out
+        %% thirty seconds later and saying only that something did not happen.
+        ?assertEqual(ok, wasm_jit:await(I, 30000)),
+        #{compiled := C, refused := R, failed := F, crashed := Cr} =
+            wasm_jit:counts(),
+        ?assertEqual(N, C),
+        ?assertEqual({0, 0, 0}, {R, F, Cr}),
+        ?assertEqual(1, wasm_jit:shards(I)),
+        ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+        ?assert(map_get(entered, wasm_jit:counts()) > 0)
+    after
+        %% A failing asynchronous case must not leave an instance or a slot
+        %% lease behind for the next one to trip over.
+        ok = wasm:destroy(I)
+    end.
+
 the_ring_keeps_only_the_newest(_) ->
     ok = wasm_code_slots:clear_diagnostics(),
     [ok = wasm_code_slots:record_diagnostic(Seq, refused, {k, Seq},
@@ -256,6 +292,8 @@ whole() -> #{compile => true, compile_after => 1, compile_whole => true}.
 sync(Opts) -> Opts#{compile_sync => true}.
 
 refused() -> map_get(refused, wasm_jit:counts()).
+
+compiled() -> map_get(compiled, wasm_jit:counts()).
 
 %% `f` plus N-1 more, none of them exported, all of them eligible. Every one is
 %% compiled because `compile_whole` asks for what exists rather than what ran.

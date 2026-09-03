@@ -512,15 +512,20 @@ wanted(Limits, Inst) ->
     end.
 
 spawn_compile(Inst, Limits) ->
-    %% Read here rather than in the compiler, because the record of what has
-    %% run lives in *this* process's dictionary and the compiler's is empty.
-    Executed = wasm_instance:executed(Inst),
+    %% Read here rather than in the compiler, because the record of what has run
+    %% lives in *this* process's dictionary and the compiler's is empty.
+    %%
+    %% Through `wanted/2`, which is also where `compile_whole` is honoured.
+    %% Reading `wasm_instance:executed/1` directly, as this did, made that
+    %% option work only under `compile_sync`: everything asked for in the
+    %% background compiled what had run, whatever the caller said.
+    Wanted = wanted(Limits, Inst),
     case start_compiler() of
         {ok, Pid} ->
             %% Started empty and then told what to do: passing the instance as a
             %% start argument would copy it into the supervisor as well, and a
             %% real instance is 35 MB.
-            Pid ! {compile, Inst, Limits, Executed},
+            Pid ! {compile, Inst, Limits, Wanted},
             true;
         %% Every slot is already being filled, so there is nothing for a
         %% seventeenth compiler to publish into. Give the ask back and let the

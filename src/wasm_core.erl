@@ -526,7 +526,15 @@ forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) ->
         Exports = [cerl:c_fname(invoke, 6)],
         {ok, cerl:c_module(cerl:c_atom(Name), Exports, [], [Invoke | Defs])}
     catch
-        throw:{limit, _} = L -> {error, L};
+        %% `error:`, not `throw:`. `fun_name/1` and `frame_name/1` raise with
+        %% `erlang:error/1`, and this clause spelled `throw:` for long enough
+        %% that a module past `?MAX_FUNS` -- CPython reaches 2,333 functions
+        %% against a bound of 2,048 -- escaped as an exception instead of
+        %% arriving as a value. `wasm_jit:compiler_loop/0` swallowed it, so the
+        %% tier refused the guest silently and for ever. The helpers keep their
+        %% contract, which `wasm_core_SUITE` asserts with `?assertError`; the
+        %% boundary is what was wrong.
+        error:{limit, _} = L -> {error, L};
         throw:{unsupported, _} = U -> {error, U}
     end.
 

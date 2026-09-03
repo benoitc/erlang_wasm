@@ -52,7 +52,7 @@ reset instead of a permanent leak. See `wasm_keeper:init/1`.
 %% Named rather than derived, because a table this does not know about is one
 %% nothing gives a lifetime to. Adding a long-lived table means adding it here.
 -define(TABLES, [wasm_holders, wasm_tables, wasm_waiters,
-                 wasm_code_slots, wasm_code_calls]).
+                 wasm_code_slots, wasm_code_calls, wasm_code_diag]).
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->

@@ -84,6 +84,27 @@ That is one shot: a function that first runs after the module was built stays
 interpreted. So this suits long-lived instances of modules you run repeatedly,
 and a workload whose hot set changes over time gets less from it.
 
+**A large hot set is compiled into several BEAM modules, not one.** Every name a
+unit can use comes from a pool generated at startup, because nothing a guest
+supplies may become an atom, and that pool is 2048 functions deep. A hot set
+past it is split across as many as four units, automatically; below it nothing
+is split, because a call between units is a crossing rather than a call. Ask
+`wasm_jit:shard_count(NFuns, Limits)` what a given hot set would do, or
+`wasm_jit:shards(Instance)` how many units it is actually resident in.
+
+CPython 3.12 reaches 2,333 functions in a single `_start`, so it splits in two.
+Before that split happened it was refused outright, and silently:
+
+    1> wasm_jit:counts().
+    #{compiled => 0, entered => 0, reentered => 0, cached => 0,
+      refused => 1, failed => 0, crashed => 0}
+    2> wasm_jit:diagnostics().
+    [{refused, {{sha256, <<...>>}, 3}, {limit, {too_many_functions, 8196}}}]
+
+Past four units there is no split that fits and the answer is that refusal.
+`counts/0` says how many, `diagnostics/0` says what: the reasons are normalised
+to a bounded shape and the last few dozen are kept.
+
 ## What turns it off underneath you
 
 **Every refusal means interpret**, and none of them is an error: a function
@@ -217,13 +238,14 @@ An unrecognised profile is `{error, #{kind := unknown_profile}}`, not a crash.
 
 ## Short notes
 
-- `baseline` is the default: it skips the OTP compiler's SSA optimiser, which
-  costs **123.1 seconds against 54.8** on QuickJS's hot set and buys nothing
-  measurable. The warm run is 141.1 ms against 142.1, and a tight arithmetic
-  loop is 3.35 ns an iteration either way over five interleaved pairs. Ask for
-  `#{compile_quality => full}` if you find a workload where it pays; the 86%
-  penalty this default once existed to avoid is no longer reproducible.
-  Figures in `test/audit/PERF.md`.
+- `full` is the default, which the profile table above says and this note used
+  to contradict. `baseline` skips the OTP compiler's SSA optimiser and was the
+  default while that optimiser bought nothing measurable; it buys something now,
+  because the generator states value ranges the pass can use. QuickJS is **75.0
+  to 76.8 ms at `full` against 86.1 to 87.7 at `baseline`**, and `full` costs
+  129.3 seconds against 58.1 to compile the hot set. Ask for
+  `#{compile_quality => baseline}` when the compile time matters more than the
+  run. Figures in `test/audit/PERF.md`.
 - Turning the tier on by default is a decision that has not been made. Every
   gate passes; the recommendation is still no, because it is 8.4x on one real
   workload and flat on another.

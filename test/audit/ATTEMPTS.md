@@ -469,3 +469,20 @@ nothing.** It answers 0 rather than an error, and `trace_info/2` then reads
 failure. `bench/paths/tiered.erl` never hit this because it warms the workload
 first; anything that sets the pattern before the first call has to
 `code:ensure_loaded/1` and match the 1 that `trace_pattern/3` returns.
+
+**A trace pattern set on a module the emulator has not loaded, twice in one
+session.** The second time it produced a whole wrong mechanism. Probing why a
+compilation never happened, `erlang:trace_pattern({wasm_jit, compile, 4}, MS,
+[local])` answered **0** because `wasm_jit` was not yet loaded, so `compile/4`
+never appeared in the trace and the conclusion was "the worker never received
+its work, so the ask dies with the process that raised it". That went into
+`PERF.md` as a finding.
+
+With `code:ensure_loaded/1` first and the pattern's return matched against 1,
+the same arm shows `compile/4` entered and the compiler still running at 45
+seconds. The real answer was that QuickJS takes 165 seconds to compile and the
+watch had been given 60, and that CPython threw `{limit, too_many_functions}`.
+
+Match the 1. `trace_pattern/3` returning 0 and `trace_info/2` reading
+`undefined` are the same shape as a runtime that does nothing, and a trace that
+matches nothing will confirm any story told about it.

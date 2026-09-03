@@ -34,12 +34,20 @@ The arms:
 -define(REQ1, <<"{\"name\": \"ada\"}\n">>).
 -define(REQ2, <<"{\"name\": \"bob\"}\n">>).
 
-main([Guest, Dir, Arm]) -> main([Guest, Dir, Arm, "", "nocount", "1"]);
-main([Guest, Dir, Arm, Cache]) -> main([Guest, Dir, Arm, Cache, "nocount", "1"]);
+main([Guest, Dir, Arm]) -> main([Guest, Dir, Arm, "", "nocount", "auto"]);
+main([Guest, Dir, Arm, Cache]) ->
+    main([Guest, Dir, Arm, Cache, "nocount", "auto"]);
 main([Guest, Dir, Arm, Cache, Count]) ->
-    main([Guest, Dir, Arm, Cache, Count, "1"]);
+    main([Guest, Dir, Arm, Cache, Count, "auto"]);
 main([Guest, Dir, Arm, Cache, Count, Shards]) ->
-    persistent_term:put({?MODULE, shards}, list_to_integer(Shards)),
+    %% `auto' leaves `compile_shards' out of the map entirely, which is the
+    %% configuration an acceptance run has to exercise: passing 1 would leave a
+    %% large guest refused and make a one-shard assertion vacuous.
+    persistent_term:put({?MODULE, shards},
+                        case Shards of
+                            "auto" -> auto;
+                            N -> list_to_integer(N)
+                        end),
     {ok, _} = application:ensure_all_started(wasm),
     Cache =:= "" orelse application:set_env(wasm, code_cache_dir, Cache),
     {ok, Bin} = file:read_file(Guest),
@@ -66,7 +74,7 @@ run(loweronly, Bin, Dir, _Count) ->
             fun() -> inst(Mod, Dir, [?REQ1], false) end,
             fun(I) ->
                 N = lower_all(I),
-                {0, {[{lowered, N}], not_counted, wasm_jit:counts()}}
+                {0, {[{lowered, N}], not_counted, wasm_jit:counts(), 0}}
             end, 1800000),
     show(Res);
 run(inwin, Bin, Dir, Count) ->
@@ -119,7 +127,7 @@ clean(Mod, Dir, Reqs, Setup, Compile) ->
     P = spawn(fun() ->
                   I = inst(Mod, Dir, Reqs, Compile),
                   Setup(I),
-                  {T, {Lines, _, _}} = call(I, false),
+                  {T, {Lines, _, _, _}} = call(I, false),
                   Parent ! {clean, self(), T, Lines}
               end),
     receive {clean, P, T, L} -> {T, L} after 1800000 -> erlang:error(clean_timeout) end.
@@ -134,7 +142,7 @@ clean(Mod, Dir, Reqs, Setup, Compile) ->
 %% reads exactly like an ask that went nowhere.
 prime(Mod, Dir) ->
     I = inst(Mod, Dir, [?REQ1], true),
-    {T, {R, _, _}} = call(I, false),
+    {T, {R, _, _, _}} = call(I, false),
     io:format("priming call ~w ms, reply ~p~n", [T, R]),
     io:format("waiting for the compiler~n"),
     W = wait_compiled(3600, 0),
@@ -169,10 +177,13 @@ inst(Mod, Dir, Reqs, Compile) ->
              stdout => fun(D) -> line(D) end,
              stderr => fun(_) -> ok end},
     Limits = case Compile of
-                 true -> #{max_memory_pages => 4096, compile => true,
-                           compile_after => 1,
-                           compile_shards =>
-                               persistent_term:get({?MODULE, shards}, 1)};
+                 true ->
+                     Base = #{max_memory_pages => 4096, compile => true,
+                              compile_after => 1},
+                     case persistent_term:get({?MODULE, shards}, auto) of
+                         auto -> Base;
+                         N -> Base#{compile_shards => N}
+                     end;
                  false -> #{max_memory_pages => 4096}
              end,
     {ok, I} = wasm:instantiate(Mod, wasi_preview1:imports(Wasi), Limits),
@@ -206,8 +217,11 @@ call(I, Count) ->
             false -> not_counted
         end,
     Lines = lists:reverse(case get(lines) of undefined -> []; L -> L end),
+    %% Before the destroy: the shard count is read from the resident chain, and
+    %% releasing the lease is what can take it away.
+    Shards = wasm_jit:shards(I),
     ok = wasm:destroy(I),
-    {T, {Lines, N, wasm_jit:counts()}}.
+    {T, {Lines, N, wasm_jit:counts(), Shards}}.
 
 %% Every function, not the reached set: the window is what has to hold no
 %% lowering, and lowering more than the request needs only moves more of it out.
@@ -221,7 +235,7 @@ lower_all(I) ->
 
 %%% ------------------------------------------------------------------ output ---
 
-show(#{result := {T, {Lines, N, Counts}}} = R) ->
+show(#{result := {T, {Lines, N, Counts, Shards}}} = R) ->
     io:format("~nwall              ~w ms~n", [T]),
     io:format("allocated         ~w words~n", [maps:get(allocated, R, 0)]),
     io:format("reclaimed         ~w words~n", [maps:get(reclaimed, R, 0)]),
@@ -234,6 +248,8 @@ show(#{result := {T, {Lines, N, Counts}}} = R) ->
                case T of 0 -> 0.0; _ -> maps:get(gc_us, R, 0) / (T * 10) end]),
     io:format("dispatches        ~w~n", [N]),
     io:format("jit               ~p~n", [Counts]),
+    io:format("shards resident   ~w~n", [Shards]),
+    io:format("diagnostics       ~p~n", [wasm_jit:diagnostics()]),
     io:format("mbuf              ~p~n", [maps:get(mbuf, R, undefined)]),
     io:format("replies           ~p~n", [Lines]).
 

@@ -3919,9 +3919,12 @@ runs, and **throws**:
 `wasm_core` pre-generates every atom a compiled unit can use, because nothing a
 guest supplies may become an atom. `?MAX_FUNS` is **2048**, and its comment says
 what it was sized against: "qjs has 1666 compilable functions". One CPython
-request reaches **2,333**. `fun_name/1` raises at the 2049th, part way through a
-compile that has already done its work, although `limits/0` exists so that "a
-caller can refuse before it starts rather than part way".
+request reaches **2,333**. `fun_name/1` raises at the 2049th, while `forms/8` is
+building the Core Erlang definitions (`wasm_core.erl:521`) and therefore before
+`compile:forms/2` is reached at all: the compiler worker is gone within 15
+seconds of what would have been a 464-second compile. It fails early, and
+`limits/0` exists so that "a caller can refuse before it starts rather than part
+way".
 
 What makes it invisible is what happens next. `compiler_loop/0` catches
 everything, gives the ask back and exits:
@@ -4016,6 +4019,98 @@ interpreted dispatch, and generated code does not allocate it.
 | wall | 53 ms to 16 ms | 19.2 s to 4.9 s |
 | functions compiled | 402 | 2,333 |
 | compile time, once | 165 s | 464 s |
+
+### Two shards against four
+
+`ceil(2333 / 2048)` is two, and two is what the automatic policy chooses. Four
+was measured first, by hand:
+
+| shards | clean wall | allocated | time to compiled | load during the arm |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 4,813 ms | 259,856,472 | 637 s | 4.73 |
+| 4 | 4,851 ms | 305,591,745 | 464 s | 13.24 |
+
+**Two shards allocate 15% less and compile 37% slower.** A call between units
+goes through `wasm_exec:shard_call/8` and a call within one does not, so fewer
+units means fewer crossings; more units means more of `compile:forms/2` running
+at once. The policy optimises the run, because the compile is paid once per node
+and the run is paid per instance.
+
+### The fix, and what it measures
+
+Three changes, and only the first is the one anybody would have guessed.
+
+**The refusal was not a value.** `wasm_core:forms/8` already ended in
+
+```erlang
+catch
+    throw:{limit, _} = L -> {error, L};
+    throw:{unsupported, _} = U -> {error, U}
+```
+
+and nothing in `src/` ever threw `{limit, _}`: `fun_name/1` and `frame_name/1`
+raise with `erlang:error/1`, so that clause was dead and the refusal escaped.
+The class was wrong at the boundary, not in the helpers -- `wasm_core_SUITE`
+asserts `?assertError` on both and still does -- so the catch matches `error:`
+now.
+
+What that looked like on the commit before, on a synthetic module of 2,056
+eligible functions:
+
+| | parent | now |
+| --- | --- | --- |
+| `compile_sync`, first call | **raises `{limit, too_many_functions}` into `wasm:call/3`** | `{ok, [11]}` |
+| `counts()` after | all zeros | `compiled => 2056, entered => 1` |
+| asynchronous, same module | `compiled => 0`, silence | compiled, entered |
+
+The synchronous arm is the sharper half: a runtime whose rule is that nothing
+raises was raising a compiler's internal bound at the embedder, on a call the
+interpreter would have answered correctly.
+
+**`auto` never split.** `auto_shards/1` returned 1 whatever it was given, so the
+split that keeps a unit under `max_funs` happened only when a caller asked for
+it by hand. It is now `ceil(NFuns / max_funs)`, capped at `?MAX_SHARDS`, and 1
+for anything that fits -- so a guest that fitted before is bit-identical.
+
+**The bin packing balanced words, not functions.** `bins/2` took the lightest
+bin outright. One QuickJS function is 98,191 words, so a word-balanced split
+puts it alone and everything else in the bin beside it: a shard count computed
+against the bound and a packing free to ignore it is not a bound. It now takes
+the lightest bin *that can still take a function*, with the count carried in the
+bin so the choice stays one comparison.
+
+**The refusal is visible and paced.** `counts/0` gains `refused`, `failed` and
+`crashed`; `diagnostics/0` gives the reasons, normalised to a bounded shape and
+kept 64 deep in an ETS ring owned like every other tier table. A refusal leaves
+the ask standing rather than releasing it, so the retry interval paces it: on
+the parent commit `release_ask/1` set the timestamp to zero and the next hot
+call asked again at once, for ever, invisibly.
+
+**What it buys**, both guests through `bench/paths/pyarms.erl` with
+`compile_shards` left at `auto`, each arm its own emulator:
+
+| | QuickJS | CPython |
+| --- | ---: | ---: |
+| shards resident | **1** | **2** |
+| `entered` on the first `_start` | 1 | 1 |
+| allocated | 554,383 | 282,396,699 |
+| clean wall | 14 ms | **3,941 ms** |
+| interpreted, for comparison | 53 ms, 28.1 M words | 19,220 ms, 5.45 G words |
+| refused / failed / crashed | 0 / 0 / 0 | 0 / 0 / 0 |
+| compiled, once | 402 functions, 1 s from cache | 2,333 functions, 609 s |
+
+Against the thresholds fixed before the measurement: CPython at most 6,000 ms
+and 300 M words, two shards, QuickJS one shard. All met.
+
+**The regression gate is inconclusive on timing and clean on structure.**
+`realbench.erl` on QuickJS, eleven interleaved pairs across two runs in both
+orderings, minimum per half: the arms are indistinguishable, and the spread
+inside one arm (1,568 to 1,656 ms) is wider than the gap between them. Every
+half ran above the protocol's load-average gate of 8 -- this box sat between 9
+and 14 throughout -- so no speed claim is made in either direction. The
+structural argument is the one that carries: QuickJS reaches 402 functions,
+stays in one unit, and never enters `shard_call/8`, and the interpreter's own
+path is not touched by any of this.
 
 ### The disk cache saves 4% of a sharded compile
 

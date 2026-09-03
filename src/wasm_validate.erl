@@ -299,9 +299,22 @@ check_type_index(T, Ctx) ->
 %% A declared supertype has to be one: the type must actually be structurally
 %% below it, the supertype must exist and must not be final, and it must be
 %% declared before this one so the relation cannot be circular.
+%%
+%% And there may be at most one of them. The binary format encodes the
+%% supertypes as a vector, which is what makes two of them decodable, and the
+%% specification bounds that vector at one; `type-subtyping.wast` asserts it as
+%% "multiple supertypes". Without this a module declaring two parents was
+%% accepted and each parent checked on its own, which is a coherent thing to do
+%% and not what the language says.
 check_subtypes(#module{types = Types}, #ctx{types = T, canon = C} = Ctx) ->
     lists:foreach(
       fun({I, #subtype{supers = Supers, body = Body}}) ->
+              case Supers of
+                  [_, _ | _] ->
+                      invalid(multiple_supertypes, <<"multiple supertypes">>,
+                              #{type => I, count => length(Supers)});
+                  _ -> ok
+              end,
               lists:foreach(
                 fun(Sup) ->
                         check_super(I, Sup, Body, T, C, Ctx)

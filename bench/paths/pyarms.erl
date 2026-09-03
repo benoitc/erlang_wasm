@@ -16,6 +16,12 @@ The arms:
   cold     one request, lowering inside the window. The baseline.
   pre      one request, every function lowered in the same process before the
            window opens, so the window holds no lowering at all.
+  whole    as `adopted`, with `compile_whole => true`, so the unit is every
+           eligible function rather than the ones the request ran. Its own
+           timeout, because 11,447 functions at `full` quality take far longer
+           than the ordinary arm ever does, and a timeout misread as a compiler
+           defect is exactly the sort of thing this file exists to prevent. Give
+           it a cache directory of its own and an empty one.
   adopted  a fresh instance that enters generated code on its *first* call.
            Reaching that today needs a priming instance to raise the ask,
            because `maybe_adopt/3` can only adopt what is already resident and
@@ -113,6 +119,9 @@ shape(pre, Bin, _Dir) ->
     {ok, Mod} = wasm:compile(Bin),
     {Mod, [?REQ1], fun(I) -> lower_all(I) end, false};
 
+shape(whole, Bin, Dir) ->
+    persistent_term:put({?MODULE, whole}, true),
+    shape(adopted, Bin, Dir);
 shape(adopted, Bin, Dir) ->
     %% On the heap like `compile/1`, and named like `load/1`. Without the
     %% identity `wasm_code_cache:key/6` refuses the module and nothing compiled
@@ -144,8 +153,15 @@ prime(Mod, Dir) ->
     I = inst(Mod, Dir, [?REQ1], true),
     {T, {R, _, _, _}} = call(I, false),
     io:format("priming call ~w ms, reply ~p~n", [T, R]),
-    io:format("waiting for the compiler~n"),
-    W = wait_compiled(3600, 0),
+    %% Four hours for the whole module, an hour otherwise. Both are ceilings
+    %% rather than expectations, and the wait reports as it goes so a long
+    %% compile is visibly a long compile and not a hang.
+    Ceiling = case persistent_term:get({?MODULE, whole}, false) of
+                  true -> 4 * 3600;
+                  false -> 3600
+              end,
+    io:format("waiting for the compiler, up to ~w s~n", [Ceiling]),
+    W = wait_compiled(Ceiling, 0),
     io:format("compiled after ~w s, ~p~n", [W, wasm_jit:counts()]).
 
 %% Long, and reported as it waits. Compiling CPython from cold took more than
@@ -178,8 +194,12 @@ inst(Mod, Dir, Reqs, Compile) ->
              stderr => fun(_) -> ok end},
     Limits = case Compile of
                  true ->
-                     Base = #{max_memory_pages => 4096, compile => true,
-                              compile_after => 1},
+                     Base0 = #{max_memory_pages => 4096, compile => true,
+                               compile_after => 1},
+                     Base = case persistent_term:get({?MODULE, whole}, false) of
+                                true -> Base0#{compile_whole => true};
+                                false -> Base0
+                            end,
                      case persistent_term:get({?MODULE, shards}, auto) of
                          auto -> Base;
                          N -> Base#{compile_shards => N}

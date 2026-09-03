@@ -486,3 +486,17 @@ watch had been given 60, and that CPython threw `{limit, too_many_functions}`.
 Match the 1. `trace_pattern/3` returning 0 and `trace_info/2` reading
 `undefined` are the same shape as a runtime that does nothing, and a trace that
 matches nothing will confirm any story told about it.
+
+**Pointing `compile_whole` at CPython.** With the name pool at 4096 the
+four-unit ceiling is 16,384, so CPython's 11,447 eligible functions are no
+longer refused and the compiler starts on all of them. It reached **33 GB
+resident on a 48 GB box in eleven minutes**, with 66 MB of memory free, 0% CPU
+because it was paging rather than compiling, and nothing published. Killed.
+
+The ceiling bounds the *names* a unit may use. It says nothing about whether
+`compile:forms/2` can build what is under it, and for a 25 MB guest it cannot.
+`docs/compiled-tier.md` already called the option affordable only on
+specification modules; this is the number behind that sentence.
+
+Compiling what ran, which every default does, is 2,333 functions, 1,105 seconds
+and a fraction of the memory.

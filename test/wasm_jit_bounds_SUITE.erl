@@ -21,6 +21,13 @@
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("wasm/include/wasm.hrl").
 
+%% Measured, on the pinned guest recorded in `test/audit/PERF.md`: CPython 3.12
+%% reaches this many functions in one `_start`, and has this many eligible in
+%% the whole module. They are here so that putting the pool back to 2048 fails a
+%% case, which nothing derived from `max_funs()` can do.
+-define(CPYTHON_HOT_FUNS, 2333).
+-define(CPYTHON_WHOLE_FUNS, 11447).
+
 all() ->
     [{group, running}, {group, without_the_table}].
 
@@ -33,8 +40,11 @@ groups() ->
        a_refusal_is_paced_by_the_retry_interval,
        a_forced_refusal_is_counted_once,
        the_shard_policy_splits_only_what_does_not_fit,
-       a_module_under_the_bound_is_still_one_unit,
+       a_cpython_sized_hot_set_is_one_real_unit,
+       the_pool_covers_the_measured_cpython_sets,
        compile_whole_reaches_the_background_compiler,
+       eight_callers_share_one_background_compile,
+       a_compile_outlives_the_process_that_asked_for_it,
        the_ring_keeps_only_the_newest,
        the_ring_normalises_what_it_is_given,
        normalising_never_builds_the_representation]},
@@ -108,7 +118,7 @@ an_uneven_split_still_respects_the_function_bound(_) ->
 %% Past every shard there is no split that fits, and the answer is a refusal
 %% that says so rather than silence. Reproduces the invisibility.
 a_module_past_every_shard_is_refused_and_says_so(_) ->
-    N = 4 * max_funs() + 4,
+    N = 4 * max_funs() + 1,
     M = build(many_wat(N)),
     {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
     %% Still answers, because interpreting is always correct.
@@ -129,7 +139,7 @@ a_module_past_every_shard_is_refused_and_says_so(_) ->
 %% and still passes: the helpers keep their contract, the boundary caught the
 %% wrong class.
 a_unit_over_the_bound_is_a_value_not_an_exception(_) ->
-    M = build(many_wat(max_funs() + 8)),
+    M = build(many_wat(max_funs() + 1)),
     {ok, I} = wasm:instantiate(M, #{}, (sync(whole()))#{compile_shards => 1}),
     ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
     #{refused := R, crashed := Cr} = wasm_jit:counts(),
@@ -145,8 +155,10 @@ a_refusal_is_paced_by_the_retry_interval(_) ->
     Was = application:get_env(wasm, compile_retry_seconds),
     ok = application:set_env(wasm, compile_retry_seconds, 1),
     try
-        M = build(called_wat(4 * max_funs() + 4)),
-        {ok, I} = wasm:instantiate(M, #{}, whole()),
+        %% One unit over its own bound, not four over theirs: the ceiling case
+        %% below is the expensive one and there is no reason for two.
+        M = build(many_wat(max_funs() + 1)),
+        {ok, I} = wasm:instantiate(M, #{}, (whole())#{compile_shards => 1}),
         [?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])) || _ <- lists:seq(1, 5)],
         ?assertEqual(ok, until(fun() -> refused() >= 1 end, 5000)),
         %% Five calls inside one interval, one refusal.
@@ -168,8 +180,9 @@ a_refusal_is_paced_by_the_retry_interval(_) ->
 %% refusal plus a crash. Fails on the parent commit, where the raise is inside
 %% `build/7` and lands in the catch.
 a_forced_refusal_is_counted_once(_) ->
-    M = build(called_wat(4 * max_funs() + 4)),
-    {ok, I} = wasm:instantiate(M, #{}, (whole())#{compile_force => true}),
+    M = build(many_wat(max_funs() + 1)),
+    {ok, I} = wasm:instantiate(M, #{}, (whole())#{compile_force => true,
+                                                  compile_shards => 1}),
     ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
     ?assertEqual(ok, until(fun() -> refused() >= 1 end, 5000)),
     timer:sleep(200),
@@ -194,12 +207,35 @@ the_shard_policy_splits_only_what_does_not_fit(_) ->
 
 %% A guard: a guest that fits in one unit must still be one unit, because a
 %% split turns a call between functions into a crossing.
-a_module_under_the_bound_is_still_one_unit(_) ->
-    M = build(many_wat(16)),
+%% A guard, not a reproduction: it passes on the parent commit by construction.
+%% What it adds over `shard_count/2` is that the OTP compiler actually accepts a
+%% generated module of this size, which no pure assertion can say. Sized at
+%% CPython's measured hot set, because that is the module this bound exists for.
+a_cpython_sized_hot_set_is_one_real_unit(_) ->
+    N = ?CPYTHON_HOT_FUNS,
+    M = build(many_wat(N)),
     {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
-    ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
-    ?assertEqual(1, wasm_jit:shards(I)),
-    ok = wasm:destroy(I).
+    try
+        ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+        ?assertEqual(1, wasm_jit:shards(I)),
+        ?assertEqual(N, compiled()),
+        ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+        ?assert(map_get(entered, wasm_jit:counts()) > 0)
+    after
+        ok = wasm:destroy(I)
+    end.
+
+%% The requirement, as opposed to the algorithm. Everything else in this suite
+%% is written against `max_funs()` and would pass just as well at 2048, which is
+%% the value CPython does not fit.
+the_pool_covers_the_measured_cpython_sets(_) ->
+    Max = max_funs(),
+    ?assert(Max >= ?CPYTHON_HOT_FUNS,
+            "one _start's worth of CPython no longer fits a single unit, so its "
+            "artifact is no longer cacheable"),
+    ?assertEqual(1, wasm_jit:shard_count(?CPYTHON_HOT_FUNS, #{})),
+    ?assertEqual(3, wasm_jit:shard_count(?CPYTHON_WHOLE_FUNS, #{})),
+    ?assert(?CPYTHON_WHOLE_FUNS =< 4 * Max).
 
 %% `compile_whole` has to mean the same thing off the calling process.
 %%
@@ -236,6 +272,100 @@ compile_whole_reaches_the_background_compiler(_) ->
         ok = wasm:destroy(I)
     end.
 
+%% One background compile, eight callers, and every observation a delta.
+%%
+%% The `entered` assertion is the point of the second barrier: eight second
+%% calls must give exactly eight entries. A merely positive delta would pass
+%% with one caller in generated code and seven still interpreting.
+eight_callers_share_one_background_compile(_) ->
+    ?assertEqual(ok, until(fun() -> workers() =:= 0 end, 10000)),
+    wasm_jit:reset_counts(),
+    N = 257,
+    M = build(many_wat(N)),
+    {ok, I} = wasm:instantiate(M, #{}, whole()),
+    try
+        Ps = [caller(I) || _ <- lists:seq(1, 8)],
+        ?assertEqual(lists:duplicate(8, {ok, [11]}), release(Ps)),
+        ?assertEqual(ok, wasm_jit:await(I, 60000)),
+        #{compiled := C, refused := R, failed := F, crashed := Cr} =
+            wasm_jit:counts(),
+        ?assertEqual(N, C, "eight askers compiled the module more than once"),
+        ?assertEqual({0, 0, 0}, {R, F, Cr}),
+        ?assertEqual(1, wasm_jit:shards(I)),
+        Before = map_get(entered, wasm_jit:counts()),
+        Qs = [caller(I) || _ <- lists:seq(1, 8)],
+        ?assertEqual(lists:duplicate(8, {ok, [11]}), release(Qs)),
+        ?assertEqual(8, map_get(entered, wasm_jit:counts()) - Before)
+    after
+        ok = wasm:destroy(I),
+        ?assertEqual(ok, until(fun() -> workers() =:= 0 end, 10000))
+    end.
+
+%% The property the `wanted/2` fix rests on: what to compile is read in the
+%% calling process, whose dictionary holds it, and copied to the worker before
+%% the caller can die.
+%%
+%% This passes on the parent commit, which read `executed/1` in the same place,
+%% so it is a guard rather than a reproduction and is mutation-tested instead:
+%% move `wanted/2` into `compiler_loop/0` and it fails.
+%%
+%% Ordinary compilation, not `compile_whole`, because `wanted/2` answers `[]`
+%% for that without reading anything caller-local, and the case would then
+%% assert nothing at all.
+a_compile_outlives_the_process_that_asked_for_it(_) ->
+    a_compile_outlives_the_process_that_asked_for_it(3, 1).
+
+a_compile_outlives_the_process_that_asked_for_it(0, _) ->
+    ct:fail("never suspended the compiler before it published");
+a_compile_outlives_the_process_that_asked_for_it(Tries, Salt) ->
+    ?assertEqual(ok, until(fun() -> workers() =:= 0 end, 10000)),
+    wasm_jit:reset_counts(),
+    %% `f` calls 200 helpers, so 201 functions are executed and none of the rest
+    %% is. A two-function compile would finish before this could suspend it.
+    M = build(pair_wat(257, 200, Salt)),
+    Self = self(),
+    {C, Mon} = spawn_monitor(
+                 fun() ->
+                     {ok, I} = wasm:instantiate(M, #{}, opts()),
+                     {ok, [11]} = wasm:call(I, ~"f", [10]),
+                     Self ! {ask_returned, self()},
+                     receive stop -> ok end
+                 end),
+    receive {ask_returned, C} -> ok after 60000 -> ct:fail(no_ask) end,
+    %% Establish the schedule rather than hope for it: the caller must die while
+    %% the worker is holding the work and before it publishes.
+    case suspend_worker() of
+        error ->
+            exit(C, kill),
+            receive {'DOWN', Mon, process, C, _} -> ok end,
+            a_compile_outlives_the_process_that_asked_for_it(Tries - 1, Salt + 1);
+        {ok, W} ->
+            exit(C, kill),
+            receive {'DOWN', Mon, process, C, _} -> ok after 10000 -> ct:fail(alive) end,
+            true = erlang:resume_process(W),
+            ?assertEqual(ok, until(fun() -> compiled() >= 201 end, 60000)),
+            ?assertEqual(201, compiled(),
+                         "the worker compiled something other than what the "
+                         "dead caller had run"),
+            %% Which indices, not only how many. A fresh instance adopts what
+            %% was published; `f` was run and is compiled, `g` was not and is
+            %% not, and `generational_entry/3` bumps `entered` only when
+            %% generated code returns or traps -- `{error, not_compiled}` falls
+            %% through to the interpreter untouched.
+            {ok, J} = wasm:instantiate(M, #{}, opts()),
+            try
+                E0 = map_get(entered, wasm_jit:counts()),
+                ?assertEqual({ok, [11]}, wasm:call(J, ~"f", [10])),
+                E1 = map_get(entered, wasm_jit:counts()),
+                ?assertEqual(1, E1 - E0, "the selected function was not compiled"),
+                ?assertEqual({ok, [17]}, wasm:call(J, ~"g", [10])),
+                ?assertEqual(0, map_get(entered, wasm_jit:counts()) - E1,
+                             "a function the caller never ran was compiled")
+            after
+                ok = wasm:destroy(J)
+            end
+    end.
+
 the_ring_keeps_only_the_newest(_) ->
     ok = wasm_code_slots:clear_diagnostics(),
     [ok = wasm_code_slots:record_diagnostic(Seq, refused, {k, Seq},
@@ -250,8 +380,8 @@ the_ring_keeps_only_the_newest(_) ->
 
 the_ring_normalises_what_it_is_given(_) ->
     ok = wasm_code_slots:clear_diagnostics(),
-    M = build(many_wat(4 * max_funs() + 4)),
-    {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+    M = build(many_wat(max_funs() + 1)),
+    {ok, I} = wasm:instantiate(M, #{}, (sync(whole()))#{compile_shards => 1}),
     {ok, _} = wasm:call(I, ~"f", [10]),
     [{refused, _, Reason}] = wasm_jit:diagnostics(),
     %% Small, and measured with `flat_size/1`. Not `erts_debug:size/1`, which
@@ -297,11 +427,7 @@ compiled() -> map_get(compiled, wasm_jit:counts()).
 
 %% `f` plus N-1 more, none of them exported, all of them eligible. Every one is
 %% compiled because `compile_whole` asks for what exists rather than what ran.
-%%
-%% Synchronous compilation only. `wasm_jit:spawn_compile/2` reads
-%% `wasm_instance:executed/1` directly rather than going through `wanted/2`, so
-%% the asynchronous path compiles what ran whatever `compile_whole` says. The
-%% cases that need a large unit off the calling process use `called_wat/1`.
+
 many_wat(N) ->
     iolist_to_binary(
       ["(module (func (export \"f\") (param i32) (result i32)
@@ -323,18 +449,84 @@ lopsided_wat(Small, Big) ->
        ")",
        ")"]).
 
-%% As `many_wat/1`, and `f` calls every one of them, so they are all *executed*
-%% and the asynchronous path -- which compiles what ran and not what exists --
-%% sees the whole module.
-called_wat(N) ->
+%% `f` at 0 calls `Calls` helpers, so exactly `Calls + 1` functions are executed
+%% and `g` at 1 is exported and never among them. `Salt` only changes the bytes,
+%% so a retry gets a module identity of its own rather than adopting what the
+%% previous round published.
+pair_wat(N, Calls, Salt) ->
     iolist_to_binary(
       ["(module (func (export \"f\") (param i32) (result i32)",
        [[" i32.const 0 call ", integer_to_list(I), " drop"]
-        || I <- lists:seq(1, N - 1)],
-       " local.get 0 i32.const 1 i32.add)",
+        || I <- lists:seq(2, Calls + 1)],
+       " local.get 0 i32.const ", integer_to_list(Salt), " i32.sub",
+       " i32.const ", integer_to_list(Salt), " i32.add i32.const 1 i32.add)",
+       "(func (export \"g\") (param i32) (result i32)"
+       " local.get 0 i32.const 7 i32.add)",
        [["(func (param i32) (result i32) local.get 0 i32.const ",
-         integer_to_list(I rem 100), " i32.add)"] || I <- lists:seq(2, N)],
+         integer_to_list(I rem 100), " i32.add)"] || I <- lists:seq(3, N)],
        ")"]).
+
+%% A process that instantiates nothing and waits to be released, so eight of
+%% them can be made to call at the same moment rather than in a queue.
+caller(I) ->
+    Self = self(),
+    spawn_monitor(fun() ->
+                      Self ! {ready, self()},
+                      receive go -> ok end,
+                      Self ! {done, self(), wasm:call(I, ~"f", [10])}
+                  end).
+
+release(Ps) ->
+    [receive {ready, P} -> ok after 10000 -> ct:fail(never_ready) end
+     || {P, _} <- Ps],
+    [P ! go || {P, _} <- Ps],
+    [receive
+         {done, P, R} -> demonitor(Mon, [flush]), R;
+         {'DOWN', Mon, process, P, Why} -> ct:fail({caller_died, Why})
+     after 60000 -> ct:fail(never_answered)
+     end || {P, Mon} <- Ps].
+
+workers() ->
+    proplists:get_value(active, supervisor:count_children(wasm_jit_sup)).
+
+%% The one process holding a slot in `loading`, suspended so it cannot publish.
+%%
+%% It spins, because the worker is not holding the slot yet when the caller
+%% returns: `spawn_compile/2` sends it a message and `claim_loading/3` is a
+%% `gen_server` call the worker has still to make. Looking once finds every slot
+%% free and concludes, wrongly, that nothing is compiling. It gives up when the
+%% slot is already `resident`, which is the race genuinely lost, and the caller
+%% retries with a module of its own.
+suspend_worker() -> suspend_worker(erlang:monotonic_time(millisecond) + 5000).
+
+suspend_worker(Deadline) ->
+    case loading_owners() of
+        [W | _] ->
+            %% `suspend_process/1` raises on a process that has already
+            %% exited, which here is just the race lost.
+            try erlang:suspend_process(W) of
+                true ->
+                    case is_process_alive(W) of
+                        true -> {ok, W};
+                        false -> error
+                    end;
+                _ -> error
+            catch
+                _:_ -> error
+            end;
+        [] ->
+            case compiled() > 0 orelse
+                 erlang:monotonic_time(millisecond) >= Deadline of
+                true -> error;
+                false -> timer:sleep(1), suspend_worker(Deadline)
+            end
+    end.
+
+loading_owners() ->
+    [Pid || {_N, _G, {loading, _}, Leases} <- ets:tab2list(wasm_code_slots),
+            Pid <- maps:values(Leases), is_pid(Pid)].
+
+opts() -> #{compile => true, compile_after => 1}.
 
 build(Wat) ->
     {ok, P} = wasm_wat:module(Wat),

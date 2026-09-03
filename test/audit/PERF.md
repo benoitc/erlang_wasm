@@ -4138,3 +4138,87 @@ unit, the same cache is worth the entire 165 seconds.
 So the two mechanisms that would make a large guest cheap are mutually
 exclusive as they stand: a module small enough to cache is one that fits under
 `?MAX_FUNS`, and a module that needs sharding to fit cannot be cached.
+
+### Making CPython fit one unit, and the cache that follows
+
+The two mechanisms stopped excluding each other by making the guest fit. The
+name pool went from 2048 to **4096**, so CPython's 2,333 executed functions are
+one unit rather than two, and a unit that ends its chain is the one
+`wasm_jit:artifact/8` will cache.
+
+**What the pool costs**, measured in a clean emulator per arm, separate builds
+rather than two pools in one node, `wasm_core` loaded and then `atoms/0` forced:
+
+| | 2048 + 512 | 4096 + 512 | change |
+| --- | ---: | ---: | ---: |
+| atoms created | 2,881 | 4,929 | +2,048 |
+| `erlang:memory(atom)` | +116,592 B | +155,504 B | **+38,912 B** |
+| `erlang:memory(atom_used)` | +116,540 B | +155,452 B | +38,912 B |
+| `erlang:memory(total)` | +271,768 B | +324,240 B | +52,472 B |
+| naming every slot again | 0 further atoms | 0 further atoms | -- |
+
+38 KB of atom memory, node-wide, paid lazily on the first compile. The
+alternative was `?MAX_SHARDS`, which reaches the same 16,384 ceiling and cannot
+do this job at all: more shards cannot make a 2,333-function set *one* unit, so
+it cannot make the artifact cacheable, and it spends code slots, of which the
+node has sixteen.
+
+**What one unit buys.** CPython, `auto`, fresh instance entering generated code
+on its first `_start`:
+
+| units | allocated | clean wall | time to compiled | load |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | 305,591,745 | 4,851 ms | 464 s | 13.24 |
+| 2 | 259,856,472 | 4,813 ms | 637 s | 4.73 |
+| **1** | **217,071,655** | **3,704 ms** | **1,105 s** | 3.11 |
+
+Monotone, and for the reason the four-shard arm already suggested: a call
+between units crosses through `wasm_exec:shard_call/8` and a call inside one
+does not. **29% less allocation in one unit than in four**, at the price of a
+compile with no parallelism left in it.
+
+**The allocation column is the claim; the wall column is not.** Each row is one
+run in its own emulator, not five interleaved pairs in both orderings, so it does
+not meet this file's bar for a speed claim and none is made. Allocated words are
+what the change is being judged on and they do not care about the load average.
+The three configurations cost about 40 minutes of compiling between them, on a
+box shared with other work, which is why the protocol was not run; it is the
+measurement to add if the wall difference ever has to be relied on.
+
+**And the compile is now paid once per node, not once per start.** A second
+emulator against the same cache directory:
+
+| | cold | warm |
+| --- | ---: | ---: |
+| time to compiled | 1,105 s | **2 s** |
+| `cached` | 0 | **1** |
+| shards resident | 1 | 1 |
+| `entered` on the first `_start` | 1 | 1 |
+| clean wall | 3,704 ms | 3,812 ms |
+
+The artifact is an 80 MB `.beam`. That is the item this file listed as open --
+"the compile recurs per node" -- closed for this guest, and closed by making it
+fit rather than by making the chain cacheable.
+
+**`compile_whole` on CPython does not finish, and the reason is memory.** With
+the pool at 4096 the ceiling is 16,384, so CPython's 11,447 eligible functions
+are no longer refused: `shard_count/2` asks for three units and the compiler
+starts. It was stopped after eleven minutes, not for being slow but for what it
+was doing to the box:
+
+| | |
+| --- | --- |
+| resident | **33 GB**, still climbing, on a 48 GB machine |
+| free memory | 66 MB |
+| CPU | 0%, so the time was paging and not compiling |
+| progress | `compiled => 0` at 600 s, nothing published |
+
+So the option is affordable exactly where `docs/compiled-tier.md` already says it
+is -- specification modules of a few functions each -- and the ceiling no longer
+refusing a 25 MB guest is not an invitation to point it at one. Compiling what
+ran, which is what every default does, is 2,333 functions and 1,105 seconds in
+16 GB less than this consumed before it was killed.
+
+Recorded because the alternative is somebody discovering it on a production
+node. The ceiling is a bound on names, not a promise that everything under it
+compiles.

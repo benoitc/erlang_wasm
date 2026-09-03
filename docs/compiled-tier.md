@@ -84,24 +84,31 @@ That is one shot: a function that first runs after the module was built stays
 interpreted. So this suits long-lived instances of modules you run repeatedly,
 and a workload whose hot set changes over time gets less from it.
 
-**A large hot set is compiled into several BEAM modules, not one.** Every name a
-unit can use comes from a pool generated at startup, because nothing a guest
-supplies may become an atom, and that pool is 2048 functions deep. A hot set
-past it is split across as many as four units, automatically; below it nothing
-is split, because a call between units is a crossing rather than a call. Ask
-`wasm_jit:shard_count(NFuns, Limits)` what a given hot set would do, or
+**A very large hot set is compiled into several BEAM modules, not one.** Every
+name a unit can use comes from a pool generated at startup, because nothing a
+guest supplies may become an atom, and that pool is **4096** functions deep. A
+hot set past it is split across as many as four units, automatically; below it
+nothing is split, and you want it not to be, for two reasons. A call between
+units is a crossing rather than a call, which costs: CPython allocates 217 M
+words in one unit against 306 M in four. And **only a unit that ends its chain
+is cached on disk**, so a split hot set is recompiled on every node.
+
+Ask `wasm_jit:shard_count(NFuns, Limits)` what a given hot set would do, or
 `wasm_jit:shards(Instance)` how many units it is actually resident in.
 
-CPython 3.12 reaches 2,333 functions in a single `_start`, so it splits in two.
-Before that split happened it was refused outright, and silently:
+CPython 3.12 reaches 2,333 functions in a single `_start`, which is one unit and
+an 80 MB artifact: 1,105 seconds to compile the first time, two seconds on the
+next node to see it.
+
+Past four units there is no split that fits, and the answer is a refusal rather
+than silence:
 
     1> wasm_jit:counts().
     #{compiled => 0, entered => 0, reentered => 0, cached => 0,
       refused => 1, failed => 0, crashed => 0}
     2> wasm_jit:diagnostics().
-    [{refused, {{sha256, <<...>>}, 3}, {limit, {too_many_functions, 8196}}}]
+    [{refused, {{sha256, <<...>>}, 3}, {limit, {too_many_functions, 16385}}}]
 
-Past four units there is no split that fits and the answer is that refusal.
 `counts/0` says how many, `diagnostics/0` says what: the reasons are normalised
 to a bounded shape and the last few dozen are kept.
 
@@ -203,6 +210,12 @@ specification says -1.
 `compile_whole` is not a tuning knob. Compiling every function of QuickJS is 74
 seconds against about 8 for the hot set. Specification modules are a few
 functions each, which is why it is affordable there and nowhere else.
+
+**Nowhere else is meant literally.** Pointed at CPython 3.12, whose 11,447
+eligible functions are inside the four-unit ceiling and so are not refused, it
+reached 33 GB resident on a 48 GB machine in eleven minutes, published nothing,
+and spent that time paging rather than compiling. The ceiling bounds the names a
+unit can use; it is not a promise that everything under it will compile.
 
 ## Pick a profile instead of the knobs
 

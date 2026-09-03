@@ -636,7 +636,7 @@ generate(Inst, Limits, Mod, Token, Executed) ->
 %% Refused before anything is generated when even `?MAX_SHARDS` units cannot
 %% hold it. `length/1` on the eligible list is the whole cost of finding out,
 %% and the alternative is discovering it inside `wasm_core:fun_name/1` after the
-%% Core Erlang for every function before the 2049th has been built.
+%% Core Erlang for every function up to the pool's depth has been built.
 generate_1(Inst, Limits, Mod, Token, Unit) ->
     N = length(Unit),
     case N > ?MAX_SHARDS * map_get(max_funs, wasm_core:limits()) of

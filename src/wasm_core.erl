@@ -52,7 +52,13 @@ every other refusal here: interpret it.
 
 %% Read these as the answer to "how many atoms can this module make", which is
 %% `?MAX_FUNS + ?MAX_FRAMES` and nothing else, ever.
--define(MAX_FUNS, 2048).      % qjs has 1666 compilable functions
+%% 4096, sized against CPython rather than QuickJS. QuickJS is 1666 compilable
+%% functions and fitted 2048 comfortably; CPython 3.12 reaches 2,333 in one
+%% `_start' and 11,447 in the whole module, and the first of those is the number
+%% that matters. A hot set inside one unit is a hot set `wasm_jit:artifact/8'
+%% can put in the on-disk cache, because only a unit that ends the chain is
+%% cacheable; split in two it is recompiled on every node for ever.
+-define(MAX_FUNS, 4096).
 -define(MAX_FRAMES, 512).     % qjs nests 257 deep at worst
 -define(MAX_ARITY, 128).      % qjs would generate 71 at worst; the BEAM allows 255
 
@@ -528,8 +534,8 @@ forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) ->
     catch
         %% `error:`, not `throw:`. `fun_name/1` and `frame_name/1` raise with
         %% `erlang:error/1`, and this clause spelled `throw:` for long enough
-        %% that a module past `?MAX_FUNS` -- CPython reaches 2,333 functions
-        %% against a bound of 2,048 -- escaped as an exception instead of
+        %% that a module past `?MAX_FUNS` -- CPython reaches 2,333 functions,
+        %% against a then-bound of 2,048 -- escaped as an exception instead of
         %% arriving as a value. `wasm_jit:compiler_loop/0` swallowed it, so the
         %% tier refused the guest silently and for ever. The helpers keep their
         %% contract, which `wasm_core_SUITE` asserts with `?assertError`; the

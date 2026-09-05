@@ -27,6 +27,9 @@
 %% case, which nothing derived from `max_funs()` can do.
 -define(CPYTHON_HOT_FUNS, 2333).
 -define(CPYTHON_WHOLE_FUNS, 11447).
+%% `?MAX_SHARDS` is private to `wasm_jit`; this is the same number, asserted
+%% against `compile_limits/0` so a change there fails here rather than silently.
+-define(MAX_SHARDS_HERE, 4).
 
 all() ->
     [{group, running}, {group, without_the_table}].
@@ -42,6 +45,7 @@ groups() ->
        the_shard_policy_splits_only_what_does_not_fit,
        a_cpython_sized_hot_set_is_one_real_unit,
        the_pool_covers_the_measured_cpython_sets,
+       a_request_past_the_ceiling_is_refused_before_it_is_lowered,
        compile_whole_reaches_the_background_compiler,
        eight_callers_share_one_background_compile,
        a_compile_outlives_the_process_that_asked_for_it,
@@ -230,12 +234,26 @@ a_cpython_sized_hot_set_is_one_real_unit(_) ->
 %% the value CPython does not fit.
 the_pool_covers_the_measured_cpython_sets(_) ->
     Max = max_funs(),
+    Ceiling = map_get(max_compile_funs, wasm_jit:compile_limits()),
     ?assert(Max >= ?CPYTHON_HOT_FUNS,
             "one _start's worth of CPython no longer fits a single unit, so its "
             "artifact is no longer cacheable"),
     ?assertEqual(1, wasm_jit:shard_count(?CPYTHON_HOT_FUNS, #{})),
     ?assertEqual(3, wasm_jit:shard_count(?CPYTHON_WHOLE_FUNS, #{})),
-    ?assert(?CPYTHON_WHOLE_FUNS =< 4 * Max).
+    %% The hot set is admitted; the whole module is **not**, and that is the
+    %% point of the two bounds being separate. The name pool genuinely covers
+    %% 11,447 names across three units -- it would compile, given the memory --
+    %% and admission rejects it anyway, because a request that size was measured
+    %% at 33 GB resident and published nothing.
+    ?assert(?CPYTHON_HOT_FUNS =< Ceiling),
+    ?assert(?CPYTHON_WHOLE_FUNS > Ceiling,
+            "the acceptance ceiling admits the whole-module compile again"),
+    ?assert(?CPYTHON_WHOLE_FUNS =< ?MAX_SHARDS_HERE * Max,
+            "the name pool no longer covers what admission is refusing, so the "
+            "refusal would happen for the wrong reason"),
+    %% And the ceiling itself: exactly at it is admitted, one past it is not.
+    ?assertEqual(1, wasm_jit:shard_count(1, #{})),
+    ?assert(Ceiling > Max, "the ceiling is not distinct from the name pool").
 
 %% `compile_whole` has to mean the same thing off the calling process.
 %%
@@ -271,6 +289,58 @@ compile_whole_reaches_the_background_compiler(_) ->
         %% lease behind for the next one to trip over.
         ok = wasm:destroy(I)
     end.
+
+%% Admission counts what was *asked for*, before anything is lowered.
+%%
+%% `unit/2` lowers every selected function and only then filters by
+%% `can_compile/2`, so counting its output meant a refused request had already
+%% built and retained its whole IR -- 3.7 M words for CPython. It also meant a
+%% module of many unsupported functions could lower an arbitrary number of them
+%% while never reaching the ceiling in *eligible* ones, which is what this
+%% module is: 8,193 functions the generator refuses.
+%%
+%% On the parent that costs 8,193 lowerings and answers `retry`, because
+%% `can_compile/2` rejects them all, `unit/2` returns `[]` and an empty unit is
+%% a retry rather than a refusal. Here it costs none and answers `refused`.
+%% Unsupported on purpose, so the parent-failure run cannot accidentally start
+%% an enormous compilation.
+a_request_past_the_ceiling_is_refused_before_it_is_lowered(_) ->
+    N = map_get(max_compile_funs, wasm_jit:compile_limits()) + 1,
+    M = build(unsupported_wat(N)),
+    {module, _} = code:ensure_loaded(wasm_instance),
+    1 = erlang:trace_pattern({wasm_instance, compiler_ir, 2}, true,
+                             [call_count]),
+    try
+        {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+        try
+            %% Still answers, because a refusal means interpret.
+            ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+            ?assertEqual(1, refused()),
+            ?assertMatch([{refused, _, {limit, {too_many_functions, N}}}],
+                         wasm_jit:diagnostics()),
+            {call_count, Lowered} =
+                erlang:trace_info({wasm_instance, compiler_ir, 2}, call_count),
+            ?assertEqual(0, Lowered,
+                         "a refused request lowered its functions anyway")
+        after
+            ok = wasm:destroy(I)
+        end
+    after
+        _ = erlang:trace_pattern({wasm_instance, compiler_ir, 2}, false,
+                                 [call_count])
+    end.
+
+%% `f` compiles; every other function reads an exported mutable global, which
+%% becomes a reference cell and is refused with `global_get_ref`.
+unsupported_wat(N) ->
+    iolist_to_binary(
+      ["(module (global $g (export \"g\") (mut i32) (i32.const 0))
+         (func (export \"f\") (param i32) (result i32)
+           local.get 0 i32.const 1 i32.add)",
+       [["(func (param i32) (result i32) global.get $g drop local.get 0"
+         " i32.const ", integer_to_list(I rem 100), " i32.add)"]
+        || I <- lists:seq(2, N)],
+       ")"]).
 
 %% One background compile, eight callers, and every observation a delta.
 %%

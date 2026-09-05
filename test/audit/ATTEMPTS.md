@@ -500,3 +500,21 @@ specification modules; this is the number behind that sentence.
 
 Compiling what ran, which every default does, is 2,333 functions, 1,105 seconds
 and a fraction of the memory.
+
+**A `max_heap_size` fuse on the compiler.** The plan was to cap whatever runs
+`compile:forms/2` so a guest nobody anticipated dies as a killed compiler rather
+than as a paging node. Measured on QuickJS at one unit, the process `wasm_jit`
+spawns peaks at **0.34 GB of heap** while the node reaches 6.19 GB: the work is
+not there. `compile:forms/2` spawns a process of its own by default and runs
+everything in it, and nothing we set reaches that child.
+
+`no_spawn_compiler_process` moves the work into our process, where the cap can
+see it -- 4.16 GB -- and costs **293 seconds against 167**, on the same box at
+the same load. The child was never collecting: it allocates, returns the binary
+and exits, and a dying process frees its heap for free. Living through the
+allocation means paying for the collections.
+
+A fuse that sees 0.34 GB of a 6 GB compile is not a fuse, and 75% of compile
+time is too much to buy one. Neither shipped. What is left open is bounding
+compile memory at all, and the obstacle is not the number: it is that the memory
+is spent in a process only the OTP compiler can configure.

@@ -4276,3 +4276,36 @@ and then throws loses its final fuel value: only `leave/2` publishes, and
 `foreign_call/5` reads the callee's *committed* `#mut{}`, so an A -> B -> A
 recursion does not see A's in-flight state, and the exception branch drops
 mutations B made before throwing. Neither is visible to a depth test.
+
+### A heap fuse on the compiler cannot be had at a price worth paying
+
+The admission ceiling bounds how many functions a request may contain and says
+nothing about how big their bodies are, so an accepted request can still exhaust
+a node. The obvious cover is `max_heap_size` with `kill => true` on whatever runs
+`compile:forms/2`: an unanticipated guest then dies as one killed compiler, which
+this design already handles, instead of as a paging node.
+
+It does not work, and the measurement says why in one line. **`compile:forms/2`
+spawns a process of its own and runs everything in it.** A limit set on the
+process `wasm_jit` spawns bounds a process that only waits:
+
+| | compile | our process's heap | node RSS |
+| --- | ---: | ---: | ---: |
+| default, the compiler spawns | **167 s** | **0.34 GB** | 6.19 GB |
+| `no_spawn_compiler_process` | **293 s** | **4.16 GB** | 7.01 GB |
+
+QuickJS, one unit, `full`, same box at load 2.5 for both.
+
+The option exists for callers that already own worker processes, which we are,
+and with it the growth happens where a fuse can see it: 0.34 GB becomes 4.16 GB.
+It also costs **75% more compile time**, and the reason is the mechanism itself.
+`compile:forms/2`'s child never collects: it allocates its several gigabytes,
+returns the binary and exits, and a dying process frees its heap without a
+collection. Doing the work in a process that has to live through it means paying
+for those collections.
+
+So the choice is a fuse that sees nothing, or one that costs three quarters of
+the compile time again. **Neither ships.** The ceiling lands, and bounding what a
+compile may spend stays open with the reason recorded: it is not a matter of
+picking a number, it is that the memory is spent in a process nobody but the OTP
+compiler can pass flags to.

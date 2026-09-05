@@ -55,6 +55,7 @@ moved, because even with all three a refusal still interprets.
 
 -export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
 -export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
+-export([compile_limits/0]).
 -export([reentered/0]).
 -export([compiler_loop/0]).
 -export([dump/1, dump/2]).
@@ -76,6 +77,21 @@ moved, because even with all three a refusal still interprets.
 %% whole node shares, and a call between units is a crossing rather than a call
 %% -- so it happens only when one unit will not fit. See `shard_count/2`.
 -define(MAX_SHARDS, 4).
+
+%% How much work the runtime will accept in one request, which is a different
+%% question from how many names a unit may draw. It was `?MAX_SHARDS *
+%% max_funs`, so raising the name pool from 2048 to 4096 raised this from 8,192
+%% to 16,384 and admitted a CPython whole-module compile measured at 33 GB
+%% resident on a 48 GB box, paging and publishing nothing. A separate constant
+%% because the two answer different questions and moving one should not move the
+%% other.
+%%
+%% Counted over the *requested* set, before anything is lowered. Words would
+%% predict the cost better -- 11 to 17 KB of allocated peak per IR word on both
+%% guests -- but any value is loose or wrong until the selector makes requests
+%% small: CPython's accepted hot set is 3.7 M words and peaked at 59.89 GB, so a
+%% ceiling admitting today's ordinary path would protect nothing.
+-define(MAX_COMPILE_FUNS, 8192).
 %% Set by `entry_1/3` when this call found the module hot and unbuilt, read by
 %% `after_call/2` once the call has finished. The invocation's own lifetime is
 %% exactly the right one for it, which is the same argument the checkpoint key
@@ -634,13 +650,34 @@ compile(Inst, Limits, Executed, Mode) ->
     end.
 
 generate(Inst, Limits, Mod, Token, Executed) ->
-    case unit(Inst, Executed) of
-        [] ->
+    %% Counted here, over what was *asked for*, because `unit/2` lowers every
+    %% selected function through `wasm_instance:compiler_ir/2` before
+    %% `can_compile/2` filters it. A refused request would otherwise have built
+    %% and retained its whole IR first, and a module of many unsupported
+    %% functions could lower an arbitrary number of them while never reaching
+    %% the ceiling in *eligible* ones. `unit/2` keeps answering a list, because
+    %% `dump/2` uses it as a list comprehension's generator.
+    N = requested(Inst, Executed),
+    case N > ?MAX_COMPILE_FUNS of
+        true ->
             ok = wasm_code_slots:abort(Token),
-            retry;
-        Unit ->
-            generate_1(Inst, Limits, Mod, Token, Unit)
+            {refused, {limit, {too_many_functions, N}}};
+        false ->
+            case unit(Inst, Executed) of
+                [] ->
+                    ok = wasm_code_slots:abort(Token),
+                    retry;
+                Unit ->
+                    generate_1(Inst, Limits, Mod, Token, Unit)
+            end
     end.
+
+%% `[]` is `wanted/2`'s way of saying every function, so the count is the
+%% module's own.
+requested(Inst, []) ->
+    length([F || F <- tuple_to_list(Inst#inst.funcs), is_record(F, fn)]);
+requested(_Inst, Executed) ->
+    length(Executed).
 
 %% Refused before anything is generated when even `?MAX_SHARDS` units cannot
 %% hold it. `length/1` on the eligible list is the whole cost of finding out,
@@ -648,7 +685,7 @@ generate(Inst, Limits, Mod, Token, Executed) ->
 %% Core Erlang for every function up to the pool's depth has been built.
 generate_1(Inst, Limits, Mod, Token, Unit) ->
     N = length(Unit),
-    case N > ?MAX_SHARDS * map_get(max_funs, wasm_core:limits()) of
+    case N > ?MAX_COMPILE_FUNS of
         true ->
             ok = wasm_code_slots:abort(Token),
             {refused, {limit, {too_many_functions, N}}};
@@ -787,6 +824,15 @@ split(Unit, Limits) ->
                 Parts -> renumber(Parts)
             end
     end.
+
+-doc """
+Every bound the compiled tier applies to a *request*, so a caller can ask rather
+than infer it from a refusal. `wasm_core:limits/0` is the same idea for the
+bounds a single unit has.
+""".
+-spec compile_limits() -> #{atom() => pos_integer()}.
+compile_limits() ->
+    #{max_compile_funs => ?MAX_COMPILE_FUNS, max_shards => ?MAX_SHARDS}.
 
 -doc """
 How many units this many functions are split into.

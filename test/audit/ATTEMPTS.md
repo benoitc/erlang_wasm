@@ -442,3 +442,79 @@ instruction keeps. `run_case/3` flags anything under 0.05 ns, which catches the
 first three failures and not the fourth; the fourth is caught only by reading
 each unsigned row against its signed twin, which is why they are laid out in
 pairs. Four rows already in that file trip the flag.
+
+**Measuring lowering with the sizing instrument still in the window.** The
+experiment that reported lowering at 39% of a QuickJS request had the isolation
+right and the build wrong: the cold arm ran an instrumented `wasm_instance`
+whose `body_of/2` called `erts_debug:size/1` on every lowered body, and the
+pre-lowered arm ran the same call in its setup, where nothing is counted. The
+difference between the arms was the instrument, not the runtime.
+
+`erts_debug:size/1` allocates 172 words for every word of term it walks:
+34,490,334 words a call on a 200,000-word list. On 725,535 words of retained IR
+that is the whole 20.6 M the experiment attributed to lowering. Clean, lowering
+is 764,533 words, 2.7%.
+
+Nothing in the run looked wrong. Both arms produced the right reply, the
+estimator validates to 0.0%, the pre-lowering demonstrably happened, and the
+two numbers were 20 M apart. A subtraction between two arms is only as clean as
+the code they *both* load: a module reached through `-pa` is part of the
+measurement. `bench/paths/pyarms.erl` prints `code:which/1` for `wasm_exec`,
+`wasm_instance` and `wasm_jit` on every arm, and reproduces both the wrong and
+the right numbers by that path alone.
+
+**`erlang:trace_pattern/3` on a module the emulator has not loaded matches
+nothing.** It answers 0 rather than an error, and `trace_info/2` then reads
+`undefined`, so a dispatch count comes back as a missing value instead of a
+failure. `bench/paths/tiered.erl` never hit this because it warms the workload
+first; anything that sets the pattern before the first call has to
+`code:ensure_loaded/1` and match the 1 that `trace_pattern/3` returns.
+
+**A trace pattern set on a module the emulator has not loaded, twice in one
+session.** The second time it produced a whole wrong mechanism. Probing why a
+compilation never happened, `erlang:trace_pattern({wasm_jit, compile, 4}, MS,
+[local])` answered **0** because `wasm_jit` was not yet loaded, so `compile/4`
+never appeared in the trace and the conclusion was "the worker never received
+its work, so the ask dies with the process that raised it". That went into
+`PERF.md` as a finding.
+
+With `code:ensure_loaded/1` first and the pattern's return matched against 1,
+the same arm shows `compile/4` entered and the compiler still running at 45
+seconds. The real answer was that QuickJS takes 165 seconds to compile and the
+watch had been given 60, and that CPython threw `{limit, too_many_functions}`.
+
+Match the 1. `trace_pattern/3` returning 0 and `trace_info/2` reading
+`undefined` are the same shape as a runtime that does nothing, and a trace that
+matches nothing will confirm any story told about it.
+
+**Pointing `compile_whole` at CPython.** With the name pool at 4096 the
+four-unit ceiling is 16,384, so CPython's 11,447 eligible functions are no
+longer refused and the compiler starts on all of them. It reached **33 GB
+resident on a 48 GB box in eleven minutes**, with 66 MB of memory free, 0% CPU
+because it was paging rather than compiling, and nothing published. Killed.
+
+The ceiling bounds the *names* a unit may use. It says nothing about whether
+`compile:forms/2` can build what is under it, and for a 25 MB guest it cannot.
+`docs/compiled-tier.md` already called the option affordable only on
+specification modules; this is the number behind that sentence.
+
+Compiling what ran, which every default does, is 2,333 functions, 1,105 seconds
+and a fraction of the memory.
+
+**A `max_heap_size` fuse on the compiler.** The plan was to cap whatever runs
+`compile:forms/2` so a guest nobody anticipated dies as a killed compiler rather
+than as a paging node. Measured on QuickJS at one unit, the process `wasm_jit`
+spawns peaks at **0.34 GB of heap** while the node reaches 6.19 GB: the work is
+not there. `compile:forms/2` spawns a process of its own by default and runs
+everything in it, and nothing we set reaches that child.
+
+`no_spawn_compiler_process` moves the work into our process, where the cap can
+see it -- 4.16 GB -- and costs **293 seconds against 167**, on the same box at
+the same load. The child was never collecting: it allocates, returns the binary
+and exits, and a dying process frees its heap for free. Living through the
+allocation means paying for the collections.
+
+A fuse that sees 0.34 GB of a 6 GB compile is not a fuse, and 75% of compile
+time is too much to buy one. Neither shipped. What is left open is bounding
+compile memory at all, and the obstacle is not the number: it is that the memory
+is spent in a process only the OTP compiler can configure.

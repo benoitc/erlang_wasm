@@ -52,7 +52,13 @@ every other refusal here: interpret it.
 
 %% Read these as the answer to "how many atoms can this module make", which is
 %% `?MAX_FUNS + ?MAX_FRAMES` and nothing else, ever.
--define(MAX_FUNS, 2048).      % qjs has 1666 compilable functions
+%% 4096, sized against CPython rather than QuickJS. QuickJS is 1666 compilable
+%% functions and fitted 2048 comfortably; CPython 3.12 reaches 2,333 in one
+%% `_start' and 11,447 in the whole module, and the first of those is the number
+%% that matters. A hot set inside one unit is a hot set `wasm_jit:artifact/8'
+%% can put in the on-disk cache, because only a unit that ends the chain is
+%% cacheable; split in two it is recompiled on every node for ever.
+-define(MAX_FUNS, 4096).
 -define(MAX_FRAMES, 512).     % qjs nests 257 deep at worst
 -define(MAX_ARITY, 128).      % qjs would generate 71 at worst; the BEAM allows 255
 
@@ -526,7 +532,15 @@ forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) ->
         Exports = [cerl:c_fname(invoke, 6)],
         {ok, cerl:c_module(cerl:c_atom(Name), Exports, [], [Invoke | Defs])}
     catch
-        throw:{limit, _} = L -> {error, L};
+        %% `error:`, not `throw:`. `fun_name/1` and `frame_name/1` raise with
+        %% `erlang:error/1`, and this clause spelled `throw:` for long enough
+        %% that a module past `?MAX_FUNS` -- CPython reaches 2,333 functions,
+        %% against a then-bound of 2,048 -- escaped as an exception instead of
+        %% arriving as a value. `wasm_jit:compiler_loop/0` swallowed it, so the
+        %% tier refused the guest silently and for ever. The helpers keep their
+        %% contract, which `wasm_core_SUITE` asserts with `?assertError`; the
+        %% boundary is what was wrong.
+        error:{limit, _} = L -> {error, L};
         throw:{unsupported, _} = U -> {error, U}
     end.
 
@@ -1049,10 +1063,14 @@ instr({call, F}, Rest, #g{unit = Unit, sigs = Sigs} = G0, Exit) ->
                            seq(Rest, G3#g{mut = M1,
                                           stack = lists:reverse(Rs) ++ G1#g.stack},
                                Exit)),
-    %% The depth check is the caller's, so a runaway recursion raises what
+    %% The depth check is this frame's own, so a runaway recursion raises what
     %% `enter/5' raises instead of growing the Erlang stack until the process
     %% runs out of heap.
-    cerl:c_seq(call_op(check_depth, [G0#g.inst, G0#g.d]),
+    %%
+    %% `G0#g.d' is the *caller's* depth -- `invoke_fn/4' takes it that way -- so
+    %% this function's own is `deeper(G0)', and checking `G0#g.d' allowed one
+    %% frame more than the interpreter: 1000 against 999 at `max_depth => 1000'.
+    cerl:c_seq(call_op(check_depth, [G0#g.inst, deeper(G0)]),
                cerl:c_case(Call, [Clause]));
 
 instr({call_indirect, TypeIdx, TableIdx}, Rest,
@@ -1077,7 +1095,7 @@ instr({call_indirect, TypeIdx, TableIdx}, Rest,
                            seq(Rest, G4#g{mut = M1,
                                           stack = lists:reverse(Rs) ++ G2#g.stack},
                                Exit)),
-    cerl:c_seq(call_op(check_depth, [G0#g.inst, G0#g.d]),
+    cerl:c_seq(call_op(check_depth, [G0#g.inst, deeper(G0)]),
                cerl:c_case(Call, [Clause]));
 
 %%% ---------------------------------------------------------------- numeric ---

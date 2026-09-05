@@ -54,6 +54,8 @@ moved, because even with all three a refusal still interprets.
 """.
 
 -export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
+-export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
+-export([compile_limits/0]).
 -export([reentered/0]).
 -export([compiler_loop/0]).
 -export([dump/1, dump/2]).
@@ -63,20 +65,38 @@ moved, because even with all three a refusal still interprets.
 
 %% Bumped whenever the shape of generated code changes, so that code compiled by
 %% an older version of this runtime is never entered by a newer one.
--define(ABI, 3).
+%%
+%% 4: `check_depth/2` is passed the calling frame's own depth rather than its
+%% caller's. An artifact built by 3 checks one level too shallow, which is
+%% exactly the divergence `every_tier_bounds_recursion_at_the_same_depth`
+%% exists to catch -- and a cached one would reintroduce it silently.
+-define(ABI, 4).
 
 -define(DEFAULT_AFTER, 32).
 
 %% Splitting a compile across units. The unit is what `compile:forms/2` is
 %% handed, and that call is 99.3% of the cost, so several of them run at once
-%% where one cannot. Sized in words of lowered IR because generated code is
-%% linear in that: 11 to 19 bytes of BEAM per word, near enough constant.
+%% where one cannot.
 %%
-%% The floor exists because a split is not free -- it takes a slot per unit out
-%% of a pool of sixteen that the whole node shares -- and a module that compiles
-%% in a second is not the problem. QuickJS's hot set is about 900,000 words.
--define(SHARD_WORDS, 150000).
+%% A split is not free -- it takes a slot per unit out of a pool of sixteen the
+%% whole node shares, and a call between units is a crossing rather than a call
+%% -- so it happens only when one unit will not fit. See `shard_count/2`.
 -define(MAX_SHARDS, 4).
+
+%% How much work the runtime will accept in one request, which is a different
+%% question from how many names a unit may draw. It was `?MAX_SHARDS *
+%% max_funs`, so raising the name pool from 2048 to 4096 raised this from 8,192
+%% to 16,384 and admitted a CPython whole-module compile measured at 33 GB
+%% resident on a 48 GB box, paging and publishing nothing. A separate constant
+%% because the two answer different questions and moving one should not move the
+%% other.
+%%
+%% Counted over the *requested* set, before anything is lowered. Words would
+%% predict the cost better -- 11 to 17 KB of allocated peak per IR word on both
+%% guests -- but any value is loose or wrong until the selector makes requests
+%% small: CPython's accepted hot set is 3.7 M words and peaked at 59.89 GB, so a
+%% ceiling admitting today's ordinary path would protect nothing.
+-define(MAX_COMPILE_FUNS, 8192).
 %% Set by `entry_1/3` when this call found the module hot and unbuilt, read by
 %% `after_call/2` once the call has finished. The invocation's own lifetime is
 %% exactly the right one for it, which is the same argument the checkpoint key
@@ -88,6 +108,18 @@ moved, because even with all three a refusal still interprets.
 -define(IX_ENTERED, 2).       % invocations that entered generated code
 -define(IX_REENTERED, 3).     % calls the interpreter made into generated code
 -define(IX_CACHED, 4).        % compilations answered from the on-disk cache
+-define(IX_REFUSED, 5).       % compiles this runtime declined to attempt
+-define(IX_FAILED, 6).        % compiles the OTP compiler rejected
+-define(IX_CRASHED, 7).       % compiles that died in an unexpected way
+%% Not a count. A sequence for `wasm_code_diag' keys, so two compilers can each
+%% record without a read-modify-write, and deliberately *not* cleared by
+%% `reset_counts/0': a row that outlived a reset must never collide with a key
+%% handed out afterwards.
+-define(IX_SEQ, 8).
+
+%% Reasons are normalised to a bounded shape before they are stored, so the
+%% ring's memory is fixed whatever a compiler hands back. The ring itself lives
+%% in `wasm_code_slots`, which owns the tier's tables.
 
 %%% ------------------------------------------------------------------ api ---
 
@@ -101,7 +133,16 @@ does not use this pays one map lookup.
 -spec entry(#inst{}, map(), fun()) -> fun().
 entry(Inst, Limits, Entry) ->
     case maps:get(compile, Limits, false) andalso
-         maps:get(fuel, Limits, infinity) =:= infinity of
+         maps:get(fuel, Limits, infinity) =:= infinity andalso
+         %% A per-call `max_depth' does not reach generated code, which reads
+         %% its ceiling from the instance, so an invocation that overrides it
+         %% interprets rather than silently getting the instance's. `wasm.erl'
+         %% merges the call's options over the instance's before calling this,
+         %% so an override shows as a difference between the two maps. The
+         %% alternative -- reading the budget inside `check_depth/2' -- puts a
+         %% process dictionary lookup on the compiled call path.
+         maps:get(max_depth, Limits, undefined) =:=
+             maps:get(max_depth, Inst#inst.limits, undefined) of
         false -> Entry;
         true -> entry_1(Inst, Limits, Entry)
     end.
@@ -189,7 +230,9 @@ maybe_adopt(Inst, Limits, Entry) ->
                 {ok, _Mod} ->
                     case compile(Inst, Limits, [], adopt) of
                         {ok, Slot} -> compiled(Inst, Slot, Entry);
-                        error -> Entry
+                        %% An adoption never refuses and never fails: there is
+                        %% nothing to generate. Anything but a slot is `retry`.
+                        _ -> Entry
                     end;
                 %% Nothing to adopt. Ask once the call has finished and this
                 %% process knows which functions it needed.
@@ -226,7 +269,27 @@ counts() ->
     #{compiled => atomics:get(R, ?IX_COMPILED),
       entered => atomics:get(R, ?IX_ENTERED),
       reentered => atomics:get(R, ?IX_REENTERED),
-      cached => atomics:get(R, ?IX_CACHED)}.
+      cached => atomics:get(R, ?IX_CACHED),
+      refused => atomics:get(R, ?IX_REFUSED),
+      failed => atomics:get(R, ?IX_FAILED),
+      crashed => atomics:get(R, ?IX_CRASHED)}.
+
+-doc """
+Why the last compiles that did not happen did not happen.
+
+`counts/0` says how many were refused or failed; this says what they were.
+Oldest first, a bounded number of them, and every reason normalised to a
+bounded shape: a `{compile, _}` from the OTP compiler carries its whole
+diagnostic list and an exit reason carries a stacktrace, and neither belongs in
+a table that is read back for diagnosis.
+
+`crashed` compiles are counted and not listed, for the same reason.
+
+Answers `[]` rather than raising when the table is not there, which is what a
+node that loaded these modules without restarting the application has.
+""".
+-spec diagnostics() -> [{refused | failed, term(), term()}].
+diagnostics() -> wasm_code_slots:diagnostics().
 
 -doc "For tests, which need to count what one run did rather than what a node did.".
 -spec reset_counts() -> ok.
@@ -235,7 +298,12 @@ reset_counts() ->
     atomics:put(R, ?IX_COMPILED, 0),
     atomics:put(R, ?IX_ENTERED, 0),
     atomics:put(R, ?IX_REENTERED, 0),
-    atomics:put(R, ?IX_CACHED, 0).
+    atomics:put(R, ?IX_CACHED, 0),
+    atomics:put(R, ?IX_REFUSED, 0),
+    atomics:put(R, ?IX_FAILED, 0),
+    atomics:put(R, ?IX_CRASHED, 0),
+    %% `?IX_SEQ' is left alone on purpose: see its definition.
+    wasm_code_slots:clear_diagnostics().
 
 %%% -------------------------------------------------------------- entering ---
 
@@ -346,7 +414,7 @@ await_1(Inst, Deadline) ->
                 {ok, _Mod} ->
                     case compile(Inst, #{}, [], adopt) of
                         {ok, _Slot} -> ok;
-                        error -> retry(Inst, Deadline)
+                        _ -> retry(Inst, Deadline)
                     end;
                 error -> retry(Inst, Deadline)
             end;
@@ -383,13 +451,85 @@ ask(Inst, Limits) ->
     case maps:get(compile_sync, Limits, false) of
         %% Synchronous compilation, for callers that would rather wait than
         %% measure something half compiled. The conformance suite is one.
+        %%
+        %% It does not consult `ask_compile/1`, so a synchronous caller retries
+        %% on every call rather than once per retry interval. That is what
+        %% asking to compile synchronously means, and it is why the pacing in
+        %% `record/3` is described as covering the asynchronous path.
         true ->
-            _ = compile(Inst, Limits, wanted(Limits, Inst), generate),
+            record(Inst, Limits, compile(Inst, Limits, wanted(Limits, Inst),
+                                         generate)),
             ok;
         false ->
             _ = wasm_instance:ask_compile(Inst) andalso spawn_compile(Inst, Limits),
             ok
     end.
+
+%% Every outcome of a compile is counted here and nowhere else, so nothing can
+%% be counted twice.
+%%
+%% `compiled` is deliberately not among them: it counts *functions*, is bumped
+%% where they are published, and `{ok, Slot}` comes back from adopting somebody
+%% else's module as readily as from generating one.
+%%
+%% Only a `retry` gives the ask back. A refusal leaves the timestamp standing,
+%% because `release_ask/1` sets it to zero and the next hot call would then ask
+%% again immediately; left alone it expires after the retry interval, which is
+%% the pacing a refusal wants and already exists.
+%%
+%% `compile_force` raises *after* the outcome is recorded and outside any
+%% `try`, so a forced failure is one record and not a record plus a crash.
+record(Inst, Limits, Outcome) ->
+    case Outcome of
+        {ok, _Slot} -> ok;
+        retry -> wasm_instance:release_ask(Inst);
+        {refused, Reason} -> note(Inst, refused, ?IX_REFUSED, Reason);
+        {failed, Reason} ->
+            note(Inst, failed, ?IX_FAILED, Reason),
+            wasm_instance:release_ask(Inst)
+    end,
+    case Outcome of
+        {ok, _} -> ok;
+        retry -> ok;
+        {_, Why} -> forced(Limits) andalso erlang:error({compile_failed, Why}),
+                    ok
+    end,
+    Outcome.
+
+note(Inst, Outcome, Index, Reason) ->
+    bump(Index, 1),
+    wasm_code_slots:record_diagnostic(next_seq(), Outcome, key(Inst),
+                                      normalize_reason(Reason)),
+    ok.
+
+next_seq() -> atomics:add_get(counters(), ?IX_SEQ, 1).
+
+-doc """
+The bounded form of a compile failure's reason, as `diagnostics/0` keeps it.
+
+Bounded by structure, not by formatting. `io_lib:format("~P", [R, 8])` bounds
+*depth*: a flat million-character list at depth 8 still formats to a million
+bytes, and truncating afterwards has already built the whole thing. So the two
+shapes that carry unbounded data lose it here -- the OTP compiler's diagnostics
+become their count, an exit reason becomes its tag -- and anything unrecognised
+becomes an atom and nothing else.
+
+Exported because it is the guarantee `diagnostics/0` rests on, and a guarantee
+that cannot be checked directly is not one.
+""".
+-spec normalize_reason(term()) -> term().
+normalize_reason({limit, _} = R) -> R;
+normalize_reason({unsupported, _} = R) -> R;
+normalize_reason({compile, Errors}) when is_list(Errors) ->
+    {compile, length(Errors)};
+normalize_reason({compiler_died, Why}) when is_tuple(Why), tuple_size(Why) > 0 ->
+    case element(1, Why) of
+        Tag when is_atom(Tag) -> {compiler_died, Tag};
+        _ -> {compiler_died, other}
+    end;
+normalize_reason({compiler_died, Why}) when is_atom(Why) ->
+    {compiler_died, Why};
+normalize_reason(_) -> other.
 
 %% Which functions to compile: the ones that ran, or all of them.
 %%
@@ -402,15 +542,20 @@ wanted(Limits, Inst) ->
     end.
 
 spawn_compile(Inst, Limits) ->
-    %% Read here rather than in the compiler, because the record of what has
-    %% run lives in *this* process's dictionary and the compiler's is empty.
-    Executed = wasm_instance:executed(Inst),
+    %% Read here rather than in the compiler, because the record of what has run
+    %% lives in *this* process's dictionary and the compiler's is empty.
+    %%
+    %% Through `wanted/2`, which is also where `compile_whole` is honoured.
+    %% Reading `wasm_instance:executed/1` directly, as this did, made that
+    %% option work only under `compile_sync`: everything asked for in the
+    %% background compiled what had run, whatever the caller said.
+    Wanted = wanted(Limits, Inst),
     case start_compiler() of
         {ok, Pid} ->
             %% Started empty and then told what to do: passing the instance as a
             %% start argument would copy it into the supervisor as well, and a
             %% real instance is 35 MB.
-            Pid ! {compile, Inst, Limits, Executed},
+            Pid ! {compile, Inst, Limits, Wanted},
             true;
         %% Every slot is already being filled, so there is nothing for a
         %% seventeenth compiler to publish into. Give the ask back and let the
@@ -449,22 +594,38 @@ The wait has a deadline for the same reason: a child whose sender died between
 compiler_loop() ->
     receive
         {compile, Inst, Limits, Executed} ->
-            try compile(Inst, Limits, Executed, generate) of
-                {ok, _Slot} -> ok;
-                %% No slot free, or another process got there first. Give the
-                %% ask back so this instance tries again when it next goes hot,
-                %% rather than waiting out the retry interval.
-                error -> wasm_instance:release_ask(Inst)
-            catch
-                %% A compile that fails must not leave the instance thinking it
-                %% has one in flight. This does not cover being killed, which
-                %% is what the ask expiring is for.
-                _:_ -> wasm_instance:release_ask(Inst)
+            %% The `try` covers the compile and nothing else. `record/3` runs
+            %% after it, so `compile_force`'s deliberate exception is not caught
+            %% here and counted a second time as a crash.
+            Outcome =
+                try compile(Inst, Limits, Executed, generate)
+                catch
+                    %% A compile that fails must not leave the instance thinking
+                    %% it has one in flight. This does not cover being killed,
+                    %% which is what the ask expiring is for.
+                    C:R ->
+                        bump(?IX_CRASHED, 1),
+                        wasm_instance:release_ask(Inst),
+                        {crashed, {C, R}}
+                end,
+            case Outcome of
+                {crashed, _} -> ok;
+                _ -> _ = record(Inst, Limits, Outcome), ok
             end
     after 30000 ->
         ok
     end.
 
+%% Every outcome is a value, and there are four of them:
+%%
+%%     {ok, Slot} | retry | {refused, Reason} | {failed, Reason}
+%%
+%% `retry` is nobody's fault -- no slot free, another process got there first,
+%% nothing eligible to compile -- and is retried at the next hot call. A refusal
+%% is this runtime declining, and is paced by the ask's own retry interval. A
+%% failure is the OTP compiler saying no. Nothing here raises for any of them,
+%% which is what let a refusal disappear before: the only exception the caller
+%% now sees is one nobody expected.
 compile(Inst, Limits, Executed, Mode) ->
     Key = key(Inst),
     case wasm_code_slots:claim_loading(Key, {instance, Inst#inst.id}, self()) of
@@ -480,8 +641,8 @@ compile(Inst, Limits, Executed, Mode) ->
             adopt(Inst, Mod);
         %% Somebody else is compiling this module. Interpreting is always
         %% correct, and waiting on another process's compilation is not.
-        loading -> error;
-        {error, no_slot} -> error;
+        loading -> retry;
+        {error, no_slot} -> retry;
         %% Nothing resident and a slot is free. In `adopt` mode that is not what
         %% was wanted: give the slot straight back rather than generate on a
         %% caller's process, which is the whole thing this asynchrony exists to
@@ -489,16 +650,51 @@ compile(Inst, Limits, Executed, Mode) ->
         %% it race-free.
         {compile, _Mod, Token} when Mode =:= adopt ->
             ok = wasm_code_slots:abort(Token),
-            error;
+            retry;
         {compile, Mod, Token} -> generate(Inst, Limits, Mod, Token, Executed)
     end.
 
 generate(Inst, Limits, Mod, Token, Executed) ->
-    case unit(Inst, Executed) of
-        [] ->
+    %% Counted here, over what was *asked for*, because `unit/2` lowers every
+    %% selected function through `wasm_instance:compiler_ir/2` before
+    %% `can_compile/2` filters it. A refused request would otherwise have built
+    %% and retained its whole IR first, and a module of many unsupported
+    %% functions could lower an arbitrary number of them while never reaching
+    %% the ceiling in *eligible* ones. `unit/2` keeps answering a list, because
+    %% `dump/2` uses it as a list comprehension's generator.
+    N = requested(Inst, Executed),
+    case N > ?MAX_COMPILE_FUNS of
+        true ->
             ok = wasm_code_slots:abort(Token),
-            error;
-        Unit ->
+            {refused, {limit, {too_many_functions, N}}};
+        false ->
+            case unit(Inst, Executed) of
+                [] ->
+                    ok = wasm_code_slots:abort(Token),
+                    retry;
+                Unit ->
+                    generate_1(Inst, Limits, Mod, Token, Unit)
+            end
+    end.
+
+%% `[]` is `wanted/2`'s way of saying every function, so the count is the
+%% module's own.
+requested(Inst, []) ->
+    length([F || F <- tuple_to_list(Inst#inst.funcs), is_record(F, fn)]);
+requested(_Inst, Executed) ->
+    length(Executed).
+
+%% Refused before anything is generated when even `?MAX_SHARDS` units cannot
+%% hold it. `length/1` on the eligible list is the whole cost of finding out,
+%% and the alternative is discovering it inside `wasm_core:fun_name/1` after the
+%% Core Erlang for every function up to the pool's depth has been built.
+generate_1(Inst, Limits, Mod, Token, Unit) ->
+    N = length(Unit),
+    case N > ?MAX_COMPILE_FUNS of
+        true ->
+            ok = wasm_code_slots:abort(Token),
+            {refused, {limit, {too_many_functions, N}}};
+        false ->
             %% `full` unless the caller asks for `baseline`, and this
             %% default has now moved three times. It is worth reading why,
             %% because the reason it moved back is not the reason it moved.
@@ -525,8 +721,15 @@ generate(Inst, Limits, Mod, Token, Executed) ->
             Mode = maps:get(compile_quality, Limits, full),
             {_Name, Gen} = Token,
             Stamp = stamp(Inst, Gen),
-            build(Inst, Limits, Mode, Stamp, Unit, split(Unit, Limits),
-                  [{Mod, Token}])
+            case split(Unit, Limits) of
+                %% Unreachable while `shard_count/2` asks for enough bins, and
+                %% still an outcome rather than a crash.
+                full ->
+                    ok = wasm_code_slots:abort(Token),
+                    {refused, {limit, {too_many_functions, N}}};
+                Parts ->
+                    build(Inst, Limits, Mode, Stamp, Unit, Parts, [{Mod, Token}])
+            end
     end.
 
 %% One unit or several, and the difference is only how many slots are held.
@@ -537,7 +740,7 @@ generate(Inst, Limits, Mod, Token, Executed) ->
 %% used sooner, because the functions worth compiling are the ones expensive to
 %% compile: sixteen of QuickJS's hot functions are already 30 seconds of the 54.
 %% See `test/audit/PERF.md`.
-build(Inst, Limits, Mode, Stamp, Unit, [_], [{Mod, Token}]) ->
+build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}]) ->
     case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod, #{}) of
         {ok, Bin} ->
             {module, Mod} = code:load_binary(Mod, "wasm_generated", Bin),
@@ -546,8 +749,7 @@ build(Inst, Limits, Mode, Stamp, Unit, [_], [{Mod, Token}]) ->
             adopt(Inst, Mod);
         {error, Reason} ->
             ok = wasm_code_slots:abort(Token),
-            forced(Limits) andalso erlang:error({compile_failed, Reason}),
-            error
+            outcome(Reason)
     end;
 build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First]) ->
     %% Every slot claimed before anything is generated, because each unit names
@@ -557,7 +759,7 @@ build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First]) ->
     case claim_rest(Inst, length(Parts) - 1, [First]) of
         {error, Held} ->
             _ = [wasm_code_slots:abort(T) || {_, T} <- Held],
-            error;
+            retry;
         Tokens ->
             Mods = [M || {M, _} <- Tokens],
             Head = hd(Mods),
@@ -576,15 +778,21 @@ build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First]) ->
             publish_all(Inst, Limits, Tokens, Parts, Bins)
     end.
 
+%% Which of the two failure outcomes a reason is. A refusal is this runtime
+%% declining to compile something; a failure is the OTP compiler rejecting what
+%% it was given, or a compiler process dying under it.
+outcome({limit, _} = R) -> {refused, R};
+outcome({unsupported, _} = R) -> {refused, R};
+outcome(R) -> {failed, R}.
+
 %% All or nothing. A chain with a hole in it would answer `not_compiled` for
 %% every function past the hole, which is correct but is most of the work thrown
 %% away, and the slots would be held for it.
-publish_all(Inst, Limits, Tokens, Parts, Bins) ->
+publish_all(Inst, _Limits, Tokens, Parts, Bins) ->
     case [R || {error, _} = R <- Bins] of
         [{error, Reason} | _] ->
             _ = [wasm_code_slots:abort(T) || {_, T} <- Tokens],
-            forced(Limits) andalso erlang:error({compile_failed, Reason}),
-            error;
+            outcome(Reason);
         [] ->
             %% Every module loaded before any of them is published, and the two
             %% must not be interleaved.
@@ -611,55 +819,105 @@ publish_all(Inst, Limits, Tokens, Parts, Bins) ->
 %% the critical path here is one function whatever the split, so it is close to
 %% the best available.
 split(Unit, Limits) ->
-    Sized = [{erts_debug:flat_size(IR), U} || {_, _, _, IR} = U <- Unit],
-    case shards(lists:sum([W || {W, _} <- Sized]), Limits) of
+    case shard_count(length(Unit), Limits) of
         1 -> [Unit];
-        N -> renumber(bins(lists:reverse(lists:sort(Sized)), empty_bins(N)))
+        N ->
+            Sized = [{erts_debug:flat_size(IR), U} || {_, _, _, IR} = U <- Unit],
+            Cap = map_get(max_funs, wasm_core:limits()),
+            case bins(lists:reverse(lists:sort(Sized)), empty_bins(N), Cap) of
+                full -> full;
+                Parts -> renumber(Parts)
+            end
     end.
 
-%% `auto` is one, which is to say splitting is off unless you ask for it.
-%%
-%% It works, and what it buys and costs are both measured. QuickJS's
-%% 223-function hot set, background compiler, at the `full` quality that is now
-%% the default:
-%%
-%% | | compile | warm `_start` |
-%% | --- | ---: | ---: |
-%% | one unit | 129.3 s | 76.5 ms |
-%% | four units | **33.2 s** | **93.3 ms** |
-%%
-%% **3.9x faster to compile and about 22% slower to run.** The second half is a
-%% call between units going through `wasm_exec:shard_call/8` where a call within
-%% one is a local `apply`; it was 1.5x until those calls stopped going out
-%% through the interpreter and back in through the head of the chain.
-%%
-%% The default is one unit anyway, because the trade depends on something this
-%% module cannot know: ninety-six seconds saved against seventeen milliseconds a
-%% run is about five thousand six hundred invocations to break even. A worker
-%% that serves a module for a day should not split; something that compiles a
-%% module to run it a few times should. So it is `compile_shards`, and it is the
-%% embedder's call.
-shards(Words, Limits) ->
+-doc """
+Every bound the compiled tier applies to a *request*, so a caller can ask rather
+than infer it from a refusal. `wasm_core:limits/0` is the same idea for the
+bounds a single unit has.
+""".
+-spec compile_limits() -> #{atom() => pos_integer()}.
+compile_limits() ->
+    #{max_compile_funs => ?MAX_COMPILE_FUNS, max_shards => ?MAX_SHARDS}.
+
+-doc """
+How many units this many functions are split into.
+
+Pure, and exported so the policy can be asserted without running a compile.
+
+`wasm_core` draws every name a unit can use from a pre-generated pool, because
+nothing a guest supplies may become an atom, and that pool is `max_funs` deep.
+A unit past it is refused, so the split exists to keep each unit under it and
+for no other reason: a guest that fits in one unit stays in one unit and its
+generated code is unchanged.
+
+The answer is the number of bins *requested*. `bins/3` drops empty ones, so
+asking for four on a one-function unit gives one actual part; `shards/1` is
+what reports the actual count.
+""".
+-spec shard_count(non_neg_integer(), map()) -> pos_integer().
+shard_count(NFuns, Limits) ->
     case maps:get(compile_shards, Limits, auto) of
-        auto -> auto_shards(Words);
+        auto -> auto_shards(NFuns);
         N when is_integer(N), N >= 1 -> erlang:min(?MAX_SHARDS, N)
     end.
 
-auto_shards(_Words) -> 1.
+auto_shards(NFuns) ->
+    Max = map_get(max_funs, wasm_core:limits()),
+    case NFuns =< Max of
+        true -> 1;
+        false -> erlang:min(?MAX_SHARDS, (NFuns + Max - 1) div Max)
+    end.
 
-empty_bins(N) -> [{0, []} || _ <- lists:seq(1, N)].
+empty_bins(N) -> [{0, 0, []} || _ <- lists:seq(1, N)].
 
-bins([], Bins) ->
-    [lists:reverse(Us) || {_, Us} <- Bins, Us =/= []];
-bins([{W, U} | Rest], Bins) ->
-    [{Load, Us} | Others] = lists:sort(Bins),
-    bins(Rest, [{Load + W, [U | Us]} | Others]).
+%% The lightest bin *that can still take a function*, not the lightest bin.
+%%
+%% Balancing by words alone is right for wall clock and wrong for the bound:
+%% one QuickJS function is 98,191 words, so a word-balanced split will happily
+%% put fifty thousand small ones in the bin beside it and refuse a module that
+%% fits. The count travels in the bin so this stays one comparison rather than a
+%% `length/1` per placement.
+%%
+%% `full` when no bin can accept, which the caller turns into a refusal. It is
+%% unreachable while `shard_count/2` asks for enough bins, and it is here
+%% because a policy that computes a number the binning is free to ignore is not
+%% a bound.
+bins([], Bins, _Cap) ->
+    [lists:reverse(Us) || {_, _, Us} <- Bins, Us =/= []];
+bins([{W, U} | Rest], Bins, Cap) ->
+    case lists:splitwith(fun({_, N, _}) -> N >= Cap end, lists:sort(Bins)) of
+        {_Full, []} -> full;
+        {Full, [{Load, N, Us} | Others]} ->
+            bins(Rest, Full ++ [{Load + W, N + 1, [U | Us]} | Others], Cap)
+    end.
 
 %% `wasm_core` names functions by position in the unit, so each unit needs a
 %% dense range of its own.
 renumber(Parts) ->
     [[{Pos, Idx, F, IR} || {Pos, {_, Idx, F, IR}} <- lists:enumerate(0, P)]
      || P <- Parts].
+
+-doc """
+How many units this instance's module is actually resident in.
+
+Zero when nothing is compiled, and otherwise the length of the contiguous chain
+starting at shard one. `shard_count/2` says how many units were *asked* for;
+this says how many there are, which is what an acceptance run has to assert
+rather than infer from a wall time.
+""".
+-spec shards(#inst{}) -> non_neg_integer().
+shards(Inst) ->
+    case wasm_code_slots:lookup(key(Inst)) of
+        {ok, _} -> 1 + rest_shards(Inst, 2, 0);
+        _ -> 0
+    end.
+
+rest_shards(_Inst, N, Acc) when N > ?MAX_SHARDS -> Acc;
+rest_shards(Inst, N, Acc) ->
+    case wasm_code_slots:lookup(shard_key(Inst, N)) of
+        {ok, _} -> rest_shards(Inst, N + 1, Acc + 1);
+        _ -> Acc
+    end.
 
 %% Shard one keeps the module's own key, so `maybe_adopt/3` finds a compiled
 %% module by asking the same question it always did.
@@ -908,13 +1166,13 @@ counters() ->
     case persistent_term:get(?PT_COUNTS, undefined) of
         undefined -> fresh_counters();
         R ->
-            case maps:get(size, atomics:info(R)) >= ?IX_CACHED of
+            case maps:get(size, atomics:info(R)) >= ?IX_SEQ of
                 true -> R;
                 false -> fresh_counters()
             end
     end.
 
 fresh_counters() ->
-    R = atomics:new(?IX_CACHED, [{signed, false}]),
+    R = atomics:new(?IX_SEQ, [{signed, false}]),
     persistent_term:put(?PT_COUNTS, R),
     R.

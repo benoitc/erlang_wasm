@@ -4309,3 +4309,113 @@ the compile time again. **Neither ships.** The ceiling lands, and bounding what 
 compile may spend stays open with the reason recorded: it is not a matter of
 picking a number, it is that the memory is spent in a process nobody but the OTP
 compiler can pass flags to.
+
+### The two demo shapes: one the tier can see, one it cannot
+
+`wasm_demo` is the worked example, and running it against this branch answers
+two separate questions: whether the depth fix costs the interpreter anything,
+and what the tier is worth to the shape a worker runtime actually wants.
+`origin/main` (66bee0a) against the branch head (3aee434), interleaved in both
+orderings, load average 1.7 to 6.8 throughout.
+
+**The demo as written is unchanged, and it had to be.** One blocking `_start`
+per worker, requests through a mailbox, both pinned guests:
+
+| | before | after |
+| --- | ---: | ---: |
+| js, first request | 282-583 ms | 279-318 ms |
+| js, steady, 6 runs x 199 requests (min / med) | 1.175 / 11.36 ms | 1.153 / 11.39 ms |
+| py, first request | 32.58-33.46 s | 32.48-32.78 s |
+| py, steady, 3 runs x 29 requests (min / med) | 6.12 / 9.23 ms | 5.80 / 7.82 ms |
+
+The sign flips with ordering on every row. None of this branch is on that path:
+`do_call/4`'s new depth check is in the `#st{code = {Mod, Gen}}` clause and an
+uncompiled instance takes `#st{code = undefined}`; WASI imports are charged by
+`charge_host_call/1` and never reach `with_depth/2`; and the new
+`multiple_supertypes` check fires only on a declared supertype, which neither
+guest has. The demo's own four entry points answer identically on hex 0.2.0,
+`origin/main` and this branch.
+
+**And that shape cannot use the tier at all.** With
+`compile => true, compile_after => 1` on the instance, both arms answer
+`compiled => 0, entered => 0`. `after_call/2` asks at the *end* of an outermost
+invocation, because that is when `wasm_instance:executed/1` is full, and the
+demo's `_start` is one invocation that blocks in `fd_read` for the worker's
+whole life. No option changes it: the worker is structurally outside the tier,
+and the fix is a different shape rather than a different setting.
+
+**A fresh instance per request is the shape that reaches it.** Same module, one
+JSON line in and one out, `profile => script`:
+
+| QuickJS, `qjs-wasi.wasm` | before | after |
+| --- | ---: | ---: |
+| interpreted | 98 ms | 98 ms |
+| interpreted while the compile runs | ~147 ms | ~147 ms |
+| compiled, tail 200 (min / med, 3 pairs) | 57.58 / 60.12 ms | 57.86 / 60.30 ms |
+| functions compiled / entries | 410 / 459-471 | 410 / 461-469 |
+| the tier lands at request | 420-432 | 422-430 |
+
+Identical, which is the row that had to be checked: `check_depth(deeper(G0))` is
+on the compiled call path. The switchover costs nothing visible either. The peak
+across it is 159 to 176 ms, against a 98 ms floor and a 147 ms
+compile-in-progress rate.
+
+CPython is the same shape and a different order of magnitude. The compile is
+long enough that paying for it in 16-second requests wastes an hour, so it is
+timed directly through `wasm_jit:await/2` instead:
+
+| CPython 3.12, `python.wasm` | before | after |
+| --- | ---: | ---: |
+| interpreted, 3 pairs, both orderings (min / med) | 15.15-15.83 / 15.69-16.25 s | 15.53-15.73 / 15.69-15.81 s |
+| the request that asks | 28.4-43.1 s | 28.2-44.0 s |
+| compile, one unit, `baseline` | did not complete | **567 s** |
+| artifact | -- | 72.5 MB |
+| functions compiled | -- | 2,332 |
+| compiled, per request, n=6 (min / med / max) | -- | **6.19 / 6.22 / 6.51 s** |
+
+**2.5x, and it costs 567 seconds of a core to get.** The same trade QuickJS
+makes, an order of magnitude further along: a guest that spends 15.7 seconds
+interpreting spends 6.2 compiled, and 91 requests go by before the compile has
+paid for itself.
+
+**And the compiler is not free while it runs.** A CPython request measured 15.7
+seconds with nothing else happening and **67.5 seconds** with the compile in
+flight, at 198% CPU and 4.59 GB resident. On a node serving requests, the
+compile is not background in any sense the latency budget recognises.
+
+**The `before` compile did not complete, twice, and nothing on that arm says
+why.** Once it died after roughly an hour with the emulator back to 0.13 GB and
+no counter moved; once no compiler process appeared under `wasm_jit_sup` at all
+for a full hour of waiting. **No causal claim is made**: `before` ran first on
+both attempts, so ordering is confounded, and the runs were stopped rather than
+repeated in the other order. What the two attempts do show is the diagnostic
+gap. `counts/0` on the parent is `#{compiled, entered, cached}` and there is no
+`diagnostics/0`, so a compile that dies or is never spawned is indistinguishable
+from one still running. The `failed`, `crashed` and `refused` counters and the
+diagnostics ring this branch adds are exactly the instrument that was missing,
+and finding that out took two hours of watching `compiled => 0`.
+
+**`wasm:compile/1` cannot reach the on-disk cache, and nothing says so.** It
+gives the module a fresh `reference()` identity, and both `wasm_jit:key/1` and
+`wasm_code_cache:key/6` key on that identity, so `key/6` answers `undefined` and
+`artifact/8` never stores. Verified directly: 410 functions compiled, cache
+directory empty. Through `wasm:load/1`, which passes the content hash, the same
+run writes the artifact and the next start adopts it:
+
+| QuickJS, per request | ms |
+| --- | ---: |
+| interpreted, `wasm:load/1` | 151 |
+| compiled, `wasm:load/1`, cold | 17 |
+| compiled, `wasm:load/1`, warm cache (`cached => 1`) | **17** |
+
+Warm is the point rather than the number: it is 17 ms from the first request
+instead of from request 425, and the 63 seconds of a core are not paid again.
+Interpreted, `wasm:load/1` is *slower* than `wasm:compile/1` by half, 151
+against 98 ms and reproducible across three runs each. That is unexplained, is
+the same on both arms, and is the measurement to chase if the interpreted path
+of a cached module ever matters.
+
+**Found while measuring, and not fixed here.** `wasm_jit:await/2` is spec'd
+`-spec await(#inst{}, timeout())` and computes
+`erlang:monotonic_time(millisecond) + Timeout`, so the `infinity` its own spec
+admits is a `badarith`. Identical on `origin/main`; it predates this branch.

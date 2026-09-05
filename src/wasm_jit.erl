@@ -112,7 +112,16 @@ does not use this pays one map lookup.
 -spec entry(#inst{}, map(), fun()) -> fun().
 entry(Inst, Limits, Entry) ->
     case maps:get(compile, Limits, false) andalso
-         maps:get(fuel, Limits, infinity) =:= infinity of
+         maps:get(fuel, Limits, infinity) =:= infinity andalso
+         %% A per-call `max_depth' does not reach generated code, which reads
+         %% its ceiling from the instance, so an invocation that overrides it
+         %% interprets rather than silently getting the instance's. `wasm.erl'
+         %% merges the call's options over the instance's before calling this,
+         %% so an override shows as a difference between the two maps. The
+         %% alternative -- reading the budget inside `check_depth/2' -- puts a
+         %% process dictionary lookup on the compiled call path.
+         maps:get(max_depth, Limits, undefined) =:=
+             maps:get(max_depth, Inst#inst.limits, undefined) of
         false -> Entry;
         true -> entry_1(Inst, Limits, Entry)
     end.

@@ -4222,3 +4222,57 @@ ran, which is what every default does, is 2,333 functions and 1,105 seconds in
 Recorded because the alternative is somebody discovering it on a production
 node. The ceiling is a bound on names, not a promise that everything under it
 compiles.
+
+### `max_depth` did not survive a tier boundary
+
+Two mutually recursive functions, `max_depth => 1000`, one program, three ways of
+running it:
+
+| arm | deepest recursion that returns | counters |
+| --- | ---: | --- |
+| both interpreted | 999 | -- |
+| both compiled | 1,000 | `compiled 2, reentered 0` |
+| **one compiled, one interpreted** | **99,999**, the search ceiling | `compiled 1, entered 18, reentered 799,994` |
+
+The third row is unbounded recursion for an untrusted guest, bounded only by BEAM
+memory. **Four separate breaks**, and the first two are the ones the measurement
+found:
+
+1. `call_out/7` reduced the *ceiling* on the way out, and `init_state/4`
+   discarded it: with a `?BUDGET` present, which it always is under
+   `wasm:call/4`, both the depth and the ceiling come from the budget. Coming
+   back, `do_call/4` handed a depth relative to that interpreter run to a check
+   against an absolute ceiling. Each round trip started again.
+2. `check_depth(Inst, G0#g.d)` validated the *caller's* depth where `enter/5`
+   validates the depth of the frame doing the calling. `invoke_fn/4`'s own
+   comment says the argument is the caller's, so a generated function's own depth
+   is `deeper(G0)`, and compiled code got one frame more than interpreted. That
+   is the 1,000 against 999.
+3. `indirect_out/9`'s foreign branch ignored its `Depth` entirely, and
+   `foreign_call/5` never published the caller's, so **two instances calling each
+   other through a shared table evaded the limit the same way**: 8 and 9 frames
+   both returned against a limit of 8.
+4. Found while fixing the others: the interpreter checks before creating an
+   *interpreted* frame and did not before entering a *compiled* one. Generated
+   code checks before its own calls, not on entry, so a callee that returned
+   without calling sat one frame past the limit unnoticed. The mixed arm bounded
+   at 9 where both pure arms bounded at 8.
+
+All four now bound at the same frame. The fix is one helper -- publish the
+crossing depth into the budget, restore **only that field** afterwards, `after`
+so a trap restores it too. Only that field because the nested run raises fuel
+through `publish_fuel/1` and the host-call count through `charge_host_call/1`;
+putting the whole tuple back would let a compiled function reset
+`max_host_calls` by crossing out and returning.
+
+A per-call `max_depth` still cannot reach generated code, which reads its ceiling
+from the instance. Rather than put a process-dictionary read inside
+`check_depth/2`, on the compiled call path, `entry/3` refuses compiled entry when
+the call overrides it -- the same thing it already does for finite fuel.
+
+**Left open, and named rather than hidden.** A foreign callee that spends fuel
+and then throws loses its final fuel value: only `leave/2` publishes, and
+`uncaught/1` is `erlang:throw({wasm_exception, Exn})` and nothing else. And
+`foreign_call/5` reads the callee's *committed* `#mut{}`, so an A -> B -> A
+recursion does not see A's in-flight state, and the exception branch drops
+mutations B made before throwing. Neither is visible to a depth test.

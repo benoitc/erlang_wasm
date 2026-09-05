@@ -1063,10 +1063,14 @@ instr({call, F}, Rest, #g{unit = Unit, sigs = Sigs} = G0, Exit) ->
                            seq(Rest, G3#g{mut = M1,
                                           stack = lists:reverse(Rs) ++ G1#g.stack},
                                Exit)),
-    %% The depth check is the caller's, so a runaway recursion raises what
+    %% The depth check is this frame's own, so a runaway recursion raises what
     %% `enter/5' raises instead of growing the Erlang stack until the process
     %% runs out of heap.
-    cerl:c_seq(call_op(check_depth, [G0#g.inst, G0#g.d]),
+    %%
+    %% `G0#g.d' is the *caller's* depth -- `invoke_fn/4' takes it that way -- so
+    %% this function's own is `deeper(G0)', and checking `G0#g.d' allowed one
+    %% frame more than the interpreter: 1000 against 999 at `max_depth => 1000'.
+    cerl:c_seq(call_op(check_depth, [G0#g.inst, deeper(G0)]),
                cerl:c_case(Call, [Clause]));
 
 instr({call_indirect, TypeIdx, TableIdx}, Rest,
@@ -1091,7 +1095,7 @@ instr({call_indirect, TypeIdx, TableIdx}, Rest,
                            seq(Rest, G4#g{mut = M1,
                                           stack = lists:reverse(Rs) ++ G2#g.stack},
                                Exit)),
-    cerl:c_seq(call_op(check_depth, [G0#g.inst, G0#g.d]),
+    cerl:c_seq(call_op(check_depth, [G0#g.inst, deeper(G0)]),
                cerl:c_case(Call, [Clause]));
 
 %%% ---------------------------------------------------------------- numeric ---

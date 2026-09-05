@@ -65,7 +65,12 @@ moved, because even with all three a refusal still interprets.
 
 %% Bumped whenever the shape of generated code changes, so that code compiled by
 %% an older version of this runtime is never entered by a newer one.
--define(ABI, 3).
+%%
+%% 4: `check_depth/2` is passed the calling frame's own depth rather than its
+%% caller's. An artifact built by 3 checks one level too shallow, which is
+%% exactly the divergence `every_tier_bounds_recursion_at_the_same_depth`
+%% exists to catch -- and a cached one would reintroduce it silently.
+-define(ABI, 4).
 
 -define(DEFAULT_AFTER, 32).
 

@@ -4636,3 +4636,54 @@ in different clothes.
   function, which is a failure indistinguishable from the one a present but
   broken bound would produce. Guarded, the case reaches its real assertion and
   fails on the parent at `refused() >= 1`, which is the defect.
+
+## Compiling on another node is 0.5%, and the helper needs none of our code
+
+The plan for a separate compiler OS process assumed the crossing was the
+problem: "Sending Core forms over distribution encodes a multi-GB term, which is
+worse than the compile; the viable variant sends the module bytes and the wanted
+index list." That is wrong, and it was wrong in the direction that matters.
+
+QuickJS, `full`, two unit sizes, on the box that compiled them:
+
+| unit | Core words | `term_to_binary` | `binary_to_term` | compile | crossing |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 function, 98 K IR words | 4.4 M | 0.04 s, 12.8 MB | 0.05 s | 19.27 s | **0.5%** |
+| 10 functions, 385 K IR words | 17.2 M | 0.16 s, 51.5 MB | 0.24 s | 79.11 s | **0.5%** |
+
+The ratio holds because encoding is linear in the term and compiling is worse
+than linear, so it only improves with size. A 17.2 M word Core is 138 MB in
+memory and 51.5 MB on the wire, and distribution moves 128 MB in 528 ms, so the
+whole round trip is under a second against a compile of eighty.
+
+### The helper is a bare OTP node
+
+Proved rather than assumed. A `peer` started with `-pa /tmp` and no `wasm` ebin
+at all:
+
+```
+peer start         0.16 s
+peer has wasm_core  non_existing
+remote compile     19.81 s, beam 1.9 MB      (19.27 s locally)
+md5 identical      true
+bytes identical    true
+```
+
+`wasm_core:forms/8` answers a `cerl:c_module()`, which is ordinary OTP terms;
+the wasm-specific part of generated code is atoms naming `wasm_exec` functions
+that are resolved when the artifact is *loaded*, back on the application node.
+So the helper needs `compile` and nothing else, and the artifact comes back byte
+identical.
+
+Three of the four costs the plan listed for this path therefore do not exist: no
+compact versioned request format, no `wasm_core` on the helper, and no
+erlang_wasm `?ABI` to keep in step. What remains is an OTP version match, since
+the Core representation is explicitly undocumented and free to change between
+releases, and the operational cost of a second VM.
+
+**This is not an argument for building it.** It is an argument that if the
+requirement ever becomes "an adversarial compile must not take down the serving
+node", the path there is much shorter than it looked: ship the Core, get a
+`.beam` back, and put the helper in a cgroup. The bounds that shipped are
+in-VM and cannot cover allocator memory, RSS or paging, which is what actually
+happened to CPython at 33 GB.

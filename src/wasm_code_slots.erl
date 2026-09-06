@@ -107,6 +107,7 @@ reasoning.
 -export([hot/2]).
 -export([record_diagnostic/4, diagnostics/0, clear_diagnostics/0]).
 -export([observe_config/1]).
+-export([acquire/2, release_budget/0, budget/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -export_type([key/0, lease/0, token/0]).
@@ -190,7 +191,12 @@ reasoning.
                 %% The bad `compile_max_heap_words' currently in force, if any.
                 %% One entry and not a set: a set would retain every value
                 %% anyone ever mistyped for the life of the node.
-                bad_cfg  = ok   :: ok | {bad, term()}}).
+                bad_cfg  = ok   :: ok | {bad, term()},
+                %% IR words admitted and not yet given back, and who is holding
+                %% them. Monitored, because a compiler that dies must not take
+                %% the node's budget with it.
+                spent    = 0    :: non_neg_integer(),
+                holders  = #{}  :: #{reference() => {pid(), pos_integer()}}}).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -264,6 +270,48 @@ diagnostics() ->
     case ets:whereis(?DIAG) of
         undefined -> [];
         _ -> [{O, K, R} || {_Seq, O, K, R, _At} <- ets:tab2list(?DIAG)]
+    end.
+
+-doc """
+Take `Words` of the node's compile budget, or say it is not there.
+
+A per-process heap ceiling bounds one compiler. Sixteen of them, each under it,
+is still not a bound on the node, and sixteen is what the slot pool allows. This
+is the other half: one budget the whole node draws on, in IR words, which is the
+quantity `split/2` already weighs shards by and the one that predicts what a
+compile will cost.
+
+`{error, busy}` means interpret and ask again later, exactly as a full slot pool
+does. It is not an error and nothing is queued: a caller that waited would be
+holding the unit IR it was admitted to compile while it waited.
+
+The reservation is monitored, so a compiler that is killed gives its words back
+without anything having to notice. `Budget` of 0 means no budget and answers
+`ok` without taking anything, so an embedder who sets nothing pays one map
+lookup and no server call.
+""".
+-spec acquire(pos_integer(), non_neg_integer()) -> ok | {error, busy}.
+acquire(_Words, 0) -> ok;
+acquire(Words, Budget) ->
+    case whereis(?MODULE) of
+        undefined -> ok;
+        _ -> gen_server:call(?MODULE, {acquire, Words, Budget})
+    end.
+
+-doc "Give back whatever this process is holding. Safe when it holds nothing.".
+-spec release_budget() -> ok.
+release_budget() ->
+    case whereis(?MODULE) of
+        undefined -> ok;
+        _ -> gen_server:call(?MODULE, release_budget)
+    end.
+
+-doc "Words currently admitted and not yet given back. For tests.".
+-spec budget() -> non_neg_integer().
+budget() ->
+    case whereis(?MODULE) of
+        undefined -> 0;
+        _ -> gen_server:call(?MODULE, budget)
     end.
 
 -doc """
@@ -586,6 +634,23 @@ handle_call({observe_config, {bad, Raw}}, _From, S) ->
                    "number of words between ~p and ~p; compiling with no heap "
                    "ceiling", [Raw, Min, (1 bsl 59) - 1]),
     {reply, ok, S#state{bad_cfg = {bad, Raw}}};
+handle_call({acquire, Words, Budget}, {Pid, _}, #state{spent = Spent} = S) ->
+    %% Admitted when there is room, and *always* admitted when nothing is out:
+    %% a single request larger than the whole budget must still compile, or a
+    %% budget set below one guest's hot set would refuse it for ever rather
+    %% than bounding anything.
+    case Spent + Words =< Budget orelse Spent =:= 0 of
+        false ->
+            {reply, {error, busy}, S};
+        true ->
+            Ref = erlang:monitor(process, Pid),
+            {reply, ok, S#state{spent = Spent + Words,
+                                holders = (S#state.holders)#{Ref => {Pid, Words}}}}
+    end;
+handle_call(release_budget, {Pid, _}, S) ->
+    {reply, ok, give_back(Pid, S)};
+handle_call(budget, _From, #state{spent = Spent} = S) ->
+    {reply, Spent, S};
 handle_call({claim_loading, Key, Lease, Owner}, _From, S) ->
     case find(Key) of
         %% Somebody else is filling this in. Interpret rather than wait.
@@ -667,6 +732,11 @@ handle_cast(_Msg, S) -> {noreply, S}.
 %% mid-call still has the call's lease, held by whichever process is running
 %% it, so the code survives exactly as long as something is inside it.
 handle_info({'DOWN', Ref, process, _Pid, _Reason},
+            #state{holders = Hs} = S0) when is_map_key(Ref, Hs) ->
+    {_, Words} = map_get(Ref, Hs),
+    {noreply, S0#state{spent = S0#state.spent - Words,
+                       holders = maps:remove(Ref, Hs)}};
+handle_info({'DOWN', Ref, process, _Pid, _Reason},
             #state{monitors = Ms, loading = Ls} = S) ->
     case maps:find(Ref, Ls) of
         %% A compiler that died. Its reservation holds the slot exclusively and
@@ -685,6 +755,17 @@ handle_info({'DOWN', Ref, process, _Pid, _Reason},
 handle_info(_Info, S) -> {noreply, S}.
 
 %%% ------------------------------------------------------------- internal ---
+
+%% Everything `Pid` is holding, which is at most one reservation but is written
+%% as a fold so a second one could never leak.
+give_back(Pid, #state{spent = Spent, holders = Hs} = S) ->
+    Mine = [{R, W} || {R, {P, W}} <- maps:to_list(Hs), P =:= Pid],
+    lists:foldl(fun ({Ref, Words}, Acc) ->
+                    true = erlang:demonitor(Ref, [flush]),
+                    Acc#state{spent = Acc#state.spent - Words,
+                              holders = maps:remove(Ref, Acc#state.holders)}
+                end, S#state{spent = Spent}, Mine).
+
 
 %% Both a loading and a resident slot answer, because a caller arriving while
 %% somebody else is filling one in has to be told to interpret rather than being

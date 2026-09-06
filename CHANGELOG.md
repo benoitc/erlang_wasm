@@ -22,8 +22,17 @@ And a compile can now be stopped. `compile:forms/2` spawns its worker with
 `application:stop(wasm)` or by its supervisor left the OTP compiler running to
 completion holding its copy of the forms, with nothing able to see or stop it.
 
-`wasm_jit:compile_limits/0` reports `max_heap_words`, and `max_heap_words/0`
-answers it on its own.
+### A budget for what the node has in flight
+
+`compile_max_heap_words` bounds one compiler, and the slot pool allows sixteen.
+`compile_budget_words` bounds the node: a request that does not fit beside what
+is already compiling is refused, so the guest interprets and asks again later.
+Nothing is queued, a request larger than the whole budget still compiles when
+nothing else is running, and a killed compiler gives its words back through a
+monitor rather than an `after`. Off by default.
+
+`wasm_jit:compile_limits/0` reports `max_heap_words` and `budget_words`, and
+`max_heap_words/0` and `compile_budget_words/0` answer them on their own.
 
 ## 0.2.2
 

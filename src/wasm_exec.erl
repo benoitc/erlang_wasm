@@ -113,7 +113,7 @@ init_state(Inst, Mut, _Args, Opts) ->
     {Fuel, Depth, MaxDepth} =
         case get(?BUDGET) of
             undefined ->
-                {maps:get(fuel, Opts, infinity), 0,
+                {maps:get(fuel, Opts, infinity), maps:get(depth, Opts, 0),
                  maps:get(max_depth, Opts, 1024)};
             {F, _HC, D, _Max, MD} ->
                 {F, D, MD}
@@ -999,10 +999,44 @@ call_out(Inst, Mut, Idx, Args, Depth, Mod, Gen) ->
     %% The name and the generation come from the caller as literals, because the
     %% caller *is* the generated module and knew both when it was built. Reading
     %% them out of the slot table instead would put a lookup on every crossing.
-    Limits = (Inst#inst.limits)#{max_depth => max_depth(Inst) - Depth,
-                                 code_module => {Mod, Gen}},
-    {ok, Results, Mut1} = call(Inst, Mut, Idx, Args, Limits),
+    Limits = (Inst#inst.limits)#{code_module => {Mod, Gen}},
+    {ok, Results, Mut1} =
+        with_depth(Depth, fun(Extra) ->
+                              call(Inst, Mut, Idx, Args, maps:merge(Limits, Extra))
+                          end),
     {Results, Mut1}.
+
+-doc """
+Run a nested invocation at an absolute depth, and give the caller's back after.
+
+Every boundary that starts one has to do this, or `max_depth` counts a fresh
+recursion each time round. `call_out/7` reduced the *ceiling* instead and
+`init_state/4` discarded it -- with a budget present, which there always is under
+`wasm:call/4`, the depth and the ceiling both come from the budget -- so a guest
+alternating tiers reached 99,999 frames against a limit of 1000.
+
+Only the depth is restored. The nested run raises fuel through `publish_fuel/1`
+and the host-call count through `charge_host_call/1`, and putting the whole tuple
+back would let a compiled function reset `max_host_calls` by crossing out and
+returning. `after`, so a trap unwinding through the crossing restores it too.
+""".
+-spec with_depth(non_neg_integer(), fun((map()) -> term())) -> term().
+with_depth(Depth, Fun) ->
+    case get(?BUDGET) of
+        %% No budget to thread through: the base travels in the options, which
+        %% `init_state/4' reads when it finds none.
+        undefined ->
+            Fun(#{depth => Depth});
+        Prev ->
+            put(?BUDGET, setelement(3, Prev, Depth)),
+            try Fun(#{})
+            after
+                case get(?BUDGET) of
+                    undefined -> ok;
+                    Now -> put(?BUDGET, setelement(3, Now, element(3, Prev)))
+                end
+            end
+    end.
 
 -doc """
 Call a function this generated module does not hold but a sibling does.
@@ -1075,7 +1109,16 @@ indirect_out(Inst, Mut, TypeIdx, TableIdx, I, Args, Depth, Mod, Gen) ->
         %% written back, and this instance's is untouched.
         {foreign, FInst, F} ->
             FMut = wasm_instance:mut(FInst),
-            {ok, Results, FMut1} = call(FInst, FMut, F, Args, FInst#inst.limits),
+            %% Through `with_depth/2` like every other nested invocation: this
+            %% branch ignored its `Depth` entirely, so two instances calling
+            %% each other through a shared table evaded `max_depth` the same way
+            %% a mixed tier did.
+            {ok, Results, FMut1} =
+                with_depth(Depth,
+                           fun(Extra) ->
+                               call(FInst, FMut, F, Args,
+                                    maps:merge(FInst#inst.limits, Extra))
+                           end),
             ok = wasm_instance:set_mut(FInst, FMut1),
             {Results, Mut}
     end.
@@ -1467,6 +1510,15 @@ do_call(F, Cont, Ctrl, #st{code = {Mod, Gen}, inst = Inst, mut = Mu} = St) ->
             %% walk of the operand stack.
             {Locals, Stack1} = pop_locals(NP, St#st.stack, Fn#fn.defaults),
             St1 = St#st{stack = Stack1},
+            %% The same check `enter/5' makes before it creates an interpreted
+            %% frame. Generated code checks before its own calls, not on entry,
+            %% so without this an interpreted caller could put a compiled frame
+            %% one past `max_depth' and a callee that returned without calling
+            %% would never notice: the mixed tier bounded at 9 where both pure
+            %% ones bounded at 8.
+            St#st.depth >= St#st.max_depth andalso
+                wasm_error:exhaustion(call_stack_exhausted,
+                                      #{depth => St#st.depth}),
             try Mod:invoke(Inst, Mu, F, lists:sublist(Locals, NP), St#st.depth,
                            Gen) of
                 %% Most functions of a real module are outside the subset. Not a
@@ -1735,7 +1787,16 @@ foreign_call(FInst, F, Cont, Ctrl, St) ->
     %% An exception that escapes the callee is not the callee's failure: it
     %% keeps unwinding in *this* instance, where a `try_table' may catch it.
     %% Only reaching the outermost invocation makes it an error.
-    try wasm_exec:call(FInst, FMut, F, Args, Limits) of
+    %%
+    %% `with_depth/2` for the same reason as every other nested invocation. Fuel
+    %% is *not* settled here and that is a known gap: a callee that spends fuel
+    %% and then throws loses its final value, because only `leave/2` publishes
+    %% and `uncaught/1` throws and nothing else. See `test/audit/PERF.md`.
+    try with_depth(St#st.depth,
+                   fun(Extra) ->
+                       wasm_exec:call(FInst, FMut, F, Args,
+                                      maps:merge(Limits, Extra))
+                   end) of
         {ok, Results, FMut1} ->
             ok = wasm_instance:set_mut(FInst, FMut1),
             run(Cont, Ctrl, St#st{stack = lists:reverse(Results) ++ Stack1})

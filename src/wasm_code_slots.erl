@@ -105,6 +105,7 @@ reasoning.
 -export([resident_module/1]).
 -export([lease_call/1, lease_call/2, release_call/1, calls_in/1]).
 -export([hot/2]).
+-export([record_diagnostic/4, diagnostics/0, clear_diagnostics/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -export_type([key/0, lease/0, token/0]).
@@ -137,6 +138,12 @@ reasoning.
 %% `?TAB' walks the whole thing, and a counter row would have to be skipped by
 %% each of them.
 -define(CALLS, wasm_code_calls).
+
+%% Why the compiles that did not happen did not happen, newest last, bounded.
+%% An `ordered_set' keyed by a sequence the caller supplies, so two compilers
+%% recording at once are two independent inserts and never a read-modify-write.
+-define(DIAG, wasm_code_diag).
+-define(DIAG_ROWS, 64).
 
 %% One counter per slot, holding the number of calls currently inside its code,
 %% plus `?EXCL' while the manager is replacing it. Published in `persistent_term'
@@ -201,7 +208,66 @@ ensure_table() ->
             ok;
         _ -> ok
     end,
+    case ets:info(?DIAG, name) of
+        undefined ->
+            ?DIAG = ets:new(?DIAG, [named_table, public, ordered_set,
+                                    {write_concurrency, true}]),
+            ok;
+        _ -> ok
+    end,
     ensure_counters().
+
+-doc """
+Record why one compile did not happen.
+
+`Seq` comes from the caller, which holds a node-wide `atomics` counter, so this
+is one insert and never a read-modify-write: two compilers recording at the same
+moment cannot lose each other's row.
+
+`Reason` must already be normalised. Nothing here bounds it, and the OTP
+compiler's diagnostics and an exit reason's stacktrace are both unbounded.
+
+A no-op when the table is not there, which is what a node that loaded these
+modules without restarting the application has. Reporting a failure must never
+be a failure.
+""".
+-spec record_diagnostic(pos_integer(), atom(), term(), term()) -> ok.
+record_diagnostic(Seq, Outcome, Key, Reason) ->
+    case ets:whereis(?DIAG) of
+        undefined -> ok;
+        _ ->
+            true = ets:insert(?DIAG, {Seq, Outcome, Key, Reason,
+                                      erlang:system_time(second)}),
+            trim()
+    end.
+
+%% Oldest first out, and deleting a key another process has already taken is a
+%% no-op, so two trims at once cost a wasted lookup and nothing else.
+trim() ->
+    case ets:info(?DIAG, size) > ?DIAG_ROWS of
+        false -> ok;
+        true ->
+            case ets:first(?DIAG) of
+                '$end_of_table' -> ok;
+                K -> true = ets:delete(?DIAG, K), trim()
+            end
+    end.
+
+-doc "Every recorded diagnostic, oldest first. `[]` when the table is absent.".
+-spec diagnostics() -> [{atom(), term(), term()}].
+diagnostics() ->
+    case ets:whereis(?DIAG) of
+        undefined -> [];
+        _ -> [{O, K, R} || {_Seq, O, K, R, _At} <- ets:tab2list(?DIAG)]
+    end.
+
+-doc "Forget them. The caller's sequence is deliberately not reset with them.".
+-spec clear_diagnostics() -> ok.
+clear_diagnostics() ->
+    case ets:whereis(?DIAG) of
+        undefined -> ok;
+        _ -> true = ets:delete_all_objects(?DIAG), ok
+    end.
 
 %% Separate from the table's own guard: the counters are a different resource
 %% and a table that already exists says nothing about whether they do.

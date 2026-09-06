@@ -40,8 +40,10 @@
 %% interpreted and only these prices explain where its time goes.
 %% An optional second argument runs only the cases whose name contains it, so
 %% a probe into one instruction does not pay for `memory.copy 1024B' twice.
-main([Tier]) -> main([Tier, ""]);
-main([Tier, Only]) ->
+main([Tier]) -> main([Tier, "", "time"]);
+main([Tier, Only]) -> main([Tier, Only, "time"]);
+main([Tier, Only, What]) ->
+    put(what, What),
     {ok, _} = application:ensure_all_started(wasm),
     Opts = case Tier of
                "off" -> #{};
@@ -154,15 +156,20 @@ main([Tier, Only]) ->
          {"br_table 4 of 8 nested ",
           "(block $a (block $b (block $c (block $d (block $e (block $f (block $g (block $h (br_table $a $b $c $d $e $f $g $h (local.get $i))))))))))",
           9}],
-    io:format("~-24s ~10s ~10s~n", ["snippet", "ns/snip", "ns/instr"]),
+    io:format("~-24s ~10s ~10s~n",
+              ["snippet", unit(What, "/snip"), unit(What, "/instr")]),
     [run_case(Name, Snip, Instrs) || {Name, Snip, Instrs} <- Cases,
                                      string:find(Name, Only) =/= nomatch],
     init:stop().
 
+unit("alloc", Suffix) -> "words" ++ Suffix;
+unit(_, Suffix) -> "ns" ++ Suffix.
+
 run_case(Name, Snippet, Instrs) ->
     K = 20,
-    T1 = time_for(Snippet, K),
-    T2 = time_for(Snippet, 2 * K),
+    M = case get(what) of "alloc" -> fun alloc_for/2; _ -> fun time_for/2 end,
+    T1 = M(Snippet, K),
+    T2 = M(Snippet, 2 * K),
     Per = (T2 - T1) / K,
     io:format("~-24s ~10.2f ~10.2f~s~n", [Name, Per, Per / Instrs, note(Per)]).
 
@@ -187,6 +194,28 @@ time_for(Snippet, K) ->
                    || _ <- lists:seq(1, 5)]),
     ok = wasm:destroy(I),
     R * 1000 / N.
+
+%% Words this loop allocated, per iteration, from the process's own collection
+%% trace rather than a node-wide counter. Same K against 2K differential as the
+%% timing, so the loop and the harness cancel and what is left is the snippet.
+alloc_for(Snippet, K) ->
+    Src = source(Snippet, K),
+    {ok, P} = wasm_wat:module(Src),
+    {ok, M} = wasm_validate:module(P),
+    N = 200000,
+    Opts = get(opts),
+    #{allocated := A} =
+        allocwords:measure(
+          fun() ->
+              {ok, I} = wasm:instantiate(M, #{}, Opts),
+              %% One call first, so lowering and any compile are paid outside
+              %% the number: this is meant to price steady-state execution.
+              _ = wasm:call(I, ~"bench", [1]),
+              R = wasm:call(I, ~"bench", [N]),
+              ok = wasm:destroy(I),
+              R
+          end),
+    A / N.
 
 source(Snippet, K) ->
     Body = lists:duplicate(K, [Snippet, "\n        "]),

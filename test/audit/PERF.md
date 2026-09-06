@@ -3441,3 +3441,981 @@ on identical work. `benchlib:in_process/1` gives each iteration a fresh
 *process*, which is right and is not enough; the emulator is the thing that has
 to be stated. Two `rebar3 eunit` runs of the same four cases came out at 16.8
 and 61.5 seconds before this was understood.
+
+## `load/1` is 4.6x slower than `compile/1` on a large guest
+
+The section above left the 227 MB process heap as the underlying defect, and
+the obvious fix is the one this runtime already implements: `wasm:load/1` puts
+the decoded module in `persistent_term`, where reads do not copy and the
+collector never scans it. `wasm.erl` says so too, in `load/1`'s own doc: "Use
+this rather than `compile/1`."
+
+On CPython that advice is expensive. Same harness, same guest, same three runs
+in one emulator, the only difference being which function built the module:
+
+| | `compile/1` | `load/1` |
+| --- | ---: | ---: |
+| peak process heap | 227 MB | **22 MB** |
+| wall, run 1 | 32,989 ms | 33,855 ms |
+| wall, run 2 | **13,763 ms** | 66,448 ms |
+| wall, run 3 | **14,172 ms** | 64,009 ms |
+| in GC, run 2 | 867 ms, 6.3% | 50,434 ms, **75.9%** |
+| minor, run 2 | 1,129 | 11,130 |
+| major, run 2 | **1** | **5,553** |
+
+**Getting the module off the process heap works, and costs 4.6x.** The heap
+does drop by ten times, exactly as the theory says. The collection it was
+supposed to save then arrives thirty times over: 5,553 major collections
+against one, and three quarters of the run spent collecting.
+
+It also inverts the cold and warm pattern the section above measured. Under
+`compile/1` the first run is the slow one and the rest are 2.4x faster; under
+`load/1` the first run is the *fast* one at 33.9 seconds and the later ones are
+64 to 66.
+
+So the 227 MB heap is not what the time is going on, and "keep the large term
+off the process heap" is the right general principle and the wrong fix here.
+The mechanism is not established. The per-process lowered-IR cache
+(`{wasm_ir, Id, Idx}`) is the first suspect, since it is the one thing that
+holds derived data per process and its contents depend on whether the module it
+was built from is heap data or a literal.
+
+**Until it is, `load/1`'s doc oversells itself on a large module.** It is right
+about what it was written about, which is not paying to decode the same bytes
+twice; it is wrong if read as advice for the steady state.
+
+### The mechanism: the decoded module is ballast the collector sizes the heap from
+
+The section above left this open. It is not the module cache, the allocator or
+the binary vheap on their own. **The collector sizes a process's heap, and its
+binary vheap threshold, from that process's live set, and the decoded module is
+live data the hot loop never reads.** On the heap it is ballast that buys a
+large heap; off the heap the same churn collects into a small one.
+
+`garbage_collection` trace on the worker, one CPython start-up, medians over
+every collection:
+
+| | `compile/1` | `load/1` | `load/1` + `min_heap_size` |
+| --- | ---: | ---: | ---: |
+| collections | 1,057 | **17,648** | **344** |
+| `heap_size` | 5,048,040 | 311,549 | 18,062,236 |
+| `old_heap_size` | 24,834,443 | 1,360,290 | 1,310,226 |
+| `bin_vheap_block_size` | 3,387,320 | **46,422**, the default | 923,153 |
+
+Read the last two columns together. Under `load/1` the live set is 1.36 M words
+against 24.8 M, so every threshold the collector derives from it stays at or
+near its default, and the interpreter's 4.8 G words of churn cross that
+threshold 17,648 times instead of 1,057. Over half of those are fullsweeps.
+
+**`min_heap_size` gives the ballast back without the live set**: 344
+collections, fewer than `compile/1` manages, with an `old_heap_size` still at
+1.31 M. The floor is doing exactly what the module was doing by accident.
+
+What is not measured yet is the wall time of that third column, cleanly. Two of
+the measurements on the way to this table were wrong and are worth recording as
+traps, because both produced plausible numbers rather than obvious failures:
+
+- **A node-wide counter for a per-process question.** `erlang:statistics(
+  garbage_collection)` counts the whole node, and it reported no change from
+  `min_heap_size` while the worker's own collections fell 51x. Trace the
+  process.
+- **A stale `.beam`.** A three-way comparison returned byte-identical rows for
+  all three configurations, which is what a harness that never took the branch
+  looks like. Print something that proves the branch was taken: this one now
+  prints whether the module is a handle or inline, and the 22 MB peak heap says
+  so too.
+
+### The baseline, on an instrument that was proved first
+
+`bench/paths/allocwords.erl` derives one process's allocation from its own
+collection trace: `wordsize` summed over the end events between two forced
+majors, plus the change in live words. It is proved before use, against a list
+of N cons cells retained (which exercises the live-set half) and discarded
+(which exercises the reclaimed half), and agrees to 0.0% at N up to four
+million. `bench/paths/guestarm.erl` runs the pinned CPython through it.
+
+One start-up plus one request, worker positions reported separately because the
+first run in an emulator is not the second:
+
+| | `compile/1` w1 | `compile/1` w2 | `load/1` w1 | `load/1` w2 |
+| --- | ---: | ---: | ---: | ---: |
+| wall ms | 39,177 | 18,397 | 49,897 | 63,606 |
+| **allocated words** | 5,452,429,940 | 5,433,402,532 | 5,446,956,230 | 5,440,531,391 |
+| collections | 1,297 | 880 | 18,073 | 17,790 |
+| live at end | 23,777,394 | 23,777,394 | 342,430 | 342,430 |
+
+**Allocation is the same to within 0.1% across all four.** The live set differs
+by 69x and the collection count by 20x. That is the mechanism above, measured
+per process rather than inferred from a node-wide counter, and it is now the
+baseline any change is judged against.
+
+**The figure to beat is 5.45 G words, not 4.8 G.** The 4.8 G quoted earlier in
+this file came from `erlang:statistics(garbage_collection)`, which counts the
+node; it was about 12% low. Every allocation number here from now on comes from
+`allocwords`.
+
+### CPython compiles completely, and the tier still never runs it
+
+Before attributing the 5.45 G words, the cheap question: can the compiled tier
+take this guest? `bench/paths/coverage.erl` on the pinned CPython:
+
+```
+functions                             11448
+compilable                            11447  100.0%
+over a generator bound                    1
+    too_many_locals                       1
+```
+
+**One refusal in 11,448**, and it is a generator bound rather than a missing
+instruction. `PERF.md` records QuickJS at 1.0x when 93% of its functions compile
+and 9.0x at 100%, so on coverage alone this is the best case there is.
+
+The tier still does nothing. With `compile => true, compile_after => 1`:
+
+| | wall w1 | wall w2 | `wasm_jit:counts/0` |
+| --- | ---: | ---: | --- |
+| tier off | 39,177 | 18,397 | not applicable |
+| tier on | 33,825 | 15,493 | `compiled => 0, entered => 0` |
+
+Nothing was compiled and nothing was entered, so the two rows differ by run
+position and noise, not by tiering.
+
+**The reason is the adoption point, and `wasm_jit:maybe_adopt/3` states it:**
+"what to compile is read from what this process has run and at the start of a
+call it has run nothing", so a call that finds nothing resident sets an ask and
+interprets, and the module is adopted *on a later call*.
+
+CPython does all of its work in **one** `_start` call. It asks when that call
+ends, and there is no later call. That is not special to CPython: it is the
+shape of every `wasm32-wasi` command-line program, which is most of what a
+toolchain emits. The tier is built for a workload of many calls into a resident
+instance, and a `_start` guest is a workload of one.
+
+So coverage is 100% and reachability is zero, for a reason that has nothing to
+do with instruction support. Two ways out, neither measured yet: adopt at a
+function boundary inside a running call rather than at a call boundary, or let
+`wasm_code_cache` carry a profile across runs so a second run adopts at its
+first call. The second is what the cache is already for and is the cheaper
+experiment.
+
+### A one-call guest can reach generated code, and keep it
+
+The section above found the tier unreachable for a `_start` guest, because
+`wasm_jit:maybe_adopt/3` adopts on a *later* call and such a guest has none.
+That is true of the call and false of the *instance*. `bench/paths/adopt.erl`
+runs one `_start`, watches `wasm_jit:counts/0` until the compiler lands, then
+runs a second instance of the same module. QuickJS, one JSON line in and out:
+
+| | cold cache | warm cache |
+| --- | ---: | ---: |
+| call 1, interpreted | 128 ms | 182 ms |
+| time until `compiled` | **150 s** | **1 s** |
+| call 2 | **28 ms** | **14 ms** |
+| counts after call 2 | `compiled 402, cached 0, entered 1` | `compiled 402, cached 1, entered 1` |
+
+The ask *is* raised by a one-call guest, 402 functions do get compiled, and a
+fresh instance adopts them at its first call. `entered => 1` is what says so;
+the wall time alone would not.
+
+**And the artifact persists**, which turns 150 seconds into 1. `cached => 1`
+is the proof it came off disk.
+
+### The fast layout and the cacheable one were only coupled by a default
+
+`wasm_code_cache:key/6` answers `undefined` for any identity that is not
+`{sha256, _}`, and `wasm:compile/1` leaves the identity unset, so nothing it
+compiles is ever kept. `wasm:load/1` hashes, and is also the path that puts the
+module in `persistent_term` -- which the sections above measured at **4.6x
+slower** on CPython, because the collector then sizes the heap for a live set
+the hot loop never reads.
+
+That reads like a trap with no way out: the only cacheable path is the slow one.
+It is not. `compile/2` already takes the identity, and its doc says why one
+would pass it. Passing the content hash gives both halves at once:
+
+```erlang
+wasm:compile(Bin, #{identity => {sha256, crypto:hash(sha256, Bin)}})
+```
+
+| | cold cache | warm cache |
+| --- | ---: | ---: |
+| time until `compiled` | 155 s | **0 s** |
+| call 2 | 18 ms | 16 ms, `cached => 1, entered => 1` |
+
+Module on the process heap, which is the layout that collects cheaply, and
+named by its content, which is what the cache needs. The five milliseconds of
+hashing that `compile/2`'s doc declines to spend by default buys a 150 second
+compile, once per machine rather than once per emulator.
+
+**Two harness bugs on the way here, both of which read as results.** A second
+call in the same process reused the stdin fun's "already sent" flag, so it hit
+end of file at once and returned in 19 ms with no reply: a 16x speedup that was
+a guest doing nothing, which is why the reply assertion is in the harness. And
+an earlier diagnosis that "the ask dies with the process" was wrong:
+`wasm:call/3` runs `after_call/2` at depth 0 before the caller moves on.
+
+## Where the words go: an 11-word record, rebuilt once per instruction
+
+The price half of the attribution. `bench/paths/perinstr.erl` gained the same K
+against 2K differential on **allocated words**, taken from `allocwords` rather
+than the node-wide counter. Interpreter, words per snippet and per instruction:
+
+| snippet | words/snip | words/instr |
+| --- | ---: | ---: |
+| `nop` | **0.00** | **0.00** |
+| `block`, empty | 7.00 | 7.00 |
+| `block` x8 nested | 56.00 | 7.00 |
+| `local.get` + `drop` | 24.00 | 12.00 |
+| `i32.const` + `drop` | 24.00 | 12.00 |
+| `i32.add` | 19.00 | 4.75 |
+| `i32.mul` | 19.00 | 3.17 |
+| `i32.load` | 19.00 | 6.33 |
+| `i64.load` | 45.00 | 15.00 |
+| `global.set` | 40.00 | 20.00 |
+| `call`, empty function | 34.00 | 34.00 |
+| `call_indirect` | 67.00 | 33.50 |
+| `memory.copy`, 8 B and 1024 B | 55.00 | 13.75 |
+
+**`nop` allocates nothing and everything else allocates about twelve words an
+instruction, whatever it computes.** That rules out dispatch, the arithmetic and
+the operand stack in one reading: a cons cell is two words, and a push with a
+pop costs twenty-four.
+
+`#st{}` has ten fields, so `St#st{stack = S}` allocates **eleven words**, the
+tag and ten fields, and the interpreter writes one per instruction. That is the
+floor the table is made of. `memory.copy` costing the same for 8 bytes as for
+1024 is the same story from the other side: the copy is not on the process heap
+and the record update is.
+
+Blocks are cheaper because a control frame is not a whole `#st{}`, and they are
+the ones that add up: `PERF.md` records QuickJS entering **132,583,392 blocks**
+in a run, which at seven words is 928 M words from `block` alone.
+
+Against the measured 5.45 G words for a CPython start-up, twenty words an
+instruction implies about 270 M instructions, which at 35 seconds interpreted is
+130 ns each and agrees with the timing table.
+
+**This is the price half only.** The executed histogram keyed by
+`{FunctionIndex, OpcodeTag}` is not built yet, so the model does not close to
+the 80% the plan requires, and no change should be made on the strength of this
+table alone. What it does say is which candidate to price first: not rebuilding
+interpreter state per instruction.
+
+### The model closes at 50%, and the missing half is not dispatch at all
+
+Price times frequency, on QuickJS serving one JSON line. The histogram comes
+from a throwaway `wasm_exec` whose 123 `run/3` clause heads are renamed and
+wrapped by a counting one, so every dispatch is counted and the tail calls are
+kept:
+
+| | words |
+| --- | ---: |
+| measured allocation | 33,128,640 |
+| model, 11 a dispatch and 7 a block | 16,660,622 |
+| **closure** | **50.3%** |
+
+1,618,706 dispatches over 89 distinct opcodes, `block` the largest single one at
+17.69%. The plan's bar is 80%, so by its own rule nothing gets optimised on
+this.
+
+**Where the other half is.** Three stages, each a fresh process, each doing
+strictly more than the last, so every component is a difference:
+
+| stage | words |
+| --- | ---: |
+| instantiate only | 137,673 |
+| instantiate + one request | 33,138,857 |
+| instantiate + two requests | 33,744,447 |
+| **marginal second request** | **605,590** |
+| **premium paid by the first request** | **32,395,594** |
+
+**A second identical request costs 605 K words against the first request's
+33 M.** Ninety-eight per cent of what a `_start` guest allocates is paid once,
+and the steady state the dispatch model prices is under two per cent of it.
+
+**What the 32.4 M is, and what it is not.** `_start` is one call that serves
+every line and exits, so "two requests" is one start-up serving two, and the
+premium is everything the first request pays that the second does not: this
+runtime's lazy IR lowering *and* QuickJS parsing `worker.js` and building its
+own JS runtime. **This experiment cannot separate those two**, and the earlier
+line in this file calling it "lowering" would be wrong. Separating them needs
+lowering counted where it happens, in `wasm_instance:body_of/2`.
+
+That reorders the candidates in the plan's step 3. Not rebuilding `#st{}` per
+instruction is a real cost and the right target for a long-running guest; for a
+one-shot `wasm32-wasi` command, which is most of what a toolchain emits, it is
+under two per cent and the one-time path is the whole thing.
+
+### Lowering is 2.7% of a request, and the 39% was the instrument
+
+An earlier version of this section reported lowering at **20,606,076 words,
+39.0% of a QuickJS request**, and said lowering allocates twenty-eight words of
+garbage per word of IR it keeps. **Both numbers were the measuring instrument.**
+They are kept here with the correction because the way they went wrong is the
+useful part.
+
+The isolation itself was right: discover which functions a deterministic request
+reaches, then on a fresh instance lower exactly those **before the window
+opens**, in the same process, because the IR cache is keyed on the instance and
+lives in the process dictionary. What was wrong is that the run carried an
+instrumented `wasm_instance` whose `body_of/2` called `erts_debug:size/1` on
+every lowered body, to report how many words the IR retained. In the cold arm
+that call is inside the window. In the pre-lowered arm it is inside the setup,
+where nothing is counted. The difference between the arms was therefore mostly
+the instrument.
+
+**`erts_debug:size/1` allocates, and not a little.** Ten calls on a
+200,000-word list, measured with `allocwords`:
+
+| | |
+| --- | ---: |
+| term walked | 200,000 words |
+| allocated per call | 34,490,334 words |
+| **per word of term** | **172 words** |
+
+At 725,535 words of retained IR that is enough to account for the whole
+20.6 M, and the "twenty-eight words per word kept" ratio was reading the
+instrument's own cost back as the runtime's.
+
+**The clean numbers.** Same harness, same arms, `bench/paths/pyarms.erl`, with
+nothing instrumented in the window:
+
+| arm | words |
+| --- | ---: |
+| cold, lowering inside the window | 28,145,449 |
+| pre-lowered, every function lowered in the setup | 27,380,916 |
+| **lowering of the reached set** | **764,533, 2.7% of the run** |
+
+Which agrees with the retained figure it was supposed to contradict: 764,533
+allocated against 725,535 retained for the same 402 functions. Lowering keeps
+almost everything it allocates.
+
+Priced on its own, in a window holding nothing else, all 1530 QuickJS functions
+lower for **2,005,901 words** and retain 1,103,338 of them. Transient garbage is
+0.8 words per word kept, not 28.
+
+**The old numbers reproduce exactly when the instrumented modules are put
+back.** Same `pyarms` arms, `-pa` pointed at the instrumented build:
+
+| arm | clean | instrumented |
+| --- | ---: | ---: |
+| cold | 28,145,449 | 52,832,905 |
+| pre-lowered | 27,380,916 | 32,209,799 |
+| difference | 764,533 | 20,623,106 |
+
+against the 20,606,076 the original experiment reported. That is the same
+number, so the correction is not a difference of runs.
+
+**The rule this leaves.** A module loaded into the window is part of the
+measurement, and `-pa` is enough to make one so. `pyarms` prints `code:which/1`
+for `wasm_exec`, `wasm_instance` and `wasm_jit` on every arm for this reason.
+Counting instrumentation belongs outside the window or in its own arm, never
+inside the one being subtracted from.
+
+`allocwords:measure/3` is still what makes the isolation possible: it runs a
+setup in the measured process with tracing off, and opens the window only once
+the setup has returned. The first attempt at this experiment put the
+pre-lowering inside the measured fun, so both arms paid it and the difference
+came out at **4,176 words, 0.0%** -- a confident null produced by a window that
+was open too early.
+
+### Where the run goes, so far
+
+Against the clean 28,145,449-word QuickJS request:
+
+| component | words | share | how it was separated |
+| --- | ---: | ---: | --- |
+| dispatch, `#st{}` at 11 a time | 16.7 M | 59% | executed histogram times measured price |
+| lowering, reached set | 0.76 M | 2.7% | pre-lowered outside the window |
+| instantiation | 0.13 M | 0.5% | `inwin` arm against `cold` |
+| **accounted** | **17.6 M** | **~62%** | |
+
+The correction reorders the ranking it used to support. **Dispatch is the
+dominant allocator and lowering is a rounding error next to it**, the reverse of
+what this file said before the instrument was taken out of the window. Against
+the plan's 80% bar the model is further from closing than the inflated version
+appeared to be, and the missing 38% is not yet named.
+
+### CPython: lowering is 0.03% of the run, and the second request is free
+
+The same four arms on CPython 3.12, which is the workload the investigation
+started from. Every arm is its own emulator, the reply is asserted, and the
+walls are from the untraced repetition because the GC trace itself doubles them.
+
+| arm | allocated | clean wall |
+| --- | ---: | ---: |
+| cold, one request | 5,447,952,387 | 19,220 ms |
+| pre-lowered, all 11,448 functions lowered in the setup | 5,446,176,895 | 23,774 ms |
+| two requests to one instance | 5,446,975,427 | 18,963 ms |
+| instantiation inside the window | 5,455,801,206 | -- |
+
+Read as differences:
+
+| | words | share of the run |
+| --- | ---: | ---: |
+| lowering | 1,775,492 | **0.033%** |
+| instantiation | 7,848,819 | 0.14% |
+| second request | below zero, inside run-to-run noise | **~0%** |
+
+**Lowering every one of CPython's 11,448 functions takes 249 ms and 12,114,304
+words**, priced on its own in a window holding nothing else. That is 0.22% of a
+run. On the 25 MB guest the whole lazy-lowering design is worth a fifth of one
+per cent, and pre-lowering it makes the run *slower*: 23.8 s against 19.2 s,
+because the 6.8 M words of IR it retains enlarge the live set every major
+collection then has to walk.
+
+**The second request is free.** Two requests allocate what one does, to within
+run-to-run noise, and produce both replies. `_start` serves every line, so a
+prewarmed instance answers out of a Python interpreter that is already up.
+Nothing in the request path is worth optimising; all 5.45 G words are Python
+starting.
+
+That is the whole shape of the problem restated: for a `wasm32-wasi` command
+guest, essentially everything is start-up, and start-up is the interpreter
+executing the guest's own initialisation.
+
+### 383 million dispatches, and the model closes to 78%
+
+`call_count` tracing on `wasm_exec:run/3` counts one CPython request at
+**383,284,913 dispatches**. The instrument is a counter in the emulator and not
+a wrapper in the module, so unlike the sizing call it does not distort what it
+measures: the counted run allocated 5,454,869,254 words against the uncounted
+5,447,952,387, a difference of 0.13%.
+
+`trace_pattern/3` needs the module loaded first. On a module the emulator has
+not reached yet it matches nothing and answers 0, and `trace_info/2` then reads
+`undefined`, so the count comes back missing rather than failing.
+`bench/paths/tiered.erl` never hit this because it warms the workload before
+setting the pattern.
+
+At the measured 11 words an interpreted operation:
+
+| component | words | share |
+| --- | ---: | ---: |
+| dispatch, 383,284,913 at 11 | 4,216,134,043 | **77.4%** |
+| instantiation | 7,848,819 | 0.14% |
+| lowering | 1,775,492 | 0.03% |
+| **accounted** | **4,225,758,354** | **77.6%** |
+
+Against the plan's 80% bar that is close and not there. It is also a different
+answer from QuickJS, where the same model reaches 62%, and the gap between the
+two workloads is itself unexplained.
+
+What it settles is what to do next. Everything that is not the interpreter
+running the guest's instructions is under half a per cent: lowering, decoding,
+validating, instantiating and the request itself, all of them together, cannot
+pay for more than a rounding error of a CPython cold start. The only lever with
+the right order of magnitude is not executing those 383 million operations
+interpreted.
+
+### The compiled tier refuses CPython, silently, at function 2049
+
+CPython never runs compiled, and the reason is neither the `_start` shape nor
+the one function refused for `too_many_locals`. The compilation is attempted,
+runs, and **throws**:
+
+    wasm_jit:compile/4 threw {error, {limit, too_many_functions}}
+
+`wasm_core` pre-generates every atom a compiled unit can use, because nothing a
+guest supplies may become an atom. `?MAX_FUNS` is **2048**, and its comment says
+what it was sized against: "qjs has 1666 compilable functions". One CPython
+request reaches **2,333**. `fun_name/1` raises at the 2049th, while `forms/8` is
+building the Core Erlang definitions (`wasm_core.erl:521`) and therefore before
+`compile:forms/2` is reached at all: the compiler worker is gone within 15
+seconds of what would have been a 464-second compile. It fails early, and
+`limits/0` exists so that "a caller can refuse before it starts rather than part
+way".
+
+What makes it invisible is what happens next. `compiler_loop/0` catches
+everything, gives the ask back and exits:
+
+| | |
+| --- | --- |
+| logged | nothing |
+| `wasm_jit:counts()` | unchanged, all zeros |
+| next hot call | asks again, and the whole thing repeats |
+
+So a caller sees a compiled tier that is enabled, asks for compilation on every
+call, and never reports an error or a compilation. Only an exception trace on
+`compile/4` says why.
+
+**A correction, and the trap that caused it.** An earlier version of this
+section said the ask does not survive the process that raised it, on the
+evidence that a spawned priming process left `workers` at 0 while a surviving
+one kept a compiler running. That was wrong twice over. The trace patterns that
+were supposed to show `compile/4` being entered had matched **nothing**, because
+`erlang:trace_pattern/3` on a module the emulator has not loaded answers 0 and
+`trace_info/2` then reads `undefined` -- the same trap this file already records
+for the dispatch counter, hit a second time in the same session. And the
+difference between the arms was the watch, not the runtime: QuickJS takes 165
+seconds to compile, and the failing arm had been given 60. With the patterns
+actually set, the spawned arm enters `compile/4` and its compiler is still
+running at 45 seconds.
+
+Set the pattern, then check it returned 1. A trace that matches nothing looks
+exactly like a runtime that does nothing.
+
+### A fresh instance that adopts before its first `_start` allocates 1.9% as much
+
+QuickJS, same guest and same request, measured the same way. The first arm is
+the cold interpreted run; the second is a fresh instance in a fresh process,
+after the module has been compiled, entering generated code on its **first and
+only** call:
+
+| | cold, interpreted | adopted before `_start` |
+| --- | ---: | ---: |
+| allocated | 28,145,449 | **532,789** |
+| collections | 32 minor, 14 major | 0 minor, 1 major |
+| clean wall | 53 ms | **16 ms** |
+| `entered` | 0 | **1** |
+
+**98.1% of the allocation is gone**, and the wall with it, 3.3x. The arm is not
+readable from the wall alone, which is why `entered` is in the table: it is 1,
+so this instance ran generated code on its first call, which is the thing that
+was in doubt.
+
+Compiling 402 functions took **165 seconds** and produced a 13.5 MB `.beam`,
+written to the on-disk cache. The cost is paid once per module, per runtime and
+per OTP version; the second emulator to see that module reads it back.
+
+This is the answer to the allocation question the whole investigation has been
+asking. The 5.45 G words CPython allocates are the interpreter executing 383
+million operations, and generated code does not allocate them. Nothing else
+measured -- lowering, decoding, validation, instantiation, the request itself --
+is worth one per cent.
+
+### CPython compiled: 4.9 seconds instead of 19.2, and 94% of the allocation gone
+
+`compile_shards => 4` is enough to get CPython past `?MAX_FUNS`. The split is by
+size, so 2,333 functions become four units of a few hundred each and
+`fun_name/1` is never asked for a 2049th name. **This needs no change to the
+runtime**: it is an existing limit, and the default is one shard.
+
+Fresh instance, fresh process, generated code adopted before its first and only
+`_start`:
+
+| | cold, interpreted | adopted, four shards |
+| --- | ---: | ---: |
+| allocated | 5,447,952,387 | **305,591,745** |
+| collections | 1102 minor, 171 major | 47 minor, 24 major |
+| GC share of the traced wall | 59.3% | 37.3% |
+| clean wall | 19,220 ms | **4,851 ms** |
+| `entered` | 0 | **1** |
+
+**94.4% of the allocation is gone and the cold start is 4.0x faster**, on a box
+that was at load average 13 for the compiled arm and 9.9 for the interpreted
+one, so the wall is if anything pessimistic.
+
+Compiling the 2,333 reached functions took **464 seconds** and wrote a 19.8 MB
+`.beam`.
+
+Both guests now say the same thing, and it is the answer the whole
+investigation was after: an interpreted `wasm32-wasi` start-up is dominated by
+interpreted dispatch, and generated code does not allocate it.
+
+| | QuickJS | CPython |
+| --- | ---: | ---: |
+| allocation removed | 98.1% | 94.4% |
+| wall | 53 ms to 16 ms | 19.2 s to 4.9 s |
+| functions compiled | 402 | 2,333 |
+| compile time, once | 165 s | 464 s |
+
+### Two shards against four
+
+`ceil(2333 / 2048)` is two, and two is what the automatic policy chooses. Four
+was measured first, by hand:
+
+| shards | clean wall | allocated | time to compiled | load during the arm |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 4,813 ms | 259,856,472 | 637 s | 4.73 |
+| 4 | 4,851 ms | 305,591,745 | 464 s | 13.24 |
+
+**Two shards allocate 15% less and compile 37% slower.** A call between units
+goes through `wasm_exec:shard_call/8` and a call within one does not, so fewer
+units means fewer crossings; more units means more of `compile:forms/2` running
+at once. The policy optimises the run, because the compile is paid once per node
+and the run is paid per instance.
+
+### The fix, and what it measures
+
+Three changes, and only the first is the one anybody would have guessed.
+
+**The refusal was not a value.** `wasm_core:forms/8` already ended in
+
+```erlang
+catch
+    throw:{limit, _} = L -> {error, L};
+    throw:{unsupported, _} = U -> {error, U}
+```
+
+and nothing in `src/` ever threw `{limit, _}`: `fun_name/1` and `frame_name/1`
+raise with `erlang:error/1`, so that clause was dead and the refusal escaped.
+The class was wrong at the boundary, not in the helpers -- `wasm_core_SUITE`
+asserts `?assertError` on both and still does -- so the catch matches `error:`
+now.
+
+What that looked like on the commit before, on a synthetic module of 2,056
+eligible functions:
+
+| | parent | now |
+| --- | --- | --- |
+| `compile_sync`, first call | **raises `{limit, too_many_functions}` into `wasm:call/3`** | `{ok, [11]}` |
+| `counts()` after | all zeros | `compiled => 2056, entered => 1` |
+| asynchronous, same module | `compiled => 0`, silence | compiled, entered |
+
+The synchronous arm is the sharper half: a runtime whose rule is that nothing
+raises was raising a compiler's internal bound at the embedder, on a call the
+interpreter would have answered correctly.
+
+**`auto` never split.** `auto_shards/1` returned 1 whatever it was given, so the
+split that keeps a unit under `max_funs` happened only when a caller asked for
+it by hand. It is now `ceil(NFuns / max_funs)`, capped at `?MAX_SHARDS`, and 1
+for anything that fits -- so a guest that fitted before is bit-identical.
+
+**The bin packing balanced words, not functions.** `bins/2` took the lightest
+bin outright. One QuickJS function is 98,191 words, so a word-balanced split
+puts it alone and everything else in the bin beside it: a shard count computed
+against the bound and a packing free to ignore it is not a bound. It now takes
+the lightest bin *that can still take a function*, with the count carried in the
+bin so the choice stays one comparison.
+
+**The refusal is visible and paced.** `counts/0` gains `refused`, `failed` and
+`crashed`; `diagnostics/0` gives the reasons, normalised to a bounded shape and
+kept 64 deep in an ETS ring owned like every other tier table. A refusal leaves
+the ask standing rather than releasing it, so the retry interval paces it: on
+the parent commit `release_ask/1` set the timestamp to zero and the next hot
+call asked again at once, for ever, invisibly.
+
+**What it buys**, both guests through `bench/paths/pyarms.erl` with
+`compile_shards` left at `auto`, each arm its own emulator:
+
+| | QuickJS | CPython |
+| --- | ---: | ---: |
+| shards resident | **1** | **2** |
+| `entered` on the first `_start` | 1 | 1 |
+| allocated | 554,383 | 282,396,699 |
+| clean wall | 14 ms | **3,941 ms** |
+| interpreted, for comparison | 53 ms, 28.1 M words | 19,220 ms, 5.45 G words |
+| refused / failed / crashed | 0 / 0 / 0 | 0 / 0 / 0 |
+| compiled, once | 402 functions, 1 s from cache | 2,333 functions, 609 s |
+
+Against the thresholds fixed before the measurement: CPython at most 6,000 ms
+and 300 M words, two shards, QuickJS one shard. All met.
+
+**The regression gate is inconclusive on timing and clean on structure.**
+`realbench.erl` on QuickJS, eleven interleaved pairs across two runs in both
+orderings, minimum per half: the arms are indistinguishable, and the spread
+inside one arm (1,568 to 1,656 ms) is wider than the gap between them. Every
+half ran above the protocol's load-average gate of 8 -- this box sat between 9
+and 14 throughout -- so no speed claim is made in either direction. The
+structural argument is the one that carries: QuickJS reaches 402 functions,
+stays in one unit, and never enters `shard_call/8`, and the interpreter's own
+path is not touched by any of this.
+
+### The disk cache saves 4% of a sharded compile
+
+Sharding is what gets CPython compiled, and it is also what stops the artifact
+being reusable. `wasm_jit:artifact/8` caches a unit only when it is the last in
+the chain:
+
+    %% Not cached when it is one of several. The key would have to carry which
+    %% module the chain points at next, and a shard set is only reproducible if
+    %% the same split falls out of the same workload, which nothing promises.
+
+Four shards, so one is written and three are rebuilt on every emulator. Measured
+by running the same arm twice against the same cache directory:
+
+| | cold cache | warm cache |
+| --- | ---: | ---: |
+| time to compiled | 464 s | **446 s** |
+| `cached` | 0 | 1 |
+| files in the cache directory | 1 | 1 |
+
+Which makes the on-disk cache worth **4%** here, and the whole 464 seconds is
+paid again by every node that runs this guest. For QuickJS, which fits in one
+unit, the same cache is worth the entire 165 seconds.
+
+So the two mechanisms that would make a large guest cheap are mutually
+exclusive as they stand: a module small enough to cache is one that fits under
+`?MAX_FUNS`, and a module that needs sharding to fit cannot be cached.
+
+### Making CPython fit one unit, and the cache that follows
+
+The two mechanisms stopped excluding each other by making the guest fit. The
+name pool went from 2048 to **4096**, so CPython's 2,333 executed functions are
+one unit rather than two, and a unit that ends its chain is the one
+`wasm_jit:artifact/8` will cache.
+
+**What the pool costs**, measured in a clean emulator per arm, separate builds
+rather than two pools in one node, `wasm_core` loaded and then `atoms/0` forced:
+
+| | 2048 + 512 | 4096 + 512 | change |
+| --- | ---: | ---: | ---: |
+| atoms created | 2,881 | 4,929 | +2,048 |
+| `erlang:memory(atom)` | +116,592 B | +155,504 B | **+38,912 B** |
+| `erlang:memory(atom_used)` | +116,540 B | +155,452 B | +38,912 B |
+| `erlang:memory(total)` | +271,768 B | +324,240 B | +52,472 B |
+| naming every slot again | 0 further atoms | 0 further atoms | -- |
+
+38 KB of atom memory, node-wide, paid lazily on the first compile. The
+alternative was `?MAX_SHARDS`, which reaches the same 16,384 ceiling and cannot
+do this job at all: more shards cannot make a 2,333-function set *one* unit, so
+it cannot make the artifact cacheable, and it spends code slots, of which the
+node has sixteen.
+
+**What one unit buys.** CPython, `auto`, fresh instance entering generated code
+on its first `_start`:
+
+| units | allocated | clean wall | time to compiled | load |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | 305,591,745 | 4,851 ms | 464 s | 13.24 |
+| 2 | 259,856,472 | 4,813 ms | 637 s | 4.73 |
+| **1** | **217,071,655** | **3,704 ms** | **1,105 s** | 3.11 |
+
+Monotone, and for the reason the four-shard arm already suggested: a call
+between units crosses through `wasm_exec:shard_call/8` and a call inside one
+does not. **29% less allocation in one unit than in four**, at the price of a
+compile with no parallelism left in it.
+
+**The allocation column is the claim; the wall column is not.** Each row is one
+run in its own emulator, not five interleaved pairs in both orderings, so it does
+not meet this file's bar for a speed claim and none is made. Allocated words are
+what the change is being judged on and they do not care about the load average.
+The three configurations cost about 40 minutes of compiling between them, on a
+box shared with other work, which is why the protocol was not run; it is the
+measurement to add if the wall difference ever has to be relied on.
+
+**And the compile is now paid once per node, not once per start.** A second
+emulator against the same cache directory:
+
+| | cold | warm |
+| --- | ---: | ---: |
+| time to compiled | 1,105 s | **2 s** |
+| `cached` | 0 | **1** |
+| shards resident | 1 | 1 |
+| `entered` on the first `_start` | 1 | 1 |
+| clean wall | 3,704 ms | 3,812 ms |
+
+The artifact is an 80 MB `.beam`. That is the item this file listed as open --
+"the compile recurs per node" -- closed for this guest, and closed by making it
+fit rather than by making the chain cacheable.
+
+**`compile_whole` on CPython does not finish, and the reason is memory.** With
+the pool at 4096 the ceiling is 16,384, so CPython's 11,447 eligible functions
+are no longer refused: `shard_count/2` asks for three units and the compiler
+starts. It was stopped after eleven minutes, not for being slow but for what it
+was doing to the box:
+
+| | |
+| --- | --- |
+| resident | **33 GB**, still climbing, on a 48 GB machine |
+| free memory | 66 MB |
+| CPU | 0%, so the time was paging and not compiling |
+| progress | `compiled => 0` at 600 s, nothing published |
+
+So the option is affordable exactly where `docs/compiled-tier.md` already says it
+is -- specification modules of a few functions each -- and the ceiling no longer
+refusing a 25 MB guest is not an invitation to point it at one. Compiling what
+ran, which is what every default does, is 2,333 functions and 1,105 seconds in
+16 GB less than this consumed before it was killed.
+
+Recorded because the alternative is somebody discovering it on a production
+node. The ceiling is a bound on names, not a promise that everything under it
+compiles.
+
+### `max_depth` did not survive a tier boundary
+
+Two mutually recursive functions, `max_depth => 1000`, one program, three ways of
+running it:
+
+| arm | deepest recursion that returns | counters |
+| --- | ---: | --- |
+| both interpreted | 999 | -- |
+| both compiled | 1,000 | `compiled 2, reentered 0` |
+| **one compiled, one interpreted** | **99,999**, the search ceiling | `compiled 1, entered 18, reentered 799,994` |
+
+The third row is unbounded recursion for an untrusted guest, bounded only by BEAM
+memory. **Four separate breaks**, and the first two are the ones the measurement
+found:
+
+1. `call_out/7` reduced the *ceiling* on the way out, and `init_state/4`
+   discarded it: with a `?BUDGET` present, which it always is under
+   `wasm:call/4`, both the depth and the ceiling come from the budget. Coming
+   back, `do_call/4` handed a depth relative to that interpreter run to a check
+   against an absolute ceiling. Each round trip started again.
+2. `check_depth(Inst, G0#g.d)` validated the *caller's* depth where `enter/5`
+   validates the depth of the frame doing the calling. `invoke_fn/4`'s own
+   comment says the argument is the caller's, so a generated function's own depth
+   is `deeper(G0)`, and compiled code got one frame more than interpreted. That
+   is the 1,000 against 999.
+3. `indirect_out/9`'s foreign branch ignored its `Depth` entirely, and
+   `foreign_call/5` never published the caller's, so **two instances calling each
+   other through a shared table evaded the limit the same way**: 8 and 9 frames
+   both returned against a limit of 8.
+4. Found while fixing the others: the interpreter checks before creating an
+   *interpreted* frame and did not before entering a *compiled* one. Generated
+   code checks before its own calls, not on entry, so a callee that returned
+   without calling sat one frame past the limit unnoticed. The mixed arm bounded
+   at 9 where both pure arms bounded at 8.
+
+All four now bound at the same frame. The fix is one helper -- publish the
+crossing depth into the budget, restore **only that field** afterwards, `after`
+so a trap restores it too. Only that field because the nested run raises fuel
+through `publish_fuel/1` and the host-call count through `charge_host_call/1`;
+putting the whole tuple back would let a compiled function reset
+`max_host_calls` by crossing out and returning.
+
+A per-call `max_depth` still cannot reach generated code, which reads its ceiling
+from the instance. Rather than put a process-dictionary read inside
+`check_depth/2`, on the compiled call path, `entry/3` refuses compiled entry when
+the call overrides it -- the same thing it already does for finite fuel.
+
+**Left open, and named rather than hidden.** A foreign callee that spends fuel
+and then throws loses its final fuel value: only `leave/2` publishes, and
+`uncaught/1` is `erlang:throw({wasm_exception, Exn})` and nothing else. And
+`foreign_call/5` reads the callee's *committed* `#mut{}`, so an A -> B -> A
+recursion does not see A's in-flight state, and the exception branch drops
+mutations B made before throwing. Neither is visible to a depth test.
+
+### A heap fuse on the compiler cannot be had at a price worth paying
+
+The admission ceiling bounds how many functions a request may contain and says
+nothing about how big their bodies are, so an accepted request can still exhaust
+a node. The obvious cover is `max_heap_size` with `kill => true` on whatever runs
+`compile:forms/2`: an unanticipated guest then dies as one killed compiler, which
+this design already handles, instead of as a paging node.
+
+It does not work, and the measurement says why in one line. **`compile:forms/2`
+spawns a process of its own and runs everything in it.** A limit set on the
+process `wasm_jit` spawns bounds a process that only waits:
+
+| | compile | our process's heap | node RSS |
+| --- | ---: | ---: | ---: |
+| default, the compiler spawns | **167 s** | **0.34 GB** | 6.19 GB |
+| `no_spawn_compiler_process` | **293 s** | **4.16 GB** | 7.01 GB |
+
+QuickJS, one unit, `full`, same box at load 2.5 for both.
+
+The option exists for callers that already own worker processes, which we are,
+and with it the growth happens where a fuse can see it: 0.34 GB becomes 4.16 GB.
+It also costs **75% more compile time**, and the reason is the mechanism itself.
+`compile:forms/2`'s child never collects: it allocates its several gigabytes,
+returns the binary and exits, and a dying process frees its heap without a
+collection. Doing the work in a process that has to live through it means paying
+for those collections.
+
+So the choice is a fuse that sees nothing, or one that costs three quarters of
+the compile time again. **Neither ships.** The ceiling lands, and bounding what a
+compile may spend stays open with the reason recorded: it is not a matter of
+picking a number, it is that the memory is spent in a process nobody but the OTP
+compiler can pass flags to.
+
+### The two demo shapes: one the tier can see, one it cannot
+
+`wasm_demo` is the worked example, and running it against this branch answers
+two separate questions: whether the depth fix costs the interpreter anything,
+and what the tier is worth to the shape a worker runtime actually wants.
+`origin/main` (66bee0a) against the branch head (3aee434), interleaved in both
+orderings, load average 1.7 to 6.8 throughout.
+
+**The demo as written is unchanged, and it had to be.** One blocking `_start`
+per worker, requests through a mailbox, both pinned guests:
+
+| | before | after |
+| --- | ---: | ---: |
+| js, first request | 282-583 ms | 279-318 ms |
+| js, steady, 6 runs x 199 requests (min / med) | 1.175 / 11.36 ms | 1.153 / 11.39 ms |
+| py, first request | 32.58-33.46 s | 32.48-32.78 s |
+| py, steady, 3 runs x 29 requests (min / med) | 6.12 / 9.23 ms | 5.80 / 7.82 ms |
+
+The sign flips with ordering on every row. None of this branch is on that path:
+`do_call/4`'s new depth check is in the `#st{code = {Mod, Gen}}` clause and an
+uncompiled instance takes `#st{code = undefined}`; WASI imports are charged by
+`charge_host_call/1` and never reach `with_depth/2`; and the new
+`multiple_supertypes` check fires only on a declared supertype, which neither
+guest has. The demo's own four entry points answer identically on hex 0.2.0,
+`origin/main` and this branch.
+
+**And that shape cannot use the tier at all.** With
+`compile => true, compile_after => 1` on the instance, both arms answer
+`compiled => 0, entered => 0`. `after_call/2` asks at the *end* of an outermost
+invocation, because that is when `wasm_instance:executed/1` is full, and the
+demo's `_start` is one invocation that blocks in `fd_read` for the worker's
+whole life. No option changes it: the worker is structurally outside the tier,
+and the fix is a different shape rather than a different setting.
+
+**A fresh instance per request is the shape that reaches it.** Same module, one
+JSON line in and one out, `profile => script`:
+
+| QuickJS, `qjs-wasi.wasm` | before | after |
+| --- | ---: | ---: |
+| interpreted | 98 ms | 98 ms |
+| interpreted while the compile runs | ~147 ms | ~147 ms |
+| compiled, tail 200 (min / med, 3 pairs) | 57.58 / 60.12 ms | 57.86 / 60.30 ms |
+| functions compiled / entries | 410 / 459-471 | 410 / 461-469 |
+| the tier lands at request | 420-432 | 422-430 |
+
+Identical, which is the row that had to be checked: `check_depth(deeper(G0))` is
+on the compiled call path. The switchover costs nothing visible either. The peak
+across it is 159 to 176 ms, against a 98 ms floor and a 147 ms
+compile-in-progress rate.
+
+CPython is the same shape and a different order of magnitude. The compile is
+long enough that paying for it in 16-second requests wastes an hour, so it is
+timed directly through `wasm_jit:await/2` instead:
+
+| CPython 3.12, `python.wasm` | before | after |
+| --- | ---: | ---: |
+| interpreted, 3 pairs, both orderings (min / med) | 15.15-15.83 / 15.69-16.25 s | 15.53-15.73 / 15.69-15.81 s |
+| the request that asks | 28.4-43.1 s | 28.2-44.0 s |
+| compile, one unit, `baseline` | did not complete | **567 s** |
+| artifact | -- | 72.5 MB |
+| functions compiled | -- | 2,332 |
+| compiled, per request, n=6 (min / med / max) | -- | **6.19 / 6.22 / 6.51 s** |
+
+**2.5x, and it costs 567 seconds of a core to get.** The same trade QuickJS
+makes, an order of magnitude further along: a guest that spends 15.7 seconds
+interpreting spends 6.2 compiled, and 91 requests go by before the compile has
+paid for itself.
+
+**And the compiler is not free while it runs.** A CPython request measured 15.7
+seconds with nothing else happening and **67.5 seconds** with the compile in
+flight, at 198% CPU and 4.59 GB resident. On a node serving requests, the
+compile is not background in any sense the latency budget recognises.
+
+**The `before` compile did not complete, twice, and nothing on that arm says
+why.** Once it died after roughly an hour with the emulator back to 0.13 GB and
+no counter moved; once no compiler process appeared under `wasm_jit_sup` at all
+for a full hour of waiting. **No causal claim is made**: `before` ran first on
+both attempts, so ordering is confounded, and the runs were stopped rather than
+repeated in the other order. What the two attempts do show is the diagnostic
+gap. `counts/0` on the parent is `#{compiled, entered, cached}` and there is no
+`diagnostics/0`, so a compile that dies or is never spawned is indistinguishable
+from one still running. The `failed`, `crashed` and `refused` counters and the
+diagnostics ring this branch adds are exactly the instrument that was missing,
+and finding that out took two hours of watching `compiled => 0`.
+
+**`wasm:compile/1` cannot reach the on-disk cache, and nothing says so.** It
+gives the module a fresh `reference()` identity, and both `wasm_jit:key/1` and
+`wasm_code_cache:key/6` key on that identity, so `key/6` answers `undefined` and
+`artifact/8` never stores. Verified directly: 410 functions compiled, cache
+directory empty. Through `wasm:load/1`, which passes the content hash, the same
+run writes the artifact and the next start adopts it:
+
+| QuickJS, per request | ms |
+| --- | ---: |
+| interpreted, `wasm:load/1` | 151 |
+| compiled, `wasm:load/1`, cold | 17 |
+| compiled, `wasm:load/1`, warm cache (`cached => 1`) | **17** |
+
+Warm is the point rather than the number: it is 17 ms from the first request
+instead of from request 425, and the 63 seconds of a core are not paid again.
+Interpreted, `wasm:load/1` is *slower* than `wasm:compile/1` by half, 151
+against 98 ms and reproducible across three runs each. That is unexplained, is
+the same on both arms, and is the measurement to chase if the interpreted path
+of a cached module ever matters.
+
+**Found while measuring, and not fixed here.** `wasm_jit:await/2` is spec'd
+`-spec await(#inst{}, timeout())` and computes
+`erlang:monotonic_time(millisecond) + Timeout`, so the `infinity` its own spec
+admits is a `badarith`. Identical on `origin/main`; it predates this branch.

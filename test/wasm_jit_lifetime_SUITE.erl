@@ -39,6 +39,11 @@ all() ->
      destroying_an_instance_gives_its_slot_lease_back,
      a_caller_that_never_destroys_keeps_a_bounded_entry_cache,
      a_module_split_across_shards_answers_the_same,
+     every_tier_bounds_recursion_at_the_same_depth,
+     a_per_call_max_depth_is_honoured_by_a_compiled_module,
+     a_crossing_does_not_roll_back_host_calls,
+     cross_instance_recursion_is_bounded,
+     a_crossing_without_a_budget_starts_where_it_is_told,
      a_profile_sets_what_you_did_not,
      an_unknown_profile_is_a_value_not_a_crash,
      both_engines_answer_the_same_bad_arguments].
@@ -616,6 +621,278 @@ serve() ->
         stop ->
             ok
     end.
+
+%% `max_depth` has to mean the same thing whichever tier is running.
+%%
+%% It did not. Two mutually recursive functions at `max_depth => 1000` reached
+%% 999 frames interpreted, 1000 compiled, and **99,999** when one of the two was
+%% compiled and the other was not: a crossing published a relative depth and the
+%% check compared it against an absolute ceiling, so every round trip started
+%% again. For an untrusted guest that is unbounded recursion.
+%%
+%% Bounded recursion with a base case, not a search: on the parent the mixed arm
+%% does not trap at all, so an unbounded version would hang rather than fail.
+every_tier_bounds_recursion_at_the_same_depth(_) ->
+    Plain = build(mutual_wat(plain)),
+    Mixed = build(mutual_wat(mixed)),
+    %% First, and on a clean slot table, because the arms below leave the module
+    %% resident and a later instance would adopt rather than compile: the mixed
+    %% module really is mixed. `b` reads an exported mutable global, which the
+    %% generator refuses with `global_get_ref`, so exactly one of the two is
+    %% compiled. Without this the case could pass by never splitting the tiers.
+    wasm_test_slots:reset(),
+    wasm_jit:reset_counts(),
+    {ok, I} = wasm:instantiate(Mixed, #{}, depth_opts()),
+    try
+        {ok, _} = wasm:call(I, ~"a", [2]),
+        {ok, _} = wasm:call(I, ~"a", [2]),
+        ?assertEqual(1, map_get(compiled, wasm_jit:counts()),
+                     "the mixed module compiled both functions or neither")
+    after
+        ok = wasm:destroy(I)
+    end,
+    %% `a(N)` is N+1 frames: itself and one per level. At `max_depth => 8` the
+    %% deepest that fits is `a(7)`, and `a(8)` is one too many.
+    [begin
+         wasm_jit:reset_counts(),
+         ?assertEqual({ok, [7]}, depth_call(M, Opts, 7), Name),
+         ?assertMatch({error, #{kind := call_stack_exhausted}},
+                      depth_call(M, Opts, 8), Name)
+     end
+     || {Name, M, Opts} <- [{interpreted, Plain, #{max_depth => 8}},
+                            {compiled, Plain, depth_opts()},
+                            {mixed, Mixed, depth_opts()}]],
+    ok.
+
+%% Generated code reads its ceiling from the instance, so an invocation that
+%% asks for a lower one has to interpret rather than quietly get the higher.
+%% `entry/3` refuses compiled entry for exactly that reason, as it already does
+%% for finite fuel.
+a_per_call_max_depth_is_honoured_by_a_compiled_module(_) ->
+    wasm_test_slots:reset(),
+    M = build(mutual_wat(plain)),
+    {ok, I} = wasm:instantiate(M, #{}, depth_opts()),
+    try
+        %% Resident and entered at the instance's own limit of 8.
+        {ok, _} = wasm:call(I, ~"a", [2]),
+        {ok, _} = wasm:call(I, ~"a", [2]),
+        wasm_jit:reset_counts(),
+        %% Four frames fit; five do not, at the limit this *call* asked for.
+        ?assertMatch({ok, _}, wasm:call(I, ~"a", [3], #{max_depth => 4})),
+        ?assertMatch({error, #{kind := call_stack_exhausted}},
+                     wasm:call(I, ~"a", [4], #{max_depth => 4})),
+        ?assertEqual(0, map_get(entered, wasm_jit:counts()),
+                     "a call that overrode max_depth still entered generated "
+                     "code, where the override cannot be seen")
+    after
+        ok = wasm:destroy(I)
+    end.
+
+%% A guard rather than a reproduction: it passes on the parent, which does not
+%% touch the budget at a crossing at all. What it pins is the shape of the fix.
+%% The crossing publishes the depth into the budget and takes only the depth
+%% back; restoring the whole tuple would put the host-call count back with it,
+%% and a compiled function could then spend `max_host_calls` again on every
+%% return.
+a_crossing_does_not_roll_back_host_calls(_) ->
+    wasm_test_slots:reset(),
+    M = build(host_loop_wat()),
+    Imports = #{{~"env", ~"tick"} => fun(_Ctx, []) -> {ok, []} end},
+    {ok, I} = wasm:instantiate(M, Imports,
+                               (depth_opts())#{max_depth => 64,
+                                               max_host_calls => 10}),
+    try
+        %% Ten are allowed; the eleventh is not, however many crossings it took
+        %% to get there.
+        ?assertMatch({error, #{kind := host_call_limit}},
+                     wasm:call(I, ~"a", [20]))
+    after
+        ok = wasm:destroy(I)
+    end.
+
+%% The branch nothing else reaches. A guard, and it passes on the parent.
+%%
+%% Every other case here enters through `wasm:call/4`, which always installs a
+%% `?BUDGET`, so none of them touches this branch at all. This calls the crossing
+%% directly, with no budget in the process, and asserts both halves together: the
+%% nested interpreter starts at the absolute depth it was given, *and* it keeps
+%% the instance's whole ceiling.
+%%
+%% Both halves, because either alone is right by accident. The parent paired a
+%% reduced ceiling with a zero base and this one pairs an absolute base with the
+%% full ceiling, and the two allow exactly the same number of frames -- which is
+%% why the parent passes. What fails is doing half of it: an absolute base with
+%% the ceiling still reduced allows `max_depth - 2 * Depth`.
+a_crossing_without_a_budget_starts_where_it_is_told(_) ->
+    M = build(mutual_wat(plain)),
+    {ok, I} = wasm:instantiate(M, #{}, #{max_depth => 8}),
+    try
+        ?assertEqual(undefined, get(wasm_budget),
+                     "this case is only meaningful without a budget"),
+        Mut = wasm_instance:mut(I),
+        %% `a(1)` is two frames. Handed depth 6 it takes 7 and 8 and returns;
+        %% handed 7 it would need 9 and traps. `a` is function index 0.
+        ?assertEqual({ok, [1]},
+                     wasm_error:capture(
+                       fun() ->
+                           {R, _} = wasm_exec:call_out(I, Mut, 0, [1], 6,
+                                                       ?MODULE, 0),
+                           {ok, R}
+                       end)),
+        ?assertMatch({error, #{kind := call_stack_exhausted}},
+                     wasm_error:capture(
+                       fun() ->
+                           {R2, _} = wasm_exec:call_out(I, Mut, 0, [1], 7,
+                                                        ?MODULE, 0),
+                           {ok, R2}
+                       end))
+    after
+        ok = wasm:destroy(I)
+    end.
+
+%% `call_out/7` names a generated module so the interpreter it crosses into can
+%% call back the other way. This suite stands in for one: nothing here is
+%% compiled, so every callee is `not_compiled` and stays interpreted.
+invoke(_Inst, _Mut, _Idx, _Args, _Depth, _Gen) -> {error, not_compiled}.
+
+%% Two instances calling each other through a table one of them exports.
+%%
+%% `indirect_out/9`'s foreign branch ignored the depth it was given, and
+%% `foreign_call/5` never published the caller's, so a pair of instances could
+%% recurse for ever inside `max_depth`. On the parent both arms below reach 9
+%% frames against a limit of 8, and keep going.
+%%
+%% Depth only. Fuel is a separate defect -- a foreign callee that throws loses
+%% its final fuel value, because only `leave/2` publishes and `uncaught/1` does
+%% not -- and asserting it here would assert a bug this commit does not fix.
+cross_instance_recursion_is_bounded(_) ->
+    wasm_test_slots:reset(),
+    [begin
+         wasm_jit:reset_counts(),
+         {IA, IB} = linked_pair(Opts),
+         try
+             %% Bounded by a counter with a base case: on the parent the depth
+             %% resets, so an unbounded recursion would not stop and the case
+             %% would hang rather than fail.
+             ?assertEqual({ok, [7]}, wasm:call(IA, ~"a", [7]), Name),
+             ?assertMatch({error, #{kind := call_stack_exhausted}},
+                          wasm:call(IA, ~"a", [8]), Name)
+         after
+             ok = wasm:destroy(IB), ok = wasm:destroy(IA)
+         end
+     end || {Name, Opts} <- [{interpreted, #{max_depth => 8}},
+                             {compiled, depth_opts()}]],
+    %% And the compiled arm reached the branch it names. Without this it could
+    %% fall back to `foreign_call/5`, still fail on the parent, still pass here,
+    %% and never touch `indirect_out/9`.
+    wasm_test_slots:reset(),
+    wasm_jit:reset_counts(),
+    {module, _} = code:ensure_loaded(wasm_exec),
+    1 = erlang:trace_pattern({wasm_exec, indirect_out, 9}, true, [call_count]),
+    try
+        {IA, IB} = linked_pair(depth_opts()),
+        try
+            {ok, _} = wasm:call(IA, ~"a", [2]),
+            {ok, _} = wasm:call(IA, ~"a", [2]),
+            ?assert(map_get(entered, wasm_jit:counts()) >= 1,
+                    "the compiled arm never entered generated code"),
+            {call_count, N} = erlang:trace_info({wasm_exec, indirect_out, 9},
+                                                call_count),
+            ?assert(N > 0, "generated code never reached indirect_out/9")
+        after
+            ok = wasm:destroy(IB), ok = wasm:destroy(IA)
+        end
+    after
+        _ = erlang:trace_pattern({wasm_exec, indirect_out, 9}, false,
+                                 [call_count])
+    end.
+
+%% `a` in one instance and `b` in another, each calling the other through the
+%% table the first exports and the second imports.
+linked_pair(Opts) ->
+    {ok, IA} = wasm:instantiate(build(peer_wat(0)), #{}, Opts),
+    {ok, T} = wasm:extern(IA, ~"t"),
+    {ok, IB} = wasm:instantiate(build(peer_wat(1)),
+                                #{{~"env", ~"t"} => T},
+                                (maps:remove(compile, Opts))#{link => IA}),
+    {IA, IB}.
+
+%% Slot 0 holds the importer's function, slot 1 the exporter's, so each side
+%% calls the other by index.
+peer_wat(0) ->
+    ~"(module
+        (type $ii (func (param i32) (result i32)))
+        (table (export \"t\") 2 funcref)
+        (elem (i32.const 1) $a)
+        (func $a (export \"a\") (param i32) (result i32)
+          local.get 0 i32.eqz
+          if (result i32) i32.const 0
+          else local.get 0 i32.const 1 i32.sub i32.const 0
+               call_indirect (type $ii) i32.const 1 i32.add end))";
+peer_wat(1) ->
+    ~"(module
+        (type $ii (func (param i32) (result i32)))
+        (import \"env\" \"t\" (table $t 2 funcref))
+        (elem (table $t) (i32.const 0) func $b)
+        (func $b (param i32) (result i32)
+          local.get 0 i32.eqz
+          if (result i32) i32.const 0
+          else local.get 0 i32.const 1 i32.sub i32.const 1
+               call_indirect (type $ii) i32.const 1 i32.add end))".
+
+%% `a` calls the import, then `b`, which calls `a`. With `b` reading an exported
+%% mutable global it is refused, so every other level is a crossing and every
+%% level makes a host call.
+host_loop_wat() ->
+    ~"(module
+        (import \"env\" \"tick\" (func $tick))
+        (global $g (export \"g\") (mut i32) (i32.const 0))
+        (func $a (export \"a\") (param i32) (result i32)
+          call $tick
+          local.get 0 i32.eqz
+          if (result i32) i32.const 0
+          else local.get 0 i32.const 1 i32.sub call $b i32.const 1 i32.add end)
+        (func $b (param i32) (result i32)
+          global.get $g drop
+          local.get 0 i32.eqz
+          if (result i32) i32.const 0
+          else local.get 0 i32.const 1 i32.sub call $a i32.const 1 i32.add end))".
+
+depth_opts() -> #{max_depth => 8, compile => true, compile_after => 1,
+                  compile_sync => true, compile_shards => 1}.
+
+%% Warmed, so a compiled arm is actually compiled before the depths are probed.
+depth_call(M, Opts, N) ->
+    {ok, I} = wasm:instantiate(M, #{}, Opts),
+    try
+        _ = wasm:call(I, ~"a", [1]),
+        _ = wasm:call(I, ~"a", [1]),
+        wasm:call(I, ~"a", [N])
+    after
+        ok = wasm:destroy(I)
+    end.
+
+%% `a` calls `b` calls `a`, one frame per level, with a base case at zero.
+%%
+%% `mixed` gives `b` a read of an exported mutable global, which becomes a
+%% reference cell rather than a value and is refused with
+%% `{unsupported, global_get_ref}`. `a` still compiles, so every level crosses
+%% the boundary.
+mutual_wat(Kind) ->
+    Read = case Kind of
+               mixed -> " global.get $g drop";
+               plain -> ""
+           end,
+    iolist_to_binary(
+      ["(module (global $g (export \"g\") (mut i32) (i32.const 0))
+         (func $a (export \"a\") (param i32) (result i32)
+           local.get 0 i32.eqz
+           if (result i32) i32.const 0
+           else local.get 0 i32.const 1 i32.sub call $b i32.const 1 i32.add end)
+         (func $b (export \"b\") (param i32) (result i32)", Read,
+       "   local.get 0 i32.eqz
+           if (result i32) i32.const 0
+           else local.get 0 i32.const 1 i32.sub call $a i32.const 1 i32.add end))"]).
 
 %%% -------------------------------------------------------------- helpers ---
 

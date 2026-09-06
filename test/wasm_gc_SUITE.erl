@@ -19,6 +19,7 @@ all() ->
      identical_types_in_separate_groups_are_the_same,
      a_forward_reference_is_unknown,
      a_final_type_cannot_be_subtyped,
+     a_type_may_declare_only_one_supertype,
      a_mutable_field_is_invariant,
      packed_fields_round_trip_through_their_width,
      ref_eq_compares_identity_not_contents,
@@ -102,6 +103,15 @@ a_forward_reference_is_unknown(_Config) ->
 a_final_type_cannot_be_subtyped(_Config) ->
     ?assertMatch({error, #{class := invalid, kind := subtype_of_final}},
                  wasm:load(subtype_of_final())).
+
+%% The binary format encodes supertypes as a vector, so two of them decode
+%% cleanly; the specification bounds that vector at one. Validation used to walk
+%% whatever the vector held and check each entry on its own, which is coherent
+%% and is not the language. `type-subtyping.wast` asserts it as "multiple
+%% supertypes", and this says the same thing without needing that checkout.
+a_type_may_declare_only_one_supertype(_Config) ->
+    ?assertMatch({error, #{class := invalid, kind := multiple_supertypes}},
+                 wasm:load(two_supertypes())).
 
 %% A mutable field is written through as well as read, so narrowing it in a
 %% subtype would let a write through the supertype store a value the subtype's
@@ -191,6 +201,18 @@ subtype_of_final() ->
                             [16#5F, wasm_asm:uleb(0)],          % final struct
                             [16#50, wasm_asm:uleb(1), wasm_asm:uleb(0),
                              16#5F, wasm_asm:uleb(0)]])]).      % sub of it
+
+%% Two open parents and a child naming both: valid to decode, invalid to accept.
+two_supertypes() ->
+    wasm_asm:module(
+      [wasm_asm:section(1, [wasm_asm:uleb(3),
+                            [16#50, wasm_asm:uleb(0),
+                             16#5F, wasm_asm:uleb(0)],          % open struct
+                            [16#50, wasm_asm:uleb(0),
+                             16#5F, wasm_asm:uleb(0)],          % open struct
+                            [16#50, wasm_asm:uleb(2),
+                             wasm_asm:uleb(0), wasm_asm:uleb(1),
+                             16#5F, wasm_asm:uleb(0)]])]).      % sub of both
 
 %% A supertype with one mutable anyref field, and a subtype narrowing it.
 narrowed_mutable_field() -> narrowed_field(1).

@@ -84,6 +84,34 @@ That is one shot: a function that first runs after the module was built stays
 interpreted. So this suits long-lived instances of modules you run repeatedly,
 and a workload whose hot set changes over time gets less from it.
 
+**A very large hot set is compiled into several BEAM modules, not one.** Every
+name a unit can use comes from a pool generated at startup, because nothing a
+guest supplies may become an atom, and that pool is **4096** functions deep. A
+hot set past it is split across as many as four units, automatically; below it
+nothing is split, and you want it not to be, for two reasons. A call between
+units is a crossing rather than a call, which costs: CPython allocates 217 M
+words in one unit against 306 M in four. And **only a unit that ends its chain
+is cached on disk**, so a split hot set is recompiled on every node.
+
+Ask `wasm_jit:shard_count(NFuns, Limits)` what a given hot set would do, or
+`wasm_jit:shards(Instance)` how many units it is actually resident in.
+
+CPython 3.12 reaches 2,333 functions in a single `_start`, which is one unit and
+an 80 MB artifact: 1,105 seconds to compile the first time, two seconds on the
+next node to see it.
+
+Past four units there is no split that fits, and the answer is a refusal rather
+than silence:
+
+    1> wasm_jit:counts().
+    #{compiled => 0, entered => 0, reentered => 0, cached => 0,
+      refused => 1, failed => 0, crashed => 0}
+    2> wasm_jit:diagnostics().
+    [{refused, {{sha256, <<...>>}, 3}, {limit, {too_many_functions, 16385}}}]
+
+`counts/0` says how many, `diagnostics/0` says what: the reasons are normalised
+to a bounded shape and the last few dozen are kept.
+
 ## What turns it off underneath you
 
 **Every refusal means interpret**, and none of them is an error: a function
@@ -171,7 +199,7 @@ generated code having run.
 | option | what it changes |
 | --- | --- |
 | `compile_sync` | compile on the calling process, so the next call is already compiled |
-| `compile_whole` | compile every eligible function, not only the ones that have run |
+| `compile_whole` | compile every eligible function, not only the ones that have run. Honoured on the background path as well as under `compile_sync`; it silently was not, and compiled what had run instead |
 | `compile_force` | raise on a compile error instead of interpreting |
 
 `wasm_spec_SUITE:compiled_phase` sets all three and then asserts
@@ -182,6 +210,12 @@ specification says -1.
 `compile_whole` is not a tuning knob. Compiling every function of QuickJS is 74
 seconds against about 8 for the hot set. Specification modules are a few
 functions each, which is why it is affordable there and nowhere else.
+
+**Nowhere else is meant literally.** Pointed at CPython 3.12, whose 11,447
+eligible functions are inside the four-unit ceiling and so are not refused, it
+reached 33 GB resident on a 48 GB machine in eleven minutes, published nothing,
+and spent that time paging rather than compiling. The ceiling bounds the names a
+unit can use; it is not a promise that everything under it will compile.
 
 ## Pick a profile instead of the knobs
 
@@ -217,13 +251,14 @@ An unrecognised profile is `{error, #{kind := unknown_profile}}`, not a crash.
 
 ## Short notes
 
-- `baseline` is the default: it skips the OTP compiler's SSA optimiser, which
-  costs **123.1 seconds against 54.8** on QuickJS's hot set and buys nothing
-  measurable. The warm run is 141.1 ms against 142.1, and a tight arithmetic
-  loop is 3.35 ns an iteration either way over five interleaved pairs. Ask for
-  `#{compile_quality => full}` if you find a workload where it pays; the 86%
-  penalty this default once existed to avoid is no longer reproducible.
-  Figures in `test/audit/PERF.md`.
+- `full` is the default, which the profile table above says and this note used
+  to contradict. `baseline` skips the OTP compiler's SSA optimiser and was the
+  default while that optimiser bought nothing measurable; it buys something now,
+  because the generator states value ranges the pass can use. QuickJS is **75.0
+  to 76.8 ms at `full` against 86.1 to 87.7 at `baseline`**, and `full` costs
+  129.3 seconds against 58.1 to compile the hot set. Ask for
+  `#{compile_quality => baseline}` when the compile time matters more than the
+  run. Figures in `test/audit/PERF.md`.
 - Turning the tier on by default is a decision that has not been made. Every
   gate passes; the recommendation is still no, because it is 8.4x on one real
   workload and flat on another.

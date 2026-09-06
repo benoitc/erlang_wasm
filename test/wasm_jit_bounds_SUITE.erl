@@ -20,6 +20,7 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("wasm/include/wasm.hrl").
+-include_lib("wasm/include/wasm_exec.hrl").
 
 %% Measured, on the pinned guest recorded in `test/audit/PERF.md`: CPython 3.12
 %% reaches this many functions in one `_start`, and has this many eligible in
@@ -54,7 +55,10 @@ groups() ->
        normalising_never_builds_the_representation,
        a_compile_over_the_ceiling_is_refused_and_the_guest_still_answers,
        the_ceiling_reaches_the_process_that_runs_the_compiler,
-       a_bad_ceiling_is_reported_once_and_compiles_anyway]},
+       a_bad_ceiling_is_reported_once_and_compiles_anyway,
+       a_compile_past_the_node_budget_is_refused_and_retried,
+       one_request_larger_than_the_whole_budget_still_compiles,
+       a_killed_compiler_gives_its_budget_back]},
      %% Its own group because it stops the application, which takes the store
      %% and its tables with it. A test process cannot delete them: they are
      %% bequeathed to `wasm_store_sup`.
@@ -88,6 +92,117 @@ end_per_testcase(_, _) ->
     ok.
 
 %%% ---------------------------------------------------------------- cases ---
+
+%% A heap ceiling bounds one compiler. This is the other half: what the node may
+%% have in flight at once. One compile holds the budget, and a second that does
+%% not fit beside it is refused rather than queued.
+%%
+%% Watched to fail on the parent commit, where `compile_budget_words` is read by
+%% nothing and both compile.
+a_compile_past_the_node_budget_is_refused_and_retried(_) ->
+    %% Slow on purpose. The holder has to still be compiling while the second
+    %% attempt is made, and a module that compiles in milliseconds would make
+    %% this a race the test loses silently by passing.
+    %% Two *different* modules. The same one twice contends for the slot rather
+    %% than for the budget: the second caller finds it already `loading` and
+    %% answers `retry` without ever reaching admission, so the case would pass
+    %% while proving nothing about the budget.
+    M = build(many_wat(400)),
+    N = build(many_wat(401)),
+    One = one_unit_words(M),
+    %% Room for one of these and not for two, derived rather than guessed: a
+    %% literal would stop bounding anything the day the IR changed size.
+    with_budget(One + (One div 2), fun () ->
+        Holder = hold_budget(M),
+        try
+            {ok, J} = wasm:instantiate(N, #{}, sync(whole())),
+            ?assertEqual({ok, [11]}, wasm:call(J, ~"f", [10])),
+            ?assert(refused() >= 1),
+            ?assertMatch([{refused, _, {limit, {compile_budget, _}}} | _],
+                         wasm_jit:diagnostics()),
+            ok = wasm:destroy(J)
+        after
+            release_hold(Holder)
+        end
+    end),
+    ?assertEqual(0, budget_or(0)).
+
+%% A budget smaller than a single request must not refuse it for ever. Nothing
+%% would ever compile on a node whose budget was set below one guest's hot set,
+%% which is a configuration mistake that should cost nothing.
+one_request_larger_than_the_whole_budget_still_compiles(_) ->
+    M = build(many_wat(64)),
+    with_budget(1, fun () ->
+        {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+        ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+        ?assert(compiled() > 0),
+        ?assertEqual(0, refused()),
+        ok = wasm:destroy(I)
+    end).
+
+%% The `after` in `admitted/9` covers a compile that returns or traps. It cannot
+%% cover one that is killed, and that is what the monitor is for.
+a_killed_compiler_gives_its_budget_back(_) ->
+    M = build(many_wat(400)),
+    One = one_unit_words(M),
+    with_budget(One * 4, fun () ->
+        Holder = hold_budget(M),
+        ?assert(budget_or(1) > 0),
+        %% Killed, not released: no `after` runs for this.
+        exit(Holder, kill),
+        ?assertEqual(ok, until(fun () -> budget_or(0) =:= 0 end, 5000))
+    end).
+
+%% One compile, admitted and still running. It is left running rather than
+%% suspended: the module is slow enough that it is certainly still holding when
+%% the caller returns, and suspending would only add a race of its own.
+hold_budget(M) ->
+    Pid = spawn(fun () ->
+                    {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+                    _ = wasm:call(I, ~"f", [10]),
+                    ok
+                end),
+    %% Wait for the budget to move, not for the process to start: the
+    %% reservation is a `gen_server` call it has still to make.
+    ?assertEqual(ok, wait_holding()),
+    Pid.
+
+release_hold(Pid) ->
+    exit(Pid, kill),
+    ?assertEqual(ok, until(fun () -> budget_or(0) =:= 0 end, 10000)).
+
+%% Wait until the holder is actually holding.
+%%
+%% Guarded, so this works on a commit that has no budget at all. With the API
+%% it waits for the reservation itself; without it, for the slot claim that
+%% immediately precedes one. Ungurded, every case using it fails on the parent
+%% with `undef` on a helper, and that failure looks exactly like the one a
+%% present-but-broken bound would produce.
+wait_holding() ->
+    case has_budget_api() of
+        true -> until(fun () -> wasm_code_slots:budget() > 0 end, 30000);
+        false -> until(fun () -> loading_owners() =/= [] end, 30000)
+    end.
+
+budget_or(Default) ->
+    case has_budget_api() of
+        true -> wasm_code_slots:budget();
+        false -> Default
+    end.
+
+has_budget_api() ->
+    _ = code:ensure_loaded(wasm_code_slots),
+    erlang:function_exported(wasm_code_slots, budget, 0).
+
+%% What one whole-module unit of this module weighs, asked of the same function
+%% the runtime weighs it with.
+one_unit_words(M) ->
+    {ok, I} = wasm:instantiate(M, #{}, #{}),
+    Fns = [F || F <- tuple_to_list(I#inst.funcs), is_record(F, fn)],
+    W = lists:sum([erts_debug:flat_size(wasm_instance:compiler_ir(F, I))
+                   || F <- Fns]),
+    ok = wasm:destroy(I),
+    W.
 
 %% The ceiling fires, the outcome is a value naming the configured number, and
 %% the guest is unaffected. Watched to fail on the parent commit, where
@@ -820,6 +935,17 @@ loading_owners() ->
             Pid <- maps:values(Leases), is_pid(Pid)].
 
 opts() -> #{compile => true, compile_after => 1}.
+
+with_budget(Words, F) ->
+    Was = application:get_env(wasm, compile_budget_words),
+    ok = application:set_env(wasm, compile_budget_words, Words),
+    try F()
+    after
+        case Was of
+            undefined -> application:unset_env(wasm, compile_budget_words);
+            {ok, Old} -> application:set_env(wasm, compile_budget_words, Old)
+        end
+    end.
 
 min_heap_words() ->
     {min_heap_size, Min} = erlang:system_info(min_heap_size),

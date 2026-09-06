@@ -186,6 +186,24 @@ A value that is not a whole number of words between `min_heap_size` and
 `(1 bsl 59) - 1` is reported once through `logger` and ignored, rather than
 turning the tier off for the life of the node.
 
+## Bound what the whole node has in flight
+
+The ceiling above bounds one compiler. Sixteen slots means up to sixteen of
+them, so it is not a bound on the node:
+
+```erlang
+application:set_env(wasm, compile_budget_words, 4_000_000).
+```
+
+In IR words, which is what a compile's cost tracks. A request that does not fit
+beside what is already running is **refused**, so the guest interprets and asks
+again at the next hot call; nothing is queued, because a caller that waited
+would hold the unit IR it was admitted to compile for the whole wait.
+
+A request larger than the entire budget still compiles when nothing else is
+running, so a budget set below one guest's hot set slows compilation down
+instead of stopping it. Also off by default.
+
 **Off by default, and the directory is as trusted as your release.** Loading a
 `.beam` from it executes whatever is in that file, so it must not be writable by
 anything you would not run as code.

@@ -56,7 +56,7 @@ moved, because even with all three a refusal still interprets.
 
 -export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
 -export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
--export([compile_limits/0, max_heap_words/0]).
+-export([compile_limits/0, max_heap_words/0, compile_budget_words/0]).
 -export([reentered/0]).
 -export([compiler_loop/0]).
 -export([dump/1, dump/2]).
@@ -739,6 +739,11 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
                         0 -> #{};
                         _ -> #{max_heap_words => Words}
                     end,
+            %% Weighed and admitted here, which is after the IR exists and
+            %% before any Core does. Admitting later would mean a request that
+            %% is turned away had already built the largest term in the
+            %% compile; admitting earlier would mean guessing its size.
+            Budget = compile_budget_words(),
             {_Name, Gen} = Token,
             Stamp = stamp(Inst, Gen),
             case split(Unit, Limits) of
@@ -748,10 +753,35 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
                     ok = wasm_code_slots:abort(Token),
                     {refused, {limit, {too_many_functions, N}}};
                 Parts ->
-                    build(Inst, Limits, Mode, Stamp, Unit, Parts,
-                          [{Mod, Token}], COpts)
+                    admitted(Inst, Limits, Mode, Stamp, Unit, Parts,
+                             {Mod, Token}, COpts, Budget)
             end
     end.
+
+%% The budget is held for the whole build and given back however it ends,
+%% including a trap on the way out. A compiler that is *killed* gives it back
+%% too, through the monitor `wasm_code_slots` took, which is the case an
+%% `after` cannot cover.
+admitted(Inst, Limits, Mode, Stamp, Unit, Parts, {Mod, Token}, COpts, Budget) ->
+    Weight = ir_words(Unit),
+    case wasm_code_slots:acquire(Weight, Budget) of
+        {error, busy} ->
+            ok = wasm_code_slots:abort(Token),
+            {refused, {limit, {compile_budget, Weight}}};
+        ok ->
+            try build(Inst, Limits, Mode, Stamp, Unit, Parts, [{Mod, Token}],
+                      COpts)
+            after
+                ok = wasm_code_slots:release_budget()
+            end
+    end.
+
+%% What `split/2` weighs shards by, over the whole request. On the sharded path
+%% it is computed again there; the duplication is one traversal of a term the
+%% compile is about to spend a minute on, and sharing it would mean threading a
+%% weight through four functions that have no use for it.
+ir_words(Unit) ->
+    lists:sum([erts_debug:flat_size(IR) || {_P, _I, _F, IR} <- Unit]).
 
 %% One unit or several, and the difference is only how many slots are held.
 %%
@@ -861,7 +891,8 @@ bounds a single unit has.
 -spec compile_limits() -> #{atom() => non_neg_integer()}.
 compile_limits() ->
     #{max_compile_funs => ?MAX_COMPILE_FUNS, max_shards => ?MAX_SHARDS,
-      max_heap_words => max_heap_words()}.
+      max_heap_words => max_heap_words(),
+      budget_words => compile_budget_words()}.
 
 -doc """
 The heap ceiling a compile would be given, in words, or 0 for none.
@@ -874,6 +905,24 @@ of a compile.
 """.
 -spec max_heap_words() -> non_neg_integer().
 max_heap_words() -> element(1, resolve_max_heap_words()).
+
+-doc """
+The node's whole compile budget in IR words, or 0 for none.
+
+A heap ceiling bounds one compiler; sixteen of them under it is not a bound on
+the node. This is what the whole node may have in flight at once. Off by
+default, and like the ceiling it refuses rather than queues: a request that does
+not fit interprets and asks again at the next hot call.
+""".
+-spec compile_budget_words() -> non_neg_integer().
+compile_budget_words() ->
+    case application:get_env(wasm, compile_budget_words, undefined) of
+        undefined -> 0;
+        W when is_integer(W), W >= 0 -> W;
+        %% A bad value is no budget, said the same way a bad ceiling is: a typo
+        %% must not bound the node at zero and refuse every compile there is.
+        _ -> 0
+    end.
 
 %% Answers the effective value *and* what to say about it, because the two
 %% cannot be recovered from one another: a bad value and an absent one both

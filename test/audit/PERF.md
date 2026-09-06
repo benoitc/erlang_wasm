@@ -4583,3 +4583,56 @@ And a fourth, in the fix rather than the test: the reaper was spawned as
 `spawn(fun () -> reap(Owner, self()) end)`, where `self()` is the *reaper's* pid.
 It monitored itself, killed itself when the owner died, and left the compiler it
 exists to stop running to completion. The case caught it.
+
+## The other half of the bound: one budget the whole node draws on
+
+The heap ceiling bounds one compiler. The slot pool allows sixteen, and sixteen
+compilers each under a ceiling is not a bound on the node: `?MAX_COMPILE_FUNS`
+is per request, `compile_max_heap_words` is per process, and neither says what
+may be in flight at once. `src/wasm_jit.erl:448` has said so all along, in its
+own words: "Nothing bounds the number of compilers except the sixteen slots."
+
+`compile_budget_words` is that bound, in IR words, which is the quantity
+`split/2` already weighs shards by and the one that predicts what a compile
+costs. A request that does not fit is **refused**, so the guest interprets and
+asks again at the next hot call, and `wasm_jit:diagnostics/0` says
+`{limit, {compile_budget, Words}}`.
+
+Three decisions worth their reasons.
+
+**Refuse, never queue.** A caller that waited would be holding the unit IR it
+was admitted to compile for the whole wait, which is the memory the budget
+exists to bound. Refusing gives it back at once and the ask's own retry interval
+paces the next attempt.
+
+**A request larger than the whole budget is still admitted, when nothing else is
+out.** Otherwise a budget set below one guest's hot set refuses every compile
+there is, for ever, and a configuration mistake becomes a silent permanent
+outage. The bound is on *concurrency of large compiles*, not on their size;
+size is what the admission ceiling and the heap ceiling are for.
+
+**The reservation is monitored, not just wrapped in an `after`.** `admitted/9`
+gives the words back however the build ends, including a trap on the way out.
+It cannot give them back for a compiler that is *killed*, which is the ordinary
+case here: `wasm_jit_sup` kills brutally and the heap ceiling kills untrappably.
+`wasm_code_slots` monitors the holder, so a killed compiler returns its words
+without anything having to notice.
+
+Off by default, for the same reason the ceiling is: there is no number right for
+every deployment, and the failure mode of a wrong one is a tier that quietly
+stops compiling.
+
+### Two ways this test passed while proving nothing
+
+Both found by running it against the parent commit, and both are the same trap
+in different clothes.
+
+- **The same module twice contends for the slot, not the budget.** The second
+  caller finds it already `loading` and answers `retry` before admission is ever
+  reached, so the case passed with the budget doing nothing. It takes two
+  distinct modules to make them contend for the budget at all.
+- **`undef` on a helper is not a differential.** Waiting on
+  `wasm_code_slots:budget/0` makes the case fail on any commit that lacks the
+  function, which is a failure indistinguishable from the one a present but
+  broken bound would produce. Guarded, the case reaches its real assertion and
+  fails on the parent at `refused() >= 1`, which is the defect.

@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### The compiled tier runs the OTP compiler in a process it owns
+
+`compile:forms/2` runs its passes in a process of its own and gives a caller no
+way to configure it, so anything set on the process `wasm_jit` spawns bound a
+process that only waits: 141 MB watched against 2,055 MB spent. The tier now
+declines that spawn with `no_spawn_compiler_process` and makes the same
+short-lived process itself, measured at 0.9% over five interleaved samples.
+
+Two things follow. A heap ceiling can be set, with
+`application:set_env(wasm, compile_max_heap_words, Words)`; a compile over it is
+refused, which means the guest interprets and answers as before, and
+`wasm_jit:diagnostics/0` says `{limit, {compile_memory, Words}}`. It is **off by
+default**: see [the compiled tier guide](docs/compiled-tier.md) for what it does
+and does not bound.
+
+And a compile can now be stopped. `compile:forms/2` spawns its worker with
+`spawn_monitor/1`, which does not link, so until now a compiler killed by
+`application:stop(wasm)` or by its supervisor left the OTP compiler running to
+completion holding its copy of the forms, with nothing able to see or stop it.
+
+`wasm_jit:compile_limits/0` reports `max_heap_words`, and `max_heap_words/0`
+answers it on its own.
+
 ## 0.2.2
 
 Documentation only. No code changed.

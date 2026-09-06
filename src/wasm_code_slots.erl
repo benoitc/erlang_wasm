@@ -106,6 +106,7 @@ reasoning.
 -export([lease_call/1, lease_call/2, release_call/1, calls_in/1]).
 -export([hot/2]).
 -export([record_diagnostic/4, diagnostics/0, clear_diagnostics/0]).
+-export([observe_config/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -export_type([key/0, lease/0, token/0]).
@@ -185,7 +186,11 @@ reasoning.
 %% out of the pool for good, so its `DOWN' aborts the reservation.
 -record(state, {monitors = #{} :: #{reference() => {key(), lease()}},
                 refs     = #{} :: #{{key(), lease()} => reference()},
-                loading  = #{} :: #{reference() => token()}}).
+                loading  = #{} :: #{reference() => token()},
+                %% The bad `compile_max_heap_words' currently in force, if any.
+                %% One entry and not a set: a set would retain every value
+                %% anyone ever mistyped for the life of the node.
+                bad_cfg  = ok   :: ok | {bad, term()}}).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -259,6 +264,37 @@ diagnostics() ->
     case ets:whereis(?DIAG) of
         undefined -> [];
         _ -> [{O, K, R} || {_Seq, O, K, R, _At} <- ets:tab2list(?DIAG)]
+    end.
+
+-doc """
+Say what resolving `compile_max_heap_words` produced, and warn once if it is bad.
+
+Told about **every** resolution and not only the failures. Without the good
+ones, a value that is bad, then corrected, then mistyped the same way again
+would stay silent the second time, because nothing would have told this server
+the condition had cleared.
+
+The warning is emitted *here*, inside the call, rather than by a caller acting
+on a `first` reply: a caller can die between the reply and the `logger` call,
+and this server would then be holding a value it believes was reported and
+nobody ever saw. Exactly-once needs the decision and the saying to be the same
+serialised step.
+
+So: **once per uninterrupted occurrence of the same bad value.** Bad A three
+times warns once; bad A, valid, bad A warns twice; bad A then bad B warns twice.
+A manager restart re-arms it, since the held value lives in `#state{}`, and that
+is right: a restarted manager has not complained about anything.
+
+Deliberately not a diagnostics-ring row. The ring's sixty-four entries answer
+"why did the last compiles that did not happen not happen", and a mistyped
+environment key is not a compile that did not happen. Spending rows on it would
+evict real refusals.
+""".
+-spec observe_config(ok | {bad, term()}) -> ok.
+observe_config(What) ->
+    case whereis(?MODULE) of
+        undefined -> ok;
+        _ -> gen_server:call(?MODULE, {observe_config, What})
     end.
 
 -doc "Forget them. The caller's sequence is deliberately not reset with them.".
@@ -540,6 +576,16 @@ init([]) ->
      end || {N, G, {loading, _}, _} <- ets:tab2list(?TAB)],
     {ok, #state{monitors = Ms, refs = Rs}}.
 
+handle_call({observe_config, Same}, _From, #state{bad_cfg = Same} = S) ->
+    {reply, ok, S};
+handle_call({observe_config, ok}, _From, S) ->
+    {reply, ok, S#state{bad_cfg = ok}};
+handle_call({observe_config, {bad, Raw}}, _From, S) ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    logger:warning("wasm: compile_max_heap_words is ~p, which is not a whole "
+                   "number of words between ~p and ~p; compiling with no heap "
+                   "ceiling", [Raw, Min, (1 bsl 59) - 1]),
+    {reply, ok, S#state{bad_cfg = {bad, Raw}}};
 handle_call({claim_loading, Key, Lease, Owner}, _From, S) ->
     case find(Key) of
         %% Somebody else is filling this in. Interpret rather than wait.

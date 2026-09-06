@@ -51,7 +51,10 @@ groups() ->
        a_compile_outlives_the_process_that_asked_for_it,
        the_ring_keeps_only_the_newest,
        the_ring_normalises_what_it_is_given,
-       normalising_never_builds_the_representation]},
+       normalising_never_builds_the_representation,
+       a_compile_over_the_ceiling_is_refused_and_the_guest_still_answers,
+       the_ceiling_reaches_the_process_that_runs_the_compiler,
+       a_bad_ceiling_is_reported_once_and_compiles_anyway]},
      %% Its own group because it stops the application, which takes the store
      %% and its tables with it. A test process cannot delete them: they are
      %% bequeathed to `wasm_store_sup`.
@@ -85,6 +88,226 @@ end_per_testcase(_, _) ->
     ok.
 
 %%% ---------------------------------------------------------------- cases ---
+
+%% The ceiling fires, the outcome is a value naming the configured number, and
+%% the guest is unaffected. Watched to fail on the parent commit, where
+%% `compile_max_heap_words` is read by nothing: `refused` stays at zero and the
+%% diagnostic is absent.
+a_compile_over_the_ceiling_is_refused_and_the_guest_still_answers(_) ->
+    W = min_heap_words() * 2,
+    with_ceiling(W, fun () ->
+        M = build(many_wat(64)),
+        {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+        %% Before and after, because a killed compiler must leave the guest
+        %% exactly where it found it.
+        ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+        #{refused := R, crashed := Cr, compiled := C} = wasm_jit:counts(),
+        ?assertEqual({1, 0, 0}, {R, Cr, C}),
+        ?assertMatch([{refused, _, {limit, {compile_memory, W}}}],
+                     wasm_jit:diagnostics()),
+        ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+        ok = wasm:destroy(I)
+    end).
+
+%% The defect that killed the earlier design, pinned: a ceiling set on a process
+%% that only waits. This asserts the flag is on the process that is *inside* the
+%% OTP compiler, not on the one blocked in a receive.
+%%
+%% On the parent commit no spawned process carries a non-default ceiling, so
+%% `Found` is empty. On the design that was dropped, the pid carrying the
+%% ceiling would be the coordinator and its stacktrace would be a receive, which
+%% is why the stacktrace is asserted and not only the flag.
+the_ceiling_reaches_the_process_that_runs_the_compiler(_) ->
+    W = min_heap_words() * 100000,
+    with_ceiling(W, fun () -> reaches(W, 3) end).
+
+reaches(_W, 0) ->
+    ct:fail(never_caught_the_compiler);
+reaches(W, Tries) ->
+    %% Deliberately slow, so the child is alive long enough to be caught. A
+    %% spawn trace message is not a scheduling barrier: the child is runnable
+    %% the moment it exists and this process learns of it asynchronously, so
+    %% losing the race is ordinary and is retried rather than tolerated.
+    M = build(many_wat(400)),
+    Me = self(),
+    Runner = spawn(fun () ->
+                       {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+                       A = wasm:call(I, ~"f", [10]),
+                       %% Read here, while this process is certainly alive:
+                       %% asking after it has answered gets `undefined`.
+                       Me ! {answered, self(), A,
+                             process_info(self(), max_heap_size)}
+                   end),
+    1 = erlang:trace(Runner, true, [procs, set_on_spawn]),
+    Found = catch_compiler(Runner, []),
+    RunnerFlag =
+        receive {answered, Runner, A, RFlag} ->
+                ?assertEqual({ok, [11]}, A),
+                RFlag
+        after 120000 -> ct:fail(runner_never_answered)
+        end,
+    %% `trace/3` raises on a process that has already exited, and by here the
+    %% runner always has.
+    try erlang:trace(Runner, false, [procs, set_on_spawn]) catch _:_ -> 0 end,
+    flush_trace(),
+    case Found of
+        [] -> reaches(W, Tries - 1);
+        [{Flag, Stack} | _] ->
+            ?assertMatch(#{size := W, kill := true,
+                           include_shared_binaries := true}, Flag),
+            %% Caught inside the OTP compiler, which is the whole claim: the
+            %% ceiling is on the process doing the work and not on one waiting
+            %% for it.
+            ?assert(lists:any(fun ({compile, _, _, _}) -> true;
+                                  (_) -> false
+                              end, Stack)),
+            %% And the coordinator is not itself capped, which is what the
+            %% design that was dropped would have done: it set the ceiling on
+            %% the process blocked in a receive.
+            ?assertMatch({max_heap_size, #{size := 0}}, RunnerFlag)
+    end.
+
+%% Poll the child rather than suspending it the instant it appears. A spawn
+%% trace message is not a scheduling barrier and `initial_call` for a fun is
+%% `{erlang,apply,2}`, so neither the moment of arrival nor the name it started
+%% with says what this process is. What does say it is finding it *inside* the
+%% OTP compiler, and the compile takes seconds, so there is a wide window to
+%% look in. `process_info/2` on a running process is safe.
+catch_compiler(Runner, Acc) ->
+    receive
+        {trace, _, spawn, Child, _MFA} ->
+            case poll_child(Child, erlang:monotonic_time(millisecond) + 5000) of
+                skip -> catch_compiler(Runner, Acc);
+                Got -> catch_compiler(Runner, [Got | Acc])
+            end;
+        {trace, _, _, _, _} -> catch_compiler(Runner, Acc);
+        {trace, _, _, _} -> catch_compiler(Runner, Acc)
+    after 2000 -> Acc
+    end.
+
+poll_child(Child, Deadline) ->
+    case {process_info(Child, max_heap_size),
+          process_info(Child, current_stacktrace)} of
+        %% The reaper is spawned plain and carries no ceiling, so it is skipped
+        %% here without ever being mistaken for the compiler.
+        {{max_heap_size, #{size := S} = Flag}, {_, Stack}} when S > 0 ->
+            case lists:any(fun ({compile, _, _, _}) -> true;
+                               (_) -> false
+                           end, Stack) of
+                true -> {Flag, Stack};
+                false -> again(Child, Deadline)
+            end;
+        %% Dead, or not ours.
+        {undefined, _} -> skip;
+        _ -> skip
+    end.
+
+again(Child, Deadline) ->
+    case erlang:monotonic_time(millisecond) < Deadline of
+        true -> timer:sleep(5), poll_child(Child, Deadline);
+        false -> skip
+    end.
+
+flush_trace() ->
+    receive
+        {trace, _, _, _, _} -> flush_trace();
+        {trace, _, _, _} -> flush_trace()
+    after 0 -> ok
+    end.
+
+%% A mistyped value must not turn the tier off, must not spend a diagnostics
+%% row, and must be said once per uninterrupted occurrence. The last row is the
+%% upper bound, which nothing documents: `size` has to be a small integer.
+a_bad_ceiling_is_reported_once_and_compiles_anyway(_) ->
+    Min = min_heap_words(),
+    %% Every shape of wrong, including the two edges. `Min - 1` is where
+    %% `spawn_opt` raises `badarg` at the bottom and `1 bsl 59` is where it
+    %% raises at the top, which nothing documents.
+    [bad_ceiling(V) || V <- [banana, -1, 1.5, Min - 1, 1 bsl 59]],
+    %% Said once per uninterrupted occurrence of the same value, which is the
+    %% part a `persistent_term` memo could not promise: two compilers reading
+    %% it concurrently would both see the old value and both warn.
+    ?assertEqual(1, warnings(fun () -> two_compiles(banana) end)),
+    ?assertEqual(1, warnings(fun () -> two_compiles(banana),
+                                       two_compiles(banana) end)),
+    %% Corrected, then mistyped the same way again: the condition cleared, so
+    %% it is news a second time. This is what fails if the server is told only
+    %% about the failures.
+    ?assertEqual(2, warnings(fun () -> two_compiles(banana),
+                                       two_compiles(Min * 4),
+                                       two_compiles(banana) end)),
+    %% Two different wrong values are two conditions, which is what fails if
+    %% the memo keys on the environment key instead of the raw term.
+    ?assertEqual(2, warnings(fun () -> two_compiles(banana),
+                                       two_compiles(-1) end)),
+    %% And the two values that mean "no ceiling" say nothing at all.
+    [begin
+         wasm_jit:reset_counts(),
+         with_ceiling(V, fun () ->
+             ?assertEqual(0, wasm_jit:max_heap_words()),
+             ?assertEqual(0, map_get(max_heap_words, wasm_jit:compile_limits()))
+         end)
+     end || V <- [0, undefined]],
+    ok.
+
+%% Count the warnings a body produces, by being the `logger` handler for it.
+warnings(Body) ->
+    reset_config_memo(),
+    ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{pid => self()}}),
+    try
+        Body(),
+        drain_warnings(0)
+    after
+        _ = logger:remove_handler(?MODULE),
+        reset_config_memo()
+    end.
+
+drain_warnings(N) ->
+    receive {warned, _} -> drain_warnings(N + 1)
+    after 200 -> N
+    end.
+
+%% The `logger` handler callback. Only this module's own message is counted, so
+%% anything else the node says during the body is ignored.
+log(#{level := warning, msg := {Fmt, Args}}, #{config := #{pid := Pid}}) ->
+    Text = unicode:characters_to_list(io_lib:format(Fmt, Args)),
+    case string:find(Text, "compile_max_heap_words") of
+        nomatch -> ok;
+        _ -> Pid ! {warned, Text}, ok
+    end;
+log(_, _) ->
+    ok.
+
+two_compiles(Value) ->
+    with_ceiling(Value, fun () ->
+        M = build(many_wat(8)),
+        [begin
+             {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+             _ = wasm:call(I, ~"f", [10]),
+             ok = wasm:destroy(I)
+         end || _ <- [1, 2]]
+    end).
+
+bad_ceiling(Value) ->
+    wasm_jit:reset_counts(),
+    reset_config_memo(),
+    with_ceiling(Value, fun () ->
+        ?assertEqual(0, wasm_jit:max_heap_words()),
+        M = build(many_wat(8)),
+        {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+        ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+        {ok, J} = wasm:instantiate(M, #{}, sync(whole())),
+        ?assertEqual({ok, [11]}, wasm:call(J, ~"f", [10])),
+        %% The tier still works, and nothing was counted as a failure of it.
+        #{compiled := C, refused := R, failed := F, crashed := Cr} =
+            wasm_jit:counts(),
+        ?assert(C > 0),
+        ?assertEqual({0, 0, 0}, {R, F, Cr}),
+        %% The complaint is not a diagnostic and must not evict one.
+        ?assertEqual([], wasm_jit:diagnostics()),
+        ok = wasm:destroy(I),
+        ok = wasm:destroy(J)
+    end).
 
 %% Reproduces the defect. On the parent commit `{limit, too_many_functions}`
 %% escapes as an exception, the compiler swallows it, and every counter stays
@@ -597,6 +820,38 @@ loading_owners() ->
             Pid <- maps:values(Leases), is_pid(Pid)].
 
 opts() -> #{compile => true, compile_after => 1}.
+
+min_heap_words() ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    Min.
+
+%% Set, run, restore. `undefined` means the key was absent, which is not the
+%% same as it being present and set to `undefined`.
+%%
+%% It does *not* reset the server's held value on the way in: several of the
+%% cases above depend on what it is holding from the previous body.
+with_ceiling(Value, F) ->
+    Was = application:get_env(wasm, compile_max_heap_words),
+    ok = application:set_env(wasm, compile_max_heap_words, Value),
+    try F()
+    after
+        case Was of
+            undefined -> application:unset_env(wasm, compile_max_heap_words);
+            {ok, Old} -> application:set_env(wasm, compile_max_heap_words, Old)
+        end,
+        ok
+    end.
+
+%% Guarded, so this helper works on a commit that has no `observe_config/1`.
+%% Without the guard every case using it fails with `undef` on the parent, which
+%% is a failure that proves nothing: it would look identical if the behaviour
+%% under test were present and correct.
+reset_config_memo() ->
+    _ = code:ensure_loaded(wasm_code_slots),
+    case erlang:function_exported(wasm_code_slots, observe_config, 1) of
+        true -> wasm_code_slots:observe_config(ok);
+        false -> ok
+    end.
 
 build(Wat) ->
     {ok, P} = wasm_wat:module(Wat),

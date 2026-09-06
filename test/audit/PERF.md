@@ -4530,3 +4530,56 @@ error, and the next person to instrument a compile will meet them again.
 allocation in two processes at once, which `allocwords` cannot do because its
 own arithmetic assumes the events it pairs come from one process. It agrees to
 0.0% at 200 K, 1 M and 3 M words. Run it before believing anything above.
+
+### What shipped, and the decision the gate made for us
+
+`R = 1.009` fell in the plan's `=< 1.10` branch, which had been written to mean
+**own the compiler worker unconditionally** rather than only when a ceiling is
+configured. So that is what shipped, and the argument is not the ceiling:
+
+| | conditional | unconditional |
+| --- | --- | --- |
+| ceiling reaches the compiler | when configured | when configured |
+| a killed compiler stops OTP's | only when configured | **always** |
+| artifact bytes vs the parent | identical when off | 60 bytes, `md5` identical |
+| topologies to reason about | two | one |
+
+The orphan is the reason. `compile:forms/2` spawns with `spawn_monitor/1`,
+which monitors and does not link, so on the parent commit a compiler killed by
+`wasm_jit_sup`'s `brutal_kill` or by `application:stop(wasm)` leaves the OTP
+compiler running to completion, holding its own copy of the forms, with nothing
+in the tree able to see or stop it. Measured directly: a caller killed 400 ms
+into a compile leaves its child alive, and the child is still alive three
+seconds later. Making that conditional on an opt-in ceiling would have left the
+default path with a defect for no reason but a promise about byte-identical
+artifacts, and the artifacts are `beam_lib:md5`-identical anyway.
+
+`compile_max_heap_words` stays **off by default**. There is still no defensible
+number: the only bracket is QuickJS's 2.5 GB worker against CPython's 33 GB
+pathology, with CPython's *legitimate* 2,333-function compile somewhere between
+them, and a ceiling low enough to catch the second would refuse the third.
+`kill => true` is destructive and belongs to the embedder.
+
+### The orphan case is the fourth vacuous test this project has caught
+
+It passed on the parent commit three times, for three different reasons, before
+it was made to fail there. Recorded because every one of them is a way to write
+a lifetime test that proves nothing.
+
+1. **It failed on the parent for the wrong reason**: `undef` on a helper calling
+   `wasm_code_slots:observe_config/1`, which the parent does not have. A failure
+   in the harness looks exactly like a failure in the runtime.
+2. **It found our own coordinator instead of OTP's child.** A process *waiting*
+   in `compile:do_compile/2`'s receive has `compile` frames in its stacktrace
+   just as the process doing the work does. Killing the coordinator then
+   satisfied "no compiler is running".
+3. **The detector flickered.** Testing "is any process currently inside the
+   compiler" samples a stacktrace against a handful of module names, and a
+   compiler moves between passes constantly. A live orphan read as present, and
+   one millisecond later as gone. The fix is to catch the pid once and then ask
+   `is_process_alive/1`, which has no such gap.
+
+And a fourth, in the fix rather than the test: the reaper was spawned as
+`spawn(fun () -> reap(Owner, self()) end)`, where `self()` is the *reaper's* pid.
+It monitored itself, killed itself when the owner died, and left the compiler it
+exists to stop running to completion. The case caught it.

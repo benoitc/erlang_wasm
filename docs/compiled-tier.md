@@ -116,7 +116,8 @@ to a bounded shape and the last few dozen are kept.
 
 **Every refusal means interpret**, and none of them is an error: a function
 outside the subset, a slot pool with nothing free, another process already
-compiling the same module, a finite fuel budget, or a compile failure.
+compiling the same module, a finite fuel budget, a compile failure, or a
+compiler over its heap ceiling.
 
 **Metered execution is interpreted.** Fuel is charged at every loop back edge,
 and charging it round a compiled loop gives back what compiling it bought, so an
@@ -152,6 +153,39 @@ application:set_env(wasm, code_cache_dir, "/var/cache/my_app/wasm").
 
 QuickJS then takes 0.2 seconds instead of 43.7 on the second start.
 
+## Bound what a compile may spend
+
+The runtime runs `compile:forms/2` in a process it spawns itself, so a heap
+ceiling can be put on the process that actually does the work:
+
+```erlang
+application:set_env(wasm, compile_max_heap_words, 2_000_000_000).
+```
+
+A compile over it is killed and **refused**, which means the guest interprets
+and answers exactly as before, and `wasm_jit:diagnostics/0` says
+`{limit, {compile_memory, Words}}`. Ask what is in force with
+`wasm_jit:compile_limits/0`, which reports `max_heap_words => 0` when there is
+none.
+
+**Off by default**, because there is no number that is right for every guest:
+QuickJS's compiler peaks around 2.5 GB, CPython's whole-module compile reached
+33 GB, and CPython's *legitimate* 2,333-function compile sits between them, so
+a ceiling low enough to catch the second refuses the third. Set it from a
+measurement of your own module, and set it before you use `compile_whole` on a
+large guest.
+
+Three things it does not bound, and it is a ceiling rather than a guarantee:
+Core generation, which happens on the calling process before the compiler is
+spawned; anything that is not process heap, such as allocator memory and node
+RSS; and the sum across concurrent compiles, since sixteen compilers may each
+sit under it. `max_heap_size` is also checked only when a garbage collection
+runs, so a compile can overshoot between collections.
+
+A value that is not a whole number of words between `min_heap_size` and
+`(1 bsl 59) - 1` is reported once through `logger` and ignored, rather than
+turning the tier off for the life of the node.
+
 **Off by default, and the directory is as trusted as your release.** Loading a
 `.beam` from it executes whatever is in that file, so it must not be writable by
 anything you would not run as code.
@@ -165,7 +199,7 @@ validated, so there is nothing stable to key on.
 | module | decides |
 | --- | --- |
 | `wasm_jit` | when a module gets compiled and how a call reaches the result. Policy only. |
-| `wasm_core` | what Core Erlang a function lowers to, and which functions it will take at all. |
+| `wasm_core` | what Core Erlang a function lowers to, which functions it will take at all, and the process the OTP compiler runs in. |
 | `wasm_code_slots` | which of sixteen module names the result may load into, and when that name may be reused. |
 | `wasm_code_cache` | whether an artifact already exists on disk. |
 | `wasm_jit_sup` | the processes that compile, so none of them is invisible. |

@@ -18,8 +18,9 @@ while a generated loop runs.
 ## Every failure interprets
 
 A module the generator refuses, a slot pool that is exhausted, another process
-already compiling the same module, a finite fuel budget, a compile error: all
-of them mean run the interpreter, and none of them is an error. That is what
+already compiling the same module, a finite fuel budget, a compile error, a
+compiler over `compile_max_heap_words`: all of them mean run the interpreter,
+and none of them is an error. That is what
 makes the tier safe to enable at all, and it is also what makes a green test
 run prove nothing on its own -- see `counts/0` and the `compile_force` option,
 which exist so that a conformance run can say generated code actually ran.
@@ -55,7 +56,7 @@ moved, because even with all three a refusal still interprets.
 
 -export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
 -export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
--export([compile_limits/0]).
+-export([compile_limits/0, max_heap_words/0]).
 -export([reentered/0]).
 -export([compiler_loop/0]).
 -export([dump/1, dump/2]).
@@ -97,6 +98,13 @@ moved, because even with all three a refusal still interprets.
 %% small: CPython's accepted hot set is 3.7 M words and peaked at 59.89 GB, so a
 %% ceiling admitting today's ordinary path would protect nothing.
 -define(MAX_COMPILE_FUNS, 8192).
+
+%% The largest `max_heap_size` `size` a 64-bit emulator accepts. Undocumented,
+%% and a hard edge rather than a soft one: measured on OTP 29, `1 bsl 59` raises
+%% `badarg` from `spawn_opt` and `(1 bsl 59) - 1` does not. An operator who
+%% writes a plausible-looking very large number gets a warning rather than a
+%% compiler that cannot start.
+-define(MAX_HEAP_WORDS, ((1 bsl 59) - 1)).
 %% Set by `entry_1/3` when this call found the module hot and unbuilt, read by
 %% `after_call/2` once the call has finished. The invocation's own lifetime is
 %% exactly the right one for it, which is the same argument the checkpoint key
@@ -719,6 +727,18 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
             %% It still costs 129.3 seconds against 58.1 to compile the hot set,
             %% and that is what `compile_shards` is for.
             Mode = maps:get(compile_quality, Limits, full),
+            %% The one place the ceiling is read, and provably one: `compile/4`
+            %% reaches `generate/5` only in `generate` mode, `generate/5`
+            %% reaches here unconditionally, and the two `adopt`-mode callers
+            %% never generate. The resolved map travels into `pmap/2`'s closure,
+            %% so a shard worker inherits it rather than reading the
+            %% environment on a process that has no business doing so.
+            {Words, Config} = resolve_max_heap_words(),
+            ok = wasm_code_slots:observe_config(Config),
+            COpts = case Words of
+                        0 -> #{};
+                        _ -> #{max_heap_words => Words}
+                    end,
             {_Name, Gen} = Token,
             Stamp = stamp(Inst, Gen),
             case split(Unit, Limits) of
@@ -728,7 +748,8 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
                     ok = wasm_code_slots:abort(Token),
                     {refused, {limit, {too_many_functions, N}}};
                 Parts ->
-                    build(Inst, Limits, Mode, Stamp, Unit, Parts, [{Mod, Token}])
+                    build(Inst, Limits, Mode, Stamp, Unit, Parts,
+                          [{Mod, Token}], COpts)
             end
     end.
 
@@ -740,8 +761,8 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
 %% used sooner, because the functions worth compiling are the ones expensive to
 %% compile: sixteen of QuickJS's hot functions are already 30 seconds of the 54.
 %% See `test/audit/PERF.md`.
-build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}]) ->
-    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod, #{}) of
+build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}], COpts) ->
+    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod, #{}, COpts) of
         {ok, Bin} ->
             {module, Mod} = code:load_binary(Mod, "wasm_generated", Bin),
             ok = wasm_code_slots:publish(Token),
@@ -751,7 +772,7 @@ build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}]) ->
             ok = wasm_code_slots:abort(Token),
             outcome(Reason)
     end;
-build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First]) ->
+build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First], COpts) ->
     %% Every slot claimed before anything is generated, because each unit names
     %% the next as a literal and cannot be built until that name exists. This
     %% process owns all of them, so a compiler that dies takes every reservation
@@ -773,7 +794,7 @@ build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First]) ->
             Bins = pmap(fun({U, M, Next}) ->
                             Mine = [Idx || {_, Idx, _, _} <- U],
                             artifact(Inst, M, U, Mode, Stamp, Next, Head,
-                                     maps:without(Mine, Where))
+                                     maps:without(Mine, Where), COpts)
                         end, Jobs),
             publish_all(Inst, Limits, Tokens, Parts, Bins)
     end.
@@ -835,9 +856,43 @@ Every bound the compiled tier applies to a *request*, so a caller can ask rather
 than infer it from a refusal. `wasm_core:limits/0` is the same idea for the
 bounds a single unit has.
 """.
--spec compile_limits() -> #{atom() => pos_integer()}.
+%% `non_neg_integer()`, because `max_heap_words` answers 0 for "no ceiling",
+%% which is `max_heap_size`'s own meaning for a size of zero.
+-spec compile_limits() -> #{atom() => non_neg_integer()}.
 compile_limits() ->
-    #{max_compile_funs => ?MAX_COMPILE_FUNS, max_shards => ?MAX_SHARDS}.
+    #{max_compile_funs => ?MAX_COMPILE_FUNS, max_shards => ?MAX_SHARDS,
+      max_heap_words => max_heap_words()}.
+
+-doc """
+The heap ceiling a compile would be given, in words, or 0 for none.
+
+Reads `compile_max_heap_words` and reports the *effective* value, so a caller is
+told what the tier would actually apply rather than what the code defaults to.
+Asking never reports: it does not log, move a counter, or clear what
+`wasm_code_slots` is holding, because a question must not have the side effects
+of a compile.
+""".
+-spec max_heap_words() -> non_neg_integer().
+max_heap_words() -> element(1, resolve_max_heap_words()).
+
+%% Answers the effective value *and* what to say about it, because the two
+%% cannot be recovered from one another: a bad value and an absent one both
+%% resolve to 0, and the raw term is what deduplicates the warning.
+%%
+%% `min_heap_size` is a *tuple*, `{min_heap_size, 233}` on OTP 29, so comparing
+%% an integer against it directly rejects every integer there is. The upper
+%% bound is undocumented and just as real: `size` must be a small integer, and
+%% `spawn_opt` raises `badarg` at `1 bsl 59` exactly as it does below the
+%% minimum.
+-spec resolve_max_heap_words() -> {non_neg_integer(), ok | {bad, term()}}.
+resolve_max_heap_words() ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    case application:get_env(wasm, compile_max_heap_words, undefined) of
+        undefined -> {0, ok};
+        0 -> {0, ok};
+        W when is_integer(W), W >= Min, W =< ?MAX_HEAP_WORDS -> {W, ok};
+        Bad -> {0, {bad, Bad}}
+    end.
 
 -doc """
 How many units this many functions are split into.
@@ -962,11 +1017,23 @@ claim_rest(Inst, N, Acc) ->
 
 %% Run the units at once. `compile:forms/2` is the whole of the cost and the
 %% units share nothing, so this is the wall clock the split is for.
+%% Each worker reaps against this process, for the same reason `wasm_core` does
+%% one rung further down: `spawn_monitor/1` does not link, so a coordinator that
+%% is killed leaves its shard workers running, holding their copied units and
+%% compiling toward slots nobody owns. A link would be the ordinary answer and
+%% cannot be used, because a worker killed by the heap ceiling exits `killed`
+%% and would take this untrapping process with it before `collect/1` could
+%% record anything.
 pmap(F, Xs) ->
     Parent = self(),
-    Pids = [element(1, spawn_monitor(fun() -> Parent ! {self(), F(X)} end))
+    Pids = [element(1, spawn_monitor(fun() -> reaped(Parent, F, X) end))
             || X <- Xs],
     [collect(P) || P <- Pids].
+
+reaped(Parent, F, X) ->
+    Me = self(),
+    _ = spawn(fun() -> wasm_core:reap(Parent, Me) end),
+    Parent ! {Me, F(X)}.
 
 collect(Pid) ->
     receive
@@ -983,7 +1050,7 @@ collect(Pid) ->
 %% today's instance. What it *does* depend on is the slot, because a module's
 %% name is part of its BEAM file, which is why the slot is in the key and why
 %% `wasm_code_slots` prefers a module's own slot when one is free.
-artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere) ->
+artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere, COpts) ->
     %% Not cached when it is one of several. The key would have to carry which
     %% module the chain points at next, and a shard set is only reproducible if
     %% the same split falls out of the same workload, which nothing promises.
@@ -999,7 +1066,7 @@ artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere) ->
         {ok, Bin} -> bump(?IX_CACHED, 1), {ok, Bin};
         _ ->
             case wasm_core:module(Mod, Unit, sigs(Inst), tsigs(Inst), Mode,
-                                  Stamp, Next, Head, Elsewhere) of
+                                  Stamp, Next, Head, Elsewhere, COpts) of
                 {ok, Bin} = Ok ->
                     Key =:= undefined orelse wasm_code_cache:store(Key, Bin),
                     Ok;

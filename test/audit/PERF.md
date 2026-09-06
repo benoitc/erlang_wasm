@@ -4419,3 +4419,167 @@ of a cached module ever matters.
 `-spec await(#inst{}, timeout())` and computes
 `erlang:monotonic_time(millisecond) + Timeout`, so the `infinity` its own spec
 admits is a `badarith`. Identical on `origin/main`; it predates this branch.
+
+## Owning the compiler worker: the ceiling is free, and the row that killed it does not reproduce
+
+The section above closed with "neither ships", on two measurements: a
+`max_heap_size` ceiling on the process `wasm_jit` spawns sees 0.34 GB of a
+compile whose node reaches 6.19 GB, and `no_spawn_compiler_process` on that same
+coordinator costs 293 s against 167. The first says the ceiling cannot reach the
+work. The second says the only option that moves the work is too expensive.
+
+**Neither experiment tried the third shape**: `no_spawn_compiler_process` in a
+*fresh, disposable* process of our own, which is the lifecycle OTP's own child
+already has. `bench/paths/compileheap.erl` is that arm, beside the other two.
+
+QuickJS, one unit of 10 functions, 385,428 IR words, 17.2 M Core words, `full`,
+five samples per arm interleaved in both orderings, load 2.0 to 5.2 throughout,
+spread within 20% on every arm. Wall times are from a **second, untraced** run
+of each arm, because tracing charges the arms unequally.
+
+| arm | min s | med s | max s | runner MB | worker MB | alloc Mw |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `otp`, as called today | 70.4 | 72.0 | 76.6 | 169.2 | **2054.8** | > 14559.4 |
+| `inline`, on the coordinator | 71.8 | 72.7 | 77.2 | 2102.7 | 2102.7 | 14542.4 |
+| `child`, a fresh capped process | 71.0 | 71.6 | 74.6 | **141.0** | 2467.8 | 14542.4 |
+
+`beam_lib:md5/1` is identical across all thirty compiles, so the arms did the
+same work. The `otp` artifact is 60 bytes smaller than the other two, which is
+`no_spawn_compiler_process` landing in the `compile_info` chunk's option list.
+
+**The ceiling costs 0.9%.** `R = child min / otp min = 1.009`, against a gate of
+1.10 written before the numbers arrived.
+
+**The 0.34 GB finding reproduces exactly, at a tenth the scale.** A ceiling on
+the process `wasm_jit` spawns would watch **141 MB while the compiler spends
+2,055 MB**: 6.9%, against the 5.5% the 0.34 / 6.19 GB row records. That is the
+whole argument for owning the spawn, and it is not an argument about a number.
+
+### The 293-second row does not reproduce, and that matters more
+
+`inline` is **71.8 s against `otp`'s 70.4**, a 2% difference where
+`ATTEMPTS.md` records 75%. This is not the earlier measurement repeated with a
+smaller unit and a shrug: the runner in this arm holds the `#inst{}` and the
+whole unit IR live across the compile, which is precisely the condition the
+larger live set was supposed to explain, and it still costs 2%.
+
+So the plan that produced this harness was **right in its conclusion and wrong
+in its mechanism**. It predicted the +75% came from collecting the coordinator's
+live set on every pass, and that a fresh child would avoid it. The child is
+indeed free, but so is the coordinator, so the live set was never the cause.
+What produced 293 s against 167 s on that day is unexplained and is now the
+open question rather than the closed one.
+
+Two things follow, and the second is the one to act on. `no_spawn_compiler_process`
+carries no intrinsic penalty on this box at this scale, so the option is not the
+obstacle it was recorded as being. And the earlier row should be re-run at its
+own scale before anyone leans on it again: it is the single measurement standing
+between this project and a bounded compile, and it is now the least reproducible
+thing in this file.
+
+### What the arms cost to instrument, and what they cannot say
+
+`alloc Mw` is the compiling process's own allocation, from its own collection
+trace, over a window a forced major collection closes at each end. **The `otp`
+arm cannot have that window**, marked `>`: its compiler is spawned inside
+`compile:do_compile/2` and exits with its result, so no closing collection can
+be forced and the final live set is unmeasured. The figure is the reclaimed sum
+alone and is a floor. `inline` and `child` agree to five digits, 14,542.4 Mw,
+which is the estimator agreeing with itself across two different process
+topologies.
+
+**294.77 KB allocated per IR word**, over 385,428 words. `src/wasm_jit.erl:95-98`
+asserts "11 to 17 KB of allocated peak per IR word on both guests" and cites
+nothing, and that figure appears nowhere under `test/audit/`. These are not the
+same quantity: this one is total allocation over a whole compile, the comment's
+is a peak. Recorded here so the comparison exists; the comment still has no
+source and should get one or lose the number.
+
+Peaks are **sampled at 50 ms and are lower bounds**, always: a peak between two
+samples is invisible, and so is the memory the collector needs while collecting.
+Nothing here sizes a ceiling by them.
+
+### Six ways to measure this wrong, all of them found the hard way
+
+Recorded because each one produced a plausible, wrong number rather than an
+error, and the next person to instrument a compile will meet them again.
+
+- **`erlang:monotonic_time/1` is negative.** It reads about
+  -576,460,751,902 ms on this box, so a sampler seeded at `0` finds
+  `Now - Last >= 50` false for the next eighteen thousand years. Every peak
+  reads 0.0 MB and the run otherwise looks perfect.
+- **A sampler driven by `after` starves exactly where the peak is.** A compile
+  floods the tracer's mailbox, every message matches a clause, and the timeout
+  never fires while the compile is busiest. Drive it from the clock.
+- **`[procs, set_on_spawn]` delivers zero collection events.** A child inherits
+  only the flags its parent carries, so the trace needs
+  `garbage_collection` too, and `monotonic_timestamp` for the collection time.
+- **`monotonic_timestamp` renames the messages.** They become `trace_ts` with a
+  timestamp appended, so a spawn is a six-tuple. A harness matching
+  `{trace, ...}` matches nothing and silently discovers no compiler.
+- **`lists:max([N, undefined])` is `undefined`.** Atoms sort above numbers, so
+  one absent measurement discards every present one.
+- **`erts_debug:flat_size(Unit)` is not the IR size.** A unit entry carries the
+  whole `#fn{}` beside its IR, so budgeting on one and reporting the other
+  selected four times the unit it meant to. QuickJS's first eligible function
+  alone is 98,191 IR words and 4.4 M words of Core, and its first 402 functions
+  by index carry 8.07 M of the module's 12.0 M: function count is the wrong
+  handle on a compile whose functions differ by three orders of magnitude.
+
+`compileheap:main("validate")` proves the pid-keyed estimator against a known
+allocation in two processes at once, which `allocwords` cannot do because its
+own arithmetic assumes the events it pairs come from one process. It agrees to
+0.0% at 200 K, 1 M and 3 M words. Run it before believing anything above.
+
+### What shipped, and the decision the gate made for us
+
+`R = 1.009` fell in the plan's `=< 1.10` branch, which had been written to mean
+**own the compiler worker unconditionally** rather than only when a ceiling is
+configured. So that is what shipped, and the argument is not the ceiling:
+
+| | conditional | unconditional |
+| --- | --- | --- |
+| ceiling reaches the compiler | when configured | when configured |
+| a killed compiler stops OTP's | only when configured | **always** |
+| artifact bytes vs the parent | identical when off | 60 bytes, `md5` identical |
+| topologies to reason about | two | one |
+
+The orphan is the reason. `compile:forms/2` spawns with `spawn_monitor/1`,
+which monitors and does not link, so on the parent commit a compiler killed by
+`wasm_jit_sup`'s `brutal_kill` or by `application:stop(wasm)` leaves the OTP
+compiler running to completion, holding its own copy of the forms, with nothing
+in the tree able to see or stop it. Measured directly: a caller killed 400 ms
+into a compile leaves its child alive, and the child is still alive three
+seconds later. Making that conditional on an opt-in ceiling would have left the
+default path with a defect for no reason but a promise about byte-identical
+artifacts, and the artifacts are `beam_lib:md5`-identical anyway.
+
+`compile_max_heap_words` stays **off by default**. There is still no defensible
+number: the only bracket is QuickJS's 2.5 GB worker against CPython's 33 GB
+pathology, with CPython's *legitimate* 2,333-function compile somewhere between
+them, and a ceiling low enough to catch the second would refuse the third.
+`kill => true` is destructive and belongs to the embedder.
+
+### The orphan case is the fourth vacuous test this project has caught
+
+It passed on the parent commit three times, for three different reasons, before
+it was made to fail there. Recorded because every one of them is a way to write
+a lifetime test that proves nothing.
+
+1. **It failed on the parent for the wrong reason**: `undef` on a helper calling
+   `wasm_code_slots:observe_config/1`, which the parent does not have. A failure
+   in the harness looks exactly like a failure in the runtime.
+2. **It found our own coordinator instead of OTP's child.** A process *waiting*
+   in `compile:do_compile/2`'s receive has `compile` frames in its stacktrace
+   just as the process doing the work does. Killing the coordinator then
+   satisfied "no compiler is running".
+3. **The detector flickered.** Testing "is any process currently inside the
+   compiler" samples a stacktrace against a handful of module names, and a
+   compiler moves between passes constantly. A live orphan read as present, and
+   one millisecond later as gone. The fix is to catch the pid once and then ask
+   `is_process_alive/1`, which has no such gap.
+
+And a fourth, in the fix rather than the test: the reaper was spawned as
+`spawn(fun () -> reap(Owner, self()) end)`, where `self()` is the *reaper's* pid.
+It monitored itself, killed itself when the owner died, and left the compiler it
+exists to stop running to completion. The case caught it.

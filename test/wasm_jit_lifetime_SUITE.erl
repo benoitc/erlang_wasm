@@ -23,7 +23,8 @@
 -include_lib("wasm/include/wasm_exec.hrl").
 
 all() ->
-    [a_compiler_killed_mid_flight_leaves_no_slot_behind,
+    [killing_the_compiler_takes_the_otp_compiler_with_it,
+     a_compiler_killed_mid_flight_leaves_no_slot_behind,
      destroying_the_instance_while_it_compiles_is_harmless,
      a_caller_killed_inside_generated_code_leaves_the_slot_usable,
      every_slot_pinned_by_a_leaked_lease_still_recovers,
@@ -58,6 +59,83 @@ init_per_testcase(_, Config) -> wasm_test_slots:reset(), Config.
 end_per_testcase(_, _) -> wasm_test_slots:reset(), ok.
 
 %%% --------------------------------------------------------------- cases ---
+
+%% The hole nothing in this repo has ever tested, and it is not ours: OTP's
+%% `compile:forms/2` spawns its worker with `spawn_monitor/1`, which monitors
+%% and does *not* link. So a compiler killed by `wasm_jit_sup`'s `brutal_kill`,
+%% or by `application:stop(wasm)`, leaves the OTP compiler running to completion
+%% holding its own copy of the forms, with nothing in the tree able to see or
+%% stop it.
+%%
+%% On the parent commit step 2 finds OTP's child and step 4 times out, because
+%% that child compiles to completion whatever happens to the process that asked
+%% for it. The anti-vacuity guard is step 2: if no compiler is ever caught, the
+%% case has proved nothing and says so instead of passing.
+-define(ORPHAN_MS, 8000).
+-define(COMPILE_MS, 40000).
+
+killing_the_compiler_takes_the_otp_compiler_with_it(_) ->
+    wasm_jit:reset_counts(),
+    %% Big enough that the compile is seconds rather than milliseconds, so
+    %% there is a window in which to catch and kill it.
+    M = big_module(2000),
+    {ok, I} = wasm:instantiate(M, #{}, #{compile => true, compile_after => 1,
+                                         compile_whole => true}),
+    ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+    Started = erlang:monotonic_time(millisecond),
+    %% Caught once, by identity, and then asked only whether it is alive.
+    %%
+    %% Asking "is any process currently inside the compiler" twice does not
+    %% work, and the way it fails is a false pass: the test is a sample of a
+    %% stacktrace against a handful of module names, and a compiler moves
+    %% between passes constantly. The first draft found the orphan, killed
+    %% nothing that mattered, sampled again one millisecond later while that
+    %% same live process happened to be inside a pass the list does not name,
+    %% and concluded it had gone. `is_process_alive/1` has no such gap.
+    Pid = catch_orphan(erlang:monotonic_time(millisecond) + 30000),
+    Waited = erlang:monotonic_time(millisecond) - Started,
+    ok = kill_compilers(),
+    ?assertEqual(ok, until(fun () -> not is_process_alive(Pid) end, ?ORPHAN_MS),
+                 "a killed compiler left the OTP compiler running"),
+    %% Both guards against a vacuous pass, and the second one is the one that
+    %% caught this case cheating. The compiler is killed a second or two in and
+    %% this module needs about forty, so an orphan is still working long after
+    %% the window closes. Sized at 600 functions it needed eleven seconds
+    %% against a ten second window, and the case passed on the parent commit by
+    %% letting the orphan finish rather than by anything killing it.
+    ?assert(Waited < 25000),
+    Total = erlang:monotonic_time(millisecond) - Started,
+    ?assert(Total < ?COMPILE_MS div 2),
+    ok = wasm:destroy(I).
+
+%% The first process found inside the OTP compiler that is not one of ours.
+%% Fails rather than returns when there is none, because a case that never
+%% caught a compiler has proved nothing.
+catch_orphan(Deadline) ->
+    case otp_compilers() of
+        [Pid | _] -> Pid;
+        [] ->
+            case erlang:monotonic_time(millisecond) < Deadline of
+                true -> timer:sleep(20), catch_orphan(Deadline);
+                false -> ct:fail("no OTP compiler ever ran, so this case "
+                                 "proved nothing")
+            end
+    end.
+
+%% `f` plus N-1 more, each with a body long enough that compiling all of them
+%% takes seconds.
+big_module(N) ->
+    Wat = iolist_to_binary(
+            ["(module (func (export \"f\") (param i32) (result i32)
+                local.get 0 i32.const 1 i32.add)",
+             [["(func (param i32) (result i32) local.get 0",
+               [" i32.const 1 i32.add" || _ <- lists:seq(1, 40)], ")"]
+              || _ <- lists:seq(2, N)],
+             ")"]),
+    {ok, P} = wasm_wat:module(Wat),
+    {ok, Mod} = wasm_validate:module(P),
+    Mod.
+
 
 a_compiler_killed_mid_flight_leaves_no_slot_behind(_) ->
     %% The reservation is owned by the process doing the work precisely so that
@@ -1008,6 +1086,38 @@ hashed(N) ->
                                    <<0>>, Body])]),
     {ok, M} = wasm:compile(Bin, #{identity => {sha256, crypto:hash(sha256, Bin)}}),
     M.
+
+%% Every process inside the OTP compiler that is not one of ours.
+%%
+%% The exclusion is the whole point and the first version did not have it. A
+%% process *waiting* in `compile:do_compile/2`'s receive has `compile` frames in
+%% its stacktrace just as the process doing the work does, so without excluding
+%% the slot owners this finds our own coordinator, and killing the coordinator
+%% then satisfies the assertion. The case passed on the parent commit, which is
+%% precisely the vacuous pass it was written to avoid.
+%%
+%% Written in terms both this commit and its parent have, so it can be watched
+%% to fail: it names no function this branch introduced.
+otp_compilers() ->
+    Ours = [self() | loading_owner_pids()],
+    [P || P <- processes(), not lists:member(P, Ours), in_compiler(P)].
+
+loading_owner_pids() ->
+    [Pid || {_N, _G, {loading, _}, Leases} <- ets:tab2list(wasm_code_slots),
+            Pid <- maps:values(Leases), is_pid(Pid)].
+
+in_compiler(P) ->
+    case process_info(P, current_stacktrace) of
+        {current_stacktrace, Stack} ->
+            lists:any(fun ({compile, _, _, _}) -> true;
+                          ({beam_ssa_opt, _, _, _}) -> true;
+                          ({beam_ssa_pre_codegen, _, _, _}) -> true;
+                          ({v3_core, _, _, _}) -> true;
+                          ({sys_core_fold, _, _, _}) -> true;
+                          (_) -> false
+                      end, Stack);
+        undefined -> false
+    end.
 
 free_slots() ->
     length([N || {N, _G, free, _} <- ets:tab2list(wasm_code_slots)]).

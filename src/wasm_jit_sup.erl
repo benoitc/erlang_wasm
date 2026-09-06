@@ -32,6 +32,27 @@ released by `wasm_code_slots`'s monitor when it dies, and the instance's own
 record of having asked expires on its own, so being killed at any moment costs
 nothing but the work.
 
+## The two processes per compile that are not in this tree
+
+`wasm_core:run_compiler/4` spawns the process that runs `compile:forms/2`, and
+that process spawns a reaper. Neither is supervised, which this doc says
+elsewhere is a place where nothing can see, bound or stop a process, so the
+exception is worth stating.
+
+They are bounded by the sixteen slot reservations rather than by any count of
+compilers: a compiler that cannot claim a slot gives up at once, and a unit
+being built holds one. So at most sixteen units are in flight, and a sharded one
+carries four such processes rather than two, since each `pmap` worker has a
+reaper of its own. The `count_children/1` check below is *not* the bound; it is
+soft and racy by design.
+
+And they are stoppable, which is the point of the reaper and is more than can be
+said for what they replace. `compile:forms/2` spawns its worker with
+`spawn_monitor/1`, which does not link, so before this the OTP compiler outlived
+the process that asked for it: a child killed here, or by `application:stop/1`,
+left a compiler running to completion holding its copy of the forms with nothing
+able to see it.
+
 ## Why the bound is not a supervisor flag
 
 An OTP supervisor has no `max_children`; that belongs to pool libraries. The

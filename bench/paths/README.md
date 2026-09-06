@@ -473,6 +473,56 @@ Interleave it against the previous commit, five pairs, and compare minimums.
 The loop cannot see this class of regression, and neither can any of the call
 arms.
 
+## Where a compile's memory is spent, and what a ceiling would cost
+
+`PERF.md` records that a `max_heap_size` ceiling on the process `wasm_jit`
+spawns sees 0.34 GB of a compile whose node reaches 6.19 GB, because
+`compile:forms/2` runs its passes in a process of its own, and that moving the
+work onto that same long-lived coordinator with `no_spawn_compiler_process`
+costs 75% more compile time. `compileheap` asks the question that experiment did
+not: what does the same option cost in a *fresh, disposable* process of our own,
+which is the lifecycle OTP's own child already has?
+
+```sh
+erlc -I _build/default/lib -o bench/paths bench/paths/compileheap.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run compileheap main test/fixtures/lang/qjs.wasm 5
+```
+
+Prove the instrument first. It groups collection events by pid, which
+`allocwords` does not and cannot, since its estimator pairs a start with the end
+after it and that is sound only within one process:
+
+```sh
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run compileheap main validate
+```
+
+Three arms compile the same `Core`, built once before any of them: `otp` as
+`wasm_core:module/9` calls it today, `inline` with
+`no_spawn_compiler_process` on the measuring process, and `child` with the same
+option in a fresh process under the `max_heap_size` map that would ship. The
+gate is one ordered rule on `R = child min / otp min`, from the **clean,
+untraced** walls: `R =< 1.10` ships, `1.10 < R =< 1.20` ships opt-in, `R > 1.20`
+stops.
+
+Four things it will not let you get wrong, each of which cost a draft:
+
+- **The wall it gates on is untraced.** The arms differ in how many processes
+  exist and so in how many collection events the instrument sees, which is the
+  same trap `pyarms` records as "the traced wall is not the wall".
+- **`[procs, set_on_spawn]` delivers zero collection events.** A child inherits
+  only the flags its parent carries, so the trace needs
+  `[procs, garbage_collection, set_on_spawn, monotonic_timestamp]`, and that
+  last flag makes every message a `trace_ts` tuple with a timestamp appended.
+  A harness matching `{trace, ...}` matches nothing and silently finds no child.
+- **The `otp` arm's allocation is a floor, printed with a `>`.** Its compiler is
+  spawned inside `compile:do_compile/2` and exits with its result, so no closing
+  collection can be forced and the final live set is unmeasured.
+- **The sampled peak is a lower bound**, always: a peak between two 50 ms
+  samples is invisible, and so is the memory the collector needs while
+  collecting. Never size a ceiling by it.
+
 ## Short notes
 
 - The box matters more than most of these differences. Taken here at load

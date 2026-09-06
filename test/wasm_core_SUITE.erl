@@ -691,7 +691,23 @@ the_core_you_can_read_is_the_core_that_is_compiled(_) ->
     {ok, Direct, Bin1} = compile:forms(Core, [from_core, binary, return_errors]),
     ?assertEqual(wasm_code_0, Direct),
     {ok, Bin2} = wasm_core:module(wasm_code_0, Unit, Sigs, TSigs, full, 0),
-    ?assertEqual(Bin2, Bin1),
+
+    %% On the *code*, not on the bytes. `module/6` runs the compiler in a
+    %% process it spawns itself, which needs `no_spawn_compiler_process`, and
+    %% that option is recorded in the `compile_info` chunk. So the two binaries
+    %% differ by one atom of metadata and by nothing else, and asserting raw
+    %% equality would only be asserting that this runtime never passes the
+    %% compiler an option.
+    %%
+    %% `beam_lib:md5/1` is the code, which is what this case is about: a step
+    %% added to one path and not the other changes it, and the option does not.
+    ?assertEqual(beam_lib:md5(Bin2), beam_lib:md5(Bin1)),
+
+    %% And the metadata difference is exactly the one option, so a second one
+    %% appearing later is a failure rather than a shrug.
+    ?assertEqual([no_spawn_compiler_process],
+                 compile_options(Bin2) -- compile_options(Bin1)),
+    ?assertEqual([], compile_options(Bin1) -- compile_options(Bin2)),
 
     %% And the rendered text is Core Erlang naming the entry point every caller
     %% goes through, not an opaque term printed with `~p`.
@@ -699,6 +715,11 @@ the_core_you_can_read_is_the_core_that_is_compiled(_) ->
     ?assert(string:find(Text, "'invoke'/6") =/= nomatch),
     ?assert(string:find(Text, "module") =/= nomatch),
     ok = wasm:destroy(I).
+
+compile_options(Bin) ->
+    {ok, {_Mod, [{compile_info, Info}]}} =
+        beam_lib:chunks(Bin, [compile_info]),
+    proplists:get_value(options, Info, []).
 
 %% A whole-module dump means counting positions to find the function you want.
 %% Real modules have hundreds, so the index the module itself uses is what a

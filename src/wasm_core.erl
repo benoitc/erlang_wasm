@@ -44,8 +44,9 @@ every other refusal here: interpret it.
 
 -export([fun_name/1, frame_name/1, limits/0, atoms/0]).
 -export([supported/1, can_compile/2, ops/0, module/4, module/6]).
--export([module/7, module/8, module/9]).
+-export([module/7, module/8, module/9, module/10]).
 -export([forms/5, forms/6, forms/7, forms/8]).
+-export([reap/2]).
 
 -include("wasm_exec.hrl").
 -include("wasm_memory.hrl").
@@ -448,14 +449,128 @@ As `module/8`, saying which other unit holds each function this one does not.
              #{non_neg_integer() => module()}) ->
           {ok, binary()} | {error, term()}.
 module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Head, Elsewhere) ->
+    module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Head, Elsewhere, #{}).
+
+-doc """
+As `module/9`, bounding the heap of the process that runs the OTP compiler.
+
+`Opts` takes `max_heap_words`, and a unit whose compiler exceeds it answers
+`{error, {limit, {compile_memory, Words}}}` rather than dying. Absent means no
+ceiling, which is the default and what every caller but `wasm_jit` passes.
+""".
+-spec module(module(), [term()], map(), map(), baseline | full,
+             binary() | non_neg_integer(), undefined | module(), module(),
+             #{non_neg_integer() => module()},
+             #{max_heap_words => pos_integer()}) ->
+          {ok, binary()} | {error, term()}.
+module(Name, Unit, Sigs, TSigs, Mode, Stamp, Next, Head, Elsewhere, Opts) ->
     case forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) of
-        {ok, Core} ->
-            case compile:forms(Core, copts(Mode)) of
-                {ok, Name, Bin} -> {ok, Bin};
-                {error, Es, _Ws} -> {error, {compile, Es}}
-            end;
+        {ok, Core} -> run_compiler(Name, Core, copts(Mode), Opts);
         {error, _} = E -> E
     end.
+
+-doc """
+Run the OTP compiler in a process this runtime owns.
+
+`compile:forms/2` runs its passes in a process of its own and gives a caller no
+way to configure it, so a `max_heap_size` set on the process `wasm_jit` spawns
+bounds a process that only waits: 141 MB watched against 2,055 MB spent, in
+`test/audit/PERF.md`. `no_spawn_compiler_process` declines that spawn, and this
+makes the same one with our options on it.
+
+The child is short-lived by construction, exactly as OTP's own is: it allocates,
+answers and exits, so it never pays for a collection of what it built. That is
+why this is free, measured at 0.9% over five interleaved samples.
+
+Two things follow from owning it rather than OTP:
+
+- **a ceiling can be set**, which is the point;
+- **it can be stopped.** `spawn_monitor/1` does not link, so OTP's child
+  outlives the process that asked for it: today a compiler killed by
+  `wasm_jit_sup`'s `brutal_kill`, or by `application:stop(wasm)`, leaves the
+  OTP compiler running to completion holding its copy of the forms, with
+  nothing in the tree able to see it. `reap/2` closes that.
+""".
+run_compiler(Name, Core, Copts, Opts) ->
+    Owner = self(),
+    {Pid, Ref} = spawn_opt(fun () -> compiler(Owner, Core, Copts) end,
+                           [monitor | heap_opts(Opts)]),
+    receive
+        {compiled, Pid, R} ->
+            demonitor(Ref, [flush]),
+            unwrap(Name, R);
+        %% `killed' says the process was killed and not why. Its pid is
+        %% published nowhere and the only kill this module issues comes from
+        %% `reap/2', which fires solely when the owner is already dead and so
+        %% has nobody left to hear an answer. A `killed' seen by a live owner
+        %% is the ceiling, unless a third party is killing pids it did not
+        %% spawn.
+        {'DOWN', Ref, process, Pid, killed} ->
+            {error, {limit, {compile_memory, maps:get(max_heap_words, Opts, 0)}}};
+        {'DOWN', Ref, process, Pid, Why} ->
+            {error, {compiler_died, Why}}
+    end.
+
+%% By message rather than by exit reason, which is how OTP returns it. The
+%% artifact is a refcounted binary, so either way what crosses is a header, and
+%% a message leaves the child exiting `normal'.
+compiler(Owner, Core, Copts) ->
+    %% Bound out here. Inside the fun, `self()` is the *reaper's* pid, so the
+    %% reaper would watch itself, kill itself when the owner died, and leave the
+    %% compiler it exists to stop running to completion.
+    Me = self(),
+    _ = spawn(fun () -> reap(Owner, Me) end),
+    Owner ! {compiled, Me, compile:forms(Core, [no_spawn_compiler_process |
+                                                Copts])},
+    ok.
+
+-doc """
+Kill `Child` if `Owner` dies first, and stop as soon as either does.
+
+Exported for `wasm_jit:pmap/2`, which has the same problem one rung up: its
+shard workers are spawned monitored and unlinked, so a killed coordinator would
+leave them compiling toward slots nobody owns.
+""".
+-spec reap(pid(), pid()) -> ok | true.
+%% Spawned *by the child*, which is what makes it window-free: if the owner is
+%% already gone, `monitor/2` answers `noproc` at once and the child is killed
+%% before it has compiled anything. Spawned by the owner there would be a gap
+%% between having the child's pid and telling the reaper about it.
+%%
+%% Not a link, which cannot be used here: a `max_heap_size` kill exits the child
+%% with reason `killed`, and an untrapping owner linked to it dies with `killed`
+%% too, before it can record the outcome. The owner under `compile_sync` is the
+%% embedder's own process and is not ours to kill or to set flags on.
+reap(Owner, Child) ->
+    OwnerRef = monitor(process, Owner),
+    ChildRef = monitor(process, Child),
+    receive
+        {'DOWN', ChildRef, process, Child, _} -> ok;
+        %% `exit/2` on a pid that has already gone is `true`, so losing this
+        %% race costs nothing.
+        {'DOWN', OwnerRef, process, Owner, _} -> exit(Child, kill)
+    end.
+
+%% `kill` and `error_logger` are set rather than inherited: `+hmaxk false`
+%% node-wide would otherwise turn the ceiling into a suggestion, and the outcome
+%% is already recorded as a value on a counter and in the diagnostics ring, so a
+%% `logger` event beside it is duplicate noise.
+%%
+%% `include_shared_binaries` counts the artifact itself, which is 7 MB for a
+%% QuickJS unit and 80 MB for CPython's, against a working set measured in
+%% gigabytes. Conservative, and noise beside what it is bounding.
+heap_opts(#{max_heap_words := W}) when is_integer(W), W > 0 ->
+    [{max_heap_size, #{size => W, kill => true, error_logger => false,
+                       include_shared_binaries => true}}];
+heap_opts(_) ->
+    [].
+
+%% `compile:forms/2` answers its child's exit reason, so a compiler that died
+%% rather than returning arrives here as an arbitrary term. Matching only the
+%% two documented shapes made that a `case_clause`.
+unwrap(Name, {ok, Name, Bin}) -> {ok, Bin};
+unwrap(_Name, {error, Es, _Ws}) -> {error, {compile, Es}};
+unwrap(_Name, Other) -> {error, {compiler_died, {unexpected, Other}}}.
 
 -doc """
 The Core Erlang this unit lowers to, before the OTP compiler sees it.

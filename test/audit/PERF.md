@@ -4687,3 +4687,63 @@ node", the path there is much shorter than it looked: ship the Core, get a
 `.beam` back, and put the helper in a cgroup. The bounds that shipped are
 in-VM and cannot cover allocator memory, RSS or paging, which is what actually
 happened to CPython at 33 GB.
+
+## The aggregate bound belongs in the VM, and the entry above oversold the OS
+
+The section on compiling out of process ended by saying the in-VM bounds "cover
+process heap, not allocator memory, RSS or paging". That is true as far as it
+goes and it framed the question wrongly: it implied the OS is needed to *measure*
+a compile, and it treated RSS as the quantity to bound. Neither survives
+measurement.
+
+**The compiler's memory is process memory, because it is compiling to BEAM.**
+The OTP compiler allocates ordinary terms on process heaps. It has no arena, no
+NIF and no off-heap store, so what we want to bound is already denominated in a
+quantity the VM counts per process and can attribute to an owner. HotSpot had to
+build arena accounting into C2 to get this; `process_info(P, memory)` is it.
+
+Summing over the compile team, against the node, QuickJS units, teams traced
+with `set_on_spawn` so nothing is assumed:
+
+| | 1 compile | 4 concurrent |
+| --- | ---: | ---: |
+| sum of the compile team | 511.5 MB (3 procs) | 2095.3 MB (12 procs) |
+| `erlang:memory(processes)` | 529.6 | 2248.7 |
+| `erlang:memory(binary)` | **4.5** | **5.6** |
+| `erlang:memory(total)` | 609.1 | 2328.1 |
+| OS RSS | 1061.2 | 2215.1 |
+| **team / (total - baseline)** | **101.7%** | **94.3%** |
+
+And the residual is not hiding anywhere. At the instant node process memory
+peaks, the largest process *outside* the team is **4.7 MB**, the test's own main
+process, followed by `code_server` at 0.7 MB. There is nowhere else for a
+compiler's memory to be.
+
+**RSS is the worse instrument, not the better one.** At one compile it read
+twice the team, entirely from allocator carriers the emulator retains from
+earlier work: memory no compile caused, that killing a compile does not return.
+A cap on RSS refuses compiles for somebody else's garbage. At four compiles the
+two nearly agree (94.6%), which is the coincidence, not the rule.
+
+**Sampling is free.** One aggregate sample costs 2.4 us over 3 processes,
+11.1 us over 12, 34.9 us over 48, so a 100 ms sampler is 0.01% of a core at the
+largest team the slot pool allows. Reading a process that is collecting hard is
+stable: 300 reads during continuous churn returned no `undefined` and moved
+between 0.9 and 1.7 MB, which is the quantity itself changing across
+collections. A transient under-read delays a kill; it does not cause a wrong
+one.
+
+### What this changes
+
+`compile_budget_words` admits on *predicted* cost, in IR words, which was chosen
+because it was the only quantity available before the work began. It can be
+backed by the measured one: `wasm_code_slots` already holds the reservations and
+monitors their owners, so it can sum the team on a timer and act on the real
+number. No new process, no OS dependency, and identical on every platform, which
+`memory.max` and Job Objects are not.
+
+What the VM still cannot do is stop the operating system paging once memory is
+committed, which is what actually happened to CPython at 33 GB. But that is an
+argument for refusing earlier and killing sooner, both of which the numbers
+above make possible, and not for moving the compiler out of the node to find out
+how big it is.

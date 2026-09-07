@@ -44,6 +44,25 @@ the clean wall and nothing else.
 sampled, but a peak between two samples is invisible, and so is the memory the
 collector needs while collecting.
 
+**`node` and `rss` are sampled beside them**, `erlang:memory(total)` and `ps`,
+because the gaps are the whole point. Measured on one QuickJS function, three
+arms:
+
+    arm      runner   worker    node     rss
+    otp        47.2    477.7  1320.3  1241.4 MB
+    inline    704.2    704.2  1685.5  1474.5 MB
+    child      53.6    477.8  1389.7  1429.2 MB
+
+Two things to read off it. The `otp` runner peaks at a *tenth* of what its own
+compiler spends, which is the blind spot this harness exists to show. And even
+the worker peak is two to three times under the node, so no per-process number
+is a substitute for the node's.
+
+`erlang:memory(total)` and RSS track within about 10%, and **either can be the
+larger**: the emulator counts pages the OS has not made resident, and the OS
+counts what the emulator does not. Do not treat one as a conservative bound on
+the other; the `child` row above has RSS above `memory(total)`.
+
 **Allocated words are per process**, from that process's own collection trace,
 by `allocwords`'s estimator: reclaimed, plus ending live, minus starting live,
 over a window a forced major collection closes at each end.
@@ -81,6 +100,12 @@ mailbox. Run it on the box before the numbers here are believed.
 -define(FLAGS, [procs, garbage_collection, set_on_spawn, monotonic_timestamp]).
 
 -define(SAMPLE_MS, 50).
+
+%% Node-level peaks for the arm currently running. In the process dictionary
+%% because the sampler is a tail-recursive loop whose accumulator is already
+%% carrying the per-pid map, and threading a second one through every clause
+%% would obscure what the loop is for.
+-define(NODE_PEAK, compileheap_node_peak).
 -define(TIMEOUT, 3600000).
 
 %% The map that would ship, at a size nothing here can reach. The gate has to
@@ -262,6 +287,7 @@ run(child, Core, Bound) ->
 %% against 167. The recorded cost was never the option; it was collecting a
 %% live set this size on every pass.
 instrumented(Arm, Core, Live) ->
+    erase(?NODE_PEAK),
     Owner = self(),
     Runner = spawn(fun () ->
                        receive go -> ok end,
@@ -309,7 +335,13 @@ watch(Runner, Peaks0, Evs, Last0) ->
 maybe_sample(Last, Peaks) ->
     Now = erlang:monotonic_time(millisecond),
     case Now - Last >= ?SAMPLE_MS of
-        true -> {Now, sample(Peaks)};
+        true ->
+            {Mem, Rss} = node_now(),
+            put(?NODE_PEAK, case get(?NODE_PEAK) of
+                                undefined -> {Mem, Rss};
+                                {M0, R0} -> {max(M0, Mem), max(R0, Rss)}
+                            end),
+            {Now, sample(Peaks)};
         false -> {Last, Peaks}
     end.
 
@@ -343,6 +375,21 @@ finish(Runner, Peaks, Evs, Result, Bounded) ->
       peaks => Peaks,
       per_pid => Per,
       result => Result}.
+
+%% What the emulator and the OS say, beside what the processes say. Sampled
+%% together, because the interesting number is the gap: a per-process peak can
+%% be two orders of magnitude under the node's, which is the whole reason this
+%% harness exists.
+node_now() ->
+    {erlang:memory(total), rss_bytes()}.
+
+%% `ps` rather than anything in the emulator, because the point is to have one
+%% number the emulator did not produce.
+rss_bytes() ->
+    case string:trim(os:cmd("ps -o rss= -p " ++ os:getpid())) of
+        "" -> 0;
+        S -> try list_to_integer(S) * 1024 catch _:_ -> 0 end
+    end.
 
 drain(Acc) ->
     receive
@@ -465,14 +512,21 @@ round_(Core, Live, I, N) ->
 one(Arm, Core, Live) ->
     #{result := R} = M = instrumented(Arm, Core, Live),
     {CleanUs, CleanR} = clean(Arm, Core, Live),
+    {NodeMem, NodeRss} = case get(?NODE_PEAK) of
+                             undefined -> {0, 0};
+                             Peak -> Peak
+                         end,
     Row = M#{arm => Arm,
+             node_mem => NodeMem,
+             node_rss => NodeRss,
              clean_us => CleanUs,
              bytes => byte_size(bin_of(R)),
              md5 => md5(bin_of(R)),
              clean_md5 => md5(bin_of(CleanR))},
-    io:format("  ~-7w clean ~7.1f s  runner ~8.1f MB  worker ~8.1f MB  ~s~n",
+    io:format("  ~-7w clean ~7.1f s  runner ~7.1f  worker ~7.1f  "
+              "node ~7.1f  rss ~7.1f MB  ~s~n",
               [Arm, CleanUs / 1000000, runner_peak(Row), worker_peak(Row),
-               note_of(Row)]),
+               NodeMem / 1048576, NodeRss / 1048576, note_of(Row)]),
     Row.
 
 clean_only(Arm, Core, Live) ->

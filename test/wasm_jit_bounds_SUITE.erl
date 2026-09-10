@@ -22,6 +22,10 @@
 -include_lib("wasm/include/wasm.hrl").
 -include_lib("wasm/include/wasm_exec.hrl").
 
+%% The configuration keys the warning helper matches on, so a case says which
+%% one it means rather than relying on there being only ever one.
+-define(CEILING_KEY, "compile_max_heap_words").
+
 %% Measured, on the pinned guest recorded in `test/audit/PERF.md`: CPython 3.12
 %% reaches this many functions in one `_start`, and has this many eligible in
 %% the whole module. They are here so that putting the pool back to 2048 fails a
@@ -57,6 +61,7 @@ groups() ->
        the_ceiling_reaches_the_process_that_runs_the_compiler,
        a_bad_ceiling_is_reported_once_and_compiles_anyway,
        a_compile_past_the_node_budget_is_refused_and_retried,
+       two_compiles_fit_and_a_third_is_refused,
        one_request_larger_than_the_whole_budget_still_compiles,
        a_killed_compiler_gives_its_budget_back]},
      %% Its own group because it stops the application, which takes the store
@@ -126,6 +131,63 @@ a_compile_past_the_node_budget_is_refused_and_retried(_) ->
         end
     end),
     ?assertEqual(0, budget_or(0)).
+
+%% What every other budget case cannot tell you: whether the *amount* reserved
+%% is right. They all ask "does a second compile fit", which is satisfied by a
+%% correct reservation, by an absurdly small budget, and by a budget that bounds
+%% nothing at all, so none of them can distinguish those three.
+%%
+%% Two fit and the third does not. That fails if a reservation is too large (the
+%% second is refused) and if it is too small (the third is admitted), so it pins
+%% the quantity rather than the direction.
+two_compiles_fit_and_a_third_is_refused(_) ->
+    %% Three distinct modules. The same one three times contends for the slot
+    %% rather than the budget and answers `retry` before admission is reached.
+    [A, B, C] = [build(many_wat(N)) || N <- [400, 401, 402]],
+    One = one_unit_words(A),
+    %% Room for two and not three, with the margin on the low side of three so
+    %% a unit whose weight drifts a little does not make this pass by accident.
+    with_budget(2 * One + (One div 2), fun () ->
+        H1 = hold_budget(A),
+        try
+            %% Asserted before anything is expected to be refused: on an idle
+            %% node `Spent =:= 0` and the escape admits any request whatever
+            %% its size, so a case that skipped this could conclude the budget
+            %% works while nothing was ever charged.
+            ?assert(budget_or(1) > 0),
+            H2 = hold_budget_more(B),
+            try
+                ?assertEqual(0, refused(), "the second must fit"),
+                {ok, I} = wasm:instantiate(C, #{}, sync(whole())),
+                ?assertEqual({ok, [11]}, wasm:call(I, ~"f", [10])),
+                ?assert(refused() >= 1),
+                ?assertMatch([{refused, _, {limit, {compile_budget, _}}} | _],
+                             wasm_jit:diagnostics()),
+                ok = wasm:destroy(I)
+            after
+                release_one(H2)
+            end
+        after
+            release_hold(H1)
+        end
+    end).
+
+%% As `hold_budget/1`, for a second holder: it waits for the budget to *rise*
+%% rather than to become non-zero, since the first holder already made it so.
+hold_budget_more(M) ->
+    Before = budget_or(0),
+    Pid = spawn(fun () ->
+                    {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+                    _ = wasm:call(I, ~"f", [10]),
+                    ok
+                end),
+    ?assertEqual(ok, until(fun () -> budget_or(0) > Before end, 30000)),
+    Pid.
+
+release_one(Pid) ->
+    Was = budget_or(0),
+    exit(Pid, kill),
+    ?assertEqual(ok, until(fun () -> budget_or(0) < Was end, 10000)).
 
 %% A budget smaller than a single request must not refuse it for ever. Nothing
 %% would ever compile on a node whose budget was set below one guest's hot set,
@@ -342,18 +404,22 @@ a_bad_ceiling_is_reported_once_and_compiles_anyway(_) ->
     %% Said once per uninterrupted occurrence of the same value, which is the
     %% part a `persistent_term` memo could not promise: two compilers reading
     %% it concurrently would both see the old value and both warn.
-    ?assertEqual(1, warnings(fun () -> two_compiles(banana) end)),
-    ?assertEqual(1, warnings(fun () -> two_compiles(banana),
+    ?assertEqual(1, warnings(?CEILING_KEY,
+                             fun () -> two_compiles(banana) end)),
+    ?assertEqual(1, warnings(?CEILING_KEY,
+                             fun () -> two_compiles(banana),
                                        two_compiles(banana) end)),
     %% Corrected, then mistyped the same way again: the condition cleared, so
     %% it is news a second time. This is what fails if the server is told only
     %% about the failures.
-    ?assertEqual(2, warnings(fun () -> two_compiles(banana),
+    ?assertEqual(2, warnings(?CEILING_KEY,
+                             fun () -> two_compiles(banana),
                                        two_compiles(Min * 4),
                                        two_compiles(banana) end)),
     %% Two different wrong values are two conditions, which is what fails if
     %% the memo keys on the environment key instead of the raw term.
-    ?assertEqual(2, warnings(fun () -> two_compiles(banana),
+    ?assertEqual(2, warnings(?CEILING_KEY,
+                             fun () -> two_compiles(banana),
                                        two_compiles(-1) end)),
     %% And the two values that mean "no ceiling" say nothing at all.
     [begin
@@ -366,9 +432,16 @@ a_bad_ceiling_is_reported_once_and_compiles_anyway(_) ->
     ok.
 
 %% Count the warnings a body produces, by being the `logger` handler for it.
-warnings(Body) ->
+%% `Match` is the substring that counts, and it is a parameter rather than a
+%% literal because there is more than one configuration key now. With it
+%% hardcoded, a case asserting on a warning about a *different* key counts zero
+%% and passes vacuously, which is the same shape of trap as an `undef` on a
+%% helper: the assertion holds for a reason that has nothing to do with the
+%% behaviour under test.
+warnings(Match, Body) ->
     reset_config_memo(),
-    ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{pid => self()}}),
+    ok = logger:add_handler(?MODULE, ?MODULE,
+                            #{config => #{pid => self(), match => Match}}),
     try
         Body(),
         drain_warnings(0)
@@ -384,9 +457,10 @@ drain_warnings(N) ->
 
 %% The `logger` handler callback. Only this module's own message is counted, so
 %% anything else the node says during the body is ignored.
-log(#{level := warning, msg := {Fmt, Args}}, #{config := #{pid := Pid}}) ->
+log(#{level := warning, msg := {Fmt, Args}},
+    #{config := #{pid := Pid, match := Match}}) ->
     Text = unicode:characters_to_list(io_lib:format(Fmt, Args)),
-    case string:find(Text, "compile_max_heap_words") of
+    case string:find(Text, Match) of
         nomatch -> ok;
         _ -> Pid ! {warned, Text}, ok
     end;
@@ -972,8 +1046,18 @@ with_ceiling(Value, F) ->
 %% Without the guard every case using it fails with `undef` on the parent, which
 %% is a failure that proves nothing: it would look identical if the behaviour
 %% under test were present and correct.
+%% Each arity guarded separately, because a commit exists that has one and not
+%% the other: the ceiling keeps `observe_config/1` and the budget keys arrive
+%% through `observe_config/2`. Guarding only arity 1, as this did, means every
+%% case that clears a budget key fails with `undef` on its parent, which is a
+%% failure indistinguishable from the defect it is meant to catch.
 reset_config_memo() ->
+    reset_config_memo([]).
+
+reset_config_memo(Keys) ->
     _ = code:ensure_loaded(wasm_code_slots),
+    [wasm_code_slots:observe_config(K, ok)
+     || erlang:function_exported(wasm_code_slots, observe_config, 2), K <- Keys],
     case erlang:function_exported(wasm_code_slots, observe_config, 1) of
         true -> wasm_code_slots:observe_config(ok);
         false -> ok

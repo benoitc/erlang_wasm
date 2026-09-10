@@ -92,11 +92,19 @@ moved, because even with all three a refusal still interprets.
 %% because the two answer different questions and moving one should not move the
 %% other.
 %%
-%% Counted over the *requested* set, before anything is lowered. Words would
-%% predict the cost better -- 11 to 17 KB of allocated peak per IR word on both
-%% guests -- but any value is loose or wrong until the selector makes requests
-%% small: CPython's accepted hot set is 3.7 M words and peaked at 59.89 GB, so a
-%% ceiling admitting today's ordinary path would protect nothing.
+%% Counted over the *requested* set, before anything is lowered.
+%%
+%% Words look like they would predict the cost better, and they do not predict
+%% it well enough to bound it. Peak team memory per IR word is 4.95 to 6.77 KB
+%% on QuickJS alone, and the spread is the *estimator* rather than the guest:
+%% summing each process's own maximum against sampling the maximum of the sum
+%% moves it 37% on the same unit. `test/audit/PERF.md` has the table.
+%%
+%% This comment used to claim "11 to 17 KB of allocated peak per IR word on both
+%% guests" and cited nothing. That figure is a third quantity again, allocation
+%% over a whole compile rather than peak, and no measurement under `test/audit/`
+%% supported it. Memory is bounded by `compile_max_heap_words`, which the VM
+%% enforces, and by the budget that reserves it; not by anything counted here.
 -define(MAX_COMPILE_FUNS, 8192).
 
 %% The largest `max_heap_size` `size` a 64-bit emulator accepts. Undocumented,

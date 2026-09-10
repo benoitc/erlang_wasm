@@ -1142,11 +1142,24 @@ collect(Pid) ->
 %% name is part of its BEAM file, which is why the slot is in the key and why
 %% `wasm_code_slots` prefers a module's own slot when one is free.
 artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere, COpts) ->
-    %% Not cached when it is one of several. The key would have to carry which
-    %% module the chain points at next, and a shard set is only reproducible if
-    %% the same split falls out of the same workload, which nothing promises.
-    Key = case Next of
-              undefined ->
+    %% Not cached when it is one of several, and until now that was not true of
+    %% the *last* one. `build/8` passes `tl(Mods) ++ [undefined]`, so the final
+    %% shard has no `Next` and took the cacheable branch, which is why the test
+    %% is on `Head` as well.
+    %%
+    %% It was cached under a key that could not describe it. `wasm_code_cache:key/6`
+    %% takes the identity, ABI, slot, quality, function set and stamp; the
+    %% artifact also embeds `Head`, the module a crossing re-enters the chain
+    %% through, and `Elsewhere`, which says where every other function lives.
+    %% Neither is in the key, and `Head` is whichever slot shard one happened to
+    %% claim. So the same last shard could be adopted into a chain whose head is
+    %% a different module than the one compiled into it.
+    %%
+    %% A shard set is also only reproducible if the same split falls out of the
+    %% same workload, which nothing promises. Both reasons say the same thing:
+    %% cache a unit only when it is the whole of what was compiled.
+    Key = case {Next, Mod =:= Head andalso map_size(Elsewhere) =:= 0} of
+              {undefined, true} ->
                   wasm_code_cache:key(wasm_instance:identity(Inst), ?ABI, Mod,
                                       Mode,
                                       [Idx || {_P, Idx, _F, _IR} <- Unit],

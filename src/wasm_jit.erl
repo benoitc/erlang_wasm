@@ -943,9 +943,32 @@ bounds a single unit has.
 %% which is `max_heap_size`'s own meaning for a size of zero.
 -spec compile_limits() -> #{atom() => non_neg_integer()}.
 compile_limits() ->
+    Ceiling = max_heap_words(),
+    Budget = compile_budget_heap_words(),
     #{max_compile_funs => ?MAX_COMPILE_FUNS, max_shards => ?MAX_SHARDS,
-      max_heap_words => max_heap_words(),
-      budget_heap_words => compile_budget_heap_words()}.
+      max_heap_words => Ceiling,
+      budget_heap_words => Budget,
+      max_concurrent_compilers => concurrency(Budget, Ceiling)}.
+
+%% Compiler *workers*, not requests: a sharded request runs one per part.
+%%
+%% Steady-state admission capacity rather than a strict instantaneous maximum.
+%% When a reservation's owner dies, `wasm_code_slots` gives the words back on
+%% its `DOWN` while `wasm_core:reap/2` kills the compiler through a separate
+%% monitor, and nothing orders those two, so a newly admitted compiler can
+%% briefly overlap one that is still dying. Making it strict would mean tracking
+%% descendants on the release path for a window that only opens on a crash.
+%%
+%% Two exceptions are folded in rather than left for a reader to discover. The
+%% `?MAX_SHARDS` floor is the `Spent =:= 0` escape, which admits one request
+%% whatever its size on an idle node, and a request is up to four workers. The
+%% slot count is the ceiling on all of it, and comes from
+%% `wasm_code_slots:slots/0` rather than a second copy of the number.
+concurrency(0, _Ceiling) -> length(wasm_code_slots:slots());
+concurrency(_Budget, 0) -> length(wasm_code_slots:slots());
+concurrency(Budget, Ceiling) ->
+    erlang:min(length(wasm_code_slots:slots()),
+               erlang:max(?MAX_SHARDS, Budget div Ceiling)).
 
 -doc """
 The heap ceiling a compile would be given, in words, or 0 for none.

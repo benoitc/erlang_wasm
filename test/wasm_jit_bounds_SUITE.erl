@@ -71,6 +71,7 @@ groups() ->
        the_old_budget_key_is_ignored_and_named,
        no_shard_of_a_sharded_compile_is_cached,
        a_cached_artifact_is_adopted_while_the_budget_is_full,
+       compile_limits_reports_the_effective_values_and_their_off_states,
        a_compile_past_the_node_budget_is_refused_and_retried,
        two_compiles_fit_and_a_third_is_refused,
        one_request_larger_than_the_whole_budget_still_compiles,
@@ -392,6 +393,45 @@ flush_trace() ->
         {trace, _, _, _} -> flush_trace()
     after 0 -> ok
     end.
+
+%% A **guard**, not a reproduction: nothing was ever wrong here, and this exists
+%% so the coupling between the two knobs is visible in the one place an operator
+%% already looks. Lowering the ceiling silently raises how many compilers the
+%% budget admits, and a reported maximum that is not the maximum would be worse
+%% than no field at all.
+compile_limits_reports_the_effective_values_and_their_off_states(_) ->
+    Slots = length(wasm_code_slots:slots()),
+    %% Nothing set: no bound anywhere, so the slot pool is the only limit.
+    ?assertMatch(#{max_heap_words := 0, budget_heap_words := 0,
+                   max_concurrent_compilers := Slots}, wasm_jit:compile_limits()),
+    %% A ceiling alone bounds each compiler and not the node: still a pool's
+    %% worth of them, which is the whole reason the budget exists.
+    with_ceiling(?ROOMY_CEILING, fun () ->
+        ?assertMatch(#{max_heap_words := ?ROOMY_CEILING, budget_heap_words := 0,
+                       max_concurrent_compilers := Slots},
+                     wasm_jit:compile_limits())
+    end),
+    %% A budget alone is inoperative, and is reported as the effective 0 rather
+    %% than as what was configured.
+    budget_no_ceiling(4 * ?ROOMY_CEILING, fun () ->
+        ?assertMatch(#{budget_heap_words := 0,
+                       max_concurrent_compilers := Slots},
+                     wasm_jit:compile_limits())
+    end),
+    %% Both: the quotient, which is what admission will actually do.
+    with_budget(4 * ?ROOMY_CEILING, fun () ->
+        ?assertMatch(#{max_heap_words := ?ROOMY_CEILING,
+                       budget_heap_words := (4 * ?ROOMY_CEILING),
+                       max_concurrent_compilers := 4},
+                     wasm_jit:compile_limits())
+    end),
+    %% And the floor: a budget under one ceiling still admits the one request
+    %% the idle escape lets through, which is up to `max_shards` workers.
+    with_budget(1, fun () ->
+        #{max_concurrent_compilers := N} = wasm_jit:compile_limits(),
+        ?assertEqual(map_get(max_shards, wasm_jit:compile_limits()), N)
+    end),
+    reset_config_memo([compile_budget_words, compile_budget_heap_words]).
 
 %% A cache hit runs no compiler, so a full budget must not refuse it. Admission
 %% used to happen two calls before the lookup, so a request about to adopt an

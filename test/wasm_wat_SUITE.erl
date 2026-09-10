@@ -27,6 +27,51 @@ all() ->
      the_facade_compiles_text_too,
      the_facade_answers_a_value_for_bad_text].
 
+%% `(memory (data ...))' and `(table funcref (elem ...))' declare a segment as
+%% well as a memory or a table, and that segment takes an index. A segment
+%% written afterwards must therefore number after it.
+%%
+%% The two passes disagreed: the name context counted only written-out segments,
+%% so `$d' below resolved to 0 while `datas' had the inline segment there. The
+%% failure is quiet in the worst way. The inline segment is *active*, so it is
+%% dropped once the module is instantiated, and `memory.init $d' then traps out
+%% of bounds instead of copying the wrong bytes: an error that looks like a
+%% guest fault rather than a name resolved to the wrong thing.
+%%
+%% Reproduces the defect: on the parent `init' traps and `load' answers 0xAB.
+an_inline_segment_takes_an_index_in_its_own_space(_) ->
+    Data = <<"(module\n"
+             "  (memory (data \"\\AB\"))\n"
+             "  (data $d \"\\CD\")\n"
+             "  (func (export \"init\")\n"
+             "    (memory.init $d (i32.const 0) (i32.const 0) (i32.const 1)))\n"
+             "  (func (export \"load\") (result i32)\n"
+             "    (i32.load8_u (i32.const 0))))">>,
+    {ok, DI} = seg_instance(Data),
+    ?assertEqual({ok, []}, wasm:call(DI, <<"init">>, [])),
+    ?assertEqual({ok, [16#CD]}, wasm:call(DI, <<"load">>, [])),
+    ok = wasm:destroy(DI),
+
+    %% The same for tables, which is the other half of the abbreviation.
+    Elem = <<"(module\n"
+             "  (func $f (result i32) i32.const 0xAB)\n"
+             "  (func $g (result i32) i32.const 0xCD)\n"
+             "  (table funcref (elem (ref.func $f)))\n"
+             "  (elem $e funcref (ref.func $g))\n"
+             "  (func (export \"init\")\n"
+             "    (table.init $e (i32.const 0) (i32.const 0) (i32.const 1)))\n"
+             "  (func (export \"run\") (result i32)\n"
+             "    (call_indirect (result i32) (i32.const 0))))">>,
+    {ok, EI} = seg_instance(Elem),
+    ?assertEqual({ok, []}, wasm:call(EI, <<"init">>, [])),
+    ?assertEqual({ok, [16#CD]}, wasm:call(EI, <<"run">>, [])),
+    ok = wasm:destroy(EI).
+
+seg_instance(Wat) ->
+    {ok, P} = wasm_wat:module(Wat),
+    {ok, M} = wasm_validate:module(P),
+    wasm:instantiate(M, #{}, #{}).
+
 %% Only the differential cases need `wasm-tools`, so only they skip without one.
 init_per_testcase(Case, Config)
   when Case =:= parses_what_the_decoder_parses;

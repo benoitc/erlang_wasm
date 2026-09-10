@@ -238,8 +238,10 @@ collect_kind(<<"import">>, Args, Ctx) ->
     [_Mod, _Name, Desc] = Args,
     collect_import(Desc, ordered(Ctx));
 collect_kind(<<"func">>, Args, Ctx) -> declare_maybe(func, Args, Ctx);
-collect_kind(<<"table">>, Args, Ctx) -> declare_maybe(table, Args, Ctx);
-collect_kind(<<"memory">>, Args, Ctx) -> declare_maybe(memory, Args, Ctx);
+collect_kind(<<"table">>, Args, Ctx) ->
+    inline_segment(elem, Args, declare_maybe(table, Args, Ctx));
+collect_kind(<<"memory">>, Args, Ctx) ->
+    inline_segment(data, Args, declare_maybe(memory, Args, Ctx));
 collect_kind(<<"global">>, Args, Ctx) -> declare_maybe(global, Args, Ctx);
 collect_kind(<<"tag">>, Args, Ctx) -> declare_maybe(tag, Args, Ctx);
 collect_kind(<<"elem">>, Args, Ctx) -> declare_maybe(elem, Args, Ctx);
@@ -252,6 +254,26 @@ collect_kind(<<"start">>, _Args, Ctx) ->
     Ctx#ctx{started = true};
 collect_kind(K, _Args, _Ctx) ->
     fail(unknown_module_field, K).
+
+%% `(memory (data "..."))' and `(table funcref (elem ...))' are a definition and
+%% a *segment* in one pair of parentheses, and the segment takes an index in its
+%% own space just as a written-out one does.
+%%
+%% Declared anonymously here so that a segment written afterwards numbers after
+%% it. Without this the two passes disagree: the name context says the `$d' in
+%% `(memory (data "\AB")) (data $d "\CD")' is data segment 0, while `datas'
+%% has the inline segment there and `$d' at 1, so `memory.init $d' reaches the
+%% inline segment. That one is active and therefore already dropped, so it traps
+%% out of bounds rather than copying the wrong bytes, which is why it went
+%% unnoticed until the specification tested it.
+inline_segment(Space, Args, Ctx) ->
+    Keyword = case Space of data -> <<"data">>; elem -> <<"elem">> end,
+    case lists:any(fun ({list, _, [{keyword, _, K} | _]}) -> K =:= Keyword;
+                       (_) -> false
+                   end, Args) of
+        true -> declare(Space, undefined, Ctx);
+        false -> Ctx
+    end.
 
 %% An inline import inside a definition counts in the same space, so
 %% `(func (import "m" "n") ...)` and `(import "m" "n" (func ...))` agree.

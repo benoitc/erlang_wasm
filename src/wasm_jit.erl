@@ -56,7 +56,7 @@ moved, because even with all three a refusal still interprets.
 
 -export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
 -export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
--export([compile_limits/0, max_heap_words/0, compile_budget_words/0]).
+-export([compile_limits/0, max_heap_words/0, compile_budget_heap_words/0]).
 -export([reentered/0]).
 -export([compiler_loop/0]).
 -export([dump/1, dump/2]).
@@ -751,7 +751,13 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
             %% before any Core does. Admitting later would mean a request that
             %% is turned away had already built the largest term in the
             %% compile; admitting earlier would mean guessing its size.
-            Budget = compile_budget_words(),
+            {Budget, Complaints} = resolve_budget(),
+            [ok = wasm_code_slots:observe_config(K, V) || {K, V} <- Complaints],
+            %% Cleared as well as set, so a corrected key stops being held and a
+            %% recurrence is news again.
+            [ok = wasm_code_slots:observe_config(K, ok)
+             || K <- [compile_budget_words, compile_budget_heap_words],
+                not lists:keymember(K, 1, Complaints)],
             {_Name, Gen} = Token,
             Stamp = stamp(Inst, Gen),
             case split(Unit, Limits) of
@@ -900,7 +906,7 @@ bounds a single unit has.
 compile_limits() ->
     #{max_compile_funs => ?MAX_COMPILE_FUNS, max_shards => ?MAX_SHARDS,
       max_heap_words => max_heap_words(),
-      budget_words => compile_budget_words()}.
+      budget_heap_words => compile_budget_heap_words()}.
 
 -doc """
 The heap ceiling a compile would be given, in words, or 0 for none.
@@ -922,14 +928,42 @@ the node. This is what the whole node may have in flight at once. Off by
 default, and like the ceiling it refuses rather than queues: a request that does
 not fit interprets and asks again at the next hot call.
 """.
--spec compile_budget_words() -> non_neg_integer().
-compile_budget_words() ->
-    case application:get_env(wasm, compile_budget_words, undefined) of
-        undefined -> 0;
-        W when is_integer(W), W >= 0 -> W;
-        %% A bad value is no budget, said the same way a bad ceiling is: a typo
-        %% must not bound the node at zero and refuse every compile there is.
-        _ -> 0
+-spec compile_budget_heap_words() -> non_neg_integer().
+compile_budget_heap_words() -> element(1, resolve_budget()).
+
+%% The effective budget and everything there is to say about the configuration,
+%% because the two cannot be recovered from one another: unset, malformed, and
+%% set-without-a-ceiling all resolve to 0.
+%%
+%% `compile_budget_words` is the old key and counted IR words. It is read only
+%% to complain about: redefining it in place would have turned a working node
+%% into a serialiser, since 4,000,000 IR words is about 21 GB of memory and
+%% 4,000,000 heap words is 32 MB, and the first compile always succeeds through
+%% the `Spent =:= 0` escape while every later one is refused.
+-spec resolve_budget() -> {non_neg_integer(), [{atom(), term()}]}.
+resolve_budget() ->
+    Old = case application:get_env(wasm, compile_budget_words, undefined) of
+              undefined -> [];
+              Raw -> [{compile_budget_words, {bad, Raw}}]
+          end,
+    case application:get_env(wasm, compile_budget_heap_words, undefined) of
+        undefined ->
+            {0, Old};
+        %% An explicit zero is a clean disabled state, spelled the way
+        %% `max_heap_size` spells it. It says what it means, so it says nothing.
+        0 ->
+            {0, Old};
+        W when is_integer(W), W > 0 ->
+            case max_heap_words() of
+                0 ->
+                    %% Nothing to aggregate: the budget admits compilers each
+                    %% bounded by the ceiling, and there is no ceiling.
+                    {0, [{compile_budget_heap_words, {bad, no_ceiling}} | Old]};
+                _ ->
+                    {W, Old}
+            end;
+        Bad ->
+            {0, [{compile_budget_heap_words, {bad, Bad}} | Old]}
     end.
 
 %% Answers the effective value *and* what to say about it, because the two

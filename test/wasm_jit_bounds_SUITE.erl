@@ -26,6 +26,13 @@
 %% one it means rather than relying on there being only ever one.
 -define(CEILING_KEY, "compile_max_heap_words").
 
+%% Non-binding on purpose: 8 G heap words is 64 GB, and the largest module here
+%% compiles in a few hundred megabytes. A case that means to trip the ceiling
+%% sets its own.
+-define(ROOMY_CEILING, (8 bsl 30)).
+-define(BUDGET_KEY, "compile_budget_heap_words").
+-define(OLD_BUDGET_KEY, "compile_budget_words").
+
 %% Measured, on the pinned guest recorded in `test/audit/PERF.md`: CPython 3.12
 %% reaches this many functions in one `_start`, and has this many eligible in
 %% the whole module. They are here so that putting the pool back to 2048 fails a
@@ -60,6 +67,8 @@ groups() ->
        a_compile_over_the_ceiling_is_refused_and_the_guest_still_answers,
        the_ceiling_reaches_the_process_that_runs_the_compiler,
        a_bad_ceiling_is_reported_once_and_compiles_anyway,
+       a_budget_without_a_ceiling_bounds_nothing_and_says_so,
+       the_old_budget_key_is_ignored_and_named,
        a_compile_past_the_node_budget_is_refused_and_retried,
        two_compiles_fit_and_a_third_is_refused,
        one_request_larger_than_the_whole_budget_still_compiles,
@@ -102,8 +111,8 @@ end_per_testcase(_, _) ->
 %% have in flight at once. One compile holds the budget, and a second that does
 %% not fit beside it is refused rather than queued.
 %%
-%% Watched to fail on the parent commit, where `compile_budget_words` is read by
-%% nothing and both compile.
+%% Watched to fail on the parent commit, where the budget key is read by nothing
+%% and both compile.
 a_compile_past_the_node_budget_is_refused_and_retried(_) ->
     %% Slow on purpose. The holder has to still be compiling while the second
     %% attempt is made, and a module that compiles in milliseconds would make
@@ -391,6 +400,105 @@ flush_trace() ->
         {trace, _, _, _} -> flush_trace()
     after 0 -> ok
     end.
+
+%% A budget admits compilers each bounded by the ceiling, so with no ceiling
+%% there is nothing to aggregate. It must not then bound *nothing* silently, and
+%% it must not serialise the node either: it is ignored and said once.
+%%
+%% Watched to fail on the parent, where a budget works without a ceiling: the
+%% second compile is refused and `refused()` is not 0, before the warning
+%% assertion is reached.
+a_budget_without_a_ceiling_bounds_nothing_and_says_so(_) ->
+    M = build(many_wat(8)),
+    N = build(many_wat(9)),
+    %% Bound out, not nested inside an `?assertEqual`. The macro binds a
+    %% temporary, funs close over it, and an inner assert's temporary then
+    %% matches against the outer's expected value and can never succeed. The
+    %% compiler says "no clause will ever match", which is the only reason this
+    %% is not a test that silently cannot fail.
+    Warned = warnings(?BUDGET_KEY, fun () ->
+        budget_no_ceiling(1, fun () ->
+            Effective = effective_budget(),
+            Reported = maps:get(budget_heap_words, wasm_jit:compile_limits(), 0),
+            [begin
+                 {ok, I} = wasm:instantiate(Mod, #{}, sync(whole())),
+                 {ok, [11]} = wasm:call(I, ~"f", [10]),
+                 ok = wasm:destroy(I)
+             end || Mod <- [M, N]],
+            put(result, {Effective, Reported, refused(), compiled()})
+        end)
+    end),
+    ?assertEqual(1, Warned),
+    ?assertMatch({0, 0, 0, C} when C > 0, get_result()),
+    %% And an explicit zero says nothing at all, because it says what it means.
+    Silent = warnings(?BUDGET_KEY,
+                      fun () -> budget_no_ceiling(0, fun () -> ok end) end),
+    ?assertEqual(0, Silent).
+
+%% The old key counted IR words and the new one counts heap words. Redefining it
+%% in place would have been silent and catastrophic: 4,000,000 IR words is about
+%% 21 GB and 4,000,000 heap words is 32 MB, the first compile always succeeds
+%% through the `Spent =:= 0` escape, and every later one is refused. So the old
+%% key is ignored and named.
+%%
+%% Watched to fail on the parent, where the old key is live: a refusal appears
+%% and the warning count is 0.
+the_old_budget_key_is_ignored_and_named(_) ->
+    M = build(many_wat(400)),
+    N = build(many_wat(401)),
+    One = one_unit_words(M),
+    Was = application:get_env(wasm, compile_budget_words),
+    ok = application:set_env(wasm, compile_budget_words, One),
+    try
+        Warned = warnings(?OLD_BUDGET_KEY, fun () ->
+            with_ceiling(?ROOMY_CEILING, fun () ->
+                Effective = effective_budget(),
+                Holder = hold_budget_no_budget(M),
+                try
+                    {ok, I} = wasm:instantiate(N, #{}, sync(whole())),
+                    {ok, [11]} = wasm:call(I, ~"f", [10]),
+                    ok = wasm:destroy(I),
+                    put(result, {Effective, refused()})
+                after
+                    exit(Holder, kill)
+                end
+            end)
+        end),
+        ?assertEqual(1, Warned),
+        ?assertEqual({0, 0}, get_result())
+    after
+        case Was of
+            undefined -> application:unset_env(wasm, compile_budget_words);
+            {ok, Old} -> application:set_env(wasm, compile_budget_words, Old)
+        end,
+        reset_config_memo([compile_budget_words, compile_budget_heap_words])
+    end.
+
+%% Guarded like `budget_or/1`, so these cases reach the assertion that matters
+%% on a parent that has no such function. Ungurded, they fail with `undef`,
+%% which is a failure indistinguishable from the defect: the parent's real
+%% difference is that it does not *warn*, and that is what has to bite.
+effective_budget() ->
+    _ = code:ensure_loaded(wasm_jit),
+    case erlang:function_exported(wasm_jit, compile_budget_heap_words, 0) of
+        true -> wasm_jit:compile_budget_heap_words();
+        false -> 0
+    end.
+
+%% What the body stashed, so an assertion can be made outside the fun rather
+%% than nested inside another assert's expression.
+get_result() -> erase(result).
+
+%% A holder for a run with no operative budget: there is no reservation to wait
+%% for, so it waits for the slot instead.
+hold_budget_no_budget(M) ->
+    Pid = spawn(fun () ->
+                    {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+                    _ = wasm:call(I, ~"f", [10]),
+                    ok
+                end),
+    ?assertEqual(ok, until(fun () -> loading_owners() =/= [] end, 30000)),
+    Pid.
 
 %% A mistyped value must not turn the tier off, must not spend a diagnostics
 %% row, and must be said once per uninterrupted occurrence. The last row is the
@@ -1010,14 +1118,24 @@ loading_owners() ->
 
 opts() -> #{compile => true, compile_after => 1}.
 
+%% A budget means nothing without a ceiling: it admits compilers each bounded by
+%% one, so with no ceiling there is nothing to aggregate and it is inoperative.
+%% So the helper sets both, with a ceiling far above anything these modules
+%% compile to, because these cases are about admission and not about killing.
+%% `budget_no_ceiling/2` is for the case that tests the inoperative state.
 with_budget(Words, F) ->
-    Was = application:get_env(wasm, compile_budget_words),
-    ok = application:set_env(wasm, compile_budget_words, Words),
+    with_ceiling(?ROOMY_CEILING, fun () -> budget_no_ceiling(Words, F) end).
+
+budget_no_ceiling(Words, F) ->
+    Was = application:get_env(wasm, compile_budget_heap_words),
+    ok = application:set_env(wasm, compile_budget_heap_words, Words),
     try F()
     after
         case Was of
-            undefined -> application:unset_env(wasm, compile_budget_words);
-            {ok, Old} -> application:set_env(wasm, compile_budget_words, Old)
+            undefined ->
+                application:unset_env(wasm, compile_budget_heap_words);
+            {ok, Old} ->
+                application:set_env(wasm, compile_budget_heap_words, Old)
         end
     end.
 

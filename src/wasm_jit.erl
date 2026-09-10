@@ -983,7 +983,7 @@ of a compile.
 max_heap_words() -> element(1, resolve_max_heap_words()).
 
 -doc """
-The node's whole compile budget in IR words, or 0 for none.
+The node's whole compile budget in heap words, or 0 for none.
 
 A heap ceiling bounds one compiler; sixteen of them under it is not a bound on
 the node. This is what the whole node may have in flight at once. Off by

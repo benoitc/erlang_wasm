@@ -193,9 +193,9 @@ reasoning.
                 %% would retain everything anyone ever mistyped for the life of
                 %% the node.
                 bad_cfg  = #{}  :: #{atom() => {bad, term()}},
-                %% IR words admitted and not yet given back, and who is holding
-                %% them. Monitored, because a compiler that dies must not take
-                %% the node's budget with it.
+                %% Heap words admitted and not yet given back, and who is
+                %% holding them. Monitored, because a compiler that dies must
+                %% not take the node's budget with it.
                 spent    = 0    :: non_neg_integer(),
                 holders  = #{}  :: #{reference() => {pid(), pos_integer()}}}).
 
@@ -278,9 +278,10 @@ Take `Words` of the node's compile budget, or say it is not there.
 
 A per-process heap ceiling bounds one compiler. Sixteen of them, each under it,
 is still not a bound on the node, and sixteen is what the slot pool allows. This
-is the other half: one budget the whole node draws on, in IR words, which is the
-quantity `split/2` already weighs shards by and the one that predicts what a
-compile will cost.
+is the other half: one budget the whole node draws on, in heap words, the same
+unit as the per-compiler ceiling. A compile reserves the ceiling it will be held
+to, so the aggregate is a sum of quantities the VM itself enforces at every
+collection rather than a prediction of any kind.
 
 `{error, busy}` means interpret and ask again later, exactly as a full slot pool
 does. It is not an error and nothing is queued: a caller that waited would be

@@ -69,6 +69,7 @@ groups() ->
        a_bad_ceiling_is_reported_once_and_compiles_anyway,
        a_budget_without_a_ceiling_bounds_nothing_and_says_so,
        the_old_budget_key_is_ignored_and_named,
+       no_shard_of_a_sharded_compile_is_cached,
        a_compile_past_the_node_budget_is_refused_and_retried,
        two_compiles_fit_and_a_third_is_refused,
        one_request_larger_than_the_whole_budget_still_compiles,
@@ -399,6 +400,55 @@ flush_trace() ->
         {trace, _, _, _, _} -> flush_trace();
         {trace, _, _, _} -> flush_trace()
     after 0 -> ok
+    end.
+
+%% A shard must never be cached, and until now the *last* one was: `build/8`
+%% passes `tl(Mods) ++ [undefined]`, so the final shard has no `Next` and took
+%% the cacheable branch. The key cannot describe it. `wasm_code_cache:key/6`
+%% carries the identity, ABI, slot, quality, function set and stamp, while the
+%% artifact also embeds `Head`, the module a crossing re-enters through, and
+%% `Elsewhere`, which says where the other functions live. `Head` is whichever
+%% slot shard one claimed, so the same artifact could be adopted into a chain
+%% headed by a different module than the one compiled into it.
+%%
+%% Watched to fail on the parent, where the last shard is cached: after the slot
+%% reset the second run answers from disk and `cached` moves.
+no_shard_of_a_sharded_compile_is_cached(Config) ->
+    Dir = filename:join(?config(priv_dir, Config), "shard-cache"),
+    ok = filelib:ensure_path(Dir),
+    Was = application:get_env(wasm, code_cache_dir),
+    ok = application:set_env(wasm, code_cache_dir, Dir),
+    try
+        %% From bytes, because only a content hash is ever cached: a module
+        %% built from text takes a fresh reference on every validation.
+        {ok, Bin} = file:read_file(
+                      filename:join([wasm_spec_runner:fixtures_dir(),
+                                     "seeds", "fac.wasm"])),
+        Id = {sha256, crypto:hash(sha256, Bin)},
+        Compile = fun () ->
+            {ok, M} = wasm:compile(Bin, #{identity => Id}),
+            {ok, I} = wasm:instantiate(M, #{}, (sync(whole()))#{compile_shards => 2}),
+            {ok, [120]} = wasm:call(I, ~"fac-rec", [5]),
+            ok = wasm:destroy(I)
+        end,
+        ok = wasm_jit:reset_counts(),
+        Compile(),
+        ?assert(compiled() > 0, "nothing compiled, so nothing could be cached"),
+        ?assertEqual(0, map_get(cached, wasm_jit:counts())),
+        %% The slots must be reset or the second run adopts *resident* code and
+        %% never reaches the cache at all, which would pass without the disk
+        %% ever being consulted.
+        wasm_test_slots:reset(),
+        ok = wasm_jit:reset_counts(),
+        Compile(),
+        ?assertEqual(0, map_get(cached, wasm_jit:counts()),
+                     "a shard was written to the cache and read back")
+    after
+        case Was of
+            undefined -> application:unset_env(wasm, code_cache_dir);
+            {ok, Old} -> application:set_env(wasm, code_cache_dir, Old)
+        end,
+        wasm_test_slots:reset()
     end.
 
 %% A budget admits compilers each bounded by the ceiling, so with no ceiling

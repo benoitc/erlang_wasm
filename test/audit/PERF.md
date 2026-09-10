@@ -4593,9 +4593,10 @@ is per request, `compile_max_heap_words` is per process, and neither says what
 may be in flight at once. `src/wasm_jit.erl:448` has said so all along, in its
 own words: "Nothing bounds the number of compilers except the sixteen slots."
 
-`compile_budget_words` is that bound, in IR words, which is the quantity
-`split/2` already weighs shards by and the one that predicts what a compile
-costs. A request that does not fit is **refused**, so the guest interprets and
+`compile_budget_words` was that bound, in IR words. **It was replaced**: see
+"Peak memory per IR word" below for why a predicted quantity could not be one,
+and the key is now `compile_budget_heap_words`, counting the ceiling each
+compile is held to. A request that does not fit is **refused**, so the guest interprets and
 asks again at the next hot call, and `wasm_jit:diagnostics/0` says
 `{limit, {compile_budget, Words}}`.
 
@@ -4736,12 +4737,15 @@ one.
 
 ### What this changes
 
-`compile_budget_words` admits on *predicted* cost, in IR words, which was chosen
-because it was the only quantity available before the work began. It can be
-backed by the measured one: `wasm_code_slots` already holds the reservations and
-monitors their owners, so it can sum the team on a timer and act on the real
-number. No new process, no OS dependency, and identical on every platform, which
-`memory.max` and Job Objects are not.
+`compile_budget_words` admitted on *predicted* cost, in IR words, which was
+chosen because it was the only quantity available before the work began.
+**Neither prediction nor sampling survived measurement.** The predictor's
+constant spans 4.95 to 6.77 KB per IR word on one guest by estimator choice
+alone, and a sampler cannot be made precise at any interval. What shipped
+instead reserves the per-compiler ceiling, so the aggregate is a sum of
+quantities the VM enforces at every collection: no constant, no timer, no OS
+dependency, and identical on every platform, which `memory.max` and Job Objects
+are not.
 
 What the VM still cannot do is stop the operating system paging once memory is
 committed, which is what actually happened to CPython at 33 GB. But that is an

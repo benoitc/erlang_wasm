@@ -776,26 +776,61 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
 %% including a trap on the way out. A compiler that is *killed* gives it back
 %% too, through the monitor `wasm_code_slots` took, which is the case an
 %% `after` cannot cover.
+%% A cache hit runs no compiler, so it must neither reserve nor be refused.
+%%
+%% The lookup used to happen two calls further in, inside `artifact/9`, so a
+%% request that was about to adopt an artifact from disk reserved as if it were
+%% about to compile one, and a busy budget turned a cache adoption into
+%% interpreting. That is the 0.2 second path the cache exists for.
+%%
+%% Looked up rather than probed. A cheap "is the file there" check before
+%% admission would leave a window: several distinct modules could each pass it
+%% and then all miss, if the entries were evicted or the directory changed, and
+%% every one of them would compile unreserved. Holding the binary closes it,
+%% and costs one read instead of two because `artifact/9` is handed the result.
 admitted(Inst, Limits, Mode, Stamp, Unit, Parts, {Mod, Token}, COpts, Budget) ->
-    Weight = ir_words(Unit),
-    case wasm_code_slots:acquire(Weight, Budget) of
-        {error, busy} ->
-            ok = wasm_code_slots:abort(Token),
-            {refused, {limit, {compile_budget, Weight}}};
-        ok ->
-            try build(Inst, Limits, Mode, Stamp, Unit, Parts, [{Mod, Token}],
-                      COpts)
-            after
-                ok = wasm_code_slots:release_budget()
+    case cached(Inst, Mod, Unit, Mode, Stamp, Parts) of
+        {ok, _Bin} = Hit ->
+            build(Inst, Limits, Mode, Stamp, Unit, Parts, [{Mod, Token}],
+                  COpts, Hit);
+        Miss ->
+            Weight = length(Parts) * reservation(Budget, COpts),
+            case wasm_code_slots:acquire(Weight, Budget) of
+                {error, busy} ->
+                    ok = wasm_code_slots:abort(Token),
+                    {refused, {limit, {compile_budget, Weight}}};
+                ok ->
+                    try build(Inst, Limits, Mode, Stamp, Unit, Parts,
+                              [{Mod, Token}], COpts, Miss)
+                    after
+                        ok = wasm_code_slots:release_budget()
+                    end
             end
     end.
 
-%% What `split/2` weighs shards by, over the whole request. On the sharded path
-%% it is computed again there; the duplication is one traversal of a term the
-%% compile is about to spend a minute on, and sharing it would mean threading a
-%% weight through four functions that have no use for it.
-ir_words(Unit) ->
-    lists:sum([erts_debug:flat_size(IR) || {_P, _I, _F, IR} <- Unit]).
+%% Only a whole unit is ever cached, so a sharded request never looks. `key/6`
+%% answers `undefined` for anything without a content hash, which is every
+%% module built from text, and `path/2` would hand that to `binary:encode_hex/1`
+%% and raise: it is a miss and must not reach `lookup/1`.
+cached(Inst, Mod, Unit, Mode, Stamp, [_]) ->
+    case wasm_code_cache:key(wasm_instance:identity(Inst), ?ABI, Mod, Mode,
+                             [Idx || {_P, Idx, _F, _IR} <- Unit], Stamp) of
+        undefined -> {miss, undefined};
+        Key ->
+            case wasm_code_cache:lookup(Key) of
+                {ok, _Bin} = Hit -> bump(?IX_CACHED, 1), Hit;
+                _ -> {miss, Key}
+            end
+    end;
+cached(_Inst, _Mod, _Unit, _Mode, _Stamp, _Parts) ->
+    {miss, undefined}.
+
+%% What one compiler may spend, which is what it is bounded at. Reserving a
+%% prediction instead was measured and rejected: peak memory per IR word spans
+%% 4.95 to 6.77 KB on one guest by estimator choice alone, and a bound built on
+%% a constant with that spread is not a bound. See `test/audit/PERF.md`.
+reservation(_Budget, #{max_heap_words := W}) -> W;
+reservation(_Budget, _COpts) -> 0.
 
 %% One unit or several, and the difference is only how many slots are held.
 %%
@@ -805,8 +840,9 @@ ir_words(Unit) ->
 %% used sooner, because the functions worth compiling are the ones expensive to
 %% compile: sixteen of QuickJS's hot functions are already 30 seconds of the 54.
 %% See `test/audit/PERF.md`.
-build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}], COpts) ->
-    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod, #{}, COpts) of
+build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}], COpts, Cached) ->
+    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod, #{}, COpts,
+                  Cached) of
         {ok, Bin} ->
             {module, Mod} = code:load_binary(Mod, "wasm_generated", Bin),
             ok = wasm_code_slots:publish(Token),
@@ -816,7 +852,7 @@ build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}], COpts) ->
             ok = wasm_code_slots:abort(Token),
             outcome(Reason)
     end;
-build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First], COpts) ->
+build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First], COpts, _Cached) ->
     %% Every slot claimed before anything is generated, because each unit names
     %% the next as a literal and cannot be built until that name exists. This
     %% process owns all of them, so a compiler that dies takes every reservation
@@ -837,8 +873,11 @@ build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First], COpts) ->
             Jobs = lists:zip3(Parts, Mods, tl(Mods) ++ [undefined]),
             Bins = pmap(fun({U, M, Next}) ->
                             Mine = [Idx || {_, Idx, _, _} <- U],
+                            %% A shard is never cached, so it never carries a
+                            %% looked-up result: `{miss, undefined}`.
                             artifact(Inst, M, U, Mode, Stamp, Next, Head,
-                                     maps:without(Mine, Where), COpts)
+                                     maps:without(Mine, Where), COpts,
+                                     {miss, undefined})
                         end, Jobs),
             publish_all(Inst, Limits, Tokens, Parts, Bins)
     end.
@@ -1141,34 +1180,15 @@ collect(Pid) ->
 %% today's instance. What it *does* depend on is the slot, because a module's
 %% name is part of its BEAM file, which is why the slot is in the key and why
 %% `wasm_code_slots` prefers a module's own slot when one is free.
-artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere, COpts) ->
-    %% Not cached when it is one of several, and until now that was not true of
-    %% the *last* one. `build/8` passes `tl(Mods) ++ [undefined]`, so the final
-    %% shard has no `Next` and took the cacheable branch, which is why the test
-    %% is on `Head` as well.
-    %%
-    %% It was cached under a key that could not describe it. `wasm_code_cache:key/6`
-    %% takes the identity, ABI, slot, quality, function set and stamp; the
-    %% artifact also embeds `Head`, the module a crossing re-enters the chain
-    %% through, and `Elsewhere`, which says where every other function lives.
-    %% Neither is in the key, and `Head` is whichever slot shard one happened to
-    %% claim. So the same last shard could be adopted into a chain whose head is
-    %% a different module than the one compiled into it.
-    %%
-    %% A shard set is also only reproducible if the same split falls out of the
-    %% same workload, which nothing promises. Both reasons say the same thing:
-    %% cache a unit only when it is the whole of what was compiled.
-    Key = case {Next, Mod =:= Head andalso map_size(Elsewhere) =:= 0} of
-              {undefined, true} ->
-                  wasm_code_cache:key(wasm_instance:identity(Inst), ?ABI, Mod,
-                                      Mode,
-                                      [Idx || {_P, Idx, _F, _IR} <- Unit],
-                                      Stamp);
-              _ -> undefined
-          end,
-    case Key =/= undefined andalso wasm_code_cache:lookup(Key) of
-        {ok, Bin} -> bump(?IX_CACHED, 1), {ok, Bin};
-        _ ->
+artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere, COpts, Cached) ->
+    %% The lookup already happened, in `admitted/9`, above admission: a request
+    %% that will adopt an artifact must not reserve a compiler's budget, and
+    %% must never be refused for it. What arrives here is the answer, so the
+    %% file is read once and not twice.
+    case Cached of
+        {ok, Bin} ->
+            {ok, Bin};
+        {miss, Key} ->
             case wasm_core:module(Mod, Unit, sigs(Inst), tsigs(Inst), Mode,
                                   Stamp, Next, Head, Elsewhere, COpts) of
                 {ok, Bin} = Ok ->

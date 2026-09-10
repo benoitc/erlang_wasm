@@ -70,6 +70,7 @@ groups() ->
        a_budget_without_a_ceiling_bounds_nothing_and_says_so,
        the_old_budget_key_is_ignored_and_named,
        no_shard_of_a_sharded_compile_is_cached,
+       a_cached_artifact_is_adopted_while_the_budget_is_full,
        a_compile_past_the_node_budget_is_refused_and_retried,
        two_compiles_fit_and_a_third_is_refused,
        one_request_larger_than_the_whole_budget_still_compiles,
@@ -124,10 +125,10 @@ a_compile_past_the_node_budget_is_refused_and_retried(_) ->
     %% while proving nothing about the budget.
     M = build(many_wat(400)),
     N = build(many_wat(401)),
-    One = one_unit_words(M),
-    %% Room for one of these and not for two, derived rather than guessed: a
-    %% literal would stop bounding anything the day the IR changed size.
-    with_budget(One + (One div 2), fun () ->
+    %% Room for exactly one compiler. A compile reserves the ceiling, because
+    %% that is what the VM will hold it to, so the budget is counted in
+    %% ceilings and not in anything predicted.
+    with_budget(?ROOMY_CEILING, fun () ->
         Holder = hold_budget(M),
         try
             {ok, J} = wasm:instantiate(N, #{}, sync(whole())),
@@ -154,10 +155,11 @@ two_compiles_fit_and_a_third_is_refused(_) ->
     %% Three distinct modules. The same one three times contends for the slot
     %% rather than the budget and answers `retry` before admission is reached.
     [A, B, C] = [build(many_wat(N)) || N <- [400, 401, 402]],
-    One = one_unit_words(A),
-    %% Room for two and not three, with the margin on the low side of three so
-    %% a unit whose weight drifts a little does not make this pass by accident.
-    with_budget(2 * One + (One div 2), fun () ->
+    %% Room for exactly two: each single-unit compile reserves one ceiling, so
+    %% the third needs a third ceiling the budget does not have. Exact rather
+    %% than approximate, because the reservation is now a fixed quantity rather
+    %% than a weight that drifts with the module.
+    with_budget(2 * ?ROOMY_CEILING, fun () ->
         H1 = hold_budget(A),
         try
             %% Asserted before anything is expected to be refused: on an idle
@@ -216,8 +218,7 @@ one_request_larger_than_the_whole_budget_still_compiles(_) ->
 %% cover one that is killed, and that is what the monitor is for.
 a_killed_compiler_gives_its_budget_back(_) ->
     M = build(many_wat(400)),
-    One = one_unit_words(M),
-    with_budget(One * 4, fun () ->
+    with_budget(4 * ?ROOMY_CEILING, fun () ->
         Holder = hold_budget(M),
         ?assert(budget_or(1) > 0),
         %% Killed, not released: no `after` runs for this.
@@ -265,16 +266,6 @@ budget_or(Default) ->
 has_budget_api() ->
     _ = code:ensure_loaded(wasm_code_slots),
     erlang:function_exported(wasm_code_slots, budget, 0).
-
-%% What one whole-module unit of this module weighs, asked of the same function
-%% the runtime weighs it with.
-one_unit_words(M) ->
-    {ok, I} = wasm:instantiate(M, #{}, #{}),
-    Fns = [F || F <- tuple_to_list(I#inst.funcs), is_record(F, fn)],
-    W = lists:sum([erts_debug:flat_size(wasm_instance:compiler_ir(F, I))
-                   || F <- Fns]),
-    ok = wasm:destroy(I),
-    W.
 
 %% The ceiling fires, the outcome is a value naming the configured number, and
 %% the guest is unaffected. Watched to fail on the parent commit, where
@@ -402,6 +393,70 @@ flush_trace() ->
     after 0 -> ok
     end.
 
+%% A cache hit runs no compiler, so a full budget must not refuse it. Admission
+%% used to happen two calls before the lookup, so a request about to adopt an
+%% artifact from disk reserved as if it were about to compile one, and a busy
+%% node turned the 0.2 second cache path into interpreting.
+%%
+%% Watched to fail on the parent, where the reservation is taken first: with the
+%% budget held below one reservation the adoption is refused and `cached` never
+%% moves.
+a_cached_artifact_is_adopted_while_the_budget_is_full(Config) ->
+    Dir = filename:join(?config(priv_dir, Config), "hit-cache"),
+    ok = filelib:ensure_path(Dir),
+    WasDir = application:get_env(wasm, code_cache_dir),
+    ok = application:set_env(wasm, code_cache_dir, Dir),
+    try
+        {ok, Bin} = file:read_file(
+                      filename:join([wasm_spec_runner:fixtures_dir(),
+                                     "seeds", "fac.wasm"])),
+        Id = {sha256, crypto:hash(sha256, Bin)},
+        Compile = fun () ->
+            {ok, M} = wasm:compile(Bin, #{identity => Id}),
+            {ok, I} = wasm:instantiate(M, #{}, sync(whole())),
+            {ok, [120]} = wasm:call(I, ~"fac-rec", [5]),
+            ok = wasm:destroy(I)
+        end,
+        %% Populate, with no budget in the way.
+        ok = wasm_jit:reset_counts(),
+        Compile(),
+        ?assert(compiled() > 0, "nothing compiled, so nothing was cached"),
+        %% Resident code would be adopted without the disk ever being read, and
+        %% this case is about the disk.
+        wasm_test_slots:reset(),
+        %% A budget of one word: the holder is admitted by the `Spent =:= 0`
+        %% escape and leaves `Spent` above the whole budget, so anything that
+        %% consults admission afterwards is refused. A budget expressed in
+        %% ceilings would not do: on the parent the reservation is far smaller
+        %% and the adoption would fit, and the case would pass there.
+        with_budget(1, fun () ->
+            Holder = spawn(fun () -> hold_reservation() end),
+            try
+                ?assertEqual(ok, until(fun () -> budget_or(0) > 0 end, 5000)),
+                ok = wasm_jit:reset_counts(),
+                Compile(),
+                ?assertEqual(1, map_get(cached, wasm_jit:counts()),
+                             "a cache hit was refused by a busy budget"),
+                ?assertEqual(0, refused())
+            after
+                exit(Holder, kill)
+            end
+        end)
+    after
+        case WasDir of
+            undefined -> application:unset_env(wasm, code_cache_dir);
+            {ok, Old} -> application:set_env(wasm, code_cache_dir, Old)
+        end,
+        wasm_test_slots:reset()
+    end.
+
+%% A holder that reserves without compiling, so it cannot take the slot the
+%% cached artifact wants and turn a hit into a miss for a reason this case is
+%% not about.
+hold_reservation() ->
+    _ = wasm_code_slots:acquire(?ROOMY_CEILING, 1),
+    receive stop -> ok end.
+
 %% A shard must never be cached, and until now the *last* one was: `build/8`
 %% passes `tl(Mods) ++ [undefined]`, so the final shard has no `Next` and took
 %% the cacheable branch. The key cannot describe it. `wasm_code_cache:key/6`
@@ -496,9 +551,10 @@ a_budget_without_a_ceiling_bounds_nothing_and_says_so(_) ->
 the_old_budget_key_is_ignored_and_named(_) ->
     M = build(many_wat(400)),
     N = build(many_wat(401)),
-    One = one_unit_words(M),
     Was = application:get_env(wasm, compile_budget_words),
-    ok = application:set_env(wasm, compile_budget_words, One),
+    %% Whatever it says, it is ignored. The value is the sort of number an
+    %% operator would have had in the old unit.
+    ok = application:set_env(wasm, compile_budget_words, 4_000_000),
     try
         Warned = warnings(?OLD_BUDGET_KEY, fun () ->
             with_ceiling(?ROOMY_CEILING, fun () ->

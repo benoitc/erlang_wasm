@@ -106,7 +106,7 @@ reasoning.
 -export([lease_call/1, lease_call/2, release_call/1, calls_in/1]).
 -export([hot/2]).
 -export([record_diagnostic/4, diagnostics/0, clear_diagnostics/0]).
--export([observe_config/1]).
+-export([observe_config/1, observe_config/2]).
 -export([acquire/2, release_budget/0, budget/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -188,13 +188,14 @@ reasoning.
 -record(state, {monitors = #{} :: #{reference() => {key(), lease()}},
                 refs     = #{} :: #{{key(), lease()} => reference()},
                 loading  = #{} :: #{reference() => token()},
-                %% The bad `compile_max_heap_words' currently in force, if any.
-                %% One entry and not a set: a set would retain every value
-                %% anyone ever mistyped for the life of the node.
-                bad_cfg  = ok   :: ok | {bad, term()},
-                %% IR words admitted and not yet given back, and who is holding
-                %% them. Monitored, because a compiler that dies must not take
-                %% the node's budget with it.
+                %% The bad value currently in force for each configuration
+                %% key, if any. One entry per key and not a set of values: a set
+                %% would retain everything anyone ever mistyped for the life of
+                %% the node.
+                bad_cfg  = #{}  :: #{atom() => {bad, term()}},
+                %% Heap words admitted and not yet given back, and who is
+                %% holding them. Monitored, because a compiler that dies must
+                %% not take the node's budget with it.
                 spent    = 0    :: non_neg_integer(),
                 holders  = #{}  :: #{reference() => {pid(), pos_integer()}}}).
 
@@ -277,9 +278,10 @@ Take `Words` of the node's compile budget, or say it is not there.
 
 A per-process heap ceiling bounds one compiler. Sixteen of them, each under it,
 is still not a bound on the node, and sixteen is what the slot pool allows. This
-is the other half: one budget the whole node draws on, in IR words, which is the
-quantity `split/2` already weighs shards by and the one that predicts what a
-compile will cost.
+is the other half: one budget the whole node draws on, in heap words, the same
+unit as the per-compiler ceiling. A compile reserves the ceiling it will be held
+to, so the aggregate is a sum of quantities the VM itself enforces at every
+collection rather than a prediction of any kind.
 
 `{error, busy}` means interpret and ask again later, exactly as a full slot pool
 does. It is not an error and nothing is queued: a caller that waited would be
@@ -339,10 +341,21 @@ environment key is not a compile that did not happen. Spending rows on it would
 evict real refusals.
 """.
 -spec observe_config(ok | {bad, term()}) -> ok.
-observe_config(What) ->
+observe_config(What) -> observe_config(compile_max_heap_words, What).
+
+-doc """
+As `observe_config/1`, for a named configuration key.
+
+There is more than one key now, and they must not clear each other: a valid
+ceiling observation that reset the budget's held value would make the budget
+warn again on its next resolution, and the "once per uninterrupted occurrence"
+contract would hold for neither.
+""".
+-spec observe_config(atom(), ok | {bad, term()}) -> ok.
+observe_config(Key, What) ->
     case whereis(?MODULE) of
         undefined -> ok;
-        _ -> gen_server:call(?MODULE, {observe_config, What})
+        _ -> gen_server:call(?MODULE, {observe_config, Key, What})
     end.
 
 -doc "Forget them. The caller's sequence is deliberately not reset with them.".
@@ -624,16 +637,17 @@ init([]) ->
      end || {N, G, {loading, _}, _} <- ets:tab2list(?TAB)],
     {ok, #state{monitors = Ms, refs = Rs}}.
 
-handle_call({observe_config, Same}, _From, #state{bad_cfg = Same} = S) ->
-    {reply, ok, S};
-handle_call({observe_config, ok}, _From, S) ->
-    {reply, ok, S#state{bad_cfg = ok}};
-handle_call({observe_config, {bad, Raw}}, _From, S) ->
-    {min_heap_size, Min} = erlang:system_info(min_heap_size),
-    logger:warning("wasm: compile_max_heap_words is ~p, which is not a whole "
-                   "number of words between ~p and ~p; compiling with no heap "
-                   "ceiling", [Raw, Min, (1 bsl 59) - 1]),
-    {reply, ok, S#state{bad_cfg = {bad, Raw}}};
+handle_call({observe_config, Key, What}, _From, #state{bad_cfg = C} = S) ->
+    case {maps:get(Key, C, ok), What} of
+        %% Unchanged, so it has already been said.
+        {Same, Same} ->
+            {reply, ok, S};
+        {_, ok} ->
+            {reply, ok, S#state{bad_cfg = maps:remove(Key, C)}};
+        {_, {bad, Raw}} ->
+            complain(Key, Raw),
+            {reply, ok, S#state{bad_cfg = C#{Key => {bad, Raw}}}}
+    end;
 handle_call({acquire, Words, Budget}, {Pid, _}, #state{spent = Spent} = S) ->
     %% Admitted when there is room, and *always* admitted when nothing is out:
     %% a single request larger than the whole budget must still compile, or a
@@ -755,6 +769,28 @@ handle_info({'DOWN', Ref, process, _Pid, _Reason},
 handle_info(_Info, S) -> {noreply, S}.
 
 %%% ------------------------------------------------------------- internal ---
+
+%% Said here, inside the serialised call, for the reason `observe_config/1`
+%% gives: a caller told "you are first" can die before it says anything, and
+%% this server would then hold a value it believes was reported.
+complain(compile_max_heap_words = Key, Raw) ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    logger:warning("wasm: ~s is ~p, which is not a whole number of words "
+                   "between ~p and ~p; compiling with no heap ceiling",
+                   [Key, Raw, Min, (1 bsl 59) - 1]);
+complain(compile_budget_words = Key, _Raw) ->
+    logger:warning("wasm: ~s is set and is ignored. It counted IR words, which "
+                   "nothing reports; the budget is now ~s and counts heap "
+                   "words, the same unit as compile_max_heap_words",
+                   [Key, compile_budget_heap_words]);
+complain(compile_budget_heap_words = Key, no_ceiling) ->
+    logger:warning("wasm: ~s is set but compile_max_heap_words is not, so it "
+                   "bounds nothing and is ignored. The budget admits compilers "
+                   "each bounded by the ceiling, so without one there is "
+                   "nothing to aggregate", [Key]);
+complain(compile_budget_heap_words = Key, Raw) ->
+    logger:warning("wasm: ~s is ~p, which is not a whole number of heap words; "
+                   "compiling with no budget", [Key, Raw]).
 
 %% Everything `Pid` is holding, which is at most one reservation but is written
 %% as a fold so a second one could never leak.

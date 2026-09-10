@@ -24,15 +24,37 @@ completion holding its copy of the forms, with nothing able to see or stop it.
 
 ### A budget for what the node has in flight
 
-`compile_max_heap_words` bounds one compiler, and the slot pool allows sixteen.
-`compile_budget_words` bounds the node: a request that does not fit beside what
-is already compiling is refused, so the guest interprets and asks again later.
-Nothing is queued, a request larger than the whole budget still compiles when
-nothing else is running, and a killed compiler gives its words back through a
-monitor rather than an `after`. Off by default.
+`compile_max_heap_words` bounds one compiler, and the slot pool allows sixteen
+of them, so it is not a bound on the node. `compile_budget_heap_words` is, in
+the same unit: a compile reserves the ceiling it will be held to, so the
+aggregate is a sum of quantities the VM enforces at every collection rather
+than a prediction. `Budget div Ceiling` compilers are admitted and the rest are
+refused, which means the guest interprets and asks again later.
 
-`wasm_jit:compile_limits/0` reports `max_heap_words` and `budget_words`, and
-`max_heap_words/0` and `compile_budget_words/0` answer them on their own.
+It needs the ceiling to mean anything, and says so once through `logger` if set
+without one. Nothing is queued: a caller that waited would hold the unit IR it
+was admitted to compile for the whole wait. A request larger than the whole
+budget still compiles when nothing else is running, and a killed compiler gives
+its words back through a monitor rather than an `after`. Off by default.
+
+`wasm_jit:compile_limits/0` reports `max_heap_words`, `budget_heap_words` and
+the `max_concurrent_compilers` the two imply.
+
+### A shard is no longer cached, and a cache hit is never refused
+
+Two defects in the compiled tier's cache, both found while measuring the above.
+
+The *last* shard of a sharded compile was written to the on-disk cache and read
+back, under a key carrying the identity, ABI, slot, quality, function set and
+stamp, while the artifact also embeds the module a crossing re-enters the chain
+through and a map of where every other function lives. Neither is in the key,
+and the first is whichever slot shard one happened to claim. Only a whole unit
+is cached now.
+
+And a request that was about to adopt an artifact from disk was admitted against
+the compile budget as if it were about to compile one, so a busy node turned the
+cache path into interpreting. The lookup now happens before admission, and a
+cache hit reserves nothing.
 
 ## 0.2.2
 

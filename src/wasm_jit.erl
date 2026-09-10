@@ -56,7 +56,7 @@ moved, because even with all three a refusal still interprets.
 
 -export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
 -export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
--export([compile_limits/0, max_heap_words/0, compile_budget_words/0]).
+-export([compile_limits/0, max_heap_words/0, compile_budget_heap_words/0]).
 -export([reentered/0]).
 -export([compiler_loop/0]).
 -export([dump/1, dump/2]).
@@ -92,11 +92,19 @@ moved, because even with all three a refusal still interprets.
 %% because the two answer different questions and moving one should not move the
 %% other.
 %%
-%% Counted over the *requested* set, before anything is lowered. Words would
-%% predict the cost better -- 11 to 17 KB of allocated peak per IR word on both
-%% guests -- but any value is loose or wrong until the selector makes requests
-%% small: CPython's accepted hot set is 3.7 M words and peaked at 59.89 GB, so a
-%% ceiling admitting today's ordinary path would protect nothing.
+%% Counted over the *requested* set, before anything is lowered.
+%%
+%% Words look like they would predict the cost better, and they do not predict
+%% it well enough to bound it. Peak team memory per IR word is 4.95 to 6.77 KB
+%% on QuickJS alone, and the spread is the *estimator* rather than the guest:
+%% summing each process's own maximum against sampling the maximum of the sum
+%% moves it 37% on the same unit. `test/audit/PERF.md` has the table.
+%%
+%% This comment used to claim "11 to 17 KB of allocated peak per IR word on both
+%% guests" and cited nothing. That figure is a third quantity again, allocation
+%% over a whole compile rather than peak, and no measurement under `test/audit/`
+%% supported it. Memory is bounded by `compile_max_heap_words`, which the VM
+%% enforces, and by the budget that reserves it; not by anything counted here.
 -define(MAX_COMPILE_FUNS, 8192).
 
 %% The largest `max_heap_size` `size` a 64-bit emulator accepts. Undocumented,
@@ -743,7 +751,13 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
             %% before any Core does. Admitting later would mean a request that
             %% is turned away had already built the largest term in the
             %% compile; admitting earlier would mean guessing its size.
-            Budget = compile_budget_words(),
+            {Budget, Complaints} = resolve_budget(),
+            [ok = wasm_code_slots:observe_config(K, V) || {K, V} <- Complaints],
+            %% Cleared as well as set, so a corrected key stops being held and a
+            %% recurrence is news again.
+            [ok = wasm_code_slots:observe_config(K, ok)
+             || K <- [compile_budget_words, compile_budget_heap_words],
+                not lists:keymember(K, 1, Complaints)],
             {_Name, Gen} = Token,
             Stamp = stamp(Inst, Gen),
             case split(Unit, Limits) of
@@ -762,26 +776,61 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
 %% including a trap on the way out. A compiler that is *killed* gives it back
 %% too, through the monitor `wasm_code_slots` took, which is the case an
 %% `after` cannot cover.
+%% A cache hit runs no compiler, so it must neither reserve nor be refused.
+%%
+%% The lookup used to happen two calls further in, inside `artifact/9`, so a
+%% request that was about to adopt an artifact from disk reserved as if it were
+%% about to compile one, and a busy budget turned a cache adoption into
+%% interpreting. That is the 0.2 second path the cache exists for.
+%%
+%% Looked up rather than probed. A cheap "is the file there" check before
+%% admission would leave a window: several distinct modules could each pass it
+%% and then all miss, if the entries were evicted or the directory changed, and
+%% every one of them would compile unreserved. Holding the binary closes it,
+%% and costs one read instead of two because `artifact/9` is handed the result.
 admitted(Inst, Limits, Mode, Stamp, Unit, Parts, {Mod, Token}, COpts, Budget) ->
-    Weight = ir_words(Unit),
-    case wasm_code_slots:acquire(Weight, Budget) of
-        {error, busy} ->
-            ok = wasm_code_slots:abort(Token),
-            {refused, {limit, {compile_budget, Weight}}};
-        ok ->
-            try build(Inst, Limits, Mode, Stamp, Unit, Parts, [{Mod, Token}],
-                      COpts)
-            after
-                ok = wasm_code_slots:release_budget()
+    case cached(Inst, Mod, Unit, Mode, Stamp, Parts) of
+        {ok, _Bin} = Hit ->
+            build(Inst, Limits, Mode, Stamp, Unit, Parts, [{Mod, Token}],
+                  COpts, Hit);
+        Miss ->
+            Weight = length(Parts) * reservation(Budget, COpts),
+            case wasm_code_slots:acquire(Weight, Budget) of
+                {error, busy} ->
+                    ok = wasm_code_slots:abort(Token),
+                    {refused, {limit, {compile_budget, Weight}}};
+                ok ->
+                    try build(Inst, Limits, Mode, Stamp, Unit, Parts,
+                              [{Mod, Token}], COpts, Miss)
+                    after
+                        ok = wasm_code_slots:release_budget()
+                    end
             end
     end.
 
-%% What `split/2` weighs shards by, over the whole request. On the sharded path
-%% it is computed again there; the duplication is one traversal of a term the
-%% compile is about to spend a minute on, and sharing it would mean threading a
-%% weight through four functions that have no use for it.
-ir_words(Unit) ->
-    lists:sum([erts_debug:flat_size(IR) || {_P, _I, _F, IR} <- Unit]).
+%% Only a whole unit is ever cached, so a sharded request never looks. `key/6`
+%% answers `undefined` for anything without a content hash, which is every
+%% module built from text, and `path/2` would hand that to `binary:encode_hex/1`
+%% and raise: it is a miss and must not reach `lookup/1`.
+cached(Inst, Mod, Unit, Mode, Stamp, [_]) ->
+    case wasm_code_cache:key(wasm_instance:identity(Inst), ?ABI, Mod, Mode,
+                             [Idx || {_P, Idx, _F, _IR} <- Unit], Stamp) of
+        undefined -> {miss, undefined};
+        Key ->
+            case wasm_code_cache:lookup(Key) of
+                {ok, _Bin} = Hit -> bump(?IX_CACHED, 1), Hit;
+                _ -> {miss, Key}
+            end
+    end;
+cached(_Inst, _Mod, _Unit, _Mode, _Stamp, _Parts) ->
+    {miss, undefined}.
+
+%% What one compiler may spend, which is what it is bounded at. Reserving a
+%% prediction instead was measured and rejected: peak memory per IR word spans
+%% 4.95 to 6.77 KB on one guest by estimator choice alone, and a bound built on
+%% a constant with that spread is not a bound. See `test/audit/PERF.md`.
+reservation(_Budget, #{max_heap_words := W}) -> W;
+reservation(_Budget, _COpts) -> 0.
 
 %% One unit or several, and the difference is only how many slots are held.
 %%
@@ -791,8 +840,9 @@ ir_words(Unit) ->
 %% used sooner, because the functions worth compiling are the ones expensive to
 %% compile: sixteen of QuickJS's hot functions are already 30 seconds of the 54.
 %% See `test/audit/PERF.md`.
-build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}], COpts) ->
-    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod, #{}, COpts) of
+build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}], COpts, Cached) ->
+    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod, #{}, COpts,
+                  Cached) of
         {ok, Bin} ->
             {module, Mod} = code:load_binary(Mod, "wasm_generated", Bin),
             ok = wasm_code_slots:publish(Token),
@@ -802,7 +852,7 @@ build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}], COpts) ->
             ok = wasm_code_slots:abort(Token),
             outcome(Reason)
     end;
-build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First], COpts) ->
+build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First], COpts, _Cached) ->
     %% Every slot claimed before anything is generated, because each unit names
     %% the next as a literal and cannot be built until that name exists. This
     %% process owns all of them, so a compiler that dies takes every reservation
@@ -823,8 +873,11 @@ build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First], COpts) ->
             Jobs = lists:zip3(Parts, Mods, tl(Mods) ++ [undefined]),
             Bins = pmap(fun({U, M, Next}) ->
                             Mine = [Idx || {_, Idx, _, _} <- U],
+                            %% A shard is never cached, so it never carries a
+                            %% looked-up result: `{miss, undefined}`.
                             artifact(Inst, M, U, Mode, Stamp, Next, Head,
-                                     maps:without(Mine, Where), COpts)
+                                     maps:without(Mine, Where), COpts,
+                                     {miss, undefined})
                         end, Jobs),
             publish_all(Inst, Limits, Tokens, Parts, Bins)
     end.
@@ -890,9 +943,32 @@ bounds a single unit has.
 %% which is `max_heap_size`'s own meaning for a size of zero.
 -spec compile_limits() -> #{atom() => non_neg_integer()}.
 compile_limits() ->
+    Ceiling = max_heap_words(),
+    Budget = compile_budget_heap_words(),
     #{max_compile_funs => ?MAX_COMPILE_FUNS, max_shards => ?MAX_SHARDS,
-      max_heap_words => max_heap_words(),
-      budget_words => compile_budget_words()}.
+      max_heap_words => Ceiling,
+      budget_heap_words => Budget,
+      max_concurrent_compilers => concurrency(Budget, Ceiling)}.
+
+%% Compiler *workers*, not requests: a sharded request runs one per part.
+%%
+%% Steady-state admission capacity rather than a strict instantaneous maximum.
+%% When a reservation's owner dies, `wasm_code_slots` gives the words back on
+%% its `DOWN` while `wasm_core:reap/2` kills the compiler through a separate
+%% monitor, and nothing orders those two, so a newly admitted compiler can
+%% briefly overlap one that is still dying. Making it strict would mean tracking
+%% descendants on the release path for a window that only opens on a crash.
+%%
+%% Two exceptions are folded in rather than left for a reader to discover. The
+%% `?MAX_SHARDS` floor is the `Spent =:= 0` escape, which admits one request
+%% whatever its size on an idle node, and a request is up to four workers. The
+%% slot count is the ceiling on all of it, and comes from
+%% `wasm_code_slots:slots/0` rather than a second copy of the number.
+concurrency(0, _Ceiling) -> length(wasm_code_slots:slots());
+concurrency(_Budget, 0) -> length(wasm_code_slots:slots());
+concurrency(Budget, Ceiling) ->
+    erlang:min(length(wasm_code_slots:slots()),
+               erlang:max(?MAX_SHARDS, Budget div Ceiling)).
 
 -doc """
 The heap ceiling a compile would be given, in words, or 0 for none.
@@ -907,21 +983,49 @@ of a compile.
 max_heap_words() -> element(1, resolve_max_heap_words()).
 
 -doc """
-The node's whole compile budget in IR words, or 0 for none.
+The node's whole compile budget in heap words, or 0 for none.
 
 A heap ceiling bounds one compiler; sixteen of them under it is not a bound on
 the node. This is what the whole node may have in flight at once. Off by
 default, and like the ceiling it refuses rather than queues: a request that does
 not fit interprets and asks again at the next hot call.
 """.
--spec compile_budget_words() -> non_neg_integer().
-compile_budget_words() ->
-    case application:get_env(wasm, compile_budget_words, undefined) of
-        undefined -> 0;
-        W when is_integer(W), W >= 0 -> W;
-        %% A bad value is no budget, said the same way a bad ceiling is: a typo
-        %% must not bound the node at zero and refuse every compile there is.
-        _ -> 0
+-spec compile_budget_heap_words() -> non_neg_integer().
+compile_budget_heap_words() -> element(1, resolve_budget()).
+
+%% The effective budget and everything there is to say about the configuration,
+%% because the two cannot be recovered from one another: unset, malformed, and
+%% set-without-a-ceiling all resolve to 0.
+%%
+%% `compile_budget_words` is the old key and counted IR words. It is read only
+%% to complain about: redefining it in place would have turned a working node
+%% into a serialiser, since 4,000,000 IR words is about 21 GB of memory and
+%% 4,000,000 heap words is 32 MB, and the first compile always succeeds through
+%% the `Spent =:= 0` escape while every later one is refused.
+-spec resolve_budget() -> {non_neg_integer(), [{atom(), term()}]}.
+resolve_budget() ->
+    Old = case application:get_env(wasm, compile_budget_words, undefined) of
+              undefined -> [];
+              Raw -> [{compile_budget_words, {bad, Raw}}]
+          end,
+    case application:get_env(wasm, compile_budget_heap_words, undefined) of
+        undefined ->
+            {0, Old};
+        %% An explicit zero is a clean disabled state, spelled the way
+        %% `max_heap_size` spells it. It says what it means, so it says nothing.
+        0 ->
+            {0, Old};
+        W when is_integer(W), W > 0 ->
+            case max_heap_words() of
+                0 ->
+                    %% Nothing to aggregate: the budget admits compilers each
+                    %% bounded by the ceiling, and there is no ceiling.
+                    {0, [{compile_budget_heap_words, {bad, no_ceiling}} | Old]};
+                _ ->
+                    {W, Old}
+            end;
+        Bad ->
+            {0, [{compile_budget_heap_words, {bad, Bad}} | Old]}
     end.
 
 %% Answers the effective value *and* what to say about it, because the two
@@ -1099,21 +1203,15 @@ collect(Pid) ->
 %% today's instance. What it *does* depend on is the slot, because a module's
 %% name is part of its BEAM file, which is why the slot is in the key and why
 %% `wasm_code_slots` prefers a module's own slot when one is free.
-artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere, COpts) ->
-    %% Not cached when it is one of several. The key would have to carry which
-    %% module the chain points at next, and a shard set is only reproducible if
-    %% the same split falls out of the same workload, which nothing promises.
-    Key = case Next of
-              undefined ->
-                  wasm_code_cache:key(wasm_instance:identity(Inst), ?ABI, Mod,
-                                      Mode,
-                                      [Idx || {_P, Idx, _F, _IR} <- Unit],
-                                      Stamp);
-              _ -> undefined
-          end,
-    case Key =/= undefined andalso wasm_code_cache:lookup(Key) of
-        {ok, Bin} -> bump(?IX_CACHED, 1), {ok, Bin};
-        _ ->
+artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere, COpts, Cached) ->
+    %% The lookup already happened, in `admitted/9`, above admission: a request
+    %% that will adopt an artifact must not reserve a compiler's budget, and
+    %% must never be refused for it. What arrives here is the answer, so the
+    %% file is read once and not twice.
+    case Cached of
+        {ok, Bin} ->
+            {ok, Bin};
+        {miss, Key} ->
             case wasm_core:module(Mod, Unit, sigs(Inst), tsigs(Inst), Mode,
                                   Stamp, Next, Head, Elsewhere, COpts) of
                 {ok, Bin} = Ok ->

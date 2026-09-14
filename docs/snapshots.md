@@ -78,8 +78,8 @@ worker reads its image instead of capturing:
 application:set_env(wasm, snapshot_dir, "/var/cache/wasm/images").
 ```
 
-Off unless you set it. A CPython worker starts in **998 ms** from a file
-against 104 s capturing, and the file is 2.7 MB. The rest of the numbers are in
+Off unless you set it. A CPython worker starts in **under a second** from a
+file against a hundred seconds capturing, and the file is 2.7 MB. The rest of the numbers are in
 `test/audit/PERF.md`.
 
 An adapter must supply a `compatibility_key` for any of this to happen. There

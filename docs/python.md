@@ -105,7 +105,7 @@ next section is how to stop paying for that.
 
 ## Skip the interpreter start, with the reactor build
 
-**0.35 s a request instead of 65.9 s.** CPython starts once when the worker
+**0.35 s a request instead of a minute or more.** CPython starts once when the worker
 starts, and each request restores an image of that point. Build it, then point
 a worker at it:
 

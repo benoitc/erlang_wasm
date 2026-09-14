@@ -5047,6 +5047,12 @@ workers, ten requests each, minimums taken:
 | QuickJS | 579 ms | 28.5 ms | 211,064 bytes |
 | CPython | 91,927 ms | 351 ms | 7,417,000 bytes |
 
+**The two QuickJS figures did not reproduce** when the whole set was taken
+again on merged `main`: 228 ms to start and 46 ms a request. Lua and CPython
+reproduced to the millisecond. See the re-measurement at the end of this file
+for what was checked and what it could not be pinned on; read this row as an
+order of magnitude.
+
 Three orders of magnitude between the start times and two between the images,
 which is the span the mechanism now has evidence over rather than an argument.
 
@@ -5161,3 +5167,75 @@ The consequence for any design: a sampled threshold `T` guarantees
 a node. `max_heap_size` has no such gap, because the VM checks it *inside* the
 collection before committing the new heap. Enforcement belongs there, and
 admission belongs before the memory is spent. Sampling belongs in neither.
+
+## The worker numbers, re-measured after both merges
+
+Everything above was measured while the work was being built. This is the same
+set taken again on merged `main`, which now carries the compile-budget work as
+well. All arms in **one** VM, interleaved, both orderings, minimums taken.
+Load average 4.36 before and 5.33 after on the one-minute figure -- and **16 to
+17 on the fifteen-minute figure**, which matters below.
+
+| arm | start | a request | recorded before | |
+| --- | ---: | ---: | ---: | --- |
+| Lua | 76 ms | **25 ms** | 25 ms | reproduces |
+| CPython, reactor | 91,091 ms | **351 ms** | 351 ms | reproduces |
+| QuickJS, command | 234 ms | **190 ms** | 173.4 ms | +10% |
+| QuickJS, reactor | 228 ms | **46 ms** | 28.5 ms | **+61%** |
+| CPython, command | 1,228 ms | **86,608 ms** | 65,856 ms | +31% |
+
+And the one the whole on-disk piece exists for, measured separately because it
+needs a directory configured. Load average 4.24 before and 6.25 after:
+
+| CPython worker start | | recorded before | |
+| --- | ---: | ---: | --- |
+| captured, then filed | 97,108 ms | 104,093 ms | |
+| **read from the file** | **908 ms** | 998 ms | reproduces |
+| with the store switched off | 101,667 ms | 102,870 ms | reproduces |
+| the file | 2,718,389 bytes | 2,717,634 bytes | |
+
+So the headline holds: a CPython worker starts in **under a second** from a
+2.7 MB file against a hundred seconds capturing, and the off arm still says the
+saving is the file rather than anything else warming up.
+
+Spreads inside each arm are tight -- QuickJS reactor ran 47, 48, 47, 46 -- so
+these are what the box does today.
+
+### What moved, and what I could not pin it on
+
+The two that reproduce to the millisecond are real reproductions, not luck, and
+they bracket the range: the smallest guest and the largest.
+
+The three that moved are all **older** measurements and all moved the same way.
+Things I checked, none of which explains it:
+
+- **It is not the compile-budget work.** Measured either side of that merge,
+  interleaved: 48 ms against 47 ms for the QuickJS reactor. Flat.
+- **It is not the restore.** That got *faster*: 6.2 ms to **1.0 ms** for
+  QuickJS, which is the memory-runs change paying off on a small image after
+  all.
+- **It is not kernel overhead.** A worker request with `fake_reactor_adapter`,
+  which stages nothing and imports no WASI, is **0.9 ms** median over forty.
+
+So for QuickJS a request is 1.0 ms of restore plus 20.6 ms of `handle` plus
+0.9 ms of kernel, and the worker measures 46. The remaining ~24 ms is staging
+two files and building the WASI import set, which is more than the guest's own
+work for a request this small. Lua shows the same shape with a smaller gap.
+
+**The most likely cause of the drift is the box**, and `bench/paths/README.md`
+is explicit that this one swings between 4 and 84. The fifteen-minute load was
+16 to 17 across today's runs against 7 to 8 when the originals were taken, and
+the one-minute figure being settled is not the same thing. I have not proved
+that, and the way to settle it is to take the set again on a quiet machine
+rather than to argue about it here.
+
+**What is safe to say**: Lua at 25 ms, CPython at 351 ms a request and 908 ms
+to start from a file are solid, and the restore path is 6x better than recorded
+for a small image. The two QuickJS figures and the CPython command figure
+should be read as the order of magnitude they have always been rather than as
+numbers to three digits.
+
+Note which ones held. Every figure the **snapshot** work rests on reproduced:
+the CPython request, the from-file start, the off arm, the file size. The three
+that drifted are the two QuickJS arms and the CPython command arm, none of
+which is a claim about snapshots.

@@ -89,8 +89,8 @@ fails fails the start. Two adapters use it, over reactors built by
 
 | | per request, command | per request, restored |
 | --- | ---: | ---: |
-| `qjs_reactor_adapter` | 173 ms | 28 ms |
-| `py_reactor_adapter` | 65.9 s | 0.35 s |
+| `qjs_reactor_adapter` | 173 to 190 ms | 28 to 46 ms |
+| `py_reactor_adapter` | 66 to 87 s | 0.35 s |
 | `lua_reactor_adapter` | n/a | 25 ms |
 
 Lua is the third language and the first added after all of this was written:
@@ -121,7 +121,8 @@ this admits proportionally more images.
 
 **Images can be kept on disk.** `application:set_env(wasm, snapshot_dir, Dir)`
 and a worker reads its image instead of running `init()` again: a CPython
-worker starts in **998 ms** against 104 s, from a 2.7 MB file. Off unless you
+worker starts in **under a second** against a hundred capturing, from a
+2.7 MB file. Off unless you
 set it, and the directory is as trusted as your release.
 `wasm:save_snapshot/2` and `wasm:load_snapshot/2` are the same thing by hand.
 

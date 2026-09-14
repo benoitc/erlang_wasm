@@ -43,7 +43,7 @@ rebar3 compile      # warnings_as_errors is on
 rebar3 lint         # elvis
 rebar3 xref
 rebar3 dialyzer
-rebar3 ct           # 824 cases
+rebar3 ct           # 830 cases
 ```
 
 The benchmarks are not among them: `wasm_bench_SUITE` and

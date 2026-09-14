@@ -192,17 +192,46 @@ The ceiling above bounds one compiler. Sixteen slots means up to sixteen of
 them, so it is not a bound on the node:
 
 ```erlang
-application:set_env(wasm, compile_budget_words, 4_000_000).
+application:set_env(wasm, compile_budget_heap_words,
+                    8_000_000_000 div erlang:system_info(wordsize)).
 ```
 
-In IR words, which is what a compile's cost tracks. A request that does not fit
-beside what is already running is **refused**, so the guest interprets and asks
-again at the next hot call; nothing is queued, because a caller that waited
-would hold the unit IR it was admitted to compile for the whole wait.
+In heap words, the same unit as the ceiling, so the two compose. **It needs the
+ceiling**: a compile reserves the ceiling it will be held to, so without one
+there is nothing to aggregate, and a budget set alone is reported as 0 and said
+once through `logger`. Divide by `Budget div Ceiling` to see how many compilers
+it admits, or read `max_concurrent_compilers` from `wasm_jit:compile_limits/0`.
 
-A request larger than the entire budget still compiles when nothing else is
-running, so a budget set below one guest's hot set slows compilation down
-instead of stopping it. Also off by default.
+A request that does not fit beside what is already running is **refused**, so
+the guest interprets and asks again at the next hot call. Nothing is queued: a
+caller that waited would hold the unit IR it was admitted to compile for the
+whole wait, which is the memory the budget exists to bound. A request larger
+than the entire budget still compiles when nothing else is running, so a budget
+set too low slows compilation instead of stopping it.
+
+**What it bounds, and what it does not.** It bounds how many compiler workers
+are admitted, each under the ceiling. It is steady-state capacity: a killed
+compiler's reservation is released through a different monitor than the one that
+kills it, so a replacement can briefly overlap it. And actual node memory is
+that, plus each compiler's overshoot between collections, plus the coordinators,
+which are not capped because under `compile_sync` the owner is your own process,
+plus allocator carriers, which no in-VM bound covers. Leave headroom: on QuickJS
+the coordinator added about 7% on top of its compiler.
+
+Both are off by default.
+
+**Sizing the ceiling.** Measure your own guest rather than copying a number:
+
+```sh
+erlc -I _build/default/lib -o bench/paths bench/paths/compileheap.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run compileheap main your.wasm 3
+```
+
+The `child` arm's `worker MB` is what one compiler of that guest peaks at. Take
+that plus headroom as the ceiling. Predicting it from a module's size does not
+work: peak memory per IR word spans 4.95 to 6.77 KB on one guest by estimator
+choice alone, which is why the budget counts ceilings and not weights.
 
 **Off by default, and the directory is as trusted as your release.** Loading a
 `.beam` from it executes whatever is in that file, so it must not be writable by

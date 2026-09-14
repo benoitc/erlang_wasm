@@ -64,7 +64,7 @@ same inline API you would, it just owns the instance.
 
 Two worked embeddings of this pattern, with guests to run in them, are in
 [guests.md](guests.md): `examples/plugin_worker.erl` for logic compiled ahead of
-time, and `examples/script_worker.erl` for logic that arrives as text.
+time, and `examples/qjs_worker.erl` for logic that arrives as text.
 
 ## Lifecycle
 
@@ -113,6 +113,39 @@ rather than in tests, because a single-request test cannot see it.
 
 You can afford `fresh` precisely because the module is cached and a small
 instance costs about 64 KB, so a reset is microseconds rather than milliseconds.
+
+## Choose a configuration: `metered` or `compiled`
+
+These two are **mutually exclusive**, and a host that asks for both gets
+neither an error nor a warning.
+
+| | `metered` | `compiled` |
+| --- | --- | --- |
+| `fuel` | a ceiling, from `wasm_limits:untrusted/0` | `infinity` |
+| `compile` | absent | `true`, with `profile => script` |
+| what stops a runaway | the fuel budget, without a kill | **only** the owner's wall-clock deadline |
+| the compiled tier | off | on, after several hundred requests |
+
+`wasm_jit:entry/3` enables generated code only when fuel is `infinity`, so
+setting `compile => true` while keeping a fuel ceiling **silently gets you the
+interpreter**: no error anywhere, and a worker whose slowness has no visible
+cause. `wasm_worker_lang_SUITE` asserts that over 500 requests, because a
+shorter run is silent whether the tier is off or merely slow.
+
+Under `compiled` the only thing between the node and a runaway guest is a kill
+from outside it. That is a security statement rather than a tuning note: it is
+the one configuration where an untrusted guest is bounded by time alone.
+
+Turning the tier on is also where PR #15's compile-side bounds belong, because
+CPython's artifact is 80 MB of generated code and the node-wide budget is what
+stops one tenant's module taking the node. Both keys are off by default; see
+[the compiled tier guide](compiled-tier.md).
+
+**`max_heap_words` in a limits map does not set the process flag.** It is
+applied by whoever owns the instance, with `spawn_opt` at creation rather than
+`process_flag` inside the process, because the closure and the request are
+copied onto the new heap before an in-process call would run. The worker kernel
+does this for you; an inline caller does not get it by passing the key.
 
 ## Bound the work and the time
 

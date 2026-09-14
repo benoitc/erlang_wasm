@@ -58,7 +58,7 @@ context to diagnose it.
 -export([read_memory/3, write_memory/3, memory_size/1]).
 -export([format_error/1]).
 
--export_type([module_/0, instance/0, source/0]).
+-export_type([module_/0, instance/0, source/0, extern/0]).
 %% `module_()` is a `#module{}`, so everything its fields are typed with is part
 %% of what a reader of that type needs. They are declared in `include/wasm.hrl`
 %% and exported here, which is also what stops the documentation build reporting
@@ -73,6 +73,21 @@ context to diagnose it.
 -nominal instance() :: #inst{}.
 -doc "What `compile/1` takes: the binary format, or the text format.".
 -nominal source() :: binary() | {wat, binary()}.
+-doc """
+An export taken in the form another module imports it, as `extern/2` hands it
+back.
+
+Named because an import map is built out of these, so anything describing one
+has to be able to spell the value. A function carries its type so a mismatched
+signature is a link error; a memory, table or mutable global is the handle
+itself, so the importer shares the thing rather than a copy of it.
+""".
+-nominal extern() :: {wasm_func, fun((term(), [term()]) -> {ok, [term()]}), term()}
+                   | {wasm_global, wasm_global:global(), #globaltype{}}
+                   | {wasm_global_const, term(), #globaltype{}}
+                   | {wasm_tag, reference(), term(), term()}
+                   | wasm_memory:mem()
+                   | wasm_table:table().
 
 %%% ------------------------------------------------------------- lifecycle ---
 
@@ -787,7 +802,7 @@ Functions come back as host functions, so wasm-to-wasm linking reuses the same
 import mechanism as Erlang-implemented imports rather than needing a second path
 through the interpreter.
 """.
--spec extern(instance(), binary()) -> {ok, term()} | {error, wasm_error:error()}.
+-spec extern(instance(), binary()) -> {ok, extern()} | {error, wasm_error:error()}.
 extern(Inst, Name) ->
     case wasm_instance:export_kind(Inst, Name) of
         {ok, {func, _}} ->

@@ -1,0 +1,328 @@
+-module(wasm_worker_kernel_SUITE).
+-moduledoc """
+The kernel, exercised by two adapters built from WAT at test time.
+
+**This suite never skips.** It downloads nothing and needs no network, which is
+what lets it be the required gate: a skip here is a failure, since the whole
+point is that it cannot be skipped.
+
+Every case body lives in `wasm_adapter_conformance`, not here. That is the
+acceptance rule made structural: a new language is accepted when it passes the
+applicable cases **without modifying the kernel**, and a suite that wrote its
+own cases would let a language quietly become a special case instead.
+
+The two adapters run the identical **base** list. Their capability cases differ
+by construction, since `fake_typed_adapter` declares no files and is therefore
+never asked to stage one. What must not differ is the base list: the typed
+adapter failing there is the signal that the kernel is a WASI runner, and it is
+the only signal there is.
+""".
+
+-compile([export_all, nowarn_export_all]).
+
+-include_lib("common_test/include/ct.hrl").
+-include_lib("stdlib/include/assert.hrl").
+
+-define(KIT, wasm_adapter_conformance).
+
+%% A wedged case must fail rather than run to Common Test's default, because
+%% breaking the deadline or the cancel path on purpose has to be seen quickly.
+suite() -> [{timetrap, {seconds, 90}}].
+
+all() ->
+    [{group, typed}, {group, command}, {group, script_v1},
+     {group, script_v1_channel}].
+
+groups() ->
+    [{typed, [], cases(fake_typed_adapter)},
+     {command, [], cases(fake_command_adapter)},
+     %% The profile runs the same kit as everything else, and then the cases
+     %% that are about the profile rather than the kernel. It needs no
+     %% interpreter: a WAT guest that reads the marker out of `argv' and frames
+     %% its result on stdout exercises `script_v1.combined' completely, so a
+     %% failure here is the profile's rather than QuickJS's.
+     {script_v1, [], cases(fake_script_v1_adapter) ++ profile_cases()},
+     %% The other transport, and the reason both exist: three descriptors
+     %% rather than two things sharing one, so the bounds are independent and
+     %% no delimiter is involved at all.
+     {script_v1_channel, [],
+      cases(fake_script_v1_channel_adapter) ++ channel_cases()}].
+
+%% A declared capability makes its cases mandatory; an undeclared one
+%% contributes none and is reported rather than passed.
+cases(Adapter) ->
+    ?KIT:base_cases() ++ ?KIT:capability_cases(Adapter).
+
+init_per_suite(Config) ->
+    {ok, _} = application:ensure_all_started(wasm),
+    Config.
+
+end_per_suite(_Config) -> ok.
+
+init_per_group(typed, Config)     -> [{adapter, fake_typed_adapter} | Config];
+init_per_group(command, Config)   -> [{adapter, fake_command_adapter} | Config];
+init_per_group(script_v1, Config) -> [{adapter, fake_script_v1_adapter} | Config];
+init_per_group(script_v1_channel, Config) ->
+    [{adapter, fake_script_v1_channel_adapter} | Config].
+
+end_per_group(_G, _Config) -> ok.
+
+init_per_testcase(TC, Config) ->
+    process_flag(trap_exit, true),
+    Root = filename:join([?config(priv_dir, Config), atom_to_list(TC), "root"]),
+    ok = filelib:ensure_path(Root),
+    {ok, Reaper} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, W} = start(Config, Root, #{}),
+    [{reaper, Reaper}, {worker, W}, {root, Root} | Config].
+
+end_per_testcase(_TC, Config) ->
+    try script_worker:stop(?config(worker, Config)) catch _:_ -> ok end,
+    try worker_reaper:stop() catch _:_ -> ok end,
+    ok.
+
+start(Config, _Root, Opts) ->
+    script_worker:start_link(?config(adapter, Config),
+                             maps:merge(#{root => scratch}, Opts)).
+
+%% What every case is handed. The kit reads nothing else, so a suite for a
+%% language adapter is this function and the delegations below.
+ctx(Config) ->
+    Root = ?config(root, Config),
+    #{adapter => ?config(adapter, Config),
+      worker => ?config(worker, Config),
+      root => Root,
+      start => fun(Opts) -> start(Config, Root, Opts) end}.
+
+%%% --------------------------------------------------------- profile cases ---
+%%
+%% These are about `script_v1' and not about the kernel, which is why they live
+%% here rather than in the kit: the kit is what a *language* reuses, and a
+%% second profile would bring its own list.
+
+profile_cases() ->
+    [a_decoy_hex_string_is_not_the_delimiter,
+     the_last_marker_wins_and_authenticates_nothing,
+     nothing_framed_is_no_result,
+     a_non_json_result_is_bad_result,
+     profile_codes_are_binaries,
+     the_context_reaches_the_guest_as_json,
+     the_combined_stream_and_stderr_are_bounded_apart,
+     every_profile_code_has_a_fixture,
+     an_invented_code_is_a_bad_result].
+
+request(Config, Extra) ->
+    maps:merge(?KIT:fixture(?config(adapter, Config), echo), Extra).
+
+run(Config, Extra) ->
+    script_worker:run(?config(worker, Config), request(Config, Extra)).
+
+a_decoy_hex_string_is_not_the_delimiter(Config) ->
+    %% Tenant output containing a different 32-hex string. A fixed delimiter
+    %% would have collided with ordinary output; sixteen random bytes per
+    %% request make that negligible.
+    {ok, Result} = run(Config, #{shape => decoy}),
+    ?assertMatch(#{~"answer" := 42}, maps:get(result, Result)),
+    %% And the tenant keeps every byte it printed, decoy included. What comes
+    %% back as `stdout` is the stream up to the delimiter, not the stream since
+    %% the last thing that looked like one.
+    ?assertEqual(match, re:run(maps:get(stdout, Result), "deadbeef",
+                               [{capture, none}])).
+
+the_last_marker_wins_and_authenticates_nothing(Config) ->
+    %% One fixture, two meanings, and they are the same observation.
+    %%
+    %% The guest frames `{"fake":1}` and then `{"answer":42}`, both behind the
+    %% real marker. Reading the **last** occurrence is what makes the second
+    %% the result: until the guest terminates, any byte could be followed by
+    %% more.
+    %%
+    %% And the tenant can read `argv`, so it can print the marker itself, which
+    %% is exactly what this fixture does. The transport cannot tell bootstrap
+    %% output from tenant output imitating it, and does not pretend to. A
+    %% tenant controls its own result either way, so nothing is lost that was
+    %% ever held, but `argv` is not a boundary. Strict framing needs
+    %% `script_v1.channel` and its dedicated `worker.result` import.
+    ?assertMatch({ok, #{result := #{~"answer" := 42}}},
+                 run(Config, #{shape => echo_marker})).
+
+nothing_framed_is_no_result(Config) ->
+    {error, E} = run(Config, #{shape => no_result}),
+    ?assertEqual(adapter_failure, maps:get(kind, E)),
+    ?assertEqual(~"no_result", maps:get(code, maps:get(ctx, E))).
+
+a_non_json_result_is_bad_result(Config) ->
+    {error, E} = run(Config, #{shape => bad_result}),
+    ?assertEqual(adapter_failure, maps:get(kind, E)),
+    ?assertEqual(~"bad_result", maps:get(code, maps:get(ctx, E))).
+
+profile_codes_are_binaries(Config) ->
+    %% The kernel's `kind' set stays closed and the profile's vocabulary is
+    %% binaries in `ctx', because the atom table is node-wide and never
+    %% reclaimed. A profile can add codes for ever without moving that set.
+    [?assert(is_binary(C)) || C <- script_v1:codes()],
+    {error, E} = run(Config, #{shape => no_result}),
+    ?assert(lists:member(maps:get(code, maps:get(ctx, E)), script_v1:codes())),
+    ?assert(lists:member(maps:get(kind, E), worker_error:kinds())).
+
+the_context_reaches_the_guest_as_json(Config) ->
+    %% Encoded once, staged as a file, and the keys stay binaries all the way
+    %% through: `json:decode/1' does not intern them, which is the half of the
+    %% atom rule that matters on the way back.
+    Ctx = #{~"value" => 41, ~"nested" => #{~"a" => [1, 2, 3]}},
+    ?assertEqual(Ctx, json:decode(script_v1:encode_context(Ctx))),
+    ?assertMatch({ok, #{result := _}}, run(Config, #{context => Ctx})).
+
+every_profile_code_has_a_fixture(Config) ->
+    %% All four, each produced by a guest rather than asserted about. The two
+    %% below the line are what a bootstrap reports when the tenant's code never
+    %% ran or ran and raised, which is why the framed value is an envelope: a
+    %% bare result cannot say which of those happened.
+    Produced = [{~"no_result", no_result}, {~"bad_result", bad_result},
+                {~"no_entry_point", no_entry_point}, {~"exception", raised}],
+    [begin
+         {error, E} = run(Config, #{shape => Shape}),
+         ?assertEqual(adapter_failure, maps:get(kind, E)),
+         ?assertEqual(Code, maps:get(code, maps:get(ctx, E))),
+         %% A binary, every time. The kernel's `kind' set stays closed and the
+         %% profile's vocabulary never reaches the atom table.
+         ?assert(is_binary(maps:get(code, maps:get(ctx, E))))
+     end || {Code, Shape} <- Produced],
+    ?assertEqual(lists:sort(script_v1:codes()),
+                 lists:sort([C || {C, _} <- Produced])).
+
+an_invented_code_is_a_bad_result(Config) ->
+    {error, E} = run(Config, #{shape => invented_code}),
+    %% The code set belongs to the profile, not to the tenant. A host that
+    %% switched on an unrecognised one would be switching on tenant input, so
+    %% a guest naming a code nobody defined has simply returned a malformed
+    %% result.
+    ?assertEqual(~"bad_result", maps:get(code, maps:get(ctx, E))).
+
+the_combined_stream_and_stderr_are_bounded_apart(Config) ->
+    %% On this transport stdout carries the tenant's output *and* the framed
+    %% result, so it is one descriptor carrying two things and the combined
+    %% budget belongs to it. `stderr` is a different descriptor and keeps its
+    %% own, which is why a single number would have been wrong: bounding the
+    %% shared stream tightly would have bounded the unshared one with it.
+    Limits = script_v1:combined_limits(#{max_combined_bytes => 64,
+                                         max_output_bytes => 1_000_000}),
+    {ok, W} = script_worker:start_link(?config(adapter, Config),
+                                       #{root => scratch, limits => Limits,
+                                         timeout => 30_000}),
+    {error, E} = script_worker:run(W, request(Config, #{shape => flood})),
+    ?assertEqual(output_limit, maps:get(kind, E)),
+    ?assertEqual(stdout, maps:get(stream, maps:get(ctx, E))),
+    %% Same worker, same tight combined budget: a guest writing to stderr is
+    %% untouched by it and still frames its result.
+    ?assertMatch({ok, #{result := #{~"answer" := 42}}},
+                 script_worker:run(W, request(Config, #{shape => noisy_stderr}))),
+    ok = script_worker:stop(W).
+
+%%% ----------------------------------------------- the channel transport ---
+
+channel_cases() ->
+    [the_result_does_not_travel_on_stdout,
+     stdout_and_result_are_bounded_independently,
+     nothing_written_is_no_result,
+     a_non_json_channel_result_is_bad_result].
+
+the_result_does_not_travel_on_stdout(Config) ->
+    {ok, Result} = run(Config, #{}),
+    ?assertMatch(#{~"answer" := 42}, maps:get(result, Result)),
+    %% The tenant's own output is exactly what the tenant wrote, with no
+    %% delimiter in it and nothing stripped out of it, because the result was
+    %% never in this stream.
+    ?assertEqual(~"tenant output\n", maps:get(stdout, Result)).
+
+stdout_and_result_are_bounded_independently(Config) ->
+    %% Generous for the result, tight for stdout. On the combined transport
+    %% these are one descriptor and this configuration cannot be expressed;
+    %% here it is the ordinary case.
+    {ok, W} = script_worker:start_link(
+                ?config(adapter, Config),
+                #{root => scratch, timeout => 30_000,
+                  limits => #{max_output_bytes => 128,
+                              max_result_bytes => 1_000_000}}),
+    {error, Flooded} = script_worker:run(W, request(Config, #{shape => flood_stdout})),
+    ?assertEqual(output_limit, maps:get(kind, Flooded)),
+    ?assertEqual(stdout, maps:get(stream, maps:get(ctx, Flooded))),
+    ok = script_worker:stop(W),
+    %% And the other way round: a result that runs away is stopped by its own
+    %% bound, which the combined transport does not consult at all.
+    {ok, W2} = script_worker:start_link(
+                 ?config(adapter, Config),
+                 #{root => scratch, timeout => 30_000,
+                   limits => #{max_output_bytes => 1_000_000,
+                               max_result_bytes => 128, fuel => infinity}}),
+    {error, Runaway} = script_worker:run(W2, request(Config, #{shape => flood_result})),
+    ?assertEqual(result_limit, maps:get(kind, Runaway)),
+    ok = script_worker:stop(W2).
+
+nothing_written_is_no_result(Config) ->
+    {error, E} = run(Config, #{shape => no_result}),
+    ?assertEqual(~"no_result", maps:get(code, maps:get(ctx, E))).
+
+a_non_json_channel_result_is_bad_result(Config) ->
+    {error, E} = run(Config, #{shape => bad_result}),
+    ?assertEqual(~"bad_result", maps:get(code, maps:get(ctx, E))).
+
+
+%%% ------------------------------------------------------------ delegation ---
+
+a_caller_that_dies_cancels(Config) -> ?KIT:a_caller_that_dies_cancels(ctx(Config)).
+a_corrupt_journal_record_is_quarantined(Config) -> ?KIT:a_corrupt_journal_record_is_quarantined(ctx(Config)).
+a_failed_restage_leaves_the_previous_file(Config) -> ?KIT:a_failed_restage_leaves_the_previous_file(ctx(Config)).
+a_failed_transfer_aborts_before_the_guest_runs(Config) -> ?KIT:a_failed_transfer_aborts_before_the_guest_runs(ctx(Config)).
+a_finite_await_leaves_the_slot_free(Config) -> ?KIT:a_finite_await_leaves_the_slot_free(ctx(Config)).
+a_guest_failure_is_a_worker_error(Config) -> ?KIT:a_guest_failure_is_a_worker_error(ctx(Config)).
+a_half_written_record_is_ignored(Config) -> ?KIT:a_half_written_record_is_ignored(ctx(Config)).
+a_hanging_cleanup_does_not_wedge_the_reaper(Config) -> ?KIT:a_hanging_cleanup_does_not_wedge_the_reaper(ctx(Config)).
+a_late_finish_does_not_kill_the_reaper(Config) -> ?KIT:a_late_finish_does_not_kill_the_reaper(ctx(Config)).
+a_non_wasi_adapter_never_names_start(Config) -> ?KIT:a_non_wasi_adapter_never_names_start(ctx(Config)).
+a_read_only_mount_refuses_a_guest_write(Config) -> ?KIT:a_read_only_mount_refuses_a_guest_write(ctx(Config)).
+a_record_naming_an_unknown_root_is_left_alone(Config) -> ?KIT:a_record_naming_an_unknown_root_is_left_alone(ctx(Config)).
+a_restage_debits_only_the_delta(Config) -> ?KIT:a_restage_debits_only_the_delta(ctx(Config)).
+a_restarted_reaper_adopts_a_live_request(Config) -> ?KIT:a_restarted_reaper_adopts_a_live_request(ctx(Config)).
+a_reused_pid_denies_the_handshake(Config) -> ?KIT:a_reused_pid_denies_the_handshake(ctx(Config)).
+a_second_await_is_already_awaited(Config) -> ?KIT:a_second_await_is_already_awaited(ctx(Config)).
+a_second_submit_is_busy(Config) -> ?KIT:a_second_submit_is_busy(ctx(Config)).
+a_silent_guardian_ends_held_holding_capacity(Config) -> ?KIT:a_silent_guardian_ends_held_holding_capacity(ctx(Config)).
+a_stale_job_is_refused_by_the_replacement(Config) -> ?KIT:a_stale_job_is_refused_by_the_replacement(ctx(Config)).
+a_stream_bound_terminates_the_runner(Config) -> ?KIT:a_stream_bound_terminates_the_runner(ctx(Config)).
+a_writable_mount_lets_the_guest_write(Config) -> ?KIT:a_writable_mount_lets_the_guest_write(ctx(Config)).
+a_writable_mount_needs_a_trusted_worker(Config) -> ?KIT:a_writable_mount_needs_a_trusted_worker(ctx(Config)).
+an_empty_invoke_is_an_adapter_error(Config) -> ?KIT:an_empty_invoke_is_an_adapter_error(ctx(Config)).
+an_exit_stops_the_remaining_invocations(Config) -> ?KIT:an_exit_stops_the_remaining_invocations(ctx(Config)).
+an_infinite_timeout_is_accepted(Config) -> ?KIT:an_infinite_timeout_is_accepted(ctx(Config)).
+an_unacknowledged_outcome_survives(Config) -> ?KIT:an_unacknowledged_outcome_survives(ctx(Config)).
+await_after_acknowledgement_is_unknown(Config) -> ?KIT:await_after_acknowledgement_is_unknown(ctx(Config)).
+cancel_stops_a_runaway(Config) -> ?KIT:cancel_stops_a_runaway(ctx(Config)).
+cleanup_capacity_refuses_admission(Config) -> ?KIT:cleanup_capacity_refuses_admission(ctx(Config)).
+cleanup_runs_after_a_trap(Config) -> ?KIT:cleanup_runs_after_a_trap(ctx(Config)).
+cleanup_that_cannot_finish_is_quarantined(Config) -> ?KIT:cleanup_that_cannot_finish_is_quarantined(ctx(Config)).
+dead_worker_answers_with_a_value(Config) -> ?KIT:dead_worker_answers_with_a_value(ctx(Config)).
+declared_snapshots_export_the_callback(Config) -> ?KIT:declared_snapshots_export_the_callback(ctx(Config)).
+echo_returns_a_result(Config) -> ?KIT:echo_returns_a_result(ctx(Config)).
+errors_have_the_same_structure(Config) -> ?KIT:errors_have_the_same_structure(ctx(Config)).
+host_calls_are_bounded(Config) -> ?KIT:host_calls_are_bounded(ctx(Config)).
+max_cleanup_actions_refuses_the_next(Config) -> ?KIT:max_cleanup_actions_refuses_the_next(ctx(Config)).
+memory_pages_are_bounded(Config) -> ?KIT:memory_pages_are_bounded(ctx(Config)).
+no_state_leaks_between_requests(Config) -> ?KIT:no_state_leaks_between_requests(ctx(Config)).
+register_performs_what_it_cannot_record(Config) -> ?KIT:register_performs_what_it_cannot_record(ctx(Config)).
+repeated_requests_leak_nothing(Config) -> ?KIT:repeated_requests_leak_nothing(ctx(Config)).
+stage_refuses_a_traversal_path(Config) -> ?KIT:stage_refuses_a_traversal_path(ctx(Config)).
+stage_refuses_an_absolute_path(Config) -> ?KIT:stage_refuses_an_absolute_path(ctx(Config)).
+stage_refuses_an_undeclared_mount(Config) -> ?KIT:stage_refuses_an_undeclared_mount(ctx(Config)).
+stage_refuses_past_the_byte_bound(Config) -> ?KIT:stage_refuses_past_the_byte_bound(ctx(Config)).
+stage_refuses_past_the_file_bound(Config) -> ?KIT:stage_refuses_past_the_file_bound(ctx(Config)).
+submit_is_refused_without_a_reaper(Config) -> ?KIT:submit_is_refused_without_a_reaper(ctx(Config)).
+the_adapter_decides_the_stop(Config) -> ?KIT:the_adapter_decides_the_stop(ctx(Config)).
+the_deadline_stops_a_runaway(Config) -> ?KIT:the_deadline_stops_a_runaway(ctx(Config)).
+the_guardian_reacts_to_the_workers_death(Config) -> ?KIT:the_guardian_reacts_to_the_workers_death(ctx(Config)).
+the_job_deadline_bounds_the_whole_chain(Config) -> ?KIT:the_job_deadline_bounds_the_whole_chain(ctx(Config)).
+the_journal_is_unreachable_from_the_guest(Config) -> ?KIT:the_journal_is_unreachable_from_the_guest(ctx(Config)).
+the_journal_survives_the_request(Config) -> ?KIT:the_journal_survives_the_request(ctx(Config)).
+the_reaper_finishes_what_a_killed_guardian_left(Config) -> ?KIT:the_reaper_finishes_what_a_killed_guardian_left(ctx(Config)).
+the_request_directory_is_removed(Config) -> ?KIT:the_request_directory_is_removed(ctx(Config)).
+the_result_channel_has_its_own_bound(Config) -> ?KIT:the_result_channel_has_its_own_bound(ctx(Config)).
+transferred_actions_run_only_when_cleanup_fails(Config) -> ?KIT:transferred_actions_run_only_when_cleanup_fails(ctx(Config)).

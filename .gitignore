@@ -15,7 +15,12 @@ rebar3.crashdump
 # still runs every other suite.
 /testsuite
 test/fixtures/spec/
-test/fixtures/lang/
+# The *artifacts* are fetched, not the directory. Excluding the directory would
+# have hidden what is in it too, and a `!` inside an excluded directory never
+# applies because git does not descend into one. The checksum is what
+# `scripts/verify-fixtures.sh` reads and the record is how a reader learns what
+# was fetched without inferring it from a URL, so both are tracked.
+test/fixtures/lang/*.wasm
 
 # Built by bench/cross/README.md, not checked in.
 bench/cross/loop.wasm

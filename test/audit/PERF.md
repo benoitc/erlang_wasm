@@ -4747,3 +4747,127 @@ committed, which is what actually happened to CPython at 33 GB. But that is an
 argument for refusing earlier and killing sooner, both of which the numbers
 above make possible, and not for moving the compiler out of the node to find out
 how big it is.
+
+## The tier through a per-request worker, QuickJS
+
+Load average 10.7 to 15.5, which is high for this box; `bench/paths/README.md`
+warns it swings between 4 and 84, so treat these as an order of magnitude
+rather than a measurement. Taken while building `wasm_worker_lang_SUITE`,
+because a case that waits for the tier has to wait for the right number.
+
+One `script_worker` over `qjs_adapter`, `script_v1.combined`, one instance per
+request, the same trivial script each time:
+
+| | |
+| --- | --- |
+| first request, cold module cache | 530 ms |
+| steady state, interpreted | 200-215 ms |
+| requests before `entered` moved | **353** |
+| wall clock to that point | **76.2 s** |
+| functions compiled at that point | 326 |
+
+`PERF.md:4354-4357` records the tier landing at request 420-432 for a
+synthetic per-request loop, so 353 is the same phenomenon at the same scale.
+
+**The tier advances with calls, not with time.** `wasm_jit:after_call/2` asks
+at the end of an outermost invocation, so a case that ran eight requests and
+then slept for twenty seconds saw nothing and would have gone in as "the tier
+does not enter". It has to keep making requests.
+
+**Fuel and the tier are exclusive, and the failure is silent.**
+`wasm_jit:entry/3` enables generated code only when fuel is `infinity`, so a
+host that sets `compile => true` and keeps `wasm_limits:untrusted/0`'s ceiling
+gets the interpreter with no error anywhere. Asserted over the same 500-request
+span, because a shorter run is silent whether the tier is off or merely slow.
+
+## The switchover a worker host sees, per cache arm
+
+`bench/paths/workerbench.erl`. Nothing here prices a path inside the runtime:
+it times a request arriving at a `script_worker`, an instance being made for
+it, and the latency changing under the host when generated code lands.
+
+**Load average checked first**, and recorded beside every arm below. This box
+swings between 4 and 84, and an arm taken at 20 is in here only as the reason a
+second one was taken.
+
+### The null experiment
+
+Two identical arms, QuickJS, `metered`, 60 requests, load average 3.4 at start:
+
+| | minimum | median |
+| --- | ---: | ---: |
+| run 1 | 153.6 ms | 202.8 ms |
+| run 2 | 129.0 ms | 194.2 ms |
+
+**16% apart on the minimum.** Nothing below that can be claimed from this
+setup, which is what makes the tier numbers below worth printing: they are a
+factor of five, not a percentage.
+
+### QuickJS, `compiled`, three cache arms
+
+500 requests each, two rounds, interleaved, minimums taken. Load average 3.0 to
+7.2 at start.
+
+| arm | `code_cache_dir` | entered at request | before | after | `cached` |
+| --- | --- | ---: | ---: | ---: | ---: |
+| adoption | unset | 363, 353 | 113.0, 130.6 ms | 26.8, 29.1 ms | 0 |
+| cold | empty | 360, 351 | 138.7, 159.5 ms | 27.8, 26.9 ms | 0 |
+| warm | populated | **3, 9** | -- | 26.8, 26.3 ms | **1** |
+
+Three findings, in order of how much they change what a host should do.
+
+**The warm arm is the whole difference**, and it is not a latency difference:
+the steady state is the same 26 to 29 ms in all three. What changes is *when*,
+and it changes by two orders of magnitude, from request 351-363 to request 3-9.
+A host that restarts without a populated `code_cache_dir` pays the interpreted
+rate for its first several hundred requests, every time.
+
+**`cached => 1` appears on the warm arm and only there**, which is what
+distinguishes it. A wall time alone would not: the adoption and cold arms are
+indistinguishable by latency, because within one node run nothing has been
+written to disk yet for the cache to be credited with.
+
+**The compiled steady state is about 4.7x**, 130 ms to 27.5 ms, well clear of
+the 16% floor. `PERF.md:4405-4409` records 151 ms to 17 ms for a synthetic
+per-request loop; this is the same phenomenon with a worker's staging, JSON and
+bootstrap in the path.
+
+The peak during the transition is 1.47 to 1.56 s, against a 130 ms floor.
+
+### CPython, and what could not be measured
+
+Four rounds of each configuration, interleaved in both orderings, four requests
+each. Load average 2.9 to 8.2.
+
+| | minimum of minimums | spread within the arm |
+| --- | ---: | ---: |
+| `metered`, fuel 4e9 | 53.9 s | **41%** |
+| `compiled`, fuel `infinity` | 53.1 s | **33%** |
+
+**The two arms are 1.5% apart and each one varies by a third**, so this
+experiment cannot see a difference between them and none is claimed.
+
+That matters because a single pair of runs earlier said something else. One
+measurement with `fuel => infinity` came out at 48 s and one with a finite
+ceiling at 85 s, and "metering costs 75% on CPython" was very nearly written
+down. It is not supported: interleaved and repeated, the minimums are 53.9 and
+53.1. The rule that caught it is the one in `bench/paths/README.md`, and this
+is what it is for.
+
+**The tier was never reached.** Six requests against the 351 to 363 QuickJS
+needed, and at ~55 s each that is five and a half hours before the first
+generated code, plus the 567 s compile recorded at `PERF.md:4370-4374`. The
+`compiled` CPython worker path is therefore **not measured**, and the arithmetic
+rather than an opinion is why.
+
+### The gate
+
+A CPython request through a worker costs **53 to 76 seconds**. The plan set the
+bar at "6.2 s is not a worker"; this is an order of magnitude past that, in the
+configuration a host would actually run.
+
+So initialized runtime snapshots are justified by the number, and the number is
+written down here rather than asserted. What blocks them is not the case for
+them: **both artifacts are commands exporting only `_start`**, and a snapshot
+needs a reactor exporting `init()` and `handle()`. That is a build-toolchain
+task before it is a runtime one.

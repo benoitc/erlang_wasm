@@ -10,7 +10,7 @@ level of interpretation:
   your code  ->  erlang_wasm  ->  plugin.wasm   (46 KB)
 ```
 
-Compare `script_worker`, which ships an interpreter inside the module so that
+Compare `qjs_worker`, which ships an interpreter inside the module so that
 logic can arrive as text at request time, and pays for it.
 
 ## When to use it

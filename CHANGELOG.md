@@ -2,6 +2,154 @@
 
 ## Unreleased
 
+### What the tier is worth to a worker host, and what it is not
+
+`bench/paths/workerbench.erl` times a request rather than a path: one arriving
+at a `script_worker`, an instance made for it, and the latency changing
+underneath when generated code lands. Three cache arms, and the third is the
+one that matters.
+
+For QuickJS the compiled steady state is about **4.7x**, 130 ms to 27 ms. But
+the arm that changes what a host should do is `warm`: with a populated
+`code_cache_dir` the tier is entered at request **3 to 9** instead of **351 to
+363**, and `wasm_jit:counts/0` saying `cached => 1` is what distinguishes it,
+because the other two arms are identical by latency. A host that restarts
+without that directory pays the interpreted rate for its first several hundred
+requests, every time.
+
+For CPython nothing finer than a range can be claimed: 53 to 76 s a request,
+with a 33 to 41% spread inside each arm. A single earlier pair of runs had
+said metering costs 75% on CPython, and interleaved and repeated the two arms
+are 1.5% apart. That claim was nearly written down and is not supported.
+
+`PERF.md` carries all of it, including the null experiment that bounds what any
+of it can mean and the arithmetic showing why the compiled CPython path was not
+measured: five and a half hours before the first generated code.
+
+### Python, and two guides that say what each language does not promise
+
+`py_adapter` runs CPython under `script_v1.combined` and `python_worker` is the
+same with the arguments unpacked. The bootstrap is `priv/script_v1/boot.py`,
+and the interpreter is started `-I -B -u`: isolated, no `.pyc` writes, and
+unbuffered because buffered output arrives in one burst at the end and the
+streaming bound never sees it.
+
+The artifact was asked rather than assumed. `sys.path` names a directory that
+is in no preopen and `import json` works anyway, so the library is embedded and
+the adapter declares **one** mount rather than two. Because `-I` implies `-P`
+the work directory is not on `sys.path`, so the bootstrap loads the tenant's
+module through `importlib.util.spec_from_file_location` against an explicit
+path rather than putting a tenant-supplied directory on the import path.
+
+**The whole kit passes against real CPython**, the identical list the WAT
+adapters and QuickJS run, in 29 minutes. It is not in the suite's default run
+for that reason, and `test/fixtures/lang/PYTHON.md` has the numbers: 48 s a
+request, and a `max_heap_words` of 16M rather than 64M because a bigger ceiling
+lets the heap grow and the collections cost more.
+
+Adding a second language found four places the **kit** had assumed a fast
+guest: a hardcoded 300 ms deadline against an adapter declaring 60 s, a 10 s
+await against a 48 s request, ten repetitions where three prove the same thing,
+and a worker timeout below what `requirements/2` asks for. Every wait is a
+multiple of what the adapter declares now. The first language hid all of it.
+
+`docs/javascript.md` and `docs/python.md` say what each one does *not* promise,
+which is the half you cannot discover from a working example. Neither says the
+network is unavailable: it is **ungranted**, and each says what `max_sockets`
+and `timeout` actually bound, because neither is a subrequest budget. CPython's
+missing `subprocess`, threading and sockets are cited to CPython rather than
+implied to be something taken away here.
+
+### JavaScript, through the profile and against the real engine
+
+`qjs_adapter` runs QuickJS under `script_v1.combined`, and `js_worker` is the
+same thing with the arguments unpacked: hand it source and a context, get back
+what `main` returned. The bootstrap it stages is `priv/script_v1/boot.js`.
+
+The artifact was **asked rather than assumed**, and the answers are in
+`test/fixtures/lang/QUICKJS.md`. Absolute module paths resolve, so
+`import('/main.js')` works and `script_v1` needs no separate non-module
+profile, which the plan had held in reserve. `scriptArgs` does not exist but
+`args` does and it excludes argv[0], so the marker is `args[1]`; and output goes
+through `std.out.puts`, because `print` would append a newline inside the
+framed result.
+
+`wasm_worker_lang_SUITE` runs the **same kit** as the WAT adapters, in both
+named configurations, because a language is accepted when it passes without the
+kernel changing and a copy of the case list with allowances in it would not
+show that.
+
+`scripts/verify-fixtures.sh` checks the artifacts against recorded checksums,
+and the new `integration` CI job runs it in a step of its own before the suite:
+a missing or mismatched artifact fails the job rather than quietly reducing what
+ran. Both failure modes were triggered once to prove they are red.
+
+### `script_v1`: one source, a JSON context, `main(context)`
+
+The profile the two language adapters will share, landing before either
+interpreter does. It is a **profile, not the protocol**: the kernel knows no
+JSON, no file staging and no framing convention, and the version in the name is
+what lets a second profile exist later without breaking this one.
+
+Two transports, and they are not one mechanism with a fallback.
+`script_v1.channel` binds a `worker.result` import to the kernel's result
+channel: three independent bounds, all enforced while streaming, no parsing.
+`script_v1.combined` puts the result on stdout for an artifact whose imports we
+cannot change, which means one bound over a stream that really is shared.
+
+The delimiter is sixteen random bytes per request, hex-encoded so it survives
+`argv`, and the result is read from its **last** occurrence. **It authenticates
+nothing.** A tenant can read `argv` and print the marker itself, and this
+transport cannot tell that from the bootstrap's own output. It makes accidental
+collision negligible and does no more; strict framing needs the channel
+transport. A fixture does exactly that imitation and the suite asserts it is
+*not* distinguished, so the documentation cannot drift away from the behaviour.
+
+Both transports have a WAT adapter of their own, so the suite now runs four.
+The combined one reads the marker out of `argv` and frames on stdout exactly as
+a real bootstrap will; the channel one imports `worker.result` and writes
+through it. The profile is proved with no interpreter and nothing downloaded,
+so a failure there is the profile's rather than QuickJS's.
+
+`max_output_bytes` was documented as per stream and was one number for both,
+which the combined transport cannot live with: stdout carries the tenant's
+output *and* the result there, so bounding the shared descriptor tightly bound
+the unshared one with it. It accepts `#{stdout := N, stderr := M}` now, and
+`script_v1:combined_limits/1` is what turns `max_combined_bytes` into a bound
+on the descriptor that actually carries both.
+
+### A worker kernel, and two adapters that are not a language
+
+`examples/script_worker.erl` is now a language-neutral kernel: it knows about
+modules, imports, invocations, deadlines and bounded channels, and nothing
+else. What stdin, preopens, stdio and an entry point mean belongs to an
+**adapter**, which is the eight-callback behaviour the same module declares.
+Assemble an import set, instantiate, call an export, release: the shape
+Wasmtime, Wasmer and wasm3 already have, where WASI is a library you attach
+rather than a mode the engine is in.
+
+There is deliberately no `{start}` invocation, because the kernel would have to
+know what `_start` means to translate one. An adapter that wants a command
+writes `{call, ~"_start", []}` itself, which is the only reason a reactor and a
+command are the same code path.
+
+`worker_reaper` is the cleanup owner that outlives a worker's guardian, with a
+journal that survives its own death, an adoption handshake in which silence
+never authorises deleting a running request's directories, and cleanup jobs
+that are bounded per callback and per job.
+
+`test/wasm_worker_kernel_SUITE` runs one base case list against two adapters
+built from WAT at test time, one of them with **no WASI at all**. It downloads
+nothing and never skips. A kernel that passes the WASI adapter and fails the
+typed one is a WASI script runner, and that is the only signal there is.
+
+### The QuickJS example is `qjs_worker`
+
+It was `script_worker`, whose name the kernel now has. The module is otherwise
+unchanged, so `eval/2` still answers `{ok, Printed}`, `{error, timeout}` and
+`{error, {exit, Code, Printed}}` exactly as before; only the name it is called
+by moved.
+
 ### The compiled tier runs the OTP compiler in a process it owns
 
 `compile:forms/2` runs its passes in a process of its own and gives a caller no

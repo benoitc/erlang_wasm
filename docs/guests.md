@@ -31,7 +31,7 @@ OPTION A - compile to wasm                OPTION B - interpret inside wasm
 
 What that costs, measured on this machine with the two worked examples:
 
-| | compiled (`plugin_worker`) | interpreted (`script_worker`) |
+| | compiled (`plugin_worker`) | interpreted (`qjs_worker`) |
 | --- | ---: | ---: |
 | module | 46 KB | 1.8 MB |
 | compile, once | 1.6 ms | 310 ms |
@@ -159,7 +159,7 @@ rebar3 shell
 
 ```erlang
 c("examples/plugin_worker.erl").
-c("examples/script_worker.erl").
+c("examples/qjs_worker.erl").
 ```
 
 Try the compiled plugin:
@@ -177,12 +177,12 @@ plugin_worker:hang(W).
 Then the scripting sandbox:
 
 ```erlang
-{ok, S} = script_worker:start_link("test/fixtures/lang/qjs.wasm").
-script_worker:eval(S, ~"print(1 + 2);").
+{ok, S} = qjs_worker:start_link("test/fixtures/lang/qjs.wasm").
+qjs_worker:eval(S, ~"print(1 + 2);").
 %% {ok,<<"3\n">>}
-script_worker:eval(S, ~"for(;;){}").
+qjs_worker:eval(S, ~"for(;;){}").
 %% {error,timeout}
-script_worker:eval(S, ~"print(typeof globalThis.marker);").
+qjs_worker:eval(S, ~"print(typeof globalThis.marker);").
 %% {ok,<<"undefined\n">>}   nothing survives a request
 ```
 
@@ -194,7 +194,7 @@ cp deps/wasm/examples/plugin_worker.erl src/my_plugin_worker.erl
 
 The parts worth changing are the timeout, the fuel, and what capabilities you
 grant the instance. `plugin_worker` grants none beyond the four imports Rust's
-standard library insists on; `script_worker` grants one directory holding one
+standard library insists on; `qjs_worker` grants one directory holding one
 script, and no network.
 
 `wasm_examples_SUITE` runs everything above, so if a command here stops working
@@ -205,6 +205,6 @@ the build tells you.
 - [worker.md](worker.md): running one under limits, with the request path
 - [wasi.md](wasi.md): the capabilities you can grant a module
 - [security.md](security.md): what those limits do and do not cover
-- `examples/plugin_worker.erl` and `examples/script_worker.erl`: both shapes,
+- `examples/plugin_worker.erl` and `examples/qjs_worker.erl`: both shapes,
   working, with the tests that run them
 - `examples/wasm_worker.erl`: the general worker pattern, pool and all

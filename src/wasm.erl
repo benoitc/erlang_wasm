@@ -55,10 +55,13 @@ context to diagnose it.
 -export([compile/1, compile/2, validate/1, instantiate/2, instantiate/3, destroy/1]).
 -export([call/3, call/4, get_global/2, exports/1, extern/2]).
 -export([pin/2, release/2, release_all/1]).
+-export([snapshot/1, snapshot/2, restore/3, snapshot_info/1]).
+-export([save_snapshot/2, load_snapshot/2]).
+-export([acquire/1, release/1]).
 -export([read_memory/3, write_memory/3, memory_size/1]).
 -export([format_error/1]).
 
--export_type([module_/0, instance/0, source/0]).
+-export_type([module_/0, instance/0, source/0, extern/0, snapshot/0]).
 %% `module_()` is a `#module{}`, so everything its fields are typed with is part
 %% of what a reader of that type needs. They are declared in `include/wasm.hrl`
 %% and exported here, which is also what stops the documentation build reporting
@@ -73,6 +76,23 @@ context to diagnose it.
 -nominal instance() :: #inst{}.
 -doc "What `compile/1` takes: the binary format, or the text format.".
 -nominal source() :: binary() | {wat, binary()}.
+-doc """
+An export taken in the form another module imports it, as `extern/2` hands it
+back.
+
+Named because an import map is built out of these, so anything describing one
+has to be able to spell the value. A function carries its type so a mismatched
+signature is a link error; a memory, table or mutable global is the handle
+itself, so the importer shares the thing rather than a copy of it.
+""".
+-nominal extern() :: {wasm_func, fun((term(), [term()]) -> {ok, [term()]}), term()}
+                   | {wasm_global, wasm_global:global(), #globaltype{}}
+                   | {wasm_global_const, term(), #globaltype{}}
+                   | {wasm_tag, reference(), term(), term()}
+                   | wasm_memory:mem()
+                   | wasm_table:table().
+-doc "An immutable image of an initialised instance. See `wasm_snapshot`.".
+-nominal snapshot() :: wasm_snapshot:snapshot().
 
 %%% ------------------------------------------------------------- lifecycle ---
 
@@ -222,7 +242,10 @@ a process in charge of it; see `docs/worker.md`.
           {ok, instance()} | {error, wasm_error:error()}.
 instantiate({wasm_module, _} = Handle, Imports, Opts) ->
     case wasm_module_cache:get(Handle) of
-        {ok, M} -> instantiate(M, Imports, Opts);
+        %% The handle is carried into the instance, because this is the only
+        %% place that knows one was used. A module named by `identity' alone
+        %% cannot prove where it came from.
+        {ok, M} -> instantiate(M, Imports, Opts#{module_handle => Handle});
         {error, not_loaded} ->
             {error, err(link, module_not_loaded, ~"module is not loaded",
                         #{handle => Handle})}
@@ -442,7 +465,33 @@ invoke_with(Entry, Inst, Idx, Args, Opts) ->
     %% back into the instance that called it, or into another one, and either
     %% way the outer interpreter's locals, operand stack and frames hold
     %% references no root can see. Collecting there would free them.
-    invoke_at(Entry, Inst, Idx, Args, Opts, enter()).
+    Depth = enter(),
+    %% **The lease is the outermost invocation's, not every frame's.** A nested
+    %% call is already inside one, and taking a second would be two atomic
+    %% operations per re-entry for nothing. On an ordinary instance this is a
+    %% comparison against `undefined` and no atomics at all.
+    case Depth =:= 0 andalso Inst#inst.leases =/= undefined of
+        false ->
+            invoke_at(Entry, Inst, Idx, Args, Opts, Depth);
+        true ->
+            leased_invoke(Entry, Inst, Idx, Args, Opts, Depth)
+    end.
+
+leased_invoke(Entry, Inst, Idx, Args, Opts, Depth) ->
+    case wasm_instance:enter_call(Inst) of
+        {error, Why} ->
+            %% The depth was already taken, and refusing here leaves without
+            %% running the invocation.
+            leave(Depth),
+            {error, err(link, instance_busy,
+                        ~"the instance is being captured or destroyed",
+                        #{state => Why})};
+        ok ->
+            try invoke_at(Entry, Inst, Idx, Args, Opts, Depth)
+            after
+                ok = wasm_instance:leave_call(Inst)
+            end
+    end.
 
 invoke_at(Entry, Inst, Idx, Args, Opts, Depth) ->
     Limits = maps:merge(Inst#inst.limits, Opts),
@@ -743,6 +792,18 @@ and discards many instances.
 """.
 -spec destroy(instance()) -> ok.
 destroy(Inst) ->
+    %% Keeps its published contract, `ok`, whatever the state: a destroy
+    %% during a capture **marks and returns**, and the destruction happens when
+    %% the capture finishes. Adding a busy return would break every existing
+    %% caller to serve a case only the capture path meets, and the image can
+    %% still never be taken from a half-destroyed instance, which was the
+    %% actual requirement.
+    case wasm_instance:begin_destroy(Inst) of
+        deferred -> ok;
+        now      -> do_destroy(Inst)
+    end.
+
+do_destroy(Inst) ->
     %% Anything the guest opened and did not close goes first, while the
     %% instance is still readable.
     _ = wasm_error:capture(fun() -> wasm_instance:run_cleanups(Inst) end),
@@ -781,14 +842,299 @@ destroy(Inst) ->
     ok.
 
 -doc """
+Capture an initialised instance, so a later one can start where it left off.
+
+```erlang
+{ok, M} = wasm:load(Bytes),
+{ok, Init} = wasm:instantiate(M, Imports, #{}),
+{ok, _} = wasm:call(Init, ~"init", []),
+{ok, Image} = wasm:snapshot(Init),
+ok = wasm:destroy(Init),
+
+{ok, Fresh} = wasm:restore(Image, FreshImports, #{}),
+{ok, _} = wasm:call(Fresh, ~"handle", []).
+```
+
+The instance must have been built through `load/1`, must import no memory,
+table or global, must have no shared memory and no live objects, and must hold
+no reference to another instance. `wasm_snapshot` says why each of those is a
+refusal rather than a special case.
+
+**An image is an in-memory optimisation and not durable state.** It is a term:
+it lives as long as something holds it and it does not survive the node.
+""".
+-spec snapshot(instance()) -> {ok, snapshot()} | {error, wasm_error:error()}.
+snapshot(Inst) -> snapshot(Inst, #{}).
+
+-doc "As `snapshot/1`, with a `version` and a `compatibility_key`.".
+-spec snapshot(instance(), map()) -> {ok, snapshot()} | {error, wasm_error:error()}.
+snapshot(Inst, Opts) ->
+    %% An instance that did not ask to be snapshotable has no lease counters,
+    %% so there is no way to prove no call is running on it. Refused by
+    %% construction rather than by checking.
+    case wasm_instance:begin_capture(Inst) of
+        {error, not_snapshotable} ->
+            {error, err(invalid, not_snapshotable,
+                        ~"instantiate with `snapshotable => true` to capture",
+                        #{})};
+        {error, Why} ->
+            %% Refuses rather than waiting: waiting invites a deadlock against
+            %% the call it is waiting for, and the caller can retry.
+            {error, err(link, busy, ~"the instance is in use", #{state => Why})};
+        ok ->
+            try
+                with_module(wasm_instance:module_handle(Inst),
+                            fun(Handle, M) ->
+                                captured(Inst, Handle, Opts#{module => M})
+                            end)
+            after
+                %% A `destroy/1` that arrived during the capture marked the
+                %% instance and returned `ok`; `end_capture/1` is what says so,
+                %% rather than this asking and marking a destroy nobody wanted.
+                case wasm_instance:end_capture(Inst) of
+                    ok          -> ok;
+                    destroy_now -> ok = do_destroy(Inst)
+                end
+            end
+    end.
+
+-doc """
+Build a fresh instance at a captured point.
+
+**`restore/3`, not an option to `instantiate/3`**, and the difference is a
+security property rather than a spelling: the module comes from the image
+rather than from the caller, so there is no module argument left to forge.
+
+The imports are **reconstructed, never restored**. You build the WASI config
+and every host binding for this request; the image carries only guest-visible
+state.
+
+It does **not** run the module's start function. Ordinary instantiation always
+does, and repeating arbitrary guest code against fresh imports would redo work
+the image already contains.
+""".
+-spec restore(snapshot(), map(), map()) ->
+          {ok, instance()} | {error, wasm_error:error()}.
+restore(Snapshot, Bindings, Opts) ->
+    %% An image whose last holder has gone has given its module claim back, so
+    %% the module may be evicted and the image is no longer restorable. Said
+    %% plainly rather than surfacing as a confusing `module_not_loaded`.
+    case wasm_snapshot_owner:holders(wasm_snapshot:owner(Snapshot)) of
+        gone ->
+            {error, err(invalid, snapshot_invalidated,
+                        ~"this image has been released", #{})};
+        _ ->
+            restore_1(Snapshot, Bindings, Opts)
+    end.
+
+restore_1(Snapshot, Bindings, Opts) ->
+    with_module(wasm_snapshot:module_of(Snapshot),
+                fun(_Handle, M) ->
+                    restored(wasm_snapshot:restore(Snapshot, M, Bindings, Opts))
+                end).
+
+%% A restore that failed after building an instance hands it back rather than
+%% releasing it, because releasing the state table alone would leave that
+%% instance's claims on its memories, tables and globals held. The full
+%% teardown is here, and reaching it from `wasm_snapshot` would put the
+%% mechanism in this module's cycle with the cache.
+restored({error, E, Inst}) ->
+    ok = do_destroy(Inst),
+    {error, E};
+restored(Other) ->
+    Other.
+
+%% An instance built inline has no handle at all, and a module that has been
+%% evicted no longer resolves. Both are refusals rather than guesses.
+with_module(undefined, _F) ->
+    {error, err(invalid, module_not_loaded,
+                ~"this instance was not built through the module cache", #{})};
+with_module(Handle, F) ->
+    case wasm_module_cache:get(Handle) of
+        {ok, M} -> F(Handle, M);
+        {error, not_loaded} ->
+            {error, err(invalid, module_not_loaded, ~"module is not loaded",
+                        #{handle => Handle})}
+    end.
+
+%% The image's claim on its module and its share of the byte budget are held by
+%% a process of the image's own, because a term cannot say when it is gone.
+%% Attached here rather than inside `wasm_snapshot`, which keeps the mechanism
+%% out of this module's cycle with the cache.
+captured(Inst, Handle, Opts) ->
+    case wasm_snapshot:capture(Inst, Handle, Opts) of
+        {error, _} = E ->
+            E;
+        {ok, Snapshot} ->
+            case wasm_snapshot_owner:charge(wasm_snapshot:bytes(Snapshot)) of
+                {error, _} = E ->
+                    E;
+                ok ->
+                    start_owner(Snapshot, Handle)
+            end
+    end.
+
+start_owner(Snapshot, Handle) ->
+    case wasm_snapshot_owner:start(Handle, wasm_snapshot:bytes(Snapshot),
+                                   self()) of
+        {ok, Owner} ->
+            {ok, wasm_snapshot:with_owner(Snapshot, Owner)};
+        {error, not_loaded} ->
+            _ = wasm_snapshot_owner:refund(wasm_snapshot:bytes(Snapshot)),
+            {error, err(invalid, module_not_loaded, ~"module is not loaded",
+                        #{handle => Handle})}
+    end.
+
+-doc """
+Keep an image alive past the process that captured it.
+
+A holder is dropped when its process dies, so "the capturing process exits and
+the image survives" is only true if **another process acquired first**. Do it
+in that order: the reverse is a race that would pass most of the time.
+
+Not to be confused with `release/2`, which drops a pin on a garbage-collected
+reference. Different subject, adjacent name; this pair is about images.
+""".
+-spec acquire(snapshot()) -> ok | {error, wasm_error:error()}.
+acquire(Snapshot) ->
+    case wasm_snapshot_owner:acquire(wasm_snapshot:owner(Snapshot), self()) of
+        ok   -> ok;
+        gone -> {error, err(invalid, snapshot_invalidated,
+                            ~"this image has been released", #{})}
+    end.
+
+-doc """
+Drop this process's hold on an image. Always `ok`, and never blocks.
+""".
+-spec release(snapshot()) -> ok.
+release(Snapshot) ->
+    wasm_snapshot_owner:release(wasm_snapshot:owner(Snapshot), self()).
+
+-doc "What an image holds: its size in bytes, its module and its version.".
+-spec snapshot_info(snapshot()) -> map().
+snapshot_info(Snapshot) -> wasm_snapshot:info(Snapshot).
+
+-doc """
+Write an image to a file, so a later node need not run `init()` again.
+
+```erlang
+ok = wasm:save_snapshot(Image, "/var/cache/wasm/py.img").
+```
+
+Written to a temporary name and renamed, so a reader never sees a half-written
+file. That is BEAM-crash durability and not host-crash durability: there is no
+`fsync`, and a machine that loses power mid-write leaves no file, which is a
+miss.
+
+**The directory is as trusted as your release.** The same words
+`wasm_code_cache` uses, and here they carry more weight: an image is not code
+but guest state laid into a live runtime, so anyone who can write the file can
+choose what a restored instance believes. Every field is validated on the way
+back in and a table slot may name only a function the module has, but that is
+containment rather than authentication.
+""".
+-spec save_snapshot(snapshot(), file:filename_all()) -> ok | {error, wasm_error:error()}.
+save_snapshot(Snapshot, Path) ->
+    Bin = wasm_snapshot_file:encode(wasm_snapshot:to_parts(Snapshot)),
+    Tmp = [Path, ".", integer_to_list(erlang:unique_integer([positive])), ".tmp"],
+    case file:write_file(Tmp, Bin) of
+        ok ->
+            case file:rename(Tmp, Path) of
+                ok -> ok;
+                {error, Why} ->
+                    _ = file:delete(Tmp),
+                    {error, err(invalid, snapshot_not_written,
+                                ~"the image could not be renamed into place",
+                                #{reason => Why})}
+            end;
+        {error, Why} ->
+            _ = file:delete(Tmp),
+            {error, err(invalid, snapshot_not_written,
+                        ~"the image could not be written", #{reason => Why})}
+    end.
+
+-doc """
+Read an image back, for a module the **caller** names.
+
+```erlang
+{ok, Handle} = wasm:load(Bytes),
+{ok, Image} = wasm:load_snapshot("/var/cache/wasm/py.img", Handle).
+```
+
+The module is an argument rather than something the file chooses, which is the
+opposite of `restore/3` and is the same protection from the other side: on the live
+path taking the module from the image is what closes the forgery, and off disk
+a file that picked its own module would open it again. An image whose recorded
+hash is not this handle's is refused.
+
+Everything else a file could lie about is bounded by the module too: the
+decompressed size is checked against what its memories may hold before a byte
+is allocated.
+""".
+-spec load_snapshot(file:filename_all(), module_()) ->
+          {ok, snapshot()} | {error, wasm_error:error()}.
+load_snapshot(Path, Handle) ->
+    case file:read_file(Path) of
+        {error, Why} ->
+            {error, err(invalid, snapshot_not_read, ~"the image could not be read",
+                        #{reason => Why})};
+        {ok, Bin} ->
+            with_module(Handle, fun(_H, M) -> from_file(Bin, Handle, M) end)
+    end.
+
+from_file(Bin, Handle, M) ->
+    case wasm_snapshot_file:decode(Bin, max_image_bytes(M)) of
+        {error, _} = E ->
+            E;
+        {ok, Parts} ->
+            case wasm_snapshot:from_parts(Parts, Handle) of
+                {error, _} = E -> E;
+                {ok, Image}    -> adopt(Image, Handle)
+            end
+    end.
+
+%% The ceiling comes from the **module**, never from the file: a length a
+%% planted image supplies bounds nothing. A module declares its memories, and
+%% what they may grow to is what an image of it may cover.
+max_image_bytes(#module{mems = Mems}) ->
+    lists:sum([declared_max(L) || #memtype{limits = L} <- Mems]) * 65536.
+
+declared_max(#limits{max = undefined}) -> 65536;
+declared_max(#limits{max = Max})       -> Max.
+
+%% An image off disk gets an owner exactly as a captured one does: it holds the
+%% module claim and the byte charge, and a term cannot say when it is gone.
+adopt(Image, Handle) ->
+    case wasm_snapshot_owner:charge(wasm_snapshot:bytes(Image)) of
+        {error, _} = E -> E;
+        ok             -> start_owner(Image, Handle)
+    end.
+
+-doc """
 Take an instance's export in the form another module can import it.
 
 Functions come back as host functions, so wasm-to-wasm linking reuses the same
 import mechanism as Erlang-implemented imports rather than needing a second path
 through the interpreter.
 """.
--spec extern(instance(), binary()) -> {ok, term()} | {error, wasm_error:error()}.
+-spec extern(instance(), binary()) -> {ok, extern()} | {error, wasm_error:error()}.
 extern(Inst, Name) ->
+    case wasm_instance:snapshotable(Inst) of
+        true ->
+            %% A lease on `call/4' alone does not cover this: `extern/2` hands
+            %% out **mutable** memory, table and global handles, and a capture
+            %% could then read a torn image while the state machine reported
+            %% the instance quiescent. Refusing costs nothing worth mourning:
+            %% an initialisation instance exists to be captured once and
+            %% destroyed, and nothing needs to export a handle out of it.
+            {error, err(link, instance_snapshotable,
+                        ~"a snapshotable instance does not hand out handles",
+                        #{name => Name})};
+        false ->
+            extern_1(Inst, Name)
+    end.
+
+extern_1(Inst, Name) ->
     case wasm_instance:export_kind(Inst, Name) of
         {ok, {func, _}} ->
             %% A host function must answer `{ok, Results}' or `{trap, Reason}'.
@@ -857,6 +1203,21 @@ read_memory(Ctx, Addr, Len) ->
 
 -spec write_memory(instance() | map(), non_neg_integer(), binary()) ->
           ok | {error, wasm_error:error()}.
+write_memory(#inst{leases = L} = Inst, Addr, Bin) when L =/= undefined ->
+    %% The other route into an instance's state that a call lease does not
+    %% cover. It goes straight to `wasm_memory:store_bytes/3`, so without this
+    %% a capture could read half of a write.
+    case wasm_instance:enter_call(Inst) of
+        {error, Why} ->
+            {error, err(link, instance_busy,
+                        ~"the instance is being captured or destroyed",
+                        #{state => Why})};
+        ok ->
+            try with_memory(Inst, fun(M) -> wasm_memory:store_bytes(M, Addr, Bin) end)
+            after
+                ok = wasm_instance:leave_call(Inst)
+            end
+    end;
 write_memory(Ctx, Addr, Bin) ->
     with_memory(Ctx, fun(Mem) -> wasm_memory:store_bytes(Mem, Addr, Bin) end).
 

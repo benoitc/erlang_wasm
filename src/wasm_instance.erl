@@ -35,8 +35,12 @@ what you use of it rather than what it contains.
 -export([mut/1, set_mut/2, memory/2, heap/1]).
 -export([root_view/1, mut_of/1, elems_of/1, release/1]).
 -export([remember/1, lookup/1, body_of/2]).
--export([identity/1, code_slot/1, set_code_slot/2, compiler_ir/2]).
+-export([identity/1, module_handle/1, code_slot/1, set_code_slot/2,
+         compiler_ir/2]).
 -export([ask_compile/1, release_ask/1, executed/1]).
+-export([snapshot_hooks/1]).
+-export([snapshotable/1, enter_call/1, leave_call/1,
+         begin_capture/1, end_capture/1, begin_destroy/1]).
 -export([publish/2, unpublish/2, published/1]).
 -export([get_extra/2, set_extra/3, on_destroy/2, run_cleanups/1]).
 -export([note_entry/2]).
@@ -98,6 +102,13 @@ new_1(M, Imports, Opts, Build, Heap, Owned) ->
             %% So a `funcref' naming this instance can be resolved back to it
             %% in this process without the reference having to carry it.
             ok = remember(Inst),
+            %% Stashed here rather than by the caller, so a restore -- which
+            %% builds an instance through this function and not through
+            %% `wasm:instantiate/3` -- gets them on the same path.
+            case maps:get(snapshot_hooks, Opts, #{}) of
+                Empty when map_size(Empty) =:= 0 -> ok;
+                Hooks -> ok = set_extra(Inst, snapshot_hooks, Hooks)
+            end,
             {ok, Inst};
         {error, _} = Error ->
             ok = wasm_keeper:discard(Build),
@@ -200,6 +211,11 @@ build(#module{} = M, Imports, Opts, Heap, Build) ->
         ctx = Ctx,
         store = holder_new(#mut{globals = {}, tables = {}, mems = {}}),
         identity = M#module.identity,
+        module_handle = maps:get(module_handle, Opts, undefined),
+        leases = case maps:get(snapshotable, Opts, false) of
+                     true  -> atomics:new(3, []);
+                     false -> undefined
+                 end,
         version = atomics:new(3, [])
     },
     Shared = Ctx#ctx.shared_globals,
@@ -318,6 +334,145 @@ compile_fn(#func{type = TypeIdx, locals = Locals, body = Body}, Ctx, Idx, Lazy) 
         type = FT,
         frame = {func, length(R)}}.
 
+%%% ------------------------------------------------------------- leases ---
+%%
+%% Capture must prove no call is running, and checking that the *calling*
+%% process is not inside one is not enough: depth is counted per process, and
+%% an instance handle works in another process while its creator is alive.
+%%
+%% Making every `wasm:call/4` take a shared lease would put synchronisation on
+%% the hot path, which is the change this project has measured at about 70% on
+%% QuickJS three times. So it is **opt-in**: `snapshotable => true` at
+%% instantiation allocates the counters, and an instance without it costs one
+%% comparison against `undefined`.
+
+-doc """
+The import-module hooks this instance was built with.
+
+Empty is not the same as absent, and the difference is the whole rule: a module
+in `bindings` with no entry here **refuses** the snapshot, because silence means
+unknown and unknown means no. A module that holds nothing says `stateless` and
+means it.
+""".
+-spec snapshot_hooks(#inst{}) -> map().
+snapshot_hooks(Inst) ->
+    case get_extra(Inst, snapshot_hooks) of
+        {ok, Hooks} -> Hooks;
+        error       -> #{}
+    end.
+
+-doc "Whether this instance can be captured at all.".
+-spec snapshotable(#inst{}) -> boolean().
+snapshotable(#inst{leases = undefined}) -> false;
+snapshotable(#inst{}) -> true.
+
+-doc """
+Take a read lease, or say why not.
+
+**A leaked lease makes capture refuse; it never lets a torn image through.**
+`exit(Pid, kill)` does not run an `after`, so a killed caller leaves the count
+raised and `begin_capture/1` answers `busy` from then on. That is the same
+exposure `wasm_code_slots` records at `:92-97` and the same reasoning: it costs
+a retry on an instance that exists to be captured once and destroyed, and never
+safety. Monitoring every leaseholder would need an owner process per instance,
+which is a larger thing than the hole it closes.
+""".
+-spec enter_call(#inst{}) -> ok | {error, atom()}.
+enter_call(#inst{leases = undefined}) ->
+    ok;
+enter_call(#inst{leases = L}) ->
+    _ = atomics:add_get(L, ?IX_SNAP_READERS, 1),
+    case atomics:get(L, ?IX_SNAP_STATE) of
+        ?SNAP_OPEN ->
+            ok;
+        State ->
+            %% Ordered the other way round from `begin_capture/1`: one of the
+            %% two always sees the other, so exclusivity actually excludes.
+            _ = atomics:sub_get(L, ?IX_SNAP_READERS, 1),
+            {error, case State of
+                        ?SNAP_CAPTURING -> capturing;
+                        ?SNAP_DESTROYING -> destroying
+                    end}
+    end.
+
+-spec leave_call(#inst{}) -> ok.
+leave_call(#inst{leases = undefined}) -> ok;
+leave_call(#inst{leases = L}) ->
+    _ = atomics:sub_get(L, ?IX_SNAP_READERS, 1),
+    ok.
+
+-doc """
+Take the instance exclusively, or refuse.
+
+**Refuses rather than waits.** Waiting invites a deadlock against the very call
+it is waiting for, and the caller is an initialisation step that can retry.
+""".
+-spec begin_capture(#inst{}) -> ok | {error, atom()}.
+begin_capture(#inst{leases = undefined}) ->
+    {error, not_snapshotable};
+begin_capture(#inst{leases = L}) ->
+    case atomics:compare_exchange(L, ?IX_SNAP_STATE, ?SNAP_OPEN,
+                                  ?SNAP_CAPTURING) of
+        ok ->
+            case atomics:get(L, ?IX_SNAP_READERS) of
+                0 ->
+                    ok;
+                _ ->
+                    atomics:put(L, ?IX_SNAP_STATE, ?SNAP_OPEN),
+                    {error, busy}
+            end;
+        ?SNAP_DESTROYING ->
+            {error, destroying};
+        _ ->
+            {error, busy}
+    end.
+
+-doc """
+Give the instance back, and say whether a destroy was waiting for it.
+
+Answering that is the point: the first version marked **every** captured
+instance destroying on the way out, because it asked `begin_destroy/1` whether
+to destroy instead of being told.
+""".
+-spec end_capture(#inst{}) -> ok | destroy_now.
+end_capture(#inst{leases = undefined}) ->
+    ok;
+end_capture(#inst{leases = L}) ->
+    _ = atomics:compare_exchange(L, ?IX_SNAP_STATE, ?SNAP_CAPTURING, ?SNAP_OPEN),
+    case atomics:get(L, ?IX_SNAP_DESTROY_WANTED) of
+        0 ->
+            ok;
+        _ ->
+            case atomics:compare_exchange(L, ?IX_SNAP_STATE, ?SNAP_OPEN,
+                                          ?SNAP_DESTROYING) of
+                ok -> destroy_now;
+                _  -> ok
+            end
+    end.
+
+-doc """
+Mark an instance destroyed, and say whether the destruction may proceed now.
+
+`wasm:destroy/1` keeps its published contract, `-spec destroy(instance()) ->
+ok`, so a destroy during a capture **marks and returns `ok`** rather than
+refusing. Adding a busy return would break every existing caller to serve a
+case only the capture path meets, and the image can still never be taken from a
+half-destroyed instance, which was the actual requirement.
+""".
+-spec begin_destroy(#inst{}) -> now | deferred.
+begin_destroy(#inst{leases = undefined}) ->
+    now;
+begin_destroy(#inst{leases = L}) ->
+    case atomics:compare_exchange(L, ?IX_SNAP_STATE, ?SNAP_OPEN,
+                                  ?SNAP_DESTROYING) of
+        ok ->
+            now;
+        _ ->
+            %% Recorded, so the end of the capture knows one is waiting.
+            atomics:put(L, ?IX_SNAP_DESTROY_WANTED, 1),
+            deferred
+    end.
+
 -doc """
 The unfused IR of a function, for the compiler.
 
@@ -351,6 +506,16 @@ call compiles one and every instance of a module the compiler refused.
 """.
 -spec identity(#inst{}) -> undefined | {sha256, binary()} | reference().
 identity(#inst{identity = Id}) -> Id.
+
+-doc """
+The cache handle this instance was built through, if it was built through one.
+
+Retained rather than inferred. `identity/1` is a name a caller may supply, so
+it says what the module is called and not where it came from; this says which
+door was used, and nothing a caller passes can set it.
+""".
+-spec module_handle(#inst{}) -> undefined | wasm_module_cache:handle().
+module_handle(#inst{module_handle = H}) -> H.
 
 -spec code_slot(#inst{}) -> undefined | pos_integer().
 code_slot(#inst{version = V}) ->

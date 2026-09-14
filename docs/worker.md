@@ -64,7 +64,7 @@ same inline API you would, it just owns the instance.
 
 Two worked embeddings of this pattern, with guests to run in them, are in
 [guests.md](guests.md): `examples/plugin_worker.erl` for logic compiled ahead of
-time, and `examples/script_worker.erl` for logic that arrives as text.
+time, and `examples/qjs_worker.erl` for logic that arrives as text.
 
 ## Lifecycle
 
@@ -114,6 +114,39 @@ rather than in tests, because a single-request test cannot see it.
 You can afford `fresh` precisely because the module is cached and a small
 instance costs about 64 KB, so a reset is microseconds rather than milliseconds.
 
+## Choose a configuration: `metered` or `compiled`
+
+These two are **mutually exclusive**, and a host that asks for both gets
+neither an error nor a warning.
+
+| | `metered` | `compiled` |
+| --- | --- | --- |
+| `fuel` | a ceiling, from `wasm_limits:untrusted/0` | `infinity` |
+| `compile` | absent | `true`, with `profile => script` |
+| what stops a runaway | the fuel budget, without a kill | **only** the owner's wall-clock deadline |
+| the compiled tier | off | on, after several hundred requests |
+
+`wasm_jit:entry/3` enables generated code only when fuel is `infinity`, so
+setting `compile => true` while keeping a fuel ceiling **silently gets you the
+interpreter**: no error anywhere, and a worker whose slowness has no visible
+cause. `wasm_worker_lang_SUITE` asserts that over 500 requests, because a
+shorter run is silent whether the tier is off or merely slow.
+
+Under `compiled` the only thing between the node and a runaway guest is a kill
+from outside it. That is a security statement rather than a tuning note: it is
+the one configuration where an untrusted guest is bounded by time alone.
+
+Turning the tier on is also where PR #15's compile-side bounds belong, because
+CPython's artifact is 80 MB of generated code and the node-wide budget is what
+stops one tenant's module taking the node. Both keys are off by default; see
+[the compiled tier guide](compiled-tier.md).
+
+**`max_heap_words` in a limits map does not set the process flag.** It is
+applied by whoever owns the instance, with `spawn_opt` at creation rather than
+`process_flag` inside the process, because the closure and the request are
+copied onto the new heap before an in-process call would run. The worker kernel
+does this for you; an inline caller does not get it by passing the key.
+
 ## Bound the work and the time
 
 ```erlang
@@ -148,6 +181,76 @@ application:set_env(wasm, worker_timeout, 30000).
 
 Pass a deadline you actually know to `call/4` instead. The default is there so
 that copying the example does not silently give you five seconds.
+
+## Every setting, and what it bounds
+
+The kernel in `examples/script_worker.erl` has more knobs than the section
+above, and all of them have defaults that a copied example gets silently. They
+are listed here because a default nobody can find is a default nobody can
+change.
+
+**Per request, in the `limits` map** you hand `script_worker:start_link/2`.
+These merge over `wasm_limits:untrusted/0`, so everything that preset bounds
+still applies:
+
+| setting | default | what it bounds |
+| --- | ---: | --- |
+| `timeout` | 5 s | one request, wall clock, enforced by the guardian |
+| `max_output_bytes` | 1 MiB | stdout and stderr, each separately; also accepts `#{stdout := N, stderr := M}` |
+| `max_result_bytes` | 1 MiB | the dedicated result channel |
+| `max_combined_bytes` | 1 MiB | stdout **and** the result together, on `script_v1.combined`, where they share one descriptor |
+| `max_request_bytes` | 1 MiB | the source plus the encoded context |
+| `max_staged_bytes` | 8 MiB | everything the adapter stages, across all mounts |
+| `max_staged_files` | 64 | how many files it stages |
+
+An interpreter needs several of these raised knowingly, and an adapter never
+raises one for you: [the Python guide](python.md) has the four CPython needs
+and what each was measured at.
+
+**Per worker, in the options map**, beside `root`:
+
+| setting | default | what it bounds |
+| --- | ---: | --- |
+| `trusted` | `false` | whether a `mode => write` mount is allowed at all |
+| `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2`. CPython needs about 90 s and so must raise it |
+
+**Per reaper**, in the second argument to `worker_reaper:start_link/2`. These
+bound cleanup, which runs after a request has already been answered:
+
+| setting | default | what it bounds |
+| --- | ---: | --- |
+| `max_cleanup_jobs` | 8 | cleanup jobs running at once |
+| `cleanup_queue_len` | 256 | jobs waiting; with the above, what **admission** counts against |
+| `cleanup_retries` | 3 | attempts after the first failure |
+| `cleanup_backoff` | 1 s, 4 s, 16 s | between those attempts |
+| `cleanup_timeout` | 30 s | **one callback**, not one job |
+| `cleanup_job_deadline` | 120 s | the whole job, every callback and action together |
+| `max_cleanup_actions` | 64 | actions an adapter may register per request |
+
+The last three are three different bounds and it is worth being exact about
+why. A job with eight actions and a `cleanup/1` could otherwise spend nine
+callback timeouts, so the job carries its own total. And the action list is
+adapter-controlled, so without a ceiling an adapter in a loop registers until
+the reaper's memory is the bound.
+
+When `live + pending + held + queued + running` reaches
+`max_cleanup_jobs + cleanup_queue_len`, `submit` answers
+`{error, #{kind => cleanup_saturated}}`. That is a refusal you can retry rather
+than a leak you cannot see.
+
+**Node-wide, through `application:set_env/3`**:
+
+| setting | default | what it bounds |
+| --- | ---: | --- |
+| `max_snapshot_bytes` | `infinity` | what every snapshot image **retains**, across the node. `infinity` means unbounded, not off |
+| `snapshot_dir` | unset | where images are kept between restarts. Unset means images live only in memory |
+| `code_cache_dir` | unset | where generated code is kept. Unset means the compiled tier recompiles on every start |
+| `page_limit` | see `wasm_engine` | linear memory pages across every instance on the node |
+
+`max_snapshot_bytes` and `page_limit` are separate on purpose: one bounds the
+images beside your instances and the other bounds the instances. See
+[snapshots](snapshots.md) for what an image retains, which is much less than
+the address space it covers.
 
 ## Get parallelism from more workers
 

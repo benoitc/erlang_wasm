@@ -1,6 +1,6 @@
 %% @doc The two worked examples, run as written.
 %%
-%% `examples/plugin_worker' and `examples/script_worker' are the two ways to use
+%% `examples/plugin_worker' and `examples/qjs_worker' are the two ways to use
 %% this library: compile the logic ahead of time, or ship an interpreter and
 %% send logic as text. Both are documented with commands, and a documented
 %% command that nobody runs is a documented command that stops working.
@@ -28,7 +28,7 @@ init_per_suite(Config) ->
     Dir = filename:join(?config(priv_dir, Config), "examples"),
     ok = filelib:ensure_path(Dir),
     [{ok, _} = compile:file(source(M), [{outdir, Dir}, return_errors])
-     || M <- [plugin_worker, script_worker]],
+     || M <- [plugin_worker, qjs_worker]],
     true = code:add_patha(Dir),
     Config.
 
@@ -97,7 +97,7 @@ script(Config, Opts) ->
         false ->
             {skip, "no QuickJS build: run scripts/fetch-qjs-fixture.sh"};
         true ->
-            {ok, W} = script_worker:start_link(
+            {ok, W} = qjs_worker:start_link(
                         Path, Opts#{scratch => ?config(priv_dir, Config)}),
             W
     end.
@@ -106,20 +106,20 @@ a_script_is_evaluated(Config) ->
     case script(Config) of
         {skip, _} = S -> S;
         W ->
-            ?assertEqual({ok, ~"3\n"}, script_worker:eval(W, ~"print(1 + 2);")),
+            ?assertEqual({ok, ~"3\n"}, qjs_worker:eval(W, ~"print(1 + 2);")),
             ?assertEqual({ok, ~"6\n"},
-                         script_worker:eval(W, ~"print([1,2,3].reduce((a,b)=>a+b));")),
-            ok = script_worker:stop(W)
+                         qjs_worker:eval(W, ~"print([1,2,3].reduce((a,b)=>a+b));")),
+            ok = qjs_worker:stop(W)
     end.
 
 a_runaway_script_is_killed(Config) ->
     case script(Config, #{timeout => 2000}) of
         {skip, _} = S -> S;
         W ->
-            ?assertEqual({error, timeout}, script_worker:eval(W, ~"for(;;){}")),
+            ?assertEqual({error, timeout}, qjs_worker:eval(W, ~"for(;;){}")),
             %% Still usable, same as the plugin.
-            ?assertEqual({ok, ~"1\n"}, script_worker:eval(W, ~"print(1);")),
-            ok = script_worker:stop(W)
+            ?assertEqual({ok, ~"1\n"}, qjs_worker:eval(W, ~"print(1);")),
+            ok = qjs_worker:stop(W)
     end.
 
 %% Each request gets its own scratch directory and its own instance, so one
@@ -128,9 +128,9 @@ scripts_cannot_see_each_other(Config) ->
     case script(Config) of
         {skip, _} = S -> S;
         W ->
-            {ok, _} = script_worker:eval(
+            {ok, _} = qjs_worker:eval(
                         W, ~"globalThis.marker = 'leaked'; print('one');"),
             ?assertEqual({ok, ~"undefined\n"},
-                         script_worker:eval(W, ~"print(typeof globalThis.marker);")),
-            ok = script_worker:stop(W)
+                         qjs_worker:eval(W, ~"print(typeof globalThis.marker);")),
+            ok = qjs_worker:stop(W)
     end.

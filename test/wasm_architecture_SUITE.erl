@@ -30,9 +30,13 @@ all() ->
 %%   generation time, so the interpreted and generated paths cannot describe a
 %%   load differently, and `wasm_exec' calls `wasm_jit:reentered/0' on the way
 %%   back in. Two edges, one function each.
-%% - the facade: `wasm_module_cache' calls `wasm:compile/2' on a miss.
+%% - the facade: `wasm_module_cache' calls `wasm:compile/2' on a miss, and
+%%   `wasm_snapshot_owner' holds an image's claim on its module, which means
+%%   calling the cache. A claim is given back by the process holding it, so
+%%   anything long-lived enough to hold one is in this cycle; what is chosen is
+%%   which module, and `wasm_snapshot' itself stays out.
 documented_cycles() ->
-    [[wasm, wasm_module_cache],
+    [[wasm, wasm_module_cache, wasm_snapshot_owner],
      [wasm_core, wasm_exec, wasm_jit],
      [wasm_decode, wasm_decode_atomic, wasm_decode_code, wasm_decode_gc,
       wasm_decode_simd]].

@@ -63,8 +63,8 @@ nothing reachable by default. See [docs/wasi.md](docs/wasi.md) and
 {ok, ~"user@example.com"} = plugin_worker:normalise(W, ~"  User@Example.COM  ").
 
 %% interpreted: logic arrives as text, two levels
-{ok, S} = script_worker:start_link("qjs.wasm"),
-{ok, ~"3\n"} = script_worker:eval(S, ~"print(1 + 2);").
+{ok, S} = qjs_worker:start_link("qjs.wasm"),
+{ok, ~"3\n"} = qjs_worker:eval(S, ~"print(1 + 2);").
 ```
 
 Both are in `examples/`, both run untrusted code under a timeout with nothing

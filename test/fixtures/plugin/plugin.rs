@@ -2,7 +2,7 @@
 //
 // This is the compiled shape: the logic is fixed at build time and erlang_wasm
 // interprets it directly, so there is one level of interpretation rather than
-// two. Compare examples/script_worker.erl, which ships an interpreter instead.
+// two. Compare examples/qjs_worker.erl, which ships an interpreter instead.
 //
 // A reactor, not a command: it has no `_start` and never exits. The host writes
 // a record into the buffer this exports, calls `normalise`, and reads back what

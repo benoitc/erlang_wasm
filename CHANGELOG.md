@@ -2,6 +2,141 @@
 
 ## Unreleased
 
+### A worker kernel for untrusted guests
+
+`examples/script_worker.erl` is now a language-neutral kernel: modules,
+imports, invocations, deadlines and bounded channels, and nothing about WASI or
+JSON. A language is an **adapter**, the eight-callback behaviour the same
+module declares. Start one with a `worker_reaper` and a scratch root:
+
+```erlang
+{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/w"}),
+{ok, W} = script_worker:start_link(my_adapter, #{root => scratch}),
+{ok, R} = script_worker:run(W, Request).
+```
+
+See [the adapter contract](docs/worker-contract.md) for writing one, and
+[the worker guide](docs/worker.md) for the `metered` and `compiled`
+configurations, which are mutually exclusive: setting `compile => true` while
+keeping a fuel ceiling silently gets you the interpreter.
+
+**Breaking.** The QuickJS example is `qjs_worker`, since the kernel has the
+name it used to hold. Its behaviour is unchanged.
+
+`max_output_bytes` now also accepts `#{stdout := N, stderr := M}`, so the two
+streams can carry different bounds.
+
+New: `wasm:extern/0` names the value `extern/2` returns. A new `kernel_check`
+rebar profile analyses `examples/`, which no other profile reaches.
+
+### JavaScript and Python through `script_v1`
+
+`js_worker` and `python_worker` run a function that arrives at request time:
+
+```erlang
+{ok, W} = js_worker:start_link("qjs.wasm", #{root => scratch}),
+{ok, #{result := #{~"answer" := 42}}} =
+    js_worker:run(W, ~"export function main(c) { return {answer: c.value+1}; }",
+                  #{~"value" => 41}).
+```
+
+**CPython needs ceilings raised knowingly**, and an adapter never raises one
+for you: `timeout`, `max_memory_pages`, `fuel` (a thousand times the untrusted
+preset) and `max_heap_words` (16M words; the default kills the runner, and a
+*larger* bound is slower). [The Python guide](docs/python.md) has the numbers.
+
+[docs/javascript.md](docs/javascript.md) and
+[docs/python.md](docs/python.md) say what each language does not promise. The
+network is **ungranted** rather than unavailable in both.
+
+`scripts/fetch-python-fixture.sh` and `scripts/verify-fixtures.sh` fetch and
+check the artifacts; `test/fixtures/lang/QUICKJS.md` and `PYTHON.md` record
+what they are.
+
+### Initialized runtime snapshots
+
+`wasm:snapshot/1`, `wasm:restore/3` and `wasm:snapshot_info/1`. An image of an
+already-started guest, restored into a **fresh** instance, so startup is
+skipped and per-request isolation is unchanged.
+
+```erlang
+{ok, Init} = wasm:instantiate(Handle, Imports, #{snapshotable => true}),
+{ok, _} = wasm:call(Init, ~"init", []),
+{ok, Image} = wasm:snapshot(Init),
+{ok, Fresh} = wasm:restore(Image, FreshImports, #{}).
+```
+
+`snapshotable => true` is required and costs an ordinary instance nothing.
+Restore does **not** run the module's start function, and takes the module from
+the image rather than from the caller. On a snapshotable instance `extern/2` is
+refused and `write_memory/3` takes a lease, so a capture cannot read a torn
+image.
+
+Every import module in the bindings needs an entry in `snapshot_hooks`, or the
+capture is refused: say `stateless`, or supply `eligible`, `capture` and
+`restore` funs. `wasi_preview1:snapshot_hook/0` is WASI's, and it refuses a
+descriptor opened during initialisation.
+
+Refused: an instance not built through `wasm:load/1`, an imported memory, table
+or global, a shared memory, a non-empty object store, and a reference to
+another instance.
+
+`script_worker` uses them: an adapter that exports `snapshot_capability/1`
+gets its runtime captured once at `start_link/2` and restored into every
+request, with `prepare/3` returning only the request's own work. A capture that
+fails fails the start. Two adapters use it, over reactors built by
+`scripts/build-quickjs-reactor.sh` and `scripts/build-python-reactor.sh`:
+
+| | per request, command | per request, restored |
+| --- | ---: | ---: |
+| `qjs_reactor_adapter` | 173 ms | 28 ms |
+| `py_reactor_adapter` | 65.9 s | 0.35 s |
+| `lua_reactor_adapter` | n/a | 25 ms |
+
+Lua is the third language and the first added after all of this was written:
+it passed the conformance kit unmodified, with no kernel, profile or snapshot
+change. Building it needs `-mllvm -wasm-use-legacy-eh=false`, because LLVM
+emits the superseded exception-handling encoding by default and this runtime
+implements the standardised one. [The Lua guide](docs/lua.md) has the rest.
+
+`test/audit/PERF.md` has the protocol and the null experiments.
+`start_link/2` pays one interpreter start, which for CPython is about 90
+seconds, so start your workers before you take traffic, and raise
+`capture_timeout` (a worker option, 60 s by default) past it.
+
+**Three fixes since.** A mutable global a module *exports* is a cell, and
+capturing it raw shared one global between every restore from an image and died
+with the instance that captured it. A restore that grew a memory wrote through
+the pre-grow handle, which only worked because reactors export their memory. A
+table the guest grew during `init()` could be captured and never restored.
+
+Capture also refuses by allowlist now rather than by a list of refusals, so a
+global holding a host term is refused instead of entering an image.
+
+A restored table is written once rather than once per element, which is
+**2.5x on a CPython request**. An image keeps only the non-zero runs of each
+memory, which holds 5.7x less: `wasm:snapshot_info/1`'s `bytes` and the
+`max_snapshot_bytes` budget both mean what is retained, so a ceiling set before
+this admits proportionally more images.
+
+**Images can be kept on disk.** `application:set_env(wasm, snapshot_dir, Dir)`
+and a worker reads its image instead of running `init()` again: a CPython
+worker starts in **998 ms** against 104 s, from a 2.7 MB file. Off unless you
+set it, and the directory is as trusted as your release.
+`wasm:save_snapshot/2` and `wasm:load_snapshot/2` are the same thing by hand.
+
+An adapter must supply a `compatibility_key` to be filed at all: an image is a
+runtime after `init()` ran against a particular environment, and nothing else
+in the contract accounts for it.
+
+[The snapshot guide](docs/snapshots.md) has the lifecycle and the hooks.
+
+`wasm:acquire/1` and `wasm:release/1` add and drop a holder. An image keeps its
+own claim on its module, so it survives the process that captured it **if
+something acquired first**. `application:set_env(wasm, max_snapshot_bytes, N)`
+bounds images node-wide; the default is `infinity`, meaning unbounded rather
+than off.
+
 ### The compiled tier runs the OTP compiler in a process it owns
 
 `compile:forms/2` runs its passes in a process of its own and gives a caller no

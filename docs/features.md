@@ -481,7 +481,7 @@ test runs without a Rust toolchain.
 Two worked embeddings, both in `examples/` and both exercised by
 `wasm_examples_SUITE`, chosen to be the two *shapes* rather than two of one.
 
-| | `plugin_worker` | `script_worker` |
+| | `plugin_worker` | `qjs_worker` |
 | --- | ---: | ---: |
 | guest | a Rust plugin, compiled | QuickJS, interpreting a script |
 | module | 46 KB | 1.8 MB |

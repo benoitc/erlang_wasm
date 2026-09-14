@@ -18,7 +18,8 @@ src/    Front end: wasm_decode(+_code/_simd/_gc/_atomic), wasm_leb128,
         _instr), wasm_wast
         Runtime: wasm (public facade), wasm_instance, wasm_exec,
         wasm_memory, wasm_table, wasm_global, wasm_heap, wasm_keeper,
-        wasm_engine, wasm_error, wasm_wait, wasm_types, wasm_module_cache
+        wasm_engine, wasm_error, wasm_wait, wasm_types, wasm_module_cache,
+        wasm_snapshot(+_owner/_file/_store)
         Compiled tier: wasm_jit, wasm_core, wasm_code_slots,
         wasm_code_cache, wasm_jit_sup
         Numerics: wasm_num(+_float/_trunc), wasm_simd
@@ -42,7 +43,7 @@ rebar3 compile      # warnings_as_errors is on
 rebar3 lint         # elvis
 rebar3 xref
 rebar3 dialyzer
-rebar3 ct           # 435 cases
+rebar3 ct           # 824 cases
 ```
 
 The benchmarks are not among them: `wasm_bench_SUITE` and

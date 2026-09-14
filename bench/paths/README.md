@@ -532,3 +532,34 @@ Four things it will not let you get wrong, each of which cost a draft:
   than the round trip the arm exists to price.
 - Take a per-iteration cost as the slope between two sizes where you can. A
   single arm's absolute number includes whatever setup the fun does.
+
+## Pricing a request rather than a path
+
+`workerbench` is the one arm here that does not time a path inside the runtime.
+It times what a host sees: a request arriving at a `script_worker`, an instance
+made for it, and the latency changing underneath when generated code lands.
+
+```sh
+erlc -o bench/paths -pa _build/test/lib/wasm/ebin \
+     -pa _build/test/lib/wasm/examples bench/paths/workerbench.erl
+erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \
+    -pa bench/paths -run workerbench main qjs compiled warm 500 /tmp/wb_cache
+```
+
+Three cache arms, and the third is the one that matters:
+
+| arm | `code_cache_dir` | what it answers |
+| --- | --- | --- |
+| `adoption` | unset | does request *n* adopt what *n-1* compiled, with no disk involved? |
+| `cold` | an empty directory | what a first-ever start costs |
+| `warm` | that directory, after a cold run | what a restart costs |
+
+`adoption` sets **no** directory rather than an empty one, so the disk cache
+cannot be credited for same-node adoption. Tell `warm` apart by
+`wasm_jit:counts/0` saying `cached => 1`, not by a wall time: the first two
+arms are indistinguishable by latency and differ only in what they prove.
+
+Run the null arm first here as everywhere else. It came out at 16% on the
+minimum for a 60-request QuickJS arm, and a CPython arm varies by a third
+within itself, which is the difference between a measurement worth printing and
+one that is not.

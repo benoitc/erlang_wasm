@@ -16,6 +16,18 @@
 %% `after` covers that. A flag would stay set and that instance would never ask
 %% again, silently and for the life of the node. A time expires.
 -define(IX_ASKED, 3).
+
+%% In the separate `#inst.leases' array, which only a snapshotable instance has.
+-define(IX_SNAP_STATE, 1).
+-define(IX_SNAP_READERS, 2).
+%% Set when a `destroy/1' arrived while a capture held the instance. Without
+%% it, the end of a capture cannot tell "a destroy was deferred" from "no
+%% destroy happened", and the first version marked every captured instance
+%% destroying on the way out.
+-define(IX_SNAP_DESTROY_WANTED, 3).
+-define(SNAP_OPEN, 0).
+-define(SNAP_CAPTURING, 1).
+-define(SNAP_DESTROYING, 2).
 %% How long an ask stands before another is allowed. Long enough that a real
 %% compile finishes inside it, short enough that a lost one is not a life
 %% sentence.
@@ -138,6 +150,28 @@
     %% that anything caching work derived from the module can find it. See
     %% `#module.identity'.
     identity  :: undefined | {sha256, binary()} | reference(),
+    %% **Which door the caller came through**, not what the module calls
+    %% itself. `identity' is a *name*, and `wasm:compile/2' takes one from the
+    %% caller, so a module can be given any name at all: load A under hash H,
+    %% compile a different B with `identity => {sha256, H}', and a claim on H
+    %% succeeds while the instance is B's. Provenance therefore has to be
+    %% retained rather than inferred, and this is where it is retained. A
+    %% caller cannot forge it because it is not something a caller supplies.
+    %%
+    %% `undefined' for an inline `wasm:compile/1', which has no cache entry at
+    %% all, and a snapshot of such an instance is refused for that reason.
+    module_handle :: undefined | wasm_module_cache:handle(),
+    %% **`undefined` unless `snapshotable => true` was asked for**, and that is
+    %% the whole design of it: an ordinary request instance allocates nothing
+    %% here and the check on the call path is a tuple element read against
+    %% `undefined`. Three changes to that path have cost about 70% on QuickJS
+    %% while a synthetic loop measured nothing, so a map lookup or a second
+    %% `atomics` array for every instance was not on.
+    %%
+    %% Two counters when it is set: `?IX_SNAP_STATE` (0 open, 1 capturing,
+    %% 2 destroying) and `?IX_SNAP_READERS`. Capture needs exclusion, and a
+    %% flag would not do: two concurrent calls need a count.
+    leases :: undefined | atomics:atomics_ref(),
     store     :: term(),           % holder for #mut{}
     %% Two counters in one `atomics' array, because an array per instance is an
     %% allocation on the instantiation path and a second one would show up in

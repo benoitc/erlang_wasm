@@ -64,6 +64,48 @@ is no `ctx.waitUntil`.
 **The WasmEdge extensions** the interim artifact carries. A script that relies
 on them is relying on that artifact rather than on the profile.
 
+## Skip the engine start, with the reactor build
+
+Starting QuickJS is most of a small request: 173 ms against 28 ms for the same
+work once the engine is already up. The reactor artifact and
+`qjs_reactor_adapter` are how you get the second number. Build it, then point a
+worker at it:
+
+```
+scripts/build-quickjs-reactor.sh
+```
+
+```erlang
+{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/js"}),
+{ok, W} = script_worker:start_link(
+            qjs_reactor_adapter,
+            #{path => "test/fixtures/lang/qjs_reactor.wasm", root => scratch,
+              limits => #{timeout => 30_000, fuel => infinity,
+                          max_memory_pages => 4096,
+                          max_heap_words => 16 * 1024 * 1024}}),
+{ok, #{result := #{~"answer" := 42}}} =
+    script_worker:run(W, #{source => ~"export function main(c)"
+                                     " { return {answer: c.value + 1}; }",
+                           context => #{~"value" => 41}}).
+```
+
+The tenant contract is unchanged: the same `main(context)`, the same JSON in
+and out, the same capabilities. What changes is that the engine is started once
+when the worker starts and each request restores an image of that point.
+
+Notes:
+
+- **Isolation is unchanged.** A restore builds a *fresh* instance, so one
+  request's globals never reach the next. That is not a claim about a reused
+  interpreter, because there is no reused interpreter.
+- **`fuel => infinity` is required**, as it is for the command artifact: the
+  untrusted preset's ceiling does not reach the engine's first line. The
+  deadline is what bounds a runaway.
+- **It needs a WASI SDK to build**, which the fetched command artifact does
+  not. `test/fixtures/lang/QUICKJS.md` has the pins.
+- The numbers, their null experiment and where the time goes are in
+  `test/audit/PERF.md`.
+
 ## The bound is wall clock, or work, and not both
 
 `wasm_limits:untrusted/0` sets a fuel ceiling, and `wasm_jit:entry/3` enables

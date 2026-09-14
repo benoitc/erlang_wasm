@@ -62,7 +62,7 @@ Read it as three stacks that meet at the top. The **front end** goes
 
 ## The three cycles
 
-There are exactly three, and each is one or two edges rather than a tangle.
+There are exactly three, and each is a few edges rather than a tangle.
 
 **The decoder, five modules.** `wasm_decode_code` and the opcode-space modules
 `wasm_decode_simd`, `wasm_decode_gc` and `wasm_decode_atomic` call each other. A
@@ -74,8 +74,18 @@ block type, so this is the format's own recursion and not a layering slip.
 interpreted and generated paths cannot describe a load differently.
 `wasm_exec` calls `wasm_jit:reentered/0` on the way back into generated code.
 
-**The facade and the cache, two modules.** `wasm_module_cache` calls
-`wasm:compile/2` on a miss. One line.
+**The facade, the cache and the snapshot owner, three modules.**
+`wasm_module_cache` calls `wasm:compile/2` on a miss. One line, and for a long
+time that was the whole of it.
+
+`wasm_snapshot_owner` joined it deliberately. An initialized runtime snapshot
+holds a module's layout, so it needs a claim on that module that outlives the
+process which captured it, and a claim is given back by the process that holds
+it. Anything long-lived enough to do that calls the cache, and the cache calls
+the facade, so there is no arrangement that avoids the cycle: only a choice of
+which module is in it. The choice was the fifty lines whose entire purpose is
+holding a claim, rather than `wasm_snapshot`, which is the mechanism -- what a
+capture copies and what a restore lays over -- and stays out of it.
 
 Cycles are not forbidden here. What is forbidden is a fourth one appearing
 because nobody noticed. A cycle is the one structural property you cannot

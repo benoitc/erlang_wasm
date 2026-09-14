@@ -100,8 +100,55 @@ because of it, and initialized runtime snapshots are the answer rather than
 tuning.
 
 A snapshot needs a **reactor** exporting `init()` and `handle()`. The artifact
-measured here is a command with one `_start`, so it can never support one, and
-that is the first reason to replace it.
+measured here is a command with one `_start`, so it can never support one. The
+next section is how to stop paying for that.
+
+## Skip the interpreter start, with the reactor build
+
+**0.35 s a request instead of 65.9 s.** CPython starts once when the worker
+starts, and each request restores an image of that point. Build it, then point
+a worker at it:
+
+```
+scripts/build-python-reactor.sh
+```
+
+```erlang
+{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/py"}),
+{ok, W} = script_worker:start_link(
+            py_reactor_adapter,
+            #{path => "test/fixtures/lang/py_reactor.wasm",
+              lib  => "test/fixtures/lang/py_reactor_lib",
+              root => scratch,
+              limits => py_reactor_adapter:limits()}),
+{ok, #{result := #{~"answer" := 42}}} =
+    script_worker:run(W, #{source => ~"def main(c):\n"
+                                     "    return {'answer': c['value'] + 1}\n",
+                           context => #{~"value" => 41}}).
+```
+
+The tenant contract is unchanged: the same `main(context)`, the same JSON in
+and out, the same capabilities.
+
+Notes:
+
+- **`start_link/2` takes 83 to 90 seconds**, because that is one interpreter
+  start. It happens once per worker, not once per request, and a host should
+  start its workers before it starts taking traffic.
+- **Isolation is unchanged.** A restore builds a *fresh* instance, so one
+  request's module-level state never reaches the next.
+- **Two paths, not one.** The module needs its standard library beside it, and
+  `lib` is where you say so. The build script produces both.
+- **The hash seed is in the image**, drawn once during initialisation and
+  shared by every request that restores it. Re-seeding afterwards is not
+  available: string hashes are already cached against the old secret, so
+  rotation means recapturing. `docs/snapshots.md` covers what else an image
+  freezes.
+- **It needs a WASI SDK and about twenty minutes to build**, which the fetched
+  command artifact does not. `test/fixtures/lang/PYTHON.md` has the pins and
+  says why there is no checksum.
+- The numbers, their null experiment and where the time goes are in
+  `test/audit/PERF.md`.
 
 ## Errors
 

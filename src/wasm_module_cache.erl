@@ -34,6 +34,7 @@ compiled artefact, with no coordination. It also means either of you can call
 
 -export([start_link/0]).
 -export([load/1, load/2, unload/1, get/1, resident/0, stats/0]).
+-export([claim_for/2, unclaim_for/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -include("wasm.hrl").
@@ -184,6 +185,29 @@ get({wasm_module, Hash}) ->
         Module -> {ok, Module}
     end.
 
+-doc """
+Claim a resident module on another process's behalf.
+
+Claims are per process and a process that dies has its claims dropped for it,
+which is the right lifetime for a caller and the wrong one for anything that
+must outlive the caller. An initialized runtime snapshot is exactly that: it
+holds a module's layout, and without a claim of its own it would be restoring
+over a module evicted underneath it.
+
+So the claim is made *for* a process whose life matches the thing that needs
+it. The owner is monitored as any other holder is, so a claim never outlives
+the process it was made for, and an owner that dies invalidates the image
+rather than pinning a module for the life of the node.
+""".
+-spec claim_for(handle(), pid()) -> ok | {error, not_loaded}.
+claim_for({wasm_module, Hash}, Owner) when is_pid(Owner) ->
+    call({claim_for, Hash, Owner}).
+
+-doc "Give back a claim made by `claim_for/2`.".
+-spec unclaim_for(handle(), pid()) -> ok.
+unclaim_for({wasm_module, Hash}, Owner) when is_pid(Owner) ->
+    call({unclaim_for, Hash, Owner}).
+
 -spec resident() -> non_neg_integer().
 resident() -> gen_server:call(?SERVER, resident).
 
@@ -240,6 +264,15 @@ handle_call({acquire, Hash}, {Pid, _} = From, State) ->
 %%
 %% `drop_claim/3` is already a no-op for a process that claimed nothing, which
 %% is what makes the first order safe.
+handle_call({claim_for, Hash, Owner}, _From, State) ->
+    case maps:is_key(Hash, State#state.resident) of
+        false -> {reply, {error, not_loaded}, State};
+        true  -> {reply, ok, claim_if_alive(Owner, Hash, State)}
+    end;
+
+handle_call({unclaim_for, Hash, Owner}, _From, State) ->
+    {reply, ok, drop_claim(Owner, Hash, State)};
+
 handle_call({gave_up, Hash}, {Pid, _}, State) ->
     Compiling =
         case maps:find(Hash, State#state.compiling) of

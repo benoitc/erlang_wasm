@@ -4867,7 +4867,228 @@ bar at "6.2 s is not a worker"; this is an order of magnitude past that, in the
 configuration a host would actually run.
 
 So initialized runtime snapshots are justified by the number, and the number is
-written down here rather than asserted. What blocks them is not the case for
-them: **both artifacts are commands exporting only `_start`**, and a snapshot
-needs a reactor exporting `init()` and `handle()`. That is a build-toolchain
-task before it is a runtime one.
+written down here rather than asserted. The reactor that was missing when this
+was written now exists for JavaScript, and the section below has what it
+bought. CPython's is still a build-toolchain task.
+
+## What the snapshot lease costs on the call path
+
+`bench/paths/realbench.erl`, QuickJS, ten interleaved pairs in both orderings,
+three runs each, load average 4.1 to 7.5 at the start and 5.0 at the end.
+Baseline is the commit before the leases; the candidate is the same tree with
+them.
+
+| | minimum | median |
+| --- | ---: | ---: |
+| before | 1471.6 ms | 1681.1 ms |
+| after | 1469.5 ms | 1647.2 ms |
+
+**0.1% on the minimum, against a 23% spread inside the baseline arm alone.**
+The change is free at this resolution, which is what the threshold asked: a
+branch on an instance field was not to be assumed free, and three changes to
+this path have cost about 70% while a synthetic loop measured nothing.
+
+It is free by construction rather than by luck. The lease is taken at the
+**outermost** invocation only, and an ordinary instance's `#inst.leases` is
+`undefined`, so the whole cost is one tuple element read and one comparison per
+outermost call. A nested call short-circuits on the depth test before reaching
+it. Putting the flag in `#inst.limits` would have made it a map lookup, and
+allocating the counters for every instance would have put an allocation on the
+instantiation path that `pathbench inst_small` watches.
+
+## What a snapshot buys a JavaScript worker
+
+The measurement Phase 6 was gated on, for the guest that has a reactor. Two
+adapters over the same profile, the same tenant source and the same context,
+through `script_worker:run/2`: `qjs_adapter` starts the engine inside every
+request, `qjs_reactor_adapter` restores an image captured once at
+`start_link/2`.
+
+Load average 8.99 before the run and 7.91 after. Six five-request arms in both
+orderings, interleaved, minimums taken.
+
+| arm | minimum | median |
+| --- | ---: | ---: |
+| command: engine started per request | 173.4 ms | 178.1 ms |
+| reactor: restored from an image | 28.5 ms | 39.7 ms |
+
+**6.1x on the minimum.** The null experiment is what says that can be believed:
+the reactor arm against itself, same protocol, is **28.1 ms against 33.6 and
+33.8 ms, 0.6% apart**, so two identical arms differ by half a percent where the
+effect is six hundred.
+
+Where it goes, from the same artifact outside the worker (load average 5.07):
+instantiate 10.4 ms, `init()` 60.6 ms, capture 2.4 ms for a 393,216-byte image,
+restore 6.6 ms. So a restore replaces a 71 ms start with a 7 ms copy, and the
+rest of the request is unchanged.
+
+Capturing costs one `init()` at `start_link/2`, which measured 579 ms for the
+whole start including loading and validating a 1.3 MB module. It is paid once
+per worker, not once per request, which is the entire point.
+
+**This does not transfer to CPython**, and nothing here should be read as
+predicting it. QuickJS starts in 71 ms and CPython takes 53 to 76 **seconds**
+through a worker; the shape of the win is the same and its size is not
+measurable until that reactor is built.
+
+## What a snapshot buys a CPython worker
+
+The other half of the gate, for the guest the gate was about. Two adapters over
+the same profile, the same tenant source and context, through
+`script_worker:run/2`: `py_adapter` starts CPython inside every request,
+`py_reactor_adapter` restores an image captured once at `start_link/2`.
+
+Load average 3.80 before the run and 3.30 after. Two-request arms in both
+orderings, interleaved, minimums taken. The arms are short because a command
+request costs a minute and the effect is not subtle.
+
+| arm | minimum | every run |
+| --- | ---: | --- |
+| command: interpreter started per request | 65,856 ms | 65.9, 87.3, 90.3, 90.6 s |
+| reactor: restored from an image | 919 ms | 919, 925, 963, 975 ms |
+
+**71.7x on the minimum**, and the null experiment is what says that can be
+believed: the reactor arm against itself is **924 ms against 924 ms**, the same
+number to the millisecond, where the effect is a factor of seventy.
+
+Where a restored request goes, from the same artifact outside the worker:
+restore 615 ms of a 41,943,040-byte image, `handle()` 330 ms. Most of a request
+is now copying 40 MB of interpreter, which is the thing to attack next if this
+is ever not fast enough.
+
+What it costs: `init()` is **83 to 90 seconds**, and a worker pays it once at
+`start_link/2` rather than once per request. That is past the 60 s
+`capture_timeout` default, so a CPython host raises it knowingly like every
+other ceiling this guest needs. `PYTHON.md` has the rest.
+
+### The gate, answered
+
+The section above set the bar at "53 to 76 s is not a worker". A request is now
+**0.92 s**, and the plan's Phase 6 is what closed the gap. That is the
+justification it was gated on, measured rather than asserted, for both guests
+that have a reactor:
+
+| guest | per request, command | per request, restored |
+| --- | ---: | ---: |
+| QuickJS | 173.4 ms | 28.5 ms |
+| CPython | 65,856 ms | 919 ms, and 351 ms after the table fix below |
+
+## What a restored table cost, and what the memory runs did not
+
+Two changes to the restore path, measured separately because they turned out to
+matter by wildly different amounts. Interleaved in both orderings, minimums
+taken, load average 7.94 before and 11.65 after.
+
+### Writing a restored table once
+
+`restore_tables/4` called `wasm_table:set/3` per element, and each of those is
+an `array:set` plus a whole-array `wasm_engine:table_put` plus a version bump.
+CPython's indirect function table is large, so a restore was thousands of
+whole-array writes. `wasm_table:init/3` folds the list and stores once.
+
+A CPython request through `script_worker:run/2`, six requests per arm:
+
+| arm | minimum | every run |
+| --- | ---: | --- |
+| as shipped | 890 ms | 890 to 918 |
+| one table write | 351 ms | 351 to 402 |
+
+**2.5x**, and the arms do not overlap: the worst fixed run is 402 ms against a
+best unfixed of 890. The null experiment is each arm against itself, 898 vs 890
+and 351 vs 353, so **0.6 to 0.9%** where the effect is 150%.
+
+This also corrects the 919 ms recorded above for a CPython request. That number
+was right for the code that produced it; the cost was a table being written
+back once per element, and it is 351 ms now.
+
+### Keeping only the non-zero runs of a memory
+
+A started CPython is 41,943,040 bytes of which 88.5% is zero, so an image kept
+37 MB of nothing and wrote it back on every restore. Capture keeps the non-zero
+runs; restore writes those and **fills the gaps**, because a fresh instance is
+not zero -- `wasm_instance:new/3` applies the module's active data segments
+before a restore sees it.
+
+| | retained | restore, in isolation |
+| --- | ---: | ---: |
+| whole memories | 41,943,040 bytes | 46.8 ms |
+| runs and fills | 7,417,000 bytes | 41.3 ms |
+
+**5.7x less held, and 12% off a restore measured on its own** -- which does
+**not** show at the worker level: 348 ms against 344 ms for a whole request,
+inside the noise. The restore is 41 ms of a 351 ms request, so a 6 ms saving
+was never going to be visible there.
+
+So the memory change earns its place on what an image *holds*, not on what a
+request costs, and `max_snapshot_bytes` now admits about six times as many
+images for the same ceiling. Saying it made requests faster would not survive
+the measurement.
+
+### QuickJS sees neither
+
+0.7 to 0.9 ms to restore, in both arms, on an image of 393 KB against 211 KB.
+Nothing here is worth anything to a guest whose whole image fits in a few
+hundred kilobytes, which is the useful half of measuring two guests.
+
+## A third language, and what it cost to add
+
+Lua 5.4 through the same profile, added after the kernel, the profile and the
+snapshot mechanism were written. Load average 8.29 before and 7.95 after, five
+workers, ten requests each, minimums taken:
+
+| guest | worker start | a request | image retained |
+| --- | ---: | ---: | ---: |
+| Lua | 75 ms | 25 ms | 77,280 bytes |
+| QuickJS | 579 ms | 28.5 ms | 211,064 bytes |
+| CPython | 91,927 ms | 351 ms | 7,417,000 bytes |
+
+Three orders of magnitude between the start times and two between the images,
+which is the span the mechanism now has evidence over rather than an argument.
+
+**What adding it cost the runtime: nothing.** The kit's 30 cases passed
+unmodified on the first run. No kernel change, no profile change, no change to
+capture or restore, no new capability, no format concession. The acceptance
+rule in `docs/worker-contract.md` asks for exactly that, and this is the first
+time it has been met by a language the code was not designed around.
+
+**What it cost the guest: two build flags**, both about `longjmp`.
+`-mllvm -wasm-enable-sjlj` and, the one that is not optional,
+`-mllvm -wasm-use-legacy-eh=false` -- LLVM still emits the superseded
+exception-handling encoding by default and this runtime implements the
+standardised one, so without it the module fails to load on opcode 6.
+`test/fixtures/lang/LUA.md` has it, because anything unwinding with `longjmp`
+will meet the same thing.
+
+## What a filed image is worth
+
+`application:set_env(wasm, snapshot_dir, Dir)` and a worker reads its image
+instead of running `init()`. A CPython worker, load average 13.83 before the
+run and 5.31 after, each arm one worker start followed by one request:
+
+| | |
+| --- | ---: |
+| cold: captured, then filed | 104,093 ms |
+| warm: read from the file | **998 ms**, and 1002, 1007 |
+| the store switched off | 102,870 ms |
+| the file | 2,717,634 bytes |
+
+**104x**, and the off arm is what says the saving is the file rather than
+anything else warming up: with `snapshot_dir` unset the start is 102,870 ms,
+indistinguishable from cold.
+
+2.7 MB of file for an image covering 41.9 MB of address space, which is the
+runs and zlib together.
+
+### Against the only published number for the same technique
+
+Cloudflare report **1.027 s** mean cold start for a Python Worker loading
+httpx, fastapi and pydantic, against about 10 s unsnapshotted. This is 998 ms
+for an interpreter plus `json`, `importlib` and `sys`.
+
+Those are not the same benchmark and the systems have nothing in common: theirs
+is Pyodide under V8 in production, ours is one machine with one guest. What the
+comparison is good for is the order of magnitude, and the order of magnitude
+now matches. What does **not** match is the per-request cost, and the reason is
+architectural rather than incidental: they reuse the isolate and we build a
+fresh instance per request, on purpose, because that is the only isolation
+boundary `docs/worker.md` is willing to claim.

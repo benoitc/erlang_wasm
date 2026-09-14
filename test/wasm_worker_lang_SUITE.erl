@@ -33,13 +33,28 @@ suite() -> [{timetrap, {minutes, 10}}].
 %% `python_compiled` is not run at all. The tier needs several hundred requests
 %% *plus* a compile measured at 567 s, which is hours, and Phase 5 is where
 %% that measurement belongs.
-all() -> [{group, qjs_metered}, {group, qjs_compiled}].
+all() -> [{group, qjs_metered}, {group, qjs_compiled}, {group, qjs_reactor},
+          {group, lua_reactor}].
 
 groups() ->
     [{qjs_metered, [], cases() ++ [asking_for_both_silently_gets_the_interpreter]},
      {qjs_compiled, [], cases() ++ [the_tier_enters_a_compiled_worker]},
+     %% The same kit over an image of an already-started engine. Its `echo` and
+     %% `state_change` cases are what say a restore is a *fresh* instance: one
+     %% tenant's globals do not reach the next, which is the claim a persistent
+     %% interpreter could not make.
+     {qjs_reactor, [], reactor_cases() ++ [a_restored_worker_answers_faster]},
      {python_metered, [], python_cases()},
-     {python_compiled, [], python_cases()}].
+     {python_compiled, [], python_cases()},
+     %% Not in `all/0` for the same reason the Python groups are not: it starts
+     %% with a 90 s capture. Run it deliberately, with
+     %% `--group=python_reactor`.
+     {python_reactor, [], python_reactor_cases()},
+     %% The third language, and the one the mechanism was **not** designed
+     %% around: it was written after the kernel, the profile and snapshots, and
+     %% none of them changed to admit it. It starts in milliseconds, so unlike
+     %% the Python groups it belongs in `all/0`.
+     {lua_reactor, [], lua_cases()}].
 
 %% `groups/0' runs before `init_per_suite', and listing an adapter's capability
 %% cases means building its artifact, which for a real engine means loading a
@@ -49,11 +64,44 @@ cases() ->
     {ok, _} = application:ensure_all_started(wasm),
     ?KIT:base_cases() ++ ?KIT:capability_cases(qjs_adapter, artifact_opts()).
 
+reactor_cases() ->
+    {ok, _} = application:ensure_all_started(wasm),
+    ?KIT:base_cases() ++ ?KIT:capability_cases(qjs_reactor_adapter,
+                                               reactor_opts()).
+
 python_cases() ->
     {ok, _} = application:ensure_all_started(wasm),
     ?KIT:base_cases() ++ ?KIT:capability_cases(py_adapter, python_opts()).
 
+lua_cases() ->
+    {ok, _} = application:ensure_all_started(wasm),
+    ?KIT:base_cases() ++ ?KIT:capability_cases(lua_reactor_adapter, lua_opts()).
+
+python_reactor_cases() ->
+    {ok, _} = application:ensure_all_started(wasm),
+    ?KIT:base_cases() ++ ?KIT:capability_cases(py_reactor_adapter,
+                                               python_reactor_opts()).
+
 artifact_opts() -> #{path => engine()}.
+
+reactor_opts() -> #{path => reactor()}.
+
+lua_opts() -> #{path => lua()}.
+
+lua() ->
+    filename:join([wasm_spec_runner:fixtures_dir(), "lang", "lua_reactor.wasm"]).
+
+python_reactor_opts() ->
+    #{path => python_reactor(), lib => python_reactor_lib()}.
+
+python_reactor() ->
+    filename:join([wasm_spec_runner:fixtures_dir(), "lang", "py_reactor.wasm"]).
+
+python_reactor_lib() ->
+    filename:join([wasm_spec_runner:fixtures_dir(), "lang", "py_reactor_lib"]).
+
+reactor() ->
+    filename:join([wasm_spec_runner:fixtures_dir(), "lang", "qjs_reactor.wasm"]).
 
 python_opts() -> #{path => python()}.
 
@@ -83,6 +131,27 @@ init_per_group(qjs_metered, Config) ->
     [{adapter, qjs_adapter}, {config, metered}, {limits, metered()} | Config];
 init_per_group(qjs_compiled, Config) ->
     [{adapter, qjs_adapter}, {config, compiled}, {limits, compiled()} | Config];
+init_per_group(qjs_reactor, Config) ->
+    skip_without(reactor(), "no QuickJS reactor: run "
+                            "scripts/build-quickjs-reactor.sh",
+                 [{adapter, qjs_reactor_adapter}, {config, reactor},
+                  {engine, reactor()}, {opts, reactor_opts()},
+                  {limits, reactor_limits()} | Config]);
+init_per_group(lua_reactor, Config) ->
+    skip_without(lua(), "no Lua reactor: run scripts/build-lua-reactor.sh",
+                 [{adapter, lua_reactor_adapter}, {config, reactor},
+                  {engine, lua()}, {opts, lua_opts()},
+                  {limits, lua_reactor_adapter:limits()} | Config]);
+init_per_group(python_reactor, Config) ->
+    skip_without(python_reactor(), "no CPython reactor: run "
+                                   "scripts/build-python-reactor.sh",
+                 [{adapter, py_reactor_adapter}, {config, reactor},
+                  {engine, python_reactor()}, {opts, python_reactor_opts()},
+                  %% One interpreter start is 83 to 90 s, so the 60 s default
+                  %% would kill every capture. Raised knowingly, like every
+                  %% other CPython ceiling.
+                  {worker_opts, #{capture_timeout => 180_000}},
+                  {limits, python_reactor_limits()} | Config]);
 init_per_group(python_metered, Config) ->
     skip_without(python(), [{adapter, py_adapter}, {config, metered},
                             {engine, python()}, {opts, python_opts()},
@@ -93,10 +162,27 @@ init_per_group(python_compiled, Config) ->
                             {limits, python_compiled()} | Config]).
 
 skip_without(Path, Config) ->
+    skip_without(Path, "no CPython build: run scripts/fetch-python-fixture.sh",
+                 Config).
+
+skip_without(Path, Why, Config) ->
     case filelib:is_file(Path) of
         true  -> Config;
-        false -> {skip, "no CPython build: run scripts/fetch-python-fixture.sh"}
+        false -> {skip, Why}
     end.
+
+%% `fuel => infinity` because the engine is a whole JavaScript runtime and the
+%% untrusted preset does not reach its first line, exactly as it does not for
+%% the command artifact. The deadline is what bounds a runaway here.
+%% The adapter's own ceilings, with the deadline cut to what this guest
+%% actually needs: a restore is 0.6 s and a request 0.3 s, so 30 s is generous
+%% and it is what bounds the runaway cases instead of two minutes each.
+python_reactor_limits() ->
+    (py_reactor_adapter:limits())#{timeout => 30_000}.
+
+reactor_limits() ->
+    #{timeout => 30_000, fuel => infinity, max_memory_pages => 4096,
+      max_host_calls => 1_000_000, max_heap_words => 16 * 1024 * 1024}.
 
 %% Every one of these was measured, and none of them is a round number chosen
 %% for looking safe. `PYTHON.md` says what each was measured at.
@@ -147,8 +233,14 @@ end_per_testcase(_TC, Config) ->
     ok.
 
 start(Config, Opts) ->
-    Base = #{root => scratch, path => proplists:get_value(engine, Config, engine()),
-             limits => ?config(limits, Config)},
+    %% Whatever else the adapter's own options carry -- the Python reactor
+    %% needs a `lib` beside its module, and nothing else does.
+    Extra = maps:merge(maps:without([path],
+                                    proplists:get_value(opts, Config, #{})),
+                       proplists:get_value(worker_opts, Config, #{})),
+    Base = Extra#{root => scratch,
+                  path => proplists:get_value(engine, Config, engine()),
+                  limits => ?config(limits, Config)},
     Merged = maps:merge(Base, Opts),
     %% A case that asks for its own limits is asking for an override, not a
     %% replacement: the engine still needs room to start.
@@ -272,3 +364,28 @@ the_reaper_finishes_what_a_killed_guardian_left(Config) -> ?KIT:the_reaper_finis
 the_request_directory_is_removed(Config) -> ?KIT:the_request_directory_is_removed(ctx(Config)).
 the_result_channel_has_its_own_bound(Config) -> ?KIT:the_result_channel_has_its_own_bound(ctx(Config)).
 transferred_actions_run_only_when_cleanup_fails(Config) -> ?KIT:transferred_actions_run_only_when_cleanup_fails(ctx(Config)).
+
+%% The claim Phase 6 was gated on, as a case rather than only as a number in
+%% `PERF.md`: a restored request is faster than one that starts the engine
+%% itself. The threshold is deliberately loose -- the measured gap is 6.1x and
+%% this asserts 2x -- because a case that encodes a measurement becomes a case
+%% that fails when the box is busy.
+a_restored_worker_answers_faster(Config) ->
+    Request = ?KIT:fixture(qjs_reactor_adapter, echo, reactor_opts()),
+    Reactor = best_of(qjs_reactor_adapter, reactor_opts(), Request),
+    Command = best_of(qjs_adapter, artifact_opts(),
+                      ?KIT:fixture(qjs_adapter, echo, artifact_opts())),
+    ct:pal("reactor ~p ms, command ~p ms", [Reactor, Command]),
+    ?assert(Reactor * 2 < Command),
+    Config.
+
+best_of(Adapter, Opts, Request) ->
+    {ok, W} = script_worker:start_link(
+                Adapter, Opts#{root => scratch, limits => reactor_limits()}),
+    Ts = [begin
+              T = erlang:monotonic_time(millisecond),
+              {ok, _} = script_worker:run(W, Request),
+              erlang:monotonic_time(millisecond) - T
+          end || _ <- lists:seq(1, 5)],
+    ok = script_worker:stop(W),
+    lists:min(Ts).

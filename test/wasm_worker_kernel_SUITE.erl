@@ -30,8 +30,9 @@ the only signal there is.
 suite() -> [{timetrap, {seconds, 90}}].
 
 all() ->
-    [{group, typed}, {group, command}, {group, script_v1},
-     {group, script_v1_channel}].
+    [every_setting_is_documented,
+     {group, typed}, {group, command}, {group, script_v1},
+     {group, script_v1_channel}, {group, reactor}].
 
 groups() ->
     [{typed, [], cases(fake_typed_adapter)},
@@ -46,11 +47,24 @@ groups() ->
      %% rather than two things sharing one, so the bounds are independent and
      %% no delimiter is involved at all.
      {script_v1_channel, [],
-      cases(fake_script_v1_channel_adapter) ++ channel_cases()}].
+      cases(fake_script_v1_channel_adapter) ++ channel_cases()},
+     %% The kernel's snapshot path, in the job that always runs. It otherwise
+     %% exists only where a QuickJS or CPython build does, and those are in the
+     %% integration job: a capability the required gate cannot exercise is a
+     %% capability nobody would notice breaking.
+     {reactor, [], cases(fake_reactor_adapter) ++ snapshot_cases()}].
 
 %% A declared capability makes its cases mandatory; an undeclared one
 %% contributes none and is reported rather than passed.
+%%
+%% `groups/0` runs before `init_per_suite`, and listing an adapter's capability
+%% cases means building its artifact. For the WAT adapters that is
+%% `wasm:compile/1` and needs nothing; for `fake_reactor_adapter` it is
+%% `wasm:load/1`, which needs a started application. Idempotent, and without it
+%% `groups/0` raises and Common Test reports **zero suites** rather than an
+%% error anyone would read.
 cases(Adapter) ->
+    {ok, _} = application:ensure_all_started(wasm),
     ?KIT:base_cases() ++ ?KIT:capability_cases(Adapter).
 
 init_per_suite(Config) ->
@@ -63,10 +77,24 @@ init_per_group(typed, Config)     -> [{adapter, fake_typed_adapter} | Config];
 init_per_group(command, Config)   -> [{adapter, fake_command_adapter} | Config];
 init_per_group(script_v1, Config) -> [{adapter, fake_script_v1_adapter} | Config];
 init_per_group(script_v1_channel, Config) ->
-    [{adapter, fake_script_v1_channel_adapter} | Config].
+    [{adapter, fake_script_v1_channel_adapter} | Config];
+init_per_group(reactor, Config) -> [{adapter, fake_reactor_adapter} | Config].
+
+%% Three things the kernel does only on this path, each of which would
+%% otherwise be exercised by nothing in the required gate.
+snapshot_cases() ->
+    [a_request_starts_from_the_image,
+     a_capture_that_does_not_finish_fails_the_start,
+     a_validate_that_refuses_fails_the_start,
+     a_worker_starts_from_a_filed_image,
+     a_worker_ignores_an_image_it_cannot_read].
 
 end_per_group(_G, _Config) -> ok.
 
+%% Needs no worker, no reaper and no adapter: it reads names out of the code
+%% and looks for them in a guide.
+init_per_testcase(every_setting_is_documented, Config) ->
+    Config;
 init_per_testcase(TC, Config) ->
     process_flag(trap_exit, true),
     Root = filename:join([?config(priv_dir, Config), atom_to_list(TC), "root"]),
@@ -75,6 +103,8 @@ init_per_testcase(TC, Config) ->
     {ok, W} = start(Config, Root, #{}),
     [{reaper, Reaper}, {worker, W}, {root, Root} | Config].
 
+end_per_testcase(every_setting_is_documented, _Config) ->
+    ok;
 end_per_testcase(_TC, Config) ->
     try script_worker:stop(?config(worker, Config)) catch _:_ -> ok end,
     try worker_reaper:stop() catch _:_ -> ok end,
@@ -326,3 +356,134 @@ the_reaper_finishes_what_a_killed_guardian_left(Config) -> ?KIT:the_reaper_finis
 the_request_directory_is_removed(Config) -> ?KIT:the_request_directory_is_removed(ctx(Config)).
 the_result_channel_has_its_own_bound(Config) -> ?KIT:the_result_channel_has_its_own_bound(ctx(Config)).
 transferred_actions_run_only_when_cleanup_fails(Config) -> ?KIT:transferred_actions_run_only_when_cleanup_fails(ctx(Config)).
+
+%%% ----------------------------------------------------- the snapshot path ---
+
+%% `handle` adds a counter it bumps to a number `init` wrote into memory. A
+%% restored instance answers the same thing every time; an instance that
+%% carried state between requests counts up. This is the isolation claim and
+%% the *only* way to see it from outside.
+a_request_starts_from_the_image(Config) ->
+    W = ?config(worker, Config),
+    First = script_worker:run(W, #{}),
+    ?assertMatch({ok, #{values := [_]}}, First),
+    ?assertEqual(First, script_worker:run(W, #{})),
+    ?assertEqual(First, script_worker:run(W, #{})),
+    %% And it really is the image talking: `init` wrote 1234 and `handle` adds
+    %% its first bump, so anything else means the capture did not happen.
+    {ok, #{values := [V]}} = First,
+    ?assertEqual(1235, V).
+
+%% `capture_timeout` bounds one `init()`. A limits map cannot do it -- a
+%% timeout there is enforced by whoever owns the instance, and an inline call
+%% cannot be interrupted -- so this is what says the kernel gave the capture an
+%% owner rather than running it in the worker.
+a_capture_that_does_not_finish_fails_the_start(Config) ->
+    Start = maps:get(start, ctx(Config)),
+    T = erlang:monotonic_time(millisecond),
+    Got = Start(#{init_call => ~"spin", capture_timeout => 300}),
+    Took = erlang:monotonic_time(millisecond) - T,
+    ?assertMatch({error, #{class := worker, kind := timeout}}, Got),
+    %% Bounded by the setting, not by a test timetrap that would pass whatever
+    %% the kernel did.
+    ?assert(Took < 5_000).
+
+%% Declaring the capability is a promise. A worker that started anyway would
+%% invoke `handle` on an instance that never ran `init`.
+a_validate_that_refuses_fails_the_start(Config) ->
+    Start = maps:get(start, ctx(Config)),
+    ?assertMatch({error, #{class := adapter, kind := adapter_failure}},
+                 Start(#{validate => refuse})).
+
+%% **The 90 s fix, in the gate that always runs.** A worker files the image it
+%% captured and the next one reads it instead of running `init()` again.
+%%
+%% With a WAT reactor there is no time to measure and both workers answer the
+%% same thing either way, so the assertion that matters is the **capture
+%% count**: the adapter bumps it in `validate`, which runs on the capture path
+%% and not on the read. Without that this case passes with the lookup deleted,
+%% which is how a test that cannot fail arrives.
+a_worker_starts_from_a_filed_image(Config) ->
+    Dir = filename:join(?config(priv_dir, Config), "images"),
+    with_store(Dir, fun() ->
+        Start = maps:get(start, ctx(Config)),
+        ok = fake_reactor_adapter:reset_captures(),
+        {ok, W1} = Start(#{}),
+        First = script_worker:run(W1, #{}),
+        ok = script_worker:stop(W1),
+        ?assertEqual(1, fake_reactor_adapter:captures()),
+        ?assertMatch([_], filelib:wildcard(filename:join(Dir, "*.img"))),
+        {ok, W2} = Start(#{}),
+        ?assertEqual(First, script_worker:run(W2, #{})),
+        %% Still one. The second worker read the file.
+        ?assertEqual(1, fake_reactor_adapter:captures()),
+        ok = script_worker:stop(W2)
+    end).
+
+%% Every reason a file might be unusable has the same answer, and it is to
+%% capture. A corrupt one must not fail a start that would otherwise have
+%% worked perfectly well.
+a_worker_ignores_an_image_it_cannot_read(Config) ->
+    Dir = filename:join(?config(priv_dir, Config), "bad-images"),
+    with_store(Dir, fun() ->
+        Start = maps:get(start, ctx(Config)),
+        {ok, W1} = Start(#{}),
+        First = script_worker:run(W1, #{}),
+        ok = script_worker:stop(W1),
+        [File] = filelib:wildcard(filename:join(Dir, "*.img")),
+        {ok, <<H:40/binary, B, R/binary>>} = file:read_file(File),
+        ok = file:write_file(File, <<H/binary, (B bxor 255), R/binary>>),
+        Before = fake_reactor_adapter:captures(),
+        {ok, W2} = Start(#{}),
+        ?assertEqual(First, script_worker:run(W2, #{})),
+        %% It captured, which is what a miss must cost and all it must cost.
+        ?assertEqual(Before + 1, fake_reactor_adapter:captures()),
+        ok = script_worker:stop(W2)
+    end).
+
+with_store(Dir, F) ->
+    ok = filelib:ensure_path(Dir),
+    application:set_env(wasm, snapshot_dir, Dir),
+    try F()
+    after
+        application:unset_env(wasm, snapshot_dir)
+    end.
+
+%%% ------------------------------------------------------------- settings ---
+
+%% **A default nobody can find is a default nobody can change.** Six of these
+%% existed only as a `-define` and a `default/1` clause: not in a guide, not in
+%% a moduledoc, invisible to anyone who had not read the source. This is what
+%% stops the next one being added the same way.
+%%
+%% It reads the names out of the code rather than listing them here, so adding
+%% a setting and forgetting the guide fails rather than passing.
+every_setting_is_documented(_Config) ->
+    Guide = read_guide("worker.md"),
+    Undocumented = [S || S <- settings(), not documented(S, Guide)],
+    ?assertEqual([], Undocumented).
+
+settings() ->
+    Worker = maps:keys(script_worker:default_limits()),
+    Worker ++ worker_reaper:setting_keys() ++
+        [trusted, capture_timeout,
+         %% Node-wide, and each one turns something substantial on or off.
+         max_snapshot_bytes, snapshot_dir, code_cache_dir].
+
+documented(Setting, Guide) ->
+    binary:match(Guide, atom_to_binary(Setting, utf8)) =/= nomatch.
+
+%% Walked up from the built application rather than counting `..` segments,
+%% because how deep `_build` puts it is rebar's business and not this suite's.
+read_guide(Name) ->
+    {ok, Bin} = file:read_file(find_guide(code:lib_dir(wasm), Name, 8)),
+    Bin.
+
+find_guide(_Dir, Name, 0) ->
+    ct:fail({no_guide, Name});
+find_guide(Dir, Name, N) ->
+    Path = filename:join([Dir, "docs", Name]),
+    case filelib:is_regular(Path) of
+        true  -> Path;
+        false -> find_guide(filename:dirname(Dir), Name, N - 1)
+    end.

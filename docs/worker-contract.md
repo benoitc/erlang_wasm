@@ -157,6 +157,63 @@ never reclaimed. Your language's vocabulary goes in `ctx` as a binary:
   ctx => #{code => ~"no_entry_point"}}
 ```
 
+## Skip the startup, if your guest is a reactor
+
+Export `snapshot_capability/1` and the worker captures your runtime once at
+`start_link/2`, then restores it into every request. Your guest has to be a
+**reactor**: something that brings the runtime up in one call and returns, so
+there is a point with no call in progress to capture. A WASI command exporting
+only `_start` cannot be one, because by the time `_start` returns the runtime
+has torn itself down.
+
+```erlang
+capabilities(_Artifact) ->
+    #{execution => reactor, snapshots => #{version => ~"my-1"}, ...}.
+
+snapshot_capability(#{module := M}) ->
+    #{version => ~"my-1",
+      module => M,
+      %% Trusted, and used once. Whatever `init()` touches is in the image
+      %% every request restores, so keep it barren.
+      imports => #{bindings => TrustedBindings,
+                   snapshot_hooks => #{~"wasi_snapshot_preview1" =>
+                                           wasi_preview1:snapshot_hook()},
+                   compatibility_key => ~"my-1"},
+      init => [{call, ~"_initialize", []}, {call, ~"init", []}],
+      validate => fun(_Inst) -> ok end,
+      post_restore => fun(_Inst, _Ctx) -> ok end}.
+```
+
+`prepare/3` then returns only the request's own work, since the rest is in the
+image:
+
+```erlang
+invoke => [{call, ~"handle", []}]
+```
+
+Notes:
+
+- **Declaring it is a promise.** A capture that fails fails `start_link/2`,
+  because a worker that carried on would call `handle` on an instance that
+  never ran `init`.
+- **`capture_timeout` bounds it**, 60 s by default, and it is a worker option
+  rather than a limit: a `timeout` in a limits map is enforced by whoever owns
+  the instance, so the kernel runs the capture in a process of its own and
+  kills it at the deadline. Raise it for a runtime that needs longer -- CPython
+  takes about ninety seconds.
+- **`validate` should ask the runtime, not the module.** `init`'s own return
+  value never reaches the kernel, which does not read guest values, so a
+  `validate` that only checks an export exists cannot tell a started runtime
+  from one that failed to start. Export something that answers.
+- **Every import module needs a `snapshot_hooks` entry** or the capture is
+  refused. Silence means no. A module holding nothing says `stateless`.
+- **`post_restore` runs in the runner**, on the request's remaining deadline,
+  because it happens per request.
+- **A restore is a fresh instance.** Nothing a request did survives it, which
+  is what keeps the isolation the worker promises.
+- `docs/snapshots.md` has the rest, including what a capture refuses and what
+  an image freezes.
+
 ## Prove it
 
 Supply `conformance_fixtures/1` and run the kit. It never looks inside a

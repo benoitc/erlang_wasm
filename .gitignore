@@ -21,6 +21,13 @@ test/fixtures/spec/
 # `scripts/verify-fixtures.sh` reads and the record is how a reader learns what
 # was fetched without inferring it from a URL, so both are tracked.
 test/fixtures/lang/*.wasm
+# The CPython reactor's standard library, built beside its module.
+test/fixtures/lang/py_reactor_lib/
+
+# `test/fixtures/snapshot/` is **not** here on purpose. Those are a few hundred
+# bytes each, hand-emitted by `scripts/build-snapshot-fixtures.py`, and needed
+# by a suite in the required gate: fetching them would make that gate depend on
+# a network, and building them would make it depend on a WebAssembly toolchain.
 
 # Built by bench/cross/README.md, not checked in.
 bench/cross/loop.wasm

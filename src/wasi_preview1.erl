@@ -46,6 +46,7 @@ Path resolution, which is where sandboxes actually fail, is in `wasi_path`.
 -export([imports/1, imports/2, default_config/0]).
 -export([exit_code/1]).
 -export([close_all/1]).
+-export([snapshot_hook/0]).
 
 -doc """
 Close every descriptor this instance still holds.
@@ -2253,6 +2254,59 @@ fd_bump_offset(#{fds := Fds} = St, Fd, N) ->
         error -> St
     end.
 
+-doc """
+The snapshot hook for this import module.
+
+Pass it as `snapshot_hooks => #{~"wasi_snapshot_preview1" => Hook}` at
+instantiation. Without it a capture is refused, because a module in `bindings`
+with no hook is a module nobody has vouched for.
+
+## What it can and cannot see
+
+It sees **live descriptors**, and that is all. A capture is eligible while
+exactly the baseline is open: the stdio entries and the preopens this
+configuration created, nothing opened since and nothing closed since. That is a
+claim that can be checked.
+
+What it cannot see is a descriptor number the guest copied into a local
+variable, which is an integer in linear memory indistinguishable from any
+other. So the guarantee is "no descriptor outside the reconstructible baseline
+is still open", and not "the guest is not holding a number". Serialising a live
+file or socket stays out of scope, and this hook does not pretend otherwise.
+
+A guest that opened a file during initialisation and kept it is not
+snapshottable, and is told so by name.
+""".
+-spec snapshot_hook() -> map().
+snapshot_hook() ->
+    #{eligible => fun eligible/1,
+      capture => fun capture/1,
+      restore => fun restore/2}.
+
+eligible(Inst) ->
+    case wasm_instance:get_extra(Inst, wasi) of
+        error ->
+            %% Never used, so nothing was opened.
+            ok;
+        {ok, #{fds := Fds, baseline := Baseline}} ->
+            case lists:sort(maps:keys(Fds)) of
+                Baseline ->
+                    ok;
+                Now ->
+                    {error, #{class => invalid,
+                              kind => wasi_descriptor_not_snapshottable,
+                              msg => ~"a descriptor outside the baseline is open",
+                              ctx => #{baseline => Baseline, open => Now}}}
+            end
+    end.
+
+%% Nothing to keep. Eligibility already required the table to be exactly what
+%% this configuration built, and a restore builds its own from the fresh
+%% configuration it was handed.
+capture(_Inst) -> {ok, baseline}.
+
+restore(_Inst, baseline) -> ok.
+
 %%% ---------------------------------------------------------------- state ---
 %%
 %% The fd table lives in the instance's own store, so it shares the instance's
@@ -2285,7 +2339,13 @@ initial_state(Config) ->
     %% preopen answers `ENOTDIR', but keeping the directories contiguous means
     %% a libc that stops early still finds all of them.
     {Listeners, Next} = listener_entries(maps:get(net, Config, none), AfterDirs),
-    #{fds => maps:from_list(Stdio ++ Preopens ++ Listeners), next => Next}.
+    Fds = maps:from_list(Stdio ++ Preopens ++ Listeners),
+    %% What this configuration opened before the guest ran. A snapshot is
+    %% eligible only while that is still exactly what is open, which is a
+    %% checkable claim; "the guest is not holding a descriptor number" is not,
+    %% because a number the guest copied into a local is an integer in linear
+    %% memory like any other.
+    #{fds => Fds, next => Next, baseline => lists:sort(maps:keys(Fds))}.
 
 %% Listening sockets named by the grant are opened by the host and handed in as
 %% preopened descriptors, so a module using only the standardised socket calls

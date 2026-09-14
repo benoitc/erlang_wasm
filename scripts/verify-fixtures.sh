@@ -44,4 +44,26 @@ for sum in "${sums[@]}"; do
         status=1
     fi
 done
+# Built artifacts are checked for presence and nothing else. A checksum would
+# pin the machine that produced them rather than the recipe: the same pinned
+# wasi-sdk 34 emits 1,351,069 bytes on arm64 macOS and 1,528,288 on x86-64
+# Linux. Their integrity story is the pinned tag, the pinned SDK, and the build
+# failing loudly. Presence still has to be checked, because a suite that skips
+# is green and a green run that proved nothing is worse than a red one.
+#
+# Only the QuickJS reactor is required here, because it is the one the
+# integration job builds and the one its groups need. The CPython reactor is
+# built deliberately and its group skips with the command to build it, so
+# demanding it would fail a job that was never going to run it.
+for built in qjs_reactor.wasm:build-quickjs-reactor.sh \
+             lua_reactor.wasm:build-lua-reactor.sh; do
+    name="${built%%:*}"; how="${built##*:}"
+    if [ -f "$DIR/$name" ]; then
+        echo "present  $name (built, no checksum)"
+    else
+        echo "MISSING  $name (run scripts/$how)" >&2
+        status=1
+    fi
+done
+
 exit $status

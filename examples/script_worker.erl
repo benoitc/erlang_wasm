@@ -88,6 +88,7 @@ edges. The kinds these four can produce are in `worker_error`.
 -export([start_link/2, start_link/3, stop/1]).
 -export([submit/2, await/3, cancel/2, run/2]).
 -export([withdraw_waiter/3, consumed/3, channel_write/2]).
+-export([default_limits/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -257,16 +258,23 @@ adapter that ignores snapshots writes neither.
 -type restore_ctx() :: #{module := wasm:module_(), version := binary()}.
 
 -doc """
-Declared in Phase 1, inert until Phase 6, types and all.
+What an adapter must supply for the worker to capture an image at start.
 
-`-optional_callbacks` names a callback that must already be declared, and
-`import_set()` names `hook()`, so a half-declared contract does not compile.
-There is deliberately no `snapshot()` type here: it does not exist until Phase
-6, and a callback contract referencing an undefined type does not compile
-either.
+`module` and `imports` are what the initialisation instance is built from, and
+they are here rather than derived from `prepare/3` because the two are not the
+same thing: an initialisation instance exists once, before any request and with
+a **trusted** binding set, and is captured. `imports` also carries the
+`compatibility_key` and the `snapshot_hooks` every restore is matched and
+checked against, so the two sides cannot drift apart.
+
+`init` is what to invoke before capturing, `validate` is the adapter's own
+eligibility check, and `post_restore` runs inside every restore, in the runner,
+on the request's remaining deadline.
 """.
 -type snapshot_cap() ::
         #{version := binary(),
+          module := wasm:module_(),
+          imports := import_set(),
           init := [{call, binary(), [term()]}],
           validate := fun((wasm:instance()) ->
                               ok | {error, worker_error:worker_error()}),
@@ -322,7 +330,14 @@ is not language-neutral.
 -callback classify(invocation_result(), adapter_state()) ->
     continue | {stop, stop_class()}.
 
--doc "Inert until Phase 6. An absent callback reads as `unsupported`.".
+-doc """
+How to capture this adapter's runtime once, at `start_link/2`.
+
+An absent callback reads as `unsupported`, so no adapter has to know snapshots
+exist. Declaring one is a promise the worker holds it to: a capture that fails
+**fails the start**, because the alternative is a worker whose requests invoke
+`handle` on an instance that never ran `init`.
+""".
 -callback snapshot_capability(artifact()) -> unsupported | snapshot_cap().
 
 -optional_callbacks([snapshot_capability/1]).
@@ -331,6 +346,15 @@ is not language-neutral.
 
 -define(DEFAULT_TIMEOUT, 5_000).
 -define(GUARDIAN_READY_TIMEOUT, 30_000).
+%% One `init()` and its hooks, at `start_link/2`. Generous next to a request's
+%% deadline because it is a whole language runtime coming up once, and finite
+%% because the alternative is a start that never returns. A guest that needs
+%% longer says so: CPython's takes about ninety seconds.
+-define(CAPTURE_TIMEOUT, 60_000).
+%% How long a capturer holds the image open waiting for the worker to take its
+%% own holder. The worker acquires immediately, so this only bounds a worker
+%% that died in between.
+-define(CAPTURE_HANDOFF, 30_000).
 
 %% The base is `wasm_limits:untrusted/0', not a fresh map: fuel, max_depth,
 %% max_heap_words, max_memory_pages and max_host_calls come from there and keep
@@ -351,6 +375,11 @@ is not language-neutral.
             root           :: worker_reaper:root_id(),
             timeout        :: timeout(),
             trusted        :: boolean(),
+            %% Captured once at `init/1' and held for the worker's life, so a
+            %% request restores rather than starting an interpreter. The worker
+            %% process is the holder, which is the lifetime that matches.
+            image          :: undefined | wasm:snapshot(),
+            snapshot_cap   :: undefined | snapshot_cap(),
             %% in flight, at most one
             ref            :: undefined | reference(),
             id             :: undefined | binary(),
@@ -514,11 +543,171 @@ init({Adapter, Opts}) ->
                     Limits = maps:merge(
                                maps:merge(wasm_limits:untrusted(), ?WORKER_LIMITS),
                                maps:get(limits, Opts, #{})),
-                    {ok, #w{adapter = Adapter, artifact = Artifact, opts = Opts,
-                            limits = Limits, root = Root,
-                            timeout = maps:get(timeout, Limits, ?DEFAULT_TIMEOUT),
-                            trusted = maps:get(trusted, Opts, false)}}
+                    started(Adapter, Artifact, Opts, Limits, Root)
             end
+    end.
+
+started(Adapter, Artifact, Opts, Limits, Root) ->
+    W = #w{adapter = Adapter, artifact = Artifact, opts = Opts,
+           limits = Limits, root = Root,
+           timeout = maps:get(timeout, Limits, ?DEFAULT_TIMEOUT),
+           trusted = maps:get(trusted, Opts, false)},
+    case capture_image(Adapter, Artifact,
+                       maps:get(capture_timeout, Opts, ?CAPTURE_TIMEOUT),
+                       maps:get(max_heap_words, Limits)) of
+        {error, E}          -> {stop, E};
+        {ok, undefined, _}  -> {ok, W};
+        {ok, Image, Cap}    -> {ok, W#w{image = Image, snapshot_cap = Cap}}
+    end.
+
+%% The image is taken once, here, from a **trusted** initialisation context and
+%% before any tenant code has run. That is the whole security argument for
+%% restoring the same bytes into every request: nothing a tenant did can be in
+%% them.
+capture_image(Adapter, Artifact, Timeout, Words) ->
+    case snapshot_cap(Adapter, Artifact) of
+        unsupported -> {ok, undefined, undefined};
+        Cap         -> from_store_or_capture(Cap, Timeout, Words)
+    end.
+
+%% **Look before capturing.** For CPython that is the difference between
+%% reading a file and ninety seconds of interpreter start. A miss for any
+%% reason -- no directory configured, no file, a corrupt one, one written by
+%% another build -- costs exactly the capture that would have happened anyway,
+%% which is why `wasm_snapshot_store:lookup/2` answers `miss` rather than
+%% raising.
+from_store_or_capture(#{module := M, imports := ImportSet} = Cap, Timeout, Words) ->
+    Key = image_key(M, Cap, ImportSet),
+    case wasm_snapshot_store:lookup(Key, M) of
+        {ok, Image} -> {ok, Image, Cap};
+        miss        -> capture_and_file(Key, Cap, Timeout, Words)
+    end.
+
+capture_and_file(Key, Cap, Timeout, Words) ->
+    case capture_elsewhere(Cap, Timeout, Words) of
+        {ok, Image, C} ->
+            ok = wasm_snapshot_store:store(Key, Image, C),
+            {ok, Image, C};
+        Other ->
+            Other
+    end.
+
+%% An inline module has no content hash and cannot be filed, which is the rule
+%% `wasm_code_cache` already applies for the same reason: there would be
+%% nothing to key on that meant the same thing twice.
+image_key({wasm_module, Hash}, #{version := Version}, ImportSet) ->
+    wasm_snapshot_store:key(Hash, Version,
+                            maps:get(compatibility_key, ImportSet, undefined),
+                            wasm_snapshot_file:image_abi());
+image_key(_Other, _Cap, _ImportSet) ->
+    undefined.
+
+%% **In a process of its own, killed at the deadline.** A `timeout` in a limits
+%% map bounds nothing by itself -- `wasm_limits` is explicit that it is enforced
+%% by whoever owns the instance, and an inline call runs in the caller and
+%% cannot be interrupted. So the owner here is a child, and a guest whose
+%% `init()` never returns costs one `capture_timeout` rather than a
+%% `start_link/2` that never comes back.
+capture_elsewhere(Cap, Timeout, Words) ->
+    Parent = self(),
+    {Pid, Mon} = spawn_opt(fun() -> capture_proc(Parent, Cap) end,
+                           [monitor, {max_heap_size, #{size => Words, kill => true,
+                                                       error_logger => true}}]),
+    receive
+        {captured, Pid, {ok, Image, C}} ->
+            %% **Before** the capturer exits, not after, which is why the child
+            %% waits below rather than returning. A holder is dropped when its
+            %% process dies, and the image's first holder is the process that
+            %% captured it: letting that one go first invalidates the image
+            %% between the send and the acquire.
+            ok = wasm:acquire(Image),
+            reap(Pid, Mon),
+            {ok, Image, C};
+        {captured, Pid, {error, _} = E} ->
+            reap(Pid, Mon),
+            E;
+        {'DOWN', Mon, process, Pid, Reason} ->
+            {error, worker_error:worker(crashed, ~"the capture died",
+                                        #{reason => reason_of(Reason)})}
+    after Timeout ->
+        exit(Pid, kill),
+        reap(Pid, Mon),
+        {error, worker_error:worker(timeout, ~"the capture did not finish",
+                                    #{capture_timeout => Timeout})}
+    end.
+
+%% Sends, then holds its own holder open until the parent has one of its own.
+%% `reap/2` is what releases it, and a parent that died instead is covered by
+%% the timeout: this process is not linked, so it would otherwise wait for
+%% ever.
+capture_proc(Parent, Cap) ->
+    Parent ! {captured, self(), run_capture(Cap)},
+    receive {'EXIT', Parent, _} -> ok
+    after ?CAPTURE_HANDOFF -> ok
+    end.
+
+reap(Pid, Mon) ->
+    exit(Pid, shutdown),
+    receive {'DOWN', Mon, process, Pid, _} -> ok
+    after 5_000 -> erlang:demonitor(Mon, [flush]) end.
+
+reason_of(R) -> iolist_to_binary(io_lib:format(~"~p", [R])).
+
+run_capture(#{module := M, imports := ImportSet, init := Invoke} = Cap) ->
+    %% No fuel and no inner deadline: the wall clock is the parent's kill, and
+    %% a work budget would be charging host code the host chose to run.
+    Limits = #{fuel => infinity, timeout => infinity},
+    Opts = maps:merge(Limits#{snapshotable => true}, restore_opts(ImportSet)),
+    initialise(M, maps:get(bindings, ImportSet), Opts, Limits, Invoke, Cap).
+
+snapshot_cap(Adapter, Artifact) ->
+    case erlang:function_exported(Adapter, snapshot_capability, 1) of
+        false -> unsupported;
+        true  -> Adapter:snapshot_capability(Artifact)
+    end.
+
+%% `snapshot_hooks' and `compatibility_key' travel together with the bindings,
+%% so capture and restore are matched against one declaration rather than two
+%% that can drift apart.
+restore_opts(ImportSet) ->
+    Base = case maps:get(snapshot_hooks, ImportSet, #{}) of
+               Empty when map_size(Empty) =:= 0 -> #{};
+               Hooks -> #{snapshot_hooks => Hooks}
+           end,
+    case maps:get(compatibility_key, ImportSet, undefined) of
+        undefined -> Base;
+        Key       -> Base#{compatibility_key => Key}
+    end.
+
+initialise(M, Bindings, Opts, Limits, Invoke, Cap) ->
+    case wasm:instantiate(M, Bindings, Opts) of
+        {error, E} -> {error, worker_error:runtime(E)};
+        {ok, Inst} -> initialised(Inst, Opts, Limits, Invoke, Cap)
+    end.
+
+%% The initialisation instance exists to be captured once and destroyed, so it
+%% goes whether the capture worked or not.
+initialised(Inst, Opts, Limits, Invoke, Cap) ->
+    Result = run_init(Invoke, Inst, Opts, Limits, Cap),
+    ok = wasm:destroy(Inst),
+    Result.
+
+run_init([], Inst, Opts, _Limits, #{validate := Validate} = Cap) ->
+    case Validate(Inst) of
+        {error, _} = E -> E;
+        ok             -> captured(Inst, Opts, Cap)
+    end;
+run_init([{call, Name, Args} | Rest], Inst, Opts, Limits, Cap) ->
+    case wasm:call(Inst, Name, Args, Limits) of
+        {error, E} -> {error, worker_error:runtime(E)};
+        {ok, _}    -> run_init(Rest, Inst, Opts, Limits, Cap)
+    end.
+
+captured(Inst, Opts, #{version := Version} = Cap) ->
+    Keys = maps:with([compatibility_key], Opts),
+    case wasm:snapshot(Inst, Keys#{version => Version}) of
+        {error, E}  -> {error, worker_error:runtime(E)};
+        {ok, Image} -> {ok, Image, Cap}
     end.
 
 handle_call({submit, _Request, _From}, _F, #w{ref = Ref} = W) when Ref =/= undefined ->
@@ -594,12 +783,28 @@ handle_info({'DOWN', Mon, process, _Pid, _Reason}, #w{smon = Mon} = W) ->
 
 handle_info(_, W) -> {noreply, W}.
 
-terminate(_Why, #w{guardian = undefined}) -> ok;
-terminate(_Why, #w{guardian = G}) ->
+terminate(Why, #w{image = Image} = W) ->
+    %% Belt as well as braces: a holder goes when its process dies, and this
+    %% process is the holder, so the image would be released anyway. Saying so
+    %% is what makes the lifetime readable.
+    _ = Image =:= undefined orelse wasm:release(Image),
+    stop_guardian(Why, W).
+
+stop_guardian(_Why, #w{guardian = undefined}) -> ok;
+stop_guardian(_Why, #w{guardian = G}) ->
     %% The guardian monitors the worker and reacts to this itself; killing it
     %% here would skip the cleanup it is holding.
     G ! {cancel, undefined},
     ok.
+
+-doc """
+The ceilings a worker starts with, over `wasm_limits:untrusted/0`.
+
+Exported so that `docs/worker.md` can be held to listing every one of them: a
+default nobody can find is a default nobody can change.
+""".
+-spec default_limits() -> map().
+default_limits() -> ?WORKER_LIMITS.
 
 %%% ------------------------------------------------------------- submitting ---
 
@@ -616,7 +821,8 @@ do_submit(Request, Caller, W) ->
     Args = #{worker => Self, ref => Ref, id => Id, deadline => Deadline,
              adapter => W#w.adapter, artifact => W#w.artifact,
              request => Request, limits => W#w.limits, root => W#w.root,
-             trusted => W#w.trusted},
+             trusted => W#w.trusted, image => W#w.image,
+             snapshot_cap => W#w.snapshot_cap},
     {G, GMon} = spawn_monitor(fun() -> guardian(Args) end),
     receive
         {guardian_ready, Ref, ok} ->
@@ -680,6 +886,8 @@ clear_waiter(W) ->
             adapter     :: module(),
             artifact    :: artifact(),
             request     :: request(),
+            image       :: undefined | wasm:snapshot(),
+            snapshot_cap :: undefined | snapshot_cap(),
             limits      :: map(),
             root        :: worker_reaper:root_id(),
             trusted     :: boolean(),
@@ -727,6 +935,8 @@ start_runner(Args, WMon, Dir) ->
             id = maps:get(id, Args), deadline = maps:get(deadline, Args),
             adapter = maps:get(adapter, Args), artifact = maps:get(artifact, Args),
             request = maps:get(request, Args), limits = Limits,
+            image = maps:get(image, Args),
+            snapshot_cap = maps:get(snapshot_cap, Args),
             root = maps:get(root, Args), trusted = maps:get(trusted, Args),
             wmon = WMon, dir = Dir,
             channels = channels(Limits)},
@@ -1178,23 +1388,26 @@ execute_and_decode(G, Spec, AState) ->
         {error, _} = E ->
             E;
         ok ->
-            {Outcome, Values, Exit, Err} = execute(G, Spec, AState),
-            Chans = G#g.channels,
-            {Out, TOut} = channel_read(maps:get(stdout, Chans)),
-            {Err2, TErr} = channel_read(maps:get(stderr, Chans)),
-            {Res, TRes} = channel_read(maps:get(result, Chans)),
-            ExecResult = #{outcome => Outcome, values => Values, exit => Exit,
-                           error => Err,
-                           channels => #{stdout => Out, stderr => Err2,
-                                         result => Res},
-                           truncated => #{stdout => TOut, stderr => TErr,
-                                          result => TRes}},
-            case call_back(G#g.adapter, decode, [ExecResult, AState]) of
-                {error, _} = E          -> E;
-                {ok, {ok, _} = Ok}      -> Ok;
-                {ok, {error, _} = Bad}  -> Bad;
-                {ok, Other}             -> bad_shape(decode, Other)
-            end
+            executed(G, AState, execute(G, Spec, AState))
+    end.
+
+executed(_G, _AState, {error, _} = WErr) ->
+    WErr;
+executed(G, AState, {Outcome, Values, Exit, Err}) ->
+    Chans = G#g.channels,
+    {Out, TOut} = channel_read(maps:get(stdout, Chans)),
+    {Err2, TErr} = channel_read(maps:get(stderr, Chans)),
+    {Res, TRes} = channel_read(maps:get(result, Chans)),
+    ExecResult = #{outcome => Outcome, values => Values, exit => Exit,
+                   error => Err,
+                   channels => #{stdout => Out, stderr => Err2, result => Res},
+                   truncated => #{stdout => TOut, stderr => TErr,
+                                  result => TRes}},
+    case call_back(G#g.adapter, decode, [ExecResult, AState]) of
+        {error, _} = E          -> E;
+        {ok, {ok, _} = Ok}      -> Ok;
+        {ok, {error, _} = Bad}  -> Bad;
+        {ok, Other}             -> bad_shape(decode, Other)
     end.
 
 %% An empty `invoke' is an adapter bug rather than a legitimate shape, so it is
@@ -1208,10 +1421,12 @@ check_spec(_) ->
                                  #{callback => prepare})}.
 
 execute(G, Spec, AState) ->
-    #{module := M, imports := ImportSet, invoke := Invoke} = Spec,
-    Bindings = maps:get(bindings, ImportSet),
+    #{invoke := Invoke} = Spec,
     Limits = G#g.limits,
-    case wasm:instantiate(M, Bindings, Limits) of
+    case start_instance(G, Spec) of
+        {error, #{class := _} = WErr} ->
+            %% An adapter's own refusal, already in the worker's shape.
+            {error, WErr};
         {error, E} ->
             {trapped, [], undefined, E};
         {ok, Inst} ->
@@ -1219,6 +1434,56 @@ execute(G, Spec, AState) ->
             ok = wasm:destroy(Inst),
             R
     end.
+
+%% One instance per request either way. The image only changes where the
+%% instance starts: a restore lands at the captured point, so the adapter's
+%% `invoke' is the request's work and nothing else.
+start_instance(#g{image = undefined, limits = Limits}, Spec) ->
+    #{module := M, imports := ImportSet} = Spec,
+    wasm:instantiate(M, maps:get(bindings, ImportSet), Limits);
+start_instance(#g{image = Image} = G, #{imports := ImportSet}) ->
+    %% The module is not passed: `restore/3' takes it from the image, so there
+    %% is no argument left to lay one module's bytes over another's layout.
+    %% The bindings **are** fresh, and the compatibility key is checked against
+    %% them before anything is copied.
+    Opts = maps:merge(G#g.limits, restore_opts(ImportSet)),
+    case wasm:restore(Image, maps:get(bindings, ImportSet), Opts) of
+        {error, E} -> {error, E};
+        {ok, Inst} -> post_restore(Inst, Image, G)
+    end.
+
+
+%% The adapter's own check, run **in the runner on the request's remaining
+%% deadline**, because it happens per request. Governing it by a capture budget
+%% would bound request work with an initialisation one.
+post_restore(Inst, Image, #g{snapshot_cap = #{post_restore := F}}) ->
+    #{module := M, version := V} = wasm:snapshot_info(Image),
+    case call_fun(F, [Inst, #{module => M, version => V}]) of
+        {ok, ok} ->
+            {ok, Inst};
+        {ok, {error, WErr}} ->
+            refused(Inst, WErr);
+        {error, WErr} ->
+            refused(Inst, WErr)
+    end.
+
+%% The instance goes and the adapter's own error is what comes back, rather
+%% than a `trapped' with nothing in it that `decode/2' would have to guess at.
+refused(Inst, WErr) ->
+    ok = wasm:destroy(Inst),
+    {error, WErr}.
+
+%% An exception from an adapter fun normalises like every other callback: named
+%% in the context, never a crash the runner carries somewhere else.
+call_fun(F, Args) ->
+    try {ok, apply(F, Args)}
+    catch C:R -> {error, worker_error:adapter(
+                           adapter_failure, ~"post_restore raised",
+                           #{callback => post_restore, class => C,
+                             reason => iolist_to_binary(
+                                         io_lib:format(~"~p", [R]))})}
+    end.
+
 
 %% `classify/2' is called after **every** invocation, whether it returned or
 %% trapped, and the kernel interprets none of them. A WASI exit arrives as a

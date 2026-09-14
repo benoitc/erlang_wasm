@@ -91,3 +91,94 @@ first one hid all of it.
 `python_compiled` is **not** run. The tier needs several hundred requests
 *plus* a compile `PERF.md` measured at 567 s, which is hours rather than
 minutes, and Phase 5 is where that measurement belongs.
+
+# The CPython reactor
+
+A second artifact, `test/fixtures/lang/py_reactor.wasm` and its standard
+library beside it, because the one above exports only `_start` and can
+therefore never be snapshotted. Build both with
+`scripts/build-python-reactor.sh`; neither is committed.
+
+| | |
+| --- | --- |
+| project | [CPython](https://github.com/python/cpython) |
+| tag | `v3.14.7` |
+| shim | `test/fixtures/lang/python_reactor/worker_reactor.c`, in this repository |
+| toolchain | wasi-sdk 34.0, clang 23.1.0, `wasm32-wasip1` |
+| size | 30,887,792 bytes |
+| standard library | `test/fixtures/lang/py_reactor_lib`, 11 MB, 554 modules |
+| shape | **reactor**: `_initialize`, `init`, `handle`, `ready` |
+| transport | `script_v1.channel` |
+
+## There is no checksum, and that is the honest answer
+
+The artifact **embeds its own build directory**: one absolute path, from
+CPython's path configuration, sits in its data section. A hash of it would pin
+this machine rather than the recipe, so there is no `py_reactor.wasm.sha256`
+and `scripts/verify-fixtures.sh` does not check it. The build script uses a
+fixed directory under `_build/` rather than a temporary one, so two builds from
+the same checkout do agree; two checkouts in different places do not.
+
+For provenance rather than verification, the artifact this box built is
+`b4a78ad5046df47d0c8422eca122aa660f83933b70fcf0736519dc0dd0bc5514`.
+
+What keeps a broken build from passing quietly is not a checksum but the build
+failing: `scripts/build-python-reactor.sh` stops on the first error, and the
+suite group refuses to run without the artifact rather than skipping green.
+
+## Why a shim
+
+Upstream's `Tools/wasm/wasi` builds a command. The shim links CPython's own
+`libpython3.14.a` with `-mexec-model=reactor` and exports `init()` and
+`handle()` instead of `_start`.
+
+It does **not** reconstruct the link line. `make -n python.wasm` names about
+four hundred objects and five static libraries, and the script asks the
+Makefile for that line, swaps `Programs/python.o` for the shim's object, and
+runs it. A hand-written copy would rot at the next CPython release.
+
+## Why `init` touches nothing a request supplies
+
+Whatever `init()` does is in the image every request restores. So it reads no
+argv, opens no file under the work directory, and evaluates no tenant source.
+It does import `json`, `importlib.util` and `sys`, deliberately: that cost is
+paid once into the image instead of once per request.
+
+`ready()` exists because `init()`'s own return value never reaches the kernel,
+which does not read guest values. Without it, an interpreter that failed to
+start would be captured and restored into every request; the adapter's
+`validate` asks `ready()` instead, and removing the standard library from the
+initialisation imports is what proved the check works.
+
+Path configuration is **stated, not computed**. Left to itself CPython walks
+the filesystem looking for a prefix and a landmark, which inside a preopened
+sandbox is a pile of failed `path_open` calls and a warning at the end of them.
+The shim sets `module_search_paths` to `/lib/python3.14` and nothing else.
+
+`script_v1.channel` rather than `combined`, for the same reason as the
+JavaScript reactor: the combined transport learns its per-request marker from
+argv, and a marker read during `init()` would be frozen into the image.
+
+## Two mounts
+
+`ro` is the kernel's, holding the tenant's staged `main.py` and
+`context.json`. `/lib` is the adapter's own `dirs` entry, pointing at the
+standard library the build produced; it is 11 MB of files the adapter ships,
+not something to stage per request. The record above predicted exactly this
+split, and it is the one an upstream build forces.
+
+## The kit passes, unmodified
+
+All 30 applicable cases, the identical list the WAT adapters and both
+JavaScript adapters run:
+
+    rebar3 ct --suite=test/wasm_worker_lang_SUITE --group=python_reactor
+
+**About 80 minutes**, which is why it is not in `all/0` and not in CI. Every
+case starts its own worker and every worker start is one interpreter start, so
+the group costs roughly one capture per case rather than one per run.
+
+`capture_timeout` has to be raised for it: the default is 60 s and a capture
+here takes 83 to 90, so the group passes `180_000`. That is the same knowingly
+raised ceiling as `fuel` and `max_heap_words`, and the adapter does not raise
+it for you.

@@ -2,153 +2,140 @@
 
 ## Unreleased
 
-### What the tier is worth to a worker host, and what it is not
+### A worker kernel for untrusted guests
 
-`bench/paths/workerbench.erl` times a request rather than a path: one arriving
-at a `script_worker`, an instance made for it, and the latency changing
-underneath when generated code lands. Three cache arms, and the third is the
-one that matters.
+`examples/script_worker.erl` is now a language-neutral kernel: modules,
+imports, invocations, deadlines and bounded channels, and nothing about WASI or
+JSON. A language is an **adapter**, the eight-callback behaviour the same
+module declares. Start one with a `worker_reaper` and a scratch root:
 
-For QuickJS the compiled steady state is about **4.7x**, 130 ms to 27 ms. But
-the arm that changes what a host should do is `warm`: with a populated
-`code_cache_dir` the tier is entered at request **3 to 9** instead of **351 to
-363**, and `wasm_jit:counts/0` saying `cached => 1` is what distinguishes it,
-because the other two arms are identical by latency. A host that restarts
-without that directory pays the interpreted rate for its first several hundred
-requests, every time.
+```erlang
+{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/w"}),
+{ok, W} = script_worker:start_link(my_adapter, #{root => scratch}),
+{ok, R} = script_worker:run(W, Request).
+```
 
-For CPython nothing finer than a range can be claimed: 53 to 76 s a request,
-with a 33 to 41% spread inside each arm. A single earlier pair of runs had
-said metering costs 75% on CPython, and interleaved and repeated the two arms
-are 1.5% apart. That claim was nearly written down and is not supported.
+See [the adapter contract](docs/worker-contract.md) for writing one, and
+[the worker guide](docs/worker.md) for the `metered` and `compiled`
+configurations, which are mutually exclusive: setting `compile => true` while
+keeping a fuel ceiling silently gets you the interpreter.
 
-`PERF.md` carries all of it, including the null experiment that bounds what any
-of it can mean and the arithmetic showing why the compiled CPython path was not
-measured: five and a half hours before the first generated code.
+**Breaking.** The QuickJS example is `qjs_worker`, since the kernel has the
+name it used to hold. Its behaviour is unchanged.
 
-### Python, and two guides that say what each language does not promise
+`max_output_bytes` now also accepts `#{stdout := N, stderr := M}`, so the two
+streams can carry different bounds.
 
-`py_adapter` runs CPython under `script_v1.combined` and `python_worker` is the
-same with the arguments unpacked. The bootstrap is `priv/script_v1/boot.py`,
-and the interpreter is started `-I -B -u`: isolated, no `.pyc` writes, and
-unbuffered because buffered output arrives in one burst at the end and the
-streaming bound never sees it.
+New: `wasm:extern/0` names the value `extern/2` returns. A new `kernel_check`
+rebar profile analyses `examples/`, which no other profile reaches.
 
-The artifact was asked rather than assumed. `sys.path` names a directory that
-is in no preopen and `import json` works anyway, so the library is embedded and
-the adapter declares **one** mount rather than two. Because `-I` implies `-P`
-the work directory is not on `sys.path`, so the bootstrap loads the tenant's
-module through `importlib.util.spec_from_file_location` against an explicit
-path rather than putting a tenant-supplied directory on the import path.
+### JavaScript and Python through `script_v1`
 
-**The whole kit passes against real CPython**, the identical list the WAT
-adapters and QuickJS run, in 29 minutes. It is not in the suite's default run
-for that reason, and `test/fixtures/lang/PYTHON.md` has the numbers: 48 s a
-request, and a `max_heap_words` of 16M rather than 64M because a bigger ceiling
-lets the heap grow and the collections cost more.
+`js_worker` and `python_worker` run a function that arrives at request time:
 
-Adding a second language found four places the **kit** had assumed a fast
-guest: a hardcoded 300 ms deadline against an adapter declaring 60 s, a 10 s
-await against a 48 s request, ten repetitions where three prove the same thing,
-and a worker timeout below what `requirements/2` asks for. Every wait is a
-multiple of what the adapter declares now. The first language hid all of it.
+```erlang
+{ok, W} = js_worker:start_link("qjs.wasm", #{root => scratch}),
+{ok, #{result := #{~"answer" := 42}}} =
+    js_worker:run(W, ~"export function main(c) { return {answer: c.value+1}; }",
+                  #{~"value" => 41}).
+```
 
-`docs/javascript.md` and `docs/python.md` say what each one does *not* promise,
-which is the half you cannot discover from a working example. Neither says the
-network is unavailable: it is **ungranted**, and each says what `max_sockets`
-and `timeout` actually bound, because neither is a subrequest budget. CPython's
-missing `subprocess`, threading and sockets are cited to CPython rather than
-implied to be something taken away here.
+**CPython needs ceilings raised knowingly**, and an adapter never raises one
+for you: `timeout`, `max_memory_pages`, `fuel` (a thousand times the untrusted
+preset) and `max_heap_words` (16M words; the default kills the runner, and a
+*larger* bound is slower). [The Python guide](docs/python.md) has the numbers.
 
-### JavaScript, through the profile and against the real engine
+[docs/javascript.md](docs/javascript.md) and
+[docs/python.md](docs/python.md) say what each language does not promise. The
+network is **ungranted** rather than unavailable in both.
 
-`qjs_adapter` runs QuickJS under `script_v1.combined`, and `js_worker` is the
-same thing with the arguments unpacked: hand it source and a context, get back
-what `main` returned. The bootstrap it stages is `priv/script_v1/boot.js`.
+`scripts/fetch-python-fixture.sh` and `scripts/verify-fixtures.sh` fetch and
+check the artifacts; `test/fixtures/lang/QUICKJS.md` and `PYTHON.md` record
+what they are.
 
-The artifact was **asked rather than assumed**, and the answers are in
-`test/fixtures/lang/QUICKJS.md`. Absolute module paths resolve, so
-`import('/main.js')` works and `script_v1` needs no separate non-module
-profile, which the plan had held in reserve. `scriptArgs` does not exist but
-`args` does and it excludes argv[0], so the marker is `args[1]`; and output goes
-through `std.out.puts`, because `print` would append a newline inside the
-framed result.
+### Initialized runtime snapshots
 
-`wasm_worker_lang_SUITE` runs the **same kit** as the WAT adapters, in both
-named configurations, because a language is accepted when it passes without the
-kernel changing and a copy of the case list with allowances in it would not
-show that.
+`wasm:snapshot/1`, `wasm:restore/3` and `wasm:snapshot_info/1`. An image of an
+already-started guest, restored into a **fresh** instance, so startup is
+skipped and per-request isolation is unchanged.
 
-`scripts/verify-fixtures.sh` checks the artifacts against recorded checksums,
-and the new `integration` CI job runs it in a step of its own before the suite:
-a missing or mismatched artifact fails the job rather than quietly reducing what
-ran. Both failure modes were triggered once to prove they are red.
+```erlang
+{ok, Init} = wasm:instantiate(Handle, Imports, #{snapshotable => true}),
+{ok, _} = wasm:call(Init, ~"init", []),
+{ok, Image} = wasm:snapshot(Init),
+{ok, Fresh} = wasm:restore(Image, FreshImports, #{}).
+```
 
-### `script_v1`: one source, a JSON context, `main(context)`
+`snapshotable => true` is required and costs an ordinary instance nothing.
+Restore does **not** run the module's start function, and takes the module from
+the image rather than from the caller. On a snapshotable instance `extern/2` is
+refused and `write_memory/3` takes a lease, so a capture cannot read a torn
+image.
 
-The profile the two language adapters will share, landing before either
-interpreter does. It is a **profile, not the protocol**: the kernel knows no
-JSON, no file staging and no framing convention, and the version in the name is
-what lets a second profile exist later without breaking this one.
+Every import module in the bindings needs an entry in `snapshot_hooks`, or the
+capture is refused: say `stateless`, or supply `eligible`, `capture` and
+`restore` funs. `wasi_preview1:snapshot_hook/0` is WASI's, and it refuses a
+descriptor opened during initialisation.
 
-Two transports, and they are not one mechanism with a fallback.
-`script_v1.channel` binds a `worker.result` import to the kernel's result
-channel: three independent bounds, all enforced while streaming, no parsing.
-`script_v1.combined` puts the result on stdout for an artifact whose imports we
-cannot change, which means one bound over a stream that really is shared.
+Refused: an instance not built through `wasm:load/1`, an imported memory, table
+or global, a shared memory, a non-empty object store, and a reference to
+another instance.
 
-The delimiter is sixteen random bytes per request, hex-encoded so it survives
-`argv`, and the result is read from its **last** occurrence. **It authenticates
-nothing.** A tenant can read `argv` and print the marker itself, and this
-transport cannot tell that from the bootstrap's own output. It makes accidental
-collision negligible and does no more; strict framing needs the channel
-transport. A fixture does exactly that imitation and the suite asserts it is
-*not* distinguished, so the documentation cannot drift away from the behaviour.
+`script_worker` uses them: an adapter that exports `snapshot_capability/1`
+gets its runtime captured once at `start_link/2` and restored into every
+request, with `prepare/3` returning only the request's own work. A capture that
+fails fails the start. Two adapters use it, over reactors built by
+`scripts/build-quickjs-reactor.sh` and `scripts/build-python-reactor.sh`:
 
-Both transports have a WAT adapter of their own, so the suite now runs four.
-The combined one reads the marker out of `argv` and frames on stdout exactly as
-a real bootstrap will; the channel one imports `worker.result` and writes
-through it. The profile is proved with no interpreter and nothing downloaded,
-so a failure there is the profile's rather than QuickJS's.
+| | per request, command | per request, restored |
+| --- | ---: | ---: |
+| `qjs_reactor_adapter` | 173 ms | 28 ms |
+| `py_reactor_adapter` | 65.9 s | 0.35 s |
+| `lua_reactor_adapter` | n/a | 25 ms |
 
-`max_output_bytes` was documented as per stream and was one number for both,
-which the combined transport cannot live with: stdout carries the tenant's
-output *and* the result there, so bounding the shared descriptor tightly bound
-the unshared one with it. It accepts `#{stdout := N, stderr := M}` now, and
-`script_v1:combined_limits/1` is what turns `max_combined_bytes` into a bound
-on the descriptor that actually carries both.
+Lua is the third language and the first added after all of this was written:
+it passed the conformance kit unmodified, with no kernel, profile or snapshot
+change. Building it needs `-mllvm -wasm-use-legacy-eh=false`, because LLVM
+emits the superseded exception-handling encoding by default and this runtime
+implements the standardised one. [The Lua guide](docs/lua.md) has the rest.
 
-### A worker kernel, and two adapters that are not a language
+`test/audit/PERF.md` has the protocol and the null experiments.
+`start_link/2` pays one interpreter start, which for CPython is about 90
+seconds, so start your workers before you take traffic, and raise
+`capture_timeout` (a worker option, 60 s by default) past it.
 
-`examples/script_worker.erl` is now a language-neutral kernel: it knows about
-modules, imports, invocations, deadlines and bounded channels, and nothing
-else. What stdin, preopens, stdio and an entry point mean belongs to an
-**adapter**, which is the eight-callback behaviour the same module declares.
-Assemble an import set, instantiate, call an export, release: the shape
-Wasmtime, Wasmer and wasm3 already have, where WASI is a library you attach
-rather than a mode the engine is in.
+**Three fixes since.** A mutable global a module *exports* is a cell, and
+capturing it raw shared one global between every restore from an image and died
+with the instance that captured it. A restore that grew a memory wrote through
+the pre-grow handle, which only worked because reactors export their memory. A
+table the guest grew during `init()` could be captured and never restored.
 
-There is deliberately no `{start}` invocation, because the kernel would have to
-know what `_start` means to translate one. An adapter that wants a command
-writes `{call, ~"_start", []}` itself, which is the only reason a reactor and a
-command are the same code path.
+Capture also refuses by allowlist now rather than by a list of refusals, so a
+global holding a host term is refused instead of entering an image.
 
-`worker_reaper` is the cleanup owner that outlives a worker's guardian, with a
-journal that survives its own death, an adoption handshake in which silence
-never authorises deleting a running request's directories, and cleanup jobs
-that are bounded per callback and per job.
+A restored table is written once rather than once per element, which is
+**2.5x on a CPython request**. An image keeps only the non-zero runs of each
+memory, which holds 5.7x less: `wasm:snapshot_info/1`'s `bytes` and the
+`max_snapshot_bytes` budget both mean what is retained, so a ceiling set before
+this admits proportionally more images.
 
-`test/wasm_worker_kernel_SUITE` runs one base case list against two adapters
-built from WAT at test time, one of them with **no WASI at all**. It downloads
-nothing and never skips. A kernel that passes the WASI adapter and fails the
-typed one is a WASI script runner, and that is the only signal there is.
+**Images can be kept on disk.** `application:set_env(wasm, snapshot_dir, Dir)`
+and a worker reads its image instead of running `init()` again: a CPython
+worker starts in **998 ms** against 104 s, from a 2.7 MB file. Off unless you
+set it, and the directory is as trusted as your release.
+`wasm:save_snapshot/2` and `wasm:load_snapshot/2` are the same thing by hand.
 
-### The QuickJS example is `qjs_worker`
+An adapter must supply a `compatibility_key` to be filed at all: an image is a
+runtime after `init()` ran against a particular environment, and nothing else
+in the contract accounts for it.
 
-It was `script_worker`, whose name the kernel now has. The module is otherwise
-unchanged, so `eval/2` still answers `{ok, Printed}`, `{error, timeout}` and
-`{error, {exit, Code, Printed}}` exactly as before; only the name it is called
-by moved.
+[The snapshot guide](docs/snapshots.md) has the lifecycle and the hooks.
+
+`wasm:acquire/1` and `wasm:release/1` add and drop a holder. An image keeps its
+own claim on its module, so it survives the process that captured it **if
+something acquired first**. `application:set_env(wasm, max_snapshot_bytes, N)`
+bounds images node-wide; the default is `infinity`, meaning unbounded rather
+than off.
 
 ### The compiled tier runs the OTP compiler in a process it owns
 

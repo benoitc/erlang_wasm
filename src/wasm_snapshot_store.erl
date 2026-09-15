@@ -5,7 +5,8 @@ A directory of snapshot images, keyed by what makes one valid.
 Shaped on `wasm_code_cache`, which is the existing precedent for a build
 artifact kept on disk and looked up by identity: a flat directory named by app
 env, absent meaning off, one file per key, write to a temporary name and
-rename. Read it for the reasoning about eviction and stale temporaries.
+rename, and a total size past which the oldest go. The policy itself is
+`wasm_file_cache`, shared with that module.
 
 ```erlang
 application:set_env(wasm, snapshot_dir, "/var/cache/wasm/images").
@@ -35,9 +36,20 @@ genuinely specific to an emulator, while an image is bytes, integers and
 indices, and one that would not load on another machine could not be moved.
 """.
 
--export([dir/0, key/4, lookup/2, store/3, purge/0]).
+-export([dir/0, key/4, lookup/2, store/3, purge/0, max_bytes/0]).
 
 -define(SUFFIX, ".img").
+
+%% The same number `wasm_code_cache` uses. A **file** here is 35 KB for Lua and
+%% 2.7 MB for CPython, a 77x spread, which is why this one is a setting and that
+%% one is not: the right size depends entirely on the guest.
+%%
+%% Note which of an image's three sizes this bounds. It is the file, not the
+%% 7.4 MB a started CPython retains in memory (`max_snapshot_bytes`) and not the
+%% 41.9 MB of address space it covers (`max_memory_pages`). `docs/snapshots.md`
+%% has the three side by side.
+-define(MAX_BYTES, 512 * 1024 * 1024).
+-define(WARNED, {?MODULE, warned_bad_max}).
 
 -doc "Where images live, or `undefined`, which means the store is off.".
 -spec dir() -> undefined | file:filename().
@@ -76,9 +88,9 @@ lookup(Key, Handle) ->
 read(Path, Handle) ->
     case wasm:load_snapshot(Path, Handle) of
         {ok, Image} ->
-            %% Least-recently-used rather than least-recently-written, which is
-            %% what makes a size cap evict the right thing later.
-            _ = file:change_time(Path, calendar:local_time()),
+            %% Least-recently-used rather than least-recently-written, which
+            %% is what makes the size cap evict the right thing.
+            ok = wasm_file_cache:touch(Path),
             {ok, Image};
         {error, _} ->
             miss
@@ -100,19 +112,61 @@ store(Key, Image, _Meta) ->
             ok;
         Dir ->
             _ = filelib:ensure_path(Dir),
-            _ = wasm:save_snapshot(Image, path(Dir, Key)),
+            Path = path(Dir, Key),
+            _ = wasm:save_snapshot(Image, Path),
+            %% **Here and nowhere else.** The directory only grows on a store,
+            %% so that is the only moment it can need shrinking; there is no
+            %% sweeper and a node that files nothing never evicts. The image
+            %% just written is kept whatever its age, or a cap smaller than one
+            %% image would file it and delete it in the same breath.
+            ok = wasm_file_cache:sweep_and_evict(Dir, ?SUFFIX, max_bytes(), Path),
             ok
     end.
 
--doc "Remove every image. For tests, and for a release that wants a clean start.".
+-doc """
+Remove every image, and every half-written one.
+
+For tests, and for a release that wants a clean start -- and for an operator
+who has just lowered `max_snapshot_dir_bytes` and wants the directory to shrink
+now rather than at the next store.
+""".
 -spec purge() -> ok.
 purge() ->
     case dir() of
         undefined -> ok;
-        Dir ->
-            _ = [file:delete(F)
-                 || F <- filelib:wildcard(filename:join(Dir, "*" ++ ?SUFFIX))],
-            ok
+        Dir       -> wasm_file_cache:purge(Dir, ?SUFFIX)
+    end.
+
+-doc """
+The cap in force, in bytes.
+
+Resolved on **every store** through `application:get_env/3`, so a change is in
+force from the next one and there is nothing cached to invalidate at boot. It
+is reported rather than left implicit because a setting nobody can read back is
+a setting nobody can tell is being used: `wasm_code_slots:resolve_max_heap_words/0`
+and `wasm_jit:compile_limits/0` exist for the same reason.
+
+A value that cannot be a size -- negative, a float, an atom -- answers the
+default and warns once. Taking it literally would mean a cap of `0` deleting
+every image on the next store.
+""".
+-spec max_bytes() -> non_neg_integer().
+max_bytes() ->
+    case application:get_env(wasm, max_snapshot_dir_bytes, ?MAX_BYTES) of
+        N when is_integer(N), N >= 0 -> N;
+        Bad -> warn_once(Bad), ?MAX_BYTES
+    end.
+
+%% Once per node, because this is read on every store and a bad value would
+%% otherwise fill a log with the same line.
+warn_once(Bad) ->
+    case persistent_term:get(?WARNED, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(?WARNED, true),
+            logger:warning("wasm: max_snapshot_dir_bytes is ~p, which is not a "
+                           "byte count; using ~p", [Bad, ?MAX_BYTES])
     end.
 
 path(Dir, Key) ->

@@ -244,8 +244,14 @@ than a leak you cannot see.
 | --- | ---: | --- |
 | `max_snapshot_bytes` | `infinity` | what every snapshot image **retains**, across the node. `infinity` means unbounded, not off |
 | `snapshot_dir` | unset | where images are kept between restarts. Unset means images live only in memory |
+| `max_snapshot_dir_bytes` | 512 MiB | how much **disk** that directory may hold. An image file is 35 KB for Lua and 2.7 MB for CPython. Not `max_snapshot_bytes`, one row above, which bounds what images retain **in memory** and is a different number for the same image: [snapshots](snapshots.md) has all three side by side |
 | `code_cache_dir` | unset | where generated code is kept. Unset means the compiled tier recompiles on every start |
 | `page_limit` | see `wasm_engine` | linear memory pages across every instance on the node |
+
+The directory is trimmed **when an image is filed and at no other time**, so a
+directory already over its cap stays over it until the next worker captures
+one, and lowering the setting shrinks nothing by itself.
+`wasm_snapshot_store:purge/0` is what empties one now.
 
 `max_snapshot_bytes` and `page_limit` are separate on purpose: one bounds the
 images beside your instances and the other bounds the instances. See

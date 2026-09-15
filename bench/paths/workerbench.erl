@@ -28,6 +28,24 @@ is what distinguishes it: a wall time alone would not.
 Output is written as it happens, one line per sample. Do not pipe it through
 `tail`, which buffers until exit and hides the progress this exists to show.
 
+## The `throughput` mode
+
+What a host gets from more workers, and what a heap floor costs it in memory.
+
+    erl ... -run workerbench main throughput qjs_reactor 20 200000 1 2 4 8 14
+
+`N` requests per worker, then a floor in words, then the worker counts to
+sweep. Each count is run twice, once with the floor and once without, so the
+curve prices the floor as well as the scaling. Peak `erlang:memory(processes)`
+is sampled during each arm, because the point of the memory column is that a
+floor is paid per *concurrent runner* and only a concurrent arm can show it.
+
+**This one is not self-controlling and nothing can make it so.** A latency
+sweep can interleave its arms and be read against whatever else the box is
+doing; a scaling curve needs idle cores and there is no substitute. Read
+`uptime` before and after every arm, and throw the run away if the box was
+busy. `bench/paths/README.md` says the same thing at more length.
+
 ## The `floors` mode
 
 A second question, and a different shape: what a **heap floor** on the request
@@ -70,6 +88,9 @@ floor on work this mode is not about.
 
 main(["floors", Adapter, N | Floors]) ->
     floors(Adapter, list_to_integer(N), [list_to_integer(F) || F <- Floors]);
+main(["throughput", Adapter, N, Floor | Counts]) ->
+    throughput(Adapter, list_to_integer(N), list_to_integer(Floor),
+               [list_to_integer(C) || C <- Counts]);
 main([Adapter, Config, Arm, N, Cache]) ->
     io:format("# load average at start: ~s", [os:cmd("uptime")]),
     {ok, _} = application:ensure_all_started(wasm),
@@ -311,3 +332,99 @@ report_floor(F, Samples) ->
               [F, hd(Us), med(Us), med(Gcs), med(GcUs), length(Samples)]).
 
 med(L) -> lists:nth(max(1, length(L) div 2), L).
+
+%%% --------------------------------------------------------- throughput ---
+
+%% Requests per second against worker count, with and without a heap floor.
+%%
+%% Shaped on `pathbench:run(concurrency)', which sweeps the same counts and
+%% reports the same rate. The difference is what is being driven: that one
+%% spawns instances, this one spawns `script_worker's, so what it prices is a
+%% host's own scaling and not the interpreter's.
+throughput(Adapter, N, Floor, Counts) ->
+    io:format("# at start: ~s#           ~s", [os:cmd("uptime"), idle()]),
+    {ok, _} = application:ensure_all_started(wasm),
+    application:unset_env(wasm, code_cache_dir),
+    Root = "/tmp/workerbench_root",
+    _ = os:cmd("rm -rf " ++ Root),
+    ok = filelib:ensure_path(Root),
+    Images = Root ++ "/images",
+    ok = filelib:ensure_path(Images),
+    application:set_env(wasm, snapshot_dir, Images),
+    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {Mod, Path, Limits} = arm(Adapter, "metered"),
+    Guest = guest(Adapter, Path),
+    {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
+    #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
+    io:format("# ~s n=~w floor=~w counts=~w schedulers=~w~n",
+              [Adapter, N, Floor, Counts, erlang:system_info(schedulers_online)]),
+    %% One worker built and thrown away, so the image is captured and filed
+    %% before any arm is timed. Otherwise the first arm pays a capture that no
+    %% other arm pays and the curve starts with a number that is not a rate.
+    ok = script_worker:stop(start_floor(Mod, Guest, Limits, 0)),
+    [arm_pair(Mod, Guest, Limits, Echo, N, Floor, C) || C <- Counts],
+    io:format("# at end:   ~s#           ~s", [os:cmd("uptime"), idle()]),
+    init:stop().
+
+%% How much of the machine was actually free. A one-minute load average decays
+%% for fifteen minutes after a previous arm and says nothing about now; this
+%% says what a scaling curve needs to know before it is believed.
+idle() ->
+    os:cmd("top -l 2 -n 0 -s 1 | grep 'CPU usage' | tail -1").
+
+%% Both orderings across the sweep rather than within it: an arm here is a
+%% whole population of workers and cannot be interleaved with another.
+arm_pair(Mod, Guest, Limits, Echo, N, Floor, C) when C rem 2 =:= 0 ->
+    one_arm(Mod, Guest, Limits, Echo, N, 0, C),
+    one_arm(Mod, Guest, Limits, Echo, N, Floor, C);
+arm_pair(Mod, Guest, Limits, Echo, N, Floor, C) ->
+    one_arm(Mod, Guest, Limits, Echo, N, Floor, C),
+    one_arm(Mod, Guest, Limits, Echo, N, 0, C).
+
+one_arm(Mod, Guest, Limits, Echo, N, Floor, Count) ->
+    Ws = [start_floor(Mod, Guest, Limits, Floor) || _ <- lists:seq(1, Count)],
+    Sampler = spawn_link(fun() -> sample(self(), 0) end),
+    T0 = erlang:monotonic_time(microsecond),
+    ok = drive(Ws, Echo, N),
+    Us = erlang:monotonic_time(microsecond) - T0,
+    Peak = stop_sampler(Sampler),
+    [ok = script_worker:stop(W) || W <- Ws],
+    io:format("workers=~2w floor=~8w  ~7.1f req/s  ~w requests in ~w ms  "
+              "peak process memory ~w MB~n",
+              [Count, Floor, Count * N / (Us / 1000000), Count * N,
+               Us div 1000, Peak div (1024 * 1024)]).
+
+%% One client per worker, all of them started before any of them runs, so the
+%% arm measures the workers competing rather than a ramp.
+drive(Ws, Req, N) ->
+    Parent = self(),
+    Pids = [spawn_link(fun() -> client(Parent, W, Req, N) end) || W <- Ws],
+    [receive {done, P} -> ok end || P <- Pids],
+    ok.
+
+client(Parent, W, Req, N) ->
+    lists:foreach(fun(_) -> ok = check(script_worker:run(W, Req)) end,
+                  lists:seq(1, N)),
+    Parent ! {done, self()}.
+
+%% Sampled rather than read at the end: a runner is created and destroyed per
+%% request, so the memory a floor costs is only visible while requests are in
+%% flight.
+%%
+%% **The peak is biased low for a fast arm**, and the bias runs the wrong way
+%% for the comparison this column exists for: a floored arm finishes sooner, so
+%% fewer samples are taken and the maximum over them is a worse estimate of the
+%% real maximum. 5 ms keeps it small against the shortest request measured
+%% (12.7 ms on Lua) but does not remove it. Read the column as a bound, not a
+%% measurement, and never read a *lower* floored number as the floor saving
+%% memory.
+sample(_Parent, Peak) ->
+    receive
+        {stop, From} -> From ! {peak, Peak}
+    after 5 ->
+        sample(_Parent, max(Peak, erlang:memory(processes)))
+    end.
+
+stop_sampler(Pid) ->
+    Pid ! {stop, self()},
+    receive {peak, P} -> P after 5000 -> 0 end.

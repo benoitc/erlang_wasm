@@ -584,3 +584,31 @@ on the processes it creates. Two rules it exists to enforce:
 - **Never compare across runs.** The floors are compared against each other
   under whatever load the box has, which is the only comparison this machine
   supports.
+
+### Scaling, where interleaving does not save you
+
+The `throughput` mode sweeps worker counts and reports requests per second,
+with and without a heap floor, sampling peak process memory as it goes.
+
+```sh
+erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples     -pa bench/paths -run workerbench main throughput qjs_reactor 25 200000 1 2 4 8 14
+```
+
+**This is the one arm here that cannot be made self-controlling.** A latency
+sweep interleaves its arms and is readable against whatever else the box is
+doing. A scaling curve needs idle cores and no trick substitutes for them: run
+it on a busy box and you measure the box. So the mode prints `top`'s idle
+percentage as well as the load average, at both ends, because a one-minute
+load average decays for fifteen minutes after the previous arm and says nothing
+about now.
+
+What survives a busy box is the *comparison* between two arms of the same
+count, since both met the same machine in the same minute. What does not is the
+absolute ceiling: read a flattening curve as this machine's free cores until
+you have run it somewhere quiet.
+
+One trap in the memory column. A floored arm finishes sooner, so it is sampled
+fewer times and its peak is the worse estimate of the two. That bias runs
+against the floor, so a *lower* floored number is safe to believe and a higher
+one is not; when it mattered, `PERF.md` re-ran the two arms with request counts
+chosen to make them the same length.

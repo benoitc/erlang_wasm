@@ -280,8 +280,37 @@ to 4,000,000 words came back flat, 223 collections at every floor, including
 the 400,000 that two other runs put at 97. It had no zero-floor arm in it, so
 there was nothing in the run itself to say whether the floors were working at
 all. A sweep of settings needs the off setting in it for the same reason a
-comparison needs a null experiment. The flat run is not explained and is not
-believed.
+comparison needs a null experiment.
+
+**Looked for three times since, with the zero arm added, and not found.** The
+three runs agree with each other to within 12% and give the ordinary curve at
+every floor: 223 to 225 collections unfloored, then 97 to 99, 43, 29 and 19.
+So the flat run stays what it was, a single unexplained result from a run that
+could not check itself, and the entry stays as the reason to include a control
+rather than as an open question. It is not worth a fourth run.
+
+**A heap floor made a ceiling that had always been enough stop being enough.**
+`capture_min_heap_words` at 2 M words with CPython's own
+`py_reactor_adapter:limits/0`, whose `max_heap_words` is 16 M, kills the
+capture about three times in four. The resolver's headroom check passes,
+because that check is about the emulator rounding a floor up at *spawn*; what
+kills it is that `max_heap_words` bounds the peak while a floor raises the
+baseline the peak is measured from. Raising the ceiling to 32 M fixed it, three
+runs for three.
+
+Recorded for the failure's shape rather than its cause. It presented as
+`killed` and nothing else, intermittently, after a ninety-second start, which
+is close to the worst way a configuration error can arrive: the first three
+attempts read as a flaky box and the fourth passed. `capture_elsewhere/2` now
+answers `max_heap_words` and the floor in the error context when a capture dies
+of `killed`, so the next person reads it instead of guessing.
+
+**Three docs code blocks that had never been run.** `docs/javascript.md`,
+`docs/lua.md` and `docs/python.md` each built a guest's source with
+`~"one" "two"`, and adjacent sigils do not concatenate: it is a syntax error,
+so all three examples failed to compile as printed. `<<"one" "two">>` is the
+form that works and is what `wasm_wat_SUITE` already uses. Nothing catches
+this, which is the point: the blocks were correct-looking prose for months.
 
 ## Open, and each a decision rather than a task
 

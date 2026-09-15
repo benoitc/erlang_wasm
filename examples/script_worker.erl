@@ -658,13 +658,38 @@ capture_elsewhere(Cap, #{timeout := Timeout, words := Words, floor := Floor}) ->
             E;
         {'DOWN', Mon, process, Pid, Reason} ->
             {error, worker_error:worker(crashed, ~"the capture died",
-                                        #{reason => reason_of(Reason)})}
+                                        died_why(Reason, Words, Floor))}
     after Timeout ->
         exit(Pid, kill),
         reap(Pid, Mon),
         {error, worker_error:worker(timeout, ~"the capture did not finish",
                                     #{capture_timeout => Timeout})}
     end.
+
+%% A capture that died of `killed' is nearly always the `max_heap_size' kill,
+%% and on its own that reason names nothing an operator can act on.
+%%
+%% It is worth spelling out because a floor makes it **more** likely rather than
+%% less: `max_heap_words' bounds the peak and `capture_min_heap_words' raises
+%% the baseline the peak is measured from, so a ceiling that was comfortable
+%% without a floor can stop being comfortable with one. That is not the
+%% `no_room' case, which `heap_words/3' refuses up front: this one passes every
+%% check and then dies under load, intermittently, which is the worst way for a
+%% configuration error to present. CPython at the 16 M words its own adapter
+%% asks for does exactly this.
+died_why(killed, Words, Floor) when Floor > 0 ->
+    #{reason => ~"killed",
+      hint => <<"the capture probably exceeded max_heap_words; a floor raises "
+                "the baseline, so raise max_heap_words with it or drop "
+                "capture_min_heap_words">>,
+      max_heap_words => Words,
+      capture_min_heap_words => Floor};
+died_why(killed, Words, _Floor) ->
+    #{reason => ~"killed",
+      hint => ~"the capture probably exceeded max_heap_words",
+      max_heap_words => Words};
+died_why(Reason, _Words, _Floor) ->
+    #{reason => reason_of(Reason)}.
 
 %% Sends, then holds its own holder open until the parent has one of its own.
 %% `reap/2` is what releases it, and a parent that died instead is covered by

@@ -175,12 +175,15 @@ five times that. [The tuning guide](tuning.md) is the procedure;
 `test/audit/PERF.md` has the measurements.
 
 Two things to know before you set it. The emulator rounds the number **up** to
-a heap-size class, so 200,000 becomes 318,187 words, which is 2.4 MiB, and
-every concurrent runner pays it. And the floor must fit under `max_heap_words`
-with room for that rounding: one that does not is refused with a warning and
-the runner gets no floor, because a `min_heap_size` above `max_heap_size` is a
-kill at spawn and a worker whose every request fails for a reason nothing
-names.
+a heap-size class, so 200,000 becomes 318,187 words, which is 2.4 MiB of
+ballast per concurrent runner. Measured, that ballast is more than paid for:
+fourteen QuickJS workers under load peak at 122 MB of process memory with the
+floor and 195 to 210 MB without, because the garbage it stops accumulating is
+larger than the heap it reserves. And the floor must fit under
+`max_heap_words` with room for that rounding: one that does not is refused with
+a warning and the runner gets no floor, because a `min_heap_size` above
+`max_heap_size` is a kill at spawn and a worker whose every request fails for a
+reason nothing names.
 
 ## Give the capture one too
 

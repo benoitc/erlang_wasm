@@ -67,9 +67,8 @@ on them is relying on that artifact rather than on the profile.
 ## Skip the engine start, with the reactor build
 
 Starting QuickJS is most of a small request: measured between 173 and 190 ms
-against 28 to 46 ms for the same work once the engine is already up, depending
-on how busy the box is. A factor of four either way. The reactor artifact and
-`qjs_reactor_adapter` are how you get the second number. Build it, then point a
+against 21 ms for the same work once the engine is already up. The reactor
+artifact and `qjs_reactor_adapter` are how you get the second number. Build it, then point a
 worker at it:
 
 ```
@@ -85,8 +84,8 @@ scripts/build-quickjs-reactor.sh
                           max_memory_pages => 4096,
                           max_heap_words => 16 * 1024 * 1024}}),
 {ok, #{result := #{~"answer" := 42}}} =
-    script_worker:run(W, #{source => ~"export function main(c)"
-                                     " { return {answer: c.value + 1}; }",
+    script_worker:run(W, #{source => <<"export function main(c)"
+                                       " { return {answer: c.value + 1}; }">>,
                            context => #{~"value" => 41}}).
 ```
 
@@ -106,6 +105,35 @@ Notes:
   not. `test/fixtures/lang/QUICKJS.md` has the pins.
 - The numbers, their null experiment and where the time goes are in
   `test/audit/PERF.md`.
+
+## Give the runner a heap floor
+
+Do this. It is the largest single thing you can do to a QuickJS request and it
+is one option:
+
+```erlang
+{ok, W} = script_worker:start_link(
+            qjs_reactor_adapter,
+            #{path => "test/fixtures/lang/qjs_reactor.wasm", root => scratch,
+              runner_min_heap_words => 200_000,
+              limits => #{timeout => 30_000, fuel => infinity,
+                          max_memory_pages => 4096,
+                          max_heap_words => 16 * 1024 * 1024}}).
+```
+
+**56.0 ms a request becomes 21.1 ms**, because 61% of an unfloored request was
+garbage collection: a restored instance keeps almost nothing on the runner's
+own heap, so the collector gives it 233 words and collects 98 times through a
+call that allocates hundreds of millions.
+
+Note the option sits beside `root` and **not** inside `limits`. A floor is not
+a bound, and one written into the limits map is ignored silently.
+
+200,000 words is QuickJS's knee and it plateaus there; the knee is a property
+of the guest, and [the tuning guide](tuning.md) is how to find one for a
+different build. There is a matching `capture_min_heap_words` for the worker
+start, which is worth little here because QuickJS captures in well under a
+second.
 
 ## The bound is wall clock, or work, and not both
 

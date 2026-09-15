@@ -66,8 +66,9 @@ on them is relying on that artifact rather than on the profile.
 
 ## Skip the engine start, with the reactor build
 
-Starting QuickJS is most of a small request: 173 ms against 28 ms for the same
-work once the engine is already up. The reactor artifact and
+Starting QuickJS is most of a small request: measured between 173 and 190 ms
+against 28 to 46 ms for the same work once the engine is already up, depending
+on how busy the box is. A factor of four either way. The reactor artifact and
 `qjs_reactor_adapter` are how you get the second number. Build it, then point a
 worker at it:
 

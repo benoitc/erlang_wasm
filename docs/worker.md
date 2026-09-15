@@ -132,6 +132,14 @@ interpreter**: no error anywhere, and a worker whose slowness has no visible
 cause. `wasm_worker_lang_SUITE` asserts that over 500 requests, because a
 shorter run is silent whether the tier is off or merely slow.
 
+**The three reactor adapters ship `metered`**, and deliberately for now: they
+set `fuel => infinity` but not `compile => true`, so a reactor request runs
+interpreted. The combination is not refused anywhere -- adding `compile => true`
+to the limits map meets both of the tier's conditions -- but it is not yet
+something this project can recommend, because a compile asked for on that path
+is not reaching generated code. `test/audit/ATTEMPTS.md` has the reproduction.
+Note that turning it on also moves you into the security posture below.
+
 Under `compiled` the only thing between the node and a runaway guest is a kill
 from outside it. That is a security statement rather than a tuning note: it is
 the one configuration where an untrusted guest is bounded by time alone.

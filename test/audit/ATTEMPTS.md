@@ -312,6 +312,44 @@ so all three examples failed to compile as printed. `<<"one" "two">>` is the
 form that works and is what `wasm_wat_SUITE` already uses. Nothing catches
 this, which is the point: the blocks were correct-looking prose for months.
 
+**The compiled tier never engages on a reactor through the worker kernel, and
+nothing says why.** `bench/paths/workerbench.erl`'s `tier` mode drives a
+metered and a compiled reactor worker alternately in one emulator. Over 3000
+requests and two and a half minutes, `entered` never leaves 0 and `compiled`
+stays at 0.
+
+It is not the gate, and it is not restore. Traced step by step with temporary
+logging in `wasm_jit`, the compiled worker's requests reach every stage:
+
+| stage | what it does |
+| --- | --- |
+| `entry/3`'s three conditions | all pass: `compile=true fuel=infinity calldepth=256 instdepth=256` |
+| `maybe_adopt/3` | reached on every request |
+| `wasm_code_slots:hot/2` | fires `true` once, at request 32, as designed |
+| `resident_module/1` | `error`, so the ask is set |
+| `wanted/2` | **264 functions** |
+| `start_compiler/0` | `ok`, and the instance is sent to it |
+| result | nothing published, and `counts/0` is `compiled => 0, refused => 0, failed => 0, crashed => 0` with `diagnostics/0` empty |
+
+So a compiler is started, told to compile 264 functions, and no trace of that
+compile ever appears -- not a success, not a refusal, not a failure.
+
+**Restore is not the cause**, which is what makes this a defect rather than a
+limitation of the design. The same artifact driven *without* the kernel --
+capture an image, restore, call, destroy, in a loop -- compiles at about
+request 70 and has `entered => 1` by 100. With a fresh process per request,
+mimicking the runner, `entered => 3` by 140. `bench/paths/workerbench.erl`'s
+`tier` mode is what reproduces the failing half.
+
+Two theories were measured and are wrong. It is not that the run was too
+short: the reactor request is 21 ms against the command path's ~200, so the
+same request count buys a tenth of the wall time, but 3000 requests is longer
+than the 76 s the command path takes to enter. And it is not the per-request
+runner process, since the direct probe reproduces that shape and still enters.
+
+Left here rather than pursued, because the next step is inside `src/` and this
+entry is what the investigation should start from.
+
 ## Open, and each a decision rather than a task
 
 **~~The rest of the memory path.~~** Done. A load or a store is generated inline

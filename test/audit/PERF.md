@@ -5423,6 +5423,23 @@ because it is a different process doing different work: CPython wants
 captures wants only the second. It costs nothing where no capture happens,
 which includes every worker that reads its image from `snapshot_dir`.
 
+### Every reactor number here is interpreted
+
+Said once, because the tier's numbers and the reactor's numbers are in this
+file together and a reader will otherwise combine them. **They are different
+configurations and they do not multiply.**
+
+`wasm_jit:entry/3` needs both `compile => true` and `fuel => infinity`. The
+three reactor adapters set the second and none sets the first, so every
+reactor measurement in this file ran interpreted, and every tier measurement
+(`8.4x`, `entered at request 353`) came from the command path.
+
+Whether the two combine is an open question with a failing reproduction:
+`ATTEMPTS.md` records the tier reaching `start_compiler/0` with 264 functions
+on a reactor worker and publishing nothing, while the same artifact outside
+the worker kernel compiles and enters. Until that is understood, no number
+here may be quoted as a reactor running the tier.
+
 ### How the floor behaves under concurrency, and what it costs in memory
 
 `workerbench`'s `throughput` mode: N workers, one client process each, a fixed

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Heap floors for the request runner and the capture
+
+`script_worker:start_link/2` takes `runner_min_heap_words`, off unless set,
+which gives the process running a request a `min_heap_size` rather than the
+emulator's 233-word default. A request runner keeps almost nothing on its own
+heap, so the collector sizes it a small one and collects through the request
+dozens of times: on QuickJS that was 61% of a request, and a floor of 200,000
+words takes one from 56.0 ms to 21.1 ms.
+
+```erlang
+script_worker:start_link(my_adapter, #{root => scratch,
+                                       runner_min_heap_words => 200_000}).
+```
+
+`capture_min_heap_words` is the same for the process a snapshot capture runs
+in, where it is worth more still: a CPython worker start goes from 91 s to
+18 s. Separate from the runner's because it is a different process doing
+different work, and it costs nothing where no capture happens.
+
+The right value is a property of the guest, so sweep for it. [The tuning
+guide](docs/tuning.md) is new and says how; `script_worker:runner_heap_words/2`
+and `capture_heap_words/2` answer what a configuration resolves to without
+starting a worker. A floor with no room under `max_heap_words` is refused with
+a warning rather than applied, because `min_heap_size` above `max_heap_size`
+kills the process at spawn.
+
 ### A worker kernel for untrusted guests
 
 `examples/script_worker.erl` is now a language-neutral kernel: modules,

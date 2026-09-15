@@ -31,6 +31,7 @@ suite() -> [{timetrap, {seconds, 90}}].
 
 all() ->
     [every_setting_is_documented,
+     a_runner_heap_floor_is_resolved_and_reported,
      {group, typed}, {group, command}, {group, script_v1},
      {group, script_v1_channel}, {group, reactor}].
 
@@ -87,13 +88,19 @@ snapshot_cases() ->
      a_capture_that_does_not_finish_fails_the_start,
      a_validate_that_refuses_fails_the_start,
      a_worker_starts_from_a_filed_image,
-     a_worker_ignores_an_image_it_cannot_read].
+     a_worker_ignores_an_image_it_cannot_read,
+     a_runner_gets_the_heap_floor_it_was_given,
+     an_unset_floor_leaves_the_runner_the_system_default,
+     a_floor_with_no_room_under_the_ceiling_still_answers,
+     a_capture_floor_does_not_stop_a_worker_starting].
 
 end_per_group(_G, _Config) -> ok.
 
 %% Needs no worker, no reaper and no adapter: it reads names out of the code
 %% and looks for them in a guide.
 init_per_testcase(every_setting_is_documented, Config) ->
+    Config;
+init_per_testcase(a_runner_heap_floor_is_resolved_and_reported, Config) ->
     Config;
 init_per_testcase(TC, Config) ->
     process_flag(trap_exit, true),
@@ -104,6 +111,8 @@ init_per_testcase(TC, Config) ->
     [{reaper, Reaper}, {worker, W}, {root, Root} | Config].
 
 end_per_testcase(every_setting_is_documented, _Config) ->
+    ok;
+end_per_testcase(a_runner_heap_floor_is_resolved_and_reported, _Config) ->
     ok;
 end_per_testcase(_TC, Config) ->
     try script_worker:stop(?config(worker, Config)) catch _:_ -> ok end,
@@ -441,6 +450,116 @@ a_worker_ignores_an_image_it_cannot_read(Config) ->
         ok = script_worker:stop(W2)
     end).
 
+%%% ------------------------------------------------- the runner heap floor ---
+%%
+%% `runner_min_heap_words' is a floor on the request runner's heap, and the
+%% reason it exists is that a restored instance keeps almost nothing on that
+%% heap -- the module is a cache handle, the memories are `atomics' pages --
+%% so the collector sizes the runner a 233-word heap and collects through the
+%% request dozens of times. `test/audit/PERF.md' has the measurements and
+%% `docs/tuning.md' is how to find the number for a guest.
+%%
+%% None of the cases here asserts a time. What they assert is that the number
+%% resolves the way the policy says and that it reaches the process that runs
+%% the guest, which is a claim a suite can hold at any load average.
+
+%% Pure: no worker, no reaper, no adapter. Two different set values, because
+%% one value cannot tell a setting being read from a constant that matches it.
+a_runner_heap_floor_is_resolved_and_reported(_Config) ->
+    Limits = #{max_heap_words => 8 * 1024 * 1024},
+    ?assertEqual({0, ok}, script_worker:runner_heap_words(#{}, Limits)),
+    ?assertEqual({0, ok}, script_worker:runner_heap_words(
+                            #{runner_min_heap_words => 0}, Limits)),
+    ?assertEqual({100_000, ok},
+                 script_worker:runner_heap_words(
+                   #{runner_min_heap_words => 100_000}, Limits)),
+    ?assertEqual({200_000, ok},
+                 script_worker:runner_heap_words(
+                   #{runner_min_heap_words => 200_000}, Limits)),
+    %% Nothing that is not a heap size becomes one. A floor taken literally
+    %% from a float or a negative number is a `badarg' from `spawn_opt', which
+    %% is a worker whose every request dies at creation.
+    [?assertMatch({0, {bad, Bad}},
+                  script_worker:runner_heap_words(
+                    #{runner_min_heap_words => Bad}, Limits))
+     || Bad <- [-1, 1.5, unlimited, ~"200000", 1 bsl 59]],
+    %% Below the emulator's own minimum is not a floor either.
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    ?assertMatch({0, {bad, _}},
+                 script_worker:runner_heap_words(
+                   #{runner_min_heap_words => Min - 1}, Limits)),
+    %% The ceiling is read from the limits and the headroom is real: half the
+    %% ceiling fits, more than half does not.
+    Small = #{max_heap_words => 400_000},
+    ?assertEqual({200_000, ok},
+                 script_worker:runner_heap_words(
+                   #{runner_min_heap_words => 200_000}, Small)),
+    ?assertEqual({0, {no_room, 400_000}},
+                 script_worker:runner_heap_words(
+                   #{runner_min_heap_words => 200_001}, Small)).
+
+%% That the resolved number reaches the process running the guest, which the
+%% case above cannot say. The adapter reads its own flags in `decode/2', after
+%% the guest has run, so this is the floor holding across the call.
+%%
+%% A lower bound, not equality: the emulator rounds a requested floor up to a
+%% heap-size class, and 200,000 words becomes 318,187.
+a_runner_gets_the_heap_floor_it_was_given(Config) ->
+    Start = maps:get(start, ctx(Config)),
+    {ok, W} = Start(#{runner_min_heap_words => 200_000}),
+    {ok, #{runner_heap := Words}} = script_worker:run(W, #{probe => heap}),
+    ?assert(Words >= 200_000),
+    ok = script_worker:stop(W).
+
+%% Off unless set, and "off" means the emulator's default rather than some
+%% number of this module's own. Without this, hardcoding any floor passes
+%% every other case here.
+an_unset_floor_leaves_the_runner_the_system_default(Config) ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    {ok, #{runner_heap := Words}} =
+        script_worker:run(?config(worker, Config), #{probe => heap}),
+    ?assertEqual(Min, Words).
+
+%% The case that matters, and the one whose failure does not look like a wrong
+%% number: a floor the ceiling has no room for must leave the runner without
+%% one, because `min_heap_size' above `max_heap_size' is a kill at spawn and a
+%% worker whose every request fails for a reason nothing names.
+%%
+%% The floor asked for here fits *under* the ceiling and still has no room,
+%% which is the whole point of the headroom: the emulator rounds up.
+a_floor_with_no_room_under_the_ceiling_still_answers(Config) ->
+    Start = maps:get(start, ctx(Config)),
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    {ok, W} = Start(#{runner_min_heap_words => 300_000,
+                      limits => #{max_heap_words => 400_000}}),
+    {ok, #{runner_heap := Words}} = script_worker:run(W, #{probe => heap}),
+    ?assertEqual(Min, Words),
+    ok = script_worker:stop(W).
+
+%% The capture floor is the same policy on a different process, so what the
+%% cases above prove about resolution carries. What does not carry is that a
+%% capture still *works* with one, and a capture failing fails the start, so
+%% this asserts a worker that answers.
+%%
+%% No timing. The effect is 5x on a CPython start and nothing measurable on a
+%% WAT reactor that captures in microseconds, and a suite is the wrong place
+%% for either.
+a_capture_floor_does_not_stop_a_worker_starting(Config) ->
+    Limits = #{max_heap_words => 8 * 1024 * 1024},
+    ?assertEqual({200_000, ok},
+                 script_worker:capture_heap_words(
+                   #{capture_min_heap_words => 200_000}, Limits)),
+    ?assertEqual({0, ok}, script_worker:capture_heap_words(#{}, Limits)),
+    %% Resolved from its own key, not the runner's: a worker given only the
+    %% runner's floor must capture without one.
+    ?assertEqual({0, ok},
+                 script_worker:capture_heap_words(
+                   #{runner_min_heap_words => 200_000}, Limits)),
+    Start = maps:get(start, ctx(Config)),
+    {ok, W} = Start(#{capture_min_heap_words => 200_000}),
+    ?assertMatch({ok, _}, script_worker:run(W, #{})),
+    ok = script_worker:stop(W).
+
 with_store(Dir, F) ->
     ok = filelib:ensure_path(Dir),
     application:set_env(wasm, snapshot_dir, Dir),
@@ -466,7 +585,8 @@ every_setting_is_documented(_Config) ->
 settings() ->
     Worker = maps:keys(script_worker:default_limits()),
     Worker ++ worker_reaper:setting_keys() ++
-        [trusted, capture_timeout,
+        [trusted, capture_timeout, runner_min_heap_words,
+         capture_min_heap_words,
          %% Node-wide, and each one turns something substantial on or off.
          max_snapshot_bytes, max_snapshot_dir_bytes, snapshot_dir,
          code_cache_dir].

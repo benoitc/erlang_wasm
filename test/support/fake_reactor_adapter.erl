@@ -48,7 +48,11 @@ prepare(Request, #{module := M}, _Env) ->
     Export = maps:get(call, Request, ~"handle"),
     {ok, #{mode => reactor, module => M, imports => import_set(),
            invoke => [{call, Export, []}]},
-     undefined}.
+     %% The adapter state, which `decode/2' is handed back. A request asking
+     %% for `probe => heap' gets the runner's own heap flags in its result;
+     %% every other request gets exactly the shape it always got, because the
+     %% kit's cases compare these.
+     maps:get(probe, Request, undefined)}.
 
 %% No imports at all, so `snapshot_hooks` is empty and every module in the
 %% bindings trivially has one. The key still travels with them, because capture
@@ -56,6 +60,8 @@ prepare(Request, #{module := M}, _Env) ->
 import_set() ->
     #{bindings => #{}, snapshot_hooks => #{}, compatibility_key => ?VERSION}.
 
+decode(#{outcome := returned, values := Values}, heap) ->
+    {ok, #{values => Values, runner_heap => runner_heap()}};
 decode(#{outcome := returned, values := Values}, _State) ->
     {ok, #{values => Values}};
 decode(#{outcome := trapped, error := E}, _State) ->
@@ -64,6 +70,18 @@ decode(#{outcome := exited, exit := Code}, _State) ->
     {error, worker_error:adapter(exit, ~"exited", #{code => Code})}.
 
 cleanup(_State) -> ok.
+
+%% Read from **inside the runner**, the only process that can answer it: the
+%% flag is installed by `spawn_opt' at the runner's creation and the runner is
+%% gone by the time a case could ask it anything. `decode/2' rather than
+%% `prepare/3' so the answer is taken after the guest has run, which is what
+%% says the floor held across the call and not merely at spawn.
+%%
+%% The number is the emulator's, not the one configured: a requested floor is
+%% rounded **up** to a heap-size class, so a case asserts a lower bound.
+runner_heap() ->
+    {garbage_collection, GC} = process_info(self(), garbage_collection),
+    proplists:get_value(min_heap_size, GC).
 
 capabilities(_Artifact) ->
     #{execution => reactor,

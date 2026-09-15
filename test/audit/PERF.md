@@ -5211,6 +5211,13 @@ Things I checked, none of which explains it:
 
 - **It is not the compile-budget work.** Measured either side of that merge,
   interleaved: 48 ms against 47 ms for the QuickJS reactor. Flat.
+
+  **But note what that does and does not establish.** Both points are *after*
+  every change that could have caused the drift: the 28.5 ms predates the
+  snapshot work, and the intermediate commits were squashed before anyone
+  thought to bisect them. So "not attributable to any commit" -- which an
+  earlier version of this section came close to saying -- claims more than was
+  checked. What is established is that the compile-budget merge did not do it.
 - **It is not the restore.** That got *faster*: 6.2 ms to **1.0 ms** for
   QuickJS, which is the memory-runs change paying off on a small image after
   all.
@@ -5218,9 +5225,8 @@ Things I checked, none of which explains it:
   which stages nothing and imports no WASI, is **0.9 ms** median over forty.
 
 So for QuickJS a request is 1.0 ms of restore plus 20.6 ms of `handle` plus
-0.9 ms of kernel, and the worker measures 46. The remaining ~24 ms is staging
-two files and building the WASI import set, which is more than the guest's own
-work for a request this small. Lua shows the same shape with a smaller gap.
+0.9 ms of kernel, and the worker measures 46. **Where the rest goes was guessed
+at here and the guess was wrong**; see the section below, which measures it.
 
 **The most likely cause of the drift is the box**, and `bench/paths/README.md`
 is explicit that this one swings between 4 and 84. The fifteen-minute load was
@@ -5239,3 +5245,49 @@ Note which ones held. Every figure the **snapshot** work rests on reproduced:
 the CPython request, the from-file start, the off arm, the file size. The three
 that drifted are the two QuickJS arms and the CPython command arm, none of
 which is a claim about snapshots.
+
+## Where a QuickJS request actually goes
+
+The section above subtracted three numbers taken in three different harnesses
+and concluded the remainder was "staging two files and building the WASI import
+set". That was arithmetic, not a measurement, and it was wrong. Each phase
+timed directly, in the process shape the worker uses, minimums over twelve
+runs, against a worker request measured in the same minute on the same box:
+
+| | |
+| --- | ---: |
+| stage the two files | 0.3 ms |
+| build the WASI import set | 0.0 ms |
+| `wasm:restore/3` | 1.5 ms |
+| **`handle`** | **17.4 ms** |
+| decode the framed result | 0.0 ms |
+| all of it | 19.4 ms |
+| the same request through a worker | **46 ms** |
+
+**Staging and WASI are 0.3 ms between them, not 24.** The guest's own `handle`
+is 90% of the work anyone can account for, which is the opposite of what was
+claimed.
+
+The kernel's share was measured separately, with a probe adapter that is
+`fake_reactor_adapter` plus a mount and two staged files and nothing else: 0.8
+ms without staging and **1.1 ms with**, so the kernel's mount, staging and
+cleanup together cost 0.3 ms.
+
+### The 26 ms nobody has found
+
+19.4 ms of accounted work against 46 ms measured, side by side. Five candidates
+ruled out, each by measurement:
+
+| candidate | effect |
+| --- | ---: |
+| a fresh runner process per request, cold per-process caches | +0.9 ms |
+| the runner's `max_heap_size`, at 1M, 4M and 16M words | none |
+| the per-call limits map the worker passes | +0.5 ms |
+| the kernel's own per-request work | 0.8 ms |
+| mount, staging and cleanup | 0.3 ms |
+
+It is not the box: both numbers above were taken within a minute of each other
+at load 14. So there is about 26 ms in a worker request that nothing here
+accounts for, it is the largest single cost in a small request, and **it is
+still unexplained**. Written down as an open question rather than filled with
+another guess.

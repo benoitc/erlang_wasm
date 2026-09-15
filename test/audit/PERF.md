@@ -5351,8 +5351,22 @@ Its collection time over that sweep is 242.0, 211.8, 83.3 and **6.7 ms**.
 One CPython sweep is not in the table. Run over 400,000 to 4,000,000 with **no
 zero-floor arm**, it came back flat at 223 collections for every floor,
 including the 400,000 that three other runs put at 97 to 99. There was nothing
-inside it to say whether the floors were working at all. It is unexplained and
-not believed; every row above comes from a run containing its own control.
+inside it to say whether the floors were working at all. It was looked for
+three more times with the control added and not found; `ATTEMPTS.md` has that.
+Every row above comes from a run containing its own control.
+
+**Past the knee a floor costs.** Those three runs carried on to 4,000,000, and
+the request gets slower while the collections keep falling:
+
+| floor | collections | in | request, min |
+| ---: | ---: | ---: | ---: |
+| 1,000,000 | 43 | 8.3 ms | 123.9, 126.0, 132.4 ms |
+| 2,000,000 | 29 | 8.8 ms | 123.9, 128.1, 137.6 ms |
+| 4,000,000 | 19 | 12.6 ms | 145.2, 149.3, 158.9 ms |
+
+Fewer collections and more time in them, which is what a heap too large for its
+live set looks like: each collection walks more. So "more is better" is false
+past the knee and a sweep has to go past it to find out where that is.
 
 **`+hms` is not this measurement.** The first version of this finding used the
 node-wide flag, which sizes the guardian, the reaper's children and every other
@@ -5408,6 +5422,74 @@ because it is a different process doing different work: CPython wants
 2,000,000 words to capture and 1,000,000 to answer, and a guest that never
 captures wants only the second. It costs nothing where no capture happens,
 which includes every worker that reads its image from `snapshot_dir`.
+
+### How the floor behaves under concurrency, and what it costs in memory
+
+`workerbench`'s `throughput` mode: N workers, one client process each, a fixed
+request count apiece. Both arms of a count run back to back with the order
+alternating, which is as close to self-controlling as a scaling curve gets.
+QuickJS at 25 requests a worker, 70.5% idle before and 74.5% after:
+
+| workers | no floor | at 200,000 | ratio |
+| ---: | ---: | ---: | ---: |
+| 1 | 17.8 req/s | 44.4 | 2.49x |
+| 2 | 34.3 | 89.8 | 2.62x |
+| 4 | 65.1 | 159.7 | 2.45x |
+| 8 | 107.6 | 255.2 | 2.37x |
+| 14 | 126.1 | 300.4 | 2.38x |
+
+CPython at 20 requests a worker, floor 1,000,000, 60.0% idle before and 59.8%
+after:
+
+| workers | no floor | at 1,000,000 | ratio |
+| ---: | ---: | ---: | ---: |
+| 1 | 2.4 req/s | 7.2 | 3.00x |
+| 2 | 4.2 | 13.1 | 3.12x |
+| 4 | 6.4 | 18.7 | 2.92x |
+| 8 | 9.1 | 27.5 | 3.02x |
+| 14 | 10.5 | 30.8 | 2.93x |
+
+**The floor is a constant factor, not one that erodes**, and the scaling is
+sublinear in both arms alike: 7.08x against 6.77x from 14 QuickJS workers,
+4.38x against 4.28x from 14 CPython ones. A floor moves the height of the curve
+and not its shape.
+
+**Neither ceiling is the runtime's** and neither should be quoted as one. The
+two runs had roughly 10 and 8 of 14 cores actually free, which is most of why
+they flatten where they do. What survives that is the ratio column, because
+both arms of a row met the same machine in the same minute.
+
+An earlier CPython run at 8 requests a worker was not monotonic in the floored
+arm (7.5, 12.2, 12.5, 29.0, 24.5 req/s). It agreed on the ratio at every count
+and is not reproduced above, because a rate over 8 requests is not a rate.
+
+#### It costs less memory, not more
+
+Peak `erlang:memory(processes)`, sampled every 5 ms:
+
+| | 14 QuickJS workers | 14 CPython workers |
+| --- | ---: | ---: |
+| no floor | 204 MB | 556 MB |
+| floored | **129 MB** | **398 MB** |
+
+That is the opposite of what a per-runner ballast suggests: 14 QuickJS runners
+at 318,187 words are 34 MB the unfloored arm never pays, and the floored total
+is still 75 MB lower.
+
+The obvious objection is sampling. A floored arm finishes sooner, so it is
+sampled fewer times and its maximum is the worse estimate, which biases the
+column in the floor's favour. **So the QuickJS pair was re-run with the request
+counts chosen to make the two arms the same length**, 25 against 10:
+
+| | wall | peak |
+| --- | ---: | ---: |
+| floored, 350 requests | 1156 ms | **122 MB** |
+| unfloored, 140 requests | 1130 ms | 195 MB |
+| unfloored, 140 requests | 1205 ms | 210 MB |
+
+It holds. The garbage a floor stops accumulating is larger than the heap it
+reserves. The CPython pair needs no such control because its bias runs the
+other way: the unfloored arm ran 26.6 s against 9.1 and still peaked higher.
 
 ### What this leaves of the QuickJS drift
 

@@ -69,8 +69,12 @@ Sweeping QuickJS, ten requests per floor, all arms in one emulator:
 | 200,000 | 21.1 ms | 34 | 2.9 ms |
 | 400,000 | 21.3 ms | 25 | 3.0 ms |
 
-The knee is sharp and it plateaus. Past it you are buying memory and nothing
-else.
+The knee is sharp and it plateaus. **Past it a floor starts costing again**,
+which is why a sweep has to go beyond the knee rather than stop at the first
+improvement. CPython at 1,000,000, 2,000,000 and 4,000,000 words is 124, 124
+and 145 ms, with the collections still falling, 43 to 29 to 19, and the time
+spent in them rising, 8.3 to 12.6 ms. A heap too large for its live set means
+each collection walks more.
 
 **Find your own.** The right value is a property of the guest, not of this
 runtime. The three measured here want a 5x spread:
@@ -81,18 +85,31 @@ runtime. The three measured here want a 5x spread:
 | QuickJS | 56.0 ms | 200,000 | 21.1 ms |
 | CPython | 367.1 ms | 1,000,000 | 117.8 ms |
 
-Sweep, take the knee, and stop. Put the off setting in the sweep: without it
-there is nothing in the run to say the floors worked at all, which is how one
-CPython sweep here came back flat and had to be thrown away.
+Sweep, take the knee, and stop. Two rules that came from getting it wrong:
+
+- **Put the off setting in the sweep.** Without it there is nothing in the run
+  to say the floors worked at all, which is how one CPython sweep here came
+  back flat and had to be thrown away.
+- **Go past the knee.** Otherwise you cannot tell a plateau from a peak, and
+  the number you pick may be on the far side of it.
 
 Two things to know before you set it:
 
 - The emulator rounds the number **up** to a heap-size class, and the jump is
   large: 200,000 words becomes 318,187, and 1,000 becomes 1,598. That is
-  2.4 MiB per concurrent runner at the QuickJS figure.
+  2.4 MiB of ballast per concurrent runner, and it does not cost you memory on
+  balance: see the scaling section below.
 - The floor must fit under this worker's `max_heap_words` with room for that
-  rounding. One that does not is refused with a warning and the runner gets no
+  rounding. One that does not is refused with a warning and the process gets no
   floor, because `min_heap_size` above `max_heap_size` is a kill at spawn.
+- **That check is not the whole of it.** It catches a floor too large to start
+  under; it cannot catch a floor that starts fine and then leaves too little
+  headroom under the ceiling for the work itself. `max_heap_words` bounds the
+  peak and a floor raises the baseline the peak is measured from, so raise the
+  two together. CPython captures at the 16 M words its adapter asks for, and
+  with a 2 M capture floor it dies about three times in four. When that
+  happens the error names `max_heap_words` and the floor rather than only
+  saying `killed`.
 
 `script_worker:runner_heap_words/2` answers what a given pair of options and
 limits resolves to, so you can check a configuration without starting a worker.
@@ -171,11 +188,59 @@ third of a second to answer. Two different settings do:
 - `code_cache_dir` keeps generated code across restarts. See [the compiled
   tier guide](compiled-tier.md).
 
+## How it scales, and what it costs
+
+A floor is paid per concurrent runner, so the question a host actually has is
+whether it still pays with many of them. It does, and by the same factor
+throughout. QuickJS, 25 requests per worker, on 14 cores about 70% idle:
+
+| workers | no floor | at 200,000 | peak process memory |
+| ---: | ---: | ---: | --- |
+| 1 | 17.8 req/s | 44.4 | 38 vs 31 MB |
+| 2 | 34.3 | 89.8 | 59 vs 36 |
+| 4 | 65.1 | 159.7 | 96 vs 57 |
+| 8 | 107.6 | 255.2 | 157 vs 85 |
+| 14 | 126.1 | **300.4** | 204 vs 129 |
+
+CPython, 20 requests per worker, at a floor of 1,000,000 and about 60% idle:
+
+| workers | no floor | at 1,000,000 | peak process memory |
+| ---: | ---: | ---: | --- |
+| 1 | 2.4 req/s | 7.2 | 64 vs 50 MB |
+| 2 | 4.2 | 13.1 | 113 vs 89 |
+| 4 | 6.4 | 18.7 | 196 vs 145 |
+| 8 | 9.1 | 27.5 | 371 vs 292 |
+| 14 | 10.5 | **30.8** | 556 vs 398 |
+
+Two things to take from both tables. **The floor is worth a constant factor at
+every worker count**, 2.4x on QuickJS and about 3x on CPython, so it does not
+wash out under concurrency. And **the scaling is sublinear in both arms
+alike**: 7.1x without the floor against 6.8x with it on QuickJS, 4.4x against
+4.3x on CPython. What a floor moves is the height of the curve, not its shape.
+
+Do not read the ceilings as the runtime's. These runs had roughly 10 and 8 of
+14 cores actually free, which is most of why the curves flatten where they do.
+The floor comparison survives that because both arms met the same machine in
+the same minute; an absolute scaling limit would not.
+
+**It costs less memory, not more**, which is the opposite of what a
+per-runner ballast suggests. Fourteen workers peak at 129 MB with the floor
+against 204 without. That comparison is unfair to the floor twice over -- the
+floored arm finishes in 1164 ms against 2775, so it is sampled less often, and
+the ballast it adds is 34 MB that the unfloored arm never pays. Rerun with the
+request counts chosen to make the two arms the same length, 1156 ms against
+1130, it is 122 MB against 195 to 210. The garbage a floor stops accumulating
+is simply larger than the heap it reserves.
+
+Run your own with the `throughput` mode, and read the caveat in
+`bench/paths/README.md` first: a scaling curve cannot be made self-controlling
+by interleaving the way a latency sweep can, so it needs a quiet machine and
+there is no trick that substitutes for one.
+
 ## What this project has not measured
 
 Said plainly rather than filled with general advice, because a claim here cites
 `test/audit/PERF.md` and there is nothing to cite: allocator flags (`+M*`),
 scheduler binding (`+sbt`), scheduler counts and dirty schedulers have no
-measurement in this tree. Neither does the shape of the concurrency curve
-across worker counts. If you measure any of them, that file is where the
+measurement in this tree. If you measure any of them, that file is where the
 numbers go.

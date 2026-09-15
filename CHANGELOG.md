@@ -21,6 +21,13 @@ in, where it is worth more still: a CPython worker start goes from 91 s to
 18 s. Separate from the runner's because it is a different process doing
 different work, and it costs nothing where no capture happens.
 
+**Raise `max_heap_words` when you add a capture floor.** The ceiling bounds the
+peak and a floor raises the baseline it is measured from, so one that was
+comfortable without a floor can stop being: CPython at its adapter's own 16 M
+words dies about three runs in four with a 2 M capture floor. A capture killed
+that way now names `max_heap_words` and the floor in its error rather than only
+saying `killed`.
+
 The right value is a property of the guest, so sweep for it. [The tuning
 guide](docs/tuning.md) is new and says how; `script_worker:runner_heap_words/2`
 and `capture_heap_words/2` answer what a configuration resolves to without

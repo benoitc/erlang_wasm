@@ -105,9 +105,9 @@ next section is how to stop paying for that.
 
 ## Skip the interpreter start, with the reactor build
 
-**0.35 s a request instead of a minute or more.** CPython starts once when the worker
-starts, and each request restores an image of that point. Build it, then point
-a worker at it:
+**0.12 s a request instead of a minute or more.** CPython starts once when the
+worker starts, and each request restores an image of that point. Build it, then
+point a worker at it:
 
 ```
 scripts/build-python-reactor.sh
@@ -122,8 +122,8 @@ scripts/build-python-reactor.sh
               root => scratch,
               limits => py_reactor_adapter:limits()}),
 {ok, #{result := #{~"answer" := 42}}} =
-    script_worker:run(W, #{source => ~"def main(c):\n"
-                                     "    return {'answer': c['value'] + 1}\n",
+    script_worker:run(W, #{source => <<"def main(c):\n"
+                                       "    return {'answer': c['value'] + 1}\n">>,
                            context => #{~"value" => 41}}).
 ```
 
@@ -132,9 +132,10 @@ and out, the same capabilities.
 
 Notes:
 
-- **`start_link/2` takes 83 to 90 seconds**, because that is one interpreter
-  start. It happens once per worker, not once per request, and a host should
-  start its workers before it starts taking traffic.
+- **`start_link/2` takes 83 to 90 seconds**, or 17 with the capture floor
+  below, because that is one interpreter start. It happens once per worker, not
+  once per request, and a host should start its workers before it starts taking
+  traffic.
 - **Isolation is unchanged.** A restore builds a *fresh* instance, so one
   request's module-level state never reaches the next.
 - **Two paths, not one.** The module needs its standard library beside it, and
@@ -149,6 +150,55 @@ Notes:
   says why there is no checksum.
 - The numbers, their null experiment and where the time goes are in
   `test/audit/PERF.md`.
+
+## Give both processes a heap floor
+
+CPython gains more from this than either other guest here, and it gains on both
+halves: the start and the request.
+
+```erlang
+Limits = (py_reactor_adapter:limits())#{max_heap_words => 32 * 1024 * 1024},
+{ok, W} = script_worker:start_link(
+            py_reactor_adapter,
+            #{path => "test/fixtures/lang/py_reactor.wasm",
+              lib  => "test/fixtures/lang/py_reactor_lib",
+              root => scratch,
+              limits => Limits,
+              runner_min_heap_words  => 1_000_000,
+              capture_min_heap_words => 2_000_000}).
+```
+
+| | without | with |
+| --- | ---: | ---: |
+| `start_link/2`, capturing | 92 s | **17 s** |
+| a request | 367 ms | **118 ms** |
+
+Both processes keep almost nothing on their own Erlang heap, because the
+module is a cache handle and the interpreter's memory is off-heap. The
+collector sizes a heap from the live set, so it gives them the emulator's 233
+words and then collects thousands of times through work that allocates
+billions.
+
+Three things to know:
+
+- **The two options sit beside `root`, not inside `limits`.** A floor is not a
+  bound, and one written into the map `py_reactor_adapter:limits/0` returns is
+  ignored silently.
+- **They are separate settings because they are separate processes.** CPython
+  wants twice as much to capture as to answer, and a worker reading its image
+  from `snapshot_dir` never captures at all, so it pays for the first and uses
+  only the second.
+- **Raise `max_heap_words` when you add the capture floor**, which is why the
+  example above overrides it. `max_heap_words` bounds the peak and a floor
+  raises the baseline that peak is measured from, so a ceiling that was
+  comfortable without one can stop being comfortable with it. CPython at the
+  adapter's own 16 M words is close enough to the edge that a floored capture
+  dies **some** of the time: three runs in four, then a pass. A start that
+  fails that way says `the capture died`, and names `max_heap_words` and the
+  floor in its context so it is not a mystery.
+- **CPython's request knee is five times QuickJS's**, which is why neither has
+  a default. [The tuning guide](tuning.md) is how to find one for a different
+  build.
 
 ## Errors
 

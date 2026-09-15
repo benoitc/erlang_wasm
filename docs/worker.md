@@ -132,13 +132,17 @@ interpreter**: no error anywhere, and a worker whose slowness has no visible
 cause. `wasm_worker_lang_SUITE` asserts that over 500 requests, because a
 shorter run is silent whether the tier is off or merely slow.
 
-**The three reactor adapters ship `metered`**, and deliberately for now: they
-set `fuel => infinity` but not `compile => true`, so a reactor request runs
-interpreted. The combination is not refused anywhere -- adding `compile => true`
-to the limits map meets both of the tier's conditions -- but it is not yet
-something this project can recommend, because a compile asked for on that path
-is not reaching generated code. `test/audit/ATTEMPTS.md` has the reproduction.
-Note that turning it on also moves you into the security posture below.
+**The three reactor adapters ship `metered`.** They set `fuel => infinity` but
+not `compile => true`, so a reactor request runs interpreted unless you add the
+key yourself.
+
+You can, and today it is not worth it. The tier does reach a restored
+instance, after about 150 s and several thousand requests on QuickJS, but a
+reactor builds a fresh instance per request and an instance adopts compiled
+code only on a call where the tier's hotness counter fires, which is one call
+in 32. So 31 requests in 32 keep interpreting and the median does not move.
+`test/audit/PERF.md` has the measurement. Turning it on also moves you into the
+security posture below.
 
 Under `compiled` the only thing between the node and a runaway guest is a kill
 from outside it. That is a security statement rather than a tuning note: it is

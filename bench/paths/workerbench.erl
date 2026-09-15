@@ -473,13 +473,52 @@ tier(Adapter, N, Floor) ->
     %% the module cache and every lazily loaded host module.
     _ = [one(W, Echo) || W <- [Wm, Wc]],
     io:format("# counts after warm-up: ~p~n", [wasm_jit:counts()]),
-    {Ms, Cs, At} = tier_rounds(Wm, Wc, Echo, N, 1, [], [], undefined),
+    {Ms, Cs, At0} = tier_rounds(Wm, Wc, Echo, N, 1, [], [], undefined),
+    %% A reactor request is 21 ms against the command path's ~200, so N
+    %% requests buy a tenth of the wall time and the background compile is very
+    %% likely still running. Wait for it, then keep driving: a run that stopped
+    %% here would report "never entered" for a compile that was merely
+    %% unfinished, which is the first wrong answer this mode gave.
+    At = wait_and_drive(Wc, Echo, At0,
+                        erlang:monotonic_time(millisecond) + 300_000),
     [ok = script_worker:stop(W) || W <- [Wm, Wc]],
     tier_report(Ms, Cs, At, N),
     io:format("# counts at end: ~p~n", [wasm_jit:counts()]),
+    io:format("# slots: ~p~n",
+              [[{Nm, St} || {Nm, _G, St, _M} <- ets:tab2list(wasm_code_slots),
+                            St =/= free]]),
+    io:format("# jit children: ~p~n",
+              [supervisor:count_children(wasm_jit_sup)]),
+
     io:format("# diagnostics:   ~p~n", [wasm_jit:diagnostics()]),
     io:format("# at end:   ~s#           ~s", [os:cmd("uptime"), idle()]),
     init:stop().
+
+%% Poll by **calling**, not by sleeping: the tier advances when calls happen,
+%% so a run that waited without calling would wait forever for an adoption only
+%% a call can perform.
+%%
+%% Bounded by wall time rather than by a request count, because that is the
+%% quantity the compiler needs and a reactor request buys a tenth as much of it
+%% as a command one. 600 requests sounded generous and was twelve seconds.
+wait_and_drive(_Wc, _Req, At, _Deadline) when At =/= undefined -> At;
+wait_and_drive(Wc, Req, undefined, Deadline) ->
+    _ = req_us(Wc, Req),
+    Now = erlang:monotonic_time(millisecond),
+    case {maps:get(entered, wasm_jit:counts(), 0) > 0, Now >= Deadline} of
+        {true, _} ->
+            io:format("# entered while waiting, ~p~n", [wasm_jit:counts()]),
+            waited;
+        {false, true} ->
+            io:format("# gave up after the wait; compilers still running: ~p~n",
+                      [supervisor:count_children(wasm_jit_sup)]),
+            undefined;
+        {false, false} ->
+            (Deadline - Now) rem 10000 < 30 andalso
+                io:format("# waiting, ~w s left, ~p~n",
+                          [(Deadline - Now) div 1000, wasm_jit:counts()]),
+            wait_and_drive(Wc, Req, undefined, Deadline)
+    end.
 
 tier_rounds(_Wm, _Wc, _Req, N, I, Ms, Cs, At) when I > N ->
     {lists:reverse(Ms), lists:reverse(Cs), At};
@@ -514,6 +553,9 @@ req_us(W, Req) ->
 
 %% Split at the request the tier engaged on, because an average across that
 %% boundary is a number describing neither side of it.
+tier_report(_Ms, _Cs, waited, _N) ->
+    io:format("# the tier engaged only after the measured rounds; rerun with a "
+              "larger N for a before/after split~n");
 tier_report(Ms, Cs, undefined, N) ->
     io:format("# NEVER ENTERED in ~w requests~n", [N]),
     io:format("# metered  min/median ~w / ~w us~n", [lists:min(Ms), med2(Ms)]),

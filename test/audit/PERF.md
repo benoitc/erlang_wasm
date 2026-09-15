@@ -5434,11 +5434,39 @@ three reactor adapters set the second and none sets the first, so every
 reactor measurement in this file ran interpreted, and every tier measurement
 (`8.4x`, `entered at request 353`) came from the command path.
 
-Whether the two combine is an open question with a failing reproduction:
-`ATTEMPTS.md` records the tier reaching `start_compiler/0` with 264 functions
-on a reactor worker and publishing nothing, while the same artifact outside
-the worker kernel compiles and enters. Until that is understood, no number
-here may be quoted as a reactor running the tier.
+**The tier does reach a reactor, and 31 requests in 32 still do not use it.**
+
+`workerbench`'s `tier` mode, QuickJS, 8000 rounds of a compiled and a metered
+worker alternating in one emulator, heap floor at 200,000 in both:
+
+| | metered | compiled |
+| --- | ---: | ---: |
+| before entry, min / median | 20347 / 23893 us | 8846 / 23877 us |
+| after entry, min / median | 19303 / 21670 us | 7340 / 21624 us |
+
+Entry at request **3295**, about 150 s, with 264 functions compiled. The
+medians are the same in both arms and move together, so what changed between
+the halves is the box, not the tier.
+
+The counter says why. Over the 4705 rounds after entry, `entered` reached
+**148**, and 4705 / 32 is 147.0. **Adoption is gated behind the same hotness
+counter that triggers compilation** (`wasm_code_slots:hot/2`, threshold
+`?DEFAULT_AFTER` = 32), and a reactor builds a fresh instance per request, so
+an instance can only adopt on a call where that counter happens to fire. One
+request in 32 enters generated code and the other 31 interpret.
+
+That is why the median does not move while the minimum does: 7340 us against a
+metered 19303 is the compiled code being real, and it is reached by 3% of
+requests.
+
+So the honest answer to "should I turn the tier on for a reactor" is **not
+yet**. It is not a configuration mistake and not a defect in restore; it is
+that per-instance adoption and per-request instances multiply badly, and 32 is
+a threshold chosen for a workload that reuses an instance. Nothing here is
+worth changing on one guest's evidence, and it is written down rather than
+acted on.
+
+Every other number in this section was taken with the tier off.
 
 ### How the floor behaves under concurrency, and what it costs in memory
 

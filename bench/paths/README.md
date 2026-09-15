@@ -602,10 +602,15 @@ against one again would credit the tier with what the floor already does.
 
 **Read `wasm_jit:counts/0`, never the wall time.** An arm where the tier is off
 and an arm where it is on and slow are the same number of milliseconds; only
-`entered` tells them apart. That is `adopt.erl`'s rule for the command path and
-it matters more here, because today this mode reports `NEVER ENTERED` and
-`compiled => 0` over 3000 requests while the same artifact outside the kernel
-compiles at request 70. `ATTEMPTS.md` has how far that is traced.
+`entered` tells them apart. That is `adopt.erl`'s rule for the command path.
+
+**And give it wall-clock time, not a request count.** The tier arrives after a
+fixed amount of compiling, and a reactor request is ten times faster than a
+command one, so the same request count buys a tenth of the time the compiler
+needs: 3000 requests here is not the 76 s that 353 requests is on the command
+path. The mode waits on a deadline, driving requests while it waits, because
+the tier advances when calls happen and not when time passes. `ATTEMPTS.md`
+records the run that read a slow compile as no compile at all.
 
 The `floors` and `throughput` modes take the config as an argument too, so
 either can be run `compiled` rather than `metered`.

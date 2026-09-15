@@ -46,6 +46,7 @@ named for the hash of its key, and eviction is by total size, oldest first.
 
 %% Beyond this the oldest entries go. Fifteen megabytes is one QuickJS, so this
 %% holds a few dozen real modules.
+-define(SUFFIX, ".beam").
 -define(MAX_BYTES, 512 * 1024 * 1024).
 
 -doc """
@@ -64,7 +65,7 @@ lookup(Key) ->
             case file:read_file(File) of
                 {ok, Bin} ->
                     %% Touch it, so eviction sees which entries are in use.
-                    _ = file:change_time(File, calendar:local_time()),
+                    ok = wasm_file_cache:touch(File),
                     {ok, Bin};
                 {error, _} -> miss
             end
@@ -97,7 +98,7 @@ store(Key, Bin) ->
                         %% leak that no later run cleans up.
                         {error, _} -> _ = file:delete(Tmp), ok
                     end,
-                    evict(Dir),
+                    evict(Dir, File),
                     ok;
                 {error, _} ->
                     _ = file:delete(Tmp),
@@ -135,42 +136,17 @@ purge() ->
     case dir() of
         undefined -> ok;
         Dir ->
-            _ = [file:delete(F) || F <- entries(Dir) ++ temps(Dir)],
-            ok
+            wasm_file_cache:purge(Dir, ?SUFFIX)
     end.
 
 %%% -------------------------------------------------------------- private ---
 
 path(Dir, Key) ->
-    filename:join(Dir, binary_to_list(binary:encode_hex(Key)) ++ ".beam").
+    filename:join(Dir, binary_to_list(binary:encode_hex(Key)) ++ ?SUFFIX).
 
-%% Oldest first, until the total is under the cap. Reading an entry touches it,
-%% so "oldest" means least recently used and not least recently written.
-evict(Dir) ->
-    sweep_temps(Dir),
-    Files = [{filelib:last_modified(F), filelib:file_size(F), F} || F <- entries(Dir)],
-    case lists:sum([S || {_, S, _} <- Files]) of
-        Total when Total =< ?MAX_BYTES -> ok;
-        Total -> drop(lists:sort(Files), Total)
-    end.
-
-entries(Dir) -> filelib:wildcard(filename:join(Dir, "*.beam")).
-temps(Dir) -> filelib:wildcard(filename:join(Dir, "*.tmp")).
-
-%% A temp older than an hour belongs to a process that is not coming back: a
-%% node killed between the write and the rename leaves one, and nothing else
-%% would ever remove it. An hour is far longer than any write takes and short
-%% enough that a crash loop does not fill a disk.
-sweep_temps(Dir) ->
-    Cutoff = calendar:gregorian_seconds_to_datetime(
-               calendar:datetime_to_gregorian_seconds(calendar:local_time()) - 3600),
-    _ = [file:delete(F) || F <- temps(Dir),
-                           filelib:last_modified(F) =/= 0,
-                           filelib:last_modified(F) < Cutoff],
-    ok.
-
-drop([], _Total) -> ok;
-drop(_Files, Total) when Total =< ?MAX_BYTES -> ok;
-drop([{_T, Size, F} | Rest], Total) ->
-    _ = file:delete(F),
-    drop(Rest, Total - Size).
+%% Oldest first, until the total is under the cap, with stale temporaries swept
+%% on the way. The policy is `wasm_file_cache`, shared with the snapshot image
+%% store, which had none and grew without bound until it was lifted out of
+%% here. `Keep` is the entry just written, which is never the one dropped.
+evict(Dir, Written) ->
+    wasm_file_cache:sweep_and_evict(Dir, ?SUFFIX, ?MAX_BYTES, Written).

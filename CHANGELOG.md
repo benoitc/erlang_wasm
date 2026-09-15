@@ -126,6 +126,12 @@ worker starts in **under a second** against a hundred capturing, from a
 set it, and the directory is as trusted as your release.
 `wasm:save_snapshot/2` and `wasm:load_snapshot/2` are the same thing by hand.
 
+`application:set_env(wasm, max_snapshot_dir_bytes, N)` bounds that directory,
+512 MiB by default, oldest first. It is trimmed when an image is filed and at
+no other time, so lowering it shrinks nothing until the next capture;
+`wasm_snapshot_store:purge/0` empties one now. Note it is not
+`max_snapshot_bytes`, which bounds what images retain in memory.
+
 An adapter must supply a `compatibility_key` to be filed at all: an image is a
 runtime after `init()` ran against a particular environment, and nothing else
 in the contract accounts for it.

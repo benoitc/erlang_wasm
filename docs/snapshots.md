@@ -12,6 +12,24 @@ module-cache restart invalidates it. Recapturing costs one `init()`, which for
 CPython is 90 seconds, so there is also a **file** form: see keeping images
 across restarts, below.
 
+## One image, three sizes
+
+"The size of an image" is ambiguous and the three answers differ by 15x, so
+this guide always says which. For a started CPython:
+
+| | | what it bounds |
+| --- | ---: | --- |
+| the address space it covers | 41.9 MB | what a restore writes into, bounded by `max_memory_pages` |
+| what it **retains** in memory | 7.4 MB | `max_snapshot_bytes`, and what `wasm:snapshot_info/1` answers as `bytes` |
+| the **file** on disk | 2.7 MB | `max_snapshot_dir_bytes` |
+
+They differ because an image keeps only the non-zero runs of each memory -- a
+started interpreter is mostly zero -- and the file is then compressed. For Lua
+the same three are 196,608 bytes, 70,456 and 35,355: a much narrower spread,
+because a small guest has little empty memory to leave out.
+
+An unqualified "image" below means the thing itself, not any one of its sizes.
+
 ## Capture one
 
 The guest must be a **reactor**: something that brings its runtime up in one
@@ -81,6 +99,23 @@ application:set_env(wasm, snapshot_dir, "/var/cache/wasm/images").
 Off unless you set it. A CPython worker starts in **under a second** from a
 file against a hundred seconds capturing, and the file is 2.7 MB. The rest of the numbers are in
 `test/audit/PERF.md`.
+
+The directory is bounded, oldest first:
+
+```erlang
+application:set_env(wasm, max_snapshot_dir_bytes, 2 * 1024 * 1024 * 1024).
+```
+
+512 MiB unless you set it, which is about 190 CPython images at 2.7 MB of file
+each. "Oldest" is least recently
+**used**, because reading one touches it.
+
+**It is trimmed when an image is filed and at no other time.** There is no
+sweeper: a directory only grows when something writes to it, so that is the
+only moment it can need shrinking. Two consequences worth knowing before you
+meet them -- a node that starts no new worker never trims, and lowering the
+setting does nothing until the next capture. `wasm_snapshot_store:purge/0`
+empties a directory now.
 
 An adapter must supply a `compatibility_key` for any of this to happen. There
 is no default and no fallback: an image is a runtime after `init()` ran against
@@ -239,11 +274,12 @@ application:set_env(wasm, max_snapshot_bytes, 512 * 1024 * 1024).
 Node-wide, in bytes, charged once at capture. The default is `infinity`, which
 means unbounded rather than off.
 
-It charges what an image **retains**, and an image keeps only the non-zero runs
-of each memory. A started CPython covers 41.9 MB of address space and holds
-7.4 MB of it, so a ceiling admits far more images than its size suggests. A restore does not charge it again: the
-memories a restore builds are an instance's, and `max_memory_pages` bounds
-those.
+It charges the **retained** size, the middle row of the three above: 7.4 MB for
+a started CPython, not the 41.9 MB of address space it covers. So a ceiling
+admits far more images than the guest's memory size suggests.
+
+A restore does not charge it again. The memories a restore builds belong to the
+instance, and `max_memory_pages` bounds those.
 
 ## What an image freezes
 

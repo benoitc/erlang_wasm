@@ -468,7 +468,8 @@ settings() ->
     Worker ++ worker_reaper:setting_keys() ++
         [trusted, capture_timeout,
          %% Node-wide, and each one turns something substantial on or off.
-         max_snapshot_bytes, snapshot_dir, code_cache_dir].
+         max_snapshot_bytes, max_snapshot_dir_bytes, snapshot_dir,
+         code_cache_dir].
 
 documented(Setting, Guide) ->
     binary:match(Guide, atom_to_binary(Setting, utf8)) =/= nomatch.

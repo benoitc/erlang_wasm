@@ -280,7 +280,10 @@ Which to adopt depends on how an embedder runs invocations, and the `lazy-bodies
 branch holds the shedding half.
 
 **The artifact cache.** Where it lives, what evicts it, and what it trusts are
-the questions, not the code.
+the questions, not the code. **What evicts it is now answered**: oldest first
+past a total size, in `wasm_file_cache`, shared with the snapshot image store
+which had no cap at all until that was lifted out. Where it lives and what it
+trusts are still open.
 
 **Turning the tier on by default.** Every gate item passes and the answer is
 still no: 8.4x on a language runtime, flat on a plugin, and tens of seconds of a

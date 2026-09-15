@@ -55,7 +55,14 @@ all() ->
      a_truncated_image_is_refused,
      an_image_for_another_module_is_refused,
      an_image_that_claims_more_than_the_module_is_refused,
-     an_image_naming_an_unknown_atom_is_refused].
+     an_image_naming_an_unknown_atom_is_refused,
+     a_filed_image_directory_stays_under_its_cap,
+     a_purge_takes_the_half_written_files_too,
+     an_unset_cap_is_the_default,
+     a_set_cap_is_the_one_reported,
+     a_cap_that_is_not_a_size_falls_back,
+     a_raised_cap_takes_effect_at_the_next_store,
+     a_lowered_cap_does_not_shrink_the_directory].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -756,3 +763,142 @@ written_to(_Config, Path) ->
     ok = wasm:release(Image),
     ok = wasm:destroy(Init),
     Path.
+
+%%% ------------------------------------------------ the directory is bounded ---
+
+with_store(Dir, Max, F) ->
+    ok = filelib:ensure_path(Dir),
+    application:set_env(wasm, snapshot_dir, Dir),
+    application:set_env(wasm, max_snapshot_dir_bytes, Max),
+    try F()
+    after
+        application:unset_env(wasm, snapshot_dir),
+        application:unset_env(wasm, max_snapshot_dir_bytes)
+    end.
+
+images(Dir) -> filelib:wildcard(filename:join(Dir, "*.img")).
+
+total(Dir) -> lists:sum([filelib:file_size(F) || F <- images(Dir)]).
+
+%% Files an image under a key of its own, the way a worker does for a distinct
+%% module or adapter version.
+file_one(Handle, Key) ->
+    Init = init(Handle, #{}),
+    {ok, Image} = wasm:snapshot(Init, #{version => ~"v1",
+                                        compatibility_key => Key}),
+    ok = wasm_snapshot_store:store(
+           wasm_snapshot_store:key(hash_of(Handle), ~"v1", Key,
+                                   wasm_snapshot_file:image_abi()),
+           Image, undefined),
+    ok = wasm:release(Image),
+    ok = wasm:destroy(Init).
+
+hash_of({wasm_module, Hash}) -> Hash.
+
+%% **The disk-filling bug, as an assertion.** A worker files an image per
+%% module, version and compatibility key, and before this nothing ever removed
+%% one: the directory grew with the deploy count until the disk was full.
+a_filed_image_directory_stays_under_its_cap(Config) ->
+    Dir = filename:join(?config(priv_dir, Config), "capped"),
+    Handle = fixture(reactor),
+    %% Room for one image and not two. The images are a few hundred bytes, so
+    %% the cap is too -- which is the whole reason it is a setting rather than
+    %% a constant nothing can reach.
+    One = filed_size(Config, Handle),
+    with_store(Dir, One + (One div 2), fun() ->
+        [file_one(Handle, K) || K <- [~"a", ~"b", ~"c", ~"d"]],
+        ?assert(total(Dir) =< One + (One div 2)),
+        ?assertMatch([_], images(Dir)),
+        %% And what survived is still usable, not a truncated remnant.
+        [Survivor] = images(Dir),
+        ?assertMatch({ok, _}, wasm:load_snapshot(Survivor, Handle))
+    end).
+
+%% How big one image is on disk, measured rather than guessed, so the cap in
+%% the case above tracks the format instead of a number that rots.
+filed_size(Config, Handle) ->
+    Dir = filename:join(?config(priv_dir, Config), "sizing"),
+    with_store(Dir, 1 bsl 40, fun() ->
+        file_one(Handle, ~"sizing"),
+        [F] = images(Dir),
+        filelib:file_size(F)
+    end).
+
+%% `wasm:save_snapshot/2` writes `<hex>.img.<n>.tmp` and renames. A node that
+%% dies in between leaves one, and `purge/0` globbed `*.img`, so it did not.
+a_purge_takes_the_half_written_files_too(Config) ->
+    Dir = filename:join(?config(priv_dir, Config), "purged"),
+    Handle = fixture(reactor),
+    with_store(Dir, 1 bsl 40, fun() ->
+        file_one(Handle, ~"p"),
+        [Img] = images(Dir),
+        Tmp = Img ++ ".999.tmp",
+        ok = file:write_file(Tmp, ~"half written"),
+        ok = wasm_snapshot_store:purge(),
+        ?assertEqual([], filelib:wildcard(filename:join(Dir, "*")))
+    end).
+
+%%% ---------------------------------------------------------- the setting ---
+%%
+%% Every case above sets the cap low and watches eviction happen, and **all of
+%% them would pass against a hardcoded cap of the same size**. These are what
+%% say the setting is read, what an absent or unusable one does, and *when* a
+%% change takes effect.
+
+with_cap(Max, F) ->
+    application:set_env(wasm, max_snapshot_dir_bytes, Max),
+    try F() after application:unset_env(wasm, max_snapshot_dir_bytes) end.
+
+an_unset_cap_is_the_default(_Config) ->
+    ok = application:unset_env(wasm, max_snapshot_dir_bytes),
+    %% The resolved number, not "a small directory survived", which would pass
+    %% with no cap at all.
+    ?assertEqual(512 * 1024 * 1024, wasm_snapshot_store:max_bytes()).
+
+%% Two values, because one cannot tell a setting being read from a constant
+%% that happens to match it.
+a_set_cap_is_the_one_reported(_Config) ->
+    with_cap(4096, fun() -> ?assertEqual(4096, wasm_snapshot_store:max_bytes()) end),
+    with_cap(99, fun() -> ?assertEqual(99, wasm_snapshot_store:max_bytes()) end).
+
+%% Taken literally, a cap of `0` or `-1` deletes every image on the next store,
+%% and a float reaches `lists:sum/1` comparisons that silently do the wrong
+%% thing. The same treatment `compile_max_heap_words` already gets.
+a_cap_that_is_not_a_size_falls_back(_Config) ->
+    Default = 512 * 1024 * 1024,
+    [with_cap(Bad, fun() ->
+         ?assertEqual(Default, wasm_snapshot_store:max_bytes())
+     end) || Bad <- [-1, 1.5, unlimited, ~"512"]].
+
+%% Read on every store, so a change is in force from the next one. This pins
+%% both that the value is read and when.
+a_raised_cap_takes_effect_at_the_next_store(Config) ->
+    Dir = filename:join(?config(priv_dir, Config), "raised"),
+    Handle = fixture(reactor),
+    One = filed_size(Config, Handle),
+    with_store(Dir, One + (One div 2), fun() ->
+        [file_one(Handle, K) || K <- [~"a", ~"b"]],
+        ?assertMatch([_], images(Dir)),
+        %% Room for three now, and the next store is what notices.
+        application:set_env(wasm, max_snapshot_dir_bytes, One * 3 + 100),
+        [file_one(Handle, K) || K <- [~"c", ~"d"]],
+        ?assertEqual(3, length(images(Dir)))
+    end).
+
+%% The surprising half of "eviction happens on a store": lowering the setting
+%% does nothing until something is written, and `purge/0` is what shrinks a
+%% directory now. Worth an assertion rather than only a sentence in the guide.
+a_lowered_cap_does_not_shrink_the_directory(Config) ->
+    Dir = filename:join(?config(priv_dir, Config), "lowered"),
+    Handle = fixture(reactor),
+    One = filed_size(Config, Handle),
+    with_store(Dir, One * 4, fun() ->
+        [file_one(Handle, K) || K <- [~"a", ~"b", ~"c"]],
+        ?assertEqual(3, length(images(Dir))),
+        application:set_env(wasm, max_snapshot_dir_bytes, One),
+        %% No store, so nothing moved.
+        ?assertEqual(3, length(images(Dir))),
+        %% And this is the way to shrink one now.
+        ok = wasm_snapshot_store:purge(),
+        ?assertEqual([], images(Dir))
+    end).

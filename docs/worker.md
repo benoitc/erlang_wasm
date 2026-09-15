@@ -147,6 +147,59 @@ applied by whoever owns the instance, with `spawn_opt` at creation rather than
 copied onto the new heap before an in-process call would run. The worker kernel
 does this for you; an inline caller does not get it by passing the key.
 
+## Give the request runner a heap floor
+
+Off unless you set it, and worth setting for any guest whose requests spend
+more time collecting than running:
+
+```erlang
+script_worker:start_link(my_adapter, #{root => scratch,
+                                       runner_min_heap_words => 200_000}).
+```
+
+`runner_min_heap_words` is a **floor**, not a bound, which is why it is a
+worker option rather than a limits key: every key in a limits map says what a
+guest may not exceed, and this one says how much room to give it. The kernel
+resolves it once at `start_link/2` and passes it to `spawn_opt` as
+`min_heap_size`, alongside the `max_heap_size` ceiling that is already there.
+
+It matters because a request runner holds almost nothing on its own heap: the
+module is a cache handle, the memories are `atomics` pages, a restored image's
+contents are reference-counted binaries. The collector sizes a heap from the
+live set, so it gives the runner the default 233 words and then collects
+through the request dozens of times. On QuickJS that was 61% of the request.
+
+**The right value is a property of your guest**, so find it by sweeping rather
+than by copying one: Lua and QuickJS both plateau at 200,000 words, CPython at
+five times that. [The tuning guide](tuning.md) is the procedure;
+`test/audit/PERF.md` has the measurements.
+
+Two things to know before you set it. The emulator rounds the number **up** to
+a heap-size class, so 200,000 becomes 318,187 words, which is 2.4 MiB, and
+every concurrent runner pays it. And the floor must fit under `max_heap_words`
+with room for that rounding: one that does not is refused with a warning and
+the runner gets no floor, because a `min_heap_size` above `max_heap_size` is a
+kill at spawn and a worker whose every request fails for a reason nothing
+names.
+
+## Give the capture one too
+
+```erlang
+script_worker:start_link(my_adapter, #{root => scratch,
+                                       capture_min_heap_words => 2_000_000}).
+```
+
+`capture_min_heap_words` is the same idea on the process that runs a snapshot
+capture, and on a guest that takes a long time to start it is worth more than
+anything else here: a CPython worker start goes from **92 s to 17 s**. It is a
+separate setting because it is a different process doing different work, and
+the two want numbers that are nothing like each other.
+
+It only applies where a capture happens, so a worker that reads its image from
+`snapshot_dir` and one whose adapter declares no snapshot capability both
+ignore it. `script_worker:capture_heap_words/2` answers what it resolves to,
+and the refusal rules are the runner's.
+
 ## Bound the work and the time
 
 ```erlang

@@ -45,7 +45,10 @@ are real:
 - **Linear memory is invisible to `max_heap_size`.** `atomics` arrays are
   off-heap. A module can exhaust node memory without its process heap moving at
   all. This is why page accounting is explicit and node-wide in `wasm_engine`
-  rather than left to the BEAM.
+  rather than left to the BEAM. It cuts the other way too, and costs rather
+  than leaks: a process holding a guest whose memory is all off-heap has almost
+  no live set, so the collector gives it a small heap and collects through the
+  call constantly. `docs/tuning.md` is what to do about that.
 - **Per-instance limits do not bound concurrency.** No single instance can
   monopolise a scheduler, because the interpreter is preemptible. But ten
   thousand instances each behaving perfectly will still saturate every

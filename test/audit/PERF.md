@@ -5291,3 +5291,143 @@ at load 14. So there is about 26 ms in a worker request that nothing here
 accounts for, it is the largest single cost in a small request, and **it is
 still unexplained**. Written down as an open question rather than filled with
 another guess.
+
+### ~~The 26 ms~~. Found: it is the runner's own garbage collection
+
+The second row of that table is the trap. `max_heap_size` was tried at 1M, 4M
+and 16M words and changed nothing, and that was read as "the runner's heap is
+not it". It is a **ceiling**. The collector never sizes a heap from it, so
+raising it cannot move a collection count and the experiment could not have
+answered the question it was asked.
+
+The floor is the other flag. `bench/paths/workerbench.erl`'s `floors` mode
+drives one worker per floor round robin in a single emulator, order reversed on
+alternate rounds, tracing `garbage_collection` on the processes each request
+creates. QuickJS, ten requests a floor, load 12.5 to 13.3:
+
+| `runner_min_heap_words` | request, min | collections | in |
+| ---: | ---: | ---: | ---: |
+| none | 56.0 ms | 98 | 35.0 ms |
+| 50,000 | 48.1 ms | 71 | 29.6 ms |
+| 100,000 | 45.8 ms | 67 | 25.9 ms |
+| 130,000 | 22.4 ms | 49 | 3.0 ms |
+| 200,000 | 21.1 ms | 34 | 2.9 ms |
+| 400,000 | 21.3 ms | 25 | 3.0 ms |
+
+**61% of an unfloored request was collection**, and the knee between 100,000
+and 130,000 words removes almost all of it. The null experiment first, two
+zero-floor arms in one emulator: 51.2 and 51.2 ms minimum, 95 collections
+each, so the spread the table is read against is a few per cent.
+
+This is the same mechanism as the start path two sections below, and the
+reason it reaches an extreme here is that a restored request instance is the
+extreme case of the shape: the module is a cache handle, the memories are
+`atomics` pages, the image's runs are refc binaries. The collector sizes a
+heap from the live set, and the runner has almost none, so it gets the
+emulator's default 233 words and collects through a call that allocates
+hundreds of millions.
+
+**The value is the guest's, not the runtime's**, which is why it is a worker
+option and not a default:
+
+| guest | no floor | at 200,000 | at 400,000 | at 1,000,000 |
+| --- | ---: | ---: | ---: | ---: |
+| Lua | 30.0 ms, 98 collections | **12.7 ms**, 23 | | |
+| QuickJS | 56.0 ms, 98 | **21.1 ms**, 34 | 21.3 ms, 25 | |
+| CPython | 367.1 ms, 223 | 331.7 ms, 177 | 200.5 ms, 99 | **117.8 ms**, 43 |
+
+CPython's knee is at 1,000,000 words and 2,000,000 buys nothing further
+(120.3 ms, 29 collections), so the three guests want 200,000, 200,000 and
+1,000,000: a 5x spread, which is why this is a worker option and not a default.
+Its collection time over that sweep is 242.0, 211.8, 83.3 and **6.7 ms**.
+
+One CPython sweep is not in the table. Run over 400,000 to 4,000,000 with **no
+zero-floor arm**, it came back flat at 223 collections for every floor,
+including the 400,000 that three other runs put at 97 to 99. There was nothing
+inside it to say whether the floors were working at all. It is unexplained and
+not believed; every row above comes from a run containing its own control.
+
+**`+hms` is not this measurement.** The first version of this finding used the
+node-wide flag, which sizes the guardian, the reaper's children and every other
+process in the emulator. Every number in this section is per-process
+`min_heap_size` given to the runner at `spawn_opt`, which is the only form that
+ships. That distinction is not pedantry: the section below records a floor set
+*in place* recovering a third of what the same floor set at spawn recovered.
+
+`examples/script_worker.erl` resolves `runner_min_heap_words` once per worker
+and clamps it against the worker's `max_heap_words`. The clamp needs headroom
+rather than a plain comparison, because the emulator rounds a requested floor
+**up** to a heap-size class and the jump is large:
+
+| asked | got | ratio |
+| ---: | ---: | ---: |
+| 1,000 | 1,598 | 1.598 |
+| 50,000 | 75,113 | 1.502 |
+| 100,000 | 121,536 | 1.215 |
+| 200,000 | 318,187 | 1.591 |
+| 400,000 | 514,838 | 1.287 |
+| 1,000,000 | 1,199,557 | 1.200 |
+
+A floor merely smaller than the ceiling can therefore round to a heap above it,
+and a heap above `max_heap_size` is a kill at spawn: not a slow worker, a
+worker whose every request dies before the runner has run a line. The factor is
+2, which covers the measured 1.598.
+
+### The same floor on the capture, which is worth more
+
+`PERF.md` has recorded since the CPython work that a `min_heap_size` floor
+takes a CPython worker start from 17,648 collections to 344, and has said in
+as many words that "what is not measured yet is the wall time of that third
+column, cleanly". Here it is. A CPython worker start with `snapshot_dir`
+unset, so every arm really captures, alternating:
+
+| `capture_min_heap_words` | worker start |
+| ---: | ---: |
+| none | 91.3, 92.1, 92.8 and 94.8 s |
+| 2,000,000 | **17.4 s**, and 17.7 |
+
+**5x**, which is larger than anything the request floor buys, on a process
+whose live set is small for exactly the same reason and whose work is longer.
+
+Unlike the request sweeps these arms are separate emulators, because a worker
+start is the thing being timed and two in one node would share a module cache.
+So they are not self-controlling, and they were taken over a window in which
+this box went from load 12 to load 187. What makes them readable anyway is that
+the floored run sits between unfloored ones in both orderings and the effect is
+5x: nothing in that range of load moved the unfloored arm by more than 4%.
+
+It is a separate setting from the runner's rather than one number for both,
+because it is a different process doing different work: CPython wants
+2,000,000 words to capture and 1,000,000 to answer, and a guest that never
+captures wants only the second. It costs nothing where no capture happens,
+which includes every worker that reads its image from `snapshot_dir`.
+
+### What this leaves of the QuickJS drift
+
+The 28.5 to 46 ms drift is not one thing. With the floor at 200,000 a QuickJS
+request is 21.1 ms, below either figure, so the question is no longer what to
+do about it but what it was. Recovering the squashed trees from the reflog and
+measuring the image each holds:
+
+| tree | image, heap words | request |
+| --- | ---: | ---: |
+| before non-zero memory runs | 6,164 | 47.5 to 50.7 ms |
+| after memory runs | 10,068 | 53.7 to 55.3 ms |
+
+So about 5 to 6 ms of it is the image growing, which is consistent with the
+mechanism above rather than a second one: a larger live term is copied at every
+collection, and there were 98 of them. The compile-budget merge accounts for
+none of it.
+
+**The image was going to be taken out of the runner's live set and is not**,
+because the floor removed the reason. `#g{}` is copied into the runner whole
+and only `post_restore/3` needs the image, so dropping it after the instance
+exists was the obvious follow-up. With the floor there are 34 collections and
+2.9 ms of collection in the whole request: the image's share of that is a
+fraction of a fraction, and the change would be complicating the record's
+shape to chase it. The 5 to 6 ms was never the image's size as such, it was
+the image's size multiplied by a collection count that is now a third of what
+it was. **The remaining difference is not attributed to any commit** and is
+left that way, following the `#st.code` precedent above: the conditions the two
+original numbers were taken under differ, and no experiment run since has
+separated them.

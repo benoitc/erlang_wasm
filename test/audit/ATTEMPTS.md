@@ -257,6 +257,32 @@ amortises that away, a frame entered constantly pays it, and real compiler
 output nests 257 deep. The fourth time the synthetic loop has disagreed with the
 real module, and the first where the mechanism is understood.
 
+**Raising `max_heap_size` to find a collection problem.** Three values, 1M, 4M
+and 16M words, on the request runner, and none of them moved anything; the
+conclusion drawn was that the runner's heap was not where the missing 26 ms of
+a worker request went. It was, and this experiment could not have said so.
+`max_heap_size` is a **ceiling**: the collector never sizes a heap from it, so
+no value of it changes a collection count. The flag that matters is
+`min_heap_size`, and with it the same request goes from 56.0 ms to 21.1 ms.
+Recorded because the measurement looked clean, swept three values, and pointed
+away from the answer.
+
+**`+hms` standing in for a per-process floor.** The same finding was first
+taken with the node-wide flag, which sizes the guardian, the reaper's children
+and every other process in the emulator. It reproduces the effect and does not
+measure the change that ships. Worth the distinction: `PERF.md` records a floor
+set in place recovering a third of what the same floor set at `spawn_opt`
+recovered, so where a heap floor is applied is a first-order question and the
+two experiments are not interchangeable.
+
+**A benchmark sweep with no control arm.** A CPython floor sweep over 400,000
+to 4,000,000 words came back flat, 223 collections at every floor, including
+the 400,000 that two other runs put at 97. It had no zero-floor arm in it, so
+there was nothing in the run itself to say whether the floors were working at
+all. A sweep of settings needs the off setting in it for the same reason a
+comparison needs a null experiment. The flat run is not explained and is not
+believed.
+
 ## Open, and each a decision rather than a task
 
 **~~The rest of the memory path.~~** Done. A load or a store is generated inline

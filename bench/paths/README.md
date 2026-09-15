@@ -563,3 +563,24 @@ Run the null arm first here as everywhere else. It came out at 16% on the
 minimum for a 60-request QuickJS arm, and a CPython arm varies by a third
 within itself, which is the difference between a measurement worth printing and
 one that is not.
+
+### Sweeping a heap floor
+
+The same module's `floors` mode answers a different question: what
+`runner_min_heap_words` is worth on a guest. It is the shape to copy for any
+per-worker setting, because it makes the comparison self-controlling.
+
+```sh
+erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples     -pa bench/paths -run workerbench main floors qjs_reactor 10 0 100000 200000
+```
+
+One worker per floor, all in **one** emulator, round robin with the order
+reversed on alternate rounds, and each request traced for `garbage_collection`
+on the processes it creates. Two rules it exists to enforce:
+
+- **Put the off setting in the sweep.** Without a zero arm there is nothing in
+  the run to say the setting did anything at all. A CPython sweep without one
+  came back flat and had to be thrown away; `ATTEMPTS.md` has it.
+- **Never compare across runs.** The floors are compared against each other
+  under whatever load the box has, which is the only comparison this machine
+  supports.

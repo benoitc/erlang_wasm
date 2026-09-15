@@ -88,7 +88,7 @@ edges. The kinds these four can produce are in `worker_error`.
 -export([start_link/2, start_link/3, stop/1]).
 -export([submit/2, await/3, cancel/2, run/2]).
 -export([withdraw_waiter/3, consumed/3, channel_write/2]).
--export([default_limits/0]).
+-export([default_limits/0, runner_heap_words/2, capture_heap_words/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -356,6 +356,26 @@ exist. Declaring one is a promise the worker holds it to: a capture that fails
 %% that died in between.
 -define(CAPTURE_HANDOFF, 30_000).
 
+%% The largest `max_heap_size' `size' a 64-bit emulator accepts, and the
+%% default ceiling a runner is spawned under. Both are `wasm_jit's numbers and
+%% the reasoning for the first is at `src/wasm_jit.erl:110'.
+-define(MAX_HEAP_WORDS, ((1 bsl 59) - 1)).
+-define(DEFAULT_MAX_HEAP_WORDS, (8 * 1024 * 1024)).
+
+%% How much of the ceiling a floor is allowed to ask for.
+%%
+%% Not 1, because the emulator rounds a requested floor **up** to a heap-size
+%% class and the jump is large: 200,000 words becomes 318,187 and 1,000 becomes
+%% 1,598, which is 1.598x, the worst of the sizes measured. A floor merely
+%% smaller than the ceiling is therefore not safe -- the rounded heap can land
+%% above it, and a heap above `max_heap_size' is a kill at spawn, before the
+%% runner has run a line. 2 covers the measured 1.598 with margin.
+-define(FLOOR_HEADROOM, 2).
+
+%% What became of a requested floor. Neither of the two changed answers is an
+%% error: a worker with no floor is the worker every release had until now.
+-type heap_note() :: ok | {bad, term()} | {no_room, pos_integer()}.
+
 %% The base is `wasm_limits:untrusted/0', not a fresh map: fuel, max_depth,
 %% max_heap_words, max_memory_pages and max_host_calls come from there and keep
 %% their meanings. The worker adds only what the runtime has no concept of.
@@ -372,6 +392,9 @@ exist. Declaring one is a promise the worker holds it to: a capture that fails
             artifact       :: artifact(),
             opts           :: map(),
             limits         :: map(),
+            %% Resolved once, here, rather than per request: the answer cannot
+            %% change over a worker's life and a bad value should be said once.
+            runner_heap = 0 :: non_neg_integer(),
             root           :: worker_reaper:root_id(),
             timeout        :: timeout(),
             trusted        :: boolean(),
@@ -548,13 +571,19 @@ init({Adapter, Opts}) ->
     end.
 
 started(Adapter, Artifact, Opts, Limits, Root) ->
+    {Heap, Note} = runner_heap_words(Opts, Limits),
+    ok = say_heap(Adapter, runner_min_heap_words, Note),
     W = #w{adapter = Adapter, artifact = Artifact, opts = Opts,
-           limits = Limits, root = Root,
+           limits = Limits, root = Root, runner_heap = Heap,
            timeout = maps:get(timeout, Limits, ?DEFAULT_TIMEOUT),
            trusted = maps:get(trusted, Opts, false)},
+    {CapHeap, CapNote} = capture_heap_words(Opts, Limits),
+    ok = say_heap(Adapter, capture_min_heap_words, CapNote),
     case capture_image(Adapter, Artifact,
-                       maps:get(capture_timeout, Opts, ?CAPTURE_TIMEOUT),
-                       maps:get(max_heap_words, Limits)) of
+                       #{timeout => maps:get(capture_timeout, Opts,
+                                             ?CAPTURE_TIMEOUT),
+                         words => maps:get(max_heap_words, Limits),
+                         floor => CapHeap}) of
         {error, E}          -> {stop, E};
         {ok, undefined, _}  -> {ok, W};
         {ok, Image, Cap}    -> {ok, W#w{image = Image, snapshot_cap = Cap}}
@@ -564,10 +593,10 @@ started(Adapter, Artifact, Opts, Limits, Root) ->
 %% before any tenant code has run. That is the whole security argument for
 %% restoring the same bytes into every request: nothing a tenant did can be in
 %% them.
-capture_image(Adapter, Artifact, Timeout, Words) ->
+capture_image(Adapter, Artifact, Budget) ->
     case snapshot_cap(Adapter, Artifact) of
         unsupported -> {ok, undefined, undefined};
-        Cap         -> from_store_or_capture(Cap, Timeout, Words)
+        Cap         -> from_store_or_capture(Cap, Budget)
     end.
 
 %% **Look before capturing.** For CPython that is the difference between
@@ -576,15 +605,15 @@ capture_image(Adapter, Artifact, Timeout, Words) ->
 %% another build -- costs exactly the capture that would have happened anyway,
 %% which is why `wasm_snapshot_store:lookup/2` answers `miss` rather than
 %% raising.
-from_store_or_capture(#{module := M, imports := ImportSet} = Cap, Timeout, Words) ->
+from_store_or_capture(#{module := M, imports := ImportSet} = Cap, Budget) ->
     Key = image_key(M, Cap, ImportSet),
     case wasm_snapshot_store:lookup(Key, M) of
         {ok, Image} -> {ok, Image, Cap};
-        miss        -> capture_and_file(Key, Cap, Timeout, Words)
+        miss        -> capture_and_file(Key, Cap, Budget)
     end.
 
-capture_and_file(Key, Cap, Timeout, Words) ->
-    case capture_elsewhere(Cap, Timeout, Words) of
+capture_and_file(Key, Cap, Budget) ->
+    case capture_elsewhere(Cap, Budget) of
         {ok, Image, C} ->
             ok = wasm_snapshot_store:store(Key, Image, C),
             {ok, Image, C};
@@ -608,11 +637,12 @@ image_key(_Other, _Cap, _ImportSet) ->
 %% cannot be interrupted. So the owner here is a child, and a guest whose
 %% `init()` never returns costs one `capture_timeout` rather than a
 %% `start_link/2` that never comes back.
-capture_elsewhere(Cap, Timeout, Words) ->
+capture_elsewhere(Cap, #{timeout := Timeout, words := Words, floor := Floor}) ->
     Parent = self(),
     {Pid, Mon} = spawn_opt(fun() -> capture_proc(Parent, Cap) end,
                            [monitor, {max_heap_size, #{size => Words, kill => true,
-                                                       error_logger => true}}]),
+                                                       error_logger => true}}
+                            | heap_floor(Floor)]),
     receive
         {captured, Pid, {ok, Image, C}} ->
             %% **Before** the capturer exits, not after, which is why the child
@@ -806,6 +836,78 @@ default nobody can find is a default nobody can change.
 -spec default_limits() -> map().
 default_limits() -> ?WORKER_LIMITS.
 
+-doc """
+How much heap a request runner starts with, and what happened to the number.
+
+`runner_min_heap_words` is a **floor**, not a bound: it says how much room to
+give a request, where every key in a limits map says what a guest may not
+exceed. Off unless set, because the right value is a property of the guest and
+there is no number that suits all of them. `docs/tuning.md` is how to find your
+own; `test/audit/PERF.md` has the one measured for QuickJS.
+
+Resolved once at `start_link/2` and reported rather than applied silently,
+which is `wasm_jit:resolve_max_heap_words/0`'s arrangement and is here for the
+same reason: a setting nobody can read back is a setting nobody can tell is
+being used. Exported so the policy can be asserted without starting a worker.
+
+Two ways a number comes back changed, and neither is an error:
+
+- `{bad, Term}` -- not a whole number of words between the emulator's own
+  minimum and its undocumented maximum. Answers off.
+- `{no_room, Ceiling}` -- the floor does not fit under this worker's
+  `max_heap_words` with the headroom the emulator's rounding needs. Answers
+  off, because the alternative is a runner killed at spawn and a worker whose
+  every request fails for a reason nothing names.
+""".
+-spec runner_heap_words(map(), map()) -> {non_neg_integer(), heap_note()}.
+runner_heap_words(Opts, Limits) ->
+    heap_words(runner_min_heap_words, Opts, Limits).
+
+-doc """
+The same, for the process a capture runs in.
+
+A separate setting because it is a different process doing different work: the
+capturer runs the guest's `init()` once and the runner answers a request, and
+the two want numbers that are nothing like each other. CPython's capture takes
+2,000,000 words to a request's 1,000,000, and a guest with no capture at all
+wants only the first.
+
+The effect is larger here than anywhere else in this module.
+`test/audit/PERF.md` has it at 5x on a CPython worker start.
+""".
+-spec capture_heap_words(map(), map()) -> {non_neg_integer(), heap_note()}.
+capture_heap_words(Opts, Limits) ->
+    heap_words(capture_min_heap_words, Opts, Limits).
+
+heap_words(Key, Opts, Limits) ->
+    Ceiling = maps:get(max_heap_words, Limits, ?DEFAULT_MAX_HEAP_WORDS),
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    case maps:get(Key, Opts, 0) of
+        %% An explicit zero is a clean disabled state, spelled the way
+        %% `max_heap_size' spells it.
+        0 ->
+            {0, ok};
+        W when is_integer(W), W >= Min, W =< ?MAX_HEAP_WORDS,
+               W * ?FLOOR_HEADROOM =< Ceiling ->
+            {W, ok};
+        W when is_integer(W), W >= Min, W =< ?MAX_HEAP_WORDS ->
+            {0, {no_room, Ceiling}};
+        Bad ->
+            {0, {bad, Bad}}
+    end.
+
+%% Once per worker, at its start, because that is where the value is resolved.
+%% A worker per tenant would otherwise log the same line per tenant.
+say_heap(_Adapter, _Key, ok) ->
+    ok;
+say_heap(Adapter, Key, {bad, Bad}) ->
+    logger:warning("script_worker: ~p: ~s is ~p, which is not a heap size; "
+                   "no floor is applied", [Adapter, Key, Bad]);
+say_heap(Adapter, Key, {no_room, Ceiling}) ->
+    logger:warning("script_worker: ~p: ~s does not fit under max_heap_words "
+                   "of ~p with room for the emulator's rounding; no floor is "
+                   "applied", [Adapter, Key, Ceiling]).
+
 %%% ------------------------------------------------------------- submitting ---
 
 do_submit(Request, Caller, W) ->
@@ -822,7 +924,8 @@ do_submit(Request, Caller, W) ->
              adapter => W#w.adapter, artifact => W#w.artifact,
              request => Request, limits => W#w.limits, root => W#w.root,
              trusted => W#w.trusted, image => W#w.image,
-             snapshot_cap => W#w.snapshot_cap},
+             snapshot_cap => W#w.snapshot_cap,
+             runner_heap => W#w.runner_heap},
     {G, GMon} = spawn_monitor(fun() -> guardian(Args) end),
     receive
         {guardian_ready, Ref, ok} ->
@@ -889,6 +992,7 @@ clear_waiter(W) ->
             image       :: undefined | wasm:snapshot(),
             snapshot_cap :: undefined | snapshot_cap(),
             limits      :: map(),
+            runner_heap :: non_neg_integer(),
             root        :: worker_reaper:root_id(),
             trusted     :: boolean(),
             wmon        :: reference(),
@@ -937,6 +1041,7 @@ start_runner(Args, WMon, Dir) ->
             request = maps:get(request, Args), limits = Limits,
             image = maps:get(image, Args),
             snapshot_cap = maps:get(snapshot_cap, Args),
+            runner_heap = maps:get(runner_heap, Args),
             root = maps:get(root, Args), trusted = maps:get(trusted, Args),
             wmon = WMon, dir = Dir,
             channels = channels(Limits)},
@@ -952,8 +1057,18 @@ start_runner(Args, WMon, Dir) ->
                    fun() -> runner(Self, G0) end,
                    [link, monitor,
                     {max_heap_size, #{size => Words, kill => true,
-                                      error_logger => true}}]),
+                                      error_logger => true}}
+                    | heap_floor(G0#g.runner_heap)]),
     loop(G0#g{runner = Pid, rmon = Mon}).
+
+%% A floor and not a bound, and it has to be given here rather than set from
+%% the runner's first line for the same reason `max_heap_size' does:
+%% `min_heap_size' takes effect at the *next* collection, so by the time an
+%% in-process call ran, the thrashing it exists to prevent has already
+%% happened. Setting it in place recovered a third of what setting it at spawn
+%% recovered; `test/audit/PERF.md` has both.
+heap_floor(0)     -> [];
+heap_floor(Words) -> [{min_heap_size, Words}].
 
 loop(G) ->
     receive

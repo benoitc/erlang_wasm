@@ -3511,9 +3511,14 @@ threshold 17,648 times instead of 1,057. Over half of those are fullsweeps.
 collections, fewer than `compile/1` manages, with an `old_heap_size` still at
 1.31 M. The floor is doing exactly what the module was doing by accident.
 
-What is not measured yet is the wall time of that third column, cleanly. Two of
-the measurements on the way to this table were wrong and are worth recording as
-traps, because both produced plausible numbers rather than obvious failures:
+~~What is not measured yet is the wall time of that third column, cleanly.~~
+**Measured**: a CPython worker start goes from 92 s to 17 s with
+`capture_min_heap_words` at 2,000,000. See "The same floor on the capture"
+below, which is where that setting and the request-side one are recorded.
+
+Two of the measurements on the way to this table were wrong and are worth
+recording as traps, because both produced plausible numbers rather than obvious
+failures:
 
 - **A node-wide counter for a per-process question.** `erlang:statistics(
   garbage_collection)` counts the whole node, and it reported no change from
@@ -5290,7 +5295,9 @@ It is not the box: both numbers above were taken within a minute of each other
 at load 14. So there is about 26 ms in a worker request that nothing here
 accounts for, it is the largest single cost in a small request, and **it is
 still unexplained**. Written down as an open question rather than filled with
-another guess.
+another guess. (That was the state when this was written. The section
+immediately below answers it; this paragraph is kept as the record of what the
+table above did and did not support.)
 
 ### ~~The 26 ms~~. Found: it is the runner's own garbage collection
 

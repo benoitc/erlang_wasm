@@ -312,6 +312,48 @@ so all three examples failed to compile as printed. `<<"one" "two">>` is the
 form that works and is what `wasm_wat_SUITE` already uses. Nothing catches
 this, which is the point: the blocks were correct-looking prose for months.
 
+**"The tier never engages on a reactor" was wrong, and the mistake was
+measuring a background compile in requests instead of seconds.** The first
+version of this entry reported `entered => 0` over 3000 requests through the
+worker kernel and traced it to `compile/4` answering `retry` with no counter
+and no diagnostic, which is true and is not the reason.
+
+The reason is that **a reactor request is 21 ms against the command path's
+~200**, so a given request count buys a tenth of the wall time, and the
+compile of 264 QuickJS functions takes about 150 s whichever path asked for it.
+3000 reactor requests is about two and a half minutes of *requests* but the
+node exits when they finish. `the_tier_enters_a_compiled_worker` enters at
+request 353 on the command path for the same reason in reverse: 353 requests
+there is 76 s.
+
+Every intermediate observation was real and every conclusion from it was
+wrong:
+
+| seen | read as | actually |
+| --- | --- | --- |
+| `compile/4` answers `retry` | the compile was lost | `claim_loading` said `loading`: the first compiler was still working |
+| `counts/0` all zero, `diagnostics/0` empty | nothing happened | `retry` bumps no counter by design, and a compile in flight is not an outcome |
+| a direct probe entered at request 70 | the kernel was at fault | the probe called `ready`, a trivial export, so it compiled almost nothing |
+
+The last row is the one worth keeping. A probe written to isolate a component
+has to run the *same work*, and `ready` against `handle` is not the same work
+by two orders of magnitude. It made a 150-second compile look like a
+one-second one and turned "slow" into "broken".
+
+What made it visible in the end was dumping `wasm_code_slots`'s own table and
+`supervisor:count_children(wasm_jit_sup)`: one slot `{loading, Key}` and one
+live compiler says "in progress" where every counter says "nothing happened".
+`workerbench`'s `tier` mode now waits on a **wall-clock** deadline, driving
+requests while it waits, because the tier advances when calls happen.
+
+**And the answer the corrected measurement gives is still no, for a different
+reason.** The tier enters at request 3295, and then 31 requests in 32 keep
+interpreting: adoption is gated behind the same `hot/2` counter that triggers
+compilation, and a reactor builds a fresh instance per request, so an instance
+can only adopt on a call where that counter fires. `PERF.md` has it. Not acted
+on: 32 is a threshold chosen for a workload that reuses an instance, and one
+guest is not evidence for changing it.
+
 ## Open, and each a decision rather than a task
 
 **~~The rest of the memory path.~~** Done. A load or a store is generated inline

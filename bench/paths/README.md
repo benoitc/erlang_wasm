@@ -571,7 +571,9 @@ The same module's `floors` mode answers a different question: what
 per-worker setting, because it makes the comparison self-controlling.
 
 ```sh
-erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples     -pa bench/paths -run workerbench main floors qjs_reactor 10 0 100000 200000
+erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \
+    -pa bench/paths \
+    -run workerbench main floors qjs_reactor metered 10 0 100000 200000
 ```
 
 One worker per floor, all in **one** emulator, round robin with the order
@@ -585,13 +587,43 @@ on the processes it creates. Two rules it exists to enforce:
   under whatever load the box has, which is the only comparison this machine
   supports.
 
+### Does a reactor ever reach the compiled tier
+
+```sh
+erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \
+    -pa bench/paths \
+    -run workerbench main tier qjs_reactor 3000 200000
+```
+
+A metered and a compiled worker over the same reactor artifact, alternating in
+one emulator, with the heap floor on in both halves. The floor is not optional:
+the tier's 8.4x was measured against an unfloored interpreter, and measuring it
+against one again would credit the tier with what the floor already does.
+
+**Read `wasm_jit:counts/0`, never the wall time.** An arm where the tier is off
+and an arm where it is on and slow are the same number of milliseconds; only
+`entered` tells them apart. That is `adopt.erl`'s rule for the command path.
+
+**And give it wall-clock time, not a request count.** The tier arrives after a
+fixed amount of compiling, and a reactor request is ten times faster than a
+command one, so the same request count buys a tenth of the time the compiler
+needs: 3000 requests here is not the 76 s that 353 requests is on the command
+path. The mode waits on a deadline, driving requests while it waits, because
+the tier advances when calls happen and not when time passes. `ATTEMPTS.md`
+records the run that read a slow compile as no compile at all.
+
+The `floors` and `throughput` modes take the config as an argument too, so
+either can be run `compiled` rather than `metered`.
+
 ### Scaling, where interleaving does not save you
 
 The `throughput` mode sweeps worker counts and reports requests per second,
 with and without a heap floor, sampling peak process memory as it goes.
 
 ```sh
-erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples     -pa bench/paths -run workerbench main throughput qjs_reactor 25 200000 1 2 4 8 14
+erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \
+    -pa bench/paths \
+    -run workerbench main throughput qjs_reactor metered 25 200000 1 2 4 8 14
 ```
 
 **This is the one arm here that cannot be made self-controlling.** A latency

@@ -32,7 +32,7 @@ Output is written as it happens, one line per sample. Do not pipe it through
 
 What a host gets from more workers, and what a heap floor costs it in memory.
 
-    erl ... -run workerbench main throughput qjs_reactor 20 200000 1 2 4 8 14
+    erl ... -run workerbench main throughput qjs_reactor metered 20 200000 1 2 4 8 14
 
 `N` requests per worker, then a floor in words, then the worker counts to
 sweep. Each count is run twice, once with the floor and once without, so the
@@ -55,7 +55,7 @@ image's runs are refc binaries -- so the collector sizes the runner a 233-word
 heap and collects through it hundreds of times.
 
     erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \\
-        -pa bench/paths -run workerbench main floors qjs_reactor 20 0 100000 200000
+        -pa bench/paths -run workerbench main floors qjs_reactor metered 20 0 100000 200000
 
 Every floor gets a worker of its own and they are driven **round robin in one
 emulator**, with the order reversed on alternate rounds, because that is the
@@ -86,11 +86,14 @@ floor on work this mode is not about.
 %% without it a collection has no duration.
 -define(GC_FLAGS, [garbage_collection, monotonic_timestamp]).
 
-main(["floors", Adapter, N | Floors]) ->
-    floors(Adapter, list_to_integer(N), [list_to_integer(F) || F <- Floors]);
-main(["throughput", Adapter, N, Floor | Counts]) ->
-    throughput(Adapter, list_to_integer(N), list_to_integer(Floor),
+main(["floors", Adapter, Config, N | Floors]) ->
+    floors(Adapter, Config, list_to_integer(N),
+           [list_to_integer(F) || F <- Floors]);
+main(["throughput", Adapter, Config, N, Floor | Counts]) ->
+    throughput(Adapter, Config, list_to_integer(N), list_to_integer(Floor),
                [list_to_integer(C) || C <- Counts]);
+main(["tier", Adapter, N, Floor]) ->
+    tier(Adapter, list_to_integer(N), list_to_integer(Floor));
 main([Adapter, Config, Arm, N, Cache]) ->
     io:format("# load average at start: ~s", [os:cmd("uptime")]),
     {ok, _} = application:ensure_all_started(wasm),
@@ -113,6 +116,7 @@ main([Adapter, Config, Arm, N, Cache]) ->
     Samples = run(W, Echo, list_to_integer(N), 1, []),
     report(Samples),
     io:format("# counts at end: ~p~n", [wasm_jit:counts()]),
+    io:format("# diagnostics:   ~p~n", [wasm_jit:diagnostics()]),
     io:format("# load average at end: ~s", [os:cmd("uptime")]),
     %% `-run' returns to an idle node, which for a harness meant every arm
     %% appeared to hang after printing its last line.
@@ -208,7 +212,7 @@ report(Samples) ->
 %% reversed on alternate rounds. Interleaving is the whole point: the floors
 %% are compared against each other under whatever load the box has, and never
 %% against a number from another run.
-floors(Adapter, N, Floors) ->
+floors(Adapter, Config, N, Floors) ->
     io:format("# load average at start: ~s", [os:cmd("uptime")]),
     {ok, _} = application:ensure_all_started(wasm),
     application:unset_env(wasm, code_cache_dir),
@@ -222,7 +226,7 @@ floors(Adapter, N, Floors) ->
     ok = filelib:ensure_path(Images),
     application:set_env(wasm, snapshot_dir, Images),
     {ok, _} = worker_reaper:start_link(#{scratch => Root}),
-    {Mod, Path, Limits} = arm(Adapter, "metered"),
+    {Mod, Path, Limits} = arm(Adapter, Config),
     io:format("# ~s floors=~w n=~w~n", [Adapter, Floors, N]),
     Guest = guest(Adapter, Path),
     Ws = [{F, start_floor(Mod, Guest, Limits, F)} || F <- Floors],
@@ -341,7 +345,7 @@ med(L) -> lists:nth(max(1, length(L) div 2), L).
 %% reports the same rate. The difference is what is being driven: that one
 %% spawns instances, this one spawns `script_worker's, so what it prices is a
 %% host's own scaling and not the interpreter's.
-throughput(Adapter, N, Floor, Counts) ->
+throughput(Adapter, Config, N, Floor, Counts) ->
     io:format("# at start: ~s#           ~s", [os:cmd("uptime"), idle()]),
     {ok, _} = application:ensure_all_started(wasm),
     application:unset_env(wasm, code_cache_dir),
@@ -352,7 +356,7 @@ throughput(Adapter, N, Floor, Counts) ->
     ok = filelib:ensure_path(Images),
     application:set_env(wasm, snapshot_dir, Images),
     {ok, _} = worker_reaper:start_link(#{scratch => Root}),
-    {Mod, Path, Limits} = arm(Adapter, "metered"),
+    {Mod, Path, Limits} = arm(Adapter, Config),
     Guest = guest(Adapter, Path),
     {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
     #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
@@ -428,3 +432,146 @@ sample(_Parent, Peak) ->
 stop_sampler(Pid) ->
     Pid ! {stop, self()},
     receive {peak, P} -> P after 5000 -> 0 end.
+
+%%% --------------------------------------------------------------- tier ---
+
+%% Whether a **restored** instance ever reaches generated code, and what it is
+%% worth if it does.
+%%
+%% Two workers over the same reactor artifact, one `metered' and one
+%% `compiled', driven alternately in one emulator with the heap floor on in
+%% both. The floor is not optional here: the tier's published 8.4x was measured
+%% against an unfloored interpreter, and against a floored one it has far less
+%% to win. Measuring it the other way would credit the tier with what the floor
+%% already does.
+%%
+%% `wasm_jit:counts/0' is the evidence, not the wall time, which is
+%% `bench/paths/adopt.erl's rule for the same question one layer down: a
+%% slow arm and an arm where the tier never engaged look identical in
+%% milliseconds, and only `entered' tells them apart.
+tier(Adapter, N, Floor) ->
+    io:format("# at start: ~s#           ~s", [os:cmd("uptime"), idle()]),
+    {ok, _} = application:ensure_all_started(wasm),
+    application:unset_env(wasm, code_cache_dir),
+    Root = "/tmp/workerbench_root",
+    _ = os:cmd("rm -rf " ++ Root),
+    ok = filelib:ensure_path(Root),
+    Images = Root ++ "/images",
+    ok = filelib:ensure_path(Images),
+    application:set_env(wasm, snapshot_dir, Images),
+    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {Mod, Path, Metered} = arm(Adapter, "metered"),
+    {Mod, Path, Compiled} = arm(Adapter, "compiled"),
+    Guest = guest(Adapter, Path),
+    {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
+    #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
+    io:format("# ~s tier n=~w floor=~w~n# compiled limits ~p~n",
+              [Adapter, N, Floor, Compiled]),
+    Wm = start_floor(Mod, Guest, Metered, Floor),
+    Wc = start_floor(Mod, Guest, Compiled, Floor),
+    %% One discarded request each, as everywhere else here: the first carries
+    %% the module cache and every lazily loaded host module.
+    _ = [one(W, Echo) || W <- [Wm, Wc]],
+    io:format("# counts after warm-up: ~p~n", [wasm_jit:counts()]),
+    {Ms, Cs, At0} = tier_rounds(Wm, Wc, Echo, N, 1, [], [], undefined),
+    %% A reactor request is 21 ms against the command path's ~200, so N
+    %% requests buy a tenth of the wall time and the background compile is very
+    %% likely still running. Wait for it, then keep driving: a run that stopped
+    %% here would report "never entered" for a compile that was merely
+    %% unfinished, which is the first wrong answer this mode gave.
+    At = wait_and_drive(Wc, Echo, At0,
+                        erlang:monotonic_time(millisecond) + 300_000),
+    [ok = script_worker:stop(W) || W <- [Wm, Wc]],
+    tier_report(Ms, Cs, At, N),
+    io:format("# counts at end: ~p~n", [wasm_jit:counts()]),
+    io:format("# slots: ~p~n",
+              [[{Nm, St} || {Nm, _G, St, _M} <- ets:tab2list(wasm_code_slots),
+                            St =/= free]]),
+    io:format("# jit children: ~p~n",
+              [supervisor:count_children(wasm_jit_sup)]),
+
+    io:format("# diagnostics:   ~p~n", [wasm_jit:diagnostics()]),
+    io:format("# at end:   ~s#           ~s", [os:cmd("uptime"), idle()]),
+    init:stop().
+
+%% Poll by **calling**, not by sleeping: the tier advances when calls happen,
+%% so a run that waited without calling would wait forever for an adoption only
+%% a call can perform.
+%%
+%% Bounded by wall time rather than by a request count, because that is the
+%% quantity the compiler needs and a reactor request buys a tenth as much of it
+%% as a command one. 600 requests sounded generous and was twelve seconds.
+wait_and_drive(_Wc, _Req, At, _Deadline) when At =/= undefined -> At;
+wait_and_drive(Wc, Req, undefined, Deadline) ->
+    _ = req_us(Wc, Req),
+    Now = erlang:monotonic_time(millisecond),
+    case {maps:get(entered, wasm_jit:counts(), 0) > 0, Now >= Deadline} of
+        {true, _} ->
+            io:format("# entered while waiting, ~p~n", [wasm_jit:counts()]),
+            waited;
+        {false, true} ->
+            io:format("# gave up after the wait; compilers still running: ~p~n",
+                      [supervisor:count_children(wasm_jit_sup)]),
+            undefined;
+        {false, false} ->
+            (Deadline - Now) rem 10000 < 30 andalso
+                io:format("# waiting, ~w s left, ~p~n",
+                          [(Deadline - Now) div 1000, wasm_jit:counts()]),
+            wait_and_drive(Wc, Req, undefined, Deadline)
+    end.
+
+tier_rounds(_Wm, _Wc, _Req, N, I, Ms, Cs, At) when I > N ->
+    {lists:reverse(Ms), lists:reverse(Cs), At};
+tier_rounds(Wm, Wc, Req, N, I, Ms, Cs, At) ->
+    %% Both orderings, so neither arm is always the one that meets a cold
+    %% scheduler.
+    {M, C} = case I rem 2 of
+                 1 -> {req_us(Wm, Req), req_us(Wc, Req)};
+                 0 -> R = req_us(Wc, Req), {req_us(Wm, Req), R}
+             end,
+    Entered = maps:get(entered, wasm_jit:counts(), 0),
+    At1 = case {At, Entered > 0} of
+              {undefined, true} ->
+                  io:format("~w ENTERED  counts ~p~n", [I, wasm_jit:counts()]),
+                  I;
+              _ ->
+                  At
+          end,
+    case I rem 25 =:= 1 of
+        true  -> io:format("~w metered=~w us compiled=~w us  ~p~n",
+                           [I, M, C, wasm_jit:counts()]);
+        false -> ok
+    end,
+    tier_rounds(Wm, Wc, Req, N, I + 1, [M | Ms], [C | Cs], At1).
+
+req_us(W, Req) ->
+    T0 = erlang:monotonic_time(microsecond),
+    R = script_worker:run(W, Req),
+    Us = erlang:monotonic_time(microsecond) - T0,
+    ok = check(R),
+    Us.
+
+%% Split at the request the tier engaged on, because an average across that
+%% boundary is a number describing neither side of it.
+tier_report(_Ms, _Cs, waited, _N) ->
+    io:format("# the tier engaged only after the measured rounds; rerun with a "
+              "larger N for a before/after split~n");
+tier_report(Ms, Cs, undefined, N) ->
+    io:format("# NEVER ENTERED in ~w requests~n", [N]),
+    io:format("# metered  min/median ~w / ~w us~n", [lists:min(Ms), med2(Ms)]),
+    io:format("# compiled min/median ~w / ~w us~n", [lists:min(Cs), med2(Cs)]);
+tier_report(Ms, Cs, At, N) ->
+    io:format("# entered at request ~w of ~w~n", [At, N]),
+    {MB, MA} = lists:split(At, Ms),
+    {CB, CA} = lists:split(At, Cs),
+    io:format("# before  metered ~w / ~w   compiled ~w / ~w us (min/median)~n",
+              [lists:min(MB), med2(MB), lists:min(CB), med2(CB)]),
+    after_report(MA, CA).
+
+after_report([], _CA) ->
+    io:format("# after   nothing ran after the tier engaged~n");
+after_report(MA, CA) ->
+    io:format("# after   metered ~w / ~w   compiled ~w / ~w us (min/median)~n",
+              [lists:min(MA), med2(MA), lists:min(CA), med2(CA)]).
+
+med2(L) -> S = lists:sort(L), lists:nth(max(1, length(S) div 2), S).

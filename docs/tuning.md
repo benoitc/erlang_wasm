@@ -37,7 +37,7 @@ reversed on alternate rounds:
 
 ```
 erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \
-    -pa bench/paths -run workerbench main floors qjs_reactor 10 0 100000 200000
+    -pa bench/paths -run workerbench main floors qjs_reactor metered 10 0 100000 200000
 ```
 
 That is the only comparison worth making on a machine that has other work on

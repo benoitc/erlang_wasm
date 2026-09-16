@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### The artifact cache is checked, not just trusted
+
+Reading a cache entry is `code:load_binary/3` on bytes from a file, and nothing
+checked those bytes or where they came from. `code_cache_dir` is still opt-in
+and still as trusted as your release, but the runtime now refuses a directory
+that plainly is not: the path must be absolute with no dot component, the
+directory owned by the node's user, every directory above it owned by root or
+that user, none of them writable by group or other, and nothing on the path a
+symlink. Entries must be regular files, and each carries a digest checked
+before it is loaded.
+
+Every failure is a cache miss and one line in the log. Nothing raises, and a
+refused directory does not stop the node compiling.
+
+Two behaviour changes worth knowing. A **missing parent** is now a refusal: the
+runtime creates the last component of the path at `0700` and nothing above it,
+where it used to create the whole chain. And a **relative** `code_cache_dir` is
+refused, because it means something different after `file:set_cwd/1`.
+
+The digest detects corruption, not a hostile writer. See
+[Security](docs/security.md) for what that does and does not cover.
+
 ### A reactor can use compiled code from a request's first call
 
 An instance adopted generated code only on a call where the compiled tier's

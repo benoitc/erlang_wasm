@@ -376,6 +376,25 @@ requests, so the samples are not comparable. A no-compilation control arm --
 tier on, `compile_after` above every call the arm makes -- prices the lookup
 and nothing else, and put it at 0.15%.
 
+**A sharded compile cannot be cached without a bigger key, and is not.**
+`wasm_code_cache:key/6` carries the module's identity, the ABI, the slot, the
+quality, the function set and the stamp. A sharded artifact also embeds `Head`,
+the module a crossing re-enters through, and `Elsewhere`, which says where the
+other functions live, and the key describes neither. A cached shard could
+therefore be adopted into a chain headed by a different module than the one
+compiled into it, so `cached/6` only looks for a single-unit compile.
+
+`no_shard_of_a_sharded_compile_is_cached` is what holds that, and it was itself
+watched to fail on a parent where the *last* shard was cached: `build/8` passed
+`tl(Mods) ++ [undefined]`, so the final shard had no `Next` and took the
+cacheable branch.
+
+It is a real warm-start cost and not only a safety note: a guest large enough
+to split across units recompiles on every node start however warm the cache is.
+Closing it means **extending the key to cover `Head` and `Elsewhere`**, which is
+a change to what a cache entry means rather than a missing argument, and it
+belongs with the cold-start work rather than with the directory's trust model.
+
 ## Open, and each a decision rather than a task
 
 **~~The rest of the memory path.~~** Done. A load or a store is generated inline

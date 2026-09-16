@@ -21,6 +21,9 @@
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("wasm/include/wasm.hrl").
 -include_lib("wasm/include/wasm_exec.hrl").
+-include_lib("kernel/include/file.hrl").
+
+-define(TMP, "/tmp").
 
 all() ->
     [killing_the_compiler_takes_the_otp_compiler_with_it,
@@ -46,6 +49,24 @@ all() ->
      cross_instance_recursion_is_bounded,
      a_crossing_without_a_budget_starts_where_it_is_told,
      a_fresh_instance_adopts_resident_code_on_its_first_call,
+     a_group_writable_cache_directory_is_refused,
+     a_cache_directory_owned_by_another_user_is_refused,
+     a_symlinked_cache_directory_is_refused,
+     a_symlinked_ancestor_is_refused,
+     a_group_writable_ancestor_is_refused,
+     an_ancestor_owned_by_another_user_is_refused,
+     a_relative_cache_directory_is_refused,
+     a_missing_cache_directory_is_created_private,
+     an_entry_that_is_not_a_regular_file_is_refused,
+     a_tampered_entry_is_a_miss,
+     a_truncated_entry_is_a_miss,
+     a_refused_path_does_not_decide_the_next_one,
+     a_malformed_cache_directory_is_a_miss,
+     a_refused_directory_warns_once_per_path,
+     concurrent_first_use_initialises_once,
+     storing_into_a_refused_directory_writes_nothing,
+     purging_a_refused_directory_deletes_nothing,
+     a_refused_directory_does_not_stop_the_node_compiling,
      a_profile_sets_what_you_did_not,
      an_unknown_profile_is_a_value_not_a_crash,
      both_engines_answer_the_same_bad_arguments].
@@ -1089,8 +1110,362 @@ numbered_wat(N) ->
       ["(module (func (export \"f\") (param i32) (result i32)
           local.get 0 i32.const ", integer_to_list(N), " i32.add))"]).
 
+%% Absolute, because the cache refuses a relative path: one means something
+%% different after `file:set_cwd/1' and cannot be vouched for.
+%%% ------------------------------------------------ the cache's trust model ---
+%%
+%% Reading a cache entry is `code:load_binary/3` on bytes from a file, so the
+%% directory is executable code and is checked like it. These cases are what
+%% says the checks exist, and every one of them names the thing that breaks it.
+%%
+%% `docs/security.md` has the boundary; the short version is that the digest
+%% catches damage, not a malicious writer, and the path checks catch
+%% misconfiguration rather than an attacker who is already the node's user.
+
+%% The mode cases carry the contract, because they hold for any user. The
+%% ownership cases below cannot say that, which is why there are both.
+a_group_writable_cache_directory_is_refused(Config) ->
+    Dir = fresh_dir(Config, "group-writable"),
+    ok = file:change_mode(Dir, 8#777),
+    ?assertEqual(miss, with_cache_dir(Dir, fun() -> store_then_lookup() end)).
+
+a_group_writable_ancestor_is_refused(Config) ->
+    Parent = fresh_dir(Config, "loose-parent"),
+    Dir = filename:join(Parent, "cache"),
+    ok = filelib:ensure_path(Dir),
+    ok = file:change_mode(Dir, 8#700),
+    ok = file:change_mode(Parent, 8#777),
+    ?assertEqual(miss, with_cache_dir(Dir, fun() -> store_then_lookup() end)).
+
+%% Not as root: root owns `/usr`, so the check it is meant to exercise would
+%% pass for the wrong reason. As root the layout can simply be built.
+a_cache_directory_owned_by_another_user_is_refused(Config) ->
+    case uid() of
+        0 ->
+            Dir = fresh_dir(Config, "other-owner"),
+            ok = chown_to_somebody_else(Dir),
+            ?assertEqual(miss, with_cache_dir(Dir, fun() -> store_then_lookup() end));
+        _ ->
+            %% Root-owned and `0755` on every POSIX system this runs on, so the
+            %% mode check passes and only the owner check can refuse it.
+            %%
+            %% **Asserting `miss` alone would be vacuous**: an ordinary user
+            %% cannot write into `/usr` either, so a build with no checks at
+            %% all also answers `miss`, for a reason that has nothing to do
+            %% with ownership. What distinguishes them is the recorded verdict.
+            ?assertEqual(miss, with_cache_dir("/usr", fun() -> store_then_lookup() end)),
+            ?assertMatch([{"/usr", {refused, {leaf, "/usr"}}}],
+                         ets:lookup(wasm_code_cache_paths, "/usr"))
+    end.
+
+%% An ordinary user cannot build this layout and cannot borrow a uid to build
+%% it with, so the policy is asserted directly. That is what the predicate is
+%% exported in the test profile for.
+an_ancestor_owned_by_another_user_is_refused(_Config) ->
+    Me = uid(),
+    Other = Me + 1,
+    Dir = #file_info{type = directory, mode = 8#755, uid = Other},
+    ?assertNot(wasm_code_cache:ancestor_ok(Dir, Me)),
+    %% Root above us is fine: it is the one owner besides ourselves that
+    %% nothing untrusted can act as.
+    ?assert(wasm_code_cache:ancestor_ok(Dir#file_info{uid = 0}, Me)),
+    ?assert(wasm_code_cache:ancestor_ok(Dir#file_info{uid = Me}, Me)),
+    %% And the leaf is held tighter than an ancestor: root owning it is not
+    %% good enough, because then something else writes this node's artifacts.
+    ?assertNot(wasm_code_cache:leaf_ok(Dir#file_info{uid = 0}, Me)),
+    ?assert(wasm_code_cache:leaf_ok(Dir#file_info{uid = Me}, Me)),
+    %% A group-writable directory is out whoever owns it.
+    ?assertNot(wasm_code_cache:leaf_ok(Dir#file_info{mode = 8#775, uid = Me}, Me)),
+    ?assertNot(wasm_code_cache:ancestor_ok(Dir#file_info{mode = 8#757}, Me)),
+    %% And a symlink is not a directory, whatever its mode says.
+    ?assertNot(wasm_code_cache:leaf_ok(Dir#file_info{type = symlink, uid = Me}, Me)).
+
+a_symlinked_cache_directory_is_refused(Config) ->
+    Real = fresh_dir(Config, "real-cache"),
+    Link = filename:join(?config(priv_dir, Config), "linked-cache"),
+    _ = file:delete(Link),
+    ok = file:make_symlink(Real, Link),
+    ?assertEqual(miss, with_cache_dir(Link, fun() -> store_then_lookup() end)).
+
+a_symlinked_ancestor_is_refused(Config) ->
+    Real = fresh_dir(Config, "real-parent"),
+    Link = filename:join(?config(priv_dir, Config), "linked-parent"),
+    _ = file:delete(Link),
+    ok = file:make_symlink(Real, Link),
+    Dir = filename:join(Link, "cache"),
+    ok = filelib:ensure_path(Dir),
+    ok = file:change_mode(Dir, 8#700),
+    ?assertEqual(miss, with_cache_dir(Dir, fun() -> store_then_lookup() end)).
+
+a_relative_cache_directory_is_refused(_Config) ->
+    ?assertEqual(miss, with_cache_dir("_build/test/logs/relative-cache",
+                                      fun() -> store_then_lookup() end)).
+
+a_malformed_cache_directory_is_a_miss(_Config) ->
+    [?assertEqual(miss, with_cache_dir(Bad, fun() -> store_then_lookup() end))
+     || Bad <- [not_a_path, 42, {dir, "/tmp"}]].
+
+%% The runtime makes the leaf and nothing above it, and makes it private.
+a_missing_cache_directory_is_created_private(Config) ->
+    Parent = fresh_dir(Config, "will-create"),
+    Dir = filename:join(Parent, "cache"),
+    ?assertEqual({ok, ~"artifact"},
+                 with_cache_dir(Dir, fun() -> store_then_lookup() end)),
+    {ok, #file_info{mode = Mode}} = file:read_link_info(Dir, [{time, posix}]),
+    ?assertEqual(0, Mode band 8#077).
+
+%%% -------------------------------------------------------- entry integrity ---
+
+%% A symlink an entry's name points at, and a directory wearing an entry's
+%% name. Both are misses; the second already was, and is here so that a change
+%% from "is it a symlink" to "is it regular" cannot regress silently.
+an_entry_that_is_not_a_regular_file_is_refused(Config) ->
+    Dir = fresh_dir(Config, "odd-entries"),
+    Elsewhere = filename:join(?config(priv_dir, Config), "planted.beam"),
+    ok = file:write_file(Elsewhere, ~"anything at all"),
+    Link = entry_path(Dir, ~"link"),
+    _ = file:delete(Link),
+    ok = file:make_symlink(Elsewhere, Link),
+    ?assertEqual(miss, with_cache_dir(Dir, fun() ->
+                                                  wasm_code_cache:lookup(~"link")
+                                          end)),
+    AsDir = entry_path(Dir, ~"dir"),
+    ok = filelib:ensure_path(AsDir),
+    ?assertEqual(miss, with_cache_dir(Dir, fun() ->
+                                                  wasm_code_cache:lookup(~"dir")
+                                          end)).
+
+a_tampered_entry_is_a_miss(Config) ->
+    Dir = fresh_dir(Config, "tampered"),
+    ?assertEqual({ok, ~"artifact"},
+                 with_cache_dir(Dir, fun() -> store_then_lookup() end)),
+    File = entry_path(Dir, ~"k"),
+    {ok, Framed} = file:read_file(File),
+    %% One byte of the payload, which the digest is over.
+    Size = byte_size(Framed),
+    <<Head:(Size - 1)/binary, Last>> = Framed,
+    ok = file:write_file(File, <<Head/binary, (Last bxor 255)>>),
+    ?assertEqual(miss, with_cache_dir(Dir, fun() ->
+                                                  wasm_code_cache:lookup(~"k")
+                                          end)).
+
+a_truncated_entry_is_a_miss(Config) ->
+    Dir = fresh_dir(Config, "truncated"),
+    ?assertEqual({ok, ~"artifact"},
+                 with_cache_dir(Dir, fun() -> store_then_lookup() end)),
+    File = entry_path(Dir, ~"k"),
+    {ok, Framed} = file:read_file(File),
+    Keep = byte_size(Framed) - 3,
+    <<Short:Keep/binary, _/binary>> = Framed,
+    ok = file:write_file(File, Short),
+    ?assertEqual(miss, with_cache_dir(Dir, fun() ->
+                                                  wasm_code_cache:lookup(~"k")
+                                          end)).
+
+%%% ------------------------------------------------------------- the verdict ---
+
+%% A verdict belongs to the path it was reached for. Setting a second directory
+%% must not inherit the first one's answer, in either direction.
+a_refused_path_does_not_decide_the_next_one(Config) ->
+    Bad = fresh_dir(Config, "bad-first"),
+    ok = file:change_mode(Bad, 8#777),
+    ?assertEqual(miss, with_cache_dir(Bad, fun() -> store_then_lookup() end)),
+    Good = fresh_dir(Config, "good-second"),
+    ?assertEqual({ok, ~"artifact"},
+                 with_cache_dir(Good, fun() -> store_then_lookup() end)),
+    %% And the first is still refused, so the good one did not clear it either.
+    ?assertEqual(miss, with_cache_dir(Bad, fun() -> store_then_lookup() end)).
+
+storing_into_a_refused_directory_writes_nothing(Config) ->
+    Dir = fresh_dir(Config, "no-writing"),
+    ok = file:change_mode(Dir, 8#777),
+    ok = with_cache_dir(Dir, fun() -> wasm_code_cache:store(~"k", ~"x") end),
+    ok = file:change_mode(Dir, 8#700),
+    ?assertEqual({ok, []}, file:list_dir(Dir)).
+
+purging_a_refused_directory_deletes_nothing(Config) ->
+    Dir = fresh_dir(Config, "no-purging"),
+    File = entry_path(Dir, ~"k"),
+    ok = file:write_file(File, ~"not ours to delete"),
+    ok = file:change_mode(Dir, 8#777),
+    ok = with_cache_dir(Dir, fun() -> wasm_code_cache:purge() end),
+    ok = file:change_mode(Dir, 8#700),
+    ?assertMatch({ok, [_]}, file:list_dir(Dir)).
+
+%% Lazy, and not an OTP startup child: a case that merely starts the
+%% application would prove nothing here. This drives a real compile against a
+%% refused directory and asserts both halves -- nothing cached, and the module
+%% compiled and entered anyway.
+a_refused_directory_does_not_stop_the_node_compiling(Config) ->
+    Dir = fresh_dir(Config, "refused-but-working"),
+    ok = file:change_mode(Dir, 8#777),
+    WasDir = application:get_env(wasm, code_cache_dir),
+    ok = application:set_env(wasm, code_cache_dir, Dir),
+    ok = wasm_jit:reset_counts(),
+    try
+        %% A **hashed** module, from a fixture. A module built from text takes a
+        %% fresh `reference()` every validation, so `key/6' answers `undefined'
+        %% and nothing is ever cacheable: the case would then prove the cache
+        %% empty without the cache ever having been asked.
+        Bin = fixture(["seeds", "fac.wasm"]),
+        {ok, M} = wasm:compile(Bin, #{identity => {sha256, crypto:hash(sha256, Bin)}}),
+        {ok, I} = wasm:instantiate(M, #{}, sync_opts()),
+        {ok, [120]} = wasm:call(I, ~"fac-rec", [5]),
+        ok = wasm_jit:await(I, 60000),
+        {ok, [120]} = wasm:call(I, ~"fac-rec", [5]),
+        ok = wasm:destroy(I),
+        Counts = wasm_jit:counts(),
+        %% It compiled and ran compiled code, with the cache refused throughout.
+        ?assert(maps:get(compiled, Counts) > 0),
+        ?assert(maps:get(entered, Counts) > 0),
+        ?assertEqual(0, maps:get(cached, Counts)),
+        ok = file:change_mode(Dir, 8#700),
+        ?assertEqual({ok, []}, file:list_dir(Dir))
+    after
+        restore_cache_dir(WasDir)
+    end.
+
+a_refused_directory_warns_once_per_path(Config) ->
+    Dir = fresh_dir(Config, "warns-once"),
+    ok = file:change_mode(Dir, 8#777),
+    ok = with_cache_dir(Dir, fun() ->
+                                     _ = wasm_code_cache:lookup(~"a"),
+                                     _ = wasm_code_cache:lookup(~"b"),
+                                     _ = wasm_code_cache:lookup(~"c"),
+                                     ok
+                             end),
+    %% The verdict is recorded, so the second and third lookups never reach the
+    %% code that warns. Counting log lines would mean owning a handler; the
+    %% observable form of "warned once" is "judged once", and a second judging
+    %% is what a lost verdict looks like.
+    ?assertMatch([{_, {refused, _}}],
+                 ets:lookup(wasm_code_cache_paths, Dir)).
+
+%% The one race this phase has, driven rather than hoped for: under the usual
+%% umask `make_dir/1` produces `0755`, so the world-writable moment a competing
+%% reader would reject may never appear on its own.
+concurrent_first_use_initialises_once(Config) ->
+    Parent = fresh_dir(Config, "concurrent"),
+    Dir = filename:join(Parent, "cache"),
+    WasDir = application:get_env(wasm, code_cache_dir),
+    ok = application:set_env(wasm, code_cache_dir, Dir),
+    Self = self(),
+    Count = counters:new(1, []),
+    %% The fun the manager runs. It reports that it has started, waits to be
+    %% let go, and counts itself.
+    Init = fun() ->
+                   counters:add(Count, 1, 1),
+                   Self ! {initialising, self()},
+                   receive go -> ok end,
+                   {ok, Dir}
+           end,
+    Racers = 4,
+    try
+        _ = [spawn_link(fun() ->
+                                Self ! {done, self(),
+                                        wasm_code_slots:cache_verdict(Dir, Init)}
+                        end) || _ <- lists:seq(1, Racers)],
+        %% **The manager is what waits**, not the racer: `Init' is run inside
+        %% `wasm_code_slots', so the pid that reports itself here is the
+        %% server, and the server is what has to be released. Sending `go' to
+        %% the racers instead leaves the manager blocked for ever, which wedges
+        %% every later case in the suite on a server that cannot answer.
+        Server = receive {initialising, P} -> P
+                 after 5000 -> ct:fail(never_started)
+                 end,
+        %% The first racer is inside; wait for the others to queue behind it.
+        %% Asserting "they are blocked" before they arrive would pass whether
+        %% or not anything serialises.
+        ok = until_queued(Racers - 1, 200),
+        ?assertEqual([], drain_done()),
+        Server ! go,
+        Results = collect_done(Racers, []),
+        ?assertEqual(Racers, length(Results)),
+        [?assertEqual({ok, Dir}, R) || R <- Results],
+        %% The point of the case. Every racer got an answer; only one of them
+        %% did the work, because `handle_call/3` looks at the table again
+        %% before running the fun.
+        ?assertEqual(1, counters:get(Count, 1))
+    after
+        %% Never leave the manager blocked on a fun nobody will release. An
+        %% assertion above can fail with the server still waiting, and then
+        %% every later case hangs on a manager that cannot answer, so any
+        %% outstanding `initialising' is released here whether or not the body
+        %% got that far.
+        flush_go(),
+        restore_cache_dir(WasDir),
+        ok = wasm_code_slots:forget_cache_verdicts()
+    end.
+
+until_queued(_N, 0) -> ct:fail(never_queued);
+until_queued(N, Tries) ->
+    case erlang:process_info(whereis(wasm_code_slots), message_queue_len) of
+        {message_queue_len, L} when L >= N -> ok;
+        _ -> timer:sleep(25), until_queued(N, Tries - 1)
+    end.
+
+drain_done() ->
+    receive {done, P, R} -> [{P, R} | drain_done()] after 0 -> [] end.
+
+collect_done(0, Acc) -> Acc;
+collect_done(N, Acc) ->
+    receive {done, _, R} -> collect_done(N - 1, [R | Acc])
+    after 5000 -> ct:fail({missing_results, N})
+    end.
+
+flush_go() ->
+    receive {initialising, P} -> P ! go, flush_go() after 0 -> ok end.
+
+%%% ------------------------------------------------------- cache test helpers ---
+
+with_cache_dir(Dir, F) ->
+    Was = application:get_env(wasm, code_cache_dir),
+    ok = application:set_env(wasm, code_cache_dir, Dir),
+    try F()
+    after restore_cache_dir(Was)
+    end.
+
+restore_cache_dir(undefined)  -> application:unset_env(wasm, code_cache_dir);
+restore_cache_dir({ok, Old})  -> application:set_env(wasm, code_cache_dir, Old).
+
+store_then_lookup() ->
+    ok = wasm_code_cache:store(~"k", ~"artifact"),
+    wasm_code_cache:lookup(~"k").
+
+%% A directory nothing has judged yet, so a case never inherits a verdict left
+%% by the one before it.
+fresh_dir(Config, Name) ->
+    D = filename:join(?config(priv_dir, Config), Name),
+    _ = file:del_dir_r(D),
+    ok = filelib:ensure_path(D),
+    ok = file:change_mode(D, 8#700),
+    %% Tolerated rather than asserted, so that running these cases against a
+    %% build without the verdict table fails them on their own assertions
+    %% rather than on this line. A case that dies of `undef' in its setup has
+    %% not been watched to fail; it has been watched to not run.
+    _ = try wasm_code_slots:forget_cache_verdicts() catch _:_ -> ok end,
+    D.
+
+entry_path(Dir, Key) ->
+    filename:join(Dir, binary_to_list(binary:encode_hex(Key)) ++ ".beam").
+
+uid() ->
+    P = filename:join(?TMP, "uid-probe-" ++
+                          integer_to_list(erlang:unique_integer([positive]))),
+    {ok, Fd} = file:open(P, [exclusive, raw, write]),
+    try
+        {ok, #file_info{uid = Uid}} = file:read_file_info(Fd, [{time, posix}]),
+        Uid
+    after
+        _ = file:close(Fd), _ = file:delete(P)
+    end.
+
+chown_to_somebody_else(Dir) ->
+    %% Root only; any uid that is neither 0 nor ours will do.
+    file:write_file_info(Dir, #file_info{uid = 65534, mode = 8#700}).
+
 cache_dir(Name) ->
-    D = filename:join(["_build", "test", "logs", Name]),
+    D = filename:absname(filename:join(["_build", "test", "logs", Name])),
     _ = filelib:ensure_path(D),
     D.
 

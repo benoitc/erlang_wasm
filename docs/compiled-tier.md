@@ -37,6 +37,48 @@ ok = wasm_jit:await(I, 60000).
 wasm_jit:counts().    %% #{compiled => N, entered => M, reentered => K, cached => C}
 ```
 
+## Keep what it compiled, or pay for it on every start
+
+Turn this on at the same time. Without it a node recompiles from scratch every
+time it starts, and for a reactor that is about 150 seconds and several
+thousand interpreted requests before the tier arrives.
+
+Set it as release configuration, so it is in force before anything is
+instantiated:
+
+```erlang
+%% sys.config
+[{wasm, [{code_cache_dir, "/var/lib/my_release/wasm"}]}].
+```
+
+**Reading a cache entry is executing it**, so the runtime checks the directory
+before it trusts one and refuses it otherwise. What it requires:
+
+- **absolute**, with no `.` or `..`, and owned by the user the node runs as
+- **no group or other write bit**, on it or on any directory above it. `0700`
+  and `0750` are the sensible choices; any mode without those bits is accepted,
+  so a `0755` directory you own is fine
+- **every directory above it owned by root or by you**, not merely unwritable
+  by others: one owned by somebody else at `0755` is not group-writable and its
+  owner can still replace what is beneath it
+- **nothing on the path a symlink**
+- **every parent must already exist.** The runtime creates the last component
+  if it is missing, at `0700`, and creates nothing above it
+- **not under `/tmp`**, which fails the mode rule on every ordinary system
+
+A directory that does not qualify is refused, the cache is simply off, and the
+log says so once. Nothing fails: a refused cache is a slower start, never an
+error.
+
+**Why this is opt-in when a release you control should almost always turn it
+on.** A library cannot invent a safe place to keep executable artifacts. Where
+a release keeps its state is your decision, and a default this code picked
+would be a directory it could not vouch for. So it asks.
+
+The entry itself carries a checksum, verified before the bytes are loaded, so
+a file damaged by a crash or a bad disk is a miss rather than a broken start.
+That catches **damage, not a hostile writer**: see [Security](security.md).
+
 ## Know what you will get
 
 **Coverage is not speed, and there is no partial credit.** A single unsupported
@@ -142,16 +184,29 @@ from a fixed pool of sixteen in `wasm_code_slots`, and function and frame names
 from bounded pools in `wasm_core`, so the number of atoms the compiler can ever
 create is a literal you can read in the source.
 
-## Cache the result across restarts
+## What the cache keys on, and what bounds it
 
-Compiling a module costs twenty to forty seconds of a core. Nothing waits for
-it, but a node pays it on every start unless you keep the result:
+Set it as shown in [Keep what it compiled](#keep-what-it-compiled-or-pay-for-it-on-every-start)
+above; this is the reference. QuickJS takes 0.2 seconds instead of 43.7 on the
+second start.
 
-```erlang
-application:set_env(wasm, code_cache_dir, "/var/cache/my_app/wasm").
-```
+A key covers everything that would make an artifact wrong if it changed: the
+module's content hash, the ABI between generated code and `wasm_exec`, the OTP
+release, the emulator flavour, the architecture, the quality asked for, the set
+of functions compiled, and the slot it was built for. A module identified by a
+`reference()` rather than a content hash is never cached, which is every module
+built from text.
 
-QuickJS then takes 0.2 seconds instead of 43.7 on the second start.
+A **sharded** compile is never cached either, and that one is a real
+limitation rather than an oversight: a sharded artifact embeds the module a
+crossing re-enters through and where the other functions live, and the key
+describes neither, so a cached shard could be adopted into a chain headed by a
+different module. A guest large enough to split therefore recompiles on every
+start.
+
+The directory is bounded by total size, oldest first, and `wasm_code_cache:purge/0`
+empties it. `purge/0` validates the directory like everything else, so it will
+not follow a rejected path and delete files somewhere else.
 
 ## What a reactor gets, and what it costs to get there
 

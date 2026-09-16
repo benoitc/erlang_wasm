@@ -145,7 +145,10 @@ Two things to budget for. **Getting there takes a while**: the tier arrives
 after a fixed amount of compiling, and a reactor request is ten times faster
 than a command one, so it takes ten times as many requests to reach it -- about
 150 s and several thousand requests on QuickJS, every one of them interpreted.
-And turning it on moves you into the security posture below.
+**Set `code_cache_dir` at the same time** or you pay that window on every node
+start; [the compiled tier guide](compiled-tier.md) says what the directory has
+to be, and it is checked rather than assumed. And turning the tier on moves you
+into the security posture below.
 
 Until recently it was not worth it at all, for a reason worth knowing if you
 are reading an older measurement: an instance could adopt compiled code only on

@@ -223,3 +223,36 @@ Check all five before you ship it:
 
 Found something? Open an issue marked security, or contact the maintainer
 directly.
+
+## The compiled tier's artifact cache is executable code
+
+`code_cache_dir` holds generated BEAM modules, and reading one back is
+`code:load_binary/3` on bytes from a file. **Anyone who can write into that
+directory can run code in your node.** Treat it exactly as you treat the
+release itself, which is why it is off unless you set it.
+
+What the runtime checks before it will use one:
+
+- the path is absolute, with no `.` or `..`
+- the directory is owned by the node's user and has no group or other write bit
+- every directory above it is owned by root or by that user, and has no group
+  or other write bit either -- an ancestor owned by somebody else can replace
+  what is beneath it however tight the leaf's own mode is
+- nothing on the path is a symlink, and an entry is a regular file
+- the entry's own checksum matches before a byte of it is loaded
+
+Every failure is a cache miss and a line in the log. Nothing raises, because a
+cache that cannot be trusted is a slower node and never a broken one.
+
+**What this does not do.** The checksum detects damage -- a torn write, a bad
+disk, a crash -- and **not** a writer who can put a well-formed entry there.
+Validating the path and opening a file under it are not atomic either. Neither
+gap is closed, and neither needs to be under this model: once every ancestor is
+owned by root or the node's user and writable by nobody else, only those two
+can change what the path resolves to, and both can already run code in the
+node. The checks catch misconfiguration -- a cache under `/tmp`, a directory
+somebody else can rename -- rather than an attacker who is already inside.
+
+If you need to trust artifacts written by a party that may **not** run code in
+your node, this is not enough: that needs the artifacts authenticated, which
+this runtime does not do.

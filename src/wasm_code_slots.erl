@@ -105,6 +105,7 @@ reasoning.
 -export([resident_module/1]).
 -export([lease_call/1, lease_call/2, release_call/1, calls_in/1]).
 -export([hot/2]).
+-export([cache_verdict/2, forget_cache_verdicts/0]).
 -export([record_diagnostic/4, diagnostics/0, clear_diagnostics/0]).
 -export([observe_config/1, observe_config/2]).
 -export([acquire/2, release_budget/0, budget/0]).
@@ -146,6 +147,21 @@ reasoning.
 %% recording at once are two independent inserts and never a read-modify-write.
 -define(DIAG, wasm_code_diag).
 -define(DIAG_ROWS, 64).
+
+%% One row per configured cache directory: the answer to "may this path be
+%% used", worked out once and then read without asking anybody.
+%%
+%% Its own table and **not a row shape in `?TAB'**, for a reason worth stating:
+%% `init/1' below folds `?TAB' with clauses that match a four-element slot row,
+%% so a row of any other shape there crashes this manager at startup and takes
+%% the JIT subtree with it.
+-define(PATHS, wasm_code_cache_paths).
+
+%% How long a caller waits for a path to be judged. Generous, because the work
+%% is a walk up a path and a `make_dir', and a caller that gives up answers
+%% "no cache this time" rather than failing: the row is still filled by
+%% whoever is doing the work, and the next call finds it.
+-define(VERDICT_TIMEOUT, 30_000).
 
 %% One counter per slot, holding the number of calls currently inside its code,
 %% plus `?EXCL' while the manager is replacing it. Published in `persistent_term'
@@ -224,6 +240,13 @@ ensure_table() ->
         undefined ->
             ?DIAG = ets:new(?DIAG, [named_table, public, ordered_set,
                                     {write_concurrency, true}]),
+            ok;
+        _ -> ok
+    end,
+    case ets:info(?PATHS, name) of
+        undefined ->
+            ?PATHS = ets:new(?PATHS, [named_table, public, set,
+                                      {read_concurrency, true}]),
             ok;
         _ -> ok
     end,
@@ -616,6 +639,35 @@ slot_module(Slot) -> element(Slot, ?NAME_TUPLE).
 resident() ->
     [{N, K, map_size(L)} || {N, _G, {resident, K}, L} <- ets:tab2list(?TAB)].
 
+-doc """
+The verdict for one cache directory, worked out once however many ask at once.
+
+`Init` is a fun rather than a module and function **on purpose**: this server
+must not name `wasm_code_cache`, because that module calls this one and a
+static edge back would make a fourth module cycle.
+`wasm_architecture_SUITE` asserts there are exactly three.
+
+Serialising matters more than it looks. Creating a cache directory is
+`make_dir`, then a chmod, and `make_dir` respects the umask: a second process
+validating between the two sees a world-writable directory, refuses it, and
+records that refusal for the life of the node. Running the whole of create,
+chmod, check, validate, warn and record inside this call is what stops one
+process reading another's half-built directory.
+
+Nothing it can do is allowed to take this server down: any exception from
+`Init` is caught and becomes a refusal, because a cache is an optimisation and
+a stat that answered `eacces` must not restart the JIT subtree.
+""".
+-spec cache_verdict(file:filename(), fun(() -> term())) -> term().
+cache_verdict(Path, Init) ->
+    gen_server:call(?MODULE, {cache_verdict, Path, Init}, ?VERDICT_TIMEOUT).
+
+-doc "Forget every cache-directory verdict. For tests.".
+-spec forget_cache_verdicts() -> ok.
+forget_cache_verdicts() ->
+    _ = ets:info(?PATHS, name) =/= undefined andalso ets:delete_all_objects(?PATHS),
+    ok.
+
 %%% -------------------------------------------------------------- server ---
 
 init([]) ->
@@ -641,6 +693,27 @@ init([]) ->
          ok = release_hold(N)
      end || {N, G, {loading, _}, _} <- ets:tab2list(?TAB)],
     {ok, #state{monitors = Ms, refs = Rs}}.
+
+%% **The re-read is the election.** A caller looked in `?PATHS', missed, and
+%% queued here; by the time this runs, whoever was ahead of it in the queue may
+%% already have filled the row. Without looking again, every queued caller runs
+%% its own `Init': one `make_dir' attempt each, one uid probe each, and one
+%% warning each for a single path, so "warned once per path" would quietly mean
+%% "once per concurrent caller".
+handle_call({cache_verdict, Path, Init}, _From, S) ->
+    case ets:lookup(?PATHS, Path) of
+        [{Path, Verdict}] ->
+            {reply, Verdict, S};
+        [] ->
+            %% Nothing `Init' does may take this server down with it. A cache
+            %% is an optimisation; a stat that answered `eacces' must not
+            %% restart the JIT subtree.
+            Verdict = try Init()
+                      catch C:R -> {refused, {crashed, {C, R}}}
+                      end,
+            true = ets:insert(?PATHS, {Path, Verdict}),
+            {reply, Verdict, S}
+    end;
 
 handle_call({observe_config, Key, What}, _From, #state{bad_cfg = C} = S) ->
     case {maps:get(Key, C, ok), What} of

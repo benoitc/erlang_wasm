@@ -45,6 +45,7 @@ all() ->
      a_crossing_does_not_roll_back_host_calls,
      cross_instance_recursion_is_bounded,
      a_crossing_without_a_budget_starts_where_it_is_told,
+     a_fresh_instance_adopts_resident_code_on_its_first_call,
      a_profile_sets_what_you_did_not,
      an_unknown_profile_is_a_value_not_a_crash,
      both_engines_answer_the_same_bad_arguments].
@@ -1026,6 +1027,43 @@ opts() -> #{compile => true, compile_after => 1}.
 %% On the calling process, so a case that counts leases counts them after the
 %% compilation rather than racing a background compiler.
 sync_opts() -> (opts())#{compile_sync => true}.
+
+%% Adoption and compilation are two decisions, and only the second wants a
+%% threshold. A reactor builds a fresh instance per request, so an instance that
+%% could only adopt on the call where `wasm_code_slots:hot/2' fires would
+%% interpret 31 requests in 32 with the compiled code sitting resident beside
+%% it. `test/audit/PERF.md' has that measured.
+%%
+%% **This case cannot use `opts/0`.** That is `compile_after => 1`, which makes
+%% the old hotness gate fire on the fresh instance's very first call, so the
+%% case would pass whether or not the two decisions are separated. The fresh
+%% instance here is given 32 deliberately, and one call.
+a_fresh_instance_adopts_resident_code_on_its_first_call(_Config) ->
+    {ok, M} = wasm:compile({wat, loop_wat()}),
+    %% Synchronous, so the module is resident before anything else runs rather
+    %% than at whatever moment a background compiler finishes.
+    {ok, Warm} = wasm:instantiate(M, #{}, sync_opts()),
+    {ok, [_]} = wasm:call(Warm, ~"f", [4]),
+    %% Destroyed **without** resetting the slots: releasing the last lease
+    %% deliberately leaves the key on the slot so a later instance adopts
+    %% rather than reloads, and that state is the whole premise here.
+    ok = wasm:destroy(Warm),
+    ok = wasm_jit:reset_counts(),
+    ?assertMatch([{_, _, _} | _], wasm_code_slots:resident()),
+    %% 32, not 1, and the tier explicitly on: `compile_after` alone does not
+    %% enable it.
+    {ok, Fresh} = wasm:instantiate(M, #{}, #{compile => true,
+                                             compile_after => 32}),
+    ?assertEqual(undefined, wasm_instance:code_slot(Fresh)),
+    try
+        ?assertEqual(0, maps:get(entered, wasm_jit:counts())),
+        %% Exactly one, which is the claim: not "eventually", not "within 32".
+        {ok, [_]} = wasm:call(Fresh, ~"f", [4]),
+        ?assertEqual(1, maps:get(entered, wasm_jit:counts())),
+        ?assertNotEqual(undefined, wasm_instance:code_slot(Fresh))
+    after
+        wasm:destroy(Fresh)
+    end.
 
 call_fresh(M, Opts, Arg) ->
     {ok, I} = wasm:instantiate(M, #{}, Opts),

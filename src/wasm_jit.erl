@@ -235,24 +235,40 @@ fresh(#inst{id = Id} = Inst, Slot, Entry, Key, Seen) ->
 %% call it has run nothing.
 maybe_adopt(Inst, Limits, Entry) ->
     After = maps:get(compile_after, Limits, ?DEFAULT_AFTER),
-    case wasm_code_slots:hot(key(Inst), After) of
-        false -> Entry;
-        true ->
-            %% Read first, claim second. `claim_loading/3` is a gen_server call
-            %% and this runs on every hot call until the module arrives, which
-            %% for `compile_after => 1` is every call: a claim-and-abort pair
-            %% here cost 320 microseconds on a three-microsecond call.
-            case wasm_code_slots:resident_module(key(Inst)) of
-                {ok, _Mod} ->
-                    case compile(Inst, Limits, [], adopt) of
-                        {ok, Slot} -> compiled(Inst, Slot, Entry);
-                        %% An adoption never refuses and never fails: there is
-                        %% nothing to generate. Anything but a slot is `retry`.
-                        _ -> Entry
-                    end;
-                %% Nothing to adopt. Ask once the call has finished and this
-                %% process knows which functions it needed.
-                error -> put(?ASK, true), Entry
+    %% Residency first, and **not** behind the threshold. These are two
+    %% decisions and only the second wants pacing: whether to *start compiling*
+    %% needs a profile of what has run, while whether to use code that already
+    %% exists needs nothing but the answer to "is it there".
+    %%
+    %% They were one decision until this, and for an instance that lives across
+    %% many calls it did not matter: adopting sets a `code_slot' and `entry_1/3'
+    %% never comes back here. It mattered enormously for a workload of one call
+    %% per instance, which is what a reactor is. Every request arrived with no
+    %% slot and could only adopt on the call where `hot/2' happened to fire, so
+    %% 31 requests in 32 interpreted with the compiled code resident beside
+    %% them. `test/audit/PERF.md' has the measurement.
+    %%
+    %% Reading first also keeps `claim_loading/3', a manager round trip, off the
+    %% path while a compile is still running: a module that is `loading' costs
+    %% one `ets:select' over sixteen rows per call and nothing more.
+    case wasm_code_slots:resident_module(key(Inst)) of
+        {ok, _Mod} ->
+            case compile(Inst, Limits, [], adopt) of
+                {ok, Slot} -> compiled(Inst, Slot, Entry);
+                %% An adoption never refuses and never fails: there is nothing
+                %% to generate. Anything but a slot is `retry'.
+                _ -> Entry
+            end;
+        error ->
+            %% Nothing to adopt, so the only question left is whether to start
+            %% compiling, which is what the threshold is for. `hot/2' is
+            %% consulted only here, which is the only window in which its count
+            %% means anything.
+            case wasm_code_slots:hot(key(Inst), After) of
+                %% Ask once the call has finished and this process knows which
+                %% functions it needed.
+                true  -> put(?ASK, true), Entry;
+                false -> Entry
             end
     end.
 

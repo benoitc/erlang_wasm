@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### A reactor can use compiled code from a request's first call
+
+An instance adopted generated code only on a call where the compiled tier's
+hotness counter fired, one call in 32. That is invisible to a long-lived
+instance, which adopts once and keeps its slot, and severe for a worker that
+restores a snapshot per request: 31 requests in 32 interpreted while the
+compiled code sat resident beside them.
+
+Whether code already exists and whether to start compiling some are two
+questions, and only the second wants a threshold. `wasm_jit:maybe_adopt/3` now
+asks about residency first and consults the count of 32 only when nothing is
+resident, so what gets compiled is unchanged and when it can be used is not.
+
+A QuickJS reactor request goes from 20.6 ms to 7.4, Lua from 11.3 to 4.4,
+CPython from 119 to 65, and throughput at fourteen workers rises about three
+quarters. `test/audit/PERF.md`
+has the measurements and the bars they had to clear.
+
 ### Heap floors for the request runner and the capture
 
 `script_worker:start_link/2` takes `runner_min_heap_words`, off unless set,

@@ -153,6 +153,31 @@ application:set_env(wasm, code_cache_dir, "/var/cache/my_app/wasm").
 
 QuickJS then takes 0.2 seconds instead of 43.7 on the second start.
 
+## What a reactor gets, and what it costs to get there
+
+A worker that restores a snapshot per request builds a **fresh instance every
+time**, which used to mean the tier was worth nothing to it: an instance could
+adopt compiled code only on a call where the hotness counter fired, one call in
+32, so 31 requests in 32 interpreted beside code that was already resident.
+That is fixed -- an instance attempts adoption on its first call -- and the
+steady-state numbers are worth having:
+
+| guest | interpreted | with the tier, once resident |
+| --- | ---: | ---: |
+| QuickJS | 20.6 ms | **7.4 ms** |
+| Lua | 11.3 ms | **4.4 ms** |
+| CPython | 119.3 ms | **64.5 ms** |
+
+Throughput at fourteen workers rises about three quarters over the same guest
+interpreted.
+
+**Budget for the cold node, because that is where the cost now is.** The tier
+arrives after a fixed amount of compiling, and a reactor request is roughly ten
+times faster than a command one, so it takes ten times as many requests to get
+there: about 150 s and several thousand requests on QuickJS, every one of them
+interpreted. `code_cache_dir` above is what turns the second start into an
+immediate one; without it every node start pays that window again.
+
 ## Bound what a compile may spend
 
 The runtime runs `compile:forms/2` in a process it spawns itself, so a heap

@@ -346,13 +346,35 @@ live compiler says "in progress" where every counter says "nothing happened".
 `workerbench`'s `tier` mode now waits on a **wall-clock** deadline, driving
 requests while it waits, because the tier advances when calls happen.
 
-**And the answer the corrected measurement gives is still no, for a different
-reason.** The tier enters at request 3295, and then 31 requests in 32 keep
-interpreting: adoption is gated behind the same `hot/2` counter that triggers
-compilation, and a reactor builds a fresh instance per request, so an instance
-can only adopt on a call where that counter fires. `PERF.md` has it. Not acted
-on: 32 is a threshold chosen for a workload that reuses an instance, and one
-guest is not evidence for changing it.
+**~~And the answer the corrected measurement gives is still no.~~** It was, and
+for a reason that has since been fixed. The tier entered at request 3295 and
+then 31 requests in 32 kept interpreting, because adoption was gated behind the
+same `hot/2` counter that triggers compilation and a reactor builds a fresh
+instance per request. `wasm_jit:maybe_adopt/3` now asks about residency first
+and consults the threshold only when nothing is resident; `PERF.md` has the
+three-guest measurement.
+
+**Two ways of fixing it that were rejected before the one that shipped**, both
+recorded because each is the obvious first idea:
+
+- **`compile_after => 1` as the default.** It would have made adoption
+  immediate by making the threshold trivial, and broken the other thing the
+  threshold does: compilation would start from a single unrepresentative first
+  request, so `wanted/2` would compile whatever that request happened to touch.
+  It would also have re-checked residency, and with it `claim_loading/3`, on
+  every call while a compile was still in flight. The two decisions had to be
+  separated, not collapsed.
+- **Adopting inside `wasm:restore/3`.** Tempting because restore already holds
+  the module handle, and wrong because it pays a manager round trip for every
+  instance including those that never make a call. `entry/3` reaches the same
+  answer on the first call and charges only instances that do.
+
+**And one measurement design that was rejected**: pricing the added residency
+lookup off the prewarm population. Prewarm contains the background compiler,
+and the two revisions do not even reach residency after the same number of
+requests, so the samples are not comparable. A no-compilation control arm --
+tier on, `compile_after` above every call the arm makes -- prices the lookup
+and nothing else, and put it at 0.15%.
 
 ## Open, and each a decision rather than a task
 

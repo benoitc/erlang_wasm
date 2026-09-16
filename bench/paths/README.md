@@ -615,6 +615,47 @@ records the run that read a slow compile as no compile at all.
 The `floors` and `throughput` modes take the config as an argument too, so
 either can be run `compiled` rather than `metered`.
 
+### Measuring from a node that has arrived
+
+`steady` is the mode for questions about a node in its final state rather than
+on its way there: module compiled, compiler gone, counters zeroed. It has three
+arms, because three gates need different setups.
+
+```sh
+erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \
+    -pa bench/paths \
+    -run workerbench main steady qjs_reactor latency 200 200000
+```
+
+- **latency**: one compiled and one metered worker, alternating. Answers the
+  compiled median against the metered median in the same emulator.
+- **throughput**: compiled workers at 1, 2, 4, 8 and 14, with a metered control
+  at each count. **Normalise before comparing revisions.** The metered control
+  ranged from 182 to 331 req/s across five runs of the same thing, so a raw
+  rate comparison is mostly box.
+- **control**: the tier on so every call pays the residency lookup, and a
+  `compile_after` above every call the arm makes so no compile ever starts. It
+  prices one thing. Its end state is the *opposite* of the other two and is
+  asserted separately: nothing resident, counts zero.
+
+**Wait for quiescence, do not infer it from residency.** `publish/1` makes a
+slot resident before the compiler bumps `compiled` and takes its own lease, so
+a harness that resets counters the moment residency appears races all three.
+`steady` waits for the target's lease count to reach zero and the compiler
+children to go, then reads and asserts a non-zero compiled count before
+resetting. Without that assertion a comparison can read 0 on both sides and
+agree vacuously.
+
+**Find the target by hash, not by key.** The JIT's slot key is
+`{identity, ?ABI}` and `?ABI` is private to `wasm_jit`, so a benchmark that
+spelled it would go stale at the next ABI bump. `wasm_code_slots:resident/0`
+answers `{Name, Key, LeaseCount}`; match the artifact's own hash inside `Key`.
+
+To compare revisions, copy this file into the older tree and compile it there,
+as the cross-commit protocol above does with `pathbench.erl` -- the older tree
+does not contain this mode. The reactor `.wasm` fixtures are built rather than
+committed, so copy those across too or the older arm cannot start.
+
 ### Scaling, where interleaving does not save you
 
 The `throughput` mode sweeps worker counts and reports requests per second,

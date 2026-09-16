@@ -94,6 +94,8 @@ main(["throughput", Adapter, Config, N, Floor | Counts]) ->
                [list_to_integer(C) || C <- Counts]);
 main(["tier", Adapter, N, Floor]) ->
     tier(Adapter, list_to_integer(N), list_to_integer(Floor));
+main(["steady", Adapter, Arm, N, Floor]) ->
+    steady(Adapter, Arm, list_to_integer(N), list_to_integer(Floor));
 main([Adapter, Config, Arm, N, Cache]) ->
     io:format("# load average at start: ~s", [os:cmd("uptime")]),
     {ok, _} = application:ensure_all_started(wasm),
@@ -575,3 +577,209 @@ after_report(MA, CA) ->
               [lists:min(MA), med2(MA), lists:min(CA), med2(CA)]).
 
 med2(L) -> S = lists:sort(L), lists:nth(max(1, length(S) div 2), S).
+
+%%% -------------------------------------------------------------- steady ---
+
+%% What adoption is worth once the code is already there.
+%%
+%% Every other mode here measures a node on its way somewhere. This one
+%% measures a node that has arrived: the module compiled, the compiler gone,
+%% the counters zeroed. That is the only state in which "does a fresh instance
+%% use the compiled code" is a question about adoption rather than about how
+%% long a compile takes.
+%%
+%%     erl ... -run workerbench main steady qjs_reactor latency 200 200000
+%%     erl ... -run workerbench main steady qjs_reactor throughput 40 200000
+%%     erl ... -run workerbench main steady qjs_reactor control 200 200000
+%%
+%% The three arms answer different gates and have different end states; see
+%% `bench/paths/README.md'. Run the same binary against both revisions, copying
+%% this file into the older tree, because the older tree does not contain it.
+steady(Adapter, Arm, N, Floor) ->
+    io:format("# at start: ~s#           ~s", [os:cmd("uptime"), idle()]),
+    {ok, _} = application:ensure_all_started(wasm),
+    application:unset_env(wasm, code_cache_dir),
+    Root = "/tmp/workerbench_root",
+    _ = os:cmd("rm -rf " ++ Root),
+    ok = filelib:ensure_path(Root),
+    Images = Root ++ "/images",
+    ok = filelib:ensure_path(Images),
+    application:set_env(wasm, snapshot_dir, Images),
+    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {Mod, Path, _} = arm(Adapter, "metered"),
+    Guest = guest(Adapter, Path),
+    {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
+    #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
+    Hash = artifact_hash(Guest),
+    io:format("# ~s steady arm=~s n=~w floor=~w~n", [Adapter, Arm, N, Floor]),
+    steady_arm(Arm, Adapter, Mod, Guest, Echo, Hash, N, Floor),
+    io:format("# at end:   ~s#           ~s", [os:cmd("uptime"), idle()]),
+    init:stop().
+
+%% The module's own content hash, which is what the JIT's slot key is built
+%% from. Read from the artifact rather than spelled here: `wasm_jit:key/1' is
+%% `{identity, ?ABI}' and `?ABI' is private to that module, so a benchmark that
+%% wrote the key out would go stale the next time the ABI moved.
+artifact_hash(Guest) ->
+    {ok, Bin} = file:read_file(maps:get(path, Guest)),
+    crypto:hash(sha256, Bin).
+
+%% The slot row holding this guest, matched by hash *inside* the key.
+%% `resident/0' answers `{Name, Key, LeaseCount}', which is both halves of what
+%% the quiescence check below needs.
+target(Hash) ->
+    case [R || {_, {{sha256, H}, _}, _} = R <- wasm_code_slots:resident(),
+               H =:= Hash] of
+        [R | _] -> {ok, R};
+        []      -> error
+    end.
+
+%%% The latency arm: one compiled worker and one metered one, alternating.
+steady_arm("latency", Adapter, Mod, Guest, Echo, Hash, N, Floor) ->
+    {_, _, Metered} = arm(Adapter, "metered"),
+    {_, _, Compiled} = arm(Adapter, "compiled"),
+    Wm = start_floor(Mod, Guest, Metered, Floor),
+    Wc = start_floor(Mod, Guest, Compiled, Floor),
+    Compiled0 = prepare(Wc, Echo, Hash),
+    {Ms, Cs} = alternate(Wm, Wc, Echo, N, 1, [], []),
+    Entered = maps:get(entered, wasm_jit:counts(), 0),
+    io:format("# compiled functions ~w~n", [Compiled0]),
+    io:format("# adoption rate ~.1f% (~w of ~w)~n",
+              [100.0 * Entered / N, Entered, N]),
+    io:format("# metered  min/median ~w / ~w us~n", [lists:min(Ms), med2(Ms)]),
+    io:format("# compiled min/median ~w / ~w us~n", [lists:min(Cs), med2(Cs)]),
+    io:format("# ratio compiled/metered median ~.3f~n", [med2(Cs) / med2(Ms)]),
+    [ok = script_worker:stop(W) || W <- [Wm, Wc]],
+    end_state(Hash, resident);
+
+%%% The throughput arm: N concurrent compiled workers, and a metered control at
+%%% the same count so the rate can be normalised before revisions are compared.
+steady_arm("throughput", Adapter, Mod, Guest, Echo, Hash, N, Floor) ->
+    [steady_rate(Adapter, Mod, Guest, Echo, Hash, N, Floor, C)
+     || C <- [1, 2, 4, 8, 14]],
+    end_state(Hash, resident);
+
+%%% The control arm: the tier on, so every call pays the residency lookup, and
+%%% a threshold nothing can reach, so no compile ever starts. It prices the
+%%% lookup and nothing else.
+steady_arm("control", Adapter, Mod, Guest, Echo, Hash, N, Floor) ->
+    {_, _, Base} = arm(Adapter, "compiled"),
+    %% Above every tier-enabled call this arm makes, discarded and measured
+    %% together, with room to spare. One threshold hit and the arm would be
+    %% measuring a compile.
+    Never = (N * 10) + 10_000,
+    W = start_floor(Mod, Guest, Base#{compile_after => Never}, Floor),
+    %% Nothing may be resident before a control arm runs, or it is not a
+    %% control: it would adopt and price adoption instead of the lookup.
+    error = target(Hash),
+    _ = one(W, Echo),
+    ok = wasm_jit:reset_counts(),
+    Us = [req_us(W, Echo) || _ <- lists:seq(1, N)],
+    io:format("# control min/median ~w / ~w us over ~w~n",
+              [lists:min(Us), med2(Us), N]),
+    io:format("# counts (all must be zero): ~p~n", [wasm_jit:counts()]),
+    ok = script_worker:stop(W),
+    end_state(Hash, absent).
+
+steady_rate(Adapter, Mod, Guest, Echo, Hash, N, Floor, Count) ->
+    {_, _, Metered} = arm(Adapter, "metered"),
+    {_, _, Compiled} = arm(Adapter, "compiled"),
+    Cs = [start_floor(Mod, Guest, Compiled, Floor) || _ <- lists:seq(1, Count)],
+    _ = prepare(hd(Cs), Echo, Hash),
+    CRate = rate(Cs, Echo, N),
+    Entered = maps:get(entered, wasm_jit:counts(), 0),
+    [ok = script_worker:stop(W) || W <- Cs],
+    Ms = [start_floor(Mod, Guest, Metered, Floor) || _ <- lists:seq(1, Count)],
+    MRate = rate(Ms, Echo, N),
+    [ok = script_worker:stop(W) || W <- Ms],
+    io:format("workers=~2w compiled ~7.1f req/s  metered ~7.1f req/s  "
+              "normalised ~.3f  entered ~w of ~w~n",
+              [Count, CRate, MRate, CRate / MRate, Entered, Count * N]).
+
+rate(Ws, Req, N) ->
+    ok = wasm_jit:reset_counts(),
+    T0 = erlang:monotonic_time(microsecond),
+    ok = drive(Ws, Req, N),
+    Us = erlang:monotonic_time(microsecond) - T0,
+    length(Ws) * N / (Us / 1000000).
+
+%% Reach the state the arm is about to measure, and prove it.
+%%
+%% `publish/1' makes a slot resident **before** the compiler bumps `compiled'
+%% and takes its own lease, so residency on its own is not quiescence: waiting
+%% for the lease count to fall to zero and for the compiler children to go is
+%% what makes the counters safe to reset. Reading `compiled' before the reset
+%% and asserting it non-zero is what stops the whole comparison passing
+%% vacuously with nothing compiled on either side.
+prepare(W, Req, Hash) ->
+    %% Already resident, which is the second and later arms of a sweep: the
+    %% counters were zeroed by the first, so `compiled' is legitimately 0 and
+    %% asserting on it here would fail an arm that is correctly set up. What
+    %% still has to hold is quiescence.
+    Already = target(Hash) =/= error,
+    Deadline = erlang:monotonic_time(millisecond) + 900_000,
+    ok = until_resident(W, Req, Hash, Deadline),
+    ok = until_quiet(Hash, Deadline),
+    Compiled = maps:get(compiled, wasm_jit:counts(), 0),
+    Already orelse Compiled > 0
+        orelse exit({nothing_compiled, wasm_jit:counts()}),
+    ok = wasm_jit:reset_counts(),
+    Compiled.
+
+until_resident(W, Req, Hash, Deadline) ->
+    _ = req_us(W, Req),
+    case target(Hash) of
+        {ok, _} -> ok;
+        error ->
+            erlang:monotonic_time(millisecond) < Deadline
+                orelse exit({never_resident, wasm_jit:counts()}),
+            until_resident(W, Req, Hash, Deadline)
+    end.
+
+%% Polled without calling, deliberately: the compiler is off the request path,
+%% so more requests would only add leases of their own to wait for.
+until_quiet(Hash, Deadline) ->
+    {ok, {_, _, Leases}} = target(Hash),
+    Children = proplists:get_value(active,
+                                   supervisor:count_children(wasm_jit_sup)),
+    case {Leases, Children} of
+        {0, 0} -> ok;
+        _ ->
+            erlang:monotonic_time(millisecond) < Deadline
+                orelse exit({never_quiet, {Leases, Children}}),
+            timer:sleep(200),
+            until_quiet(Hash, Deadline)
+    end.
+
+alternate(_Wm, _Wc, _Req, N, I, Ms, Cs) when I > N ->
+    {lists:reverse(Ms), lists:reverse(Cs)};
+alternate(Wm, Wc, Req, N, I, Ms, Cs) ->
+    {M, C} = case I rem 2 of
+                 1 -> {req_us(Wm, Req), req_us(Wc, Req)};
+                 0 -> R = req_us(Wc, Req), {req_us(Wm, Req), R}
+             end,
+    alternate(Wm, Wc, Req, N, I + 1, [M | Ms], [C | Cs]).
+
+%% Not "every slot free". Releasing the last lease deliberately leaves the key
+%% on the slot so a later instance adopts rather than reloads, so the expected
+%% end state is resident-with-no-leases. The control arm is the opposite and
+%% says so.
+end_state(Hash, resident) ->
+    {ok, {Name, _, Leases}} = target(Hash),
+    io:format("# end state: ~p resident, ~w leases, ~w loading, ~p children~n",
+              [Name, Leases, length(loading()),
+               supervisor:count_children(wasm_jit_sup)]),
+    Leases =:= 0 orelse exit({leases_left, Leases}),
+    [] =:= loading() orelse exit({still_loading, loading()}),
+    ok;
+end_state(Hash, absent) ->
+    error = target(Hash),
+    #{compiled := 0, entered := 0, cached := 0} = wasm_jit:counts(),
+    [] =:= loading() orelse exit({still_loading, loading()}),
+    io:format("# end state: nothing resident, counts zero, ~p children~n",
+              [supervisor:count_children(wasm_jit_sup)]),
+    ok.
+
+loading() ->
+    [N || {N, _, St, _} <- ets:tab2list(wasm_code_slots),
+          element(1, St) =:= loading].

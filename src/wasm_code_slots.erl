@@ -566,10 +566,15 @@ calls_in(Name) -> atomics:get(counters(), slot_index(Name)).
 -doc """
 The module `Key` is resident in, as a select rather than a listing.
 
-On the path every call takes when a module is hot and not yet adopted, so it is
-a match spec the emulator runs over sixteen rows and not a term built for the
-caller to filter. Asking the gen_server instead cost 320 microseconds a call on
-a three-microsecond one.
+On the path **every** tier-enabled call takes from an instance that has not yet
+adopted, so it is a match spec the emulator runs over sixteen rows and not a
+term built for the caller to filter. Asking the gen_server instead cost 320
+microseconds a call on a three-microsecond one.
+
+It used to run only when a module was hot. `wasm_jit:maybe_adopt/3` now asks it
+first and consults the threshold only when the answer is `error`, because
+whether code already exists and whether to start making some are two questions
+and only the second wants pacing.
 """.
 -spec resident_module(key()) -> {ok, module()} | error.
 resident_module(Key) ->

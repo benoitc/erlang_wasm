@@ -136,13 +136,22 @@ shorter run is silent whether the tier is off or merely slow.
 not `compile => true`, so a reactor request runs interpreted unless you add the
 key yourself.
 
-You can, and today it is not worth it. The tier does reach a restored
-instance, after about 150 s and several thousand requests on QuickJS, but a
-reactor builds a fresh instance per request and an instance adopts compiled
-code only on a call where the tier's hotness counter fires, which is one call
-in 32. So 31 requests in 32 keep interpreting and the median does not move.
-`test/audit/PERF.md` has the measurement. Turning it on also moves you into the
-security posture below.
+You can, and once the code is compiled it is now worth it. A QuickJS request
+goes from 20.6 ms interpreted to 7.4 ms and throughput at fourteen workers
+rises by about three quarters; Lua goes 11.3 ms to 4.4 and CPython 119 to 65.
+`test/audit/PERF.md` has all three.
+
+Two things to budget for. **Getting there takes a while**: the tier arrives
+after a fixed amount of compiling, and a reactor request is ten times faster
+than a command one, so it takes ten times as many requests to reach it -- about
+150 s and several thousand requests on QuickJS, every one of them interpreted.
+And turning it on moves you into the security posture below.
+
+Until recently it was not worth it at all, for a reason worth knowing if you
+are reading an older measurement: an instance could adopt compiled code only on
+a call where the tier's hotness counter fired, one call in 32, and a reactor
+builds a fresh instance per request. So 31 requests in 32 interpreted with the
+compiled code resident beside them.
 
 Under `compiled` the only thing between the node and a runaway guest is a kill
 from outside it. That is a security statement rather than a tuning note: it is

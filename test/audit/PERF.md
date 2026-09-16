@@ -5468,6 +5468,101 @@ acted on.
 
 Every other number in this section was taken with the tier off.
 
+### Adoption, separated from the compile threshold
+
+`wasm_jit:maybe_adopt/3` used to ask `wasm_code_slots:hot/2` first and look for
+resident code only inside the `true` branch, so one counter decided both when
+to *start compiling* and when an instance might *use* what was already
+compiled. For an instance that lives across many calls that is invisible:
+adopting sets a `code_slot` and `entry_1/3` never returns. For a reactor, which
+builds a fresh instance per request, it meant an instance could only adopt on
+the one call in 32 where the counter fired.
+
+The change asks for residency first and consults the threshold only when
+nothing is resident. `bench/paths/workerbench.erl`'s `steady` mode measures it
+from a node that has **arrived**: module compiled, compiler gone, counters
+zeroed, quiescence asserted rather than assumed.
+
+#### Latency, 200 alternating requests, heap floor on in both arms
+
+| guest | | parent | changed |
+| --- | --- | ---: | ---: |
+| QuickJS | adoption rate | 3.0% | **100%** |
+| | compiled median | 20,570 us | **7,364 us** |
+| | metered median | 20,612 us | 20,599 us |
+| | ratio compiled/metered | 0.998 | **0.357** |
+| Lua | adoption rate | 3.0% | **100%** |
+| | compiled median | 11,345 us | **4,422 us** |
+| | metered median | 11,333 us | 11,563 us |
+| | ratio compiled/metered | 1.001 | **0.382** |
+| CPython | adoption rate | 3.0% | **100%** |
+| | compiled median | 119,325 us | **64,509 us** |
+| | metered median | 119,645 us | 121,431 us |
+| | ratio compiled/metered | 0.997 | **0.531** |
+
+The parent's ratio is the finding restated: with the tier on, compiled and
+interpreted medians are the same number, because 31 requests in 32 are
+interpreted. The compiled *minimum* was already 7,172 us on the parent, so the
+generated code was real and almost nothing reached it.
+
+**The compiled function set is unchanged**, which is the check that says this
+moved when code is adopted and not what gets built: 264 on QuickJS, 224 on Lua
+and 971 on CPython, equal on both revisions.
+
+All three guests give the same shape and the parent's ratio is within 0.3% of
+1.000 in every one of them: three independent confirmations that with the tier
+on and code resident, the parent was interpreting almost everything.
+
+#### Throughput at 14 workers, five alternating pairs
+
+Rates normalised by the metered arm from the same emulator at the same worker
+count, then compared as paired ratios. Normalising is not decoration here: the
+metered control ranged from 182 to 331 req/s across these runs, so a raw
+comparison would have been mostly box.
+
+| pair | parent normalised | changed normalised | ratio |
+| ---: | ---: | ---: | ---: |
+| 1 | 1.029 | 1.943 | 1.888 |
+| 2 | 1.030 | 2.005 | 1.947 |
+| 3 | 1.048 | 1.530 | 1.460 |
+| 4 | 1.002 | 1.745 | 1.742 |
+| 5 | 1.035 | 1.673 | 1.617 |
+
+Median paired ratio **1.742**. The gate was "at most 5% below the parent",
+against the risk that an adoption claim per request would contend on the
+`wasm_code_slots` singleton; it is 74% above instead. The parent's own
+normalised figure sits between 1.002 and 1.048 in every pair, which is the
+tier being worth nothing to it.
+
+Adoption at 14 workers: 17 or 18 of 560 on the parent, 560 of 560 on the
+changed build, in every pair.
+
+#### What the added lookup costs, priced on its own
+
+A call that finds nothing resident now does one `ets:select` over sixteen rows
+that it did not do before. The control arm prices exactly that: the tier
+enabled so every call pays the lookup, `compile_after` above every call the arm
+makes so no compile ever starts, nothing resident at either end.
+
+| pair | parent median | changed median | ratio |
+| ---: | ---: | ---: | ---: |
+| 1 | 20,114 us | 20,144 us | 1.0015 |
+| 2 | 20,519 us | 20,404 us | 0.9944 |
+| 3 | 20,306 us | 20,400 us | 1.0046 |
+
+Median **1.0015**, against a 2% bar. The lookup is not measurable at this
+scale.
+
+#### Why quiescence had to be waited for rather than assumed
+
+`publish/1` makes a slot resident **before** the compiler bumps `compiled` and
+takes its own lease (`wasm_jit.erl:846-849`, and the sharded path at `913-915`).
+A harness that saw residency and immediately reset the counters would race all
+three, and the compiled-set comparison could read 0 on both revisions and agree
+vacuously. `steady` waits for the target's lease count to reach zero and
+`wasm_jit_sup` to have no children, then reads and asserts a non-zero compiled
+count, and only then resets.
+
 ### How the floor behaves under concurrency, and what it costs in memory
 
 `workerbench`'s `throughput` mode: N workers, one client process each, a fixed

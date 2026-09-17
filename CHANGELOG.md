@@ -5,8 +5,15 @@
 ### What a reactor host must do at startup
 
 Measured, for the first time on the reactor path: a cold node reaches the
-compiled tier in 47 s and 3,835 requests on Lua, 147 s and 6,412 on QuickJS. A
-warm `code_cache_dir` takes that to 0.5 s and 44 requests, and 1.5 s and 34.
+compiled tier in 47 s and 3,835 requests on Lua, 147 s and 6,412 on QuickJS,
+319 s and 1,908 on CPython. A warm `code_cache_dir` takes that to 0.5 s and 44
+requests, 1.5 s and 34, and 7.7 s and 33.
+
+Also fixed, because it made CPython unmeasurable: an image whose tables hold a
+`funcref` could only be read by a node that had already interned that atom,
+which a freshly started one has not. The decoder now lists the atoms an image's
+own values can contain, so they exist before it can decode anything. A CPython
+worker start goes from 104 s to 1.1 s.
 
 Two things a host needs to know. **A different script gets nothing from a warm
 cache** -- the key includes the set of functions a request executed, so a

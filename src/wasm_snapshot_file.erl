@@ -44,6 +44,7 @@ as the release, in the same words `wasm_code_cache` uses.
 """.
 
 -export([encode/1, decode/2]).
+-export([own_atoms/0]).
 -export([format_version/0, image_abi/0]).
 
 -define(MAGIC, "WASMIMG\0").
@@ -85,6 +86,33 @@ format_version() -> ?FORMAT.
 -doc "The value-representation version, bumped by hand.".
 -spec image_abi() -> pos_integer().
 image_abi() -> ?IMAGE_ABI.
+
+-doc """
+The atoms the runtime's own values are made of, listed so that loading this
+module interns them.
+
+`unterm/1` decodes a name through `binary_to_existing_atom/2`, which is right:
+nothing in a file may mint an atom. But "existing" is a property of the
+emulator at that moment, and Erlang loads modules lazily, so without this the
+answer depends on whether some unrelated module carrying the same literal
+happened to have been loaded first.
+
+That is not hypothetical. A CPython image holds `funcref` in its tables, and on
+a node that had only started the application `binary_to_existing_atom(
+<<"funcref">>, utf8)` raised `badarg`: the image was refused, `lookup/2` turned
+the refusal into a miss as it must, and the worker spent 104 seconds capturing
+a snapshot it already had on disk. `test/audit/ATTEMPTS.md` has that run.
+
+Every name here is a literal in this module's source, so it is in this module's
+atom table and exists from the moment the module is loaded -- which is before
+it can decode anything. The set is exactly what `wasm_snapshot:admissible/2`
+admits, and the guarantee it restores is only about *these* names: an atom a
+hook kept is still subject to existing already, because that one really does
+come from outside.
+""".
+-spec own_atoms() -> [atom()].
+own_atoms() ->
+    [funcref, null, i31, nan, infinity, neg_infinity].
 
 %%% --------------------------------------------------------------- encode ---
 
@@ -282,6 +310,9 @@ unterm(<<3, L:16, N:L/binary, R/binary>>) ->
     %% than interned: the atom table is node-wide and never reclaimed, and a
     %% file in a directory is exactly where a guest-shaped name would be
     %% planted.
+    %%
+    %% `own_atoms/0' below is why "existing" is not a lottery for the names the
+    %% runtime itself writes.
     try {ok, binary_to_existing_atom(N, utf8), R}
     catch error:badarg ->
         refuse(snapshot_unknown_atom, unknown_atom_msg(), #{name => N})

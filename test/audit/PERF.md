@@ -5484,11 +5484,17 @@ residency starting **after** the worker is up so the snapshot is not counted.
 | | **warm** | **541 ms** | **44** | 224, `cached => 1` |
 | QuickJS | cold | 146,503 ms | 6,412 | 264 |
 | | **warm** | **1,460 ms** | **34** | 264, `cached => 1` |
+| CPython | cold | 319,234 ms | 1,908 | 971 |
+| | **warm** | **7,676 ms** | **33** | 971, `cached => 1` |
 
-**87x and 100x**, in requests as well as in wall time. A warm node reaches the
-tier in about a second after two or three dozen requests; a cold one spends
-forty-seven to a hundred and fifty seconds and thousands of requests
+**87x, 100x and 42x**, in requests as well as in wall time. A warm node reaches
+the tier in a second or a few, after two or three dozen requests; a cold one
+spends forty-seven seconds to five minutes and thousands of requests
 interpreting.
+
+CPython's cold arm takes *fewer* requests than Lua's while taking six times
+longer, which is the shape to expect: the request is slower, so the compile has
+more wall time per request to work with.
 
 #### Serving while it compiles, against waiting for it
 
@@ -5523,6 +5529,8 @@ all:
 | | experimental, B | **0** | 227 | -- | 48,761 ms |
 | QuickJS | control, W | **1** | 264 | `wasm_code_8` | 1,460 ms |
 | | experimental, B | **0** | 271 | `wasm_code_8` | 152,381 ms |
+| CPython | control, W | **1** | 971 | `wasm_code_11` | 7,676 ms |
+| | experimental, B | **0** | 1,062 | `wasm_code_11` | 325,460 ms |
 
 **B pays the full cold cost against a warm cache**, and writes a second entry
 of its own. The attribution is to the executed function set and not to anything
@@ -5532,21 +5540,34 @@ reached residency with `compiled > 0`; `refused`, `failed` and `crashed` were
 than skipping it as it does for a sharded compile; and B took the **same slot**
 as W, which is also in the key.
 
-The compiled counts differ by three and seven functions, which is the
-independent variable doing what it was chosen to do.
+The compiled counts differ by three, seven and ninety-one functions, which is
+the independent variable doing what it was chosen to do. On CPython the effect
+is stark: a script that sorts, serialises and substitutes pays **five and a
+half minutes** against a warm cache that cost the first script the same.
 
-#### CPython: not measured, and why
+#### CPython was unmeasurable until a defect this found was fixed
 
-It was given a bounded deadline and did not make it. Every arm exited on the
-harness's own guard, `{worker_captured_rather_than_loaded, 104035, 20000}`: the
-worker spent 104 seconds **capturing** a snapshot although an image for that
-exact configuration was already filed in the directory it was pointed at. The
-image is 2.6 MB and present; it is written and then not read back.
+Its first arms exited on the harness's own guard,
+`{worker_captured_rather_than_loaded, 104035, 20000}`: the worker spent 104
+seconds **capturing** although a 2.6 MB image for that exact configuration was
+already filed where it was looking.
 
-That is a defect in the image store or in the key it is looked up under, not an
-answer to anything this section asks, and chasing it here would have meant
-measuring a hundred seconds of the wrong thing. It is left as the next thing to
-look at, and the two-guest result above is reported as a two-guest result.
+Not the key, which computes to exactly the filename on disk. The load refused
+with `snapshot_unknown_atom` on `funcref`: `wasm_snapshot_file` decodes atoms
+with `binary_to_existing_atom/2`, and a node that had only started the
+application had never interned that one. So **whether an image loaded depended
+on which modules the emulator happened to have loaded**, Erlang loading them
+lazily.
+
+`wasm_snapshot_file:own_atoms/0` now lists the six atoms an image's own values
+can contain, as literals, so loading the decoder interns them before it can
+decode anything. Worker start went from **104,035 ms to 1,134 ms**, and CPython
+appears in the tables above.
+
+**The guard is what made this findable.** Without it every CPython arm would
+have reported a cold window a hundred seconds longer than the truth, with
+nothing in the output to say why, and the number would have gone into this
+file.
 
 **The guard is the point.** Without it the CPython arms would have reported a
 cold window a hundred seconds longer than the truth, with nothing in the output

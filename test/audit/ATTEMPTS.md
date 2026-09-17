@@ -395,23 +395,50 @@ Closing it means **extending the key to cover `Head` and `Elsewhere`**, which is
 a change to what a cache entry means rather than a missing argument, and it
 belongs with the cold-start work rather than with the directory's trust model.
 
-**A CPython reactor image is filed and then not read back.** Every `coldnode`
-arm for CPython exited on the harness's own guard --
+**~~An image is unreadable on a node that has not interned `funcref`.~~**
+Found, diagnosed and fixed. Recorded because the shape of it is general and the
+symptom was silent.
+
+Every `coldnode` arm for CPython exited on the harness's guard --
 `{worker_captured_rather_than_loaded, 104035, 20000}` -- with a 2.6 MB image
-for that exact configuration sitting in the directory the worker was pointed
-at. Two consecutive runs with identical configuration both captured, so the key
-the image is stored under and the key it is looked up under disagree, or the
-read refuses it for a reason `lookup/2` turns into a miss.
+for that exact configuration already filed where the worker was looking. Not
+the key: it computes to exactly the filename on disk. The load refused:
 
-Not chased, because it was found while measuring something else and chasing it
-would have meant a hundred seconds of the wrong measurement per arm. The
-compatibility key is a constant (`?VERSION`), the module hash is stable and the
-ABI is fixed, so the disagreement is somewhere less obvious than those. The
-cold-node results are a two-guest result because of it.
+```erlang
+#{kind => snapshot_unknown_atom, class => malformed,
+  msg  => <<"the image names an atom this node does not have">>,
+  ctx  => #{name => <<"funcref">>}}
+```
 
-Recorded here rather than in `PERF.md`'s open list because it is reproducible
-in one command and wants a fix rather than a decision:
-`workerbench main coldnode py_reactor <dir> cold serve w`, twice.
+`wasm_snapshot_file` decodes atoms with `binary_to_existing_atom/2` so nothing
+in a file can mint one, which is right. CPython's captured tables hold
+`funcref`. And on a node that had just started the application that atom did
+not exist -- `binary_to_existing_atom(<<"funcref">>, utf8)` raised `badarg`
+straight after `application:ensure_all_started(wasm)`.
+
+**So whether an image loaded depended on which modules the emulator happened to
+have loaded**, because loading a module is what interns its literals and Erlang
+loads lazily. Nothing about it was specific to CPython: any image whose tables
+hold a `funcref` was exposed, and QuickJS and Lua loaded only because something
+had interned it first. `lookup/2` turns every failure into a miss, by design,
+so the whole thing presented as a silent hundred-second capture.
+
+`own_atoms/0` now lists the six atoms an image's own values can contain, as
+literals in that module, so they exist from the moment the decoder is loaded --
+which is before it can decode anything. The set is exactly what
+`wasm_snapshot:admissible/2` admits. An atom a *hook* kept still has to exist
+already, because that one really does come from outside. Worker start:
+**104,035 ms to 1,134 ms**.
+
+**The test needed a node of its own, and the first version of it was vacuous.**
+In the suite's node everything is loaded long before a case runs, so the
+property cannot be asked there; `every_atom_an_image_holds_exists_once_the_
+decoder_is_loaded` starts a `peer` with `standard_io` (a named peer wants
+distribution, and the suite is `nonode@nohost`), loads only the decoder, and
+checks each name. The first attempt read the list *from `own_atoms/0`*, so
+deleting `funcref` from the fix deleted it from the test in the same motion and
+the case went on passing. It carries its own literal list now, and asserts the
+two agree.
 
 ## Open, and each a decision rather than a task
 

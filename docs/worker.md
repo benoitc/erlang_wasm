@@ -146,8 +146,8 @@ after a fixed amount of compiling, and a reactor request is ten times faster
 than a command one, so it takes ten times as many requests to reach it -- about
 150 s and several thousand requests on QuickJS, every one of them interpreted.
 **Set `code_cache_dir` at the same time** or you pay that window on every node
-start -- it takes a Lua worker from 47 s to 0.5, and a QuickJS one from 147 s
-to 1.5, with [what a host must do at startup](compiled-tier.md) spelling out
+start -- it takes a Lua worker from 47 s to 0.5, a QuickJS one from 147 s to
+1.5 and a CPython one from 319 s to 7.7, with [what a host must do at startup](compiled-tier.md) spelling out
 the rest, including that there is currently no supported way to wait until the
 tier is ready; [the compiled tier guide](compiled-tier.md) says what the directory has
 to be, and it is checked rather than assumed. And turning the tier on moves you

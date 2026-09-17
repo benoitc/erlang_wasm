@@ -106,6 +106,7 @@ What it is worth, measured on a reactor worker:
 | --- | --- | --- |
 | Lua | 47 s, 3,835 requests | **0.5 s, 44 requests** |
 | QuickJS | 147 s, 6,412 requests | **1.5 s, 34 requests** |
+| CPython | 319 s, 1,908 requests | **7.7 s, 33 requests** |
 
 And what a *different* script gets from that warm cache: nothing. A second
 script against a cache filled by the first paid the full cold cost again and

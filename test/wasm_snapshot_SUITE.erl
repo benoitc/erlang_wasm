@@ -20,7 +20,8 @@ testing the artifact rather than the mechanism.
 suite() -> [{timetrap, {seconds, 60}}].
 
 all() ->
-    [a_restored_instance_matches_one_that_ran_init,
+    [every_atom_an_image_holds_exists_once_the_decoder_is_loaded,
+     a_restored_instance_matches_one_that_ran_init,
      restore_does_not_run_the_start_function,
      a_restored_instance_is_isolated_from_the_image,
      self_referencing_funcrefs_are_relocated,
@@ -902,3 +903,45 @@ a_lowered_cap_does_not_shrink_the_directory(Config) ->
         ok = wasm_snapshot_store:purge(),
         ?assertEqual([], images(Dir))
     end).
+
+%% An image is decoded with `binary_to_existing_atom/2`, which is right: a file
+%% must not be able to mint an atom. But "existing" is a property of the
+%% emulator at that instant, and Erlang loads modules lazily, so before
+%% `wasm_snapshot_file:own_atoms/0' existed the answer depended on whether some
+%% unrelated module carrying the same literal happened to have been loaded.
+%%
+%% It cost a hundred and four seconds a time: a CPython image holds `funcref',
+%% a freshly started node did not have that atom, the image was refused,
+%% `wasm_snapshot_store:lookup/2' turned the refusal into a miss as it must,
+%% and the worker captured a snapshot it already had on disk.
+%%
+%% **This needs a node of its own.** In this one everything is loaded long
+%% before the case runs, so the property is unfalsifiable here: the assertion
+%% would pass whether or not the fix exists. A peer starts with nothing loaded,
+%% which is the only place the question can be asked.
+every_atom_an_image_holds_exists_once_the_decoder_is_loaded(_Config) ->
+    %% `standard_io' rather than a named node: the suite runs as
+    %% `nonode@nohost' and a named peer wants distribution started, which this
+    %% case has no use for.
+    {ok, Peer, _} =
+        peer:start_link(#{connection => standard_io,
+                          args => ["-pa" | code:get_path()]}),
+    try
+        %% Loading the decoder is the whole intervention. Nothing in that node
+        %% has decoded, validated or instantiated anything.
+        ?assertEqual({module, wasm_snapshot_file},
+                     peer:call(Peer, code, ensure_loaded, [wasm_snapshot_file])),
+        %% **Written out here, not read from `own_atoms/0`.** Taking the list
+        %% from the module under test would make this vacuous: dropping a name
+        %% from the list would drop it from the test in the same motion, and
+        %% the case would go on passing. That is exactly what happened the
+        %% first time this was falsified.
+        Expected = [funcref, null, i31, nan, infinity, neg_infinity],
+        ?assertEqual(lists:sort(Expected),
+                     lists:sort(wasm_snapshot_file:own_atoms())),
+        [?assertEqual(A, peer:call(Peer, erlang, binary_to_existing_atom,
+                                   [atom_to_binary(A, utf8), utf8]))
+         || A <- Expected]
+    after
+        peer:stop(Peer)
+    end.

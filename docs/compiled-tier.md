@@ -79,6 +79,45 @@ The entry itself carries a checksum, verified before the bytes are loaded, so
 a file damaged by a crash or a bad disk is a miss rather than a broken start.
 That catches **damage, not a hostile writer**: see [Security](security.md).
 
+## What to do at startup
+
+The cache spares a node the **compile**. It does not spare it the requests
+before the compile is asked for, and it only helps a workload that executes the
+same functions as the one that filled it. Both of those shape what a host has
+to do.
+
+1. **Configure an absolute, trusted, persistent `code_cache_dir`**, as above. A
+   directory that does not qualify is refused and the node recompiles on every
+   start.
+2. **Load the guest with a stable content identity** -- `wasm:load/1` on
+   committed bytes. A module built from text takes a fresh `reference()` every
+   validation and is **never cached**.
+3. **Run one fixed representative request at startup**, and do not vary it
+   between deploys. Pinning it is what keeps the cache key stable; it is a rule
+   of thumb rather than the mechanism, since what the key actually turns on is
+   the set of functions a request executed.
+4. **There is no supported way to wait until the tier is ready**, and no
+   request count substitutes for one. See the limitation below.
+5. **Admit traffic knowing early requests interpret.**
+
+What it is worth, measured on a reactor worker:
+
+| guest | cold start | warm start |
+| --- | --- | --- |
+| Lua | 47 s, 3,835 requests | **0.5 s, 44 requests** |
+| QuickJS | 147 s, 6,412 requests | **1.5 s, 34 requests** |
+
+And what a *different* script gets from that warm cache: nothing. A second
+script against a cache filled by the first paid the full cold cost again and
+wrote a second entry, because it executed a different set of functions.
+
+**The readiness limitation.** `wasm_jit:await/2` takes an instance, and a
+worker destroys its instance after every request, so a worker host has nothing
+supported to wait on. Waiting for the compile rather than serving through it is
+worth a great deal -- on Lua it is 32 interpreted requests instead of 3,835,
+for the same wall time -- which is why this is recorded as a gap rather than
+left unsaid. `test/audit/PERF.md` has the measurements.
+
 ## Know what you will get
 
 **Coverage is not speed, and there is no partial credit.** A single unsupported

@@ -543,8 +543,16 @@ made for it, and the latency changing underneath when generated code lands.
 erlc -o bench/paths -pa _build/test/lib/wasm/ebin \
      -pa _build/test/lib/wasm/examples bench/paths/workerbench.erl
 erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \
-    -pa bench/paths -run workerbench main qjs compiled warm 500 /tmp/wb_cache
+    -pa bench/paths -run workerbench main qjs compiled warm 500 \
+        "$PWD/_build/bench-cache"
 ```
+
+**Not `/tmp`.** The cache validates its directory now, and `/tmp` fails twice
+over: it is a symlink to `private/tmp` on macOS, and `/private/tmp` is
+`drwxrwxrwt`. A run pointed there gets no cache at all and says so once in the
+log -- which, before this was written down, is exactly the shape of a warm arm
+that quietly measures a cold one. Use an absolute path you own with no group or
+other write bit; `_build` is gitignored and convenient.
 
 Three cache arms, and the third is the one that matters:
 
@@ -655,6 +663,41 @@ To compare revisions, copy this file into the older tree and compile it there,
 as the cross-commit protocol above does with `pathbench.erl` -- the older tree
 does not contain this mode. The reactor `.wasm` fixtures are built rather than
 committed, so copy those across too or the older arm cannot start.
+
+### What a cold node pays, and whether a cache spares it
+
+`coldnode` measures the window before the tier is running, which for a reactor
+nothing had measured.
+
+```sh
+erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \
+    -pa bench/paths \
+    -run workerbench main coldnode lua_reactor "$PWD/_build/c1" cold serve w
+```
+
+The arguments are the guest, an **absolute trusted** cache directory, `cold` or
+`warm`, `serve` or `wait`, and `w` or `b`.
+
+Four things it does that are not optional, each because getting one wrong
+produces a plausible number:
+
+- **The snapshot is prepared outside the timed arm, and the arm checks it was
+  loaded.** Setting `snapshot_dir` proves nothing: a worker that finds no image
+  captures instead, silently. The first CPython run here exited with
+  `{worker_captured_rather_than_loaded, 108990, 20000}` rather than quietly
+  reporting a hundred and nine seconds of somebody else's work.
+- **The clock starts after the worker is up**, so the snapshot is reported
+  apart from the compile rather than inside it.
+- **The number of shards is recorded.** `cached/6` skips the lookup entirely
+  for a sharded compile, so a sharded arm reports `cached = 0` for a reason
+  that has nothing to do with the cache.
+- **The slot is recorded**, because it is in the cache key: two arms in
+  different slots miss each other whatever else matches.
+
+To ask whether a *different* script hits a warm cache, use **two emulators over
+two clones** of the same seeded directory -- one running `w`, one running `b`.
+One emulator cannot answer it: whichever runs first becomes resident and the
+second adopts its code without ever consulting the cache.
 
 ### Scaling, where interleaving does not save you
 

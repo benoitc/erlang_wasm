@@ -94,6 +94,12 @@ main(["throughput", Adapter, Config, N, Floor | Counts]) ->
                [list_to_integer(C) || C <- Counts]);
 main(["tier", Adapter, N, Floor]) ->
     tier(Adapter, list_to_integer(N), list_to_integer(Floor));
+main(["coldnode", Adapter, Dir, State, Strategy]) ->
+    coldnode(Adapter, Dir, State, Strategy);
+main(["coldnode", Adapter, Dir, State, Strategy, Which]) ->
+    coldnode(Adapter, Dir, State, Strategy, Which);
+main(["workloads", Adapter]) ->
+    workloads(Adapter);
 main(["steady", Adapter, Arm, N, Floor]) ->
     steady(Adapter, Arm, list_to_integer(N), list_to_integer(Floor));
 main([Adapter, Config, Arm, N, Cache]) ->
@@ -157,10 +163,17 @@ arm("lua_reactor", Config) ->
 
 %% `wasm_jit:entry/3` enables generated code only when fuel is `infinity`, so
 %% the compiled arm has to remove the ceiling rather than add to it.
+%%
+%% `interpreted' is the **fuel-matched** control, and it exists because
+%% `metered' is not one: `metered' keeps the untrusted preset's fuel ceiling
+%% while `compiled' removes it, so comparing those two prices metering and
+%% compilation together. This differs from `compiled' in exactly one thing.
 limits(Config, Base) ->
     case Config of
-        "metered"  -> Base;
-        "compiled" -> Base#{fuel => infinity, compile => true, profile => script}
+        "metered"     -> Base;
+        "interpreted" -> Base#{fuel => infinity};
+        "compiled"    -> Base#{fuel => infinity, compile => true,
+                               profile => script}
     end.
 
 run(_W, _R, N, I, Acc) when I > N ->
@@ -181,6 +194,18 @@ run(W, R, N, I, Acc) ->
 
 check({ok, _}) -> ok;
 check({error, E}) -> io:format("# REQUEST FAILED: ~p~n", [E]), ok.
+
+%% What `check/1' is not. That one matches any `{ok, _}' and, worse, *prints* on
+%% an error and still answers `ok', so a request that failed is logged and its
+%% timing kept. A timing arm cannot do that: a failed request is faster than a
+%% working one and would flatter whatever produced it.
+%%
+%% This compares the decoded result against what the workload says it should be
+%% and stops the arm otherwise.
+strict(#{expect := Expect}, {ok, #{result := Got}}) when Got =:= Expect ->
+    ok;
+strict(#{expect := Expect}, Other) ->
+    exit({wrong_result, #{expected => Expect, got => Other}}).
 
 %% Minimum and median, never a mean: one scheduling hiccup moves a mean and
 %% neither of these, and `bench/paths/README.md` asks for minimums.
@@ -578,6 +603,75 @@ after_report(MA, CA) ->
 
 med2(L) -> S = lists:sort(L), lists:nth(max(1, length(S) div 2), S).
 
+%%% ----------------------------------------------------------- workloads ---
+
+%% The two scripts the cold-node arms use, per guest, with what each must
+%% answer. They are literals rather than fixtures because the cache keys on the
+%% **set of functions a request executed**, so what these scripts touch is the
+%% independent variable: `W' is arithmetic, `B' sorts, serialises and rewrites,
+%% which reaches into parts of an engine `W' never does.
+%%
+%% `expect' is not decoration. A timing arm that accepts any answer will happily
+%% time a request that failed, and a failure is faster than the work.
+workload(Adapter, w) -> element(1, pair(Adapter));
+workload(Adapter, b) -> element(2, pair(Adapter)).
+
+pair("qjs_reactor") ->
+    {#{source => ~"export function main(c) { return {answer: c.value + 1}; }",
+       context => #{~"value" => 41},
+       expect => #{~"answer" => 42}},
+     #{source => <<"export function main(c) {"
+                   " const xs = c.words.slice().sort();"
+                   " return {out: xs.join('-') + ':' + JSON.stringify(xs).length};"
+                   "}">>,
+       context => #{~"words" => [~"pear", ~"fig", ~"date"]},
+       expect => #{~"out" => ~"date-fig-pear:21"}}};
+pair("lua_reactor") ->
+    {#{source => ~"function main(c) return {answer = c.value + 1} end",
+       context => #{~"value" => 41},
+       expect => #{~"answer" => 42}},
+     #{source => <<"function main(c)\n"
+                   "  local xs = {}\n"
+                   "  for i, w in ipairs(c.words) do xs[i] = w end\n"
+                   "  table.sort(xs)\n"
+                   "  local s = table.concat(xs, '-')\n"
+                   "  s = string.gsub(s, 'fig', 'FIG')\n"
+                   "  return {out = string.format('%s:%d', s, #s)}\n"
+                   "end">>,
+       context => #{~"words" => [~"pear", ~"fig", ~"date"]},
+       expect => #{~"out" => ~"date-FIG-pear:13"}}};
+pair("py_reactor") ->
+    {#{source => ~"def main(c):\n    return {'answer': c['value'] + 1}\n",
+       context => #{~"value" => 41},
+       expect => #{~"answer" => 42}},
+     #{source => <<"import json, re\n"
+                   "def main(c):\n"
+                   "    xs = sorted(c['words'])\n"
+                   "    s = re.sub('fig', 'FIG', '-'.join(xs))\n"
+                   "    return {'out': '%s:%d' % (s, len(json.dumps(xs)))}\n">>,
+       context => #{~"words" => [~"pear", ~"fig", ~"date"]},
+       expect => #{~"out" => ~"date-FIG-pear:23"}}}.
+
+%% Run W and B once each and print what came back, so a workload can be checked
+%% without waiting for a compile. Nothing here is timed.
+workloads(Adapter) ->
+    io:format("# ~s workloads~n", [Adapter]),
+    {ok, _} = application:ensure_all_started(wasm),
+    Root = "/tmp/workerbench_root",
+    _ = os:cmd("rm -rf " ++ Root),
+    ok = filelib:ensure_path(Root),
+    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {Mod, Path, Limits} = arm(Adapter, "metered"),
+    Guest = guest(Adapter, Path),
+    W = start_floor(Mod, Guest, Limits, 0),
+    [begin
+         Wl = workload(Adapter, Which),
+         R = script_worker:run(W, maps:with([source, context], Wl)),
+         io:format("~p: ~p~n  expect ~p~n", [Which, R, maps:get(expect, Wl)])
+     end || Which <- [w, b]],
+    ok = script_worker:stop(W),
+    init:stop().
+
 %%% -------------------------------------------------------------- steady ---
 
 %% What adoption is worth once the code is already there.
@@ -783,3 +877,131 @@ end_state(Hash, absent) ->
 loading() ->
     [N || {N, _, St, _} <- ets:tab2list(wasm_code_slots),
           element(1, St) =:= loading].
+
+%%% ------------------------------------------------------------ cold node ---
+
+%% What a node pays before the tier is running, and whether a cache spares it.
+%%
+%%     erl ... -run workerbench main coldnode lua_reactor <dir> cold serve
+%%
+%% `<dir>' is an **absolute** path the cache will accept: not `/tmp', which is a
+%% symlink to a world-writable directory and is refused. `cold' starts from an
+%% empty one and populates it; `warm' expects a seeded one.
+%%
+%% `serve' keeps requests coming while the compile runs, which is what a host
+%% can actually do. `wait' stops once the compile has been asked for and polls
+%% while idle -- **not** a host strategy, because the polling is an internal
+%% API, but the lower bound a readiness barrier would buy.
+coldnode(Adapter, Dir, State, Strategy) ->
+    coldnode(Adapter, Dir, State, Strategy, "w").
+
+coldnode(Adapter, Dir, State, Strategy, Which) ->
+    say_box("at start"),
+    {ok, _} = application:ensure_all_started(wasm),
+    Root = "/tmp/workerbench_root",
+    _ = os:cmd("rm -rf " ++ Root),
+    ok = filelib:ensure_path(Root),
+    true = filename:pathtype(Dir) =:= absolute,
+    ok = filelib:ensure_path(Dir),
+    application:set_env(wasm, code_cache_dir, Dir),
+    %% Prepared outside every timed arm. A worker that finds no image captures
+    %% instead, silently, and the arm would then carry ninety seconds of
+    %% somebody else's work.
+    Images = image_dir(Adapter),
+    application:set_env(wasm, snapshot_dir, Images),
+    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {Mod, Path, _} = arm(Adapter, "metered"),
+    Guest = guest(Adapter, Path),
+    {_, _, Compiled} = arm(Adapter, "compiled"),
+    Wl = workload(Adapter, list_to_atom(Which)),
+    io:format("# ~s coldnode dir=~ts state=~s strategy=~s workload=~s~n",
+              [Adapter, Dir, State, Strategy, Which]),
+    io:format("# entries before: ~w~n", [length(entries(Dir))]),
+    State =:= "warm" andalso entries(Dir) =:= [] andalso
+        exit(warm_arm_with_empty_cache),
+    T0 = erlang:monotonic_time(millisecond),
+    Wk = start_floor(Mod, Guest, Compiled, floor_for(Adapter)),
+    Start = erlang:monotonic_time(millisecond) - T0,
+    ok = loaded_not_captured(Adapter, Start),
+    ok = wasm_jit:reset_counts(),
+    %% The clock for residency starts here: the snapshot is already paid for.
+    T1 = erlang:monotonic_time(millisecond),
+    {Reqs, Ms} = to_residency(Wk, Wl, Strategy, T1),
+    Counts = wasm_jit:counts(),
+    io:format("# worker start   ~w ms (snapshot, reported apart)~n", [Start]),
+    io:format("# to residency   ~w ms over ~w requests~n", [Ms, Reqs]),
+    io:format("# counts         ~p~n", [Counts]),
+    io:format("# shards         ~w~n", [shards_of(Adapter, Dir)]),
+    %% The slot is in the cache key, so a miss cannot be blamed on the function
+    %% set unless both arms took the same one.
+    io:format("# slot           ~p~n",
+              [[N || {N, _, _} <- wasm_code_slots:resident()]]),
+    io:format("# entries after: ~w~n", [length(entries(Dir))]),
+    ok = script_worker:stop(Wk),
+    say_box("at end"),
+    init:stop().
+
+%% Drive until the module is resident, one of two ways.
+to_residency(Wk, Wl, Strategy, T0) ->
+    Deadline = T0 + 1_800_000,
+    Hash = artifact_hash_of(Wl),
+    to_residency(Wk, Wl, Strategy, T0, Deadline, 0, Hash).
+
+to_residency(Wk, Wl, Strategy, T0, Deadline, N, Hash) ->
+    case resident_any() of
+        true ->
+            {N, erlang:monotonic_time(millisecond) - T0};
+        false ->
+            erlang:monotonic_time(millisecond) < Deadline
+                orelse exit({never_resident, N, wasm_jit:counts()}),
+            case {Strategy, asked(N)} of
+                %% Asked for already: stop driving and let it finish. This is
+                %% the idealised arm; a host cannot see `asked' either.
+                {"wait", true} ->
+                    timer:sleep(200),
+                    to_residency(Wk, Wl, Strategy, T0, Deadline, N, Hash);
+                _ ->
+                    ok = strict(Wl, script_worker:run(
+                                      Wk, maps:with([source, context], Wl))),
+                    to_residency(Wk, Wl, Strategy, T0, Deadline, N + 1, Hash)
+            end
+    end.
+
+%% A compile has been asked for once anything is loading or a compiler is up.
+asked(_N) ->
+    proplists:get_value(active, supervisor:count_children(wasm_jit_sup)) > 0
+        orelse [] =/= [x || {_, _, St, _} <- ets:tab2list(wasm_code_slots),
+                            element(1, St) =:= loading].
+
+resident_any() -> wasm_code_slots:resident() =/= [].
+
+%% A sharded compile never looks in the cache at all, so a `cached' of 0 from
+%% one means nothing about the function set. Recorded for every arm.
+shards_of(_Adapter, _Dir) -> length(wasm_code_slots:resident()).
+
+entries(Dir) -> filelib:wildcard(filename:join(Dir, "*.beam")).
+
+%% Only a load can be this quick; a capture is the guest's whole startup.
+loaded_not_captured(Adapter, Ms) ->
+    Ceiling = case Adapter of
+                  "py_reactor"  -> 20_000;
+                  "qjs_reactor" -> 5_000;
+                  "lua_reactor" -> 5_000
+              end,
+    case Ms =< Ceiling of
+        true -> ok;
+        false -> exit({worker_captured_rather_than_loaded, Ms, Ceiling})
+    end.
+
+image_dir(Adapter) ->
+    D = filename:absname(filename:join(["_build", "bench-images", Adapter])),
+    ok = filelib:ensure_path(D),
+    D.
+
+artifact_hash_of(_Wl) -> undefined.
+
+floor_for("py_reactor") -> 1_000_000;
+floor_for(_)            -> 200_000.
+
+say_box(When) ->
+    io:format("# ~s: ~s#           ~s", [When, os:cmd("uptime"), idle()]).

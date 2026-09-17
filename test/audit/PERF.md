@@ -5468,6 +5468,103 @@ acted on.
 
 Every other number in this section was taken with the tier off.
 
+### What a reactor host pays before the tier is running
+
+The cache numbers above this section are all **command** path. A reactor
+restores a snapshot per request, and until recently the tier was worth nothing
+to one, so none of it had been measured on that path. These runs use
+`workerbench`'s `coldnode` arm: a trusted absolute cache directory under
+`_build`, the snapshot image prepared outside every timed arm and the worker's
+start time checked against a ceiling only a load can meet, and the clock for
+residency starting **after** the worker is up so the snapshot is not counted.
+
+| guest | | to residency | requests | compiled |
+| --- | --- | ---: | ---: | ---: |
+| Lua | cold | 47,340 ms | 3,835 | 224 |
+| | **warm** | **541 ms** | **44** | 224, `cached => 1` |
+| QuickJS | cold | 146,503 ms | 6,412 | 264 |
+| | **warm** | **1,460 ms** | **34** | 264, `cached => 1` |
+
+**87x and 100x**, in requests as well as in wall time. A warm node reaches the
+tier in about a second after two or three dozen requests; a cold one spends
+forty-seven to a hundred and fifty seconds and thousands of requests
+interpreting.
+
+#### Serving while it compiles, against waiting for it
+
+The compiler runs off the request path, so a host has a choice nobody had
+measured. Lua, same guest and same directory state:
+
+| | wall | interpreted requests |
+| --- | ---: | ---: |
+| serve through | 47,340 ms | **3,835** |
+| trigger and wait | 51,012 ms | **32** |
+
+**The wall time is the compile either way.** What changes is how many requests
+are served interpreted while it happens: 32, the threshold, against nearly four
+thousand.
+
+That is what a readiness barrier would be worth, and it is why the gap below
+matters. **Trigger-and-wait is not a host strategy today**: the wait is a poll
+of `wasm_code_slots:resident/0`, an internal API, so this row is an idealised
+lower bound rather than something a host can implement.
+
+#### A different script does not hit a warm cache
+
+The question a host with varied tenant scripts actually has. `W` is the
+arithmetic echo; `B` sorts a list, joins it and measures the result. Two
+emulators per guest over two clones of a W-only cache, because a single
+emulator would let `B` adopt `W`'s resident code and never look in the cache at
+all:
+
+| guest | arm | `cached` | compiled | slot | to residency |
+| --- | --- | ---: | ---: | --- | ---: |
+| Lua | control, W | **1** | 224 | -- | 534 ms |
+| | experimental, B | **0** | 227 | -- | 48,761 ms |
+| QuickJS | control, W | **1** | 264 | `wasm_code_8` | 1,460 ms |
+| | experimental, B | **0** | 271 | `wasm_code_8` | 152,381 ms |
+
+**B pays the full cold cost against a warm cache**, and writes a second entry
+of its own. The attribution is to the executed function set and not to anything
+else, because in the same runs: the control on an identical clone hit; B
+reached residency with `compiled > 0`; `refused`, `failed` and `crashed` were
+0; the compile was **one unit**, so `cached/6` did look in the cache rather
+than skipping it as it does for a sharded compile; and B took the **same slot**
+as W, which is also in the key.
+
+The compiled counts differ by three and seven functions, which is the
+independent variable doing what it was chosen to do.
+
+#### CPython: not measured, and why
+
+It was given a bounded deadline and did not make it. Every arm exited on the
+harness's own guard, `{worker_captured_rather_than_loaded, 104035, 20000}`: the
+worker spent 104 seconds **capturing** a snapshot although an image for that
+exact configuration was already filed in the directory it was pointed at. The
+image is 2.6 MB and present; it is written and then not read back.
+
+That is a defect in the image store or in the key it is looked up under, not an
+answer to anything this section asks, and chasing it here would have meant
+measuring a hundred seconds of the wrong thing. It is left as the next thing to
+look at, and the two-guest result above is reported as a two-guest result.
+
+**The guard is the point.** Without it the CPython arms would have reported a
+cold window a hundred seconds longer than the truth, with nothing in the output
+to say why, and the number would have gone into this file.
+
+#### The host cannot wait for any of this
+
+There is **no supported way for a reactor host to know the tier is ready**.
+`wasm_jit:await/2` takes an instance and a worker destroys its instance every
+request. `cached > 0` is not a barrier either: it is bumped before
+`code:load_binary/3` and before the slot is published. The arms above poll
+`wasm_code_slots:resident/0` and `supervisor:count_children/1`, both internal.
+
+So the `trigger and wait` row is what a barrier would be worth and not
+something a host can do, and no request count substitutes for one: publication
+depends on background wall time and load, so a count that worked in one
+measurement is not a guarantee in another.
+
 ### Adoption, separated from the compile threshold
 
 `wasm_jit:maybe_adopt/3` used to ask `wasm_code_slots:hot/2` first and look for

@@ -395,6 +395,24 @@ Closing it means **extending the key to cover `Head` and `Elsewhere`**, which is
 a change to what a cache entry means rather than a missing argument, and it
 belongs with the cold-start work rather than with the directory's trust model.
 
+**A CPython reactor image is filed and then not read back.** Every `coldnode`
+arm for CPython exited on the harness's own guard --
+`{worker_captured_rather_than_loaded, 104035, 20000}` -- with a 2.6 MB image
+for that exact configuration sitting in the directory the worker was pointed
+at. Two consecutive runs with identical configuration both captured, so the key
+the image is stored under and the key it is looked up under disagree, or the
+read refuses it for a reason `lookup/2` turns into a miss.
+
+Not chased, because it was found while measuring something else and chasing it
+would have meant a hundred seconds of the wrong measurement per arm. The
+compatibility key is a constant (`?VERSION`), the module hash is stable and the
+ABI is fixed, so the disagreement is somewhere less obvious than those. The
+cold-node results are a two-guest result because of it.
+
+Recorded here rather than in `PERF.md`'s open list because it is reproducible
+in one command and wants a fix rather than a decision:
+`workerbench main coldnode py_reactor <dir> cold serve w`, twice.
+
 ## Open, and each a decision rather than a task
 
 **~~The rest of the memory path.~~** Done. A load or a store is generated inline

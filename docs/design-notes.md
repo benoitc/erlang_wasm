@@ -243,6 +243,51 @@ exceeds 2^59 and is therefore a heap bignum allocated on every operation. The
 raw-double NIF avoids that but cannot implement WebAssembly f64 at all. Pure
 Erlang wins here on measurement, not on principle.
 
+## A request is three processes, not one
+
+The worker kernel gives each request a **worker**, a **guardian** and a
+**runner**, and the split is about who can be trusted to survive what.
+
+The runner is the only process that touches tenant data: it instantiates,
+invokes, decodes and dies. It is spawned `[link, monitor]` so that the monitor
+delivers a `DOWN` carrying the exit reason, and the link kills it if the
+guardian goes. The guardian traps exits, owns the mounts and the deadline, and
+is the process a `cancel` acts on. The worker is the API and holds the single
+in-flight slot.
+
+Everything a request can leak -- a directory, a staged file, a registered
+cleanup action -- is owned by the guardian and handed to a node-wide **reaper**
+when the request ends. That reaper is a process and not an ETS table with the
+worker as `heir`, for two reasons `worker_reaper` states: `heir` fires when the
+*owner* dies, so a worker-owned table survives exactly the failure it is not
+needed for; and deferring the sweep to the worker's next request leaks for as
+long as that worker is idle, which for a lightly used tenant has no bound.
+
+The cost of that shape is measurable and small. Accepting a request -- the
+reservation, the request directory, the channels and the runner spawn -- is
+1.7 to 2.3 ms, which on a 6 ms QuickJS request is a quarter of it. It has not
+been attacked because nothing yet needs it to be smaller.
+
+## A snapshot is a copy of state, not of an instance
+
+`wasm:snapshot/1` does not freeze an instance. It copies the guest-visible
+state -- the non-zero runs of each memory, the table contents, the globals --
+and `restore/3` lays that over a **fresh** instance built from the same module
+with **fresh imports**. Nothing of the host side travels: file descriptors,
+sockets, clocks and random providers are the embedder's to supply again.
+
+That is what makes a restored instance safe to hand a different tenant. It is
+also why capture refuses an image holding a `funcref` into another instance or
+any `externref`: those name something on this node that a restore has no way to
+recreate, so the refusal is at capture, where it can still be explained.
+
+Two consequences worth knowing before changing the restore path. A restore
+writes only the runs, onto memory that is zero because the instance was built
+without its active data segments applied -- they would be overwritten anyway,
+and applying them made a restore pay twice. And the module is taken from the
+handle the image retained rather than passed in, so there is no argument that
+could lay one module's bytes over another's layout.
+
 ## Garbage collection
 
 Objects cannot ride on BEAM garbage collection. A struct is mutable and two

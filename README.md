@@ -138,20 +138,22 @@ pattern with a tested example in `examples/wasm_worker.erl`.
 
 ## Documentation
 
+[The full index is in docs/](docs/README.md). The pages you are most likely to
+want first:
+
 - [Getting started](docs/getting-started.md)
 - [Producing a module](docs/guests.md): which shape to build, and how
 - [Embedding](docs/embedding.md): lifetime, ownership, limits
-- [Host functions](docs/host-functions.md)
 - [WASI](docs/wasi.md): capabilities and preopens
-- [Workers](docs/worker.md): request isolation, timeouts, pools
-- [Streams](docs/streams.md): talk to a guest while it runs
+- [Workers](docs/worker.md): running untrusted code one request at a time
+- [Snapshots](docs/snapshots.md): start an interpreter once, not per request
 - [The compiled tier](docs/compiled-tier.md): what `compile => true` buys, and when
 - [Security](docs/security.md): the threat model
 - [Features and conformance](docs/features.md)
 
 For changing the runtime rather than using it:
 
-- [Architecture](docs/architecture.md): the layers, the cycles, where to start reading
+- [Architecture](docs/architecture.md): the layers, the cycles, the path of a call
 - [Adding an instruction](docs/adding-an-instruction.md): the files, per opcode space
 - [Design notes](docs/design-notes.md): why it is built this way
 

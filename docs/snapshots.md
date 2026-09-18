@@ -70,6 +70,18 @@ there is nothing to pass that could lay an image over a different module's
 layout. It also does **not** run the module's start function, because the image
 already contains what that function did.
 
+**What a restore costs, and why it is not the whole address space.** Only the
+image's non-zero runs are written. The instance underneath is built without the
+module's active data segments applied, because every byte they would write is
+overwritten by the image and the memory is already zero -- applying them made a
+restore pay twice, once to write and once to zero the gaps back. Their bounds
+are still checked, so a module that could not be instantiated is still refused.
+
+A CPython restore is 13 ms of a 35 ms request and a QuickJS one 0.4 ms of 6.2.
+The share follows how *dense* an image is rather than how large: CPython's
+covers 17.7% of its address space and QuickJS's 53.7%, so CPython gains more
+from writing only the runs.
+
 ## Hold an image past its creator
 
 A holder is a process. `wasm:snapshot/1` gives the capturing process the first

@@ -229,7 +229,12 @@ build(#module{} = M, Imports, Opts, Heap, Build) ->
     ElemVals = [elem_values(E, GlobalVals, Inst0) || E <- M#module.elems],
     Mut0 = #mut{globals = Globals, tables = Tables, mems = Mems},
     Inst = Inst0#inst{elems = list_to_tuple(ElemVals)},
-    Mut1 = init_segments(M, Inst, Mut0, ElemVals),
+    %% `segments => false' is the restore path saying an image will overwrite
+    %% every active segment. Nothing else may pass it: an instance built without
+    %% its segments and without an image laid over it is a module whose data is
+    %% simply missing.
+    Mut1 = init_segments(M, Inst, Mut0, ElemVals,
+                         maps:get(segments, Opts, true)),
     ok = set_mut(Inst, Mut1),
     Inst.
 
@@ -1258,11 +1263,24 @@ elem_values(#elem{init = Inits}, Globals, Inst) ->
 %% Active segments are copied into memory and tables at instantiation. The
 %% specification requires bounds to be checked here, so a module whose data
 %% segment does not fit fails to instantiate rather than trapping later.
-init_segments(#module{elems = Elems, datas = Datas}, _Inst, Mut0, ElemVals) ->
+%%
+%% `Write` is `false` when a snapshot is about to be laid over this instance.
+%% Every byte an active segment would write is then overwritten by the image,
+%% and the memory underneath is already zero, so writing it costs a restore
+%% twice: once to write it and once to fill it back to zero. What is *not*
+%% skipped is the bounds decision. It is part of instantiation and it traps, so
+%% a module whose segment does not fit has to fail the same way whether or not
+%% an image follows; skipping it would make the refusal depend on every image
+%% having come from a live capture of a module that had already passed it.
+%%
+%% Passive segments are untouched either way: `memory.init` can name one at any
+%% point after a restore, and the image carries only which ones were dropped.
+init_segments(#module{elems = Elems, datas = Datas}, _Inst, Mut0, ElemVals,
+              Write) ->
     Mut1 = lists:foldl(
              fun({#elem{mode = {active, TableIdx, Offset}}, Vals}, M) ->
                      Base = eval_const_addr(Offset, deref(M#mut.globals)),
-                     init_table(M, TableIdx, Base, Vals);
+                     init_table(M, TableIdx, Base, Vals, Write);
                 ({#elem{}, _}, M) -> M
              end, Mut0, lists:zip(Elems, ElemVals)),
     %% Active element segments are dropped after initialisation, and so are
@@ -1276,7 +1294,7 @@ init_segments(#module{elems = Elems, datas = Datas}, _Inst, Mut0, ElemVals) ->
              fun(#data{mode = {active, MemIdx, Offset}, init = Bytes}, M) ->
                      Base = eval_const_addr(Offset, deref(M#mut.globals)),
                      Mem = element(MemIdx + 1, M#mut.mems),
-                     wasm_memory:store_bytes(Mem, Base, Bytes),
+                     init_mem(Mem, Base, Bytes, Write),
                      M;
                 (#data{}, M) -> M
              end, Mut1#mut{dropped_elems = Dropped}, Datas),
@@ -1285,7 +1303,19 @@ init_segments(#module{elems = Elems, datas = Datas}, _Inst, Mut0, ElemVals) ->
                            <- lists:enumerate(0, Datas)], true),
     Mut2#mut{dropped_datas = DroppedD}.
 
-init_table(M, TableIdx, Base, Vals) ->
+%% `store_bytes/3` makes the same decision on its way in, so the skipping path
+%% has to make it here or lose it.
+init_mem(Mem, Base, Bytes, true) ->
+    wasm_memory:store_bytes(Mem, Base, Bytes);
+init_mem(Mem, Base, Bytes, false) ->
+    case wasm_memory:fits(Mem, Base, byte_size(Bytes)) of
+        true  -> ok;
+        false -> wasm_error:trap(out_of_bounds_memory_access,
+                                 #{addr => Base, size => byte_size(Bytes),
+                                   limit => wasm_memory:size_bytes(Mem)})
+    end.
+
+init_table(M, TableIdx, Base, Vals, Write) ->
     Table = element(TableIdx + 1, M#mut.tables),
     case Base + length(Vals) =< wasm_table:size(Table) of
         false ->
@@ -1299,10 +1329,12 @@ init_table(M, TableIdx, Base, Vals) ->
             wasm_error:trap(out_of_bounds_table_access,
                             #{offset => Base, count => length(Vals),
                               size => wasm_table:size(Table)});
-        true ->
+        true when Write ->
             %% Mutates the shared table in place, so `#mut{}' is unchanged: the
             %% table handle it holds already points at the new contents.
             ok = wasm_table:init(Table, Base, Vals),
+            M;
+        true ->
             M
     end.
 

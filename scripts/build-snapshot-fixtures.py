@@ -303,6 +303,47 @@ def zeroed_data():
     return module(types=types, funcs=funcs, mems=mems, globals_=globals_,
                   exports=exports, code=[init, handle, ready], datas=datas)
 
+# -------------------------------------------------------- zeroed_gap ---
+# The same shape as `zeroed_data` and the one it cannot express: a stretch the
+# guest zeroed that is **wide enough to become a gap between runs**.
+#
+# `wasm_snapshot:runs/1` aligns a run's start down to 8 and its end up to 8,
+# and carries any zero stretch shorter than its `?MIN_GAP` of 64 bytes along
+# inside the run. So the single zeroed byte in `zeroed_data` is inside a run
+# and is written back correctly however the memory underneath was prepared:
+# that fixture asserts that a run is written, not that a gap is zero.
+#
+# This one zeroes 128 bytes, which falls between two runs and is written by
+# nothing. It is the fixture that can tell "the memory underneath was zero"
+# from "something zeroed it afterwards", which is the claim a restore that
+# skips the active data segments rests on.
+def zeroed_gap():
+    types = [functype([], []), functype([], [I32])]
+    funcs = [0, 1, 1]
+    mems = [b"\x00" + u32(1)]
+    globals_ = [bytes([I32, 0x01]) + b"\x41" + i32(0) + END]
+    exports = [export("memory", 0x02, 0),
+               export("init", 0x00, 0), export("handle", 0x00, 1),
+               export("ready", 0x00, 2)]
+    datas = [active_data(0, b"\xAA" * 256)]
+    # memory.fill 128 zero bytes at 64, then mark byte 200, so the runs come
+    # out as [0,64) and [192,256) with [64,192) between them.
+    init = body([],
+                b"\x41" + i32(64) + b"\x41" + i32(0) + b"\x41" + i32(128) +
+                b"\xfc" + u32(11) + b"\x00" +
+                b"\x41" + i32(200) + b"\x41" + i32(0x99) + b"\x3a\x00\x00" +
+                b"\x41" + i32(1) + b"\x24" + u32(0))
+    # byte 64 | byte 128 << 8 | byte 200 << 16
+    handle = body([],
+                  b"\x41" + i32(64) + b"\x2d\x00\x00" +
+                  b"\x41" + i32(128) + b"\x2d\x00\x00" +
+                  b"\x41" + i32(8) + b"\x74" + b"\x72" +
+                  b"\x41" + i32(200) + b"\x2d\x00\x00" +
+                  b"\x41" + i32(16) + b"\x74" + b"\x72")
+    ready = body([], b"\x23" + u32(0))
+    return module(types=types, funcs=funcs, mems=mems, globals_=globals_,
+                  exports=exports, code=[init, handle, ready], datas=datas)
+
 # --------------------------------------------------- holds_host_value ---
 # A mutable `externref` global that `init()` fills from a host import. An
 # external reference is whatever the embedder handed over -- a pid, a port, a
@@ -337,6 +378,7 @@ if __name__ == "__main__":
                    ("exported_global", exported_global),
                    ("grown_table", grown_table),
                    ("zeroed_data", zeroed_data),
+                   ("zeroed_gap", zeroed_gap),
                    ("holds_host_value", holds_host_value)]:
         path = os.path.join(dest, nm + ".wasm")
         data = fn()

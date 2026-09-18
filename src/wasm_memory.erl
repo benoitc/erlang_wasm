@@ -46,7 +46,7 @@ who holds the memory and releases it when they are all gone.
 -export([load/3, store/4]).
 -export([atomic_load/3, atomic_store/4, atomic_rmw/5, atomic_cmpxchg/5]).
 -export([is_shared/1, id/1]).
--export([load_bytes/3, store_bytes/3]).
+-export([load_bytes/3, store_bytes/3, fits/3]).
 -export([field_indices/0, mask/1]).
 -export([grow/2, fill/4, copy/4, copy/5, init/5]).
 -export([to_binary/1]).
@@ -383,6 +383,18 @@ load(M, Addr, Nbytes) ->
     Pages = size_pages(M),
     check_bounds(Addr, Nbytes, Pages),
     read(M, Addr, Nbytes).
+
+-doc """
+Whether a write of `Nbytes` at `Addr` would be in bounds, as a value.
+
+For a caller that has to make the specification's bounds decision without
+performing the write. `wasm_instance` uses it to keep an active data segment's
+instantiation-time trap when a restore is about to overwrite whatever the
+segment would have written.
+""".
+-spec fits(mem(), non_neg_integer(), non_neg_integer()) -> boolean().
+fits(M, Addr, Nbytes) ->
+    Addr >= 0 andalso Addr + Nbytes =< size_pages(M) * ?PAGE_SIZE.
 
 -spec store(mem(), non_neg_integer(), 1..8, integer()) -> ok.
 store(M, Addr, Nbytes, Value) ->

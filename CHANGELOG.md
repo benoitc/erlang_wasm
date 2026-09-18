@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### A restore stops writing what it is about to overwrite
+
+A restored instance was built by applying the module's active data segments and
+then zeroing everything the image did not cover, which on CPython was 25 ms of
+writing zeros over memory that `atomics:new/2` had already zeroed. A restore
+now asks for an instance without those segments applied and writes only the
+image's non-zero runs.
+
+**A warm CPython reactor request goes from 64 ms to 35 ms**, and the restore
+inside it from 46 ms to 13 ms. QuickJS gains 10%, which is all a guest whose
+image is half non-zero has to gain. The bounds an active segment carries are
+still checked, so a module that could not be instantiated is refused as before.
+
+Nothing to set: this is how a restore works now.
+
 ### Two thirds of a CPython request is restoring its image
 
 A warm, tiered CPython reactor request is 64 ms, and 42 ms of that is

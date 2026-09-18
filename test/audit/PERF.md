@@ -6051,3 +6051,63 @@ the runner's death and the wait for its `DOWN`, and two image copies are freed
 there. What is measured above is the cost of carrying one *in*, which is not
 the cost of tearing one down. A process-lifetime experiment settles it and has
 not been run.
+
+### Not applying what the image overwrites: a CPython request is 35 ms
+
+`restore/4` now asks `wasm_instance:new/3` for `segments => false`, and
+`restore_mems/2` writes the runs onto memory that is therefore still zero. The
+bounds decision the active segments carry is still made, by `init_mem/4` and
+`init_table/5`, so a module that could not be instantiated is refused exactly
+as before; what is skipped is only the writing.
+
+Inside a restore, `restorebits` on the same images, seven rounds, minimums:
+
+| | CPython | QuickJS |
+| --- | ---: | ---: |
+| before | 46,496 us | 793 us |
+| after | **13,493 us** | **383 us** |
+| | **3.4x** | **2.1x** |
+
+End to end, `phases pairs`, twelve paired samples, medians, load 5.0 to 10.2:
+
+| | CPython before | CPython after | QuickJS before | QuickJS after |
+| --- | ---: | ---: | ---: | ---: |
+| submit | 2,256 | 1,807 | 1,660 | 1,104 |
+| **deliver + restore** | 42,474 | **13,281** | 889 | **548** |
+| invocation envelope | 17,900 | 19,026 | 3,806 | 3,912 |
+| reply | 867 | 870 | 25 | 37 |
+| **total** | **64,331** | **35,498** | **6,833** | **6,171** |
+
+**A tiered CPython request is 1.81x faster**, and the bucket that was two
+thirds of it is 37.5%. QuickJS gains 10%, which is what a guest whose image is
+53.7% non-zero has to gain.
+
+The envelope is unchanged in both, 17.9 to 19.0 and 3.81 to 3.91, which is the
+check that this moved the restore and nothing else: the guest's own work is not
+on this path and must not have moved. The envelope speedup is 3.77x on CPython
+and 4.29x on QuickJS, a quotient of 0.879 against the 0.75 trigger, so the
+second cut still does not fire.
+
+**The interpreted arm is now dominated by the envelope alone**: 88.2 ms of
+which 71.6 is the envelope and 13.4 the restore. Before, an interpreted CPython
+request was 118.2 ms with 43.0 of restore in it.
+
+#### The guard that makes the argument, and the one that could not
+
+`a_data_segment_the_guest_zeroed_stays_zero` looked like the regression guard
+for exactly this change and **is insensitive to it**. Its fixture zeroes one
+byte inside a data segment, `runs/1` aligns a run's start down to 8 and its end
+up to 8, and a `?MIN_GAP` of 64 carries any shorter zero stretch along inside
+the run. So the byte is written back by the run whatever the memory underneath
+held, and the case passes against a build that skips the fills while still
+applying the segments. It was asserting that a run is written.
+
+`a_zeroed_gap_between_runs_stays_zero` is the case that can fail. Its fixture
+zeroes 128 bytes, which splits the image into two runs with a genuine gap
+between them that nothing writes. Run against a build with `segments => true`
+and no fills it reads 16#AAAA where it wants 0, and that is what says a
+restored memory is zero where the image is zero.
+
+Four fixtures were tried before one worked: a 16-byte gap is inside `?MIN_GAP`
+and produced a single run of 256 bytes. The threshold is the thing to know
+here, and no test had encoded it.

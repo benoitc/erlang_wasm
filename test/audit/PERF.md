@@ -5981,3 +5981,73 @@ measured as a defect in the samples; it runs per arm now. The resolution floor
 was a difference of medians and read 3.6 ms of probe overhead that was the box
 drifting inside one arm. And the counter assertion had a clause-per-shape with
 a silent catch-all, so an unexpected pair of configurations asserted nothing.
+
+### Inside the restore: half of it is writing zeros over zeros
+
+The section above leaves `deliver + restore` as a bucket, because an adapter
+cannot see inside it. `bench/paths/restorebits.erl` can: it restores a filed
+image directly and prices the parts.
+
+Seven rounds each, one emulator per guest, load 5.4 to 7.1 throughout:
+
+| | CPython | QuickJS |
+| --- | ---: | ---: |
+| image held / memory span | 7.4 MB / 41.9 MB (17.7%) | 211 KB / 393 KB (53.7%) |
+| runs in the image | 1,487 | 433 |
+| `wasm_instance:new/3` | 9,019 us | 336 us |
+| — `atomics` allocation alone | 2,511 us | 18 us |
+| **filling the gaps between runs** | **25,220 us** | **154 us** |
+| writing the runs | 7,543 us | 225 us |
+| **one `wasm:restore/3`** | **46,496 us** | **793 us** |
+
+Minimums. **These parts are isolation measurements and do not partition the
+whole**, deliberately: `new` and the fills overlap, because what the fills
+overwrite is what `new` wrote. The arm says so in its own doc, and subtracting
+them from one another would be the arithmetic the QuickJS section above exists
+to warn about.
+
+**54% of a CPython restore is zeroing memory that was already zero.**
+`wasm_snapshot.erl:588` says why the gaps are filled at all: a fresh instance's
+memory is not zero, because `wasm_instance:new/3` applies the module's active
+data segments before a restore sees it. But `atomics:new/2` hands back zeroed
+memory, and `runs/1` captures every non-zero byte, aligned outward. So the only
+thing making the memory non-zero is a pass whose entire output the image then
+overwrites, and the fill exists to undo it.
+
+The share follows the image's density rather than its size: CPython's image
+covers 17.7% of its memory and pays 54% of its restore in fills, QuickJS's
+covers 53.7% and pays 19%.
+
+### What the image costs to carry, twice per request
+
+`do_submit/3` spawns the guardian with a closure over `Args`, which holds the
+image (`script_worker.erl:948-954`), and the guardian spawns the runner with
+`#g{}`, which holds it again. A term in a spawn closure is copied.
+
+| | CPython | QuickJS |
+| --- | ---: | ---: |
+| table entries in the image | 5,958 | 580 |
+| `erts_debug:size` | 426 KB | 65 KB |
+| carried into one spawned process | **298 us** | **59 us** |
+
+The memory runs are refc binaries and are shared; it is the **tables** that
+copy, as a list of terms. So about 600 us of CPython's 2.26 ms `submit` is the
+image being copied twice, against about 120 us for QuickJS.
+
+**Two candidate explanations for `submit` were tested and discarded.** A heap
+floor costs nothing at `spawn_opt`: 0 to 1 us at every floor from 0 to 2,000,000
+words, 200 spawn-and-exit round trips each. And the request directory with one
+mount, created and removed, is 115 us of the 1.7 to 2.3 ms. Three channels are
+below a microsecond.
+
+`submit` is also **acceptance plus runner-start latency, and the two overlap**:
+the guardian sends `guardian_ready` and only then calls `start_runner/3`
+(`script_worker.erl:1056-1057`), so `submit/2` returns before the runner is
+spawned and part of T0-T1 happens after it returned.
+
+**The `reply` interval is a hypothesis and not a finding.** The image is a
+candidate for CPython's 867 us against QuickJS's 25 us, because T10-T11 holds
+the runner's death and the wait for its `DOWN`, and two image copies are freed
+there. What is measured above is the cost of carrying one *in*, which is not
+the cost of tearing one down. A process-lifetime experiment settles it and has
+not been run.

@@ -257,21 +257,33 @@ hotness counter happens to fire.
 
 What a whole request costs, per guest, interpreted against the tier once it is
 resident. Both arms have the heap floor on, so this is the tier's own share and
-not the floor's:
+not the floor's. Twelve paired samples, medians, all three guests in one
+session:
 
 | guest | interpreted | with the tier |
 | --- | ---: | ---: |
-| QuickJS | 19.1 ms | **6.2 ms** |
-| CPython | 88.2 ms | **35.5 ms** |
+| Lua | 11.4 ms | **4.4 ms** |
+| QuickJS | 20.4 ms | **6.9 ms** |
+| CPython | 93.1 ms | **37.6 ms** |
 
 Throughput at fourteen workers rises about three quarters over the same guest
 interpreted.
 
-**Most of what is left is not the guest's code.** Of that 35.5 ms on CPython,
-19.0 is the invocation itself and 13.3 is delivering the adapter state and
-restoring the 40 MB image; on QuickJS, 3.9 and 0.5 of 6.2. The tier can only
-act on the first of those, and it does: the invocation alone is 3.8x faster on
-CPython and 4.3x on QuickJS. `test/audit/PERF.md` has the phase tables.
+**Most of what is left is not the guest's code**, and how much depends entirely
+on the size of the image being restored. The same requests, by phase, tier on:
+
+| guest | accept | deliver + restore | invocation | reply |
+| --- | ---: | ---: | ---: | ---: |
+| Lua | 1.18 ms | 0.26 ms | 2.35 ms | 0.03 ms |
+| QuickJS | 1.42 ms | 0.56 ms | 4.38 ms | 0.06 ms |
+| CPython | 1.99 ms | **13.5 ms** | 20.7 ms | 0.86 ms |
+
+The tier can only act on the invocation, and it does so evenly: 3.9x on Lua,
+4.0x on QuickJS, 3.7x on CPython. What separates the guests is the restore --
+0.26 ms for Lua's 196,608-byte memory against 13.5 ms for CPython's 41.9 MB --
+and accepting a request, which is a fixed 1.2 to 2.0 ms and therefore a quarter
+of a Lua request and 5% of a CPython one. `test/audit/PERF.md` has the full phase
+tables and what is in each interval.
 
 **Budget for the cold node, because that is where the cost now is.** The tier
 arrives after a fixed amount of compiling, and a reactor request is roughly ten

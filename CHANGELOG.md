@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### The compiled tier reaches everything a reactor request runs
+
+Measured rather than assumed: every function a reactor request reaches is
+compiled, 971 on CPython and 264 on QuickJS, with nothing refused and no bound
+hit, and a tiered request makes **zero** interpreted dispatches on either
+guest. The often-quoted "971 of 11,447 eligible functions" compared against the
+wrong denominator: a request reaches 971 of them.
+
+So the tier's 3.8x on CPython and 4.3x on QuickJS are its code quality, not its
+reach, and no coverage change can make a reactor request faster. This is about
+one frozen script; a different one reaches a different set and pays its own
+cold cost, which is what the cache key already says.
+
 ### A restore stops writing what it is about to overwrite
 
 A restored instance was built by applying the module's active data segments and

@@ -72,7 +72,8 @@ It never calls `code:purge/1`, which kills processes still running old code.
 Reuse goes through `code:soft_purge/1`, and a slot whose old code is still
 running is left alone and reported as unavailable rather than taken.
 
-**`soft_purge/1` is the authority and the call leases are a hint.** It was the
+**`code:soft_purge/1` is the authority and the call leases are a hint.** It was
+the
 other way round once and could not be: a lease is given back in an `after`,
 which does not run when a process is killed untrappably, and killing a process
 is how a runaway invocation is stopped here. Leases leak, so they cannot be what
@@ -81,13 +82,13 @@ decides whether a slot may be taken.
 What makes reuse safe is not here at all. Generated code carries the stamp it
 was built for and refuses a caller carrying another, which is atomic with the
 call in a way no lease can be. See `wasm_core:module/6`. That is why a stuck
-counter can be repaired from `soft_purge/1` without a race.
+counter can be repaired from `code:soft_purge/1` without a race.
 
-`soft_purge/1` runs *inside this server*, so every claim, publish and lease
-queues behind an operation whose cost grows with the number of live processes on
-the node. It is a known serialisation point, kept deliberately: moving it out
-re-opens the window the reservation exists to close, and nothing has measured it
-as a problem.
+`code:soft_purge/1` runs *inside this server*, so every claim, publish and
+lease queues behind an operation whose cost grows with the number of live
+processes on the node. It is a known serialisation point, kept deliberately:
+moving it out re-opens the window the reservation exists to close, and nothing
+has measured it as a problem.
 
 It does not survive a process killed outright. `exit(Pid, kill)` skips the
 `after` that would give a call lease back, and that slot's counter stays raised

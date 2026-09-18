@@ -9,7 +9,7 @@
 %% *fourth* one appearing without anybody deciding it should. A cycle is the
 %% one structural property a reader cannot discover locally: every other
 %% question about a module can be answered by reading that module, and this one
-%% can only be answered by reading all forty-eight.
+%% can only be answered by reading all fifty-six.
 -module(wasm_architecture_SUITE).
 
 -compile([export_all, nowarn_export_all]).
@@ -19,7 +19,9 @@
 
 all() ->
     [the_module_graph_has_the_three_documented_cycles,
-     every_module_says_what_it_is].
+     every_module_says_what_it_is,
+     the_layer_diagram_names_every_module,
+     every_function_a_moduledoc_names_exists].
 
 %% The three components `docs/architecture.md' names, and why each one is there.
 %%
@@ -57,6 +59,115 @@ every_module_says_what_it_is(_) ->
                         _ -> true
                     end],
     ?assertEqual([], Missing).
+
+%% A doc that points at a function that is not there is worse than no pointer:
+%% it sends a reader looking for code that was renamed or never existed, and
+%% nothing tells them the doc is wrong rather than their grep.
+%%
+%% Three had rotted when this was written. `wasm_num' pointed at `wasm_num_f32'
+%% and `wasm_num_f64', a split that was considered and rejected; two modules
+%% pointed at `wasm_ir', which has never existed; and a navigation table added
+%% in the same commit as this case invented `wasm_instance:run_start/2',
+%% `wasm_validate_code:validate/4' and three `wasi_fs' functions.
+%%
+%% Only same-module `` `f/2` `` references are checked, and only against
+%% exports and local functions of that module. A qualified `` `m:f/2` `` is
+%% somebody else's business and is left to xref.
+every_function_a_moduledoc_names_exists(_) ->
+    Bad = lists:append([missing_refs(M) || M <- modules()]),
+    ?assertEqual([], Bad).
+
+missing_refs(M) ->
+    case code:get_doc(M) of
+        {ok, {docs_v1, _, _, _, #{<<"en">> := D}, _, _}} ->
+            Have = local_names(M),
+            [{M, R} || {F, A} = R <- refs(binary_to_list(D)),
+                       not lists:member(R, Have),
+                       not erl_internal:bif(F, A)];
+        _ ->
+            []
+    end.
+
+%% `` `name/2` `` inside backticks, with no module in front of it. The regexp
+%% takes the backtick as the left boundary, which is what excludes `m:f/2'.
+refs(Doc) ->
+    case re:run(Doc, "`([a-z_][a-zA-Z_0-9]*)/([0-9]+)`",
+                [global, {capture, all_but_first, list}]) of
+        {match, Ms} -> lists:usort([{list_to_atom(N), list_to_integer(A)}
+                                    || [N, A] <- Ms]);
+        nomatch     -> []
+    end.
+
+%% Exports plus locals: a doc may point at a private function, and often should
+%% -- `run/3' and `do_call/4' are the two most important functions in
+%% `wasm_exec' and neither is exported.
+local_names(M) ->
+    M:module_info(exports) ++ beam_locals(M).
+
+%% From `ebin()' and not `code:which/1': `cover_enabled' is set for this
+%% project and a cover-compiled module answers a bare `"m.beam"' with no
+%% directory, which reads nothing and would make every local look missing. It
+%% did, on the first run of this case.
+beam_locals(M) ->
+    Path = filename:join(ebin(), atom_to_list(M) ++ ".beam"),
+    case beam_lib:chunks(Path, [locals]) of
+        {ok, {_, [{locals, L}]}} -> L;
+        _                        -> []
+    end.
+
+%% The layer diagram is the only map of this runtime, and a map missing a
+%% subsystem is worse than no map: a reader who cannot find `wasm_snapshot' in
+%% it concludes the runtime has no snapshots rather than that the page is
+%% stale. Seven modules went missing that way -- the four snapshot ones,
+%% `wasm_file_cache', `wasm_store' and `wasm_subsup' -- because the cycles
+%% below were kept current by hand and the diagram above them was not.
+%%
+%% Parsed out of the page rather than duplicated here. A copy of the list in
+%% this file would be a second thing to forget.
+the_layer_diagram_names_every_module(_) ->
+    Drawn = drawn_modules(),
+    Built = lists:sort(modules()),
+    ?assertEqual([], Built -- Drawn, "modules missing from the diagram"),
+    ?assertEqual([], Drawn -- Built, "diagram names something that is gone").
+
+%% The first fenced block on the page, which is the `L8'..`L0' listing. Taken
+%% by position and then checked, so a page that stops holding one fails here
+%% rather than passing with an empty set: `[] -- []' is `[]' and an empty
+%% diagram would agree with anything.
+drawn_modules() ->
+    Body = architecture_page(),
+    [Fence | _] = [B || B <- fences(Body), string:find(B, "L8") =/= nomatch],
+    Names = lists:sort([list_to_atom(W) || W <- string:lexemes(Fence, " \n"),
+                                           is_module_name(W)]),
+    ?assert(length(Names) > 40),
+    Names.
+
+%% Everything between an opening fence and its closing one: split on the fence
+%% and keep every other piece, starting with the one after the first.
+fences(Body) ->
+    case string:split(Body, "```", all) of
+        [_ | Rest] -> inside(Rest);
+        _          -> []
+    end.
+
+inside([])           -> [];
+inside([In])         -> [In];
+inside([In, _ | Tl]) -> [In | inside(Tl)].
+
+is_module_name("L" ++ _) -> false;
+is_module_name(W) ->
+    (lists:prefix("wasm", W) orelse lists:prefix("wasi", W))
+        andalso lists:member(list_to_atom(W), modules()).
+
+architecture_page() ->
+    Path = filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
+                          "docs", "architecture.md"]),
+    case file:read_file(Path) of
+        {ok, B} -> binary_to_list(B);
+        {error, _} ->
+            {ok, B2} = file:read_file("docs/architecture.md"),
+            binary_to_list(B2)
+    end.
 
 %%% ---------------------------------------------------------------- helpers ---
 

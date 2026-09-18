@@ -36,6 +36,27 @@ whoever is debugging it) can tell "you were not granted this" from "the host
 operating system refused".
 
 Path resolution, which is where sandboxes actually fail, is in `wasi_path`.
+## Where things are
+
+2,400 lines, one clause per syscall. The banners group them by the part of the
+capability model they belong to:
+
+| you want | look at |
+| --- | --- |
+| the import set handed to an instance | `imports/1`, in `%%% api` |
+| **the descriptor table**, and what an `fd` is | `%%% file I/O`, and `#wasi{}` in `include/wasi.hrl` |
+| preopened directories and their numbering | `%%% preopens` |
+| a path syscall, and the sandbox it goes through | `%%% path syscalls`, then `wasi_path` |
+| sockets | `%%% sockets`, `%%% sockets: the extension`, then `wasi_sock` |
+| `proc_exit` and the trap it becomes | `%%% process` |
+| clocks, randomness, args and environment | their own banners |
+
+Two conventions run through every clause. An **iovec** is a `{ptr, len}` pair
+read out of guest memory, so a syscall reads the vector before it reads the
+data. And every return is an **errno**, a number, never an Erlang error: the
+guest is entitled to see `EBADF` and carry on. The distinction between
+`ENOTCAPABLE` and `EACCES` is the capability model speaking and is explained
+above.
 """.
 
 -include("wasm.hrl").

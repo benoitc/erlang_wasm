@@ -43,7 +43,7 @@ They are bounded by the sixteen slot reservations rather than by any count of
 compilers: a compiler that cannot claim a slot gives up at once, and a unit
 being built holds one. So at most sixteen units are in flight, and a sharded one
 carries four such processes rather than two, since each `pmap` worker has a
-reaper of its own. The `count_children/1` check below is *not* the bound; it is
+reaper of its own. The `supervisor:count_children/1` check below is *not* the bound; it is
 soft and racy by design.
 
 And they are stoppable, which is the point of the reaper and is more than can be
@@ -56,7 +56,7 @@ able to see it.
 ## Why the bound is not a supervisor flag
 
 An OTP supervisor has no `max_children`; that belongs to pool libraries. The
-bound is a `count_children/1` check in `wasm_jit` before asking for a child, and
+bound is a `supervisor:count_children/1` check in `wasm_jit` before asking for a child, and
 it is a soft one, which is all that is needed: the hard bound is the sixteen
 code slots, and a compiler that cannot get one gives up at once. The check is
 there to stop a seventeenth *copying an instance* to find that out.

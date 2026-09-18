@@ -1053,12 +1053,15 @@ say_box(When) ->
         #{"py_reactor" =>
               "b4a78ad5046df47d0c8422eca122aa660f83933b70fcf0736519dc0dd0bc5514",
           "qjs_reactor" =>
-              "7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb"}).
+              "7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb",
+          "lua_reactor" =>
+              "65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb"}).
 
 %% What the seed must compile, exactly. A cardinality and not an identity: the
 %% identity control is the warm preparer's `cached = 1', since the eligible
 %% function-index set is part of the cache key.
--define(PH_COMPILED, #{"py_reactor" => 971, "qjs_reactor" => 264}).
+-define(PH_COMPILED, #{"py_reactor" => 971, "qjs_reactor" => 264,
+                       "lua_reactor" => 224}).
 
 phases(["preflight"]) ->
     ph_preflight(maps:keys(?PH_PINNED)),

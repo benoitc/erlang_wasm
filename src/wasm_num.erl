@@ -15,9 +15,11 @@ Signed zero needs no special case: since OTP 27 `-0.0 =/= 0.0` and
 `<<(-0.0):64/float>>` produces the correct sign bit, so Erlang models it
 natively.
 
-Arithmetic over this representation lives in `wasm_num_f32` and `wasm_num_f64`.
-This module is only the boundary with bit patterns: constants in the binary
-format, `reinterpret` instructions, and linear memory loads and stores.
+Arithmetic over this representation lives in `wasm_num_float`, which takes the
+width as an argument rather than splitting into two width-specific modules; its
+own doc says why. This module is only the boundary with bit patterns: constants
+in the binary format, `reinterpret` instructions, and linear memory loads and
+stores.
 """.
 
 -include("wasm.hrl").

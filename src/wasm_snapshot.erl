@@ -41,7 +41,7 @@ Loudly, and never half-applied:
 | a non-empty `wasm_heap` | references are ids into a store, not values |
 | an external `funcref` or any `externref` | it names an instance that is not this one |
 
-The first is the one that is easy to get wrong. `identity/0` is a *name* and
+The first is the one that is easy to get wrong. An `identity` is a *name* and
 `wasm:compile/2` lets a caller supply one, so loading module A under hash `H`
 and compiling a different B with `identity => {sha256, H}` gives B a claim on
 `H` that succeeds. A claim proves the cache holds *something* under that name,

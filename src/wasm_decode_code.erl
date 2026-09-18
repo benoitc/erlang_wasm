@@ -2,11 +2,11 @@
 -moduledoc """
 Instruction and expression decoding.
 
-Read this before you add an opcode. Block bodies nest directly rather than being flattened with `end` markers.
-WebAssembly control flow is structured, so nesting is lossless, and it lets
-`wasm_ir` build continuation lists without a separate label-resolution pass.
-A flat stream would have to be re-scanned to pair every `block` with its
-`end` anyway.
+Read this before you add an opcode. Block bodies nest directly rather than
+being flattened with `end` markers. WebAssembly control flow is structured, so
+nesting is lossless, and it lets `wasm_instance`'s IR lowering build
+continuation lists without a separate label-resolution pass. A flat stream
+would have to be re-scanned to pair every `block` with its `end` anyway.
 
 The opcode dispatch is a dense integer match, which the BEAM compiler turns
 into a jump table. Writing one clause per opcode is verbose but it is the
@@ -474,8 +474,8 @@ u32_arg(Bin, Wrap) ->
 
 %% Memory arguments carry a log2 alignment hint and a static offset. The hint
 %% is kept rather than discarded: validation checks it against the access
-%% width, and `wasm_ir' uses it to select aligned fast paths, which measured
-%% 6 ns versus 22 ns for the read-modify-write case.
+%% width, and the IR lowering uses it to select aligned fast paths, which
+%% measured 6 ns versus 22 ns for the read-modify-write case.
 %%
 %% Bit 6 of the alignment field is a flag, not part of the alignment: when set
 %% it means an explicit memory index follows (the multiple memories proposal).

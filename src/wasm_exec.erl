@@ -38,6 +38,26 @@ metering*, not for scheduler safety: every dispatch step here is an Erlang
 function call and therefore consumes a reduction, so the BEAM preempts this loop
 whether or not you enabled fuel. A pure-Erlang interpreter cannot monopolise a
 scheduler, which is precisely what a NIF-based one can.
+## Where things are
+
+2,400 lines. Three functions carry almost all of it, and `AGENTS.md` singles
+them out because three separate changes to them have each cost about 70% on
+QuickJS while the synthetic loop measured nothing:
+
+| function | what it is |
+| --- | --- |
+| `run/3` | the dispatch loop. One clause per IR instruction, in `%%% dispatch` |
+| `branch/3` | control flow: taking a label, unwinding to it, in `%%% branches` |
+| `do_call/4` | the call trampoline, in `%%% calls` |
+
+Anything you add on those three goes through `bench/paths/realbench.erl` on
+QuickJS, five interleaved pairs, both orderings, before you believe it.
+
+The rest by banner: `%%% call entry` is where an invocation starts and where
+generated code is entered; `%%% bounded operand cache` is the operand stack;
+`%%% operations, for generated code` holds the helpers `wasm_core` emits calls
+to, so the interpreted and compiled paths cannot disagree; `%%% exceptions`,
+`%%% gc`, `%%% simd memory` and `%%% bulk memory` are the proposals.
 """.
 
 -include("wasm.hrl").
@@ -1210,8 +1230,9 @@ set_global_at(#inst{ckpt = Key}, Mu, I, V) ->
 %%
 %% The interpreter's own bulk-memory clauses call these too, so there is one
 %% implementation of each and the compiled and interpreted paths cannot disagree
-%% about a bound or a width. Each takes the operand widths the way `wasm_ir'
-%% tagged them; generated code passes 32, because `wasm_core:supported/1'
+%% about a bound or a width. Each takes the operand widths the way the IR
+%% lowering tagged them; generated code passes 32, because
+%% `wasm_core:supported/1'
 %% refuses the memory64 forms.
 %%
 %% `fill', `copy' and `init' write into `atomics' in place and so leave `#mut{}'

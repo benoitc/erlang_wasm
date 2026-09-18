@@ -6222,3 +6222,46 @@ different set, and the eligible-function set is part of the cache key, so a
 second script pays the full cold cost and writes its own entry. That was
 already recorded when the cache arms were measured, and it is why this result
 is about what the tier can reach rather than about what a host will see.
+
+### All three guests, one session, after the restore change
+
+The reactor table in `docs/compiled-tier.md` had a Lua row from the older
+`steady` arm and lost it when the phase numbers replaced it: `phases` knew two
+guests. It knows three now. Re-seeded and re-run in one session so the table is
+one measurement rather than three, twelve paired samples per guest, medians,
+load 10.6 to 11.8 throughout and every gate passed.
+
+| guest | interpreted | tier adopted | envelope speedup |
+| --- | ---: | ---: | ---: |
+| Lua | 11,424 us | **4,379 us** | 3.93x |
+| QuickJS | 20,449 us | **6,918 us** | 4.02x |
+| CPython | 93,092 us | **37,572 us** | 3.68x |
+
+By phase, tier adopted:
+
+| guest | T0-T1 accept | T4-T5 deliver+restore | T6-T7 envelope | T10-T11 reply |
+| --- | ---: | ---: | ---: | ---: |
+| Lua | 1,179 us | 255 us | 2,351 us | 31 us |
+| QuickJS | 1,416 us | 563 us | 4,384 us | 55 us |
+| CPython | 1,991 us | 13,465 us | 20,681 us | 862 us |
+
+**The envelope speedup is within 9% across three guests** -- 3.93, 4.02 and
+3.68 -- which is the tier doing the same thing to three unrelated interpreters.
+Everything that separates the guests is outside it.
+
+`deliver + restore` is 5.9% of a Lua request, 8.5% of a QuickJS one and 36.2%
+of a CPython one, tracking image size: 192 KB, 393 KB and 41.9 MB of address
+space. Lua is the guest that shows the floor of that cost rather than its
+ceiling, which is why losing its row mattered.
+
+**`accept` is the cost nothing has attacked.** T0-T1 is 1.2 to 2.0 ms whatever
+the guest, so it is a quarter of a Lua request and 5% of a CPython one. It is
+the guardian reservation, the request directory, the channels and the runner
+spawn, and the earlier per-phase work ruled out the image copy (600 us of it on
+CPython), the heap floor (free) and the request directory (115 us) without
+accounting for the rest.
+
+Both earlier tables in this file stand: this run is at a different load and the
+numbers differ from them by a few per cent, which is what interleaved pairs on
+a busy box are for. What is not allowed is reading a row from one and a row
+from another.

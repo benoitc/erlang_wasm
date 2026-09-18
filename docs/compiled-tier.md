@@ -251,20 +251,39 @@ not follow a rejected path and delete files somewhere else.
 ## What a reactor gets, and what it costs to get there
 
 A worker that restores a snapshot per request builds a **fresh instance every
-time**, which used to mean the tier was worth nothing to it: an instance could
-adopt compiled code only on a call where the hotness counter fired, one call in
-32, so 31 requests in 32 interpreted beside code that was already resident.
-That is fixed -- an instance attempts adoption on its first call -- and the
-steady-state numbers are worth having:
+time**, and an instance attempts adoption on its first call, so a reactor
+reaches resident code on every request rather than on the one in 32 where a
+hotness counter happens to fire.
 
-| guest | interpreted | with the tier, once resident |
+What a whole request costs, per guest, interpreted against the tier once it is
+resident. Both arms have the heap floor on, so this is the tier's own share and
+not the floor's. Twelve paired samples, medians, all three guests in one
+session:
+
+| guest | interpreted | with the tier |
 | --- | ---: | ---: |
-| QuickJS | 20.6 ms | **7.4 ms** |
-| Lua | 11.3 ms | **4.4 ms** |
-| CPython | 119.3 ms | **64.5 ms** |
+| Lua | 11.4 ms | **4.4 ms** |
+| QuickJS | 20.4 ms | **6.9 ms** |
+| CPython | 93.1 ms | **37.6 ms** |
 
 Throughput at fourteen workers rises about three quarters over the same guest
 interpreted.
+
+**Most of what is left is not the guest's code**, and how much depends entirely
+on the size of the image being restored. The same requests, by phase, tier on:
+
+| guest | accept | deliver + restore | invocation | reply |
+| --- | ---: | ---: | ---: | ---: |
+| Lua | 1.18 ms | 0.26 ms | 2.35 ms | 0.03 ms |
+| QuickJS | 1.42 ms | 0.56 ms | 4.38 ms | 0.06 ms |
+| CPython | 1.99 ms | **13.5 ms** | 20.7 ms | 0.86 ms |
+
+The tier can only act on the invocation, and it does so evenly: 3.9x on Lua,
+4.0x on QuickJS, 3.7x on CPython. What separates the guests is the restore --
+0.26 ms for Lua's 196,608-byte memory against 13.5 ms for CPython's 41.9 MB --
+and accepting a request, which is a fixed 1.2 to 2.0 ms and therefore a quarter
+of a Lua request and 5% of a CPython one. `test/audit/PERF.md` has the full phase
+tables and what is in each interval.
 
 **Budget for the cold node, because that is where the cost now is.** The tier
 arrives after a fixed amount of compiling, and a reactor request is roughly ten
@@ -413,7 +432,8 @@ seconds against about 8 for the hot set. Specification modules are a few
 functions each, which is why it is affordable there and nowhere else.
 
 **Nowhere else is meant literally.** Pointed at CPython 3.12, whose 11,447
-eligible functions are inside the four-unit ceiling and so are not refused, it
+functions are eligible module-wide and so are not refused by the four-unit
+ceiling -- a single request only ever *reaches* 971 of them -- it
 reached 33 GB resident on a 48 GB machine in eleven minutes, published nothing,
 and spent that time paging rather than compiling. The ceiling bounds the names a
 unit can use; it is not a promise that everything under it will compile.

@@ -728,3 +728,60 @@ fewer times and its peak is the worse estimate of the two. That bias runs
 against the floor, so a *lower* floored number is safe to believe and a higher
 one is not; when it mattered, `PERF.md` re-ran the two arms with request counts
 chosen to make them the same length.
+
+### Where a request's milliseconds go
+
+`phases` decomposes one request at the five adapter boundaries, using the real
+worker rather than a reconstruction of it: `bench/paths/phasing_adapter.erl`
+wraps the real adapter and timestamps both sides of every callback.
+
+```sh
+erlc -Werror -o bench/paths -pa _build/test/lib/wasm/ebin \
+     -pa _build/test/lib/wasm/examples \
+     bench/paths/phasing_adapter.erl bench/paths/workerbench.erl
+
+erl_paths=(-pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples
+           -pa _build/test/lib/wasm/test/support -pa bench/paths)
+
+erl -noshell "${erl_paths[@]}" -run workerbench main phases smoke
+erl -noshell "${erl_paths[@]}" -run workerbench main phases seed  py_reactor
+erl -noshell "${erl_paths[@]}" -run workerbench main phases null  py_reactor compiled
+erl -noshell "${erl_paths[@]}" -run workerbench main phases pairs py_reactor \
+    interpreted compiled
+```
+
+An array, not a scalar: zsh does not word-split an unquoted `$P`, so a single
+`-pa a -pa b` string reaches `erl` as one argument and the module is "not
+found". That cost a run here.
+
+Order matters, and `set -e` is part of the procedure. `smoke` and `calibrate`
+gate the instrument; `seed` fills the cache and the image directory and writes
+the manifests; `null` runs before `overhead` and both before `pairs`, because a
+failed null invalidates every timing run after it. An arm that fails a gate
+writes its record and halts the emulator non-zero.
+
+**Re-seed after any harness change.** Every arm asserts a code manifest -- the
+runtime, kernel, adapter and harness BEAMs by content, plus HEAD and a diff
+hash -- against what the seed recorded, because these runs happen from a
+worktree that is still being edited and a git SHA names the parent commit
+rather than the code that was loaded. It caught a recompile between a seed and
+its arm on the first day it existed.
+
+Three rules this mode adds to the protocol above:
+
+- **The window is silent.** Validation, phase assembly, gate arithmetic,
+  counter reads and printing all wait until the twelve samples are done.
+  Printing per sample puts a gap between requests and changes the cleanup
+  overlap the controls are there to measure.
+- **The residual is an assertion.** The intervals are contiguous, so they sum
+  to the total identically; a non-zero residual is an assembly bug and fails
+  the sample. It is never reported as an unexplained cost.
+- **Small phases need the overhead arm.** `overhead` prices the wrapper against
+  the real adapter and reports the median of the paired *differences*. Phases
+  under it are below probe resolution and are not values of the uninstrumented
+  request. Taking a difference of medians instead read 3.6 ms of "overhead"
+  that was the box moving inside one arm.
+
+`calibrate` injects a known sleep into one named callback and requires it to
+appear in that interval and nowhere else. Run all five: injecting into one
+proves that boundary and leaves a swap among the other four invisible.

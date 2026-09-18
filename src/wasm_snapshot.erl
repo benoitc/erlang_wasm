@@ -402,8 +402,14 @@ count_zeros(<<0, R/binary>>, N) -> count_zeros(R, N + 1);
 count_zeros(_, N)               -> N.
 
 %% Where the non-zero stretch starting at `Off` ends. A short zero gap inside
-%% one is not worth splitting a run for: two writes plus a fill cost more than
-%% carrying a few zero bytes along.
+%% one is not worth splitting a run for: a second `store_bytes/3` costs more
+%% than carrying a few zero bytes along inside the first.
+%%
+%% The rationale used to count a fill as well, and there is no fill any more:
+%% a restore writes the runs onto memory that is already zero. What is left is
+%% the straight trade of one more call against up to 63 more bytes written, and
+%% 64 is still on the right side of it. Lowering it would shrink an image and
+%% lengthen its run list, which is a capture-side question and not this one.
 -define(MIN_GAP, 64).
 
 zero_from(Bin, Off, Size) when Off < Size ->
@@ -450,9 +456,17 @@ restore(#snapshot{handle = Handle, key = Key} = S, M, Bindings, Opts) ->
             %% latter runs the start function, which is arbitrary guest code
             %% with arbitrary host effects, and the image already contains
             %% whatever it did.
+            %% `segments => false`: every byte an active segment would write
+            %% is overwritten by the image below, and the memory underneath is
+            %% zero from `atomics:new/2`. Applying them would cost this restore
+            %% twice, once to write and once to fill back to zero, which was
+            %% 54% of a CPython restore. `wasm_instance` still makes their
+            %% bounds decision, so a module that could not be instantiated is
+            %% refused here exactly as it was.
             case wasm_instance:new(M, Bindings,
                                    maps:remove(compatibility_key,
-                                               Opts#{module_handle => Handle})) of
+                                               Opts#{module_handle => Handle,
+                                                     segments => false})) of
                 {error, _} = E -> E;
                 {ok, Inst}     -> lay_over(S, Inst)
             end;
@@ -542,17 +556,11 @@ restore_tables([T | Ts], [Elems | Es], From, To) ->
     ok = wasm_table:init(T, 0, [reloc(V, From, To) || V <- Elems]),
     restore_tables(Ts, Es, From, To).
 
-lay_runs(Mem, [], At, End) when At < End ->
-    wasm_memory:fill(Mem, At, 0, End - At);
-lay_runs(_Mem, [], _At, _End) ->
+lay_runs(_Mem, []) ->
     ok;
-lay_runs(Mem, [{Off, Run} | Rest], At, End) ->
-    ok = case Off > At of
-             true  -> wasm_memory:fill(Mem, At, 0, Off - At);
-             false -> ok
-         end,
+lay_runs(Mem, [{Off, Run} | Rest]) ->
     ok = wasm_memory:store_bytes(Mem, Off, Run),
-    lay_runs(Mem, Rest, Off + byte_size(Run), End).
+    lay_runs(Mem, Rest).
 
 fit(_T, Have, Want) when Have >= Want ->
     ok;
@@ -585,15 +593,20 @@ restore_mems([Mem | Ms], [#{pages := Pages, runs := Runs} | Cs]) ->
                             erlang:error({snapshot_restore_grow_failed, Why})
                     end
             end,
-    %% **The gaps are filled, not skipped**, because a fresh instance's memory
-    %% is not zero: `wasm_instance:new/3` runs the module's active data
-    %% segments before a restore ever sees it. A restore that wrote only the
-    %% runs would leave a segment's byte wherever `init()` had written a zero,
-    %% which is a wrong answer per request rather than a crash. The win is in
-    %% *how* the gaps are written: `fill/4` puts a word at a time with no
-    %% binary to decode, where `store_bytes/3` matches one out of a binary for
-    %% each.
-    ok = lay_runs(Grown, Runs, 0, Pages * 65536),
+    %% **Only the runs are written, and the gaps are left alone.** Two things
+    %% have to hold for that and each is enforced by something: `atomics:new/2`
+    %% hands back zeroed memory, and `restore/4` asks `wasm_instance:new/3` not
+    %% to apply the active data segments that would otherwise have dirtied it.
+    %% `runs/1` captures every non-zero byte, aligned outward, so a memory that
+    %% starts at zero and receives the runs **is** the image.
+    %%
+    %% The gaps were filled until this was measured, and they had to be while
+    %% the segments were being applied: 25.2 ms of a 46.5 ms CPython restore
+    %% went on zeroing memory that was already zero. A guest whose image is
+    %% dense pays far less for it -- QuickJS's is 53.7% non-zero against
+    %% CPython's 17.7% -- which is why it looked small on the guest the restore
+    %% path was first measured on.
+    ok = lay_runs(Grown, Runs),
     %% The grown handle goes **back into `#mut.mems`**, not just written
     %% through. An observable memory keeps its size in an atomics cell, so the
     %% old record would still read the new size; an unexported one keeps it in

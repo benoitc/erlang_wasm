@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### The compiled tier reaches everything a reactor request runs
+
+Measured rather than assumed: every function a reactor request reaches is
+compiled, 971 on CPython and 264 on QuickJS, with nothing refused and no bound
+hit, and a tiered request makes **zero** interpreted dispatches on either
+guest. The often-quoted "971 of 11,447 eligible functions" compared against the
+wrong denominator: a request reaches 971 of them.
+
+So the tier's 3.8x on CPython and 4.3x on QuickJS are its code quality, not its
+reach, and no coverage change can make a reactor request faster. This is about
+one frozen script; a different one reaches a different set and pays its own
+cold cost, which is what the cache key already says.
+
+### A restore stops writing what it is about to overwrite
+
+A restored instance was built by applying the module's active data segments and
+then zeroing everything the image did not cover, which on CPython was 25 ms of
+writing zeros over memory that `atomics:new/2` had already zeroed. A restore
+now asks for an instance without those segments applied and writes only the
+image's non-zero runs.
+
+**A warm CPython reactor request goes from 64 ms to 35 ms**, and the restore
+inside it from 46 ms to 13 ms. QuickJS gains 10%, which is all a guest whose
+image is half non-zero has to gain. The bounds an active segment carries are
+still checked, so a module that could not be instantiated is refused as before.
+
+Nothing to set: this is how a restore works now.
+
+### Two thirds of a CPython request is restoring its image
+
+A warm, tiered CPython reactor request is 64 ms, and 42 ms of that is
+delivering the adapter state and restoring the image. The same bucket is 0.9 ms
+of a 6.8 ms QuickJS request. Measured per phase against the real worker, not
+reconstructed.
+
+This settles what looked like a CPython-specific weakness in the compiled tier.
+On the interval the tier can act on, it is worth **4.3x on QuickJS and 4.0x on
+CPython**: the same, to within 8%. The whole-request difference is Amdahl on a
+bucket the tier never touches.
+
+Two costs nobody had measured: accepting a request -- the guardian reservation,
+the request directory, the channels and the runner spawn -- is 1.7 to 2.3 ms,
+which is 24% of a tiered QuickJS request; and the reply path is 0.87 ms on
+CPython against 0.025 ms on QuickJS for the same kernel, which is not
+explained.
+
+Nothing in `src/` changed. `bench/paths/phasing_adapter.erl` and
+`workerbench`'s `phases` mode are how it was measured, and
+[the benchmark protocol](bench/paths/README.md) says how to run it.
+
 ### What a reactor host must do at startup
 
 Measured, for the first time on the reactor path: a cold node reaches the

@@ -50,6 +50,7 @@ all() ->
      an_exported_global_is_not_shared_between_restores,
      a_grown_table_restores,
      a_data_segment_the_guest_zeroed_stays_zero,
+     a_zeroed_gap_between_runs_stays_zero,
      a_global_holding_a_host_term_refuses_the_capture,
      an_image_survives_a_file,
      a_corrupt_image_is_refused,
@@ -627,6 +628,24 @@ a_grown_table_restores(_Config) ->
 a_data_segment_the_guest_zeroed_stays_zero(_Config) ->
     Image = image_of(plain(zeroed_data)),
     Want = 0 bor (16#99 bsl 8) bor (16#AA bsl 16),
+    ?assertEqual({ok, [Want]}, handled(Image)),
+    ?assertEqual({ok, [Want]}, handled(Image)).
+
+%% The case above cannot fail for the reason it names, and this one can.
+%%
+%% `wasm_snapshot:runs/1` aligns a run's start down to 8 and its end up to 8,
+%% so the single zeroed byte above is inside the run that follows it and gets
+%% written back correctly however the memory underneath was prepared. It was
+%% asserting that a run is written, not that a gap is zero.
+%%
+%% This fixture zeroes **sixteen aligned bytes**, which fall between two runs
+%% and are written by nothing. It is what says a restored memory is zero where
+%% the image is zero, which is what lets `restore/4` ask `wasm_instance:new/3`
+%% to skip the active data segments and lay only the runs. Against a build that
+%% skips the fills while still applying the segments, this reads 16#AAAA.
+a_zeroed_gap_between_runs_stays_zero(_Config) ->
+    Image = image_of(plain(zeroed_gap)),
+    Want = 0 bor (0 bsl 8) bor (16#99 bsl 16),
     ?assertEqual({ok, [Want]}, handled(Image)),
     ?assertEqual({ok, [Want]}, handled(Image)).
 

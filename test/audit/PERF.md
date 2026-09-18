@@ -5778,3 +5778,447 @@ it was. **The remaining difference is not attributed to any commit** and is
 left that way, following the `#st.code` precedent above: the conditions the two
 original numbers were taken under differ, and no experiment run since has
 separated them.
+## Where a CPython reactor request actually goes
+
+`PERF.md` has carried 64.5 ms for a warm, tiered, floored CPython request and
+no account of what it is. The tier looked worth 1.88x on CPython against 2.80x
+on QuickJS, and that gap was unexplained. Both of those ratios are **compiled
+over metered**, which prices metering and compilation together, so they were
+never a tier-only comparison either.
+
+`bench/paths/phasing_adapter.erl` wraps the real adapter and timestamps both
+sides of all five request-path callbacks; `workerbench`'s `phases` mode takes
+T0 and T11 around `submit/2` and `await/3` and joins them by a `make_ref()` the
+wrapper mints. The boundaries are contiguous, so the eleven intervals sum to
+the total identically and **the residual is an assertion, not a finding**:
+every sample fails if it is not exactly zero.
+
+Twelve paired samples per arm, arms alternating in one emulator with the order
+reversed on alternate rounds. `interpreted` is the fuel-matched control
+(`fuel => infinity`, no `compile`), not `metered`. The heap floor is on in both
+arms at each guest's knee, 1,000,000 words for CPython and 200,000 for QuickJS.
+
+Every arm asserts a manifest of the runtime, kernel, adapter and harness BEAMs
+by content, plus HEAD and a diff hash, so "the same build" is checked rather
+than assumed. It refused an arm the first day it existed, after a recompile
+between a seed and its run. Load was 4.8 to 6.7 across the set.
+
+### The answer: two thirds of a CPython request is deliver-plus-restore
+
+Medians of twelve, tier adopted, in microseconds:
+
+| interval | CPython | QuickJS |
+| --- | ---: | ---: |
+| submit | 2,256 | 1,660 |
+| requirements | 4 | 2 |
+| mounts | 73 | 65 |
+| prepare | 379 | 353 |
+| **deliver + restore** | **42,474** | **889** |
+| post_restore | 1 | 0 |
+| **invocation envelope** | **17,900** | **3,806** |
+| classify | 1 | 1 |
+| destroy + channels | 66 | 38 |
+| decode | 5 | 2 |
+| reply | 867 | 25 |
+| **total** | **64,331** | **6,833** |
+
+Per-phase medians are independent summaries and do not sum to the median total.
+The row that does sum is the sixth and seventh samples by total, averaged phase
+by phase, and it is in the raw records.
+
+**`deliver + restore` is 66.5% of a CPython request and 13.1% of a QuickJS
+one** (medians of the twelve per-request shares, not a ratio of medians).
+
+### So the tier is worth the same on both guests
+
+The interval the tier can act on is the invocation envelope, and the medians of
+the twelve paired interpreted-over-adopted ratios are:
+
+| guest | envelope speedup | min |
+| --- | ---: | ---: |
+| QuickJS | **4.31x** | 3.66 |
+| CPython | **3.98x** | 3.66 |
+
+The trigger for a second investigation was preregistered as
+`S_cpython / S_qjs < 0.75`. It is **0.922**, so it does not fire: there is no
+guest-specific deficit in what the tier does to CPython's code. The
+whole-request difference is Amdahl on a bucket the tier cannot touch.
+
+That is the predeclared reading of a dominant restore bucket, and its
+arithmetic check passed: with the restore-side constant taken out, the two
+guests' speedups agree to within 8%.
+
+**It reproduces.** An earlier set on a different build gave 4.21x and 3.95x,
+and a `deliver + restore` share of 0.665 on CPython against 0.665 here.
+
+### What the bucket is, and what it is not
+
+**T4-T5 is a bucket, not a measurement of `wasm:restore/3`.** It holds
+`deliver/3`, `check_spec/1`, `wasm:restore/3` and `snapshot_info/1`, and an
+adapter cannot separate them. What can be said is that it is 42.5 ms on CPython
+and 0.89 ms on QuickJS, on images of 40 MB and a few hundred kilobytes, which
+makes the restore the candidate inside it. Naming it takes another measurement.
+
+It also does not make the retained image the lever. Restore builds an instance
+covering 41.9 MB and fills the gaps, because active data segments make a fresh
+instance non-zero, so the 7.4 MB the image holds is not what a restore does.
+
+**T6-T7 is an envelope, not `handle()`.** T6 is taken inside `call_fun/2`
+before `post_restore/3` returns (`script_worker.erl:1599`) and T7 inside
+`invoke_loop/5`'s dispatch into `classify/2` (`:1632`), so it wraps the guest
+call rather than bounding it: the returns through `post_restore/3` and
+`start_instance/2`, the dispatch, and all of `wasm:call/5`. Isolating guest
+execution would need a boundary around `wasm:call/5`, which no adapter reaches.
+
+### Two things nobody had measured
+
+**`submit` is 1.7 to 2.3 ms.** T0-T1 is the guardian reservation, the request
+directory, the channels and the runner spawn, and on QuickJS it is 24% of a
+tiered request, second only to the envelope. The earlier per-phase table
+(`PERF.md:5254`) could not see it: it timed from inside.
+
+**`reply` is 0.87 ms on CPython and 0.025 ms on QuickJS**, a 35x difference in
+the runner's relay and the guardian's shutdown for the same kernel. It is far
+above the probe's resolution and is **not explained here**.
+
+### What is below the probe's resolution
+
+The overhead arm runs the real adapter against the timing wrapper, paired and
+alternated, and reports the median of the paired differences. It is **297 us
+interpreted and 49 us compiled** on QuickJS, and 528 us and 120 us on CPython.
+
+Phases under that are **below probe resolution** and are not values of the
+uninstrumented request: `requirements`, `post_restore`, `classify` and `decode`
+everywhere, and `mounts` and `destroy + channels` on both guests. The overhead
+is never subtracted from a phase, because where it lands is unknown.
+
+Taking the difference of the medians rather than the median of the paired
+differences read 3,643 us of "probe overhead" on one run, which was the box
+moving between the two halves of the arm and would have disqualified every
+phase but the envelope. The rule that ratios come from pairs, not from
+medians, applies to differences too.
+
+### The collector: the tier removes 92% of the runner's collections
+
+One dedicated collector process per request, `new_processes` traced, filtered
+to the runner pid the wrapper reports, and the `trace_delivered` **message**
+waited for before draining. Twelve requests per arm, and an unpaired event
+would invalidate the whole arm rather than its own sample. None came.
+
+| guest | arm | minor | major | collection |
+| --- | --- | ---: | ---: | ---: |
+| QuickJS | interpreted | 24 | 1 | 2.72 ms |
+| QuickJS | adopted | **2** | 1 | **0.17 ms** |
+| CPython | interpreted | 33 | 1 | 6.40 ms |
+| CPython | adopted | **3** | 1 | **1.70 ms** |
+
+Every one of the twelve samples in each arm gave the same collection counts, to
+the collection.
+
+Two things follow. **Collection is not the missing time in a CPython request**:
+it is 1.70 ms of 64.3 ms, 2.6%. And **the tier removes most of what the heap
+floor left**, 92% of the collections on QuickJS and 91% on CPython, because
+generated code does not build the interpreter's per-call terms.
+
+### Cleanup does not inflate these numbers, and waiting has its own cost
+
+The worker publishes a result before the reaper removes the request directory
+(`script_worker.erl:1183`), so a following request can overlap the previous
+one's cleanup. Two batches of twelve in one emulator, in both orderings, the
+reaper waited empty before every batch of either kind and before each request
+of an isolated one. Ratios are continuous over isolated, per interval:
+
+| guest | interval | cont first | iso first |
+| --- | --- | ---: | ---: |
+| QuickJS | total | 0.789 | 0.764 |
+| QuickJS | submit | 0.784 | 0.953 |
+| QuickJS | envelope | 0.782 | 0.724 |
+| QuickJS | reply | 0.819 | 0.671 |
+| CPython | total | 1.016 | 1.011 |
+| CPython | submit | 1.046 | 0.969 |
+| CPython | envelope | 1.029 | 1.022 |
+| CPython | reply | 1.087 | 1.016 |
+
+**Read the direction before the magnitude.** Every QuickJS ratio is below 1,
+which is the *continuous* arm being faster: waiting for the reaper costs
+something, it is not cleanup leaking into the next request. Cleanup
+contamination would put these above 1.
+
+The cost looks fixed rather than proportional. About 2 ms on a 9 ms QuickJS
+request is 22%; the same 1 ms or so on a 64 ms CPython request is inside the
+1 to 3% the CPython rows show. So the control's answer is that **the immediate
+regime the primary run uses is not inflated by cleanup on either guest**, and
+the only interval where the continuous arm is consistently slower is CPython's
+`reply`, by 2 to 9%, which is the phase already recorded as unexplained.
+
+### The floor, observed rather than assumed
+
+Its own worker per configuration, with the timed worker's limits, six discarded
+requests, and `process_info(self(), garbage_collection)` read inside the runner
+by the wrapper. Never in a sample: it allocates and enlarges the reply.
+
+| guest | asked | got | ceiling |
+| --- | ---: | ---: | ---: |
+| QuickJS | 200,000 | 318,187 | 8,388,608 |
+| CPython | 1,000,000 | 1,199,557 | 16,777,216 |
+
+At least, not equal: the emulator rounds a requested floor up to a heap-size
+class, by as much as 1.598x here. All six probes agreed in every arm.
+
+### What the instrument had to survive first
+
+**Calibration.** A 50 ms sleep injected into each of the five wrapped callbacks
+in turn, six paired samples each, no-delay and delayed alternating. Every
+injection landed in its own interval and the largest movement anywhere else was
+265 us, against a preregistered tolerance of 10 ms. Without this, a boundary
+wired to the wrong phase is invisible: every interval would still be positive
+and still sum.
+
+**Three defects in the harness, found by these rules and not by inspection.**
+The bimodality check ran on both arms concatenated, which is bimodal by
+construction when the arms differ by 4x, and so reported the effect being
+measured as a defect in the samples; it runs per arm now. The resolution floor
+was a difference of medians and read 3.6 ms of probe overhead that was the box
+drifting inside one arm. And the counter assertion had a clause-per-shape with
+a silent catch-all, so an unexpected pair of configurations asserted nothing.
+
+### Inside the restore: half of it is writing zeros over zeros
+
+The section above leaves `deliver + restore` as a bucket, because an adapter
+cannot see inside it. `bench/paths/restorebits.erl` can: it restores a filed
+image directly and prices the parts.
+
+Seven rounds each, one emulator per guest, load 5.4 to 7.1 throughout:
+
+| | CPython | QuickJS |
+| --- | ---: | ---: |
+| image held / memory span | 7.4 MB / 41.9 MB (17.7%) | 211 KB / 393 KB (53.7%) |
+| runs in the image | 1,487 | 433 |
+| `wasm_instance:new/3` | 9,019 us | 336 us |
+| — `atomics` allocation alone | 2,511 us | 18 us |
+| **filling the gaps between runs** | **25,220 us** | **154 us** |
+| writing the runs | 7,543 us | 225 us |
+| **one `wasm:restore/3`** | **46,496 us** | **793 us** |
+
+Minimums. **These parts are isolation measurements and do not partition the
+whole**, deliberately: `new` and the fills overlap, because what the fills
+overwrite is what `new` wrote. The arm says so in its own doc, and subtracting
+them from one another would be the arithmetic the QuickJS section above exists
+to warn about.
+
+**54% of a CPython restore is zeroing memory that was already zero.**
+`wasm_snapshot.erl:588` says why the gaps are filled at all: a fresh instance's
+memory is not zero, because `wasm_instance:new/3` applies the module's active
+data segments before a restore sees it. But `atomics:new/2` hands back zeroed
+memory, and `runs/1` captures every non-zero byte, aligned outward. So the only
+thing making the memory non-zero is a pass whose entire output the image then
+overwrites, and the fill exists to undo it.
+
+The share follows the image's density rather than its size: CPython's image
+covers 17.7% of its memory and pays 54% of its restore in fills, QuickJS's
+covers 53.7% and pays 19%.
+
+### What the image costs to carry, twice per request
+
+`do_submit/3` spawns the guardian with a closure over `Args`, which holds the
+image (`script_worker.erl:948-954`), and the guardian spawns the runner with
+`#g{}`, which holds it again. A term in a spawn closure is copied.
+
+| | CPython | QuickJS |
+| --- | ---: | ---: |
+| table entries in the image | 5,958 | 580 |
+| `erts_debug:size` | 426 KB | 65 KB |
+| carried into one spawned process | **298 us** | **59 us** |
+
+The memory runs are refc binaries and are shared; it is the **tables** that
+copy, as a list of terms. So about 600 us of CPython's 2.26 ms `submit` is the
+image being copied twice, against about 120 us for QuickJS.
+
+**Two candidate explanations for `submit` were tested and discarded.** A heap
+floor costs nothing at `spawn_opt`: 0 to 1 us at every floor from 0 to 2,000,000
+words, 200 spawn-and-exit round trips each. And the request directory with one
+mount, created and removed, is 115 us of the 1.7 to 2.3 ms. Three channels are
+below a microsecond.
+
+`submit` is also **acceptance plus runner-start latency, and the two overlap**:
+the guardian sends `guardian_ready` and only then calls `start_runner/3`
+(`script_worker.erl:1056-1057`), so `submit/2` returns before the runner is
+spawned and part of T0-T1 happens after it returned.
+
+**The `reply` interval is a hypothesis and not a finding.** The image is a
+candidate for CPython's 867 us against QuickJS's 25 us, because T10-T11 holds
+the runner's death and the wait for its `DOWN`, and two image copies are freed
+there. What is measured above is the cost of carrying one *in*, which is not
+the cost of tearing one down. A process-lifetime experiment settles it and has
+not been run.
+
+### Not applying what the image overwrites: a CPython request is 35 ms
+
+`restore/4` now asks `wasm_instance:new/3` for `segments => false`, and
+`restore_mems/2` writes the runs onto memory that is therefore still zero. The
+bounds decision the active segments carry is still made, by `init_mem/4` and
+`init_table/5`, so a module that could not be instantiated is refused exactly
+as before; what is skipped is only the writing.
+
+Inside a restore, `restorebits` on the same images, seven rounds, minimums:
+
+| | CPython | QuickJS |
+| --- | ---: | ---: |
+| before | 46,496 us | 793 us |
+| after | **13,493 us** | **383 us** |
+| | **3.4x** | **2.1x** |
+
+End to end, `phases pairs`, twelve paired samples, medians, load 5.0 to 10.2:
+
+| | CPython before | CPython after | QuickJS before | QuickJS after |
+| --- | ---: | ---: | ---: | ---: |
+| submit | 2,256 | 1,807 | 1,660 | 1,104 |
+| **deliver + restore** | 42,474 | **13,281** | 889 | **548** |
+| invocation envelope | 17,900 | 19,026 | 3,806 | 3,912 |
+| reply | 867 | 870 | 25 | 37 |
+| **total** | **64,331** | **35,498** | **6,833** | **6,171** |
+
+**A tiered CPython request is 1.81x faster**, and the bucket that was two
+thirds of it is 37.5%. QuickJS gains 10%, which is what a guest whose image is
+53.7% non-zero has to gain.
+
+The envelope is unchanged in both, 17.9 to 19.0 and 3.81 to 3.91, which is the
+check that this moved the restore and nothing else: the guest's own work is not
+on this path and must not have moved. The envelope speedup is 3.77x on CPython
+and 4.29x on QuickJS, a quotient of 0.879 against the 0.75 trigger, so the
+second cut still does not fire.
+
+**The interpreted arm is now dominated by the envelope alone**: 88.2 ms of
+which 71.6 is the envelope and 13.4 the restore. Before, an interpreted CPython
+request was 118.2 ms with 43.0 of restore in it.
+
+#### The guard that makes the argument, and the one that could not
+
+`a_data_segment_the_guest_zeroed_stays_zero` looked like the regression guard
+for exactly this change and **is insensitive to it**. Its fixture zeroes one
+byte inside a data segment, `runs/1` aligns a run's start down to 8 and its end
+up to 8, and a `?MIN_GAP` of 64 carries any shorter zero stretch along inside
+the run. So the byte is written back by the run whatever the memory underneath
+held, and the case passes against a build that skips the fills while still
+applying the segments. It was asserting that a run is written.
+
+`a_zeroed_gap_between_runs_stays_zero` is the case that can fail. Its fixture
+zeroes 128 bytes, which splits the image into two runs with a genuine gap
+between them that nothing writes. Run against a build with `segments => true`
+and no fills it reads 16#AAAA where it wants 0, and that is what says a
+restored memory is zero where the image is zero.
+
+Four fixtures were tried before one worked: a 16-byte gap is inside `?MIN_GAP`
+and produced a single run of 256 bytes. The threshold is the thing to know
+here, and no test had encoded it.
+
+### The controls, re-run after the restore change
+
+Same protocol, same build, load 4.1 to 6.1. The floor is unchanged and still
+observed rather than assumed: 200,000 words asked and 318,187 given on QuickJS,
+1,000,000 and 1,199,557 on CPython, all six probes agreeing in every arm.
+
+Collections, twelve requests per arm, every sample identical to the collection:
+
+| guest | arm | minor | major | collection | was |
+| --- | --- | ---: | ---: | ---: | ---: |
+| QuickJS | interpreted | 24 | 1 | 2.85 ms | 2.72 ms |
+| QuickJS | adopted | **1** | 1 | **0.03 ms** | 0.17 ms |
+| CPython | interpreted | 32 | 1 | 7.09 ms | 6.40 ms |
+| CPython | adopted | 3 | 1 | 1.80 ms | 1.70 ms |
+
+The restore change took a collection off an adopted QuickJS request, 2 to 1,
+and its collection time with it. It is 0.03 ms of a 6.2 ms request now.
+
+Cleanup overlap gives the same answer as before and in the same direction:
+every QuickJS ratio below 1 (0.75 to 0.99), CPython's total and envelope inside
+[0.95, 1.05]. The continuous regime is the faster one, so waiting for the
+reaper is what costs and cleanup is not leaking into the next request.
+
+### `reply` is not the image, and not anything else the process carries
+
+The image was the candidate for CPython's `reply` against QuickJS's, because
+`do_submit/3` puts it in the guardian's spawn closure and the guardian puts it
+in the runner's, and both are torn down inside that interval.
+`bench/paths/teardown.erl` opens its window with the process already up and
+holding the term and closes it on the `DOWN`, so the copy is outside it: 200
+rounds per arm, each interleaved with a bare one and read against it.
+
+| what the process held | CPython | QuickJS |
+| --- | ---: | ---: |
+| the whole image | **3 us** | 0 us |
+| a 640-page memory, 40 MB of `atomics` | **2 us** | 0 us |
+| a heap floor it had written across | 0 us | 0 us |
+
+Minimums, against a teardown carrying a handle. **The gap to explain is 833 us
+and the image is 3 us of it.** Freeing 40 MB of `atomics` is 2 us, and a used
+heap floor is free. Carrying a term in costs 298 us on CPython; taking it down
+costs nothing, and the two are not the same measurement.
+
+**And `reply` does not scale with the request.** Across the four arms of one
+paired run:
+
+| guest | arm | envelope | reply |
+| --- | --- | ---: | ---: |
+| CPython | interpreted | 71,640 us | 807 us |
+| CPython | adopted | 19,026 us | 870 us |
+| QuickJS | interpreted | 16,925 us | 48 us |
+| QuickJS | adopted | 3,912 us | 37 us |
+
+A 3.8x change in the work the request did moves `reply` by 8%. It is a
+per-guest constant of about 830 us and about 42 us, which rules out everything
+proportional to what was executed as well as everything proportional to what
+was carried.
+
+**So it stays open, with four candidates struck off rather than one.** It is
+0.1% of a QuickJS request and 2.4% of a CPython one, which is why it is
+recorded and not chased further here.
+
+### The tier compiles everything a request reaches, and the interpreter runs none of it
+
+The original plan asked how much of CPython's eval loop is still interpreted,
+given that only 971 of its 11,447 eligible functions were compiled. The answer
+is none of it, and the 11,447 was the wrong denominator.
+
+`phases census` runs the frozen request on a node with the tier off and nothing
+resident, and asks `wasm_core:can_compile/2` about every index
+`wasm_instance:executed/1` reports, from inside `classify/2` against the live
+instance. The tally is disjoint and exhaustive over every matched index, and an
+index matching no function is an error rather than a row:
+
+| | CPython | QuickJS |
+| --- | ---: | ---: |
+| functions the request reaches | 971 | 264 |
+| eligible | **971** | **264** |
+| unsupported | 0 | 0 |
+| over a generator bound | 0 | 0 |
+
+**Every function a reactor request reaches is compilable, on both guests.** The
+reached set and the compiled set are the same 971 and 264 the seed asserts, so
+there is no coverage left to win on this workload: `?MAX_COMPILE_FUNS` is not
+binding, no instruction is refused, and no bound is hit.
+
+A census counts functions, which `PERF.md` has been wrong about before --
+QuickJS once reached 93% of functions compiled while about 1% of its executed
+instructions were. So the count is corroborated by the instrument that cannot
+be fooled that way, `call_count` on `wasm_exec:run/3`, three requests per arm:
+
+| | interpreted | adopted |
+| --- | ---: | ---: |
+| QuickJS | 1,158,954 | **0** |
+| CPython | 6,589,401 | **0** |
+
+**The interpreter does not execute a single instruction of a tiered request on
+either guest.** Coverage and dispatch agree, from opposite directions.
+
+So the envelope that is left -- 19.0 ms on CPython and 3.9 ms on QuickJS -- is
+generated code running, not a mixture. The tier's 3.8x and 4.3x are its code
+quality and not its reach, and nothing in the compiled tier's *coverage* can
+improve a reactor request further. That closes the second cut's question
+whether or not its trigger fires.
+
+**This is about the frozen echo request.** A different script reaches a
+different set, and the eligible-function set is part of the cache key, so a
+second script pays the full cold cost and writes its own entry. That was
+already recorded when the cache arms were measured, and it is why this result
+is about what the tier can reach rather than about what a host will see.

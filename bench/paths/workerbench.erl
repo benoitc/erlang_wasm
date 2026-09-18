@@ -1504,8 +1504,10 @@ ph_stage("floor", Guest, [Config]) ->
     Ceiling = maps:get(max_heap_words, element(3, arm(Guest, Config)),
                        8 * 1024 * 1024),
     io:format("# floor asked ~w got ~p ceiling ~w~n", [Want, Mins, Ceiling]),
-    io:format("# minor_gcs ~p~n", [[maps:get(minor_gcs, G) || G <- Gs]]),
-    io:format("# fullsweep_after ~p~n",
+    %% `~w' and not `~p': a list of six small integers is a printable string to
+    %% `~p', so 32 collections apiece printed as six spaces.
+    io:format("# minor_gcs ~w~n", [[maps:get(minor_gcs, G) || G <- Gs]]),
+    io:format("# fullsweep_after ~w~n",
               [lists:usort([maps:get(fullsweep_after, G) || G <- Gs])]),
     %% At least, not equal: the emulator rounds a requested floor up to a
     %% heap-size class, by as much as 1.598x.

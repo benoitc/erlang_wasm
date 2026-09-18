@@ -6111,3 +6111,65 @@ restored memory is zero where the image is zero.
 Four fixtures were tried before one worked: a 16-byte gap is inside `?MIN_GAP`
 and produced a single run of 256 bytes. The threshold is the thing to know
 here, and no test had encoded it.
+
+### The controls, re-run after the restore change
+
+Same protocol, same build, load 4.1 to 6.1. The floor is unchanged and still
+observed rather than assumed: 200,000 words asked and 318,187 given on QuickJS,
+1,000,000 and 1,199,557 on CPython, all six probes agreeing in every arm.
+
+Collections, twelve requests per arm, every sample identical to the collection:
+
+| guest | arm | minor | major | collection | was |
+| --- | --- | ---: | ---: | ---: | ---: |
+| QuickJS | interpreted | 24 | 1 | 2.85 ms | 2.72 ms |
+| QuickJS | adopted | **1** | 1 | **0.03 ms** | 0.17 ms |
+| CPython | interpreted | 32 | 1 | 7.09 ms | 6.40 ms |
+| CPython | adopted | 3 | 1 | 1.80 ms | 1.70 ms |
+
+The restore change took a collection off an adopted QuickJS request, 2 to 1,
+and its collection time with it. It is 0.03 ms of a 6.2 ms request now.
+
+Cleanup overlap gives the same answer as before and in the same direction:
+every QuickJS ratio below 1 (0.75 to 0.99), CPython's total and envelope inside
+[0.95, 1.05]. The continuous regime is the faster one, so waiting for the
+reaper is what costs and cleanup is not leaking into the next request.
+
+### `reply` is not the image, and not anything else the process carries
+
+The image was the candidate for CPython's `reply` against QuickJS's, because
+`do_submit/3` puts it in the guardian's spawn closure and the guardian puts it
+in the runner's, and both are torn down inside that interval.
+`bench/paths/teardown.erl` opens its window with the process already up and
+holding the term and closes it on the `DOWN`, so the copy is outside it: 200
+rounds per arm, each interleaved with a bare one and read against it.
+
+| what the process held | CPython | QuickJS |
+| --- | ---: | ---: |
+| the whole image | **3 us** | 0 us |
+| a 640-page memory, 40 MB of `atomics` | **2 us** | 0 us |
+| a heap floor it had written across | 0 us | 0 us |
+
+Minimums, against a teardown carrying a handle. **The gap to explain is 833 us
+and the image is 3 us of it.** Freeing 40 MB of `atomics` is 2 us, and a used
+heap floor is free. Carrying a term in costs 298 us on CPython; taking it down
+costs nothing, and the two are not the same measurement.
+
+**And `reply` does not scale with the request.** Across the four arms of one
+paired run:
+
+| guest | arm | envelope | reply |
+| --- | --- | ---: | ---: |
+| CPython | interpreted | 71,640 us | 807 us |
+| CPython | adopted | 19,026 us | 870 us |
+| QuickJS | interpreted | 16,925 us | 48 us |
+| QuickJS | adopted | 3,912 us | 37 us |
+
+A 3.8x change in the work the request did moves `reply` by 8%. It is a
+per-guest constant of about 830 us and about 42 us, which rules out everything
+proportional to what was executed as well as everything proportional to what
+was carried.
+
+**So it stays open, with four candidates struck off rather than one.** It is
+0.1% of a QuickJS request and 2.4% of a CPython one, which is why it is
+recorded and not chased further here.

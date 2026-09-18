@@ -5798,20 +5798,10 @@ reversed on alternate rounds. `interpreted` is the fuel-matched control
 (`fuel => infinity`, no `compile`), not `metered`. The heap floor is on in both
 arms at each guest's knee, 1,000,000 words for CPython and 200,000 for QuickJS.
 
-### Conditions, and what is not here yet
-
-The CPython window ran at a one-minute load of **5.66** at both ends and the
-QuickJS one at **8.58**, three minutes apart, on the same build: every arm
-asserts a manifest of the runtime, kernel, adapter and harness BEAMs by
-content, plus HEAD and a diff hash, so "the same build" is checked rather than
-assumed. It refused an arm the first day it existed, after a recompile between
-a seed and its run.
-
-**The floor, cleanup and collection controls are outstanding.** The box went
-from load 6 to load 291 on `mds` and MediaAnalysis indexing the artifacts these
-runs wrote, and the load gate refuses to measure through that. They are
-additive to what is below, not load-bearing for it. `bench/paths/README.md` has
-the commands.
+Every arm asserts a manifest of the runtime, kernel, adapter and harness BEAMs
+by content, plus HEAD and a diff hash, so "the same build" is checked rather
+than assumed. It refused an arm the first day it existed, after a recompile
+between a seed and its run. Load was 4.8 to 6.7 across the set.
 
 ### The answer: two thirds of a CPython request is deliver-plus-restore
 
@@ -5819,24 +5809,24 @@ Medians of twelve, tier adopted, in microseconds:
 
 | interval | CPython | QuickJS |
 | --- | ---: | ---: |
-| submit | 1,991 | 1,561 |
-| requirements | 4 | 6 |
-| mounts | 91 | 116 |
-| prepare | 397 | 565 |
-| **deliver + restore** | **43,695** | **1,060** |
-| post_restore | 1 | 1 |
-| **invocation envelope** | **18,687** | **5,798** |
+| submit | 2,256 | 1,660 |
+| requirements | 4 | 2 |
+| mounts | 73 | 65 |
+| prepare | 379 | 353 |
+| **deliver + restore** | **42,474** | **889** |
+| post_restore | 1 | 0 |
+| **invocation envelope** | **17,900** | **3,806** |
 | classify | 1 | 1 |
-| destroy + channels | 71 | 67 |
-| decode | 5 | 6 |
-| reply | 808 | 53 |
-| **total** | **65,910** | **9,291** |
+| destroy + channels | 66 | 38 |
+| decode | 5 | 2 |
+| reply | 867 | 25 |
+| **total** | **64,331** | **6,833** |
 
 Per-phase medians are independent summaries and do not sum to the median total.
 The row that does sum is the sixth and seventh samples by total, averaged phase
 by phase, and it is in the raw records.
 
-**`deliver + restore` is 66.5% of a CPython request and 13.6% of a QuickJS
+**`deliver + restore` is 66.5% of a CPython request and 13.1% of a QuickJS
 one** (medians of the twelve per-request shares, not a ratio of medians).
 
 ### So the tier is worth the same on both guests
@@ -5846,24 +5836,27 @@ the twelve paired interpreted-over-adopted ratios are:
 
 | guest | envelope speedup | min |
 | --- | ---: | ---: |
-| QuickJS | **4.21x** | 3.78 |
-| CPython | **3.95x** | 3.66 |
+| QuickJS | **4.31x** | 3.66 |
+| CPython | **3.98x** | 3.66 |
 
 The trigger for a second investigation was preregistered as
-`S_cpython / S_qjs < 0.75`. It is **0.939**, so it does not fire: there is no
+`S_cpython / S_qjs < 0.75`. It is **0.922**, so it does not fire: there is no
 guest-specific deficit in what the tier does to CPython's code. The
 whole-request difference is Amdahl on a bucket the tier cannot touch.
 
 That is the predeclared reading of a dominant restore bucket, and its
 arithmetic check passed: with the restore-side constant taken out, the two
-guests' speedups agree to within 6%.
+guests' speedups agree to within 8%.
+
+**It reproduces.** An earlier set on a different build gave 4.21x and 3.95x,
+and a `deliver + restore` share of 0.665 on CPython against 0.665 here.
 
 ### What the bucket is, and what it is not
 
 **T4-T5 is a bucket, not a measurement of `wasm:restore/3`.** It holds
 `deliver/3`, `check_spec/1`, `wasm:restore/3` and `snapshot_info/1`, and an
-adapter cannot separate them. What can be said is that it is 43.7 ms on CPython
-and 1.06 ms on QuickJS, on images of 40 MB and a few hundred kilobytes, which
+adapter cannot separate them. What can be said is that it is 42.5 ms on CPython
+and 0.89 ms on QuickJS, on images of 40 MB and a few hundred kilobytes, which
 makes the restore the candidate inside it. Naming it takes another measurement.
 
 It also does not make the retained image the lever. Restore builds an instance
@@ -5879,29 +5872,112 @@ execution would need a boundary around `wasm:call/5`, which no adapter reaches.
 
 ### Two things nobody had measured
 
-**`submit` is 1.5 to 2.0 ms.** T0-T1 is the guardian reservation, the request
-directory, the channels and the runner spawn, and on QuickJS it is 17% of a
+**`submit` is 1.7 to 2.3 ms.** T0-T1 is the guardian reservation, the request
+directory, the channels and the runner spawn, and on QuickJS it is 24% of a
 tiered request, second only to the envelope. The earlier per-phase table
 (`PERF.md:5254`) could not see it: it timed from inside.
 
-**`reply` is 0.81 ms on CPython and 0.05 ms on QuickJS**, a 15x difference in
-the runner's relay and the guardian's shutdown for the same kernel. It is above
-the probe's resolution and is not explained here.
+**`reply` is 0.87 ms on CPython and 0.025 ms on QuickJS**, a 35x difference in
+the runner's relay and the guardian's shutdown for the same kernel. It is far
+above the probe's resolution and is **not explained here**.
 
 ### What is below the probe's resolution
 
 The overhead arm runs the real adapter against the timing wrapper, paired and
-alternated, and reports the median of the paired differences. It is **145 us
-interpreted and 157 us compiled** on QuickJS, and 553 us and 1,413 us on
-CPython.
+alternated, and reports the median of the paired differences. It is **297 us
+interpreted and 49 us compiled** on QuickJS, and 528 us and 120 us on CPython.
 
 Phases under that are **below probe resolution** and are not values of the
 uninstrumented request: `requirements`, `post_restore`, `classify` and `decode`
-everywhere, and `mounts` and `destroy + channels` on CPython. The overhead is
-never subtracted from a phase, because where it lands is unknown.
+everywhere, and `mounts` and `destroy + channels` on both guests. The overhead
+is never subtracted from a phase, because where it lands is unknown.
 
 Taking the difference of the medians rather than the median of the paired
 differences read 3,643 us of "probe overhead" on one run, which was the box
 moving between the two halves of the arm and would have disqualified every
 phase but the envelope. The rule that ratios come from pairs, not from
 medians, applies to differences too.
+
+### The collector: the tier removes 92% of the runner's collections
+
+One dedicated collector process per request, `new_processes` traced, filtered
+to the runner pid the wrapper reports, and the `trace_delivered` **message**
+waited for before draining. Twelve requests per arm, and an unpaired event
+would invalidate the whole arm rather than its own sample. None came.
+
+| guest | arm | minor | major | collection |
+| --- | --- | ---: | ---: | ---: |
+| QuickJS | interpreted | 24 | 1 | 2.72 ms |
+| QuickJS | adopted | **2** | 1 | **0.17 ms** |
+| CPython | interpreted | 33 | 1 | 6.40 ms |
+| CPython | adopted | **3** | 1 | **1.70 ms** |
+
+Every one of the twelve samples in each arm gave the same collection counts, to
+the collection.
+
+Two things follow. **Collection is not the missing time in a CPython request**:
+it is 1.70 ms of 64.3 ms, 2.6%. And **the tier removes most of what the heap
+floor left**, 92% of the collections on QuickJS and 91% on CPython, because
+generated code does not build the interpreter's per-call terms.
+
+### Cleanup does not inflate these numbers, and waiting has its own cost
+
+The worker publishes a result before the reaper removes the request directory
+(`script_worker.erl:1183`), so a following request can overlap the previous
+one's cleanup. Two batches of twelve in one emulator, in both orderings, the
+reaper waited empty before every batch of either kind and before each request
+of an isolated one. Ratios are continuous over isolated, per interval:
+
+| guest | interval | cont first | iso first |
+| --- | --- | ---: | ---: |
+| QuickJS | total | 0.789 | 0.764 |
+| QuickJS | submit | 0.784 | 0.953 |
+| QuickJS | envelope | 0.782 | 0.724 |
+| QuickJS | reply | 0.819 | 0.671 |
+| CPython | total | 1.016 | 1.011 |
+| CPython | submit | 1.046 | 0.969 |
+| CPython | envelope | 1.029 | 1.022 |
+| CPython | reply | 1.087 | 1.016 |
+
+**Read the direction before the magnitude.** Every QuickJS ratio is below 1,
+which is the *continuous* arm being faster: waiting for the reaper costs
+something, it is not cleanup leaking into the next request. Cleanup
+contamination would put these above 1.
+
+The cost looks fixed rather than proportional. About 2 ms on a 9 ms QuickJS
+request is 22%; the same 1 ms or so on a 64 ms CPython request is inside the
+1 to 3% the CPython rows show. So the control's answer is that **the immediate
+regime the primary run uses is not inflated by cleanup on either guest**, and
+the only interval where the continuous arm is consistently slower is CPython's
+`reply`, by 2 to 9%, which is the phase already recorded as unexplained.
+
+### The floor, observed rather than assumed
+
+Its own worker per configuration, with the timed worker's limits, six discarded
+requests, and `process_info(self(), garbage_collection)` read inside the runner
+by the wrapper. Never in a sample: it allocates and enlarges the reply.
+
+| guest | asked | got | ceiling |
+| --- | ---: | ---: | ---: |
+| QuickJS | 200,000 | 318,187 | 8,388,608 |
+| CPython | 1,000,000 | 1,199,557 | 16,777,216 |
+
+At least, not equal: the emulator rounds a requested floor up to a heap-size
+class, by as much as 1.598x here. All six probes agreed in every arm.
+
+### What the instrument had to survive first
+
+**Calibration.** A 50 ms sleep injected into each of the five wrapped callbacks
+in turn, six paired samples each, no-delay and delayed alternating. Every
+injection landed in its own interval and the largest movement anywhere else was
+265 us, against a preregistered tolerance of 10 ms. Without this, a boundary
+wired to the wrong phase is invisible: every interval would still be positive
+and still sum.
+
+**Three defects in the harness, found by these rules and not by inspection.**
+The bimodality check ran on both arms concatenated, which is bimodal by
+construction when the arms differ by 4x, and so reported the effect being
+measured as a defect in the samples; it runs per arm now. The resolution floor
+was a difference of medians and read 3.6 ms of probe overhead that was the box
+drifting inside one arm. And the counter assertion had a clause-per-shape with
+a silent catch-all, so an unexpected pair of configurations asserted nothing.

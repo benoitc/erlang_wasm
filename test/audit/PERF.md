@@ -6173,3 +6173,52 @@ was carried.
 **So it stays open, with four candidates struck off rather than one.** It is
 0.1% of a QuickJS request and 2.4% of a CPython one, which is why it is
 recorded and not chased further here.
+
+### The tier compiles everything a request reaches, and the interpreter runs none of it
+
+The original plan asked how much of CPython's eval loop is still interpreted,
+given that only 971 of its 11,447 eligible functions were compiled. The answer
+is none of it, and the 11,447 was the wrong denominator.
+
+`phases census` runs the frozen request on a node with the tier off and nothing
+resident, and asks `wasm_core:can_compile/2` about every index
+`wasm_instance:executed/1` reports, from inside `classify/2` against the live
+instance. The tally is disjoint and exhaustive over every matched index, and an
+index matching no function is an error rather than a row:
+
+| | CPython | QuickJS |
+| --- | ---: | ---: |
+| functions the request reaches | 971 | 264 |
+| eligible | **971** | **264** |
+| unsupported | 0 | 0 |
+| over a generator bound | 0 | 0 |
+
+**Every function a reactor request reaches is compilable, on both guests.** The
+reached set and the compiled set are the same 971 and 264 the seed asserts, so
+there is no coverage left to win on this workload: `?MAX_COMPILE_FUNS` is not
+binding, no instruction is refused, and no bound is hit.
+
+A census counts functions, which `PERF.md` has been wrong about before --
+QuickJS once reached 93% of functions compiled while about 1% of its executed
+instructions were. So the count is corroborated by the instrument that cannot
+be fooled that way, `call_count` on `wasm_exec:run/3`, three requests per arm:
+
+| | interpreted | adopted |
+| --- | ---: | ---: |
+| QuickJS | 1,158,954 | **0** |
+| CPython | 6,589,401 | **0** |
+
+**The interpreter does not execute a single instruction of a tiered request on
+either guest.** Coverage and dispatch agree, from opposite directions.
+
+So the envelope that is left -- 19.0 ms on CPython and 3.9 ms on QuickJS -- is
+generated code running, not a mixture. The tier's 3.8x and 4.3x are its code
+quality and not its reach, and nothing in the compiled tier's *coverage* can
+improve a reactor request further. That closes the second cut's question
+whether or not its trigger fires.
+
+**This is about the frozen echo request.** A different script reaches a
+different set, and the eligible-function set is part of the cache key, so a
+second script pays the full cold cost and writes its own entry. That was
+already recorded when the cache arms were measured, and it is why this result
+is about what the tier can reach rather than about what a host will see.

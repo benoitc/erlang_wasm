@@ -34,7 +34,7 @@ nothing but the work.
 
 ## The two processes per compile that are not in this tree
 
-`wasm_core:run_compiler/4` spawns the process that runs `compile:forms/2`, and
+`wasm_core`'s `run_compiler` spawns the process that runs `compile:forms/2`, and
 that process spawns a reaper. Neither is supervised, which this doc says
 elsewhere is a place where nothing can see, bound or stop a process, so the
 exception is worth stating.

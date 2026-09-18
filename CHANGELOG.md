@@ -41,7 +41,7 @@ Read next: [workers](docs/worker.md) to run one,
 [Lua](docs/lua.md) for a language.
 
 Smaller things: `max_output_bytes` now accepts separate bounds for stdout and
-stderr. `wasm:extern/0` names the type `extern/2` returns.
+stderr. `t:wasm:extern/0` names the type `extern/2` returns.
 
 ### Start an interpreter once, not once per request
 

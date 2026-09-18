@@ -143,7 +143,7 @@ The cap in force, in bytes.
 Resolved on **every store** through `application:get_env/3`, so a change is in
 force from the next one and there is nothing cached to invalidate at boot. It
 is reported rather than left implicit because a setting nobody can read back is
-a setting nobody can tell is being used: `wasm_code_slots:resolve_max_heap_words/0`
+a setting nobody can tell is being used. `wasm_jit`'s `resolve_max_heap_words`
 and `wasm_jit:compile_limits/0` exist for the same reason.
 
 A value that cannot be a size -- negative, a float, an atom -- answers the

@@ -550,7 +550,7 @@ compiler(Owner, Core, Copts) ->
 -doc """
 Kill `Child` if `Owner` dies first, and stop as soon as either does.
 
-Exported for `wasm_jit:pmap/2`, which has the same problem one rung up: its
+Exported for `wasm_jit`'s `pmap`, which has the same problem one rung up: its
 shard workers are spawned monitored and unlinked, so a killed coordinator would
 leave them compiling toward slots nobody owns.
 """.

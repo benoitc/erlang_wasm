@@ -177,6 +177,45 @@ jobs:
           restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
       - run: rebar3 lint
 
+  docs:
+    name: Docs
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build
+          key: ${{ runner.os }}-rebar3-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
+      # `rebar3 ex_doc` exits 0 whatever it warns about, so the warnings have to
+      # be looked for. They are the one class of doc defect the suites cannot
+      # see: `wasm_architecture_SUITE` checks that a function a moduledoc names
+      # exists in *that* module, and ex_doc is what checks a qualified
+      # `m:f/a` -- which is how a pointer at a private function, and one naming
+      # the wrong module entirely, survived to a release.
+      # Both halves are needed. `rebar3 ex_doc` returns 0 whatever happens, so
+      # the output is the only signal -- and it has two failure shapes, not
+      # one: a `warning:` for a reference it cannot resolve, and an edoc
+      # doclet `error` that produces no warnings at all because it never got
+      # that far. A gate that grepped only for warnings passed a build that
+      # had failed outright, which is how this one was first written.
+      - name: Build the docs, and fail on a warning or an error
+        run: |
+          rebar3 ex_doc 2>&1 | tee /tmp/exdoc.log
+          if grep -qE "warning:|error in doclet|An unknown error occurred" /tmp/exdoc.log; then
+            echo "::error::ex_doc did not build cleanly"
+            grep -B1 -A3 -E "warning:|error in doclet" /tmp/exdoc.log
+            exit 1
+          fi
+          test -f doc/index.html
+
   xref:
     name: Xref
     needs: compile

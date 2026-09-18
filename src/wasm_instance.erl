@@ -33,7 +33,7 @@ the map:
 | the whole of instantiation, in order | `new/3`, and `%%% instantiation` |
 | resolving an import to what the embedder supplied | `resolve_import/3`, in `%%% funcs` |
 | active data and element segments, and their bounds | `init_segments/5`, in `%%% segments` |
-| the start function | not here: `wasm:run_start/3`, after `new/3` returns |
+| the start function | not here: `wasm` runs it, after `new/3` returns |
 | finding an export by name | `export_kind/2`, in `%%% exports` |
 | lowering a body to IR, and the per-process cache | `body_of/2`, `compiler_ir/2`, in `%%% IR` |
 | reading and writing `#mut{}` | `mut/1`, `set_mut/2`, in `%%% mutable-state holder` |

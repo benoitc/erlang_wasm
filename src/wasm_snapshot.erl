@@ -107,8 +107,14 @@ never captured.
                           runs := [{non_neg_integer(), binary()}]}.
 
 -doc "An immutable image. Copyable between processes; see `wasm:acquire/1`.".
+%% `portable/0` and `captured_mem/0` go out with `snapshot/0` because the
+%% nominal below is over `#snapshot{}`, whose fields are typed with them: a
+%% reader of the public type needs them visible, and ex_doc says so if they are
+%% not. The comment belongs here rather than above the `-export_type', where
+%% edoc would read it as that attribute's doc comment and exit.
 -nominal snapshot() :: #snapshot{}.
--export_type([snapshot/0]).
+
+-export_type([snapshot/0, portable/0, captured_mem/0]).
 
 %%% -------------------------------------------------------------- capture ---
 

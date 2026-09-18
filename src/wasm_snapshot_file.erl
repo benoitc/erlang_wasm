@@ -105,7 +105,7 @@ a snapshot it already had on disk. `test/audit/ATTEMPTS.md` has that run.
 
 Every name here is a literal in this module's source, so it is in this module's
 atom table and exists from the moment the module is loaded -- which is before
-it can decode anything. The set is exactly what `wasm_snapshot:admissible/2`
+it can decode anything. The set is exactly what `wasm_snapshot`'s `admissible`
 admits, and the guarantee it restores is only about *these* names: an atom a
 hook kept is still subject to existing already, because that one really does
 come from outside.

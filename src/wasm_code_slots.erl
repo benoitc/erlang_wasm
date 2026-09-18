@@ -595,7 +595,7 @@ adopted, so it is a match spec the emulator runs over sixteen rows and not a
 term built for the caller to filter. Asking the gen_server instead cost 320
 microseconds a call on a three-microsecond one.
 
-It used to run only when a module was hot. `wasm_jit:maybe_adopt/3` now asks it
+It used to run only when a module was hot. `wasm_jit`'s `maybe_adopt` now asks it
 first and consults the threshold only when the answer is `error`, because
 whether code already exists and whether to start making some are two questions
 and only the second wants pacing.

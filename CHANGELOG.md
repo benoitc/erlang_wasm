@@ -2,158 +2,17 @@
 
 ## Unreleased
 
-### The compiled tier reaches everything a reactor request runs
+Three things arrive together and are meant to be used together: a **worker
+kernel** that runs untrusted guests one request at a time, **snapshots** so a
+language runtime starts once instead of per request, and a **compiled tier**
+that a per-request worker can actually reach. A CPython request that took a
+minute through the command path is 35 ms through all three.
 
-Measured rather than assumed: every function a reactor request reaches is
-compiled, 971 on CPython and 264 on QuickJS, with nothing refused and no bound
-hit, and a tiered request makes **zero** interpreted dispatches on either
-guest. The often-quoted "971 of 11,447 eligible functions" compared against the
-wrong denominator: a request reaches 971 of them.
+### Run untrusted code per request
 
-So the tier's 3.8x on CPython and 4.3x on QuickJS are its code quality, not its
-reach, and no coverage change can make a reactor request faster. This is about
-one frozen script; a different one reaches a different set and pays its own
-cold cost, which is what the cache key already says.
-
-### A restore stops writing what it is about to overwrite
-
-A restored instance was built by applying the module's active data segments and
-then zeroing everything the image did not cover, which on CPython was 25 ms of
-writing zeros over memory that `atomics:new/2` had already zeroed. A restore
-now asks for an instance without those segments applied and writes only the
-image's non-zero runs.
-
-**A warm CPython reactor request goes from 64 ms to 35 ms**, and the restore
-inside it from 46 ms to 13 ms. QuickJS gains 10%, which is all a guest whose
-image is half non-zero has to gain. The bounds an active segment carries are
-still checked, so a module that could not be instantiated is refused as before.
-
-Nothing to set: this is how a restore works now.
-
-### Two thirds of a CPython request is restoring its image
-
-A warm, tiered CPython reactor request is 64 ms, and 42 ms of that is
-delivering the adapter state and restoring the image. The same bucket is 0.9 ms
-of a 6.8 ms QuickJS request. Measured per phase against the real worker, not
-reconstructed.
-
-This settles what looked like a CPython-specific weakness in the compiled tier.
-On the interval the tier can act on, it is worth **4.3x on QuickJS and 4.0x on
-CPython**: the same, to within 8%. The whole-request difference is Amdahl on a
-bucket the tier never touches.
-
-Two costs nobody had measured: accepting a request -- the guardian reservation,
-the request directory, the channels and the runner spawn -- is 1.7 to 2.3 ms,
-which is 24% of a tiered QuickJS request; and the reply path is 0.87 ms on
-CPython against 0.025 ms on QuickJS for the same kernel, which is not
-explained.
-
-Nothing in `src/` changed. `bench/paths/phasing_adapter.erl` and
-`workerbench`'s `phases` mode are how it was measured, and
-[the benchmark protocol](bench/paths/README.md) says how to run it.
-
-### What a reactor host must do at startup
-
-Measured, for the first time on the reactor path: a cold node reaches the
-compiled tier in 47 s and 3,835 requests on Lua, 147 s and 6,412 on QuickJS,
-319 s and 1,908 on CPython. A warm `code_cache_dir` takes that to 0.5 s and 44
-requests, 1.5 s and 34, and 7.7 s and 33.
-
-Also fixed, because it made CPython unmeasurable: an image whose tables hold a
-`funcref` could only be read by a node that had already interned that atom,
-which a freshly started one has not. The decoder now lists the atoms an image's
-own values can contain, so they exist before it can decode anything. A CPython
-worker start goes from 104 s to 1.1 s.
-
-Two things a host needs to know. **A different script gets nothing from a warm
-cache** -- the key includes the set of functions a request executed, so a
-second script pays the full cold cost and writes its own entry. And **there is
-no supported way to wait until the tier is ready**: `wasm_jit:await/2` needs an
-instance, and a worker destroys its instance every request. Waiting rather than
-serving through is worth 32 interpreted requests instead of 3,835, so the gap
-is recorded rather than papered over.
-
-[The compiled tier guide](docs/compiled-tier.md) has the startup procedure.
-
-### The artifact cache is checked, not just trusted
-
-Reading a cache entry is `code:load_binary/3` on bytes from a file, and nothing
-checked those bytes or where they came from. `code_cache_dir` is still opt-in
-and still as trusted as your release, but the runtime now refuses a directory
-that plainly is not: the path must be absolute with no dot component, the
-directory owned by the node's user, every directory above it owned by root or
-that user, none of them writable by group or other, and nothing on the path a
-symlink. Entries must be regular files, and each carries a digest checked
-before it is loaded.
-
-Every failure is a cache miss and one line in the log. Nothing raises, and a
-refused directory does not stop the node compiling.
-
-Two behaviour changes worth knowing. A **missing parent** is now a refusal: the
-runtime creates the last component of the path at `0700` and nothing above it,
-where it used to create the whole chain. And a **relative** `code_cache_dir` is
-refused, because it means something different after `file:set_cwd/1`.
-
-The digest detects corruption, not a hostile writer. See
-[Security](docs/security.md) for what that does and does not cover.
-
-### A reactor can use compiled code from a request's first call
-
-An instance adopted generated code only on a call where the compiled tier's
-hotness counter fired, one call in 32. That is invisible to a long-lived
-instance, which adopts once and keeps its slot, and severe for a worker that
-restores a snapshot per request: 31 requests in 32 interpreted while the
-compiled code sat resident beside them.
-
-Whether code already exists and whether to start compiling some are two
-questions, and only the second wants a threshold. `wasm_jit:maybe_adopt/3` now
-asks about residency first and consults the count of 32 only when nothing is
-resident, so what gets compiled is unchanged and when it can be used is not.
-
-A QuickJS reactor request goes from 20.6 ms to 7.4, Lua from 11.3 to 4.4,
-CPython from 119 to 65, and throughput at fourteen workers rises about three
-quarters. `test/audit/PERF.md`
-has the measurements and the bars they had to clear.
-
-### Heap floors for the request runner and the capture
-
-`script_worker:start_link/2` takes `runner_min_heap_words`, off unless set,
-which gives the process running a request a `min_heap_size` rather than the
-emulator's 233-word default. A request runner keeps almost nothing on its own
-heap, so the collector sizes it a small one and collects through the request
-dozens of times: on QuickJS that was 61% of a request, and a floor of 200,000
-words takes one from 56.0 ms to 21.1 ms.
-
-```erlang
-script_worker:start_link(my_adapter, #{root => scratch,
-                                       runner_min_heap_words => 200_000}).
-```
-
-`capture_min_heap_words` is the same for the process a snapshot capture runs
-in, where it is worth more still: a CPython worker start goes from 91 s to
-18 s. Separate from the runner's because it is a different process doing
-different work, and it costs nothing where no capture happens.
-
-**Raise `max_heap_words` when you add a capture floor.** The ceiling bounds the
-peak and a floor raises the baseline it is measured from, so one that was
-comfortable without a floor can stop being: CPython at its adapter's own 16 M
-words dies about three runs in four with a 2 M capture floor. A capture killed
-that way now names `max_heap_words` and the floor in its error rather than only
-saying `killed`.
-
-The right value is a property of the guest, so sweep for it. [The tuning
-guide](docs/tuning.md) is new and says how; `script_worker:runner_heap_words/2`
-and `capture_heap_words/2` answer what a configuration resolves to without
-starting a worker. A floor with no room under `max_heap_words` is refused with
-a warning rather than applied, because `min_heap_size` above `max_heap_size`
-kills the process at spawn.
-
-### A worker kernel for untrusted guests
-
-`examples/script_worker.erl` is now a language-neutral kernel: modules,
-imports, invocations, deadlines and bounded channels, and nothing about WASI or
-JSON. A language is an **adapter**, the eight-callback behaviour the same
-module declares. Start one with a `worker_reaper` and a scratch root:
+`examples/script_worker.erl` is a language-neutral kernel: modules, imports,
+invocations, deadlines and bounded channels, and nothing about WASI or JSON. A
+language is an **adapter**, an eight-callback behaviour.
 
 ```erlang
 {ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/w"}),
@@ -161,188 +20,73 @@ module declares. Start one with a `worker_reaper` and a scratch root:
 {ok, R} = script_worker:run(W, Request).
 ```
 
-See [the adapter contract](docs/worker-contract.md) for writing one, and
-[the worker guide](docs/worker.md) for the `metered` and `compiled`
-configurations, which are mutually exclusive: setting `compile => true` while
-keeping a fuel ceiling silently gets you the interpreter.
+`js_worker` and `python_worker` run a function that arrives at request time;
+Lua ships as an adapter, `lua_reactor_adapter`. Each guest needs its own
+ceilings and an adapter never raises one for you; the language guides have the
+numbers.
 
-**Breaking.** The QuickJS example is `qjs_worker`, since the kernel has the
-name it used to hold. Its behaviour is unchanged.
+- [The worker guide](docs/worker.md), [the adapter contract](docs/worker-contract.md)
+- [JavaScript](docs/javascript.md), [Python](docs/python.md), [Lua](docs/lua.md)
+- New: `max_output_bytes` accepts `#{stdout := N, stderr := M}`; `wasm:extern/0`
+  names what `extern/2` returns; a `kernel_check` profile analyses `examples/`.
 
-`max_output_bytes` now also accepts `#{stdout := N, stderr := M}`, so the two
-streams can carry different bounds.
+### Start an interpreter once, restore it per request
 
-New: `wasm:extern/0` names the value `extern/2` returns. A new `kernel_check`
-rebar profile analyses `examples/`, which no other profile reaches.
-
-### JavaScript and Python through `script_v1`
-
-`js_worker` and `python_worker` run a function that arrives at request time:
+`wasm:snapshot/1` copies an initialised instance; `wasm:restore/3` lays it over
+a fresh one with fresh imports. `wasm:save_snapshot/2` and `load_snapshot/2`
+put it on disk.
 
 ```erlang
-{ok, W} = js_worker:start_link("qjs.wasm", #{root => scratch}),
-{ok, #{result := #{~"answer" := 42}}} =
-    js_worker:run(W, ~"export function main(c) { return {answer: c.value+1}; }",
-                  #{~"value" => 41}).
-```
-
-**CPython needs ceilings raised knowingly**, and an adapter never raises one
-for you: `timeout`, `max_memory_pages`, `fuel` (a thousand times the untrusted
-preset) and `max_heap_words` (16M words; the default kills the runner, and a
-*larger* bound is slower). [The Python guide](docs/python.md) has the numbers.
-
-[docs/javascript.md](docs/javascript.md) and
-[docs/python.md](docs/python.md) say what each language does not promise. The
-network is **ungranted** rather than unavailable in both.
-
-`scripts/fetch-python-fixture.sh` and `scripts/verify-fixtures.sh` fetch and
-check the artifacts; `test/fixtures/lang/QUICKJS.md` and `PYTHON.md` record
-what they are.
-
-### Initialized runtime snapshots
-
-`wasm:snapshot/1`, `wasm:restore/3` and `wasm:snapshot_info/1`. An image of an
-already-started guest, restored into a **fresh** instance, so startup is
-skipped and per-request isolation is unchanged.
-
-```erlang
-{ok, Init} = wasm:instantiate(Handle, Imports, #{snapshotable => true}),
-{ok, _} = wasm:call(Init, ~"init", []),
 {ok, Image} = wasm:snapshot(Init),
 {ok, Fresh} = wasm:restore(Image, FreshImports, #{}).
 ```
 
-`snapshotable => true` is required and costs an ordinary instance nothing.
-Restore does **not** run the module's start function, and takes the module from
-the image rather than from the caller. On a snapshotable instance `extern/2` is
-refused and `write_memory/3` takes a lease, so a capture cannot read a torn
-image.
+A CPython worker start is 83 to 90 s and a request after it is 35 ms. Capture
+needs `snapshotable => true` and a `snapshot_hooks` declaration; `restore/3`
+refuses an image whose module, version or bindings do not match. Bound what a
+node holds with `max_snapshot_bytes`.
 
-Every import module in the bindings needs an entry in `snapshot_hooks`, or the
-capture is refused: say `stateless`, or supply `eligible`, `capture` and
-`restore` funs. `wasi_preview1:snapshot_hook/0` is WASI's, and it refuses a
-descriptor opened during initialisation.
+[The snapshot guide](docs/snapshots.md) has the three sizes, the refusals and
+what a restore does not carry.
 
-Refused: an instance not built through `wasm:load/1`, an imported memory, table
-or global, a shared memory, a non-empty object store, and a reference to
-another instance.
+### The compiled tier reaches a reactor
 
-`script_worker` uses them: an adapter that exports `snapshot_capability/1`
-gets its runtime captured once at `start_link/2` and restored into every
-request, with `prepare/3` returning only the request's own work. A capture that
-fails fails the start. Two adapters use it, over reactors built by
-`scripts/build-quickjs-reactor.sh` and `scripts/build-python-reactor.sh`:
+Set `compile => true` with `fuel => infinity`; the two are mutually exclusive
+and setting both silently gets you the interpreter. Point `code_cache_dir` at a
+directory you own and a warm restart is seconds instead of minutes.
 
-| | per request, command | per request, restored |
-| --- | ---: | ---: |
-| `qjs_reactor_adapter` | 173 to 190 ms | 28 to 46 ms |
-| `py_reactor_adapter` | 66 to 87 s | 0.35 s |
-| `lua_reactor_adapter` | n/a | 25 ms |
+- A fresh instance adopts resident code on its **first** call. It used to need
+  the hotness counter to fire, so 31 requests in 32 interpreted beside code
+  that was already there.
+- The OTP compiler runs in a process the tier owns, so a compile can be given a
+  heap ceiling (`compile_max_heap_words`) and can be stopped. Both off by
+  default.
+- `compile_budget_heap_words` bounds the whole node rather than one compiler.
+  Admitted compiles are `Budget div Ceiling`; the rest interpret and ask again.
+- A restore no longer applies the active data segments an image is about to
+  overwrite. A CPython request goes from 64 ms to 35 ms, the restore in it from
+  46 to 13.
+- The artifact cache validates its directory and the digest of every entry, and
+  treats any failure as a miss. It never loads through a symlinked, group- or
+  world-writable path.
 
-Lua is the third language and the first added after all of this was written:
-it passed the conformance kit unmodified, with no kernel, profile or snapshot
-change. Building it needs `-mllvm -wasm-use-legacy-eh=false`, because LLVM
-emits the superseded exception-handling encoding by default and this runtime
-implements the standardised one. [The Lua guide](docs/lua.md) has the rest.
+[The compiled tier guide](docs/compiled-tier.md) has the startup procedure and
+the cache arms.
 
-`test/audit/PERF.md` has the protocol and the null experiments.
-`start_link/2` pays one interpreter start, which for CPython is about 90
-seconds, so start your workers before you take traffic, and raise
-`capture_timeout` (a worker option, 60 s by default) past it.
+### Give the request runner a heap floor
 
-**Three fixes since.** A mutable global a module *exports* is a cell, and
-capturing it raw shared one global between every restore from an image and died
-with the instance that captured it. A restore that grew a memory wrote through
-the pre-grow handle, which only worked because reactors export their memory. A
-table the guest grew during `init()` could be captured and never restored.
+A restored instance holds almost nothing on its own heap, so the collector
+sizes the runner 233 words and collects hundreds of times through a call that
+allocates hundreds of millions. `runner_min_heap_words` and
+`capture_min_heap_words` fix that, and the value is the **guest's**: 200,000
+for QuickJS and Lua, 1,000,000 for CPython, and more is worse past the knee.
 
-Capture also refuses by allowlist now rather than by a list of refusals, so a
-global holding a host term is refused instead of entering an image.
+[The tuning guide](docs/tuning.md) has the sweeps and what `+hms` does not do.
 
-A restored table is written once rather than once per element, which is
-**2.5x on a CPython request**. An image keeps only the non-zero runs of each
-memory, which holds 5.7x less: `wasm:snapshot_info/1`'s `bytes` and the
-`max_snapshot_bytes` budget both mean what is retained, so a ceiling set before
-this admits proportionally more images.
+### Breaking
 
-**Images can be kept on disk.** `application:set_env(wasm, snapshot_dir, Dir)`
-and a worker reads its image instead of running `init()` again: a CPython
-worker starts in **under a second** against a hundred capturing, from a
-2.7 MB file. Off unless you
-set it, and the directory is as trusted as your release.
-`wasm:save_snapshot/2` and `wasm:load_snapshot/2` are the same thing by hand.
-
-`application:set_env(wasm, max_snapshot_dir_bytes, N)` bounds that directory,
-512 MiB by default, oldest first. It is trimmed when an image is filed and at
-no other time, so lowering it shrinks nothing until the next capture;
-`wasm_snapshot_store:purge/0` empties one now. Note it is not
-`max_snapshot_bytes`, which bounds what images retain in memory.
-
-An adapter must supply a `compatibility_key` to be filed at all: an image is a
-runtime after `init()` ran against a particular environment, and nothing else
-in the contract accounts for it.
-
-[The snapshot guide](docs/snapshots.md) has the lifecycle and the hooks.
-
-`wasm:acquire/1` and `wasm:release/1` add and drop a holder. An image keeps its
-own claim on its module, so it survives the process that captured it **if
-something acquired first**. `application:set_env(wasm, max_snapshot_bytes, N)`
-bounds images node-wide; the default is `infinity`, meaning unbounded rather
-than off.
-
-### The compiled tier runs the OTP compiler in a process it owns
-
-`compile:forms/2` runs its passes in a process of its own and gives a caller no
-way to configure it, so anything set on the process `wasm_jit` spawns bound a
-process that only waits: 141 MB watched against 2,055 MB spent. The tier now
-declines that spawn with `no_spawn_compiler_process` and makes the same
-short-lived process itself, measured at 0.9% over five interleaved samples.
-
-Two things follow. A heap ceiling can be set, with
-`application:set_env(wasm, compile_max_heap_words, Words)`; a compile over it is
-refused, which means the guest interprets and answers as before, and
-`wasm_jit:diagnostics/0` says `{limit, {compile_memory, Words}}`. It is **off by
-default**: see [the compiled tier guide](docs/compiled-tier.md) for what it does
-and does not bound.
-
-And a compile can now be stopped. `compile:forms/2` spawns its worker with
-`spawn_monitor/1`, which does not link, so until now a compiler killed by
-`application:stop(wasm)` or by its supervisor left the OTP compiler running to
-completion holding its copy of the forms, with nothing able to see or stop it.
-
-### A budget for what the node has in flight
-
-`compile_max_heap_words` bounds one compiler, and the slot pool allows sixteen
-of them, so it is not a bound on the node. `compile_budget_heap_words` is, in
-the same unit: a compile reserves the ceiling it will be held to, so the
-aggregate is a sum of quantities the VM enforces at every collection rather
-than a prediction. `Budget div Ceiling` compilers are admitted and the rest are
-refused, which means the guest interprets and asks again later.
-
-It needs the ceiling to mean anything, and says so once through `logger` if set
-without one. Nothing is queued: a caller that waited would hold the unit IR it
-was admitted to compile for the whole wait. A request larger than the whole
-budget still compiles when nothing else is running, and a killed compiler gives
-its words back through a monitor rather than an `after`. Off by default.
-
-`wasm_jit:compile_limits/0` reports `max_heap_words`, `budget_heap_words` and
-the `max_concurrent_compilers` the two imply.
-
-### A shard is no longer cached, and a cache hit is never refused
-
-Two defects in the compiled tier's cache, both found while measuring the above.
-
-The *last* shard of a sharded compile was written to the on-disk cache and read
-back, under a key carrying the identity, ABI, slot, quality, function set and
-stamp, while the artifact also embeds the module a crossing re-enters the chain
-through and a map of where every other function lives. Neither is in the key,
-and the first is whichever slot shard one happened to claim. Only a whole unit
-is cached now.
-
-And a request that was about to adopt an artifact from disk was admitted against
-the compile budget as if it were about to compile one, so a busy node turned the
-cache path into interpreting. The lookup now happens before admission, and a
-cache hit reserves nothing.
+The QuickJS example is `qjs_worker`; `script_worker` is now the kernel. Its
+behaviour is unchanged.
 
 ## 0.2.2
 

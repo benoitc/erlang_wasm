@@ -270,7 +270,20 @@ the_deadline_stops_a_runaway(Ctx) ->
     %% `min_timeout' accordingly, and a kit that ignored it would be asserting
     %% `timeout' against a request the policy had already refused for being
     %% impossible.
-    W = start(Ctx, #{limits => #{timeout => 2 * min_timeout(Ctx, runaway),
+    %%
+    %% **Plus a flat second, because the deadline also has to cover being
+    %% accepted.** `policy/2' compares `min_timeout' against the deadline's
+    %% *remaining* time, and that clock starts at `submit/2': the guardian
+    %% spawn, the request directory, the channels and the runner spawn are all
+    %% inside it. `2 *' alone leaves exactly `min_timeout' for that, which is
+    %% 50 ms for an adapter declaring 50, and this failed on CI accordingly --
+    %% `insufficient_limit' where the case wanted `timeout'. Accepting a
+    %% request measures 1.2 to 2.0 ms idle (`test/audit/PERF.md'), but it is
+    %% scheduling and not work, so a loaded box can spend far more.
+    %%
+    %% Flat rather than a larger multiplier: an adapter declaring 10,000 would
+    %% turn a bigger factor into a runaway of a minute and a half.
+    W = start(Ctx, #{limits => #{timeout => 2 * min_timeout(Ctx, runaway) + 1000,
                                  fuel => infinity}}),
     {error, E} = script_worker:run(W, fix(Ctx, runaway)),
     ?assertEqual(timeout, maps:get(kind, E)),

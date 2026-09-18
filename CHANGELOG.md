@@ -2,17 +2,24 @@
 
 ## 0.3.0
 
-Three things arrive together and are meant to be used together: a **worker
-kernel** that runs untrusted guests one request at a time, **snapshots** so a
-language runtime starts once instead of per request, and a **compiled tier**
-that a per-request worker can actually reach. A CPython request that took a
-minute through the command path is 35 ms through all three.
+This release is about running other people's code: safely, and fast enough to
+be worth doing.
 
-### Run untrusted code per request
+Three parts, meant to be used together.
 
-`examples/script_worker.erl` is a language-neutral kernel: modules, imports,
-invocations, deadlines and bounded channels, and nothing about WASI or JSON. A
-language is an **adapter**, an eight-callback behaviour.
+- A **worker** runs one untrusted request at a time, in its own process, with
+  its own deadline and its own limits.
+- **Snapshots** let a language like Python start once, when the worker starts,
+  instead of starting again on every request.
+- The **compiled tier** now works for a worker like that. It did not before.
+
+Together they take a CPython request from about a minute to 35 ms.
+
+### Run untrusted code, one request at a time
+
+`script_worker` is the worker. It knows about modules, imports, deadlines and
+output limits. It knows nothing about WASI, or JSON, or what your guest calls
+its entry point. That part is an **adapter**: one module per language.
 
 ```erlang
 {ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/w"}),
@@ -20,73 +27,92 @@ language is an **adapter**, an eight-callback behaviour.
 {ok, R} = script_worker:run(W, Request).
 ```
 
-`js_worker` and `python_worker` run a function that arrives at request time;
-Lua ships as an adapter, `lua_reactor_adapter`. Each guest needs its own
-ceilings and an adapter never raises one for you; the language guides have the
-numbers.
+Three languages come with adapters already. `js_worker` and `python_worker`
+take a function written by whoever is sending the request. Lua is
+`lua_reactor_adapter`.
 
-- [The worker guide](docs/worker.md), [the adapter contract](docs/worker-contract.md)
-- [JavaScript](docs/javascript.md), [Python](docs/python.md), [Lua](docs/lua.md)
-- New: `max_output_bytes` accepts `#{stdout := N, stderr := M}`; `wasm:extern/0`
-  names what `extern/2` returns; a `kernel_check` profile analyses `examples/`.
+Every language needs its own limits, and an adapter will never raise one for
+you. Python will not even start until you raise several of them. The Python
+guide lists them.
 
-### Start an interpreter once, restore it per request
+Read next: [workers](docs/worker.md) to run one,
+[the adapter contract](docs/worker-contract.md) to write one, and
+[JavaScript](docs/javascript.md), [Python](docs/python.md) or
+[Lua](docs/lua.md) for a language.
 
-`wasm:snapshot/1` copies an initialised instance; `wasm:restore/3` lays it over
-a fresh one with fresh imports. `wasm:save_snapshot/2` and `load_snapshot/2`
-put it on disk.
+Smaller things: `max_output_bytes` now accepts separate bounds for stdout and
+stderr. `wasm:extern/0` names the type `extern/2` returns.
+
+### Start an interpreter once, not once per request
+
+Starting CPython takes about a minute and a half. Doing that per request is not
+an option, and keeping one interpreter alive across requests leaks one caller's
+state into the next.
+
+So capture it once, and give every request a fresh copy:
 
 ```erlang
 {ok, Image} = wasm:snapshot(Init),
 {ok, Fresh} = wasm:restore(Image, FreshImports, #{}).
 ```
 
-A CPython worker start is 83 to 90 s and a request after it is 35 ms. Capture
-needs `snapshotable => true` and a `snapshot_hooks` declaration; `restore/3`
-refuses an image whose module, version or bindings do not match. Bound what a
-node holds with `max_snapshot_bytes`.
+The copy is genuinely fresh. Globals, memory and tables come from the image,
+but the imports are the ones you pass in now, so one request cannot reach
+another's files or sockets.
 
-[The snapshot guide](docs/snapshots.md) has the three sizes, the refusals and
-what a restore does not carry.
+The instance you capture has to be created with `snapshotable => true`, and a
+restore refuses an image that does not match the module it is handed.
+`wasm:save_snapshot/2` and `load_snapshot/2` put an image on disk.
+`max_snapshot_bytes` caps what one node keeps in memory.
 
-### The compiled tier reaches a reactor
+Read next: [snapshots](docs/snapshots.md).
 
-Set `compile => true` with `fuel => infinity`; the two are mutually exclusive
-and setting both silently gets you the interpreter. Point `code_cache_dir` at a
-directory you own and a warm restart is seconds instead of minutes.
+### Compiling hot code, and why it helps now
 
-- A fresh instance adopts resident code on its **first** call. It used to need
-  the hotness counter to fire, so 31 requests in 32 interpreted beside code
-  that was already there.
-- The OTP compiler runs in a process the tier owns, so a compile can be given a
-  heap ceiling (`compile_max_heap_words`) and can be stopped. Both off by
-  default.
-- `compile_budget_heap_words` bounds the whole node rather than one compiler.
-  Admitted compiles are `Budget div Ceiling`; the rest interpret and ask again.
-- A restore no longer applies the active data segments an image is about to
-  overwrite. A CPython request goes from 64 ms to 35 ms, the restore in it from
-  46 to 13.
-- The artifact cache validates its directory and the digest of every entry, and
-  treats any failure as a miss. It never loads through a symlinked, group- or
-  world-writable path.
+Turn it on with `compile => true` and `fuel => infinity`. Those two go
+together: leaving a fuel limit in place quietly keeps you on the interpreter.
+Point `code_cache_dir` at a directory you own, and a restart reuses what was
+compiled last time. That is minutes of work turned into seconds.
 
-[The compiled tier guide](docs/compiled-tier.md) has the startup procedure and
-the cache arms.
+What changed:
 
-### Give the request runner a heap floor
+- **A fresh instance uses compiled code immediately.** It used to wait for a
+  function to be called 32 times. A worker that builds a new instance per
+  request almost never got there, so 31 requests in 32 ran interpreted next to
+  compiled code that was sitting right there.
+- **Restoring a snapshot is three times faster.** It used to write out the
+  module's initial data and then blank it again, even though the image was
+  about to overwrite all of it. A CPython request went from 64 ms to 35 ms.
+- **A compile can be given a memory cap, and can be interrupted.**
+  `compile_max_heap_words` caps a single compile. `compile_budget_heap_words`
+  caps the whole machine: divide it by the cap and that is how many compiles
+  run at once. A guest that does not get a slot keeps interpreting and tries
+  again later. Both are off unless you turn them on.
+- **The compiled-code cache is checked, not trusted.** It verifies the
+  directory and every file it reads, and quietly recompiles if anything looks
+  wrong. It will not read through a symlink or out of a world-writable
+  directory.
 
-A restored instance holds almost nothing on its own heap, so the collector
-sizes the runner 233 words and collects hundreds of times through a call that
-allocates hundreds of millions. `runner_min_heap_words` and
-`capture_min_heap_words` fix that, and the value is the **guest's**: 200,000
-for QuickJS and Lua, 1,000,000 for CPython, and more is worse past the knee.
+Read next: [the compiled tier](docs/compiled-tier.md).
 
-[The tuning guide](docs/tuning.md) has the sweeps and what `+hms` does not do.
+### If requests are slower than you expect, set a heap floor
+
+A restored instance holds almost nothing on the Erlang heap, so the runtime
+gives its process a tiny one and then collects garbage hundreds of times during
+a single call.
+
+`runner_min_heap_words` fixes it. The right value depends on the guest:
+200,000 for QuickJS and Lua, 1,000,000 for CPython. Going higher than that
+makes things worse, not better. `capture_min_heap_words` does the same for the
+snapshot.
+
+Read next: [tuning](docs/tuning.md).
 
 ### Breaking
 
-The QuickJS example is `qjs_worker`; `script_worker` is now the kernel. Its
-behaviour is unchanged.
+`script_worker` used to be the QuickJS worker. It is called `qjs_worker` now
+and behaves exactly as it did. The old name now belongs to the
+language-neutral worker described above.
 
 ## 0.2.2
 

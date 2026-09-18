@@ -5798,6 +5798,21 @@ reversed on alternate rounds. `interpreted` is the fuel-matched control
 (`fuel => infinity`, no `compile`), not `metered`. The heap floor is on in both
 arms at each guest's knee, 1,000,000 words for CPython and 200,000 for QuickJS.
 
+### Conditions, and what is not here yet
+
+The CPython window ran at a one-minute load of **5.66** at both ends and the
+QuickJS one at **8.58**, three minutes apart, on the same build: every arm
+asserts a manifest of the runtime, kernel, adapter and harness BEAMs by
+content, plus HEAD and a diff hash, so "the same build" is checked rather than
+assumed. It refused an arm the first day it existed, after a recompile between
+a seed and its run.
+
+**The floor, cleanup and collection controls are outstanding.** The box went
+from load 6 to load 291 on `mds` and MediaAnalysis indexing the artifacts these
+runs wrote, and the load gate refuses to measure through that. They are
+additive to what is below, not load-bearing for it. `bench/paths/README.md` has
+the commands.
+
 ### The answer: two thirds of a CPython request is deliver-plus-restore
 
 Medians of twelve, tier adopted, in microseconds:

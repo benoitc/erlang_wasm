@@ -1604,10 +1604,6 @@ ph_warm(Guest, Workload) ->
     ok = script_worker:stop(P),
     ok.
 
-%% Exactly, never `entered > 0': that passes with eleven of twelve samples
-%% interpreting, and the exact count is always available. A mode whose counters
-%% do not match is invalid whether or not it produced numbers, because a
-%% completed run does not prove the request entered generated code.
 %% Only a compiled arm needs the cache warmed, and warming one for an
 %% interpreted arm would put resident code on a node whose whole point is that
 %% it has none.
@@ -1617,12 +1613,13 @@ ph_maybe_warm(true, Guest, Workload)    -> ph_warm(Guest, Workload).
 ph_maybe_wait(false, _Deadline) -> ok;
 ph_maybe_wait(true, Deadline)   -> ph_reaper_empty(Deadline).
 
-ph_counts("interpreted", _N) ->
-    #{compiled := 0, entered := 0, cached := 0, refused := 0, failed := 0,
-      crashed := 0} = wasm_jit:counts(),
-    [] = wasm_jit:diagnostics(),
-    ok;
-ph_counts("compiled", N) ->
+ph_counts(Config, N) -> ph_entered(ph_enters(Config, N)).
+
+%% Exactly N, never `entered > 0': that passes with eleven of twelve samples
+%% interpreting, and the exact count is always available. An arm whose counters
+%% do not match is invalid whether or not it produced numbers, because a
+%% completed run does not prove the request entered generated code.
+ph_entered(N) ->
     C = wasm_jit:counts(),
     #{compiled := 0, cached := 0, refused := 0, failed := 0, crashed := 0} = C,
     case maps:get(entered, C) of
@@ -1688,14 +1685,19 @@ ph_finish(Guest, Kind, ConfA, ConfB, ModeA, ModeB, Raw, Counts, L0, L1) ->
                          gates => Gates, samples => {Av, Bv}}),
     ph_gate_verdict(Gates, Dir).
 
-%% Each arm declares its own count, and a null or overhead arm runs both halves
-%% in one node-wide window, so a compiled one enters twice per round.
-ph_expect_counts("pairs", A, B, _C) when A =:= "interpreted", B =:= "compiled" ->
-    ph_counts("compiled", ?PH_SAMPLES);
-ph_expect_counts(_Kind, C, C, _Counts) ->
-    ph_counts(C, ?PH_SAMPLES * 2);
-ph_expect_counts(_Kind, _A, _B, _C) ->
-    ok.
+%% The counters are node-wide, so the window sees both arms: the expected
+%% `entered' is the sum over the two configurations, whatever they are and in
+%% whichever order they were given.
+%%
+%% Written as a sum rather than as a clause per shape because the clause
+%% version had a silent catch-all: `pairs G compiled interpreted' matched
+%% nothing and asserted nothing, which is a check that cannot fail.
+ph_expect_counts(_Kind, ConfA, ConfB, _Counts) ->
+    ph_entered(ph_enters(ConfA, ?PH_SAMPLES)
+               + ph_enters(ConfB, ?PH_SAMPLES)).
+
+ph_enters("compiled", N)    -> N;
+ph_enters("interpreted", _) -> 0.
 
 %% A null gate applies to the total and to the envelope separately; an overhead
 %% gate is the wrapper against the direct adapter and also reports the absolute

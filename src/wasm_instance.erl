@@ -23,6 +23,25 @@ continuation lists beat a program counter on this VM.
 Above 256 functions a module is lowered progressively: a body is turned into IR
 the first time it is called, and cached per process, so a large module costs you
 what you use of it rather than what it contains.
+## Where things are
+
+1,800 lines, and instantiation is only the first two hundred. The banners are
+the map:
+
+| you want | look at |
+| --- | --- |
+| the whole of instantiation, in order | `new/3`, and `%%% instantiation` |
+| resolving an import to what the embedder supplied | `resolve_import/3`, in `%%% funcs` |
+| active data and element segments, and their bounds | `init_segments/5`, in `%%% segments` |
+| the start function | not here: `wasm:run_start/3`, after `new/3` returns |
+| finding an export by name | `export_kind/2`, in `%%% exports` |
+| lowering a body to IR, and the per-process cache | `body_of/2`, `compiler_ir/2`, in `%%% IR` |
+| reading and writing `#mut{}` | `mut/1`, `set_mut/2`, in `%%% mutable-state holder` |
+| the lease counters a capture and a destroy use | `enter_call/1`, `begin_capture/1`, in `%%% leases` |
+
+`init_segments/5` takes a `Write` flag. A restore passes `false`: the image
+overwrites every byte an active segment would write, so applying them costs a
+restore twice. The bounds are still checked, because they trap.
 """.
 
 -include("wasm.hrl").

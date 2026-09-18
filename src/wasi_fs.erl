@@ -25,6 +25,21 @@ back, and the read in flight read whatever that now was.
 You do not choose between them. `wasi_preview1` asks for a path beneath a
 preopen and gets a handle back; which mechanism enforced the boundary is this
 module's business.
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| opening a path below a preopen | `open/3`, `preopen/1` |
+| reading and writing at an offset | `pread/3`, `pwrite/3` |
+| the stat shapes, by path and by descriptor | `stat/2`, `stat/3`, `stat_fd/1` |
+| reading a directory | `list_dir/2` |
+| the other path operations | `mkdir/2`, `unlink/2`, `rmdir/2`, `symlink/3`, `rename/4`, `link/4` |
+| which backend a build got | `backend/0` |
+
+**Rights are not here.** `wasi_preview1` owns the descriptor table and the
+rights mask; this module owns the two backends and the lock that makes a native
+handle safe to share. The path sandbox is `wasi_path`, and a descriptor with
+the right to read may still be refused a path that escapes its preopen.
 """.
 
 -export([open/3, pread/3, pwrite/3, size/1, stat_fd/1, close/1,

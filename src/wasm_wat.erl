@@ -31,6 +31,22 @@ Most of the work is not instructions, it is the shorthand. (func $f (export
 if none matches, a function, and an export. The specification calls these
 abbreviations and they are not optional; real files are written almost entirely
 in them.
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| the two passes, in order | `%%% first pass` collects declarations, `%%% second pass` builds them |
+| an identifier like `$f` resolving to an index | `%%% bookkeeping`, and the per-space name maps |
+| where a `(type ...)` is invented for an inline signature | `%%% implicit types`, `%%% type uses` |
+| memories, tables, globals | `%%% declarations`, `%%% memories and tables` |
+| data and element segments | `%%% segments` |
+| **folded `(i32.add (a) (b))` vs flat `a b i32.add`** | `%%% instructions` and `%%% expressions`, which accept both |
+| block types and their labels | `%%% blocks` |
+| immediates, including memory arguments | `%%% immediates`, `%%% memory arguments` |
+
+The lexer is `wasm_wat_lex`, the s-expression reader is `wasm_wat_sexp`,
+numeric literals are `wasm_wat_num`, and the instruction name table is
+`wasm_wat_instr`. This module is the part that knows what the shapes *mean*.
 """.
 
 -include("wasm.hrl").

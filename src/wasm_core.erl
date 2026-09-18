@@ -1,9 +1,32 @@
 -module(wasm_core).
 -moduledoc """
-Names and bounds for generated code.
+The Core Erlang back end: it generates the forms for a set of WebAssembly
+functions, and compiles them.
 
-You get here if you turn a WebAssembly function into Core Erlang. Read this
-before you generate a name, because a Core function identifier has to be an
+`wasm_jit` decides *when* to compile and `wasm_code_slots` decides *which
+module name* the result gets; this decides what the code says. `module/4` and
+its longer arities take the functions and answer a loaded module;
+`can_compile/2` and `supported/1` are the filter that says whether a function
+is inside the subset at all, and `wasm_jit` asks them before building anything.
+
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| whether a function can be compiled | `can_compile/2`, `supported/1` |
+| the generated shape of one instruction | `binop/4`, `cmp/1`, `access/7`, `call_op/2` |
+| a whole function's forms | `function/4`, `forms/5` |
+| the module around them, and the compiler run | `module/4`, `run_compiler/4` |
+| the atoms a name can be | `fun_name/1`, `frame_name/1`, `atoms/0` |
+| the bounds a generator refuses past | `limits/0`, and the table below |
+
+The rest of this doc is about naming, which is one concern of several here but
+the one that can leak the node.
+
+## Names, and why they are bounded
+
+Read this before you generate a name, because a Core function identifier has
+to be an
 atom and the atom table is node-wide and never reclaimed: a name derived from a
 module's own bytes is a permanent leak with a remote attacker holding the tap.
 

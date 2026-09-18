@@ -17,6 +17,21 @@ faces hostile input directly:
       vector element occupies at least one byte, so a count exceeding the
       remaining bytes is unsatisfiable and is rejected in constant time.
       Without this, `vec` of 4294967295 is a one-line denial of service.
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| the entry point and the section loop | `module/1`, `%%% api`, `%%% sections` |
+| **section order, and which may repeat** | `section/5` and its ordering check in `%%% sections` |
+| custom sections, which may appear anywhere | the `0` clause of `section/5` |
+| types, and the recursive shapes GC adds | `%%% types` |
+| data and element segments | `%%% segments` |
+| the checks that need the whole module | `%%% post-checks` |
+
+Instruction bodies are not decoded here: `wasm_decode_code` does those, and the
+opcode-space modules `wasm_decode_simd`, `wasm_decode_gc` and
+`wasm_decode_atomic` do their own prefixes. What comes out is the `#module{}`
+in `include/wasm.hrl`, which is what `wasm_validate` then checks.
 """.
 
 -include("wasm.hrl").

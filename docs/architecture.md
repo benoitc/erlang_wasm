@@ -32,33 +32,46 @@ it entirely unless you are working on WASI.
 
 ## The layers
 
-Nine of them. A module only calls downward, with three exceptions noted below.
-Level 0 depends on nothing else in the project, so it is where you can start
-and be certain of finishing.
+Ten of them, derived rather than drawn: a module sits one level above the
+highest thing it calls, and the three cycles below each occupy a single level
+together. So a module only ever calls **downward**, and level 0 depends on
+nothing else in the project, which is where you can start and be certain of
+finishing.
 
 ```
-L8  wasi
-L7  wasi_preview1
-L6  wasm  wasm_module_cache  wasm_jit_sup
-L5  wasm_exec  wasm_core  wasm_jit
-L4  wasm_instance  wasm_wat
-L3  wasm_validate  wasm_wast  wasm_wat_instr  wasm_app
+L9  wasi
+L8  wasi_preview1  wasm_snapshot_store
+L7  wasm  wasm_module_cache  wasm_snapshot_owner  wasm_jit_sup
+L6  wasm_exec  wasm_core  wasm_jit  wasm_snapshot
+L5  wasm_instance  wasm_wat
+L4  wasm_validate  wasm_wat_instr
+L3  wasm_memory  wasm_table  wasm_global  wasm_heap  wasm_store
+    wasm_validate_code  wasm_wast
 L2  wasm_decode  wasm_decode_code  wasm_decode_simd  wasm_decode_gc
-    wasm_decode_atomic  wasm_memory  wasm_table  wasm_global  wasm_simd
-    wasm_validate_code  wasm_wat_sexp  wasm_sup
-L1  wasm_keeper  wasm_heap  wasm_types  wasm_num_float  wasm_num_trunc
-    wasm_leb128  wasm_wait  wasm_wat_lex  wasm_wat_num  wasi_fs  wasi_sock
-L0  wasm_error  wasm_num  wasm_limits  wasm_engine  wasm_code_slots
-    wasm_code_cache  wasm_validate_simd  wasm_validate_atomic  wasi_path
-    wasi_net  wasi_file_nif
+    wasm_decode_atomic  wasm_keeper  wasm_simd  wasm_types  wasm_wait
+    wasm_wat_sexp  wasm_app
+L1  wasm_code_cache  wasm_engine  wasm_leb128  wasm_num_float
+    wasm_num_trunc  wasm_sup  wasm_wat_lex  wasm_wat_num  wasi_fs  wasi_sock
+L0  wasm_error  wasm_num  wasm_limits  wasm_code_slots  wasm_file_cache
+    wasm_snapshot_file  wasm_subsup  wasm_validate_simd  wasm_validate_atomic
+    wasi_path  wasi_net  wasi_file_nif
 ```
+
+`test/wasm_architecture_SUITE.erl` asserts that this block names every module
+in the application and nothing else. It was added after seven modules went
+missing from it -- the four snapshot ones, `wasm_file_cache`, `wasm_store` and
+`wasm_subsup` -- while the cycles below were kept current by hand.
 
 Read it as three stacks that meet at the top. The **front end** goes
 `wasm_leb128` to `wasm_decode` to `wasm_validate`, or `wasm_wat_lex` to
 `wasm_wat` for the text format, and both produce the same `#module{}`. The
 **runtime** goes `wasm_keeper` to `wasm_memory` and its siblings to
 `wasm_instance` to `wasm_exec`. The **tier** goes `wasm_code_slots` to
-`wasm_core` to `wasm_jit`. `wasm` sits over all three.
+`wasm_core` to `wasm_jit`. `wasm` sits over all three, and the snapshot
+modules hang off the runtime at three different heights: `wasm_snapshot_file`
+at the bottom because a file format needs nothing, `wasm_snapshot` in the
+middle because it copies instance state, `wasm_snapshot_owner` at the top
+because it holds a module claim, which is why it is in a cycle with the facade.
 
 ## The three cycles
 
@@ -90,11 +103,55 @@ capture copies and what a restore lays over -- and stays out of it.
 Cycles are not forbidden here. What is forbidden is a fourth one appearing
 because nobody noticed. A cycle is the one structural property you cannot
 discover by reading a module: everything else about `wasm_memory` is answered
-inside `wasm_memory`, and this is answered only by reading all forty-eight.
+inside `wasm_memory`, and this is answered only by reading all fifty-six.
 
 The margin is thinner than it looks. Adding one call from `wasm_error`, at
 level 0, up into `wasm` collapses fourteen modules into a single component, and
 nothing but the guard would have told you.
+
+## The path of a call
+
+One `wasm:call/3` end to end, so you can put a breakpoint anywhere on it. Every
+hop names the function you would stop in.
+
+```
+wasm:call/3                      check per-call limits, if any were given
+  wasm:call_1/4                  wasm_instance:export_kind/2 resolves the name
+                                 to a function index, then checks the arguments
+  wasm:invoke_with/5             enter/0 counts depth **per process**, not per
+                                 instance, because a host import may call back
+  wasm:leased_invoke/6           only at depth 0, and only on a snapshotable
+                                 instance: wasm_instance:enter_call/1 refuses
+                                 while a capture or a destroy is in progress
+  wasm:invoke_at/6               takes the heap lease, opens the fuel budget,
+                                 reads #mut{} once
+     wasm_jit:entry/3            depth 0 only. Answers a compiled entry point
+                                 if a slot is resident, otherwise the one it
+                                 was given
+  wasm_exec:call/5               the interpreter: dispatch in run/3, control
+                                 flow in branch/3, calls in do_call/4
+  wasm:settle/2                  values out, or an error value
+```
+
+Three things about that shape are deliberate and easy to undo by accident.
+
+**The tier is entered once, at the outermost invocation.** Not inside
+`do_call/4`, where a "is this callee compiled?" test would sit on the
+interpreter's hot path. Three separate changes to `run/3` and `branch/3` have
+each cost about 70% on QuickJS while the synthetic loop measured nothing;
+`test/audit/PERF.md` has them.
+
+**Depth is per process.** A host function may call back into the instance that
+called it, so the count cannot live on the instance.
+
+**The lease is the outermost frame's.** Nested calls are already inside one,
+and taking a second would be two atomic operations per re-entry for nothing.
+
+A request through the worker kernel arrives at this path by a longer road:
+`script_worker` spawns a runner per request, the adapter's `prepare/3` builds
+the import set, and a reactor restores an image before `handle` is called. That
+road is drawn in [the worker guide](worker.md), and its cost is broken down
+phase by phase in `test/audit/PERF.md`.
 
 ## Reading the graph yourself
 

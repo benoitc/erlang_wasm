@@ -23,7 +23,7 @@ it just throws away the entries being used.
 ## What it does when something goes wrong
 
 Nothing raises and nothing is reported. An unreadable directory answers no
-entries and so evicts nothing. A failed delete is ignored, and `drop/2`
+entries and so evicts nothing. A failed delete is ignored, and `drop/3`
 subtracts the size it expected to free either way, so a file that will not go
 cannot make the loop spin. Two processes evicting at once both enumerate, both
 delete, and the second delete fails with `enoent`: the result is over-eviction

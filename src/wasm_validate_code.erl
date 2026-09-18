@@ -25,6 +25,22 @@ is what distinguishes the two: popping below the height yields `unknown`
 Because the decoder produces a nested AST rather than a flat stream, blocks
 recurse here instead of pushing and popping through `end` opcodes. The
 typing rules are identical; only the traversal differs.
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| the entry point, one function body | `function/3`, in `%%% api` |
+| the operand and control stacks | `push_opd/2`, `pop_opd/1`, `pop_expect/2`, in `%%% abstract stack machine` |
+| **where a new opcode's typing rule goes** | `%%% instructions`, one clause per opcode |
+| the signature tables for the simple cases | `%%% opcode signatures` |
+| reading the module's index spaces | `%%% context access` |
+| constant expressions, which have their own rules | `const_expr/3`, `%%% constant expressions` |
+| the natural alignment table, which `wasm_wat` borrows | `load_store/1` |
+
+SIMD, atomic and GC opcodes are delegated to `wasm_validate_simd` and
+`wasm_validate_atomic`; add there, not here, if the opcode is in one of those
+spaces. [Adding an instruction](../docs/adding-an-instruction.md) has the full
+four-stage recipe.
 """.
 
 -include("wasm.hrl").

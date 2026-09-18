@@ -55,7 +55,7 @@ size together. Concurrent growers queue rather than being refused, because
 really was exhausted.
 
 The registry, not the caller's possibly stale handle, is the authority for how
-many pages a resource has. That is why `free/1` releases the size the memory is
+many pages a resource has. That is why `release/2` releases the size the memory is
 now rather than the size the handle was made at.
 """.
 -behaviour(gen_server).

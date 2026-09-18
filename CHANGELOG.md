@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Two thirds of a CPython request is restoring its image
+
+A warm, tiered CPython reactor request is 66 ms, and 44 ms of that is
+delivering the adapter state and restoring the image. The same bucket is 1.1 ms
+of a 9.3 ms QuickJS request. Measured per phase against the real worker, not
+reconstructed.
+
+This settles what looked like a CPython-specific weakness in the compiled tier.
+On the interval the tier can act on, it is worth **4.2x on QuickJS and 4.0x on
+CPython**: the same, to within 6%. The whole-request difference is Amdahl on a
+bucket the tier never touches.
+
+Two costs nobody had measured: accepting a request -- the guardian reservation,
+the request directory, the channels and the runner spawn -- is 1.5 to 2.0 ms,
+which is 17% of a tiered QuickJS request; and the reply path is 0.81 ms on
+CPython against 0.05 ms on QuickJS for the same kernel, which is not explained.
+
+Nothing in `src/` changed. `bench/paths/phasing_adapter.erl` and
+`workerbench`'s `phases` mode are how it was measured, and
+[the benchmark protocol](bench/paths/README.md) says how to run it.
+
 ### What a reactor host must do at startup
 
 Measured, for the first time on the reactor path: a cold node reaches the

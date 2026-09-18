@@ -109,8 +109,11 @@ requirements(Request, _Artifact) when is_map(Request) ->
     Source = maps:get(source, Request, ?DEFAULT_SOURCE),
     Context = script_v1:encode_context(maps:get(context, Request, #{})),
     Staged = byte_size(Source) + byte_size(Context),
-    {ok, #{%% A restore of a 40 MB image is most of this, and the request that
-           %% follows it is a few hundred milliseconds. Measured, in `PERF.md`.
+    {ok, #{%% Two thirds of a warm request is delivering the adapter state and
+           %% restoring the image, and the whole request is about 66 ms. Both
+           %% measured per phase, in `PERF.md`. The bucket cannot be split
+           %% further from here: `deliver/3', `check_spec/1', `restore/3' and
+           %% `snapshot_info/1' are inside it and no adapter sees their edges.
            min_timeout => 10_000,
            min_memory_pages => 1024,
            request_bytes => Staged,

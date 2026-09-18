@@ -5778,3 +5778,115 @@ it was. **The remaining difference is not attributed to any commit** and is
 left that way, following the `#st.code` precedent above: the conditions the two
 original numbers were taken under differ, and no experiment run since has
 separated them.
+## Where a CPython reactor request actually goes
+
+`PERF.md` has carried 64.5 ms for a warm, tiered, floored CPython request and
+no account of what it is. The tier looked worth 1.88x on CPython against 2.80x
+on QuickJS, and that gap was unexplained. Both of those ratios are **compiled
+over metered**, which prices metering and compilation together, so they were
+never a tier-only comparison either.
+
+`bench/paths/phasing_adapter.erl` wraps the real adapter and timestamps both
+sides of all five request-path callbacks; `workerbench`'s `phases` mode takes
+T0 and T11 around `submit/2` and `await/3` and joins them by a `make_ref()` the
+wrapper mints. The boundaries are contiguous, so the eleven intervals sum to
+the total identically and **the residual is an assertion, not a finding**:
+every sample fails if it is not exactly zero.
+
+Twelve paired samples per arm, arms alternating in one emulator with the order
+reversed on alternate rounds. `interpreted` is the fuel-matched control
+(`fuel => infinity`, no `compile`), not `metered`. The heap floor is on in both
+arms at each guest's knee, 1,000,000 words for CPython and 200,000 for QuickJS.
+
+### The answer: two thirds of a CPython request is deliver-plus-restore
+
+Medians of twelve, tier adopted, in microseconds:
+
+| interval | CPython | QuickJS |
+| --- | ---: | ---: |
+| submit | 1,991 | 1,561 |
+| requirements | 4 | 6 |
+| mounts | 91 | 116 |
+| prepare | 397 | 565 |
+| **deliver + restore** | **43,695** | **1,060** |
+| post_restore | 1 | 1 |
+| **invocation envelope** | **18,687** | **5,798** |
+| classify | 1 | 1 |
+| destroy + channels | 71 | 67 |
+| decode | 5 | 6 |
+| reply | 808 | 53 |
+| **total** | **65,910** | **9,291** |
+
+Per-phase medians are independent summaries and do not sum to the median total.
+The row that does sum is the sixth and seventh samples by total, averaged phase
+by phase, and it is in the raw records.
+
+**`deliver + restore` is 66.5% of a CPython request and 13.6% of a QuickJS
+one** (medians of the twelve per-request shares, not a ratio of medians).
+
+### So the tier is worth the same on both guests
+
+The interval the tier can act on is the invocation envelope, and the medians of
+the twelve paired interpreted-over-adopted ratios are:
+
+| guest | envelope speedup | min |
+| --- | ---: | ---: |
+| QuickJS | **4.21x** | 3.78 |
+| CPython | **3.95x** | 3.66 |
+
+The trigger for a second investigation was preregistered as
+`S_cpython / S_qjs < 0.75`. It is **0.939**, so it does not fire: there is no
+guest-specific deficit in what the tier does to CPython's code. The
+whole-request difference is Amdahl on a bucket the tier cannot touch.
+
+That is the predeclared reading of a dominant restore bucket, and its
+arithmetic check passed: with the restore-side constant taken out, the two
+guests' speedups agree to within 6%.
+
+### What the bucket is, and what it is not
+
+**T4-T5 is a bucket, not a measurement of `wasm:restore/3`.** It holds
+`deliver/3`, `check_spec/1`, `wasm:restore/3` and `snapshot_info/1`, and an
+adapter cannot separate them. What can be said is that it is 43.7 ms on CPython
+and 1.06 ms on QuickJS, on images of 40 MB and a few hundred kilobytes, which
+makes the restore the candidate inside it. Naming it takes another measurement.
+
+It also does not make the retained image the lever. Restore builds an instance
+covering 41.9 MB and fills the gaps, because active data segments make a fresh
+instance non-zero, so the 7.4 MB the image holds is not what a restore does.
+
+**T6-T7 is an envelope, not `handle()`.** T6 is taken inside `call_fun/2`
+before `post_restore/3` returns (`script_worker.erl:1599`) and T7 inside
+`invoke_loop/5`'s dispatch into `classify/2` (`:1632`), so it wraps the guest
+call rather than bounding it: the returns through `post_restore/3` and
+`start_instance/2`, the dispatch, and all of `wasm:call/5`. Isolating guest
+execution would need a boundary around `wasm:call/5`, which no adapter reaches.
+
+### Two things nobody had measured
+
+**`submit` is 1.5 to 2.0 ms.** T0-T1 is the guardian reservation, the request
+directory, the channels and the runner spawn, and on QuickJS it is 17% of a
+tiered request, second only to the envelope. The earlier per-phase table
+(`PERF.md:5254`) could not see it: it timed from inside.
+
+**`reply` is 0.81 ms on CPython and 0.05 ms on QuickJS**, a 15x difference in
+the runner's relay and the guardian's shutdown for the same kernel. It is above
+the probe's resolution and is not explained here.
+
+### What is below the probe's resolution
+
+The overhead arm runs the real adapter against the timing wrapper, paired and
+alternated, and reports the median of the paired differences. It is **145 us
+interpreted and 157 us compiled** on QuickJS, and 553 us and 1,413 us on
+CPython.
+
+Phases under that are **below probe resolution** and are not values of the
+uninstrumented request: `requirements`, `post_restore`, `classify` and `decode`
+everywhere, and `mounts` and `destroy + channels` on CPython. The overhead is
+never subtracted from a phase, because where it lands is unknown.
+
+Taking the difference of the medians rather than the median of the paired
+differences read 3,643 us of "probe overhead" on one run, which was the box
+moving between the two halves of the arm and would have disqualified every
+phase but the envelope. The rule that ratios come from pairs, not from
+medians, applies to differences too.

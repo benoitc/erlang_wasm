@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 Three things arrive together and are meant to be used together: a **worker
 kernel** that runs untrusted guests one request at a time, **snapshots** so a

@@ -4,7 +4,7 @@ This page records what the runtime implements, how it scores against the
 official WebAssembly specification test suite, and what it measures. Use it to
 find out whether a module you care about will run, and what it will cost.
 
-Status as of **0.2.2**.
+Status as of **0.3.0**.
 
 The internals that used to sit at the end of this page -- how the garbage
 collector works and how the WASI sandboxes are enforced -- are in

@@ -19,7 +19,8 @@ this suite goes red.
 -include_lib("stdlib/include/assert.hrl").
 
 all() ->
-    [state_does_not_leak_between_requests,
+    [every_0_3_call_shape_still_works,
+     state_does_not_leak_between_requests,
      reuse_policy_keeps_state,
      infinite_loop_is_bounded_by_fuel,
      infinite_loop_is_bounded_by_timeout,
@@ -63,6 +64,32 @@ worker(Wasm, Opts) ->
     {ok, Pid} = wasm_instance_worker:start_link(Mod, Opts),
     put(workers, [Pid | get(workers)]),
     Pid.
+
+%%% --------------------------------------------------------- compatibility ---
+
+%% `wasm_instance_worker' was `examples/wasm_worker.erl' in 0.3, and the
+%% upgrade page promises that switching is a rename of the calls. So every
+%% call the 0.3 example took, with the argument shapes it took and the values
+%% it answered, is exercised here. A change to any of them is a break for
+%% everybody who copied the example, and this is where it shows.
+every_0_3_call_shape_still_works(_Config) ->
+    {ok, Mod} = wasm:compile(counter_module()),
+    {ok, W1} = wasm_instance_worker:start_link(Mod),
+    {ok, W2} = wasm_instance_worker:start_link(Mod, #{isolation => reuse}),
+    ?assertEqual({ok, [1]}, wasm_instance_worker:call(W1, ~"inc", [])),
+    ?assertEqual({ok, [1]}, wasm_instance_worker:call(W2, ~"inc", [], 1000)),
+    ?assertEqual({ok, [2]}, wasm_instance_worker:call(W2, ~"inc", [], 1000)),
+    ?assertMatch({ok, #{served := 2, isolation := reuse}},
+                 wasm_instance_worker:info(W2)),
+    ?assertMatch({ok, #{served := 1, isolation := fresh}},
+                 wasm_instance_worker:info(W1)),
+    ?assertEqual(ok, wasm_instance_worker:stop(W1)),
+    ?assertEqual(ok, wasm_instance_worker:stop(W2)),
+    Spin = worker(spin_module(), #{limits => #{fuel => infinity}}),
+    unlink(Spin),
+    ?assertMatch({error, #{class := exhaustion, kind := timeout,
+                           ctx := #{timeout := 200}}},
+                 wasm_instance_worker:call(Spin, ~"spin", [], 200)).
 
 %%% ------------------------------------------------------------- isolation ---
 

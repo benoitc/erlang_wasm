@@ -123,6 +123,17 @@ jobs:
       # checksum honest, so a broken download fails here rather than the first
       # time somebody runs the group deliberately.
       - run: rebar3 ct --suite=test/wasm_worker_lang_SUITE
+      # Every code block in the docs, strictly: the fixtures above are all
+      # declared, so a block that needs one must run here rather than skip,
+      # and a missing checker tool fails instead of skipping. Node and Python
+      # are on the runner; luac is not.
+      - name: Install luac
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+      - name: Check every documentation snippet
+        env:
+          WASM_DOCS_STRICT: "1"
+          WASM_DOCS_FIXTURES: qjs,python,qjs_reactor,lua_reactor
+        run: rebar3 ct --suite=test/wasm_docs_SUITE
 
   tests:
     name: Tests

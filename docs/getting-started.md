@@ -22,7 +22,30 @@ Start it from your application's `applications` list, or by hand in the shell:
 Start it before you do anything else. The application owns the module cache and
 the node's page budget.
 
-## Run a module
+## Run your first module
+
+You do not need a `.wasm` file or any toolchain to start. The runtime reads the
+WebAssembly text format itself:
+
+```erlang
+Src = ~"""
+(module
+  (func (export "add") (param i32 i32) (result i32)
+    local.get 0 local.get 1 i32.add))
+""",
+{ok, Mod}  = wasm:compile({wat, Src}),
+{ok, Inst} = wasm:instantiate(Mod, #{}),
+{ok, [7]}  = wasm:call(Inst, ~"add", [3, 4]),
+ok         = wasm:destroy(Inst).
+```
+
+`compile/1` turns the text into a module, `instantiate/2` gives you a running
+instance of it, and `call/3` calls one of its exported functions. Paste it into
+`rebar3 shell` as it is.
+
+## Load a module from a file
+
+A module built by a real toolchain arrives as a `.wasm` file:
 
 ```erlang
 {ok, Mod}  = wasm:load_file("add.wasm"),
@@ -36,26 +59,10 @@ validates the bytes and caches the result by content hash, so loading the same
 file again costs microseconds instead of milliseconds. Each `instantiate/2`
 gives you a fresh instance that shares nothing with the others.
 
-## Write the module inline
-
-You do not need a `.wasm` file to try something. The runtime reads the text
-format itself, with no toolchain involved:
-
-```erlang
-Src = ~"""
-(module
-  (func (export "add") (param i32 i32) (result i32)
-    local.get 0 local.get 1 i32.add))
-""",
-{ok, Mod}  = wasm:compile({wat, Src}),
-{ok, Inst} = wasm:instantiate(Mod, #{}),
-{ok, [7]}  = wasm:call(Inst, ~"add", [3, 4]).
-```
-
-Use it for a snippet, a test, or a shell session. `compile/1` skips the cache,
-which is right for text: a module built from text takes a fresh identity every
-time, so there is nothing stable to cache it against. Use `load_file/1` for a
-module you instantiate repeatedly.
+`compile/1`, used above, skips that cache, which is right for text: a module
+built from text takes a fresh identity every time, so there is nothing stable
+to cache it against. Use `load_file/1` for a module you instantiate
+repeatedly.
 
 ## Give it something to call
 
@@ -131,7 +138,12 @@ its timeout, restart and isolation policies:
 
 ```sh
 cp deps/wasm/examples/wasm_worker.erl src/my_wasm_worker.erl
+perl -pi -e 's/^-module\(wasm_worker\)\./-module(my_wasm_worker)./' src/my_wasm_worker.erl
 ```
+
+The second line renames the module inside the file to match its new name;
+without it the copy still calls itself `wasm_worker` and `my_wasm_worker:...`
+is undefined.
 
 ```erlang
 {ok, W} = my_wasm_worker:start_link(Mod, #{limits => wasm_limits:untrusted(),

@@ -23,15 +23,16 @@ Nothing raises. A malformed binary, an ill-typed module, a trap and a resource
 limit all come back as `{error, Error}` carrying a class, a machine-readable
 kind, the specification's message text, and context.
 
-## AI-assisted development
+## Where to start
 
-This software is developed with **strong assistance from GPT 5.6, Claude Opus 5, and Fable**, with humans leading the architecture, semantics, testing, benchmarking, and debugging.
-
-We say this openly because it shaped how the project was built. If you are not comfortable using AI-developed code, this software may not be for you.
-
-The development process is not prompt-and-accept. Humans define the design, architecture, expected behaviour, and correctness criteria. AI agents are used extensively for implementation, refactoring, test generation, code analysis, and exploring alternative approaches.
-
-Generated code is treated as a proposal, not as evidence of correctness. Changes are validated through the WebAssembly specification test suite, real toolchain output, differential testing against established runtimes where applicable, and repeatable performance benchmarks. Unexpected results are investigated rather than accepted because an agent produced plausible code.
+| I want to | start with |
+| --- | --- |
+| call exported WebAssembly functions from Erlang | [Getting started](docs/getting-started.md), then [Embedding](docs/embedding.md) |
+| run a program that has a `main` (a WASI command) | [WASI](docs/wasi.md) |
+| run WebAssembly I did not write | [Workers](docs/worker.md), then [Security](docs/security.md) |
+| run JavaScript, Python or Lua source | [JavaScript](docs/javascript.md), [Python](docs/python.md), [Lua](docs/lua.md) |
+| stop paying interpreter startup on every request | [Snapshots](docs/snapshots.md) |
+| speed up a workload I have measured | [The compiled tier](docs/compiled-tier.md) |
 
 ## Status
 
@@ -55,14 +56,14 @@ Sockets are granted the way directories are: by naming what may be reached, with
 nothing reachable by default. See [docs/wasi.md](docs/wasi.md) and
 [docs/security.md](docs/security.md).
 
-## Two ways to use it
+## A plugin or a script
 
 ```erlang
-%% compiled: logic fixed at build time, one level of interpretation
+%% a prebuilt plugin: logic compiled to .wasm ahead of time
 {ok, W} = plugin_worker:start_link("plugin.wasm"),
 {ok, ~"user@example.com"} = plugin_worker:normalise(W, ~"  User@Example.COM  ").
 
-%% interpreted: logic arrives as text, two levels
+%% a script: logic arrives as text, run by an interpreter inside the guest
 {ok, S} = qjs_worker:start_link("qjs.wasm"),
 {ok, ~"3\n"} = qjs_worker:eval(S, ~"print(1 + 2);").
 ```
@@ -70,50 +71,6 @@ nothing reachable by default. See [docs/wasi.md](docs/wasi.md) and
 Both are in `examples/`, both run untrusted code under a timeout with nothing
 surviving a request. [docs/guests.md](docs/guests.md) has the commands to build
 the guests, run both from `rebar3 shell`, and decide which shape you want.
-
-## Why it is built this way
-
-The design follows from measurements on the BEAM rather than from how C
-runtimes are built. Five results shaped it:
-
-**A cons-list walk beats a flattened instruction stream.** Same program, 2.4M
-instructions: walking a nested AST measured 3.7 ns per instruction, while the
-bytecode-plus-program-counter shape every C interpreter uses measured 5.6 ns.
-`element/2` with a runtime index is bounds-checked; matching a list head is a
-dereference the compiler turns into a jump table. WebAssembly control flow is
-structured, so blocks nest and there is no program counter at all.
-
-**Erlang cannot represent NaN or Infinity as a float.** `0.0/0.0` raises
-`badarith`, and `<<F:64/float>>` does not even match those bit patterns. Floats
-use a hybrid representation. A C NIF was measured as an alternative and was
-*slower*: a NaN-capable NIF must return raw bit patterns, and every such pattern
-is a heap bignum.
-
-**A `v128` is a binary, not a 128-bit integer.** Bit syntax truncates each
-field to its declared width, so lane wrapping is free, and the vector is built
-in one allocation. `i32x4.add` measured 11.8 ns against 126 ns for the integer
-form; `i8x16.add` 14.6 ns against 610 ns.
-
-**Garbage-collected objects cannot ride on BEAM garbage collection.** They are
-mutable and cyclic, and the BEAM's only traced mutable container holds
-integers. So they live in a store this runtime owns and this runtime collects,
-which is affordable only because the interpreter owns all execution state
-explicitly: between calls the operand stack is empty, so the roots are
-enumerable without stack maps or safe points.
-
-**The collector is generational, and the generation is free.** Object ids come
-from a counter and are never reused, so the objects allocated since the last
-collection are exactly an id range: the nursery needs no bookkeeping. A minor
-collection after a thousand allocations costs 0.083 ms whether the live set is a
-thousand objects or a hundred thousand, where tracing all of the latter costs
-14.9 ms.
-
-**`atomics` makes linear memory viable without native code.** A store costs
-6 ns against 1201 ns for rebuilding an immutable binary. Memory is chunked
-`atomics` arrays sized to the memory, so growth appends instead of copying.
-
-The full reasoning, including the trade-offs rejected and the benchmark that
-lied, is in the module documentation and [docs/features.md](docs/features.md).
 
 ## Sandboxing
 
@@ -178,6 +135,60 @@ git clone --depth 1 https://github.com/WebAssembly/testsuite.git
 
 Nothing is generated and no other tool is needed. Without the checkout the
 conformance suite skips with that message and everything else still runs.
+
+## Why it is built this way
+
+The design follows from measurements on the BEAM rather than from how C
+runtimes are built. Five results shaped it:
+
+**A cons-list walk beats a flattened instruction stream.** Same program, 2.4M
+instructions: walking a nested AST measured 3.7 ns per instruction, while the
+bytecode-plus-program-counter shape every C interpreter uses measured 5.6 ns.
+`element/2` with a runtime index is bounds-checked; matching a list head is a
+dereference the compiler turns into a jump table. WebAssembly control flow is
+structured, so blocks nest and there is no program counter at all.
+
+**Erlang cannot represent NaN or Infinity as a float.** `0.0/0.0` raises
+`badarith`, and `<<F:64/float>>` does not even match those bit patterns. Floats
+use a hybrid representation. A C NIF was measured as an alternative and was
+*slower*: a NaN-capable NIF must return raw bit patterns, and every such pattern
+is a heap bignum.
+
+**A `v128` is a binary, not a 128-bit integer.** Bit syntax truncates each
+field to its declared width, so lane wrapping is free, and the vector is built
+in one allocation. `i32x4.add` measured 11.8 ns against 126 ns for the integer
+form; `i8x16.add` 14.6 ns against 610 ns.
+
+**Garbage-collected objects cannot ride on BEAM garbage collection.** They are
+mutable and cyclic, and the BEAM's only traced mutable container holds
+integers. So they live in a store this runtime owns and this runtime collects,
+which is affordable only because the interpreter owns all execution state
+explicitly: between calls the operand stack is empty, so the roots are
+enumerable without stack maps or safe points.
+
+**The collector is generational, and the generation is free.** Object ids come
+from a counter and are never reused, so the objects allocated since the last
+collection are exactly an id range: the nursery needs no bookkeeping. A minor
+collection after a thousand allocations costs 0.083 ms whether the live set is a
+thousand objects or a hundred thousand, where tracing all of the latter costs
+14.9 ms.
+
+**`atomics` makes linear memory viable without native code.** A store costs
+6 ns against 1201 ns for rebuilding an immutable binary. Memory is chunked
+`atomics` arrays sized to the memory, so growth appends instead of copying.
+
+The full reasoning, including the trade-offs rejected and the benchmark that
+lied, is in the module documentation and [docs/features.md](docs/features.md).
+
+## AI-assisted development
+
+This software is developed with **strong assistance from GPT 5.6, Claude Opus 5, and Fable**, with humans leading the architecture, semantics, testing, benchmarking, and debugging.
+
+We say this openly because it shaped how the project was built. If you are not comfortable using AI-developed code, this software may not be for you.
+
+The development process is not prompt-and-accept. Humans define the design, architecture, expected behaviour, and correctness criteria. AI agents are used extensively for implementation, refactoring, test generation, code analysis, and exploring alternative approaches.
+
+Generated code is treated as a proposal, not as evidence of correctness. Changes are validated through the WebAssembly specification test suite, real toolchain output, differential testing against established runtimes where applicable, and repeatable performance benchmarks. Unexpected results are investigated rather than accepted because an agent produced plausible code.
 
 ## Licence
 

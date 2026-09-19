@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the forty-eight modules are, which
+This page is the map of the runtime: what the fifty-five modules are, which
 ones depend on which, and where to start reading. You need it before you change
 anything, because every module explains itself and none of them explains the
 shape of the whole.
@@ -31,6 +31,11 @@ Read in this order. Each step is understandable with only the ones before it.
 it entirely unless you are working on WASI.
 
 ## The layers
+
+This is a map for changing the runtime, not for using it: a level says which
+modules a module may call, and nothing about what you do with them. If you are
+running WebAssembly rather than changing the runtime, start at
+[Getting started](getting-started.md) instead.
 
 Ten of them, derived rather than drawn: a module sits one level above the
 highest thing it calls, and the three cycles below each occupy a single level
@@ -103,7 +108,7 @@ capture copies and what a restore lays over -- and stays out of it.
 Cycles are not forbidden here. What is forbidden is a fourth one appearing
 because nobody noticed. A cycle is the one structural property you cannot
 discover by reading a module: everything else about `wasm_memory` is answered
-inside `wasm_memory`, and this is answered only by reading all fifty-six.
+inside `wasm_memory`, and this is answered only by reading all fifty-five.
 
 The margin is thinner than it looks. Adding one call from `wasm_error`, at
 level 0, up into `wasm` collapses fourteen modules into a single component, and

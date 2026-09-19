@@ -15,6 +15,8 @@ build flags that nothing else in this repository does.
 scripts/build-lua-reactor.sh
 ```
 
+<!-- check: run -->
+<!-- check: needs lua_reactor -->
 ```erlang
 {ok, W} = wasm_script_worker:start_link(
             wasm_lua,
@@ -42,6 +44,9 @@ other two guests here.
 
 One option, and it more than halves a request:
 
+<!-- check: run -->
+<!-- check: fresh -->
+<!-- check: needs lua_reactor -->
 ```erlang
 {ok, W} = wasm_script_worker:start_link(
             wasm_lua,

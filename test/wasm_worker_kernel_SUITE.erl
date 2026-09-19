@@ -612,7 +612,7 @@ with_store(Dir, F) ->
 %% It reads the names out of the code rather than listing them here, so adding
 %% a setting and forgetting the guide fails rather than passing.
 every_setting_is_documented(_Config) ->
-    Guide = read_guide("worker.md"),
+    Guide = read_guide("worker-reference.md"),
     Undocumented = [S || S <- settings(), not documented(S, Guide)],
     ?assertEqual([], Undocumented).
 
@@ -621,9 +621,10 @@ settings() ->
     Worker ++ wasm_worker_reaper:setting_keys() ++
         [trusted, capture_timeout, runner_min_heap_words,
          capture_min_heap_words,
+         root,
          %% Node-wide, and each one turns something substantial on or off.
          max_snapshot_bytes, max_snapshot_dir_bytes, snapshot_dir,
-         code_cache_dir].
+         code_cache_dir, scratch_roots, reaper_options, worker_timeout].
 
 documented(Setting, Guide) ->
     binary:match(Guide, atom_to_binary(Setting, utf8)) =/= nomatch.

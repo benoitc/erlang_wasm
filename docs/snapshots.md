@@ -12,6 +12,63 @@ module-cache restart invalidates it. Recapturing costs one `init()`, which for
 CPython is 90 seconds, so there is also a **file** form: see keeping images
 across restarts, below.
 
+**Do you need this?** Yes, if a guest takes seconds to start and milliseconds
+to run, such as an interpreter. No, for a plugin that starts in microseconds.
+
+## Let a worker do it for you, which is the usual way
+
+`wasm_script_worker` captures at `start_link/2` and restores per request, so an
+adapter never calls `snapshot/1` itself. Declare the capability and say what
+the initialisation instance is built from:
+
+```erlang
+capabilities(Artifact) ->
+    %% your other capabilities, with these two set
+    (base_capabilities(Artifact))#{execution => reactor,
+                                   snapshots => #{version => ~"my-1"}}.
+
+snapshot_capability(#{module := M}) ->
+    #{version => ~"my-1",
+      module => M,
+      imports => #{bindings => TrustedBindings,
+                   snapshot_hooks => Hooks,
+                   compatibility_key => ~"my-1"},
+      init => [{call, ~"_initialize", []}, {call, ~"init", []}],
+      validate => fun(Inst) -> ok end,
+      post_restore => fun(Inst, _Ctx) -> ok end}.
+```
+
+Then `prepare/3` returns only the request's own work, because the rest is in
+the image:
+
+```erlang
+invoke => [{call, ~"handle", []}]
+```
+
+A capture that fails **fails the start**, since the alternative is a worker
+whose requests call `handle` on an instance that never ran `init`. The
+initialisation bindings should be as barren as the guest allows: whatever
+`init()` touches is shared by every request that restores it.
+
+`capture_timeout` bounds the whole thing, 60 s by default:
+
+<!-- check: modules my_adapter -->
+```erlang
+wasm_script_worker:start_link(my_adapter, #{root => scratch,
+                                       capture_timeout => 180_000}).
+```
+
+It is a worker option rather than a limit because a `timeout` in a limits map
+is enforced by whoever owns the instance, and an inline call cannot be
+interrupted. The kernel gives the capture a process of its own and kills it at
+the deadline, so a guest whose `init()` never returns costs one timeout instead
+of a `start_link/2` that never comes back.
+
+Make `validate` ask the runtime whether it came up, rather than asking the
+module what it exports: `init`'s own return value never reaches the kernel, so
+the alternative is capturing a runtime that failed to start and restoring it
+into every request.
+
 ## One image, three sizes
 
 "The size of an image" is ambiguous and the three answers differ by 15x, so
@@ -156,60 +213,6 @@ same protection `restore/3` gets from the other direction. Every failure is a
 refusal by name: `snapshot_corrupt`, `snapshot_truncated`,
 `snapshot_wrong_module`, `snapshot_too_large`, `snapshot_unknown_atom`,
 `snapshot_abi_mismatch`. A worker treats all of them as a miss and captures.
-
-## Let a worker do it for you
-
-`wasm_script_worker` captures at `start_link/2` and restores per request, so an
-adapter never calls `snapshot/1` itself. Declare the capability and say what
-the initialisation instance is built from:
-
-```erlang
-capabilities(Artifact) ->
-    %% your other capabilities, with these two set
-    (base_capabilities(Artifact))#{execution => reactor,
-                                   snapshots => #{version => ~"my-1"}}.
-
-snapshot_capability(#{module := M}) ->
-    #{version => ~"my-1",
-      module => M,
-      imports => #{bindings => TrustedBindings,
-                   snapshot_hooks => Hooks,
-                   compatibility_key => ~"my-1"},
-      init => [{call, ~"_initialize", []}, {call, ~"init", []}],
-      validate => fun(Inst) -> ok end,
-      post_restore => fun(Inst, _Ctx) -> ok end}.
-```
-
-Then `prepare/3` returns only the request's own work, because the rest is in
-the image:
-
-```erlang
-invoke => [{call, ~"handle", []}]
-```
-
-A capture that fails **fails the start**, since the alternative is a worker
-whose requests call `handle` on an instance that never ran `init`. The
-initialisation bindings should be as barren as the guest allows: whatever
-`init()` touches is shared by every request that restores it.
-
-`capture_timeout` bounds the whole thing, 60 s by default:
-
-<!-- check: modules my_adapter -->
-```erlang
-wasm_script_worker:start_link(my_adapter, #{root => scratch,
-                                       capture_timeout => 180_000}).
-```
-
-It is a worker option rather than a limit because a `timeout` in a limits map
-is enforced by whoever owns the instance, and an inline call cannot be
-interrupted. The kernel gives the capture a process of its own and kills it at
-the deadline, so a guest whose `init()` never returns costs one timeout instead
-of a `start_link/2` that never comes back.
-
-Make `validate` ask the runtime whether it came up, rather than asking the
-module what it exports: `init`'s own return value never reaches the kernel, so
-the alternative is capturing a runtime that failed to start and restoring it
-into every request.
 
 ## Declare what your imports hold
 

@@ -5,6 +5,10 @@ one costs you, how long it lives, and which process owns it. Read it when you
 are past your first `wasm:call/3` and are deciding where instances live in your
 supervision tree.
 
+**Do you need this?** Yes, once your first call works and you are deciding
+where instances live and how long. No, for a first try: start with
+[Getting started](getting-started.md).
+
 Have the application running before any of this. It owns the page budget and the
 module cache:
 

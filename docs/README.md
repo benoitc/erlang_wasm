@@ -52,8 +52,9 @@ You are running WebAssembly and want to know how.
 | [Host functions](host-functions.md) | calling from WebAssembly into Erlang |
 | [WASI](wasi.md) | running a `wasm32-wasip1` program, and its capabilities |
 | [Streams](streams.md) | talking to a guest while it runs |
-| [Workers](worker.md) | running untrusted code one request at a time |
-| [The adapter contract](worker-contract.md) | teaching the worker kernel a language |
+| [Using workers](worker.md) | running untrusted code one request at a time, with a deadline |
+| [Hosting scripting languages](scripting.md) | JavaScript, Python and Lua, one request per sandbox |
+| [Writing an adapter](worker-contract.md) | teaching the worker kernel another language |
 | [JavaScript](javascript.md) | QuickJS |
 | [Python](python.md) | CPython |
 | [Lua](lua.md) | Lua 5.4 |
@@ -73,6 +74,7 @@ You have it working and want it fast, bounded and safe.
 
 | | |
 | --- | --- |
+| [Worker configuration](worker-reference.md) | every worker setting, with its default |
 | [Features and conformance](features.md) | what is implemented, what it scores, what it costs |
 | [Upgrading from 0.3](upgrading.md) | moving from copied examples to the installed workers |
 | [Changelog](../CHANGELOG.md) | what changed, and what to set |
@@ -84,6 +86,7 @@ You are changing the runtime rather than using it.
 | | |
 | --- | --- |
 | [Architecture](architecture.md) | the module map, the layers, the path of a call |
+| [Worker internals](worker-internals.md) | how the worker kernel and its reaper are built |
 | [Adding an instruction](adding-an-instruction.md) | the change you will make most often |
 | [Design notes](design-notes.md) | why it is built this way |
 

@@ -245,28 +245,8 @@ Erlang wins here on measurement, not on principle.
 
 ## A request is three processes, not one
 
-The worker kernel gives each request a **worker**, a **guardian** and a
-**runner**, and the split is about who can be trusted to survive what.
-
-The runner is the only process that touches tenant data: it instantiates,
-invokes, decodes and dies. It is spawned `[link, monitor]` so that the monitor
-delivers a `DOWN` carrying the exit reason, and the link kills it if the
-guardian goes. The guardian traps exits, owns the mounts and the deadline, and
-is the process a `cancel` acts on. The worker is the API and holds the single
-in-flight slot.
-
-Everything a request can leak -- a directory, a staged file, a registered
-cleanup action -- is owned by the guardian and handed to a node-wide **reaper**
-when the request ends. That reaper is a process and not an ETS table with the
-worker as `heir`, for two reasons `wasm_worker_reaper` states: `heir` fires when the
-*owner* dies, so a worker-owned table survives exactly the failure it is not
-needed for; and deferring the sweep to the worker's next request leaks for as
-long as that worker is idle, which for a lightly used tenant has no bound.
-
-The cost of that shape is measurable and small. Accepting a request -- the
-reservation, the request directory, the channels and the runner spawn -- is
-1.7 to 2.3 ms, which on a 6 ms QuickJS request is a quarter of it. It has not
-been attacked because nothing yet needs it to be smaller.
+Moved to [Worker internals](worker-internals.md), beside the rest of how the
+worker kernel is built.
 
 ## A snapshot is a copy of state, not of an instance
 
@@ -790,3 +770,68 @@ and handed in as a preopened descriptor: a module using only standardised calls
 never names an address at all. What socket support does **not** cover is
 enumerated in [docs/security.md](security.md), and two of those statements are
 asserted by tests so the document fails with them.
+
+## The compiled tier, for someone changing it
+
+What follows was in [the compiled tier guide](compiled-tier.md), and is for
+changing `wasm_jit`, `wasm_core`, `wasm_code_slots` or `wasm_code_cache`
+rather than using them.
+
+### The five modules, and what each decides
+
+| module | decides |
+| --- | --- |
+| `wasm_jit` | when a module gets compiled and how a call reaches the result. Policy only. |
+| `wasm_core` | what Core Erlang a function lowers to, which functions it will take at all, and the process the OTP compiler runs in. |
+| `wasm_code_slots` | which of sixteen module names the result may load into, and when that name may be reused. |
+| `wasm_code_cache` | whether an artifact already exists on disk. |
+| `wasm_jit_sup` | the processes that compile, so none of them is invisible. |
+
+The compile runs in a supervised process that **owns** its slot reservation.
+That is the whole lifetime argument: the reservation dies with its owner, so a
+compiler that crashes or is killed costs nothing but the work.
+
+### Read what it generated
+
+If you change a lowering clause, look at the result rather than guessing:
+
+```erlang
+{ok, I} = wasm:instantiate(M, #{}, #{}),
+io:format("~s~n", [wasm_jit:dump(I)]).       %% the whole unit
+io:format("~s~n", [wasm_jit:dump(I, 12)]).   %% one function, by module index
+```
+
+`dump/1` builds the same unit the compiler builds and stops one step earlier, so
+what you read is what would run. `wasm_core:module/6` calls
+`wasm_core:forms/5` and compiles what it answers, and
+`wasm_core_SUITE:the_core_you_can_read_is_the_core_that_is_compiled` holds the
+two together.
+
+### Three options that exist only for conformance
+
+The defaults are what an embedder wants and are all wrong for a test that means
+to check generated code, because each of them lets a test pass without any
+generated code having run.
+
+| option | what it changes |
+| --- | --- |
+| `compile_sync` | compile on the calling process, so the next call is already compiled |
+| `compile_whole` | compile every eligible function, not only the ones that have run. Honoured on the background path as well as under `compile_sync`; it silently was not, and compiled what had run instead |
+| `compile_force` | raise on a compile error instead of interpreting |
+
+`wasm_spec_SUITE:compiled_phase` sets all three and then asserts
+`wasm_jit:counts/0` moved, because even with all three a refusal still
+interprets. That phase is what found `i32.shr_u` answering 4294967295 where the
+specification says -1.
+
+`compile_whole` is not a tuning knob. Compiling every function of QuickJS is 74
+seconds against about 8 for the hot set. Specification modules are a few
+functions each, which is why it is affordable there and nowhere else.
+
+**Nowhere else is meant literally.** Pointed at CPython 3.12, whose 11,447
+functions are eligible module-wide and so are not refused by the four-unit
+ceiling -- a single request only ever *reaches* 971 of them -- it
+reached 33 GB resident on a 48 GB machine in eleven minutes, published nothing,
+and spent that time paging rather than compiling. The ceiling bounds the names a
+unit can use; it is not a promise that everything under it will compile.
+

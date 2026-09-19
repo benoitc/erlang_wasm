@@ -1,12 +1,16 @@
 # The compiled tier
 
-The runtime interprets by default. Turn the tier on and a module that gets hot
-is compiled to Core Erlang, loaded as a BEAM module, and called instead of
-interpreted. Read this before you enable it, and before you change anything in
-`wasm_jit`, `wasm_core`, `wasm_code_slots` or `wasm_code_cache`.
+Every instance starts **interpreted**. The compiled tier, off by default,
+turns the functions a module calls most into BEAM code, through Core Erlang,
+and runs that instead. These are the two **execution modes**: interpreted
+always, compiled once a module is hot. Read this page before you turn it on.
 
-It is worth 8.4x on a language runtime and flat on a plugin, which is why it is
-opt-in. Decide with a measurement on your own module, not with this page.
+**Do you need this?** Yes, if a guest runs long, such as an interpreter: it is
+worth 8.4x on a language runtime. No, for a small plugin, where it is flat;
+measure your own module before deciding.
+
+For how the tier is built, and the options that exist only for the
+conformance suites, see [Design notes](design-notes.md#the-compiled-tier-for-someone-changing-it).
 
 ## Turn it on
 
@@ -379,64 +383,6 @@ anything you would not run as code.
 Only modules with a content hash are cached, which means modules you loaded from
 bytes. A module built from text takes a fresh identity every time it is
 validated, so there is nothing stable to key on.
-
-## The five modules, and what each decides
-
-| module | decides |
-| --- | --- |
-| `wasm_jit` | when a module gets compiled and how a call reaches the result. Policy only. |
-| `wasm_core` | what Core Erlang a function lowers to, which functions it will take at all, and the process the OTP compiler runs in. |
-| `wasm_code_slots` | which of sixteen module names the result may load into, and when that name may be reused. |
-| `wasm_code_cache` | whether an artifact already exists on disk. |
-| `wasm_jit_sup` | the processes that compile, so none of them is invisible. |
-
-The compile runs in a supervised process that **owns** its slot reservation.
-That is the whole lifetime argument: the reservation dies with its owner, so a
-compiler that crashes or is killed costs nothing but the work.
-
-## Read what it generated
-
-If you change a lowering clause, look at the result rather than guessing:
-
-```erlang
-{ok, I} = wasm:instantiate(M, #{}, #{}),
-io:format("~s~n", [wasm_jit:dump(I)]).       %% the whole unit
-io:format("~s~n", [wasm_jit:dump(I, 12)]).   %% one function, by module index
-```
-
-`dump/1` builds the same unit the compiler builds and stops one step earlier, so
-what you read is what would run. `wasm_core:module/6` calls
-`wasm_core:forms/5` and compiles what it answers, and
-`wasm_core_SUITE:the_core_you_can_read_is_the_core_that_is_compiled` holds the
-two together.
-
-## Three options that exist only for conformance
-
-The defaults are what an embedder wants and are all wrong for a test that means
-to check generated code, because each of them lets a test pass without any
-generated code having run.
-
-| option | what it changes |
-| --- | --- |
-| `compile_sync` | compile on the calling process, so the next call is already compiled |
-| `compile_whole` | compile every eligible function, not only the ones that have run. Honoured on the background path as well as under `compile_sync`; it silently was not, and compiled what had run instead |
-| `compile_force` | raise on a compile error instead of interpreting |
-
-`wasm_spec_SUITE:compiled_phase` sets all three and then asserts
-`wasm_jit:counts/0` moved, because even with all three a refusal still
-interprets. That phase is what found `i32.shr_u` answering 4294967295 where the
-specification says -1.
-
-`compile_whole` is not a tuning knob. Compiling every function of QuickJS is 74
-seconds against about 8 for the hot set. Specification modules are a few
-functions each, which is why it is affordable there and nowhere else.
-
-**Nowhere else is meant literally.** Pointed at CPython 3.12, whose 11,447
-functions are eligible module-wide and so are not refused by the four-unit
-ceiling -- a single request only ever *reaches* 971 of them -- it
-reached 33 GB resident on a 48 GB machine in eleven minutes, published nothing,
-and spent that time paging rather than compiling. The ceiling bounds the names a
-unit can use; it is not a promise that everything under it will compile.
 
 ## Pick a profile instead of the knobs
 

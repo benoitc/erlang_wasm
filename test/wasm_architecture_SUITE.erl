@@ -21,6 +21,7 @@ all() ->
     [the_module_graph_has_the_three_documented_cycles,
      every_module_says_what_it_is,
      the_layer_diagram_names_every_module,
+     the_page_counts_the_modules_right,
      every_function_a_moduledoc_names_exists].
 
 %% The three components `docs/architecture.md' names, and why each one is there.
@@ -129,6 +130,26 @@ the_layer_diagram_names_every_module(_) ->
     Built = lists:sort(modules()),
     ?assertEqual([], Built -- Drawn, "modules missing from the diagram"),
     ?assertEqual([], Drawn -- Built, "diagram names something that is gone").
+
+%% The page says how many modules there are, in words, and that number went
+%% stale three times: forty-eight while the tree had fifty-five, and fifty-six
+%% in two other places. The diagram check above could not catch it, since it
+%% compares names and not the sentence.
+the_page_counts_the_modules_right(_) ->
+    {match, [Words]} = re:run(architecture_page(),
+                              "what the ([a-z-]+) modules are",
+                              [{capture, all_but_first, list}]),
+    ?assertEqual(length(modules()), number(Words)).
+
+number(Words) ->
+    Units = #{"one" => 1, "two" => 2, "three" => 3, "four" => 4, "five" => 5,
+              "six" => 6, "seven" => 7, "eight" => 8, "nine" => 9},
+    Tens = #{"twenty" => 20, "thirty" => 30, "forty" => 40, "fifty" => 50,
+             "sixty" => 60, "seventy" => 70, "eighty" => 80, "ninety" => 90},
+    case string:split(Words, "-") of
+        [T, U] -> maps:get(T, Tens) + maps:get(U, Units);
+        [T]    -> maps:get(T, Tens)
+    end.
 
 %% The first fenced block on the page, which is the `L8'..`L0' listing. Taken
 %% by position and then checked, so a page that stops holding one fails here

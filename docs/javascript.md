@@ -11,6 +11,8 @@ promised, because that is the half you cannot discover from a working example.
 > `wasm_javascript` and the worker kernel they run on (`wasm_script_worker`)
 > are installed with the application; you supply the QuickJS artifact.
 
+<!-- check: run -->
+<!-- check: needs qjs -->
 ```erlang
 {ok, W} = wasm_script_worker:start_link(
             wasm_javascript_command, #{path => "test/fixtures/lang/qjs.wasm"}),
@@ -80,6 +82,9 @@ worker at it:
 scripts/build-quickjs-reactor.sh
 ```
 
+<!-- check: run -->
+<!-- check: fresh -->
+<!-- check: needs qjs_reactor -->
 ```erlang
 {ok, W} = wasm_script_worker:start_link(
             wasm_javascript,
@@ -115,6 +120,9 @@ Notes:
 Do this. It is the largest single thing you can do to a QuickJS request and it
 is one option:
 
+<!-- check: run -->
+<!-- check: fresh -->
+<!-- check: needs qjs_reactor -->
 ```erlang
 {ok, W} = wasm_script_worker:start_link(
             wasm_javascript,

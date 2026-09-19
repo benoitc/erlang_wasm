@@ -11,6 +11,8 @@ raises a ceiling behind your back.
 > the worker kernel they run on (`wasm_script_worker`) are installed with the
 > application; you supply the CPython artifact.
 
+<!-- check: run -->
+<!-- check: needs python -->
 ```erlang
 {ok, W} = wasm_script_worker:start_link(
             wasm_python_command,
@@ -18,7 +20,8 @@ raises a ceiling behind your back.
               limits => #{timeout => 300_000,
                           max_memory_pages => 4096,
                           max_host_calls => 1_000_000,
-                          max_heap_words => 16 * 1024 * 1024}}),
+                          max_heap_words => 16 * 1024 * 1024,
+                          fuel => 4_000_000_000}}),
 {ok, #{result := #{~"answer" := 42}}} =
     wasm_script_worker:run(W, ~"def main(c):\n    return {'answer': c['value'] + 1}\n",
                            #{~"value" => 41}).
@@ -43,14 +46,10 @@ interpreter. Three of its defaults will not do:
 | `max_heap_words` | the default **kills the runner** before the interpreter starts |
 | `fuel` | 10,000,000 does not reach CPython's first line; 4,000,000,000 is measured to be enough |
 
-**A bigger `max_heap_words` is slower, not safer.** Measured on this box: 16M
-words ran a request in 48.3 s, 64M took 85.3 s, and 256M took 84.5 s. A larger
-bound lets the heap grow before a collection and the collection then costs
-more. A ceiling is not a target.
-
-Those are single runs, and this box is noisy enough that a request costs
-anywhere from 53 to 76 s when the measurement is repeated and interleaved. Use
-16M; do not read the other two as a precise ratio.
+**A bigger `max_heap_words` is slower, not safer.** Use 16M words: 64M and
+256M were both measured slower, 85 s against 48 s for a request, because a
+larger bound lets the heap grow before each collection and the collection then
+costs more. A ceiling is not a target.
 
 `test/fixtures/lang/PYTHON.md` has the rest of the numbers and what artifact
 they were taken on.
@@ -116,12 +115,15 @@ point a worker at it:
 scripts/build-python-reactor.sh
 ```
 
+<!-- check: run -->
+<!-- check: fresh -->
+<!-- check: needs python_reactor -->
 ```erlang
 {ok, W} = wasm_script_worker:start_link(
             wasm_python,
             #{path => "test/fixtures/lang/py_reactor.wasm",
               lib  => "test/fixtures/lang/py_reactor_lib",
-              root => scratch,
+              capture_timeout => 300_000,
               limits => wasm_python:limits()}),
 {ok, #{result := #{~"answer" := 42}}} =
     wasm_script_worker:run(W, #{source => <<"def main(c):\n"
@@ -137,7 +139,8 @@ Notes:
 - **`start_link/2` takes 83 to 90 seconds**, or 17 with the capture floor
   below, because that is one interpreter start. It happens once per worker, not
   once per request, and a host should start its workers before it starts taking
-  traffic.
+  traffic. It is also longer than the 60 s `capture_timeout` default, which is
+  why the example raises it.
 - **Isolation is unchanged.** A restore builds a *fresh* instance, so one
   request's module-level state never reaches the next.
 - **Two paths, not one.** The module needs its standard library beside it, and
@@ -158,13 +161,16 @@ Notes:
 CPython gains more from this than either other guest here, and it gains on both
 halves: the start and the request.
 
+<!-- check: run -->
+<!-- check: fresh -->
+<!-- check: needs python_reactor -->
 ```erlang
 Limits = (wasm_python:limits())#{max_heap_words => 32 * 1024 * 1024},
 {ok, W} = wasm_script_worker:start_link(
             wasm_python,
             #{path => "test/fixtures/lang/py_reactor.wasm",
               lib  => "test/fixtures/lang/py_reactor_lib",
-              root => scratch,
+              capture_timeout => 300_000,
               limits => Limits,
               runner_min_heap_words  => 1_000_000,
               capture_min_heap_words => 2_000_000}).

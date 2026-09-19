@@ -6265,3 +6265,37 @@ Both earlier tables in this file stand: this run is at a different load and the
 numbers differ from them by a few per cent, which is what interleaved pairs on
 a busy box are for. What is not allowed is reading a row from one and a row
 from another.
+
+## The kernel moved into the application, compared against the one it replaced
+
+The worker kernel moved from `examples/` into `src/worker/` under `wasm_`
+names, and the reaper became supervised. No hot path changed, but every
+module the worker benchmarks drive was renamed, so the comparison was run
+rather than assumed.
+
+`workerbench`'s `revision` mode loads the old kernel twice, from `main` at
+`eef4701` with every module renamed `o1_` and `o2_`, beside the new one at
+`1cf58d3`, in one emulator: the null is o1 against o2, the comparison o1
+against new, each side with its own worker, reaper and scratch root.
+`revision_set` runs three pairs of runs in each ordering (six for throughput),
+each in a fresh emulator, and gates each ordering on the median of paired
+ratios inside [0.95, 1.05]. Every null passed on the first attempt; no
+throughput run was rerun for idle time. CPython reactor
+`b4a78ad5046df47d0c8422eca122aa660f83933b70fcf0736519dc0dd0bc5514`. Load
+average 14 at the start, 70 at the end, most of it macOS indexing.
+
+| arm | size | null, F | new over old, F | null, R | new over old, R |
+| --- | --- | ---: | ---: | ---: | ---: |
+| QuickJS latency | 200 rounds, floor 200,000 | 1.0009 | 1.0011 | 0.9995 | 1.0013 |
+| Lua latency | 200 rounds, floor 200,000 | 1.0013 | 0.9996 | 0.9995 | 1.0007 |
+| CPython latency | 50 rounds, floor 1,000,000 | 1.0033 | 1.0012 | 1.0020 | 0.9965 |
+| QuickJS throughput | K = 4, 60 s, floor 200,000 | 1.0005 | 0.9998 | 0.9999 | 0.9999 |
+
+**No arm moved.** The largest difference is 0.35%, inside the null's own
+spread. The gate is known to see a change of this kind: a new kernel slowed
+by 3 ms a request fails both orderings at about 1.19.
+
+On the new tree alone: `rebar3 bench` passes; `restorebits` and `teardown` run
+under the new names (a QuickJS restore 444 us minimum, 540 median). The
+`phases` null and overhead arms were refused by their own load gate at load
+74 and are recorded in the next section once the box is quiet.

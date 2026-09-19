@@ -786,10 +786,10 @@ wraps the real adapter and timestamps both sides of every callback.
 
 ```sh
 erlc -Werror -o bench/paths -pa _build/test/lib/wasm/ebin \
-     -pa _build/test/lib/wasm/examples \
+     -pa _build/test/lib/wasm/test/support \
      bench/paths/phasing_adapter.erl bench/paths/workerbench.erl
 
-erl_paths=(-pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples
+erl_paths=(-pa _build/test/lib/wasm/ebin
            -pa _build/test/lib/wasm/test/support -pa bench/paths)
 
 erl -noshell "${erl_paths[@]}" -run workerbench main phases smoke

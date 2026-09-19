@@ -43,10 +43,14 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
-%% Pages whose Erlang blocks all run unless marked `parse'.
+%% Pages whose Erlang blocks all run unless marked `parse': getting-started
+%% and every page under `docs/examples/'.
 -define(RUN_PAGES, ["docs/getting-started.md"]).
-%% Pages where no block may be skipped.
--define(START_PAGES, ["docs/getting-started.md", "docs/guests.md"]).
+-define(RUN_DIR, "docs/examples/").
+%% Pages where no block may be skipped: Start here, and the examples.
+-define(START_PAGES, ["docs/introduction.md", "docs/concepts.md",
+                      "docs/what-you-get.md", "docs/getting-started.md",
+                      "docs/guests.md"]).
 %% The worker start functions whose adapter argument must name an adapter, as
 %% {Module, Function, Arity, ArgumentPosition}.
 -define(ADAPTER_ARGS, [{wasm_script_worker, start_link, 2, 1},
@@ -92,7 +96,7 @@ every_skip_has_a_reason(Config) ->
 start_pages_skip_nothing(Config) ->
     Bad = [where(B) || #{src := {file, F}, ann := #{skip := _}} = B
                            <- all_blocks(Config),
-                       lists:member(F, ?START_PAGES)],
+                       start_page(F)],
     ?assertEqual([], Bad, "no skip on a Start here page").
 
 erlang_blocks_parse(Config) ->
@@ -271,9 +275,12 @@ page_blocks(Config, Page) ->
 
 runs(#{lang := "erlang", src := {file, F}, ann := A}) ->
     not maps:is_key(parse, A) andalso
-        (maps:get(run, A, false) orelse lists:member(F, ?RUN_PAGES));
+        (maps:get(run, A, false) orelse lists:member(F, ?RUN_PAGES)
+         orelse lists:prefix(?RUN_DIR, F));
 runs(_) ->
     false.
+
+start_page(F) -> lists:member(F, ?START_PAGES) orelse lists:prefix(?RUN_DIR, F).
 
 where(#{src := {file, F}, line := N}) -> {F, N};
 where(#{src := {doc, M, What}, line := N}) -> {M, What, N}.

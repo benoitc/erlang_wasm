@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 **The workers ship with the application.** Running JavaScript, Python or Lua
 now needs the dependency and a runtime artifact, and nothing copied from
@@ -18,6 +18,9 @@ maps each copied module to its installed one.
   cleans up what a crashed one left, and `reaper_options` for the cleanup
   limits. `wasm_script_worker:cleanup_stats/0` and `cleanup_requests/0` show
   what it holds.
+- The guides open with what you want to do, and ten example pages run as
+  written. Every code block in `README.md`, `docs/` and the module docs is
+  checked on every test run, and `getting-started.md` runs as pasted.
 
 ## 0.3.0
 

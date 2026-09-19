@@ -5,6 +5,10 @@ with a WASI sysroot) and give it a filesystem, environment, clocks and sockets
 that you choose. Read this when your guest is a real program rather than a bag
 of exported functions, and when you need to decide exactly what it may reach.
 
+**Do you need this?** Yes, if your guest was built for WASI (it has a `main`,
+reads files or the clock), or you are granting it access to anything. No, for
+a module that only computes over the memory you give it.
+
 Here WASI is an Erlang host interface, not an embedded WASI runtime. Every
 syscall is an ordinary host function, so you can trace it, replace it, or refuse
 it, and every capability decision is made in Erlang.

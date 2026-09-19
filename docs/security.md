@@ -4,6 +4,9 @@ This page tells you what the runtime protects you against and what it leaves to
 you. Read it before you put a module you did not write in front of user traffic.
 The second list is the important one.
 
+**Do you need this?** Yes, before running any module you did not write. It
+says what the sandbox covers and, more usefully, what it leaves to you.
+
 ## What holds the boundary
 
 A module cannot reach outside its sandbox, for five reasons:
@@ -146,13 +149,9 @@ the most tempting wrong claim available about this design. A process is a
    preopen at a directory a hostile party can write to concurrently.
 
    A preopen is also a directory rather than a name on the native backend,
-   opened once when the capability is granted. Replacing the host directory
-   underneath a running instance used to redirect every path it held.
-
-   This is only now true of what a guest does. `path_open` resolved the path
-   and opened it as two separate steps whichever backend was present, so the
-   native one guarded nothing a guest could reach and every deployment had the
-   fallback's race. A guest open goes through `wasi_fs` now, and
+   opened once when the capability is granted, so replacing the host directory
+   underneath a running instance does not redirect the paths it holds. A
+   guest's `path_open` goes through `wasi_fs` and gets that protection;
    `wasi_SUITE` asserts it by a behaviour only the native backend has.
 
 ## What a network grant does not cover

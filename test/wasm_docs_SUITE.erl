@@ -57,7 +57,10 @@
                        {wasm_script_worker, start_link, 3, 2}]).
 -define(ADAPTER_BEHAVIOUR, wasm_worker_adapter).
 %% Blocks the strict run may not execute, as {Page, Fixture}: reviewed here.
--define(NOT_IN_CI, []).
+%% The CPython reactor takes about twenty minutes to cross-build and 90 s to
+%% capture, so CI does not build it; these run when the CPython interop group
+%% is run by hand, with `python_reactor' added to `WASM_DOCS_FIXTURES'.
+-define(NOT_IN_CI, [{"docs/python.md", python_reactor}]).
 
 suite() -> [{timetrap, {minutes, 15}}].
 
@@ -528,24 +531,23 @@ scratch(Name) ->
 %% One peer node per page, working directory at the repository root, the
 %% application started, and one evaluator for the whole page.
 run_page(Root, Page, Blocks) ->
-    case [B || B <- Blocks, runs(B)] of
-        []   -> [];
-        Runs ->
-            case [N || #{ann := #{needs := N}} <- Runs,
-                       not fixture_present(N, Root)] of
-                [] ->
-                    run_blocks(Root, Page, Runs);
-                Missing ->
-                    case strict() andalso
-                         lists:any(fun(N) ->
-                                       lists:member(N, declared_fixtures())
-                                   end, Missing) of
-                        true  -> [{Page, {fixture_missing, Missing}}];
-                        false -> ct:log("~ts not run: missing ~p",
-                                        [Page, Missing]),
-                                 []
-                    end
-            end
+    Runs = [B || B <- Blocks, runs(B)],
+    %% Block by block: a page whose reactor example has no fixture here still
+    %% runs its command example. A block needing a fixture starts `fresh', so
+    %% leaving one out cannot starve a later block of its bindings.
+    {Present, Absent} =
+        lists:partition(fun(#{ann := #{needs := N}}) -> fixture_present(N, Root);
+                           (_) -> true
+                        end, Runs),
+    Declared = declared_fixtures(),
+    Failures = [{where(B), {fixture_missing, N}}
+                || #{ann := #{needs := N}} = B <- Absent,
+                   strict() andalso lists:member(N, Declared)],
+    _ = [ct:log("~p not run: fixture ~p is not here", [where(B), N])
+         || #{ann := #{needs := N}} = B <- Absent],
+    case Present of
+        []  -> Failures;
+        _   -> Failures ++ run_blocks(Root, Page, Present)
     end.
 
 run_blocks(Root, Page, Runs) ->

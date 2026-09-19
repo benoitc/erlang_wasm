@@ -1,7 +1,8 @@
-# The adapter contract
+# Writing an adapter
 
 This page is for writing an adapter: the module that teaches the worker kernel
-how to run one language. You need it when you want to run a guest the kernel
+how to run one language, by implementing the `wasm_worker_adapter`
+behaviour. You need it when you want to run a guest the kernel
 has never heard of, and you should not need to change the kernel to do it. The
 kernel knows about modules, imports, invocations, deadlines and bounded
 channels. It does not know what WASI is, what JSON is, or that an entry point

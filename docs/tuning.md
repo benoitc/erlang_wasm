@@ -7,6 +7,9 @@ digits. Most of the time the answer is garbage collection in the process the
 kernel spawns per request, and the fix is one worker option. The rest of the
 time it is the start rather than the request, which is a different guide.
 
+**Do you need this?** Yes, when a request costs much more than the same work
+measured on its own. No, until something is measurably slow.
+
 Every number here was measured on this project; `test/audit/PERF.md` is where
 each one lives, and `bench/paths/README.md` is the protocol they were taken
 under.
@@ -177,7 +180,7 @@ Do not set these again or fight them:
 - `wasm:compile/1` floors its own heap at two words per input byte. That is
   what takes QuickJS from 244 ms to 55.
 - `max_heap_words` in a limits map, applied at `spawn_opt` by whoever owns the
-  instance. See [the worker guide](worker.md).
+  instance. See [Worker internals](worker-internals.md).
 - `compile_max_heap_words` bounds a compiler process. See [the compiled tier
   guide](compiled-tier.md).
 

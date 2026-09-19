@@ -159,7 +159,7 @@ and taking a second would be two atomic operations per re-entry for nothing.
 A request through the worker kernel arrives at this path by a longer road:
 `wasm_script_worker` spawns a runner per request, the adapter's `prepare/3` builds
 the import set, and a reactor restores an image before `handle` is called. That
-road is drawn in [the worker guide](worker.md), and its cost is broken down
+road is drawn in [Worker internals](worker-internals.md), and its cost is broken down
 phase by phase in `test/audit/PERF.md`.
 
 ## Reading the graph yourself

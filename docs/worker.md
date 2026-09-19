@@ -116,6 +116,9 @@ instance costs about 64 KB, so a reset is microseconds rather than milliseconds.
 
 ## Choose a configuration: `metered` or `compiled`
 
+`metered` means a fuel budget stops a runaway guest; `compiled` means the
+compiled tier is on and only a wall-clock deadline stops it. The names are the
+ones the test groups (`qjs_metered`, `qjs_compiled`) and the benchmarks use.
 These two are **mutually exclusive**, and a host that asks for both gets
 neither an error nor a warning.
 

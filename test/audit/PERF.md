@@ -6297,5 +6297,8 @@ by 3 ms a request fails both orderings at about 1.19.
 
 On the new tree alone: `rebar3 bench` passes; `restorebits` and `teardown` run
 under the new names (a QuickJS restore 444 us minimum, 540 median). The
-`phases` null and overhead arms were refused by their own load gate at load
-74 and are recorded in the next section once the box is quiet.
+`phases` null and overhead arms were first refused by their own load gate at
+load 74, then by the code manifest when committing this record moved HEAD;
+re-seeded and rerun below load 20, both gates pass. The null reads 19.6 ms
+against 19.5 ms median for a QuickJS reactor request, envelope paired ratio
+0.999; the probe resolution floor is 67 us.

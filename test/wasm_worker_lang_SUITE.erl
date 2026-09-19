@@ -62,24 +62,24 @@ groups() ->
 %% was a kit that returns an empty list when it cannot tell.
 cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(qjs_adapter, artifact_opts()).
+    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_javascript_command, artifact_opts()).
 
 reactor_cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(qjs_reactor_adapter,
+    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_javascript,
                                                reactor_opts()).
 
 python_cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(py_adapter, python_opts()).
+    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_python_command, python_opts()).
 
 lua_cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(lua_reactor_adapter, lua_opts()).
+    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_lua, lua_opts()).
 
 python_reactor_cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(py_reactor_adapter,
+    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_python,
                                                python_reactor_opts()).
 
 artifact_opts() -> #{path => engine()}.
@@ -128,24 +128,24 @@ engine() ->
 %% silently get the interpreter, which is why they are two named
 %% configurations rather than a set of knobs.
 init_per_group(qjs_metered, Config) ->
-    [{adapter, qjs_adapter}, {config, metered}, {limits, metered()} | Config];
+    [{adapter, wasm_javascript_command}, {config, metered}, {limits, metered()} | Config];
 init_per_group(qjs_compiled, Config) ->
-    [{adapter, qjs_adapter}, {config, compiled}, {limits, compiled()} | Config];
+    [{adapter, wasm_javascript_command}, {config, compiled}, {limits, compiled()} | Config];
 init_per_group(qjs_reactor, Config) ->
     skip_without(reactor(), "no QuickJS reactor: run "
                             "scripts/build-quickjs-reactor.sh",
-                 [{adapter, qjs_reactor_adapter}, {config, reactor},
+                 [{adapter, wasm_javascript}, {config, reactor},
                   {engine, reactor()}, {opts, reactor_opts()},
                   {limits, reactor_limits()} | Config]);
 init_per_group(lua_reactor, Config) ->
     skip_without(lua(), "no Lua reactor: run scripts/build-lua-reactor.sh",
-                 [{adapter, lua_reactor_adapter}, {config, reactor},
+                 [{adapter, wasm_lua}, {config, reactor},
                   {engine, lua()}, {opts, lua_opts()},
-                  {limits, lua_reactor_adapter:limits()} | Config]);
+                  {limits, wasm_lua:limits()} | Config]);
 init_per_group(python_reactor, Config) ->
     skip_without(python_reactor(), "no CPython reactor: run "
                                    "scripts/build-python-reactor.sh",
-                 [{adapter, py_reactor_adapter}, {config, reactor},
+                 [{adapter, wasm_python}, {config, reactor},
                   {engine, python_reactor()}, {opts, python_reactor_opts()},
                   %% One interpreter start is 83 to 90 s, so the 60 s default
                   %% would kill every capture. Raised knowingly, like every
@@ -153,11 +153,11 @@ init_per_group(python_reactor, Config) ->
                   {worker_opts, #{capture_timeout => 180_000}},
                   {limits, python_reactor_limits()} | Config]);
 init_per_group(python_metered, Config) ->
-    skip_without(python(), [{adapter, py_adapter}, {config, metered},
+    skip_without(python(), [{adapter, wasm_python_command}, {config, metered},
                             {engine, python()}, {opts, python_opts()},
                             {limits, python_metered()} | Config]);
 init_per_group(python_compiled, Config) ->
-    skip_without(python(), [{adapter, py_adapter}, {config, compiled},
+    skip_without(python(), [{adapter, wasm_python_command}, {config, compiled},
                             {engine, python()}, {opts, python_opts()},
                             {limits, python_compiled()} | Config]).
 
@@ -178,7 +178,7 @@ skip_without(Path, Why, Config) ->
 %% actually needs: a restore is 0.6 s and a request 0.3 s, so 30 s is generous
 %% and it is what bounds the runaway cases instead of two minutes each.
 python_reactor_limits() ->
-    (py_reactor_adapter:limits())#{timeout => 30_000}.
+    (wasm_python:limits())#{timeout => 30_000}.
 
 reactor_limits() ->
     #{timeout => 30_000, fuel => infinity, max_memory_pages => 4096,
@@ -223,13 +223,13 @@ init_per_testcase(TC, Config) ->
     process_flag(trap_exit, true),
     Root = filename:join([?config(priv_dir, Config), atom_to_list(TC), "root"]),
     ok = filelib:ensure_path(Root),
-    {ok, Reaper} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, Reaper} = wasm_worker_reaper:start_link(#{scratch => Root}),
     {ok, W} = start(Config, #{}),
     [{reaper, Reaper}, {worker, W}, {root, Root} | Config].
 
 end_per_testcase(_TC, Config) ->
-    try script_worker:stop(?config(worker, Config)) catch _:_ -> ok end,
-    try worker_reaper:stop() catch _:_ -> ok end,
+    try wasm_script_worker:stop(?config(worker, Config)) catch _:_ -> ok end,
+    try wasm_worker_reaper:stop() catch _:_ -> ok end,
     ok.
 
 start(Config, Opts) ->
@@ -244,7 +244,7 @@ start(Config, Opts) ->
     Merged = maps:merge(Base, Opts),
     %% A case that asks for its own limits is asking for an override, not a
     %% replacement: the engine still needs room to start.
-    script_worker:start_link(
+    wasm_script_worker:start_link(
       ?config(adapter, Config),
       Merged#{limits => maps:merge(?config(limits, Config),
                                    maps:get(limits, Opts, #{}))}).
@@ -272,9 +272,9 @@ asking_for_both_silently_gets_the_interpreter(Config) ->
     ct:timetrap({minutes, 6}),
     Before = entered(),
     {ok, W} = start(Config, #{limits => #{compile => true, profile => script}}),
-    [_ = script_worker:run(W, echo(Config)) || _ <- lists:seq(1, 500)],
+    [_ = wasm_script_worker:run(W, echo(Config)) || _ <- lists:seq(1, 500)],
     ?assertEqual(Before, entered()),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 the_tier_enters_a_compiled_worker(Config) ->
     %% Minutes, and measured rather than guessed: on this box the tier was
@@ -294,7 +294,7 @@ entered() -> maps:get(entered, wasm_jit:counts(), 0).
 
 until_entered(_W, _R, 0) -> false;
 until_entered(W, R, N) ->
-    _ = script_worker:run(W, R),
+    _ = wasm_script_worker:run(W, R),
     case entered() > 0 of
         true  -> true;
         false -> until_entered(W, R, N - 1)
@@ -371,21 +371,21 @@ transferred_actions_run_only_when_cleanup_fails(Config) -> ?KIT:transferred_acti
 %% this asserts 2x -- because a case that encodes a measurement becomes a case
 %% that fails when the box is busy.
 a_restored_worker_answers_faster(Config) ->
-    Request = ?KIT:fixture(qjs_reactor_adapter, echo, reactor_opts()),
-    Reactor = best_of(qjs_reactor_adapter, reactor_opts(), Request),
-    Command = best_of(qjs_adapter, artifact_opts(),
-                      ?KIT:fixture(qjs_adapter, echo, artifact_opts())),
+    Request = ?KIT:fixture(wasm_javascript, echo, reactor_opts()),
+    Reactor = best_of(wasm_javascript, reactor_opts(), Request),
+    Command = best_of(wasm_javascript_command, artifact_opts(),
+                      ?KIT:fixture(wasm_javascript_command, echo, artifact_opts())),
     ct:pal("reactor ~p ms, command ~p ms", [Reactor, Command]),
     ?assert(Reactor * 2 < Command),
     Config.
 
 best_of(Adapter, Opts, Request) ->
-    {ok, W} = script_worker:start_link(
+    {ok, W} = wasm_script_worker:start_link(
                 Adapter, Opts#{root => scratch, limits => reactor_limits()}),
     Ts = [begin
               T = erlang:monotonic_time(millisecond),
-              {ok, _} = script_worker:run(W, Request),
+              {ok, _} = wasm_script_worker:run(W, Request),
               erlang:monotonic_time(millisecond) - T
           end || _ <- lists:seq(1, 5)],
-    ok = script_worker:stop(W),
+    ok = wasm_script_worker:stop(W),
     lists:min(Ts).

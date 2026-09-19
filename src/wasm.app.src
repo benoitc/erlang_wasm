@@ -5,7 +5,7 @@
     %% {deps, [{wasm, {pkg, erlang_wasm}}]}.
     {pkg_name, erlang_wasm},
     {vsn, "0.3.0"},
-    {registered, [wasm_sup, wasm_engine, wasm_module_cache]},
+    {registered, [wasm_sup, wasm_engine, wasm_module_cache, wasm_worker_reaper]},
     {mod, {wasm_app, []}},
     {applications, [kernel, stdlib, crypto]},
     {env, []},

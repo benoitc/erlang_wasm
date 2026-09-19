@@ -4,8 +4,8 @@ This page shows you how to run untrusted WebAssembly per request,
 Cloudflare-Workers style: one cached module, a pool of worker processes, one
 instance per worker, and no state surviving a request. Read it when a module you
 did not write handles user traffic, or when you need a timeout that actually
-stops the work. The runtime ships no worker of its own, so what follows is the
-pattern, and `examples/wasm_worker.erl` is a working implementation you can copy.
+stops the work. `wasm_instance_worker` is that worker, installed with the
+application; what follows is how it works and how to use it.
 
 ## Decide whether you need one
 
@@ -52,10 +52,10 @@ timeout is advice rather than a bound.
 
 ```erlang
 {ok, Mod}  = wasm:load_file("plugin.wasm"),      % compiled once, cached
-{ok, W}    = wasm_worker:start_link(Mod, #{isolation => fresh,
+{ok, W}    = wasm_instance_worker:start_link(Mod, #{isolation => fresh,
                                            limits => wasm_limits:untrusted()}),
-{ok, [R]}  = wasm_worker:call(W, ~"handle", [RequestId], 500),
-ok         = wasm_worker:stop(W).
+{ok, [R]}  = wasm_instance_worker:call(W, ~"handle", [RequestId], 500),
+ok         = wasm_instance_worker:stop(W).
 ```
 
 The worker is an ordinary `gen_server`. Its `init` calls `wasm:instantiate/3`
@@ -76,7 +76,7 @@ time, and `examples/qjs_worker.erl` for logic that arrives as text.
         |
         v
    init/1 --> wasm:instantiate(Mod, Imports, Limits)
-        |     proc_lib:set_label({wasm_worker, Name})
+        |     proc_lib:set_label({wasm_instance_worker, Name})
         v
      ready <---------------------------------+
         |                                     |
@@ -184,7 +184,7 @@ more time collecting than running:
 
 <!-- check: modules my_adapter -->
 ```erlang
-script_worker:start_link(my_adapter, #{root => scratch,
+wasm_script_worker:start_link(my_adapter, #{root => scratch,
                                        runner_min_heap_words => 200_000}).
 ```
 
@@ -220,7 +220,7 @@ reason nothing names.
 
 <!-- check: modules my_adapter -->
 ```erlang
-script_worker:start_link(my_adapter, #{root => scratch,
+wasm_script_worker:start_link(my_adapter, #{root => scratch,
                                        capture_min_heap_words => 2_000_000}).
 ```
 
@@ -232,7 +232,7 @@ the two want numbers that are nothing like each other.
 
 It only applies where a capture happens, so a worker that reads its image from
 `snapshot_dir` and one whose adapter declares no snapshot capability both
-ignore it. `script_worker:capture_heap_words/2` answers what it resolves to,
+ignore it. `wasm_script_worker:capture_heap_words/2` answers what it resolves to,
 and the refusal rules are the runner's.
 
 ## Bound the work and the time
@@ -260,7 +260,7 @@ catch
 end.
 ```
 
-`wasm_worker:call/3` uses `worker_timeout` for `Timeout`, five seconds unless
+`wasm_instance_worker:call/3` uses `worker_timeout` for `Timeout`, five seconds unless
 you set it:
 
 ```erlang
@@ -272,12 +272,12 @@ that copying the example does not silently give you five seconds.
 
 ## Every setting, and what it bounds
 
-The kernel in `examples/script_worker.erl` has more knobs than the section
+The kernel, `wasm_script_worker`, has more knobs than the section
 above, and all of them have defaults that a copied example gets silently. They
 are listed here because a default nobody can find is a default nobody can
 change.
 
-**Per request, in the `limits` map** you hand `script_worker:start_link/2`.
+**Per request, in the `limits` map** you hand `wasm_script_worker:start_link/2`.
 These merge over `wasm_limits:untrusted/0`, so everything that preset bounds
 still applies:
 
@@ -302,7 +302,7 @@ and what each was measured at.
 | `trusted` | `false` | whether a `mode => write` mount is allowed at all |
 | `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2`. CPython needs about 90 s and so must raise it |
 
-**Per reaper**, in the second argument to `worker_reaper:start_link/2`. These
+**Per reaper**, in the second argument to `wasm_worker_reaper:start_link/2`. These
 bound cleanup, which runs after a request has already been answered:
 
 | setting | default | what it bounds |
@@ -354,7 +354,7 @@ instance both read-modify-write the same state, and the last writer wins.
 ```erlang
 %% One module, N workers, check one out per request.
 {ok, Mod} = wasm:load_file("plugin.wasm"),
-Pool = [begin {ok, W} = wasm_worker:start_link(Mod, Opts), W end
+Pool = [begin {ok, W} = wasm_instance_worker:start_link(Mod, Opts), W end
         || _ <- lists:seq(1, erlang:system_info(schedulers_online))],
 ```
 

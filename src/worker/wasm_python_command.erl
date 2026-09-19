@@ -1,4 +1,4 @@
--module(py_adapter).
+-module(wasm_python_command).
 -moduledoc """
 Run Python that arrives at request time, through the `script_v1` profile.
 
@@ -41,7 +41,7 @@ preopened read-only as a second mount, and `requirements/2` is where that would
 be declared.
 """.
 
--behaviour(script_worker).
+-behaviour(wasm_script_worker).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).
@@ -51,7 +51,7 @@ be declared.
 artifact(Opts) ->
     case maps:find(path, Opts) of
         error ->
-            {error, worker_error:adapter(adapter_failure,
+            {error, wasm_worker_error:adapter(adapter_failure,
                                          ~"no `path' to a CPython build", #{})};
         {ok, Path} ->
             load(Path)
@@ -60,13 +60,13 @@ artifact(Opts) ->
 load(Path) ->
     case file:read_file(Path) of
         {error, Why} ->
-            {error, worker_error:adapter(adapter_failure, ~"cannot read the engine",
+            {error, wasm_worker_error:adapter(adapter_failure, ~"cannot read the engine",
                                          #{path => iolist_to_binary(Path),
                                            reason => Why})};
         {ok, Bytes} ->
             case wasm:load(Bytes) of
                 {ok, Module} -> {ok, #{module => Module, boot => boot()}};
-                {error, E}   -> {error, worker_error:runtime(E)}
+                {error, E}   -> {error, wasm_worker_error:runtime(E)}
             end
     end.
 
@@ -79,7 +79,7 @@ boot() ->
 
 requirements(Request, #{boot := Boot}) when is_map(Request) ->
     Source = maps:get(source, Request, ?DEFAULT_SOURCE),
-    Context = script_v1:encode_context(maps:get(context, Request, #{})),
+    Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
     Staged = byte_size(Boot) + byte_size(Source) + byte_size(Context),
     {ok, #{%% Starting CPython is tens of seconds, not milliseconds, and a
            %% request that cannot have that much left is refused rather than
@@ -90,13 +90,13 @@ requirements(Request, #{boot := Boot}) when is_map(Request) ->
            staged_bytes => Staged, staged_files => 3,
            mounts => #{ro => #{guest_path => ~"/", mode => read}}}};
 requirements(_Request, _Artifact) ->
-    {error, worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
+    {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
 prepare(Request, #{module := M, boot := Boot}, Env) ->
-    Marker = script_v1:marker(),
+    Marker = wasm_script_v1:marker(),
     Stage = maps:get(stage, Env),
     Source = maps:get(source, Request, ?DEFAULT_SOURCE),
-    Context = script_v1:encode_context(maps:get(context, Request, #{})),
+    Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
     case stage_all(Stage, [{~"_boot.py", Boot}, {~"main.py", Source},
                            {~"context.json", Context}]) of
         {error, E} ->
@@ -124,7 +124,7 @@ wasi(Marker, Env) ->
     #{host_dir := Dir} = maps:get(ro, Mounts),
     Sink = fun(Which) ->
                C = maps:get(Which, Chans),
-               fun(Data) -> script_worker:channel_write(C, Data) end
+               fun(Data) -> wasm_script_worker:channel_write(C, Data) end
            end,
     wasi_preview1:imports(
       #{args => [~"python", ~"-I", ~"-B", ~"-u", ~"/_boot.py", Marker],
@@ -135,20 +135,20 @@ wasi(Marker, Env) ->
 
 decode(#{outcome := exited, exit := 0} = R, #{marker := Marker}) ->
     #{channels := #{stdout := Out, stderr := Err}} = R,
-    case script_v1:decode_combined(Out, Marker) of
+    case wasm_script_v1:decode_combined(Out, Marker) of
         {ok, #{result := Result, stdout := Printed}} ->
             {ok, #{result => Result, stdout => Printed, stderr => Err}};
         {error, Code, Msg} ->
-            {error, script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
+            {error, wasm_script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
     end;
 decode(#{outcome := exited, exit := Code} = R, _State) ->
     #{channels := #{stdout := Out, stderr := Err}} = R,
-    {error, worker_error:adapter(exit, ~"the engine exited non-zero",
+    {error, wasm_worker_error:adapter(exit, ~"the engine exited non-zero",
                                  #{code => Code, stdout => Out, stderr => Err})};
 decode(#{outcome := trapped, error := undefined}, _State) ->
-    {error, worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
+    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
 decode(#{outcome := trapped, error := E}, _State) ->
-    {error, worker_error:runtime(E)};
+    {error, wasm_worker_error:runtime(E)};
 decode(#{outcome := returned} = R, State) ->
     decode(R#{outcome := exited, exit := 0}, State).
 

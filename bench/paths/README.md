@@ -536,7 +536,7 @@ Four things it will not let you get wrong, each of which cost a draft:
 ## Pricing a request rather than a path
 
 `workerbench` is the one arm here that does not time a path inside the runtime.
-It times what a host sees: a request arriving at a `script_worker`, an instance
+It times what a host sees: a request arriving at a `wasm_script_worker`, an instance
 made for it, and the latency changing underneath when generated code lands.
 
 ```sh

@@ -543,7 +543,7 @@ nothing to download:
 | `wasm_spec_SUITE` | the official suite, gated per suite against a baseline |
 | `wasm_prop_SUITE` | totality, atom safety, memory model equivalence, LEB128 round trip |
 | `wasm_bench_SUITE` | the tables above, plus the responsiveness assertion |
-| `wasm_worker_SUITE` | limits actually bound, tested through `examples/wasm_worker` |
+| `wasm_worker_SUITE` | limits actually bound, tested through `wasm_instance_worker` |
 | `wasi_SUITE` | WASI syscalls, and one case per filesystem escape technique |
 | `wasi_nif_SUITE` | the native backend, including the symlink-swap race |
 | `wasi_net_SUITE` | the network grant on its own, with no sockets in it |

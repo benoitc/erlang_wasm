@@ -23,7 +23,7 @@ echo_returns_a_result(Config) ->
 ## Opaque fixtures
 
 The kit **never looks inside a request**. It does not parse source, know a
-syntax, or recognise a language: it submits what `conformance_fixtures/1`
+syntax, or recognise a language: it submits what `c:wasm_script_worker:conformance_fixtures/1`
 handed it and asserts only observable behaviour. That is the whole reason
 JavaScript and Python can be adapters rather than special cases in a suite.
 
@@ -33,7 +33,7 @@ stdout fixture.
 
 ## A declared capability is mandatory; an undeclared one is reported
 
-`capabilities/1` decides what is demanded. **A skip is never a pass.** This
+`c:wasm_script_worker:capabilities/1` decides what is demanded. **A skip is never a pass.** This
 repo has had four tests that could not fail, and a skip that looks green is how
 a fifth arrives, so an undeclared capability is reported as unsupported and
 counted as neither.
@@ -258,11 +258,11 @@ echo_returns_a_result(Ctx) ->
 
 a_guest_failure_is_a_worker_error(Ctx) ->
     {error, E} = run(Ctx, failure),
-    ?assert(worker_error:is_error(E)),
+    ?assert(wasm_worker_error:is_error(E)),
     %% Nothing a guest supplied became an atom on the way here: the kind is
     %% from the closed set this layer defines, and the language's own
     %% vocabulary travels as a binary in `ctx'.
-    ?assert(lists:member(maps:get(kind, E), worker_error:kinds())).
+    ?assert(lists:member(maps:get(kind, E), wasm_worker_error:kinds())).
 
 the_deadline_stops_a_runaway(Ctx) ->
     %% Twice what the adapter says it needs, rather than a number the kit made
@@ -285,24 +285,24 @@ the_deadline_stops_a_runaway(Ctx) ->
     %% turn a bigger factor into a runaway of a minute and a half.
     W = start(Ctx, #{limits => #{timeout => 2 * min_timeout(Ctx, runaway) + 1000,
                                  fuel => infinity}}),
-    {error, E} = script_worker:run(W, fix(Ctx, runaway)),
+    {error, E} = wasm_script_worker:run(W, fix(Ctx, runaway)),
     ?assertEqual(timeout, maps:get(kind, E)),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 cancel_stops_a_runaway(Ctx) ->
     W = patient(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, runaway)),
-    ok = script_worker:cancel(W, Ref),
-    {error, E} = script_worker:await(W, Ref, patience(Ctx)),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
+    ok = wasm_script_worker:cancel(W, Ref),
+    {error, E} = wasm_script_worker:await(W, Ref, patience(Ctx)),
     ?assertEqual(cancelled, maps:get(kind, E)),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 a_caller_that_dies_cancels(Ctx) ->
     W = patient(Ctx),
     Self = self(),
     {Pid, Mon} = spawn_monitor(
                    fun() ->
-                       {ok, R} = script_worker:submit(W, fix(Ctx, runaway)),
+                       {ok, R} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
                        Self ! {submitted, R},
                        receive never -> ok end
                    end),
@@ -311,7 +311,7 @@ a_caller_that_dies_cancels(Ctx) ->
     receive {'DOWN', Mon, process, Pid, _} -> ok end,
     %% The slot freeing is what says the guardian actually stopped.
     ?assertMatch({ok, _}, until_free(W, fix(Ctx, echo), ticks(Ctx))),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 no_state_leaks_between_requests(Ctx) ->
     A = run(Ctx, state_change),
@@ -330,81 +330,81 @@ errors_have_the_same_structure(Ctx) ->
     %% provably true and the assertion could not fail. Comparing the key set is
     %% a check that survives an adapter ignoring the spec.
     ?assertEqual([class, ctx, kind, msg], lists:sort(maps:keys(E))),
-    ?assert(worker_error:is_error(E)).
+    ?assert(wasm_worker_error:is_error(E)).
 
 %% This asserts the contract and not which layer enforces it, which is worth
 %% saying because the obvious reading is wrong. There are two: `submit' checks
-%% `worker_reaper:alive/0', and the guardian's `reserve' fails anyway against a
+%% `wasm_worker_reaper:alive/0', and the guardian's `reserve' fails anyway against a
 %% dead reaper. Removing either alone changes nothing observable, and only
 %% removing both makes this fail. Measured, not assumed.
 submit_is_refused_without_a_reaper(Ctx) ->
-    ok = worker_reaper:stop(),
-    {error, E} = script_worker:submit(worker(Ctx), fix(Ctx, echo)),
+    ok = wasm_worker_reaper:stop(),
+    {error, E} = wasm_script_worker:submit(worker(Ctx), fix(Ctx, echo)),
     ?assertEqual(no_reaper, maps:get(kind, E)).
 
 a_second_submit_is_busy(Ctx) ->
     W = patient(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, runaway)),
-    {error, E} = script_worker:submit(W, fix(Ctx, echo)),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
+    {error, E} = wasm_script_worker:submit(W, fix(Ctx, echo)),
     ?assertEqual(busy, maps:get(kind, E)),
-    ok = script_worker:cancel(W, Ref),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:cancel(W, Ref),
+    ok = wasm_script_worker:stop(W).
 
 await_after_acknowledgement_is_unknown(Ctx) ->
     W = worker(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, echo)),
-    {ok, _} = script_worker:await(W, Ref, patience(Ctx)),
-    {error, E} = script_worker:await(W, Ref, 1_000),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, echo)),
+    {ok, _} = wasm_script_worker:await(W, Ref, patience(Ctx)),
+    {error, E} = wasm_script_worker:await(W, Ref, 1_000),
     ?assertEqual(unknown_ref, maps:get(kind, E)).
 
 a_second_await_is_already_awaited(Ctx) ->
     W = patient(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, runaway)),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     Self = self(),
     _ = spawn(fun() ->
                   Self ! waiting,
                   %% `infinity`, because this one exists to *hold* the slot.
                   %% A finite wait here gives it up again, and the case then
                   %% asks for a slot nobody is holding.
-                  _ = script_worker:await(W, Ref, infinity)
+                  _ = wasm_script_worker:await(W, Ref, infinity)
               end),
     receive waiting -> ok after 5_000 -> ct:fail(no_waiter) end,
     ?assertEqual(already_awaited, kind_of_second_await(W, Ref, ticks(Ctx))),
-    ok = script_worker:cancel(W, Ref),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:cancel(W, Ref),
+    ok = wasm_script_worker:stop(W).
 
 a_finite_await_leaves_the_slot_free(Ctx) ->
     W = patient(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, runaway)),
-    {error, E1} = script_worker:await(W, Ref, 200),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
+    {error, E1} = wasm_script_worker:await(W, Ref, 200),
     ?assertEqual(still_running, maps:get(kind, E1)),
     %% The case a caught `gen_server' timeout alone would fail: the server must
     %% no longer believe the abandoning caller holds the single waiter slot.
-    ok = script_worker:cancel(W, Ref),
-    {error, E2} = script_worker:await(W, Ref, patience(Ctx)),
+    ok = wasm_script_worker:cancel(W, Ref),
+    {error, E2} = wasm_script_worker:await(W, Ref, patience(Ctx)),
     ?assertEqual(cancelled, maps:get(kind, E2)),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 an_unacknowledged_outcome_survives(Ctx) ->
     W = worker(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, echo)),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, echo)),
     %% `withdraw_waiter/3' answers with the outcome once it is published and
     %% does **not** acknowledge it, so this observes retention without any
     %% await having consumed anything. Sending is not consuming.
     Outcome = until_published(W, Ref, ticks(Ctx)),
     ?assertMatch({ok, _}, Outcome),
-    ?assertEqual(Outcome, script_worker:await(W, Ref, patience(Ctx))).
+    ?assertEqual(Outcome, wasm_script_worker:await(W, Ref, patience(Ctx))).
 
 dead_worker_answers_with_a_value(Ctx) ->
     W = start(Ctx, #{}),
-    ok = script_worker:stop(W),
+    ok = wasm_script_worker:stop(W),
     Echo = fix(Ctx, echo),
-    ?assertMatch({error, #{kind := no_worker}}, script_worker:submit(W, Echo)),
-    ?assertMatch({error, #{kind := no_worker}}, script_worker:run(W, Echo)),
+    ?assertMatch({error, #{kind := no_worker}}, wasm_script_worker:submit(W, Echo)),
+    ?assertMatch({error, #{kind := no_worker}}, wasm_script_worker:run(W, Echo)),
     ?assertMatch({error, #{kind := no_worker}},
-                 script_worker:cancel(W, make_ref())),
+                 wasm_script_worker:cancel(W, make_ref())),
     ?assertMatch({error, #{kind := no_worker}},
-                 script_worker:await(W, make_ref(), 100)).
+                 wasm_script_worker:await(W, make_ref(), 100)).
 
 the_request_directory_is_removed(Ctx) ->
     {ok, _} = run(Ctx, echo),
@@ -419,7 +419,7 @@ the_journal_survives_the_request(Ctx) ->
 
 cleanup_runs_after_a_trap(Ctx) ->
     {Marker, Action} = markers(Ctx),
-    {error, _} = script_worker:run(worker(Ctx),
+    {error, _} = wasm_script_worker:run(worker(Ctx),
                                    with_marker(fix(Ctx, failure), Marker)),
     %% Ran after the guest trapped, and the caller already had its answer
     %% before any of this: cleanup cannot change the outcome.
@@ -435,7 +435,7 @@ transferred_actions_run_only_when_cleanup_fails(Ctx) ->
     Request = (with_marker(fix(Ctx, echo), Marker))#{fail_cleanup => true},
     %% A `cleanup/1' that raises never becomes an error in a result the caller
     %% already has: it is logged and counted, and the answer stands.
-    ?assertMatch({ok, _}, script_worker:run(worker(Ctx), Request)),
+    ?assertMatch({ok, _}, wasm_script_worker:run(worker(Ctx), Request)),
     ?assert(until_exists(Action, 60)),
     %% And it ran *after* `cleanup/1', which is the order the retention exists
     %% for: a transferred action covers a resource `cleanup/1' now owns, so
@@ -449,7 +449,7 @@ repeated_requests_leak_nothing(Ctx) ->
     %% request directories, journal records -- so a leak of one per request
     %% shows on the second, and ten was an arbitrary number that cost eight
     %% minutes against an interpreter.
-    [{ok, _} = script_worker:run(W, Echo) || _ <- lists:seq(1, 3)],
+    [{ok, _} = wasm_script_worker:run(W, Echo) || _ <- lists:seq(1, 3)],
     ?assertEqual([], until_swept(root(Ctx), ticks(Ctx))),
     %% Exact counts, not aggregates: `erlang:memory/0' and the node process
     %% count are too noisy to assert on, and a GC that has not run yet is not
@@ -459,57 +459,57 @@ repeated_requests_leak_nothing(Ctx) ->
 
 the_reaper_finishes_what_a_killed_guardian_left(Ctx) ->
     W = patient(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, runaway)),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     [#{guardian := G}] = until_reservations(1, 40),
     exit(G, kill),
-    {error, E} = script_worker:await(W, Ref, patience(Ctx)),
+    {error, E} = wasm_script_worker:await(W, Ref, patience(Ctx)),
     ?assertEqual(crashed, maps:get(kind, E)),
     %% The guardian is gone, so what removes its directory is the reaper.
     ?assertEqual([], until_swept(root(Ctx), 60)),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 a_restarted_reaper_adopts_a_live_request(Ctx) ->
     W = patient(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, runaway)),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     [#{id := Id}] = until_reservations(1, 40),
     Dir = filename:join(root(Ctx), <<"req-", Id/binary>>),
     ?assert(filelib:is_dir(Dir)),
-    ok = worker_reaper:stop(),
-    {ok, _} = worker_reaper:start_link(#{scratch => root(Ctx)}),
+    ok = wasm_worker_reaper:stop(),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => root(Ctx)}),
     %% The guardian is alive and answers the handshake, so the replacement
     %% adopts rather than replaying. This is what separates a fallback from a
     %% saboteur: a reaper that replayed here would delete a running request's
     %% mounts.
     ?assert(still_there(Dir, 20)),
-    ok = script_worker:cancel(W, Ref),
-    {error, _} = script_worker:await(W, Ref, patience(Ctx)),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:cancel(W, Ref),
+    {error, _} = wasm_script_worker:await(W, Ref, patience(Ctx)),
+    ok = wasm_script_worker:stop(W).
 
 a_corrupt_journal_record_is_quarantined(Ctx) ->
-    ok = worker_reaper:stop(),
+    ok = wasm_worker_reaper:stop(),
     Journal = filename:join(root(Ctx), ".journal"),
     ok = file:write_file(filename:join(Journal, "planted.rec"),
                          <<"not a record at all\n">>),
-    {ok, _} = worker_reaper:start_link(#{scratch => root(Ctx)}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => root(Ctx)}),
     %% The journal is exactly where an adversarial file would have to be
     %% planted, so a record that does not parse is moved aside and counted
     %% rather than acted on.
-    ?assertEqual(1, maps:get(quarantined, worker_reaper:stats())),
+    ?assertEqual(1, maps:get(quarantined, wasm_worker_reaper:stats())),
     ?assert(filelib:is_file(
               filename:join([Journal, "quarantine", "planted.rec"]))).
 
 a_record_naming_an_unknown_root_is_left_alone(Ctx) ->
-    ok = worker_reaper:stop(),
+    ok = wasm_worker_reaper:stop(),
     Journal = filename:join(root(Ctx), ".journal"),
-    Rec = [<<"v1 ">>, worker_reaper:incarnation(), <<" 1 ">>,
+    Rec = [<<"v1 ">>, wasm_worker_reaper:incarnation(), <<" 1 ">>,
            list_to_binary(pid_to_list(self())), <<" abcd\n">>,
            <<"remove_tree nosuchroot req-abcd\n">>],
     ok = file:write_file(filename:join(Journal, "unknown.rec"),
                          iolist_to_binary(Rec)),
-    {ok, _} = worker_reaper:start_link(#{scratch => root(Ctx)}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => root(Ctx)}),
     %% Guessed at, it would name a directory nobody configured. So it is not
     %% guessed at.
-    ?assertEqual(1, maps:get(quarantined, worker_reaper:stats())).
+    ?assertEqual(1, maps:get(quarantined, wasm_worker_reaper:stats())).
 
 declared_snapshots_export_the_callback(Ctx) ->
     Adapter = adapter(Ctx),
@@ -526,7 +526,7 @@ an_empty_invoke_is_an_adapter_error(Ctx) ->
     %% shape, so it is an error and not a quiet success. Only an adapter that
     %% can be *asked* for an empty sequence can be asked this, which is why it
     %% is a declared fixture: a real language adapter has no such request.
-    {error, E} = script_worker:run(worker(Ctx), fix_cap(Ctx, empty_invoke)),
+    {error, E} = wasm_script_worker:run(worker(Ctx), fix_cap(Ctx, empty_invoke)),
     ?assertEqual(adapter_failure, maps:get(kind, E)).
 
 an_infinite_timeout_is_accepted(Ctx) ->
@@ -534,15 +534,15 @@ an_infinite_timeout_is_accepted(Ctx) ->
     %% `wasm_limits:trusted/0' sets this, so it is a legitimate value and every
     %% remaining-time computation has to read it as "no deadline" rather than
     %% doing arithmetic on an atom.
-    ?assertMatch({ok, _}, script_worker:run(W, fix(Ctx, echo))),
-    ok = script_worker:stop(W).
+    ?assertMatch({ok, _}, wasm_script_worker:run(W, fix(Ctx, echo))),
+    ok = wasm_script_worker:stop(W).
 
 %%% ------------------------------------------------ capability: streams ---
 
 a_stream_bound_terminates_the_runner(Ctx) ->
     W = start(Ctx, #{limits => #{max_output_bytes => 64, fuel => infinity,
                                  timeout => patience(Ctx)}}),
-    {error, E} = script_worker:run(W, fix_cap(Ctx, framed_stream)),
+    {error, E} = wasm_script_worker:run(W, fix_cap(Ctx, framed_stream)),
     %% This is the assertion, and asserting only that the guest stopped writing
     %% would not be: `exit/1' also unwinds the invocation, so the guest stops
     %% either way. What it does not do is stop the **runner**, which sails on
@@ -550,12 +550,12 @@ a_stream_bound_terminates_the_runner(Ctx) ->
     %% `exit/2' sends a signal no `try' can intercept, and this is how you tell.
     ?assertEqual(output_limit, maps:get(kind, E)),
     %% And the deadline is not what stopped it: 30 s against a bound of 64.
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 the_adapter_decides_the_stop(Ctx) ->
     W = worker(Ctx),
-    {error, Stopped} = script_worker:run(W, fix_cap(Ctx, classify_stop)),
-    {error, Continued} = script_worker:run(W, fix_cap(Ctx, classify_continue)),
+    {error, Stopped} = wasm_script_worker:run(W, fix_cap(Ctx, classify_stop)),
+    {error, Continued} = wasm_script_worker:run(W, fix_cap(Ctx, classify_continue)),
     %% The same trap, the same `execution_result()', a different answer,
     %% because `classify/2' is what decides and the kernel interprets none of
     %% it. "The kernel stops on every trap" could not express this: a WASI exit
@@ -569,8 +569,8 @@ the_adapter_decides_the_stop(Ctx) ->
 
 an_exit_stops_the_remaining_invocations(Ctx) ->
     W = worker(Ctx),
-    {ok, Once} = script_worker:run(W, fix_cap(Ctx, invoke_once)),
-    {ok, Twice} = script_worker:run(W, fix_cap(Ctx, invoke_twice)),
+    {ok, Once} = wasm_script_worker:run(W, fix_cap(Ctx, invoke_once)),
+    {ok, Twice} = wasm_script_worker:run(W, fix_cap(Ctx, invoke_twice)),
     %% `proc_exit(0)' earns a stop for the same reason a non-zero one does: a
     %% runtime that has run its atexit handlers is in a state nobody specified.
     %% So the second invocation never ran, and one call's worth of output is
@@ -614,7 +614,7 @@ stage_refuses_past_the_byte_bound(Ctx) ->
     W = start(Ctx, #{limits => #{max_staged_bytes => 16}}),
     K = stage_kind_on(W, Ctx, ro, ~"big.txt", binary:copy(~"x", 64)),
     ?assertEqual(insufficient_limit, K),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 stage_refuses_past_the_file_bound(Ctx) ->
     W = start(Ctx, #{limits => #{max_staged_files => 1}}),
@@ -622,7 +622,7 @@ stage_refuses_past_the_file_bound(Ctx) ->
     %% worker and not on a mount.
     K = stage_kind_on(W, Ctx, ro, [{~"a.txt", ~"a"}, {~"b.txt", ~"b"}]),
     ?assertEqual(insufficient_limit, K),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 a_restage_debits_only_the_delta(Ctx) ->
     W = start(Ctx, #{limits => #{max_staged_bytes => 8, max_staged_files => 4}}),
@@ -632,19 +632,19 @@ a_restage_debits_only_the_delta(Ctx) ->
     ?assertEqual(ok, stage_kind_on(W, Ctx, ro, [{~"a.txt", ~"aaaa"},
                                                 {~"a.txt", ~"bbbb"},
                                                 {~"a.txt", ~"cccc"}])),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 a_writable_mount_needs_a_trusted_worker(Ctx) ->
     Untrusted = start(Ctx, #{}),
-    {error, E} = script_worker:run(Untrusted, writable(fix(Ctx, echo))),
+    {error, E} = wasm_script_worker:run(Untrusted, writable(fix(Ctx, echo))),
     %% `max_staged_bytes' bounds the adapter, not the guest, and nothing bounds
     %% what a guest writes once the preopen exists. Until that exists, a
     %% writable mount is refused rather than pretended.
     ?assertEqual(insufficient_limit, maps:get(kind, E)),
-    ok = script_worker:stop(Untrusted),
+    ok = wasm_script_worker:stop(Untrusted),
     Trusted = start(Ctx, #{trusted => true}),
-    ?assertMatch({ok, _}, script_worker:run(Trusted, writable(fix(Ctx, echo)))),
-    ok = script_worker:stop(Trusted).
+    ?assertMatch({ok, _}, wasm_script_worker:run(Trusted, writable(fix(Ctx, echo)))),
+    ok = wasm_script_worker:stop(Trusted).
 
 %%% ---------------------------------------------------------------- helpers ---
 
@@ -708,7 +708,7 @@ no_wasi_bindings() ->
     #{{~"host", ~"input"} => fun(_Ctx, []) -> {ok, [0]} end,
       {~"host", ~"emit"}  => fun(_Ctx, []) -> {ok, []} end}.
 
-run(Ctx, Name) -> script_worker:run(worker(Ctx), fix(Ctx, Name)).
+run(Ctx, Name) -> wasm_script_worker:run(worker(Ctx), fix(Ctx, Name)).
 
 with_marker(Request, Path) -> Request#{cleanup_marker => Path}.
 
@@ -740,7 +740,7 @@ stage_kind_on(W, Ctx, Mount, Writes) ->
 %% per request, so a case about a refund cannot spread its writes across two.
 probe(W, Ctx, Mount, Writes) ->
     Request = (fix_cap(Ctx, stage_probe))#{stage_probe => {Mount, Writes}},
-    case script_worker:run(W, Request) of
+    case wasm_script_worker:run(W, Request) of
         {ok, Result}   -> maps:get(probe, Result);
         {error, _} = E -> E
     end.
@@ -749,21 +749,21 @@ probe(W, Ctx, Mount, Writes) ->
 %% following request can legitimately see `busy' for a moment.
 until_free(_W, _R, 0) -> {error, gave_up};
 until_free(W, R, N) ->
-    case script_worker:run(W, R) of
+    case wasm_script_worker:run(W, R) of
         {error, #{kind := busy}} -> timer:sleep(?TICK), until_free(W, R, N - 1);
         Other                    -> Other
     end.
 
 until_published(_W, _Ref, 0) -> {error, never_published};
 until_published(W, Ref, N) ->
-    case script_worker:withdraw_waiter(W, Ref, make_ref()) of
+    case wasm_script_worker:withdraw_waiter(W, Ref, make_ref()) of
         {ok, Outcome} -> Outcome;
         _             -> timer:sleep(?TICK), until_published(W, Ref, N - 1)
     end.
 
 kind_of_second_await(_W, _Ref, 0) -> gave_up;
 kind_of_second_await(W, Ref, N) ->
-    case script_worker:await(W, Ref, 100) of
+    case wasm_script_worker:await(W, Ref, 100) of
         {error, #{kind := already_awaited}} -> already_awaited;
         _ -> timer:sleep(?TICK), kind_of_second_await(W, Ref, N - 1)
     end.
@@ -775,16 +775,16 @@ until_swept(Root, N) ->
         _   -> timer:sleep(?TICK), until_swept(Root, N - 1)
     end.
 
-until_no_reservations(0) -> worker_reaper:requests();
+until_no_reservations(0) -> wasm_worker_reaper:requests();
 until_no_reservations(N) ->
-    case worker_reaper:requests() of
+    case wasm_worker_reaper:requests() of
         [] -> [];
         _  -> timer:sleep(?TICK), until_no_reservations(N - 1)
     end.
 
 until_reservations(_Want, 0) -> [];
 until_reservations(Want, N) ->
-    case worker_reaper:requests() of
+    case wasm_worker_reaper:requests() of
         R when length(R) =:= Want -> R;
         _ -> timer:sleep(?TICK), until_reservations(Want, N - 1)
     end.
@@ -806,8 +806,8 @@ still_there(Dir, N) ->
     end.
 
 restart_reaper(Ctx, Opts) ->
-    ok = worker_reaper:stop(),
-    {ok, _} = worker_reaper:start_link(#{scratch => root(Ctx)}, Opts),
+    ok = wasm_worker_reaper:stop(),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => root(Ctx)}, Opts),
     ok.
 
 %% A record naming a live process that is not a guardian. Everything in it is a
@@ -815,36 +815,36 @@ restart_reaper(Ctx, Opts) ->
 %% why writing one by hand is possible at all and why decoding one can never
 %% mint an atom.
 plant(Ctx, Name, PidText, RootName) ->
-    Rec = [<<"v1 ">>, worker_reaper:incarnation(), <<" 1 ">>,
+    Rec = [<<"v1 ">>, wasm_worker_reaper:incarnation(), <<" 1 ">>,
            list_to_binary(PidText), <<" beefbeef\n">>,
            <<"remove_tree ">>, list_to_binary(RootName), <<" req-beefbeef\n">>],
     ok = file:write_file(filename:join([root(Ctx), ".journal", Name]),
                          iolist_to_binary(Rec)).
 
-until_state(_Want, 0) -> [S || #{state := S} <- worker_reaper:requests()];
+until_state(_Want, 0) -> [S || #{state := S} <- wasm_worker_reaper:requests()];
 until_state(Want, N) ->
-    case [S || #{state := S} <- worker_reaper:requests()] of
+    case [S || #{state := S} <- wasm_worker_reaper:requests()] of
         [Want] -> Want;
         _      -> timer:sleep(?TICK), until_state(Want, N - 1)
     end.
 
-until_delivered(0) -> worker_reaper:requests();
+until_delivered(0) -> wasm_worker_reaper:requests();
 until_delivered(N) ->
-    case worker_reaper:requests() of
+    case wasm_worker_reaper:requests() of
         [#{delivered := true}] = R -> R;
         _ -> timer:sleep(?TICK), until_delivered(N - 1)
     end.
 
 until_gone(_Id, 0) -> false;
 until_gone(Id, N) ->
-    case [I || #{id := I} <- worker_reaper:requests(), I =:= Id] of
+    case [I || #{id := I} <- wasm_worker_reaper:requests(), I =:= Id] of
         []  -> true;
         [_] -> timer:sleep(?TICK), until_gone(Id, N - 1)
     end.
 
-until_quarantined(_Want, 0) -> maps:get(quarantined, worker_reaper:stats());
+until_quarantined(_Want, 0) -> maps:get(quarantined, wasm_worker_reaper:stats());
 until_quarantined(Want, N) ->
-    case maps:get(quarantined, worker_reaper:stats()) of
+    case maps:get(quarantined, wasm_worker_reaper:stats()) of
         Want -> Want;
         _    -> timer:sleep(?TICK), until_quarantined(Want, N - 1)
     end.
@@ -868,50 +868,50 @@ cleanup_capacity_refuses_admission(Ctx) ->
     A = patient(Ctx),
     B = patient(Ctx),
     C = patient(Ctx),
-    {ok, RefA} = script_worker:submit(A, fix(Ctx, runaway)),
-    {ok, RefB} = script_worker:submit(B, fix(Ctx, runaway)),
+    {ok, RefA} = wasm_script_worker:submit(A, fix(Ctx, runaway)),
+    {ok, RefB} = wasm_script_worker:submit(B, fix(Ctx, runaway)),
     %% Two live reservations is the whole capacity, and `live' counts.
-    {error, E} = script_worker:submit(C, fix(Ctx, runaway)),
+    {error, E} = wasm_script_worker:submit(C, fix(Ctx, runaway)),
     %% A refusal it can retry rather than a leak it cannot see.
     ?assertEqual(cleanup_saturated, maps:get(kind, E)),
-    ok = script_worker:cancel(A, RefA),
-    ok = script_worker:cancel(B, RefB),
-    [ok = script_worker:stop(W) || W <- [A, B, C]].
+    ok = wasm_script_worker:cancel(A, RefA),
+    ok = wasm_script_worker:cancel(B, RefB),
+    [ok = wasm_script_worker:stop(W) || W <- [A, B, C]].
 
 a_silent_guardian_ends_held_holding_capacity(Ctx) ->
     %% A record naming this process, which is alive and will never answer the
     %% handshake. That is the *unknown* case, and a timeout is not a denial: a
     %% guardian descheduled or behind a full mailbox is a live guardian that
     %% happens to be slow.
-    ok = worker_reaper:stop(),
+    ok = wasm_worker_reaper:stop(),
     plant(Ctx, "silent.rec", pid_to_list(self()), "scratch"),
-    {ok, _} = worker_reaper:start_link(#{scratch => root(Ctx)},
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => root(Ctx)},
                                        #{max_cleanup_jobs => 1,
                                          cleanup_queue_len => 0}),
     %% It retries, then holds. Never quarantined, because the request may still
     %% be running, and never replayed, because leaking a directory is
     %% recoverable where deleting a live request's mounts is not.
     ?assertEqual(held, until_state(held, 100)),
-    ?assertEqual(0, maps:get(quarantined, worker_reaper:stats())),
+    ?assertEqual(0, maps:get(quarantined, wasm_worker_reaper:stats())),
     %% And it still holds its capacity. If it did not, a new request would
     %% consume what the reservation is still holding, the guardian would
     %% confirm, and cleanup would be overcommitted with no check having failed.
     W = start(Ctx, #{}),
-    {error, E} = script_worker:submit(W, fix(Ctx, echo)),
+    {error, E} = wasm_script_worker:submit(W, fix(Ctx, echo)),
     ?assertEqual(cleanup_saturated, maps:get(kind, E)),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 a_stale_job_is_refused_by_the_replacement(Ctx) ->
     %% A *real* reservation, because a made-up id is refused for having no
     %% record at all and would say nothing about the generation. That version
     %% of this case passed with the check removed.
     W = patient(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, runaway)),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     [#{id := Id}] = until_reservations(1, 40),
-    Old = worker_reaper:generation(),
-    ok = worker_reaper:stop(),
-    {ok, _} = worker_reaper:start_link(#{scratch => root(Ctx)}),
-    New = worker_reaper:generation(),
+    Old = wasm_worker_reaper:generation(),
+    ok = wasm_worker_reaper:stop(),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => root(Ctx)}),
+    New = wasm_worker_reaper:generation(),
     ?assert(New > Old),
     [#{id := Id}] = until_reservations(1, 40),
     %% Links are not ordering: a supervisor can see the reaper's `DOWN' and
@@ -920,26 +920,26 @@ a_stale_job_is_refused_by_the_replacement(Ctx) ->
     %% *currently registered* reaper, which checks a generation it holds in
     %% memory and answers serially. A job that wakes after its reaper is gone
     %% reaches the replacement, whose generation no longer matches.
-    ?assertEqual({error, stale}, worker_reaper:authorise(Id, Old)),
-    ?assertEqual(ok, worker_reaper:authorise(Id, New)),
+    ?assertEqual({error, stale}, wasm_worker_reaper:authorise(Id, Old)),
+    ?assertEqual(ok, wasm_worker_reaper:authorise(Id, New)),
     %% Teardown only, and deliberately not asserted on. Whether the request is
     %% still running by now is `a_restarted_reaper_adopts_a_live_request\'s
     %% subject, which asserts it directly; making this case depend on it as
     %% well only bought a race between the restart and the request.
-    _ = script_worker:cancel(W, Ref),
-    _ = script_worker:await(W, Ref, patience(Ctx)),
-    ok = script_worker:stop(W).
+    _ = wasm_script_worker:cancel(W, Ref),
+    _ = wasm_script_worker:await(W, Ref, patience(Ctx)),
+    ok = wasm_script_worker:stop(W).
 
 a_half_written_record_is_ignored(Ctx) ->
-    ok = worker_reaper:stop(),
+    ok = wasm_worker_reaper:stop(),
     Journal = filename:join(root(Ctx), ".journal"),
     ok = file:write_file(filename:join(Journal, "torn.rec.part"),
                          <<"v1 half written and then the node">>),
-    {ok, _} = worker_reaper:start_link(#{scratch => root(Ctx)}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => root(Ctx)}),
     %% A partial temp file is simply not the record: the sweep reads `.rec' and
     %% the rename is what makes one exist. Not quarantined either, because
     %% nothing about it is adversarial or corrupt.
-    ?assertEqual(0, maps:get(quarantined, worker_reaper:stats())),
+    ?assertEqual(0, maps:get(quarantined, wasm_worker_reaper:stats())),
     ?assert(filelib:is_file(filename:join(Journal, "torn.rec.part"))).
 
 a_hanging_cleanup_does_not_wedge_the_reaper(Ctx) ->
@@ -947,22 +947,22 @@ a_hanging_cleanup_does_not_wedge_the_reaper(Ctx) ->
     {Marker, _} = markers(Ctx),
     W = start(Ctx, #{}),
     Request = (with_marker(fix(Ctx, echo), Marker))#{fail_cleanup => hang},
-    ?assertMatch({ok, _}, script_worker:run(W, Request)),
+    ?assertMatch({ok, _}, wasm_script_worker:run(W, Request)),
     %% One bad adapter must not stop registration and recovery for every worker
     %% on the node, which is why the singleton never runs a callback itself.
     %% There is no polling here on purpose: `stats/0' waits for ever, so a
     %% wedged reaper fails this at the timetrap rather than answering late.
-    ?assert(is_map(worker_reaper:stats())),
+    ?assert(is_map(wasm_worker_reaper:stats())),
     %% And the directory still goes, because the job carries on past the
     %% callback it had to kill.
     ?assertEqual([], until_swept(root(Ctx), 100)),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 register_performs_what_it_cannot_record(Ctx) ->
     Marker = filename:join(root(Ctx), "unrecorded"),
     _ = file:delete(Marker),
-    ok = worker_reaper:stop(),
-    Result = worker_reaper:register(~"noreq",
+    ok = wasm_worker_reaper:stop(),
+    Result = wasm_worker_reaper:register(~"noreq",
                                     fun() -> file:write_file(Marker, ~"ran") end),
     %% A `register' that returns an error having done neither leaks precisely
     %% the resource the adapter allocated one line earlier. So it says which of
@@ -973,7 +973,7 @@ register_performs_what_it_cannot_record(Ctx) ->
 
 the_guardian_reacts_to_the_workers_death(Ctx) ->
     W = patient(Ctx),
-    {ok, _Ref} = script_worker:submit(W, fix(Ctx, runaway)),
+    {ok, _Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     [_] = until_reservations(1, 40),
     %% Monitors are one-way. The worker monitors the guardian; this is the
     %% other direction, and without it the guardian would run to its deadline
@@ -984,7 +984,7 @@ the_guardian_reacts_to_the_workers_death(Ctx) ->
 %%% ---------------------------------------- typed adapter: bounds and hooks ---
 
 max_cleanup_actions_refuses_the_next(Ctx) ->
-    {error, E} = script_worker:run(worker(Ctx),
+    {error, E} = wasm_script_worker:run(worker(Ctx),
                                    (fix_cap(Ctx, adapter_hooks))#{register_n => 65}),
     %% The action list is adapter-controlled: without a ceiling an adapter in a
     %% loop registers until the reaper's memory is the bound.
@@ -995,7 +995,7 @@ a_failed_transfer_aborts_before_the_guest_runs(Ctx) ->
     _ = file:delete(Marker),
     Request = (fix_cap(Ctx, adapter_hooks))#{cleanup_marker => Marker,
                                              kill_reaper_in_prepare => true},
-    {error, _} = script_worker:run(worker(Ctx), Request),
+    {error, _} = wasm_script_worker:run(worker(Ctx), Request),
     %% Transfer fails when the reaper is gone, and the reaper *is* the
     %% registry, so what cleans up is the guardian's **mirror**: it made every
     %% `register' call and kept the list as it went. The reaper's registry
@@ -1006,24 +1006,24 @@ the_result_channel_has_its_own_bound(Ctx) ->
     W = start(Ctx, #{limits => #{max_result_bytes => 64, fuel => infinity,
                                  max_host_calls => infinity,
                                  timeout => patience(Ctx)}}),
-    {error, E} = script_worker:run(W, (fix_cap(Ctx, adapter_hooks))#{op => emit}),
+    {error, E} = wasm_script_worker:run(W, (fix_cap(Ctx, adapter_hooks))#{op => emit}),
     %% Separate from the output bound, because the channels are separate: this
     %% adapter has no stdout at all and still has a result to bound.
     ?assertEqual(result_limit, maps:get(kind, E)),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 host_calls_are_bounded(Ctx) ->
     W = start(Ctx, #{limits => #{max_host_calls => 100, fuel => infinity,
                                  max_result_bytes => 1_000_000_000,
                                  timeout => patience(Ctx)}}),
-    {error, E} = script_worker:run(W, (fix_cap(Ctx, adapter_hooks))#{op => emit}),
+    {error, E} = wasm_script_worker:run(W, (fix_cap(Ctx, adapter_hooks))#{op => emit}),
     %% A host call burns no fuel by construction, so this is the only thing
     %% bounding a guest that does its work through an import. It matters most
     %% with `fuel => infinity', which is the compiled configuration.
     ?assertEqual(runtime_failure, maps:get(kind, E)),
     ?assertMatch(#{kind := host_call_limit},
                  maps:get(error, maps:get(ctx, E))),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 %%% ------------------------------------------------ capability: files ---
 
@@ -1043,7 +1043,7 @@ a_failed_restage_leaves_the_previous_file(Ctx) ->
                  probe(W, Ctx, ro, [{~"a.txt", ~"first"},
                                     {~"a.txt/b", ~"second"},
                                     {~"a.txt", ~"elevenchars"}])),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 %%% ------------------------------------ capability: what the guest can do ---
 
@@ -1071,7 +1071,7 @@ the_journal_is_unreachable_from_the_guest(Ctx) ->
     %% granted per directory subtree and inherited by everything opened
     %% beneath, which is exactly why the record must not sit anywhere in that
     %% tree. This is the half a kernel change could break.
-    {ok, Result} = script_worker:run(worker(Ctx), probe_request(Ctx)),
+    {ok, Result} = wasm_script_worker:run(worker(Ctx), probe_request(Ctx)),
     Journal = filename:join(root(Ctx), ".journal"),
     ?assert(filelib:is_dir(Journal)),
     Dirs = maps:values(maps:get(mount_dirs, Result)),
@@ -1084,26 +1084,26 @@ the_journal_is_unreachable_from_the_guest(Ctx) ->
 a_writable_mount_lets_the_guest_write(Ctx) ->
     W = start(Ctx, #{trusted => true}),
     Request = (probe_request(Ctx))#{write_mount => true},
-    {ok, Result} = script_worker:run(W, Request),
+    {ok, Result} = wasm_script_worker:run(W, Request),
     %% Same guest, same call, a different mount: `rw' is fd 4 and it succeeds
     %% where fd 3 refused. Without this, "read" and "write" would be two words
     %% for the same behaviour.
     ?assertEqual(0, binary:at(maps:get(stdout, Result), 3)),
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 memory_pages_are_bounded(Ctx) ->
     Tight = start(Ctx, #{limits => #{max_memory_pages => 1}}),
     Grow = fix_cap(Ctx, memory_grow),
-    {ok, Refused} = script_worker:run(Tight, Grow),
+    {ok, Refused} = wasm_script_worker:run(Tight, Grow),
     %% `memory.grow' answers -1 as the specification requires, rather than
     %% trapping or growing past what the instance was promised.
     ?assertEqual(255, binary:at(maps:get(stdout, Refused), 0)),
-    ok = script_worker:stop(Tight),
+    ok = wasm_script_worker:stop(Tight),
     Roomy = start(Ctx, #{limits => #{max_memory_pages => 64}}),
-    {ok, Grown} = script_worker:run(Roomy, Grow),
+    {ok, Grown} = wasm_script_worker:run(Roomy, Grow),
     %% The previous size, which says the same guest does grow when it may.
     ?assertEqual(1, binary:at(maps:get(stdout, Grown), 0)),
-    ok = script_worker:stop(Roomy).
+    ok = wasm_script_worker:stop(Roomy).
 
 %% Whether `Journal' sits anywhere beneath `Dir'.
 %%
@@ -1120,22 +1120,22 @@ contains(Dir, Journal) ->
 probe_request(Ctx) -> fix_cap(Ctx, guest_probe).
 
 probe_byte(Ctx, N) ->
-    {ok, Result} = script_worker:run(worker(Ctx), probe_request(Ctx)),
+    {ok, Result} = wasm_script_worker:run(worker(Ctx), probe_request(Ctx)),
     binary:at(maps:get(stdout, Result), N).
 
 %%% ------------------------------------------- recovery, the harder cases ---
 
 a_reused_pid_denies_the_handshake(Ctx) ->
     W = patient(Ctx),
-    {ok, Ref} = script_worker:submit(W, fix(Ctx, runaway)),
+    {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     [#{guardian := G}] = until_reservations(1, 40),
-    ok = worker_reaper:stop(),
+    ok = wasm_worker_reaper:stop(),
     %% A record naming a live process that is a guardian, but for a *different*
     %% request. Liveness alone is not enough: pids are reused within one
     %% incarnation, so a record naming a dead guardian whose pid now belongs to
     %% something else would be adopted and never cleaned.
     plant(Ctx, "reused.rec", pid_to_list(G), "scratch"),
-    {ok, _} = worker_reaper:start_link(#{scratch => root(Ctx)}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => root(Ctx)}),
     %% The planted reservation goes away, and that is the whole assertion.
     %% Every other answer keeps it: adoption would leave it `live', and silence
     %% would leave it `pending' and then `held', because a timeout is not a
@@ -1144,10 +1144,10 @@ a_reused_pid_denies_the_handshake(Ctx) ->
     ?assert(until_gone(~"beefbeef", 100)),
     %% And it was orphaned rather than quarantined: a denial is an answer, not
     %% the ambiguity quarantine is for.
-    ?assertEqual(0, maps:get(quarantined, worker_reaper:stats())),
-    _ = script_worker:cancel(W, Ref),
-    _ = script_worker:await(W, Ref, patience(Ctx)),
-    ok = script_worker:stop(W).
+    ?assertEqual(0, maps:get(quarantined, wasm_worker_reaper:stats())),
+    _ = wasm_script_worker:cancel(W, Ref),
+    _ = wasm_script_worker:await(W, Ref, patience(Ctx)),
+    ok = wasm_script_worker:stop(W).
 
 the_job_deadline_bounds_the_whole_chain(Ctx) ->
     %% Each callback stays well under `cleanup_timeout'. What stops the chain
@@ -1161,7 +1161,7 @@ the_job_deadline_bounds_the_whole_chain(Ctx) ->
                                                   fail_cleanup => true,
                                                   slow_actions => {3, 200,
                                                                    root(Ctx)}},
-    ?assertMatch({ok, _}, script_worker:run(W, Slow)),
+    ?assertMatch({ok, _}, wasm_script_worker:run(W, Slow)),
     ?assert(until_exists(Marker, 60)),
     %% `cleanup/1` alone spent most of the budget, so none of its transferred
     %% actions got to finish. They are not retried here either: what is being
@@ -1169,7 +1169,7 @@ the_job_deadline_bounds_the_whole_chain(Ctx) ->
     timer:sleep(800),
     [?assertNot(filelib:is_file(filename:join(root(Ctx), "slow-" ++ N)))
      || N <- ["1", "2", "3"]],
-    ok = script_worker:stop(W).
+    ok = wasm_script_worker:stop(W).
 
 cleanup_that_cannot_finish_is_quarantined(Ctx) ->
     restart_reaper(Ctx, #{cleanup_retries => 1, cleanup_backoff => [50],
@@ -1178,13 +1178,13 @@ cleanup_that_cannot_finish_is_quarantined(Ctx) ->
     %% Something inside the request tree that genuinely cannot be removed, so
     %% the job fails on its own terms rather than being told it did.
     Wedged = (fix_cap(Ctx, stage_probe))#{wedge_cleanup => true},
-    ?assertMatch({ok, _}, script_worker:run(W, Wedged)),
+    ?assertMatch({ok, _}, wasm_script_worker:run(W, Wedged)),
     %% Retried, then quarantined. This is the **only** cause of quarantine:
     %% an unresolved ownership handshake is `held', and a full queue is a
     %% refusal at admission. Work that genuinely cannot be done ends here, and
     %% the count is what an operator alerts on.
     ?assertEqual(1, until_quarantined(1, 200)),
-    ok = script_worker:stop(W),
+    ok = wasm_script_worker:stop(W),
     unwedge(Ctx).
 
 a_late_finish_does_not_kill_the_reaper(Ctx) ->
@@ -1197,7 +1197,7 @@ a_late_finish_does_not_kill_the_reaper(Ctx) ->
     {Marker, _} = markers(Ctx),
     W = patient(Ctx),
     Slow = (with_marker(fix(Ctx, runaway), Marker))#{sleep_cleanup => 2_000},
-    {ok, _Ref} = script_worker:submit(W, Slow),
+    {ok, _Ref} = wasm_script_worker:submit(W, Slow),
     %% Wait for the state to have been delivered, not merely for the
     %% reservation to exist. A reservation is written before `prepare/3` even
     %% runs, so killing the guardian at that point leaves the job with no
@@ -1207,6 +1207,6 @@ a_late_finish_does_not_kill_the_reaper(Ctx) ->
     %% still there with nothing left to demonitor.
     exit(G, kill),
     ?assertEqual(running, until_state(running, 100)),
-    ok = worker_reaper:finish(Id),
-    ?assert(is_map(worker_reaper:stats())),
-    ok = script_worker:stop(W).
+    ok = wasm_worker_reaper:finish(Id),
+    ?assert(is_map(wasm_worker_reaper:stats())),
+    ok = wasm_script_worker:stop(W).

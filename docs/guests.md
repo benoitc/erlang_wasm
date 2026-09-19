@@ -137,9 +137,8 @@ what is used of it. Nothing about producing the module changes.
 
 ## Run the two examples
 
-Both live in `examples/` and are **not** part of the application, the same as
-`examples/wasm_worker.erl`: they are worked code to copy and change, not library
-modules to depend on. To try them where they are, build the two fixtures and
+Both live in `examples/` and are **not** part of the application: they are
+worked code to copy and change, not library modules to depend on. To try them where they are, build the two fixtures and
 compile them into a shell.
 
 Build the guests. The plugin needs the Rust wasm target; the QuickJS build is
@@ -207,4 +206,4 @@ the build tells you.
 - [security.md](security.md): what those limits do and do not cover
 - `examples/plugin_worker.erl` and `examples/qjs_worker.erl`: both shapes,
   working, with the tests that run them
-- `examples/wasm_worker.erl`: the general worker pattern, pool and all
+- `wasm_instance_worker`: the general worker, installed with the application

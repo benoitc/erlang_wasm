@@ -1,8 +1,8 @@
--module(py_reactor_adapter).
+-module(wasm_python).
 -moduledoc """
 Run Python from an image of an already-started interpreter.
 
-The same profile and the same tenant contract as `py_adapter` -- `main(context)`,
+The same profile and the same tenant contract as `wasm_python_command` -- `main(context)`,
 JSON in and out -- over a **reactor** rather than a command, so CPython starts
 once when the worker starts and every request restores that point.
 
@@ -11,14 +11,14 @@ request costs tens of seconds; restoring an image of a started one costs under
 a second, and `test/audit/PERF.md` has both.
 
 ```erlang
-{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/py"}),
-{ok, W} = script_worker:start_link(
-            py_reactor_adapter,
+{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/py"}),
+{ok, W} = wasm_script_worker:start_link(
+            wasm_python,
             #{path => "test/fixtures/lang/py_reactor.wasm",
               lib  => "test/fixtures/lang/py_reactor_lib",
-              root => scratch, limits => py_reactor_adapter:limits()}),
+              root => scratch, limits => wasm_python:limits()}),
 {ok, #{result := #{~"answer" := 42}}} =
-    script_worker:run(W, #{source => ~"def main(c):\\n    return {'answer': c['value'] + 1}\\n",
+    wasm_script_worker:run(W, #{source => ~"def main(c):\\n    return {'answer': c['value'] + 1}\\n",
                            context => #{~"value" => 41}}).
 ```
 
@@ -44,7 +44,7 @@ the old secret. Rotation means recapturing, which is one `init()`.
 `docs/snapshots.md` says the same thing about every guest.
 """.
 
--behaviour(script_worker).
+-behaviour(wasm_script_worker).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,
@@ -70,10 +70,10 @@ limits() ->
 artifact(Opts) ->
     case {maps:find(path, Opts), maps:find(lib, Opts)} of
         {error, _} ->
-            {error, worker_error:adapter(
+            {error, wasm_worker_error:adapter(
                       adapter_failure, ~"no `path' to a CPython reactor", #{})};
         {_, error} ->
-            {error, worker_error:adapter(
+            {error, wasm_worker_error:adapter(
                       adapter_failure, ~"no `lib' with the standard library",
                       #{})};
         {{ok, Path}, {ok, Lib}} ->
@@ -83,7 +83,7 @@ artifact(Opts) ->
 load(Path, Lib) ->
     case filelib:is_dir(Lib) of
         false ->
-            {error, worker_error:adapter(
+            {error, wasm_worker_error:adapter(
                       adapter_failure, ~"the standard library is not there",
                       #{lib => iolist_to_binary(Lib)})};
         true ->
@@ -93,7 +93,7 @@ load(Path, Lib) ->
 read(Path, Lib) ->
     case file:read_file(Path) of
         {error, Why} ->
-            {error, worker_error:adapter(
+            {error, wasm_worker_error:adapter(
                       adapter_failure, ~"cannot read the interpreter",
                       #{path => iolist_to_binary(Path), reason => Why})};
         {ok, Bytes} ->
@@ -101,13 +101,13 @@ read(Path, Lib) ->
             %% handle as its provenance, and an inline module has none.
             case wasm:load(Bytes) of
                 {ok, Module} -> {ok, #{module => Module, lib => Lib}};
-                {error, E}   -> {error, worker_error:runtime(E)}
+                {error, E}   -> {error, wasm_worker_error:runtime(E)}
             end
     end.
 
 requirements(Request, _Artifact) when is_map(Request) ->
     Source = maps:get(source, Request, ?DEFAULT_SOURCE),
-    Context = script_v1:encode_context(maps:get(context, Request, #{})),
+    Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
     Staged = byte_size(Source) + byte_size(Context),
     {ok, #{%% About a third of a warm request is delivering the adapter state
            %% and restoring the image, and the whole request is about 35 ms.
@@ -120,12 +120,12 @@ requirements(Request, _Artifact) when is_map(Request) ->
            staged_bytes => Staged, staged_files => 2,
            mounts => #{ro => #{guest_path => ~"/", mode => read}}}};
 requirements(_Request, _Artifact) ->
-    {error, worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
+    {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
 prepare(Request, #{module := M, lib := Lib}, Env) ->
     Stage = maps:get(stage, Env),
     Source = maps:get(source, Request, ?DEFAULT_SOURCE),
-    Context = script_v1:encode_context(maps:get(context, Request, #{})),
+    Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
     case stage_all(Stage, [{~"main.py", Source}, {~"context.json", Context}]) of
         {error, E} ->
             {error, E, #{}};
@@ -150,7 +150,7 @@ imports(Lib, Env) ->
     #{host_dir := Dir} = maps:get(ro, Mounts),
     Sink = fun(Which) ->
                C = maps:get(Which, Chans),
-               fun(Data) -> script_worker:channel_write(C, Data) end
+               fun(Data) -> wasm_script_worker:channel_write(C, Data) end
            end,
     import_set(wasi(Dir, Lib, Sink(stdout), Sink(stderr)),
                maps:get(result, Chans)).
@@ -178,7 +178,7 @@ import_set(Wasi, Result) ->
 result_import(Channel) ->
     fun(Ctx, [Ptr, Len]) ->
         case wasm:read_memory(Ctx, Ptr, Len) of
-            {ok, Bytes} -> ok = script_worker:channel_write(Channel, Bytes),
+            {ok, Bytes} -> ok = wasm_script_worker:channel_write(Channel, Bytes),
                            {ok, []};
             {error, _}  -> {ok, []}
         end
@@ -186,19 +186,19 @@ result_import(Channel) ->
 
 decode(#{outcome := returned} = R, _State) ->
     #{channels := #{result := Res, stdout := Out, stderr := Err}} = R,
-    case script_v1:decode_channel(Res) of
+    case wasm_script_v1:decode_channel(Res) of
         {ok, Result} ->
             {ok, #{result => Result, stdout => Out, stderr => Err}};
         {error, Code, Msg} ->
-            {error, script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
+            {error, wasm_script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
     end;
 decode(#{outcome := trapped, error := undefined}, _State) ->
-    {error, worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
+    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
 decode(#{outcome := trapped, error := E}, _State) ->
-    {error, worker_error:runtime(E)};
+    {error, wasm_worker_error:runtime(E)};
 decode(#{outcome := exited, exit := Code} = R, _State) ->
     #{channels := #{stdout := Out, stderr := Err}} = R,
-    {error, worker_error:adapter(exit, ~"the interpreter exited",
+    {error, wasm_worker_error:adapter(exit, ~"the interpreter exited",
                                  #{code => Code, stdout => Out, stderr => Err})}.
 
 cleanup(_State) -> ok.
@@ -250,11 +250,11 @@ validate(Inst) ->
         {ok, [1]} ->
             ok;
         {ok, Other} ->
-            {error, worker_error:adapter(
+            {error, wasm_worker_error:adapter(
                       adapter_failure, ~"the runtime did not come up",
                       #{ready => Other})};
         {error, E} ->
-            {error, worker_error:runtime(E)}
+            {error, wasm_worker_error:runtime(E)}
     end.
 
 %% Nothing to repair: the interpreter's state is guest-side and came back with

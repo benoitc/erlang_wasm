@@ -164,31 +164,27 @@ execution traps, and `exhaustion` when a limit is hit.
 ## Run untrusted code
 
 Set limits, and put the instance in a process so you can kill a runaway module
-on a timeout. Copy `examples/wasm_worker.erl` into your own application first.
-It is a worked example rather than a library module, precisely so you can change
-its timeout, restart and isolation policies:
+on a timeout. `wasm_instance_worker` is that process, installed with the
+application:
 
-```sh
-cp deps/wasm/examples/wasm_worker.erl src/my_wasm_worker.erl
-perl -pi -e 's/^-module\(wasm_worker\)\./-module(my_wasm_worker)./' src/my_wasm_worker.erl
-```
-
-The second line renames the module inside the file to match its new name;
-without it the copy still calls itself `wasm_worker` and `my_wasm_worker:...`
-is undefined.
-
-<!-- check: parse "runs once the worker is copied into your project" -->
-<!-- check: modules my_wasm_worker -->
+<!-- check: fresh -->
 ```erlang
-{ok, W} = my_wasm_worker:start_link(Mod, #{limits => wasm_limits:untrusted(),
-                                           isolation => fresh}),
-{ok, R} = my_wasm_worker:call(W, ~"handle", [Request], 500).
+Src = ~"""
+(module
+  (func (export "handle") (param i32) (result i32)
+    local.get 0 i32.const 1 i32.add))
+""",
+{ok, Mod} = wasm:compile({wat, Src}),
+{ok, W}   = wasm_instance_worker:start_link(Mod, #{limits => wasm_limits:untrusted(),
+                                                   isolation => fresh}),
+{ok, [42]} = wasm_instance_worker:call(W, ~"handle", [41], 500).
 ```
 
-`isolation => fresh` destroys and rebuilds the instance after every request, so
-no state survives one. Read [worker.md](worker.md) for why the process boundary
-is what makes the timeout real, and [security.md](security.md) for what limits
-do not cover.
+The last argument is the timeout in milliseconds: when it passes, the worker is
+killed, so the work actually stops rather than running on unwatched. `isolation => fresh` destroys and rebuilds the instance
+after every request, so no state survives one. Read [worker.md](worker.md) for
+why the process boundary is what makes the timeout real, and
+[security.md](security.md) for what limits do not cover.
 
 ## Next
 

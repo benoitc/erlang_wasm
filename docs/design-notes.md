@@ -258,7 +258,7 @@ in-flight slot.
 Everything a request can leak -- a directory, a staged file, a registered
 cleanup action -- is owned by the guardian and handed to a node-wide **reaper**
 when the request ends. That reaper is a process and not an ETS table with the
-worker as `heir`, for two reasons `worker_reaper` states: `heir` fires when the
+worker as `heir`, for two reasons `wasm_worker_reaper` states: `heir` fires when the
 *owner* dies, so a worker-owned table survives exactly the failure it is not
 needed for; and deferring the sweep to the worker's next request leaks for as
 long as that worker is idle, which for a lightly used tenant has no bound.

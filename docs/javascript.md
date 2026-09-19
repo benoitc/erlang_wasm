@@ -7,16 +7,15 @@ promised, because that is the half you cannot discover from a working example.
 
 ## Run one
 
-> **Where these modules come from.** `js_worker`, `qjs_adapter`,
-> `qjs_reactor_adapter` and the worker kernel they run on (`script_worker`,
-> `worker_reaper`, `script_v1` and `worker_error`) are in `examples/` in this
-> release, not installed with the application. From a checkout of this
-> repository, `rebar3 as test shell` compiles them and puts them on the path.
-> In your own project, copy those files from `deps/wasm/examples/` into your
-> `src/`.
+> **Where these modules come from.** `wasm_javascript_command`,
+> `wasm_javascript` and the worker kernel they run on (`wasm_script_worker`)
+> are installed with the application; you supply the QuickJS artifact.
+> `js_worker`, the thin wrapper the first example uses, is still in
+> `examples/`: from a checkout of this repository, `rebar3 as test shell` puts
+> it on the path.
 
 ```erlang
-{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/js"}),
+{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/js"}),
 {ok, W} = js_worker:start_link("test/fixtures/lang/qjs.wasm", #{root => scratch}),
 {ok, #{result := #{~"answer" := 42}}} =
     js_worker:run(W, ~"export function main(c) { return {answer: c.value + 1}; }",
@@ -76,7 +75,7 @@ on them is relying on that artifact rather than on the profile.
 
 Starting QuickJS is most of a small request: measured between 173 and 190 ms
 against 21 ms for the same work once the engine is already up. The reactor
-artifact and `qjs_reactor_adapter` are how you get the second number. Build it, then point a
+artifact and `wasm_javascript` are how you get the second number. Build it, then point a
 worker at it:
 
 ```sh
@@ -84,15 +83,15 @@ scripts/build-quickjs-reactor.sh
 ```
 
 ```erlang
-{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/js"}),
-{ok, W} = script_worker:start_link(
-            qjs_reactor_adapter,
+{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/js"}),
+{ok, W} = wasm_script_worker:start_link(
+            wasm_javascript,
             #{path => "test/fixtures/lang/qjs_reactor.wasm", root => scratch,
               limits => #{timeout => 30_000, fuel => infinity,
                           max_memory_pages => 4096,
                           max_heap_words => 16 * 1024 * 1024}}),
 {ok, #{result := #{~"answer" := 42}}} =
-    script_worker:run(W, #{source => <<"export function main(c)"
+    wasm_script_worker:run(W, #{source => <<"export function main(c)"
                                        " { return {answer: c.value + 1}; }">>,
                            context => #{~"value" => 41}}).
 ```
@@ -120,8 +119,8 @@ Do this. It is the largest single thing you can do to a QuickJS request and it
 is one option:
 
 ```erlang
-{ok, W} = script_worker:start_link(
-            qjs_reactor_adapter,
+{ok, W} = wasm_script_worker:start_link(
+            wasm_javascript,
             #{path => "test/fixtures/lang/qjs_reactor.wasm", root => scratch,
               runner_min_heap_words => 200_000,
               limits => #{timeout => 30_000, fuel => infinity,

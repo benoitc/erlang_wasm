@@ -126,7 +126,7 @@ report_image(S) ->
                lists:sum([length(maps:get(runs, Mm)) || Mm <- Mems]),
                lists:sum([length(T) || T <- maps:get(tables, P)])]).
 
-%% As `script_worker:restore_opts/1', plus the ceilings the guest needs: a
+%% As `wasm_script_worker:restore_opts/1', plus the ceilings the guest needs: a
 %% CPython image is past the default page budget and a restore that refused
 %% would be measuring the refusal.
 restore_opts(ImportSet, Guest) ->
@@ -143,11 +143,11 @@ restore_opts(ImportSet, Guest) ->
 
 %% The same two guests `workerbench' knows, named the same way.
 arm("py_reactor") ->
-    {py_reactor_adapter,
+    {wasm_python,
      #{path => "test/fixtures/lang/py_reactor.wasm",
        lib => "test/fixtures/lang/py_reactor_lib", pages => 4096}};
 arm("qjs_reactor") ->
-    {qjs_reactor_adapter,
+    {wasm_javascript,
      #{path => "test/fixtures/lang/qjs_reactor.wasm", pages => 2048}}.
 
 us(F) ->

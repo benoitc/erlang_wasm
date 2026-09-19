@@ -1,4 +1,4 @@
--module(script_v1).
+-module(wasm_script_v1).
 -moduledoc """
 The `script_v1` profile: one source, a JSON context, `main(context)`, a JSON
 result.
@@ -63,7 +63,7 @@ A bootstrap frames an **envelope**, never a bare result, because "the tenant
 returned something" and "the tenant's code did not run" have to be told apart
 and a bare value cannot say which happened:
 
-```json
+```jsonl
 {"ok": {"answer": 42}}
 {"error": {"code": "exception", "message": "name 'x' is not defined"}}
 ```
@@ -152,9 +152,9 @@ A profile error, in the kernel's shape.
 The kind is always `adapter_failure`, because that set is closed. What varies
 is `ctx.code`, which is a binary and can grow with the languages.
 """.
--spec error(binary(), binary(), map()) -> worker_error:worker_error().
+-spec error(binary(), binary(), map()) -> wasm_worker_error:worker_error().
 error(Code, Msg, Ctx) ->
-    worker_error:adapter(adapter_failure, Msg, Ctx#{code => Code}).
+    wasm_worker_error:adapter(adapter_failure, Msg, Ctx#{code => Code}).
 
 -doc "Every code this profile defines. Extensible without touching the kernel.".
 -spec codes() -> [binary()].
@@ -169,8 +169,8 @@ separate descriptor and keeps `max_output_bytes`, and `max_result_bytes` is not
 consulted at all, because nothing is written to the result channel.
 
 ```erlang
-Limits = script_v1:combined_limits(#{max_combined_bytes => 65_536}),
-{ok, W} = script_worker:start_link(qjs_adapter, #{limits => Limits, ...}).
+Limits = wasm_script_v1:combined_limits(#{max_combined_bytes => 65_536}),
+{ok, W} = wasm_script_worker:start_link(wasm_javascript_command, #{limits => Limits}).
 ```
 """.
 -spec combined_limits(map()) -> map().

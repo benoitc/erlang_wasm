@@ -89,9 +89,9 @@ Rust's own `std::fs`. [docs/security.md](docs/security.md) states what the
 sandbox does *not* cover, which is the more useful half.
 
 For untrusted code, put the instance in a process so a runaway module can be
-killed on a timeout. The runtime ships no process wrapper: process architecture
-belongs to your application, and [docs/worker.md](docs/worker.md) documents the
-pattern with a tested example in `examples/wasm_worker.erl`.
+killed on a timeout. `wasm_instance_worker` is that process: one instance, a
+deadline, and a kill when it passes. [docs/worker.md](docs/worker.md) says when
+you need it, and how to put a pool of them in your own supervision tree.
 
 ## Documentation
 

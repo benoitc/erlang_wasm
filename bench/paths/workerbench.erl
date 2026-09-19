@@ -117,9 +117,9 @@ main([Adapter, Config, Arm, N, Cache]) ->
     Root = "/tmp/workerbench_root",
     _ = os:cmd("rm -rf " ++ Root),
     ok = filelib:ensure_path(Root),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     {Mod, Path, Limits} = arm(Adapter, Config),
-    {ok, W} = script_worker:start_link(Mod, #{root => scratch, path => Path,
+    {ok, W} = wasm_script_worker:start_link(Mod, #{root => scratch, path => Path,
                                               limits => Limits}),
     {ok, Artifact} = Mod:artifact(#{path => Path}),
     Echo = echo(Mod, Artifact),
@@ -138,11 +138,11 @@ main([Adapter, Config, Arm, N, Cache]) ->
 %% of these is a round number chosen for looking safe: `QUICKJS.md` and
 %% `PYTHON.md` say what each was measured at.
 arm("qjs", Config) ->
-    {qjs_adapter, "test/fixtures/lang/qjs.wasm",
+    {wasm_javascript_command, "test/fixtures/lang/qjs.wasm",
      limits(Config, #{timeout => 300_000, max_memory_pages => 2048,
                       max_host_calls => 100_000})};
 arm("python", Config) ->
-    {py_adapter, "test/fixtures/lang/python.wasm",
+    {wasm_python_command, "test/fixtures/lang/python.wasm",
      limits(Config, #{timeout => 600_000, max_memory_pages => 4096,
                       max_host_calls => 1_000_000,
                       max_heap_words => 16 * 1024 * 1024,
@@ -151,17 +151,17 @@ arm("python", Config) ->
 %% an image per request instead of starting an interpreter, so the request is
 %% the guest's own work and the runner's collections are most of what is left.
 arm("qjs_reactor", Config) ->
-    {qjs_reactor_adapter, "test/fixtures/lang/qjs_reactor.wasm",
+    {wasm_javascript, "test/fixtures/lang/qjs_reactor.wasm",
      limits(Config, #{timeout => 300_000, max_memory_pages => 2048,
                       max_host_calls => 100_000})};
 arm("py_reactor", Config) ->
-    {py_reactor_adapter, "test/fixtures/lang/py_reactor.wasm",
+    {wasm_python, "test/fixtures/lang/py_reactor.wasm",
      limits(Config, #{timeout => 600_000, max_memory_pages => 4096,
                       max_host_calls => 1_000_000,
                       max_heap_words => 16 * 1024 * 1024,
                       fuel => 4_000_000_000})};
 arm("lua_reactor", Config) ->
-    {lua_reactor_adapter, "test/fixtures/lang/lua_reactor.wasm",
+    {wasm_lua, "test/fixtures/lang/lua_reactor.wasm",
      limits(Config, #{timeout => 300_000, max_memory_pages => 2048,
                       max_host_calls => 100_000})}.
 
@@ -184,7 +184,7 @@ run(_W, _R, N, I, Acc) when I > N ->
     lists:reverse(Acc);
 run(W, R, N, I, Acc) ->
     T0 = erlang:monotonic_time(microsecond),
-    Result = script_worker:run(W, request(R)),
+    Result = wasm_script_worker:run(W, request(R)),
     Us = erlang:monotonic_time(microsecond) - T0,
     ok = strict(R, Result),
     Entered = maps:get(entered, wasm_jit:counts(), 0),
@@ -262,7 +262,7 @@ floors(Adapter, Config, N, Floors) ->
     Images = Root ++ "/images",
     ok = filelib:ensure_path(Images),
     application:set_env(wasm, snapshot_dir, Images),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     {Mod, Path, Limits} = arm(Adapter, Config),
     io:format("# ~s floors=~w n=~w~n", [Adapter, Floors, N]),
     Guest = guest(Adapter, Path),
@@ -288,7 +288,7 @@ start_floor(Mod, Guest, Limits, Floor) ->
                0 -> Base;
                _ -> Base#{runner_min_heap_words => Floor}
            end,
-    {ok, W} = script_worker:start_link(Mod, Opts),
+    {ok, W} = wasm_script_worker:start_link(Mod, Opts),
     W.
 
 %% What an adapter needs to find its guest, beyond the module itself. CPython
@@ -325,7 +325,7 @@ rounds(Ws, Req, N, I, Acc) ->
 one(W, Req) ->
     _ = erlang:trace(new_processes, true, ?GC_FLAGS),
     T0 = erlang:monotonic_time(microsecond),
-    Result = script_worker:run(W, request(Req)),
+    Result = wasm_script_worker:run(W, request(Req)),
     Us = erlang:monotonic_time(microsecond) - T0,
     _ = erlang:trace(new_processes, false, ?GC_FLAGS),
     ok = strict(Req, Result),
@@ -360,7 +360,7 @@ drain(Open, Gcs, Acc) ->
 %% `wasm_worker_kernel_SUITE's, not a benchmark's: the suite reads
 %% `process_info(self(), garbage_collection)' from inside a runner.
 resolved(Limits, Floor) ->
-    script_worker:runner_heap_words(#{runner_min_heap_words => Floor}, Limits).
+    wasm_script_worker:runner_heap_words(#{runner_min_heap_words => Floor}, Limits).
 
 report_floor(F, []) ->
     io:format("# floor ~w: no samples~n", [F]);
@@ -380,7 +380,7 @@ med(L) -> lists:nth(max(1, length(L) div 2), L).
 %%
 %% Shaped on `pathbench:run(concurrency)', which sweeps the same counts and
 %% reports the same rate. The difference is what is being driven: that one
-%% spawns instances, this one spawns `script_worker's, so what it prices is a
+%% spawns instances, this one spawns `wasm_script_worker's, so what it prices is a
 %% host's own scaling and not the interpreter's.
 throughput(Adapter, Config, N, Floor, Counts) ->
     io:format("# at start: ~s#           ~s", [os:cmd("uptime"), idle()]),
@@ -392,7 +392,7 @@ throughput(Adapter, Config, N, Floor, Counts) ->
     Images = Root ++ "/images",
     ok = filelib:ensure_path(Images),
     application:set_env(wasm, snapshot_dir, Images),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     {Mod, Path, Limits} = arm(Adapter, Config),
     Guest = guest(Adapter, Path),
     {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
@@ -402,7 +402,7 @@ throughput(Adapter, Config, N, Floor, Counts) ->
     %% One worker built and thrown away, so the image is captured and filed
     %% before any arm is timed. Otherwise the first arm pays a capture that no
     %% other arm pays and the curve starts with a number that is not a rate.
-    ok = script_worker:stop(start_floor(Mod, Guest, Limits, 0)),
+    ok = wasm_script_worker:stop(start_floor(Mod, Guest, Limits, 0)),
     [arm_pair(Mod, Guest, Limits, Echo, N, Floor, C) || C <- Counts],
     io:format("# at end:   ~s#           ~s", [os:cmd("uptime"), idle()]),
     init:stop().
@@ -429,7 +429,7 @@ one_arm(Mod, Guest, Limits, Echo, N, Floor, Count) ->
     ok = drive(Ws, Echo, N),
     Us = erlang:monotonic_time(microsecond) - T0,
     Peak = stop_sampler(Sampler),
-    [ok = script_worker:stop(W) || W <- Ws],
+    [ok = wasm_script_worker:stop(W) || W <- Ws],
     io:format("workers=~2w floor=~8w  ~7.1f req/s  ~w requests in ~w ms  "
               "peak process memory ~w MB~n",
               [Count, Floor, Count * N / (Us / 1000000), Count * N,
@@ -445,7 +445,7 @@ drive(Ws, Req, N) ->
 
 client(Parent, W, Req, N) ->
     lists:foreach(fun(_) ->
-                          ok = strict(Req, script_worker:run(W, request(Req)))
+                          ok = strict(Req, wasm_script_worker:run(W, request(Req)))
                   end,
                   lists:seq(1, N)),
     Parent ! {done, self()}.
@@ -498,7 +498,7 @@ tier(Adapter, N, Floor) ->
     Images = Root ++ "/images",
     ok = filelib:ensure_path(Images),
     application:set_env(wasm, snapshot_dir, Images),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     {Mod, Path, Metered} = arm(Adapter, "metered"),
     {Mod, Path, Compiled} = arm(Adapter, "compiled"),
     Guest = guest(Adapter, Path),
@@ -520,7 +520,7 @@ tier(Adapter, N, Floor) ->
     %% unfinished, which is the first wrong answer this mode gave.
     At = wait_and_drive(Wc, Echo, At0,
                         erlang:monotonic_time(millisecond) + 300_000),
-    [ok = script_worker:stop(W) || W <- [Wm, Wc]],
+    [ok = wasm_script_worker:stop(W) || W <- [Wm, Wc]],
     tier_report(Ms, Cs, At, N),
     io:format("# counts at end: ~p~n", [wasm_jit:counts()]),
     io:format("# slots: ~p~n",
@@ -585,7 +585,7 @@ tier_rounds(Wm, Wc, Req, N, I, Ms, Cs, At) ->
 
 req_us(W, Req) ->
     T0 = erlang:monotonic_time(microsecond),
-    R = script_worker:run(W, request(Req)),
+    R = wasm_script_worker:run(W, request(Req)),
     Us = erlang:monotonic_time(microsecond) - T0,
     ok = strict(Req, R),
     Us.
@@ -672,16 +672,16 @@ workloads(Adapter) ->
     Root = "/tmp/workerbench_root",
     _ = os:cmd("rm -rf " ++ Root),
     ok = filelib:ensure_path(Root),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     {Mod, Path, Limits} = arm(Adapter, "metered"),
     Guest = guest(Adapter, Path),
     W = start_floor(Mod, Guest, Limits, 0),
     [begin
          Wl = workload(Adapter, Which),
-         R = script_worker:run(W, maps:with([source, context], Wl)),
+         R = wasm_script_worker:run(W, maps:with([source, context], Wl)),
          io:format("~p: ~p~n  expect ~p~n", [Which, R, maps:get(expect, Wl)])
      end || Which <- [w, b]],
-    ok = script_worker:stop(W),
+    ok = wasm_script_worker:stop(W),
     init:stop().
 
 %%% -------------------------------------------------------------- steady ---
@@ -711,7 +711,7 @@ steady(Adapter, Arm, N, Floor) ->
     Images = Root ++ "/images",
     ok = filelib:ensure_path(Images),
     application:set_env(wasm, snapshot_dir, Images),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     {Mod, Path, _} = arm(Adapter, "metered"),
     Guest = guest(Adapter, Path),
     {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
@@ -755,7 +755,7 @@ steady_arm("latency", Adapter, Mod, Guest, Echo, Hash, N, Floor) ->
     io:format("# metered  min/median ~w / ~w us~n", [lists:min(Ms), med2(Ms)]),
     io:format("# compiled min/median ~w / ~w us~n", [lists:min(Cs), med2(Cs)]),
     io:format("# ratio compiled/metered median ~.3f~n", [med2(Cs) / med2(Ms)]),
-    [ok = script_worker:stop(W) || W <- [Wm, Wc]],
+    [ok = wasm_script_worker:stop(W) || W <- [Wm, Wc]],
     end_state(Hash, resident);
 
 %%% The throughput arm: N concurrent compiled workers, and a metered control at
@@ -784,7 +784,7 @@ steady_arm("control", Adapter, Mod, Guest, Echo, Hash, N, Floor) ->
     io:format("# control min/median ~w / ~w us over ~w~n",
               [lists:min(Us), med2(Us), N]),
     io:format("# counts (all must be zero): ~p~n", [wasm_jit:counts()]),
-    ok = script_worker:stop(W),
+    ok = wasm_script_worker:stop(W),
     end_state(Hash, absent).
 
 steady_rate(Adapter, Mod, Guest, Echo, Hash, N, Floor, Count) ->
@@ -794,10 +794,10 @@ steady_rate(Adapter, Mod, Guest, Echo, Hash, N, Floor, Count) ->
     _ = prepare(hd(Cs), Echo, Hash),
     CRate = rate(Cs, Echo, N),
     Entered = maps:get(entered, wasm_jit:counts(), 0),
-    [ok = script_worker:stop(W) || W <- Cs],
+    [ok = wasm_script_worker:stop(W) || W <- Cs],
     Ms = [start_floor(Mod, Guest, Metered, Floor) || _ <- lists:seq(1, Count)],
     MRate = rate(Ms, Echo, N),
-    [ok = script_worker:stop(W) || W <- Ms],
+    [ok = wasm_script_worker:stop(W) || W <- Ms],
     io:format("workers=~2w compiled ~7.1f req/s  metered ~7.1f req/s  "
               "normalised ~.3f  entered ~w of ~w~n",
               [Count, CRate, MRate, CRate / MRate, Entered, Count * N]).
@@ -921,7 +921,7 @@ coldnode(Adapter, Dir, State, Strategy, Which) ->
     %% somebody else's work.
     Images = image_dir(Adapter),
     application:set_env(wasm, snapshot_dir, Images),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     {Mod, Path, _} = arm(Adapter, "metered"),
     Guest = guest(Adapter, Path),
     {_, _, Compiled} = arm(Adapter, "compiled"),
@@ -949,7 +949,7 @@ coldnode(Adapter, Dir, State, Strategy, Which) ->
     io:format("# slot           ~p~n",
               [[N || {N, _, _} <- wasm_code_slots:resident()]]),
     io:format("# entries after: ~w~n", [length(entries(Dir))]),
-    ok = script_worker:stop(Wk),
+    ok = wasm_script_worker:stop(Wk),
     say_box("at end"),
     init:stop().
 
@@ -973,7 +973,7 @@ to_residency(Wk, Wl, Strategy, T0, Deadline, N, Hash) ->
                     timer:sleep(200),
                     to_residency(Wk, Wl, Strategy, T0, Deadline, N, Hash);
                 _ ->
-                    ok = strict(Wl, script_worker:run(
+                    ok = strict(Wl, wasm_script_worker:run(
                                       Wk, maps:with([source, context], Wl))),
                     to_residency(Wk, Wl, Strategy, T0, Deadline, N + 1, Hash)
             end
@@ -1265,7 +1265,7 @@ ph_boot(Guest, Cache) ->
     _ = os:cmd("rm -rf " ++ Root),
     ok = filelib:ensure_path(Root),
     application:set_env(wasm, snapshot_dir, ph_images(Guest)),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     ok.
 
 %% A wrapper worker in one mode, or the real adapter with no wrapper at all.
@@ -1286,14 +1286,14 @@ ph_worker(Guest, Config, Mode, Expect) ->
     {ok, W} =
         case Mode of
             direct ->
-                script_worker:start_link(Mod, Base);
+                wasm_script_worker:start_link(Mod, Base);
             {calibrate, Cb, Sleep} ->
-                script_worker:start_link(
+                wasm_script_worker:start_link(
                   phasing_adapter,
                   Base#{under => Mod, mode => calibrate,
                         calibrate => {Cb, Sleep}});
             _ ->
-                script_worker:start_link(
+                wasm_script_worker:start_link(
                   phasing_adapter, Base#{under => Mod, mode => Mode})
         end,
     Ms = erlang:monotonic_time(millisecond) - T0,
@@ -1311,8 +1311,8 @@ ph_workload(Guest) -> element(1, pair(Guest)).
 
 %% T0, submit, a **finite** await against the arm's remaining time, cancel, T11.
 %%
-%% Not `script_worker:run/2', which is `submit/2' plus `await(infinity)'
-%% (`script_worker.erl:494-510'), so a request begun just inside a deadline
+%% Not `wasm_script_worker:run/2', which is `submit/2' plus `await(infinity)'
+%% (`wasm_script_worker.erl:494-510'), so a request begun just inside a deadline
 %% runs on for the worker's own timeout: ten more minutes on CPython. A loop
 %% that only checks the clock before submitting is not a bound.
 %%
@@ -1321,17 +1321,17 @@ ph_workload(Guest) -> element(1, pair(Guest)).
 ph_one(W, Workload, Deadline) ->
     Req = maps:with([source, context], Workload),
     T0 = erlang:monotonic_time(microsecond),
-    case script_worker:submit(W, Req) of
+    case wasm_script_worker:submit(W, Req) of
         {error, E} ->
             {invalid, {submit, E}};
         {ok, Ref} ->
             Left = max(0, Deadline - erlang:monotonic_time(millisecond)),
-            case script_worker:await(W, Ref, Left) of
+            case wasm_script_worker:await(W, Ref, Left) of
                 {ok, Map} ->
                     T11 = erlang:monotonic_time(microsecond),
                     ph_vector(Workload, T0, T11, Map);
                 {error, E} ->
-                    _ = script_worker:cancel(W, Ref),
+                    _ = wasm_script_worker:cancel(W, Ref),
                     {invalid, {failed, E}}
             end
     end.
@@ -1482,7 +1482,7 @@ ph_stage("seed", Guest, _) ->
     #{compiled := Want, refused := 0, failed := 0, crashed := 0} = Counts,
     [] = wasm_jit:diagnostics(),
     1 = length(wasm_code_slots:resident()),
-    ok = script_worker:stop(W),
+    ok = wasm_script_worker:stop(W),
     [_] = ph_beams(Cache),
     M = ph_write_manifest(Guest, ph_observe(Guest, hint, hint)),
     io:format("# seeded ~s: ~p~n", [Guest, maps:with([guest, request], M)]);
@@ -1526,7 +1526,7 @@ ph_stage("floor", Guest, [Config]) ->
     Got >= Want orelse ph_die({floor_below_request, Got, Want}),
     Got =< Ceiling orelse ph_die({floor_over_ceiling, Got, Ceiling}),
     ok = ph_counts(Config, ?PH_FLOOR_PROBES),
-    ok = script_worker:stop(W);
+    ok = wasm_script_worker:stop(W);
 
 %%% ---------------------------------------------------- the paired windows ---
 
@@ -1577,13 +1577,13 @@ ph_until_resident(W, Workload, Hash, Deadline) ->
 %% an error only in a timed arm.
 ph_drive(W, Workload, Deadline) ->
     Req = maps:with([source, context], Workload),
-    {ok, Ref} = script_worker:submit(W, Req),
+    {ok, Ref} = wasm_script_worker:submit(W, Req),
     Left = max(0, Deadline - erlang:monotonic_time(millisecond)),
-    case script_worker:await(W, Ref, Left) of
+    case wasm_script_worker:await(W, Ref, Left) of
         {ok, Map} ->
             strict_phase(Workload, {ok, maps:remove('$phases', Map)});
         {error, E} ->
-            _ = script_worker:cancel(W, Ref),
+            _ = wasm_script_worker:cancel(W, Ref),
             ph_die({drive_failed, E})
     end.
 
@@ -1602,7 +1602,7 @@ ph_warm(Guest, Workload) ->
     Base = (guest(Guest, Path))#{root => scratch,
                                  limits => Limits#{compile_after => 1},
                                  runner_min_heap_words => floor_for(Guest)},
-    {ok, P} = script_worker:start_link(Mod, Base),
+    {ok, P} = wasm_script_worker:start_link(Mod, Base),
     Hash = ph_hash(Guest),
     D = ph_deadline(),
     ok = ph_until_resident(P, Workload, Hash, D),
@@ -1614,7 +1614,7 @@ ph_warm(Guest, Workload) ->
       crashed := 0} = Counts,
     [] = wasm_jit:diagnostics(),
     1 = length(wasm_code_slots:resident()),
-    ok = script_worker:stop(P),
+    ok = wasm_script_worker:stop(P),
     ok.
 
 %% Only a compiled arm needs the cache warmed, and warming one for an
@@ -1668,7 +1668,7 @@ ph_pairs(Guest, {ConfA, ModeA}, {ConfB, ModeB}, Kind) ->
     Raw = ph_rounds(Wa, Wb, Workload, D, 1, []),
     Counts = wasm_jit:counts(),
     Load1 = ph_load(),
-    [ok = script_worker:stop(W) || W <- [Wa, Wb]],
+    [ok = wasm_script_worker:stop(W) || W <- [Wa, Wb]],
     ph_finish(Guest, Kind, ConfA, ConfB, ModeA, ModeB, Raw, Counts,
               Load0, Load1).
 
@@ -1843,7 +1843,7 @@ ph_bimodality(Which, Xs) ->
 
 %% Cleanup overlap. The worker publishes its result before the reaper runs
 %% adapter cleanup and removes the request directory
-%% (`script_worker.erl:1183'), so a following request can overlap the previous
+%% (`wasm_script_worker.erl:1183'), so a following request can overlap the previous
 %% one's cleanup. The primary run stays immediate, because that is the workload
 %% whose numbers are being explained.
 %%
@@ -1865,7 +1865,7 @@ ph_cleanup(Guest, Config) ->
             || Order <- [cont_first, iso_first],
                Kind <- ph_order(Order)],
     L1 = ph_load(),
-    ok = script_worker:stop(W),
+    ok = wasm_script_worker:stop(W),
     Get = fun(O, K) -> hd([V || {Oo, Kk, V} <- Runs, Oo =:= O, Kk =:= K]) end,
     io:format("~n# cleanup overlap, ~s~n", [Config]),
     Overlaps = [ph_overlap(N, Get) || N <- [total, submit, envelope, reply]],
@@ -1929,7 +1929,7 @@ ph_series(total, Vs) -> ph_col(total, Vs);
 ph_series(Name, Vs)  -> ph_iv(Name, Vs).
 
 ph_reaper_empty(Deadline) ->
-    case worker_reaper:requests() of
+    case wasm_worker_reaper:requests() of
         [] -> ok;
         _  ->
             erlang:monotonic_time(millisecond) < Deadline
@@ -1944,7 +1944,7 @@ ph_quiesce() ->
 ph_quiesce(Deadline) ->
     Children = proplists:get_value(active,
                                    supervisor:count_children(wasm_jit_sup)),
-    case {Children, loading(), worker_reaper:requests()} of
+    case {Children, loading(), wasm_worker_reaper:requests()} of
         {0, [], []} -> ok;
         State ->
             erlang:monotonic_time(millisecond) < Deadline
@@ -1980,7 +1980,7 @@ ph_gc(Guest, Config) ->
     Rows = [ph_collect(W, Workload, D) || _ <- lists:seq(1, ?PH_SAMPLES)],
     L1 = ph_load(),
     ok = ph_counts(Config, ?PH_SAMPLES),
-    ok = script_worker:stop(W),
+    ok = wasm_script_worker:stop(W),
     %% An incomplete start/end pair is an incomplete event stream, which the
     %% collector's own failure protocol invalidates the arm for. Twelve or
     %% nothing: never an eleven-sample diagnostic, and never a replacement
@@ -2107,7 +2107,7 @@ ph_dispatch_arm(Guest, Config, Workload) ->
         %% Afresh per arm, so the interpreted arm's hundreds of millions cannot
         %% leak into the adopted count.
         _ = erlang:trace_pattern({wasm_exec, run, 3}, false, [call_count]),
-        ok = script_worker:stop(W)
+        ok = wasm_script_worker:stop(W)
     end.
 
 %%% ---------------------------------------------------------------- msacc ---
@@ -2140,7 +2140,7 @@ ph_msacc(Guest) ->
                 ph_write(Dir, #{kind => msacc, guest => Guest, rows => Rows})
             after
                 _ = msacc:stop(),
-                [ok = script_worker:stop(W) || W <- maps:values(Ws)]
+                [ok = wasm_script_worker:stop(W) || W <- maps:values(Ws)]
             end
     end.
 
@@ -2204,7 +2204,7 @@ ph_census(Guest) ->
     Workload = ph_workload(Guest),
     W = ph_worker(Guest, "interpreted", census),
     {ok, V} = ph_one(W, Workload, ph_deadline()),
-    ok = script_worker:stop(W),
+    ok = wasm_script_worker:stop(W),
     Extra = maps:get(extra, V),
     1 = maps:get(classify_calls, Extra),
     C = maps:get(census, Extra),
@@ -2237,7 +2237,7 @@ ph_smoke() ->
     _ = os:cmd("rm -rf " ++ Root),
     ok = filelib:ensure_path(Root),
     application:set_env(wasm, snapshot_dir, Root),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     Wl = ph_fake_workload(),
     T = ph_fake_worker(timing),
     D = ph_deadline(),
@@ -2250,13 +2250,13 @@ ph_smoke() ->
     Bare = maps:get(extra, A),
     [] = maps:keys(Bare) -- [mode, classify_calls],
     timing = maps:get(mode, Bare),
-    ok = script_worker:stop(T),
+    ok = wasm_script_worker:stop(T),
     G = ph_fake_worker(gc),
     {ok, Gv} = ph_one(G, Wl, D),
     Runner = maps:get(runner, maps:get(extra, Gv)),
     is_pid(Runner) orelse ph_die(no_runner_pid),
     Runner =/= self() orelse ph_die(runner_is_caller),
-    ok = script_worker:stop(G),
+    ok = wasm_script_worker:stop(G),
     io:format("# smoke ok: ordered, sums, distinct ids, timing mode bare, "
               "gc mode names a runner ~p~n", [Runner]).
 
@@ -2272,14 +2272,14 @@ ph_calibrate(Callback, Ms, N) ->
     _ = os:cmd("rm -rf " ++ Root),
     ok = filelib:ensure_path(Root),
     application:set_env(wasm, snapshot_dir, Root),
-    {ok, _} = worker_reaper:start_link(#{scratch => Root}),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Root}),
     Wl = ph_fake_workload(),
     Base = ph_fake_worker(timing),
     Slow = ph_fake_worker({calibrate, Callback, Ms}),
     D = ph_deadline(),
     _ = [ph_one(W, Wl, D) || W <- [Base, Slow]],
     {Bs, Ss} = ph_cal_rounds(Base, Slow, Wl, D, N, [], []),
-    [ok = script_worker:stop(W) || W <- [Base, Slow]],
+    [ok = wasm_script_worker:stop(W) || W <- [Base, Slow]],
     Owner = ph_owner(Callback),
     Us = Ms * 1000,
     io:format("~n# calibrate ~w, ~w ms into ~w, owner interval ~w~n",
@@ -2326,7 +2326,7 @@ ph_fake_worker(Mode) ->
                _ ->
                    Base#{mode => Mode}
            end,
-    {ok, W} = script_worker:start_link(phasing_adapter, Opts),
+    {ok, W} = wasm_script_worker:start_link(phasing_adapter, Opts),
     W.
 
 %% The fixture's own base request, with the answer it must give. The kernel
@@ -2339,10 +2339,10 @@ ph_fake_workload() ->
 %% Asked once, before any timing, rather than written here: the fixture's
 %% counter is the adapter's business and a literal would go stale with it.
 ph_fake_expect(Echo) ->
-    {ok, W} = script_worker:start_link(
+    {ok, W} = wasm_script_worker:start_link(
                 fake_reactor_adapter, #{root => scratch}),
-    {ok, #{values := R}} = script_worker:run(W, Echo),
-    ok = script_worker:stop(W),
+    {ok, #{values := R}} = wasm_script_worker:run(W, Echo),
+    ok = wasm_script_worker:stop(W),
     R.
 
 %%% ---------------------------------------------------------- the record ----

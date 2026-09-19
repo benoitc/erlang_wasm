@@ -13,7 +13,7 @@ be imitated by a tenant printing the right bytes, because there are no bytes to
 imitate.
 """.
 
--behaviour(script_worker).
+-behaviour(wasm_script_worker).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).
@@ -74,27 +74,27 @@ artifact(_Opts) ->
                    (S, {ok, Acc}) ->
                        case wasm:compile({wat, wat(S)}) of
                            {ok, M}    -> {ok, Acc#{S => M}};
-                           {error, E} -> {error, worker_error:runtime(E)}
+                           {error, E} -> {error, wasm_worker_error:runtime(E)}
                        end
                 end, {ok, #{}}, ?SHAPES).
 
 requirements(Request, _Artifact) when is_map(Request) ->
-    Context = script_v1:encode_context(maps:get(context, Request, #{})),
+    Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
     {ok, #{min_timeout => 100, min_memory_pages => 1,
            request_bytes => byte_size(Context),
            staged_bytes => byte_size(Context), staged_files => 1,
            mounts => #{ro => #{guest_path => ~"/", mode => read}}}};
 requirements(_Request, _Artifact) ->
-    {error, worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
+    {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
 prepare(Request, Artifact, Env) ->
     Shape = maps:get(shape, Request, ok),
     case maps:find(Shape, Artifact) of
         error ->
-            {error, worker_error:adapter(adapter_failure, ~"unknown shape",
+            {error, wasm_worker_error:adapter(adapter_failure, ~"unknown shape",
                                          #{shape => Shape}), undefined};
         {ok, M} ->
-            Context = script_v1:encode_context(maps:get(context, Request, #{})),
+            Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
             case (maps:get(stage, Env))(ro, ~"context.json", Context) of
                 {error, E} ->
                     {error, E, #{}};
@@ -113,7 +113,7 @@ bindings(Env) ->
     #{host_dir := Dir} = maps:get(ro, Mounts),
     Sink = fun(Which) ->
                C = maps:get(Which, Chans),
-               fun(Data) -> script_worker:channel_write(C, Data) end
+               fun(Data) -> wasm_script_worker:channel_write(C, Data) end
            end,
     Result = maps:get(result, Chans),
     Wasi = wasi_preview1:imports(
@@ -125,7 +125,7 @@ bindings(Env) ->
               fun(Ctx, [Ptr, Len]) ->
                   case wasm:read_memory(Ctx, Ptr, Len) of
                       {ok, Bytes} ->
-                          script_worker:channel_write(Result, Bytes),
+                          wasm_script_worker:channel_write(Result, Bytes),
                           {ok, []};
                       {error, E} ->
                           {trap, E}
@@ -134,18 +134,18 @@ bindings(Env) ->
 
 decode(#{outcome := exited, exit := 0} = R, _State) ->
     #{channels := #{stdout := Out, stderr := Err, result := Res}} = R,
-    case script_v1:decode_channel(Res) of
+    case wasm_script_v1:decode_channel(Res) of
         {ok, Result} ->
             {ok, #{result => Result, stdout => Out, stderr => Err}};
         {error, Code, Msg} ->
-            {error, script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
+            {error, wasm_script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
     end;
 decode(#{outcome := exited, exit := Code}, _State) ->
-    {error, worker_error:adapter(exit, ~"non-zero exit", #{code => Code})};
+    {error, wasm_worker_error:adapter(exit, ~"non-zero exit", #{code => Code})};
 decode(#{outcome := trapped, error := undefined}, _State) ->
-    {error, worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
+    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
 decode(#{outcome := trapped, error := E}, _State) ->
-    {error, worker_error:runtime(E)};
+    {error, wasm_worker_error:runtime(E)};
 decode(#{outcome := returned} = R, State) ->
     decode(R#{outcome := exited, exit := 0}, State).
 

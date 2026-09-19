@@ -11,7 +11,7 @@ Paired with `fake_typed_adapter`, which has none of that, these two are what
 the kernel suite runs the identical base case list against.
 """.
 
--behaviour(script_worker).
+-behaviour(wasm_script_worker).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).
@@ -101,7 +101,7 @@ artifact(_Opts) ->
                    (Shape, {ok, Acc}) ->
                        case wasm:compile({wat, wat(Shape)}) of
                            {ok, M}    -> {ok, Acc#{Shape => M}};
-                           {error, E} -> {error, worker_error:runtime(E)}
+                           {error, E} -> {error, wasm_worker_error:runtime(E)}
                        end
                 end, {ok, #{}}, ?SHAPES).
 
@@ -122,13 +122,13 @@ requirements(Request, _Artifact) when is_map(Request) ->
            staged_files => case Staged of <<>> -> 0; _ -> 1 end,
            mounts => Mounts}};
 requirements(_Request, _Artifact) ->
-    {error, worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
+    {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
 prepare(Request, Artifact, Env) ->
     Shape = maps:get(shape, Request, echo),
     case maps:find(Shape, Artifact) of
         error ->
-            {error, worker_error:adapter(adapter_failure, ~"unknown shape",
+            {error, wasm_worker_error:adapter(adapter_failure, ~"unknown shape",
                                          #{shape => Shape}), undefined};
         {ok, M} ->
             case prepare_files(Request, Env) of
@@ -231,7 +231,7 @@ wasi(Env) ->
     #{mounts := Mounts, channels := Chans} = Env,
     Sink = fun(Which) ->
                C = maps:get(Which, Chans),
-               fun(Data) -> script_worker:channel_write(C, Data) end
+               fun(Data) -> wasm_script_worker:channel_write(C, Data) end
            end,
     Dirs = [{maps:get(guest_path, M), maps:get(host_dir, M), maps:get(mode, M)}
             || Name <- lists:sort(maps:keys(Mounts)),
@@ -247,14 +247,14 @@ decode(#{outcome := exited, exit := 0} = R, State) ->
     {ok, (streams(R))#{probe => maps:get(probe, State, []),
                        mount_dirs => maps:get(mount_dirs, State, #{})}};
 decode(#{outcome := exited, exit := Code} = R, _State) ->
-    {error, worker_error:adapter(exit, ~"non-zero exit",
+    {error, wasm_worker_error:adapter(exit, ~"non-zero exit",
                                  maps:merge(#{code => Code}, streams(R)))};
 decode(#{outcome := returned} = R, _State) ->
     {ok, streams(R)};
 decode(#{outcome := trapped, error := undefined}, _State) ->
-    {error, worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
+    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
 decode(#{outcome := trapped, error := E}, _State) ->
-    {error, worker_error:runtime(E)}.
+    {error, wasm_worker_error:runtime(E)}.
 
 streams(#{channels := #{stdout := Out, stderr := Err}, truncated := T}) ->
     #{stdout => Out, stderr => Err, truncated => T}.

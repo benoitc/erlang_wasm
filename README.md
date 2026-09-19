@@ -98,7 +98,9 @@ you need it, and how to put a pool of them in your own supervision tree.
 [The full index is in docs/](docs/README.md). The pages you are most likely to
 want first:
 
+- [What it is for](docs/introduction.md) and [Concepts](docs/concepts.md)
 - [Getting started](docs/getting-started.md)
+- [Examples](docs/README.md#examples): one task per page, each one tested
 - [Producing a module](docs/guests.md): which shape to build, and how
 - [Embedding](docs/embedding.md): lifetime, ownership, limits
 - [WASI](docs/wasi.md): capabilities and preopens

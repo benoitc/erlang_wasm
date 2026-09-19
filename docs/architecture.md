@@ -43,7 +43,7 @@ together. So a module only ever calls **downward**, and level 0 depends on
 nothing else in the project, which is where you can start and be certain of
 finishing.
 
-```
+```text
 L9  wasi
 L8  wasi_preview1  wasm_snapshot_store
 L7  wasm  wasm_module_cache  wasm_snapshot_owner  wasm_jit_sup
@@ -119,7 +119,7 @@ nothing but the guard would have told you.
 One `wasm:call/3` end to end, so you can put a breakpoint anywhere on it. Every
 hop names the function you would stop in.
 
-```
+```text
 wasm:call/3                      check per-call limits, if any were given
   wasm:call_1/4                  wasm_instance:export_kind/2 resolves the name
                                  to a function index, then checks the arguments

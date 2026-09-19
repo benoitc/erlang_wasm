@@ -2,7 +2,7 @@
 -moduledoc """
 Root supervisor. What `application:ensure_all_started(wasm)` gets you:
 
-```
+```text
 wasm_sup                one_for_one, 5 in 300
   |
   +-- wasm_store_sup    one_for_one    the long-lived ETS tables

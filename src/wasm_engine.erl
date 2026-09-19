@@ -5,7 +5,7 @@ Node-wide resource accounting.
 This is where you cap how much linear memory the whole node may hold, and where
 you go to see how much is in use:
 
-```
+```erlang
 wasm_engine:set_page_limit(16384),          % 1 GiB
 #{pages_in_use := N} = wasm_engine:stats().
 ```

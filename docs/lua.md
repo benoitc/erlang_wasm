@@ -14,7 +14,7 @@ build flags that nothing else in this repository does.
 > compiles them and puts them on the path. In your own project, copy those
 > files from `deps/wasm/examples/` into your `src/`.
 
-```
+```sh
 scripts/build-lua-reactor.sh
 ```
 
@@ -100,7 +100,7 @@ did not put there.
 
 Lua signals errors with `longjmp`, which on WebAssembly is exception handling:
 
-```
+```text
 -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false
 ```
 
@@ -118,7 +118,7 @@ A tenant error arrives as a value, in the same shape every other language uses:
 
 ```erlang
 {error, #{class := adapter, kind := adapter_failure,
-          ctx := #{code := ~"exception", ...}}}
+          ctx := #{code := ~"exception"}}}
 ```
 
 `~"no_entry_point"` when no global `main` is defined, and `~"exception"` for

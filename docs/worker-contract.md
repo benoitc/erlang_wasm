@@ -176,8 +176,10 @@ only `_start` cannot be one, because by the time `_start` returns the runtime
 has torn itself down.
 
 ```erlang
-capabilities(_Artifact) ->
-    #{execution => reactor, snapshots => #{version => ~"my-1"}, ...}.
+capabilities(Artifact) ->
+    %% your other capabilities, with these two set
+    (base_capabilities(Artifact))#{execution => reactor,
+                                   snapshots => #{version => ~"my-1"}}.
 
 snapshot_capability(#{module := M}) ->
     #{version => ~"my-1",

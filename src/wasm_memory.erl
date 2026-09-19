@@ -6,7 +6,7 @@ You reach this through `wasm:read_memory/3` and `wasm:write_memory/3`; read the
 module itself when you want to know what a store costs you. The representation
 is the one the benchmarks chose. Per store, on this machine:
 
-```
+```text
   atomics, raw 64-bit word        6.1 ns
   atomics, masked i32 store      22.1 ns
   ETS, one row per word          41.6 ns

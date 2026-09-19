@@ -214,7 +214,7 @@ module is untrusted.
 **To link modules that exchange garbage-collected references**, name the
 instance to share an object store with:
 
-```
+```erlang
 {ok, A} = wasm:instantiate(ModA, #{}),
 {ok, T} = wasm:extern(A, ~"table"),
 {ok, B} = wasm:instantiate(ModB, #{{~"env", ~"t"} => T}, #{link => A}).

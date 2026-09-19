@@ -79,7 +79,7 @@ against 21 ms for the same work once the engine is already up. The reactor
 artifact and `qjs_reactor_adapter` are how you get the second number. Build it, then point a
 worker at it:
 
-```
+```sh
 scripts/build-quickjs-reactor.sh
 ```
 

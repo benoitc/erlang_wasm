@@ -88,6 +88,14 @@ floor on work this mode is not about.
 %% without it a collection has no duration.
 -define(GC_FLAGS, [garbage_collection, monotonic_timestamp]).
 
+main(["revision", Arm, Ord, Adapter, "latency", N, Floor]) ->
+    revision_latency(Arm, Ord, Adapter, list_to_integer(N),
+                     list_to_integer(Floor));
+main(["revision", Arm, Ord, Adapter, "throughput", K, Secs, Floor]) ->
+    revision_throughput(Arm, Ord, Adapter, list_to_integer(K),
+                        list_to_integer(Secs), list_to_integer(Floor));
+main(["revision_set" | Args]) ->
+    revision_set(Args);
 main(["phases" | Rest]) ->
     phases(Rest);
 main(["floors", Adapter, Config, N | Floors]) ->
@@ -2402,3 +2410,264 @@ ph_die(Reason) ->
     io:format("# ** INVALID: ~p~n", [Reason]),
     init:stop(2),
     timer:sleep(infinity).
+
+%%% ------------------------------------------------------------- revision ---
+%%
+%% Two kernels in one emulator, so a revision is compared against its
+%% predecessor under the same load, the same scheduler and the same minute.
+%% `floors' and `steady' are self-controlling inside one run and must never be
+%% compared across runs; this is what compares across revisions instead.
+%%
+%% The old kernel is compiled twice from `main', every module renamed with an
+%% `o1_' or an `o2_' prefix, and loaded beside the new one. Each side has its
+%% own worker, its own reaper and its own scratch root. `null' runs o1 against
+%% o2: two identical kernels in exactly the topology of `ab', which runs o1
+%% against the new one. The runtime underneath is the same code for all three.
+%%
+%% `revision_set' is what acceptance uses: it runs the predeclared sequence in
+%% fresh emulators, computes the gates per ordering, and exits non-zero on a
+%% failure. The gate is the one `phases' already uses: the median of paired
+%% ratios inside [0.95, 1.05], and no bimodal set.
+
+rev_sides("null") -> [old_side(o1), old_side(o2)];
+rev_sides("ab")   -> [old_side(o1), new_side]. 
+
+old_side(P) ->
+    Pre = atom_to_list(P) ++ "_",
+    #{name => P,
+      worker => list_to_atom(Pre ++ "script_worker"),
+      reaper => list_to_atom(Pre ++ "worker_reaper"),
+      adapters => #{"qjs_reactor" => list_to_atom(Pre ++ "qjs_reactor_adapter"),
+                    "lua_reactor" => list_to_atom(Pre ++ "lua_reactor_adapter"),
+                    "py_reactor"  => list_to_atom(Pre ++ "py_reactor_adapter")}}.
+
+new_side_map() ->
+    #{name => new, worker => wasm_script_worker, reaper => wasm_worker_reaper,
+      adapters => #{"qjs_reactor" => wasm_javascript,
+                    "lua_reactor" => wasm_lua,
+                    "py_reactor"  => wasm_python}}.
+
+rev_side(new_side) -> new_side_map();
+rev_side(M) -> M.
+
+%% F: the first side starts; R: the second does.
+rev_order(Sides, "F") -> Sides;
+rev_order(Sides, "R") -> lists:reverse(Sides).
+
+rev_start(Adapter, Floor, Sides0) ->
+    Base = filename:join("/tmp", "workerbench_revision"),
+    _ = os:cmd("rm -rf " ++ Base),
+    Sides = [rev_side(S) || S <- Sides0],
+    NewRoot = filename:join(Base, "new"),
+    ok = filelib:ensure_path(NewRoot),
+    ok = application:set_env(wasm, scratch_roots, #{scratch => NewRoot}),
+    {ok, _} = application:ensure_all_started(wasm),
+    {_, Path, Limits} = arm(Adapter, "metered"),
+    Guest = guest(Adapter, Path),
+    [begin
+         case Name of
+             new -> ok;
+             _   -> Root = filename:join(Base, atom_to_list(Name)),
+                    ok = filelib:ensure_path(Root),
+                    {ok, _} = Reaper:start_link(#{scratch => Root})
+         end,
+         Opts0 = Guest#{root => scratch, limits => Limits},
+         Opts = case Floor of 0 -> Opts0;
+                              _ -> Opts0#{runner_min_heap_words => Floor}
+                end,
+         {ok, W} = Worker:start_link(maps:get(Adapter, As), Opts),
+         S#{w => W}
+     end || #{name := Name, reaper := Reaper, worker := Worker,
+              adapters := As} = S <- Sides].
+
+rev_req(#{worker := M, w := W}, Wl) ->
+    T0 = erlang:monotonic_time(microsecond),
+    R = M:run(W, request(Wl)),
+    Us = erlang:monotonic_time(microsecond) - T0,
+    ok = strict(Wl, R),
+    Us.
+
+revision_latency(Arm, Ord, Adapter, N, Floor) ->
+    Start = {os:cmd("uptime"), idle()},
+    Sides = rev_start(Adapter, Floor, rev_sides(Arm)),
+    Wl = workload(Adapter, w),
+    %% one untimed request each, so neither side pays a first-request cost
+    _ = [rev_req(S, Wl) || S <- Sides],
+    [A, B] = rev_order(Sides, Ord),
+    Rounds = [case I rem 2 of
+                  1 -> Ta = rev_req(A, Wl), {Ta, rev_req(B, Wl)};
+                  0 -> Tb = rev_req(B, Wl), {rev_req(A, Wl), Tb}
+              end || I <- lists:seq(1, N)],
+    End = {os:cmd("uptime"), idle()},
+    %% Times are reported as the first side of `rev_sides/1' and the second,
+    %% whatever the order, so the ratio is always second over first.
+    {Ts1, Ts2} = case Ord of
+                     "F" -> lists:unzip(Rounds);
+                     "R" -> {Bs, As} = lists:unzip(Rounds), {As, Bs}
+                 end,
+    rev_emit(#{kind => latency, arm => Arm, ordering => Ord,
+               first => Ts1, second => Ts2, start => Start, 'end' => End}),
+    init:stop().
+
+revision_throughput(Arm, Ord, Adapter, K, Secs, Floor) ->
+    Start = {os:cmd("uptime"), idle()},
+    Sides = lists:append([rev_start_many(Adapter, Floor, rev_sides(Arm), K)]),
+    Wl = workload(Adapter, w),
+    Ordered = rev_order(Sides, Ord),
+    Parent = self(),
+    Deadline = erlang:monotonic_time(millisecond) + Secs * 1000,
+    Pids = [spawn_link(fun() -> Parent ! {count, Name, rev_drive(S, Wl, Deadline, 0)} end)
+            || #{name := Name, ws := Ws} = Side <- Ordered,
+               W <- Ws, S <- [Side#{w => W}]],
+    Counts = lists:foldl(fun(_, Acc) ->
+                             receive {count, Name, C} ->
+                                 maps:update_with(Name, fun(X) -> X + C end, C, Acc)
+                             end
+                         end, #{}, Pids),
+    End = {os:cmd("uptime"), idle()},
+    [#{name := N1}, #{name := N2}] = Sides,
+    rev_emit(#{kind => throughput, arm => Arm, ordering => Ord,
+               first => maps:get(N1, Counts), second => maps:get(N2, Counts),
+               start => Start, 'end' => End}),
+    init:stop().
+
+rev_start_many(Adapter, Floor, Sides, K) ->
+    Started = rev_start(Adapter, Floor, Sides),
+    [begin
+         Extra = [begin
+                      {_, Path, Limits} = arm(Adapter, "metered"),
+                      Opts0 = (guest(Adapter, Path))#{root => scratch,
+                                                      limits => Limits},
+                      Opts = case Floor of 0 -> Opts0;
+                                 _ -> Opts0#{runner_min_heap_words => Floor}
+                             end,
+                      {ok, W} = Worker:start_link(maps:get(Adapter, As), Opts),
+                      W
+                  end || _ <- lists:seq(2, K)],
+         S#{ws => [W1 | Extra]}
+     end || #{w := W1, worker := Worker, adapters := As} = S <- Started].
+
+rev_drive(S, Wl, Deadline, N) ->
+    case erlang:monotonic_time(millisecond) >= Deadline of
+        true  -> N;
+        false -> _ = rev_req(S, Wl), rev_drive(S, Wl, Deadline, N + 1)
+    end.
+
+%% One line the driver reads back: everything a gate needs, as a term.
+rev_emit(Map) ->
+    io:format("#DATA ~w.~n", [Map]).
+
+%%% ---------------------------------------------------------- revision_set ---
+
+revision_set([Adapter, "latency", N, Floor]) ->
+    rev_set(Adapter, latency, ["latency", N, Floor], 3);
+revision_set([Adapter, "throughput", K, Secs, Floor]) ->
+    rev_set(Adapter, throughput, ["throughput", K, Secs, Floor], 6).
+
+rev_set(Adapter, Kind, Args, PerOrdering) ->
+    rev_set(Adapter, Kind, Args, PerOrdering, 1).
+
+rev_set(_Adapter, _Kind, _Args, _Per, Attempt) when Attempt > 3 ->
+    io:format("# GAVE UP: the null did not pass in three attempts~n"),
+    erlang:halt(2);
+rev_set(Adapter, Kind, Args, Per, Attempt) ->
+    io:format("# revision_set ~s ~w attempt ~w~n", [Adapter, Kind, Attempt]),
+    %% F, R, F, R ...: an F pair runs null then ab, an R pair ab then null.
+    Plan = lists:append([case I rem 2 of
+                             1 -> [{"null", "F"}, {"ab", "F"}];
+                             0 -> [{"ab", "R"}, {"null", "R"}]
+                         end || I <- lists:seq(1, 2 * Per)]),
+    Runs = [rev_run(Adapter, Kind, Arm, Ord, Args) || {Arm, Ord} <- Plan],
+    Gates = [{Ord, Arm, rev_gate(Kind, [R || #{arm := A, ordering := O} = R <- Runs,
+                                          A =:= Arm, O =:= Ord])}
+             || Ord <- ["F", "R"], Arm <- ["null", "ab"]],
+    [io:format("# ~s ~-4s ~p~n", [Ord, Arm, G]) || {Ord, Arm, G} <- Gates],
+    Pooled = rev_gate(Kind, [R || #{arm := "ab"} = R <- Runs]),
+    io:format("# pooled ab (supplementary, gates nothing) ~p~n", [Pooled]),
+    NullOk = lists:all(fun({_, "null", {ok, _}}) -> true;
+                          ({_, "null", _}) -> false;
+                          (_) -> true end, Gates),
+    AbOk = lists:all(fun({_, "ab", {ok, _}}) -> true;
+                        ({_, "ab", _}) -> false;
+                        (_) -> true end, Gates),
+    case {NullOk, AbOk} of
+        {false, _}    -> io:format("# null failed: discarding the set~n"),
+                         rev_set(Adapter, Kind, Args, Per, Attempt + 1);
+        {true, true}  -> io:format("# PASS~n"), erlang:halt(0);
+        {true, false} -> io:format("# FAIL~n"), erlang:halt(1)
+    end.
+
+%% One run in a fresh emulator, with this node's code path. A throughput run
+%% on a box under 50% idle at either end is run again, up to three times.
+rev_run(Adapter, Kind, Arm, Ord, Args) ->
+    rev_run(Adapter, Kind, Arm, Ord, Args, 1).
+
+rev_run(_Adapter, _Kind, Arm, Ord, _Args, 4) ->
+    io:format("# GAVE UP: ~s ~s never ran on an idle box~n", [Arm, Ord]),
+    erlang:halt(2);
+rev_run(Adapter, Kind, Arm, Ord, Args, Try) ->
+    Paths = lists:append([["-pa", D] || D <- code:get_path()]),
+    Erl = os:find_executable("erl"),
+    Port = open_port({spawn_executable, Erl},
+                     [{args, ["-noshell" | Paths] ++
+                          ["-run", "workerbench", "main", "revision", Arm, Ord,
+                           Adapter | Args]},
+                      exit_status, stderr_to_stdout, binary,
+                      {line, 1 bsl 20}]),
+    Data = rev_collect(Port, undefined),
+    io:format("# ~s ~s done~n", [Arm, Ord]),
+    case Kind =:= throughput andalso not rev_idle_ok(Data) of
+        true  -> io:format("# ~s ~s: box not idle, again~n", [Arm, Ord]),
+                 rev_run(Adapter, Kind, Arm, Ord, Args, Try + 1);
+        false -> Data
+    end.
+
+rev_collect(Port, Data) ->
+    receive
+        {Port, {data, {eol, <<"#DATA ", T/binary>>}}} ->
+            {ok, Toks, _} = erl_scan:string(binary_to_list(T)),
+            {ok, Term} = erl_parse:parse_term(Toks),
+            rev_collect(Port, Term);
+        {Port, {data, {_, Line}}} ->
+            io:format("   ~s~n", [Line]),
+            rev_collect(Port, Data);
+        {Port, {exit_status, 0}} when Data =/= undefined ->
+            Data;
+        {Port, {exit_status, S}} ->
+            io:format("# run failed with status ~w~n", [S]),
+            erlang:halt(3)
+    end.
+
+rev_idle_ok(#{start := {_, I0}, 'end' := {_, I1}}) ->
+    rev_idle(I0) >= 50.0 andalso rev_idle(I1) >= 50.0.
+
+rev_idle(Top) ->
+    case re:run(Top, "([0-9.]+)% idle", [{capture, all_but_first, list}]) of
+        {match, [P]} -> list_to_float(case lists:member($., P) of
+                                          true  -> P;
+                                          false -> P ++ ".0"
+                                      end);
+        nomatch      -> 0.0
+    end.
+
+%% Latency: the median of the per-round ratios, second side over first,
+%% pooled over the set's runs; bimodality on each side's times, per run.
+%% Throughput: the median of the per-run ratios of request counts;
+%% bimodality on each side's counts, which are six values or more.
+rev_gate(latency, Runs) ->
+    Ratios = lists:append([ph_paired(S, F) || #{first := F, second := S} <- Runs]),
+    Bimodal = [W || #{first := F, second := S} <- Runs, W <- [F, S],
+                    ph_bimodal(W) =/= false],
+    rev_verdict(Ratios, Bimodal);
+rev_gate(throughput, Runs) ->
+    Ratios = [S / F || #{first := F, second := S} <- Runs, F > 0],
+    Firsts = [F || #{first := F} <- Runs],
+    Seconds = [S || #{second := S} <- Runs],
+    Bimodal = [W || W <- [Firsts, Seconds], length(W) >= 6,
+                    ph_bimodal(W) =/= false],
+    rev_verdict(Ratios, Bimodal).
+
+rev_verdict([], _) -> {failed, no_samples};
+rev_verdict(Ratios, []) -> ph_ratio_gate(Ratios);
+rev_verdict(Ratios, _Bimodal) -> {failed, {bimodal, ph_median(Ratios)}}.
+

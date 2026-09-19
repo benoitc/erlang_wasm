@@ -7,6 +7,14 @@ raises a ceiling behind your back.
 
 ## Run one
 
+> **Where these modules come from.** `python_worker`, `py_adapter`,
+> `py_reactor_adapter` and the worker kernel they run on (`script_worker`,
+> `worker_reaper`, `script_v1` and `worker_error`) are in `examples/` in this
+> release, not installed with the application. From a checkout of this
+> repository, `rebar3 as test shell` compiles them and puts them on the path.
+> In your own project, copy those files from `deps/wasm/examples/` into your
+> `src/`.
+
 ```erlang
 {ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/py"}),
 {ok, W} = python_worker:start_link(

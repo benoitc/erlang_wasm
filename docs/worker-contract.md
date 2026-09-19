@@ -19,6 +19,15 @@ component-model guests are outside the guarantee.
 
 ## Write one
 
+> **Where these modules come from.** The behaviour your adapter implements (it
+> is defined in `script_worker`), the conformance kit
+> `wasm_adapter_conformance`, and the worker kernel they run on
+> (`script_worker`, `worker_reaper`, `script_v1` and `worker_error`) are in
+> `examples/` in this release, not installed with the application. From a
+> checkout of this repository, `rebar3 as test shell` compiles them and puts
+> them on the path. In your own project, copy those files from
+> `deps/wasm/examples/` into your `src/`.
+
 Eight callbacks. `snapshot_capability/1` is optional and an absent one reads as
 `unsupported`.
 

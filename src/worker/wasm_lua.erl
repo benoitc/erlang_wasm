@@ -41,7 +41,7 @@ The one thing it did need was a **build flag**: Lua signals errors with
 superseded encoding by default. `LUA.md` has it.
 """.
 
--behaviour(wasm_script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,

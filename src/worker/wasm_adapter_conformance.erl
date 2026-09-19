@@ -23,7 +23,7 @@ echo_returns_a_result(Config) ->
 ## Opaque fixtures
 
 The kit **never looks inside a request**. It does not parse source, know a
-syntax, or recognise a language: it submits what `c:wasm_script_worker:conformance_fixtures/1`
+syntax, or recognise a language: it submits what `c:wasm_worker_adapter:conformance_fixtures/1`
 handed it and asserts only observable behaviour. That is the whole reason
 JavaScript and Python can be adapters rather than special cases in a suite.
 
@@ -33,7 +33,7 @@ stdout fixture.
 
 ## A declared capability is mandatory; an undeclared one is reported
 
-`c:wasm_script_worker:capabilities/1` decides what is demanded. **A skip is never a pass.** This
+`c:wasm_worker_adapter:capabilities/1` decides what is demanded. **A skip is never a pass.** This
 repo has had four tests that could not fail, and a skip that looks green is how
 a fifth arrives, so an undeclared capability is reported as unsupported and
 counted as neither.

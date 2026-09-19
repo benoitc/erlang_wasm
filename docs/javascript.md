@@ -10,15 +10,14 @@ promised, because that is the half you cannot discover from a working example.
 > **Where these modules come from.** `wasm_javascript_command`,
 > `wasm_javascript` and the worker kernel they run on (`wasm_script_worker`)
 > are installed with the application; you supply the QuickJS artifact.
-> `js_worker`, the thin wrapper the first example uses, is still in
-> `examples/`: from a checkout of this repository, `rebar3 as test shell` puts
-> it on the path.
 
 ```erlang
-{ok, W} = js_worker:start_link("test/fixtures/lang/qjs.wasm", #{}),
+{ok, W} = wasm_script_worker:start_link(
+            wasm_javascript_command, #{path => "test/fixtures/lang/qjs.wasm"}),
 {ok, #{result := #{~"answer" := 42}}} =
-    js_worker:run(W, ~"export function main(c) { return {answer: c.value + 1}; }",
-                  #{~"value" => 41}).
+    wasm_script_worker:run(W, <<"export function main(c)"
+                                " { return {answer: c.value + 1}; }">>,
+                           #{~"value" => 41}).
 ```
 
 The tenant writes an ES module exporting `main`:

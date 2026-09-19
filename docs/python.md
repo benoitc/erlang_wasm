@@ -9,21 +9,19 @@ raises a ceiling behind your back.
 
 > **Where these modules come from.** `wasm_python_command`, `wasm_python` and
 > the worker kernel they run on (`wasm_script_worker`) are installed with the
-> application; you supply the CPython artifact. `python_worker`, the thin
-> wrapper the first example uses, is still in `examples/`: from a checkout of
-> this repository, `rebar3 as test shell` puts it on the path.
+> application; you supply the CPython artifact.
 
 ```erlang
-{ok, W} = python_worker:start_link(
-            "test/fixtures/lang/python.wasm",
-            #{root => scratch,
+{ok, W} = wasm_script_worker:start_link(
+            wasm_python_command,
+            #{path => "test/fixtures/lang/python.wasm",
               limits => #{timeout => 300_000,
                           max_memory_pages => 4096,
                           max_host_calls => 1_000_000,
                           max_heap_words => 16 * 1024 * 1024}}),
 {ok, #{result := #{~"answer" := 42}}} =
-    python_worker:run(W, ~"def main(c):\n    return {'answer': c['value'] + 1}\n",
-                      #{~"value" => 41}).
+    wasm_script_worker:run(W, ~"def main(c):\n    return {'answer': c['value'] + 1}\n",
+                           #{~"value" => 41}).
 ```
 
 The tenant writes one function:

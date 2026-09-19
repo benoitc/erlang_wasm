@@ -7,11 +7,11 @@ with `scripts/fetch-python-fixture.sh` and check what it is against
 `test/fixtures/lang/PYTHON.md`.
 
 ```erlang
-{ok, W} = python_worker:start_link("test/fixtures/lang/python.wasm",
-                                   #{root => scratch}),
+{ok, W} = wasm_script_worker:start_link(
+            wasm_python_command, #{path => "test/fixtures/lang/python.wasm"}),
 {ok, #{result := #{~"answer" := 42}}} =
-    python_worker:run(W, ~"def main(c):\n    return {'answer': c['value'] + 1}\n",
-                      #{~"value" => 41}).
+    wasm_script_worker:run(W, ~"def main(c):\n    return {'answer': c['value'] + 1}\n",
+                           #{~"value" => 41}).
 ```
 
 ## Not Pyodide, and not MicroPython
@@ -41,7 +41,7 @@ preopened read-only as a second mount, and `requirements/2` is where that would
 be declared.
 """.
 
--behaviour(wasm_script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).

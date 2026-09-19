@@ -1,7 +1,7 @@
 -module(wasm_script_v1).
 -moduledoc """
-The `script_v1` profile: one source, a JSON context, `main(context)`, a JSON
-result.
+Internal: the `script_v1` profile the shipped adapters speak. One source, a
+JSON context, `main(context)`, a JSON result.
 
 This is a **profile, not the protocol**. The kernel knows none of it: no JSON,
 no file staging, no framing convention. A language adapter calls into here to

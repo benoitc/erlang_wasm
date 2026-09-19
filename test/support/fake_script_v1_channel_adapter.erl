@@ -13,7 +13,7 @@ be imitated by a tenant printing the right bytes, because there are no bytes to
 imitate.
 """.
 
--behaviour(wasm_script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).

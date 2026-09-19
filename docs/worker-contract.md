@@ -19,17 +19,16 @@ component-model guests are outside the guarantee.
 
 ## Write one
 
-> **Where these modules come from.** The behaviour your adapter implements (it
-> is defined in `wasm_script_worker`), the conformance kit
-> `wasm_adapter_conformance` and the worker kernel are installed with the
-> application.
+> **Where these modules come from.** The behaviour your adapter implements,
+> `wasm_worker_adapter`, the conformance kit `wasm_adapter_conformance` and
+> the worker kernel are installed with the application.
 
 Eight callbacks. `snapshot_capability/1` is optional and an absent one reads as
 `unsupported`.
 
 ```erlang
 -module(my_adapter).
--behaviour(wasm_script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).

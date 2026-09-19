@@ -8,10 +8,12 @@ with `scripts/fetch-qjs-fixture.sh` and check what it is against
 `test/fixtures/lang/QUICKJS.md`.
 
 ```erlang
-{ok, W} = js_worker:start_link("test/fixtures/lang/qjs.wasm", #{root => scratch}),
+{ok, W} = wasm_script_worker:start_link(
+            wasm_javascript_command, #{path => "test/fixtures/lang/qjs.wasm"}),
 {ok, #{result := #{~"answer" := 42}}} =
-    js_worker:run(W, ~"export function main(c) { return {answer: c.value + 1}; }",
-                  #{~"value" => 41}).
+    wasm_script_worker:run(W, <<"export function main(c)"
+                                " { return {answer: c.value + 1}; }">>,
+                           #{~"value" => 41}).
 ```
 
 ## What this adapter does, and where it stops
@@ -32,7 +34,7 @@ compiled artifact would be written under a key nothing can look up: measured
 once as 410 functions compiled and an empty cache directory.
 """.
 
--behaviour(wasm_script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).

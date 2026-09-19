@@ -9,7 +9,7 @@ A kernel that passes `fake_command_adapter` and fails this one is a WASI script
 runner, and that failure would be invisible in every other test.
 """.
 
--behaviour(wasm_script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).

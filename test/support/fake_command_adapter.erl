@@ -11,7 +11,7 @@ Paired with `fake_typed_adapter`, which has none of that, these two are what
 the kernel suite runs the identical base case list against.
 """.
 
--behaviour(wasm_script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).

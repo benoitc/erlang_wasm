@@ -43,7 +43,7 @@ the old secret. Rotation means recapturing, which is one `init()`.
 `docs/snapshots.md` says the same thing about every guest.
 """.
 
--behaviour(wasm_script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,

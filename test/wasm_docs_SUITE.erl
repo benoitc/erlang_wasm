@@ -51,7 +51,7 @@
 %% {Module, Function, Arity, ArgumentPosition}.
 -define(ADAPTER_ARGS, [{wasm_script_worker, start_link, 2, 1},
                        {wasm_script_worker, start_link, 3, 2}]).
--define(ADAPTER_BEHAVIOUR, wasm_script_worker).
+-define(ADAPTER_BEHAVIOUR, wasm_worker_adapter).
 %% Blocks the strict run may not execute, as {Page, Fixture}: reviewed here.
 -define(NOT_IN_CI, []).
 

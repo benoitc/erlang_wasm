@@ -20,7 +20,7 @@ tenant has no bound.
 So the reaper outlives both. It holds the registry, it monitors every guardian,
 and on a `DOWN` with work outstanding it **spawns a job** and goes straight
 back to its loop. It never runs a cleanup callback itself: it is a singleton,
-and an adapter whose `c:wasm_script_worker:cleanup/1` hangs would otherwise stop registration and
+and an adapter whose `c:wasm_worker_adapter:cleanup/1` hangs would otherwise stop registration and
 recovery for every worker on the node.
 
 ## Surviving its own death
@@ -117,30 +117,12 @@ supervised reaper will almost always perform.
 -define(HANDSHAKE_TIMEOUT, 1_000).
 -define(HANDSHAKE_RETRIES, 3).
 
--doc "Names a configured scratch root. A closed set, supplied at start.".
--type root_id() :: atom().
--doc "The kernel's own id for a request. Minted at `submit`, never a term.".
--type request_id() :: binary().
--doc "What a registered cleanup action is identified by.".
--type token() :: pos_integer().
-
--doc """
-An operation a replacement reaper can replay from disk.
-
-Deliberately a closed set: this is what the journal is allowed to contain, and
-the reaper is the only thing that understands it.
-""".
--type recover_op() :: {remove_tree, root_id(), binary()}
-                    | {delete_file, root_id(), binary()}.
-
--doc """
-What `register/2` accepts.
-
-A fun is in memory and dies with the reaper. A `recover_op()` is written down
-and survives it. They are different promises and the caller chooses which.
-""".
--type action() :: fun(() -> ok) | recover_op().
-
+%% Defined in `wasm_worker_adapter`, beside the callbacks that name them.
+-type root_id() :: wasm_worker_adapter:root_id().
+-type request_id() :: wasm_worker_adapter:request_id().
+-type token() :: wasm_worker_adapter:token().
+-type recover_op() :: wasm_worker_adapter:recover_op().
+-type action() :: wasm_worker_adapter:action().
 -export_type([root_id/0, request_id/0, token/0, recover_op/0, action/0]).
 
 %% A reservation's monitor is cleared the moment its `DOWN' is processed, so
@@ -350,7 +332,7 @@ Operator-facing rather than test-only: a reservation that ends in `held` stays
 there until a late answer or a `DOWN`, deliberately, and the way to resolve one
 is to look at what is holding it and kill that guardian if it really is stuck.
 `delivered` says whether the adapter's state has reached the registry yet, and
-so whether `c:wasm_script_worker:cleanup/1` has an owner.
+so whether `c:wasm_worker_adapter:cleanup/1` has an owner.
 """.
 -spec requests() -> [#{id := request_id(), state := atom(), guardian := pid(),
                        delivered := boolean()}]

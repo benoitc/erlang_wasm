@@ -24,6 +24,31 @@ Not "any language":
 Long-lived event loops, threads, native extensions, browser ABIs and
 component-model guests are outside the guarantee.
 
+## What is supported API
+
+These are covered by compatibility and the release notes:
+
+| module | what it is |
+| --- | --- |
+| `wasm_script_worker` | this module: start, run, submit, await, cancel, stop, and the operator view (`cleanup_stats/0`, `cleanup_requests/0`) |
+| `wasm_worker_adapter` | the behaviour an adapter implements, and every type its callbacks name |
+| `wasm_worker_error` | the errors a worker answers with, and the constructors an adapter builds its own with |
+| `wasm_javascript`, `wasm_javascript_command`, `wasm_python`, `wasm_python_command`, `wasm_lua` | the shipped adapters |
+| `wasm_adapter_conformance` | the kit that checks an adapter keeps the contract |
+| `wasm_instance_worker` | the simple worker: one instance, one process, a deadline |
+
+So are the option keys this module takes (`root`, `timeout`, `trusted`,
+`limits`, `capture_timeout`, `runner_min_heap_words`,
+`capture_min_heap_words`, and the `limits` keys `docs/worker.md` lists), the
+`wasm` application settings `scratch_roots` and `reaper_options`, and the
+error shapes: a running worker answers `{error, wasm_worker_error:worker_error()}`,
+and `start_link/2,3` fails with a `gen_server` start reason, one of
+`{missing_option, Key}`, `{unknown_root, Root, Known}`,
+`{unknown_reaper_option, Keys}` or the adapter's own `wasm_worker_error()`.
+
+`wasm_worker_reaper`, `wasm_worker_sup` and `wasm_script_v1` are internal:
+they may change in any release.
+
 ## The execution model is the one every other runtime has
 
 Stripped of processes and bounds, the whole job is three lines:
@@ -87,6 +112,7 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 
 -export([start_link/2, start_link/3, stop/1]).
 -export([submit/2, await/3, cancel/2, run/2]).
+-export([run/3, submit/3]).
 -export([withdraw_waiter/3, consumed/3, channel_write/2]).
 -export([default_limits/0, runner_heap_words/2, capture_heap_words/2]).
 -export([cleanup_stats/0, cleanup_requests/0]).
@@ -97,251 +123,40 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 
 %%% ------------------------------------------------------------ behaviour ---
 
--doc "Whatever the adapter loaded once, at `start_link`. Opaque to the kernel.".
--type artifact() :: term().
--doc "One unit of tenant work. The kernel never reads inside it.".
--type request() :: term().
--doc "Whatever `prepare/3` needs `cleanup/1` to receive. Opaque.".
--type adapter_state() :: term().
--doc "What `decode/2` produced. The profile decides what is in it.".
--type result() :: term().
--doc "What a request answers with.".
--type outcome() :: {ok, result()} | {error, wasm_worker_error:worker_error()}.
-
--doc "Names a mount the adapter declared. Its own directory, its own mode.".
--type mount_name() :: atom().
-
--doc """
-One host directory, preopened at `guest_path`, with one mode.
-
-A mode cannot belong to a file: WASI grants rights to a **preopened directory
-and everything opened beneath it**, so a work directory holding one read-only
-and one writable staged path cannot express that. Naming mounts is how an
-adapter says what it meant.
-""".
--type mount() :: #{guest_path := binary(),
-                   host_dir := file:filename_all(),
-                   mode := read | write}.
-
--doc "An opaque sink. The only operation is writing to it.".
--type channel() :: {channel, atom(), ets:tid(), atomics:atomics_ref(),
-                    pos_integer()}.
-
--doc """
-Register a cleanup action, or drop one. **No transfer**, deliberately.
-
-If an adapter could transfer and its runner then died before delivering an
-`adapter_state()`, the transferred action would run only "if a state was
-delivered" and none ever was, so nothing would own it. The kernel transfers
-once, after the guardian holds the complete state.
-
-Every operation can fail, and `register` says which of three things happened,
-because one that returns an error having neither recorded nor performed the
-action leaks exactly the resource the adapter allocated one line earlier.
-""".
--type cleanup_cap() ::
-        #{register := fun((wasm_worker_reaper:action()) ->
-                              {ok, wasm_worker_reaper:token()}
-                            | {error, wasm_worker_error:worker_error(),
-                               released | cleanup_failed}),
-          withdraw := fun((wasm_worker_reaper:token()) ->
-                              ok | {error, wasm_worker_error:worker_error()})}.
-
--doc """
-What `prepare/3` is handed. The channels come down rather than back, because
-the adapter needs them *while* it builds its imports.
-
-`limits` are **effective, not proposed**: the adapter said what it needed in
-`requirements/2`, the policy has been applied, and the deadline is built from
-the result. An adapter reads them and never returns replacements.
-""".
--type env() :: #{mounts := #{mount_name() => mount()},
-                 channels := #{stdout := channel(), stderr := channel(),
-                               result := channel()},
-                 deadline := integer() | infinity,
-                 limits := map(),
-                 cleanup := cleanup_cap(),
-                 stage := fun((mount_name(), binary(), iodata()) ->
-                                  ok | {error, wasm_worker_error:worker_error()})}.
-
--doc """
-Every extern kind the runtime resolves, not just functions.
-
-A guest may import a memory, a table, a global or a tag, and `wasm:extern/2`
-hands those out so two instances can be linked.
-""".
--type import_value() :: fun((term(), [term()]) -> term())
-                      | {module(), atom()}
-                      | wasm:extern().
-
--doc """
-Portable by construction.
-
-No pid, port, reference or fun can enter the identity a snapshot is matched on,
-because every one of those differs between two runs of an identical
-configuration, so the key would stop matching itself.
-""".
--type portable() :: binary() | number() | atom() | [portable()]
-                  | tuple() | #{portable() => portable()}.
-
--type compatibility_key() :: portable().
--type capture() :: portable().
-
--doc """
-How an import module participates in a snapshot. Inert until Phase 6.
-
-Runtime-facing, so these return the runtime's error type: nothing in `src/` may
-depend on this module.
-""".
--type hook() :: stateless
-              | #{eligible := fun((wasm:instance()) ->
-                                      ok | {error, wasm_error:error()}),
-                  capture := fun((wasm:instance()) ->
-                                     {ok, capture()} | {error, wasm_error:error()}),
-                  restore := fun((wasm:instance(), capture()) ->
-                                     ok | {error, wasm_error:error()})}.
-
--doc """
-The import set, as one type from the start so Phase 6 adds no new shape.
-
-**Only `bindings` reaches import resolution**, because the runtime's import map
-is flat and keyed by `{Module, Name}`. The other two are optional and an
-adapter that ignores snapshots writes neither.
-""".
--type import_set() :: #{bindings := #{{binary(), binary()} => import_value()},
-                        snapshot_hooks => #{binary() => hook()},
-                        compatibility_key => compatibility_key()}.
-
--doc "What the kernel needs in order to run the thing.".
--type execution_spec() :: #{mode := command | reactor,
-                            module := wasm:module_(),
-                            imports := import_set(),
-                            invoke := [{call, binary(), [term()]}, ...]}.
-
--doc "What happened, still uninterpreted.".
--type execution_result() :: #{outcome := returned | trapped | exited,
-                              values := [term()],
-                              exit := undefined | integer(),
-                              channels := #{stdout := binary(), stderr := binary(),
-                                            result := binary()},
-                              truncated := #{stdout := boolean(),
-                                             stderr := boolean(),
-                                             result := boolean()},
-                              error := undefined | wasm_error:error()}.
-
--type invocation_result() :: {ok, [term()]} | {error, wasm_error:error()}.
--type stop_class() :: returned | trapped | {exited, integer()}.
-
--doc "What `requirements/2` answers: what this request needs and what it costs.".
--type requirements() :: #{min_timeout := pos_integer(),
-                          min_memory_pages := non_neg_integer(),
-                          request_bytes := non_neg_integer(),
-                          staged_bytes := non_neg_integer(),
-                          staged_files := non_neg_integer(),
-                          mounts := #{mount_name() =>
-                                          #{guest_path := binary(),
-                                            mode := read | write}}}.
-
--doc "What the conformance kit reads to decide what to demand.".
--type capabilities() :: #{execution := command | reactor | both,
-                          input_channels := [typed_args | stdin | files
-                                             | custom_import],
-                          result_channels := [typed_result | custom_import
-                                              | framed_stream],
-                          snapshots := unsupported | #{version := binary()},
-                          wasi := boolean()}.
-
--doc "Opaque requests the kit submits. It never reads them.".
--type fixtures() :: #{base := #{echo := request(), failure := request(),
-                                runaway := request(), state_change := request()},
-                      by_capability := #{atom() => request()}}.
-
--type restore_ctx() :: #{module := wasm:module_(), version := binary()}.
-
--doc """
-What an adapter must supply for the worker to capture an image at start.
-
-`module` and `imports` are what the initialisation instance is built from, and
-they are here rather than derived from `prepare/3` because the two are not the
-same thing: an initialisation instance exists once, before any request and with
-a **trusted** binding set, and is captured. `imports` also carries the
-`compatibility_key` and the `snapshot_hooks` every restore is matched and
-checked against, so the two sides cannot drift apart.
-
-`init` is what to invoke before capturing, `validate` is the adapter's own
-eligibility check, and `post_restore` runs inside every restore, in the runner,
-on the request's remaining deadline.
-""".
--type snapshot_cap() ::
-        #{version := binary(),
-          module := wasm:module_(),
-          imports := import_set(),
-          init := [{call, binary(), [term()]}],
-          validate := fun((wasm:instance()) ->
-                              ok | {error, wasm_worker_error:worker_error()}),
-          post_restore := fun((wasm:instance(), restore_ctx()) ->
-                                  ok | {error, wasm_worker_error:worker_error()})}.
+%% The adapter behaviour and its types live in `wasm_worker_adapter`. These
+%% aliases keep `wasm_script_worker:outcome()` and the rest meaning what they
+%% always did.
+-type artifact() :: wasm_worker_adapter:artifact().
+-type request() :: wasm_worker_adapter:request().
+-type adapter_state() :: wasm_worker_adapter:adapter_state().
+-type result() :: wasm_worker_adapter:result().
+-type outcome() :: wasm_worker_adapter:outcome().
+-type mount_name() :: wasm_worker_adapter:mount_name().
+-type mount() :: wasm_worker_adapter:mount().
+-type channel() :: wasm_worker_adapter:channel().
+-type cleanup_cap() :: wasm_worker_adapter:cleanup_cap().
+-type env() :: wasm_worker_adapter:env().
+-type import_value() :: wasm_worker_adapter:import_value().
+-type import_set() :: wasm_worker_adapter:import_set().
+-type hook() :: wasm_worker_adapter:hook().
+-type portable() :: wasm_worker_adapter:portable().
+-type capture() :: wasm_worker_adapter:capture().
+-type compatibility_key() :: wasm_worker_adapter:compatibility_key().
+-type execution_spec() :: wasm_worker_adapter:execution_spec().
+-type execution_result() :: wasm_worker_adapter:execution_result().
+-type invocation_result() :: wasm_worker_adapter:invocation_result().
+-type stop_class() :: wasm_worker_adapter:stop_class().
+-type requirements() :: wasm_worker_adapter:requirements().
+-type capabilities() :: wasm_worker_adapter:capabilities().
+-type fixtures() :: wasm_worker_adapter:fixtures().
+-type snapshot_cap() :: wasm_worker_adapter:snapshot_cap().
+-type restore_ctx() :: wasm_worker_adapter:restore_ctx().
 
 -export_type([artifact/0, request/0, adapter_state/0, result/0, outcome/0,
               mount_name/0, mount/0, channel/0, cleanup_cap/0, env/0,
               import_value/0, import_set/0, hook/0, portable/0, capture/0,
-              compatibility_key/0, execution_spec/0, execution_result/0,
-              invocation_result/0, stop_class/0, requirements/0, capabilities/0,
-              fixtures/0, snapshot_cap/0, restore_ctx/0]).
-
--doc "Load whatever this adapter runs, once, when the worker starts.".
--callback artifact(Opts :: map()) -> {ok, artifact()} | {error, wasm_worker_error:worker_error()}.
-
--doc """
-What this request would need, and what staging it would cost.
-
-Runs in the runner, under the deadline and the heap bound, because sizing a
-tenant's request means traversing it and may allocate. It is untrusted work and
-is not a pure, allocation-free callback.
-""".
--callback requirements(request(), artifact()) ->
-    {ok, requirements()} | {error, wasm_worker_error:worker_error()}.
-
--doc "Build the thing to run. Mounts already exist; limits are already final.".
--callback prepare(request(), artifact(), env()) ->
-    {ok, execution_spec(), adapter_state()}
-  | {error, wasm_worker_error:worker_error(), adapter_state()}.
-
--doc "Turn what happened into an answer. Runs in the runner, on the remaining time.".
--callback decode(execution_result(), adapter_state()) -> outcome().
-
--doc "Release whatever `prepare/3` acquired. Runs in a bounded cleanup job.".
--callback cleanup(adapter_state()) -> ok.
-
--doc "What this adapter can do, so the conformance kit knows what to demand.".
--callback capabilities(artifact()) -> capabilities().
-
--doc "Opaque requests the kit submits. Base cases are mandatory.".
--callback conformance_fixtures(artifact()) -> fixtures().
-
--doc """
-Called after **every** invocation, success or trap, and the kernel interprets
-none of them.
-
-A WASI exit arrives here as a trap, and only the adapter knows that. A kernel
-that told a `proc_exit` trap from any other trap would be calling
-`wasi_preview1:exit_code/1`, and a kernel that calls `wasi_preview1` anything
-is not language-neutral.
-""".
--callback classify(invocation_result(), adapter_state()) ->
-    continue | {stop, stop_class()}.
-
--doc """
-How to capture this adapter's runtime once, at `start_link/2`.
-
-An absent callback reads as `unsupported`, so no adapter has to know snapshots
-exist. Declaring one is a promise the worker holds it to: a capture that fails
-**fails the start**, because the alternative is a worker whose requests invoke
-`handle` on an instance that never ran `init`.
-""".
--callback snapshot_capability(artifact()) -> unsupported | snapshot_cap().
-
--optional_callbacks([snapshot_capability/1]).
+              compatibility_key/0, execution_spec/0, execution_result/0, invocation_result/0, stop_class/0,
+              requirements/0, capabilities/0, fixtures/0, snapshot_cap/0, restore_ctx/0]).
 
 %%% ------------------------------------------------------------------ api ---
 
@@ -396,7 +211,7 @@ exist. Declaring one is a promise the worker holds it to: a capture that fails
             %% Resolved once, here, rather than per request: the answer cannot
             %% change over a worker's life and a bad value should be said once.
             runner_heap = 0 :: non_neg_integer(),
-            root           :: wasm_worker_reaper:root_id(),
+            root           :: wasm_worker_adapter:root_id(),
             timeout        :: timeout(),
             trusted        :: boolean(),
             %% Captured once at `init/1' and held for the worker's life, so a
@@ -563,6 +378,32 @@ run(W, Request) ->
         {ok, Ref}  -> await(W, Ref, infinity);
         {error, _} = E -> E
     end.
+
+-doc """
+Run `Source` with `Context` and wait for the answer: `run/2` with the request
+every shipped adapter takes, `#{source => Source, context => Context}`.
+
+```erlang
+{ok, W} = wasm_script_worker:start_link(
+            wasm_javascript_command, #{path => "test/fixtures/lang/qjs.wasm"}),
+{ok, #{result := #{~"answer" := 42}}} =
+    wasm_script_worker:run(W, <<"export function main(c)"
+                                " { return {answer: c.value + 1}; }">>,
+                           #{~"value" => 41}).
+```
+""".
+-spec run(gen_server:server_ref(), binary(), term()) ->
+          outcome() | {error, wasm_worker_error:worker_error()}.
+run(W, Source, Context) ->
+    run(W, script_request(Source, Context)).
+
+-doc "`submit/2` with `#{source => Source, context => Context}`, as `run/3`.".
+-spec submit(gen_server:server_ref(), binary(), term()) ->
+          {ok, reference()} | {error, wasm_worker_error:worker_error()}.
+submit(W, Source, Context) ->
+    submit(W, script_request(Source, Context)).
+
+script_request(Source, Context) -> #{source => Source, context => Context}.
 
 -doc """
 Release the waiter slot after a finite `await/3` gave up, and settle the race.
@@ -1071,7 +912,7 @@ clear_waiter(W) ->
             snapshot_cap :: undefined | snapshot_cap(),
             limits      :: map(),
             runner_heap :: non_neg_integer(),
-            root        :: wasm_worker_reaper:root_id(),
+            root        :: wasm_worker_adapter:root_id(),
             trusted     :: boolean(),
             wmon        :: reference(),
             dir         :: file:filename_all(),
@@ -1081,7 +922,7 @@ clear_waiter(W) ->
             mounts = #{} :: #{mount_name() => mount()},
             %% The guardian made every `register' call, so it keeps the list as
             %% it goes. That mirror is what survives the reaper.
-            actions = [] :: [{wasm_worker_reaper:token(), wasm_worker_reaper:action()}],
+            actions = [] :: [{wasm_worker_adapter:token(), wasm_worker_adapter:action()}],
             delivered = false :: boolean(),
             adapter_state      :: undefined | {module(), adapter_state()},
             staged = #{}  :: #{binary() => non_neg_integer()},

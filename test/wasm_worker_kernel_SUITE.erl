@@ -33,7 +33,7 @@ all() ->
     [every_setting_is_documented,
      a_runner_heap_floor_is_resolved_and_reported,
      {group, typed}, {group, command}, {group, script_v1},
-     {group, script_v1_channel}, {group, reactor}].
+     {group, script_v1_channel}, {group, reactor}, {group, wrappers}].
 
 groups() ->
     [{typed, [], cases(fake_typed_adapter)},
@@ -53,7 +53,11 @@ groups() ->
      %% exists only where a QuickJS or CPython build does, and those are in the
      %% integration job: a capability the required gate cannot exercise is a
      %% capability nobody would notice breaking.
-     {reactor, [], cases(fake_reactor_adapter) ++ snapshot_cases()}].
+     {reactor, [], cases(fake_reactor_adapter) ++ snapshot_cases()},
+     %% `run/3' and `submit/3', through an adapter that records the request
+     %% it is handed, since the kernel never looks inside one.
+     {wrappers, [], [run_3_hands_the_adapter_source_and_context,
+                     submit_3_can_be_awaited_and_cancelled]}].
 
 %% A declared capability makes its cases mandatory; an undeclared one
 %% contributes none and is reported rather than passed.
@@ -76,6 +80,7 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     wasm_adapter_conformance:hand_back_reaper().
 
+init_per_group(wrappers, Config)  -> [{adapter, fake_recording_adapter} | Config];
 init_per_group(typed, Config)     -> [{adapter, fake_typed_adapter} | Config];
 init_per_group(command, Config)   -> [{adapter, fake_command_adapter} | Config];
 init_per_group(script_v1, Config) -> [{adapter, fake_script_v1_adapter} | Config];
@@ -133,6 +138,33 @@ ctx(Config) ->
       worker => ?config(worker, Config),
       root => Root,
       start => fun(Opts) -> start(Config, Root, Opts) end}.
+
+%%% -------------------------------------------------------- wrapper cases ---
+
+run_3_hands_the_adapter_source_and_context(Config) ->
+    W = ?config(worker, Config),
+    ok = fake_recording_adapter:forget(),
+    Source = ~"handle",
+    Context = #{~"value" => 41},
+    Three = wasm_script_worker:run(W, Source, Context),
+    ?assertEqual(#{source => Source, context => Context},
+                 fake_recording_adapter:last_request()),
+    ?assertMatch({ok, _}, Three),
+    ?assertEqual(Three, wasm_script_worker:run(W, #{source => Source,
+                                                    context => Context})).
+
+submit_3_can_be_awaited_and_cancelled(Config) ->
+    W = ?config(worker, Config),
+    ok = fake_recording_adapter:forget(),
+    {ok, Ref} = wasm_script_worker:submit(W, ~"handle", #{}),
+    ?assert(is_reference(Ref)),
+    ?assertMatch({ok, _}, wasm_script_worker:await(W, Ref, 10000)),
+    ?assertEqual(#{source => ~"handle", context => #{}},
+                 fake_recording_adapter:last_request()),
+    {ok, Ref2} = wasm_script_worker:submit(W, ~"spin", #{}),
+    ok = wasm_script_worker:cancel(W, Ref2),
+    ?assertMatch({error, #{kind := cancelled}},
+                 wasm_script_worker:await(W, Ref2, 10000)).
 
 %%% --------------------------------------------------------- profile cases ---
 %%

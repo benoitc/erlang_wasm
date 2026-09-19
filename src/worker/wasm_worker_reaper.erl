@@ -2,14 +2,10 @@
 -moduledoc """
 Who cleans up after a request when the process that owned it is gone.
 
-Start one per node from your own supervision tree, naming the roots the workers
-scratch under, and `wasm_script_worker` refuses to accept a request without it:
-
-<!-- check: modules my_adapter -->
-```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/workers"}),
-{ok, W} = wasm_script_worker:start_link(my_adapter, #{root => scratch}).
-```
+Internal. The `wasm` application runs one per node, under `wasm_worker_sup`,
+which says where it keeps its files; `wasm_script_worker` refuses a request
+when none is running. `wasm_script_worker:cleanup_stats/0` and
+`wasm_script_worker:cleanup_requests/0` are the supported way to look at it.
 
 ## Why a process and not a table
 
@@ -91,7 +87,7 @@ supervised reaper will almost always perform.
 
 -behaviour(gen_server).
 
--export([start_link/1, start_link/2, stop/0, alive/0]).
+-export([start_link/1, start_link/2, start_link/3, stop/0, alive/0, roots/0]).
 -export([setting_keys/0]).
 -export([reserve/4, register/2, withdraw/2, transfer/3, finish/1]).
 -export([authorise/2, generation/0, incarnation/0, stats/0, requests/0]).
@@ -179,7 +175,10 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
              quarantined = 0 :: non_neg_integer(),
              gen        :: pos_integer(),
              incarnation :: binary(),
-             opts       :: map()}).
+             opts       :: map(),
+             %% Roots this reaper made for itself and may remove at a clean
+             %% shutdown. Never a root somebody configured.
+             generated = [] :: [root_id()]}).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -197,8 +196,27 @@ start_link(Roots) -> start_link(Roots, #{}).
 
 -spec start_link(#{root_id() => file:filename_all()}, map()) ->
           {ok, pid()} | {error, term()}.
-start_link(Roots, Opts) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, {Roots, Opts}, []).
+start_link(Roots, Opts) -> start_link(Roots, Opts, #{}).
+
+-doc """
+Start the reaper with what only its supervisor may say.
+
+`#{generated := Ids}` names the roots this reaper was given a directory of its
+own for, which it removes at a clean shutdown when nothing is left in them.
+It is a separate argument, not a key in `Opts`, so that no configuration can
+mark a directory somebody else owns for deletion. `wasm_worker_sup` is the
+only caller.
+""".
+-spec start_link(#{root_id() => file:filename_all()}, map(),
+                 #{generated => [root_id()]}) ->
+          {ok, pid()} | {error, term()}.
+start_link(Roots, Opts, Internal) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE,
+                          {Roots, Opts, maps:get(generated, Internal, [])}, []).
+
+-doc "The root ids this reaper was started with.".
+-spec roots() -> [root_id()] | {error, wasm_worker_error:worker_error()}.
+roots() -> call(roots).
 
 -spec stop() -> ok.
 stop() -> gen_server:stop(?SERVER).
@@ -392,7 +410,7 @@ setting_keys() ->
 
 %%% -------------------------------------------------------------- server ---
 
-init({Roots, Opts}) ->
+init({Roots, Opts, Generated}) ->
     process_flag(trap_exit, true),
     Incarnation = incarnation_of_node(),
     Gen = next_generation(),
@@ -401,7 +419,8 @@ init({Roots, Opts}) ->
     %% than a default lookup in a guard, which cannot call a function.
     Settings = maps:from_list([{K, setting(Opts, K)} || K <- setting_keys()]),
     St = #st{roots = Roots, gen = Gen, incarnation = Incarnation,
-             opts = Settings},
+             opts = Settings,
+             generated = [G || G <- Generated, maps:is_key(G, Roots)]},
     {ok, sweep(St)}.
 
 handle_call({reserve, Id, Guardian, Root, RelPath}, _From, St) ->
@@ -498,6 +517,8 @@ handle_call(requests, _From, St) ->
                delivered => R#req.cleanup =/= undefined}
              || R <- maps:values(St#st.reqs)], St};
 
+handle_call(roots, _From, St) ->
+    {reply, maps:keys(St#st.roots), St};
 handle_call(stats, _From, St) ->
     Counts = lists:foldl(fun(#req{state = S}, Acc) ->
                              maps:update_with(S, fun(N) -> N + 1 end, 1, Acc)
@@ -549,7 +570,38 @@ handle_info({'EXIT', _Pid, _Reason}, St) ->
 handle_info(_, St) ->
     {noreply, St}.
 
-terminate(_Why, _St) -> ok.
+%% A clean shutdown removes the roots this reaper generated, and only when
+%% nothing in them is left to recover: no reservation in any state, and a
+%% journal with no record and nothing quarantined. Otherwise the directory and
+%% its journal stay, for whoever looks next. A crash removes nothing.
+terminate(shutdown, #st{generated = [_ | _] = Gen} = St) ->
+    _ = [remove_if_idle(Id, St) || Id <- Gen],
+    ok;
+terminate(_Why, _St) ->
+    ok.
+
+remove_if_idle(Id, #st{roots = Roots} = St) ->
+    Dir = maps:get(Id, Roots),
+    case idle(St) andalso journal_empty(Dir) of
+        true ->
+            _ = file:del_dir_r(Dir),
+            ok;
+        false ->
+            ?LOG_WARNING("wasm_worker_reaper: keeping ~ts at shutdown: "
+                         "requests or journal records remain", [Dir])
+    end.
+
+idle(#st{reqs = Reqs, queue = Queue, jobs = Jobs}) ->
+    map_size(Reqs) =:= 0 andalso Queue =:= [] andalso map_size(Jobs) =:= 0.
+
+journal_empty(Dir) ->
+    Journal = journal_dir(Dir),
+    case {file:list_dir(Journal),
+          file:list_dir(filename:join(Journal, ?QUARANTINE_DIR))} of
+        {{ok, Names}, {ok, []}} -> Names -- [?QUARANTINE_DIR] =:= [];
+        {{ok, Names}, {error, enoent}} -> Names =:= [];
+        _ -> false
+    end.
 
 %%% ---------------------------------------------------------- registering ---
 

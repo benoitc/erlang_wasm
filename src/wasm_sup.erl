@@ -19,7 +19,10 @@ wasm_sup                one_for_one, 5 in 300
   |     +-- wasm_jit_sup
   |
   +-- wasm_cache_sup    one_for_one    modules, keyed by content hash
-        +-- wasm_module_cache
+  |     +-- wasm_module_cache
+  |
+  +-- wasm_worker_sup   one_for_one    the reaper, once a worker needs one
+        +-- wasm_worker_reaper
 ```
 
 There is deliberately no instance supervisor. An instance is owned by the
@@ -73,5 +76,11 @@ init([]) ->
          wasm_subsup:child(wasm_keeper_sup, one_for_one,  [wasm_keeper]),
          wasm_subsup:child(wasm_code_sup,   rest_for_one, [wasm_code_slots,
                                                            wasm_jit_sup]),
-         wasm_subsup:child(wasm_cache_sup,  one_for_one,  [wasm_module_cache])],
+         wasm_subsup:child(wasm_cache_sup,  one_for_one,  [wasm_module_cache]),
+         #{id => wasm_worker_sup,
+           start => {wasm_worker_sup, start_link, []},
+           restart => permanent,
+           shutdown => infinity,
+           type => supervisor,
+           modules => [wasm_worker_sup]}],
     {ok, {SupFlags, Children}}.

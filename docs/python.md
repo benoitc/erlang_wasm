@@ -14,7 +14,6 @@ raises a ceiling behind your back.
 > this repository, `rebar3 as test shell` puts it on the path.
 
 ```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/py"}),
 {ok, W} = python_worker:start_link(
             "test/fixtures/lang/python.wasm",
             #{root => scratch,
@@ -120,7 +119,6 @@ scripts/build-python-reactor.sh
 ```
 
 ```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/py"}),
 {ok, W} = wasm_script_worker:start_link(
             wasm_python,
             #{path => "test/fixtures/lang/py_reactor.wasm",

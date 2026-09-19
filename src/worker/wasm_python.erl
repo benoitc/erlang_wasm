@@ -11,7 +11,6 @@ request costs tens of seconds; restoring an image of a started one costs under
 a second, and `test/audit/PERF.md` has both.
 
 ```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/py"}),
 {ok, W} = wasm_script_worker:start_link(
             wasm_python,
             #{path => "test/fixtures/lang/py_reactor.wasm",

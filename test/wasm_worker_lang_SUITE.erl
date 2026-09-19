@@ -114,10 +114,12 @@ init_per_suite(Config) ->
             {skip, "no QuickJS build: run scripts/fetch-qjs-fixture.sh"};
         true ->
             {ok, _} = application:ensure_all_started(wasm),
+            ok = wasm_adapter_conformance:take_over_reaper(),
             Config
     end.
 
-end_per_suite(_Config) -> ok.
+end_per_suite(_Config) ->
+    wasm_adapter_conformance:hand_back_reaper().
 
 engine() ->
     filename:join([wasm_spec_runner:fixtures_dir(), "lang", "qjs.wasm"]).

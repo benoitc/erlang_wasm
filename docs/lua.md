@@ -16,10 +16,9 @@ scripts/build-lua-reactor.sh
 ```
 
 ```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/lua"}),
 {ok, W} = wasm_script_worker:start_link(
             wasm_lua,
-            #{path => "test/fixtures/lang/lua_reactor.wasm", root => scratch,
+            #{path => "test/fixtures/lang/lua_reactor.wasm",
               limits => wasm_lua:limits()}),
 {ok, #{result := #{~"answer" := 42}}} =
     wasm_script_worker:run(W, #{source => <<"function main(c)"
@@ -46,7 +45,7 @@ One option, and it more than halves a request:
 ```erlang
 {ok, W} = wasm_script_worker:start_link(
             wasm_lua,
-            #{path => "test/fixtures/lang/lua_reactor.wasm", root => scratch,
+            #{path => "test/fixtures/lang/lua_reactor.wasm",
               limits => wasm_lua:limits(),
               runner_min_heap_words => 200_000}).
 ```

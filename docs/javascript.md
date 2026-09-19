@@ -15,8 +15,7 @@ promised, because that is the half you cannot discover from a working example.
 > it on the path.
 
 ```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/js"}),
-{ok, W} = js_worker:start_link("test/fixtures/lang/qjs.wasm", #{root => scratch}),
+{ok, W} = js_worker:start_link("test/fixtures/lang/qjs.wasm", #{}),
 {ok, #{result := #{~"answer" := 42}}} =
     js_worker:run(W, ~"export function main(c) { return {answer: c.value + 1}; }",
                   #{~"value" => 41}).
@@ -83,10 +82,9 @@ scripts/build-quickjs-reactor.sh
 ```
 
 ```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/js"}),
 {ok, W} = wasm_script_worker:start_link(
             wasm_javascript,
-            #{path => "test/fixtures/lang/qjs_reactor.wasm", root => scratch,
+            #{path => "test/fixtures/lang/qjs_reactor.wasm",
               limits => #{timeout => 30_000, fuel => infinity,
                           max_memory_pages => 4096,
                           max_heap_words => 16 * 1024 * 1024}}),
@@ -121,7 +119,7 @@ is one option:
 ```erlang
 {ok, W} = wasm_script_worker:start_link(
             wasm_javascript,
-            #{path => "test/fixtures/lang/qjs_reactor.wasm", root => scratch,
+            #{path => "test/fixtures/lang/qjs_reactor.wasm",
               runner_min_heap_words => 200_000,
               limits => #{timeout => 30_000, fuel => infinity,
                           max_memory_pages => 4096,

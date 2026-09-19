@@ -8,10 +8,9 @@ starts once when the worker starts and every request restores that point
 instead of reaching it again.
 
 ```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/w"}),
 {ok, W} = wasm_script_worker:start_link(
             wasm_javascript,
-            #{path => "test/fixtures/lang/qjs_reactor.wasm", root => scratch}),
+            #{path => "test/fixtures/lang/qjs_reactor.wasm"}),
 {ok, #{result := #{~"answer" := 42}}} =
     wasm_script_worker:run(W, #{source => <<"export function main(c)"
                                              " { return {answer: c.value + 1}; }">>,

@@ -302,8 +302,8 @@ and what each was measured at.
 | `trusted` | `false` | whether a `mode => write` mount is allowed at all |
 | `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2`. CPython needs about 90 s and so must raise it |
 
-**Per reaper**, in the second argument to `wasm_worker_reaper:start_link/2`. These
-bound cleanup, which runs after a request has already been answered:
+**Per node**, in the `reaper_options` application setting. These bound
+cleanup, which runs after a request has already been answered:
 
 | setting | default | what it bounds |
 | --- | ---: | --- |

@@ -39,6 +39,7 @@ a fifth arrives, so an undeclared capability is reported as unsupported and
 counted as neither.
 """.
 
+-export([take_over_reaper/0, hand_back_reaper/0]).
 -export([base_cases/0, capability_cases/1, capability_cases/2,
          fixtures/1, fixtures/2, fixture/2, fixture/3,
          unsupported/2, has_capability/2]).
@@ -102,6 +103,29 @@ counted as neither.
          a_late_finish_does_not_kill_the_reaper/1]).
 
 -include_lib("stdlib/include/assert.hrl").
+
+-doc """
+Take the reaper over for a suite that runs one by hand.
+
+These cases stop and restart the reaper to see what a worker does without
+one. With the application supervising a reaper, a stopped one would be
+restarted under them, and starting a worker would quietly bring one up. So a
+suite using the kit calls this from `init_per_suite/1`: the supervised reaper
+is stopped and nothing starts another until `hand_back_reaper/0`.
+""".
+-spec take_over_reaper() -> ok.
+take_over_reaper() ->
+    wasm_worker_sup:suspend_reaper().
+
+-doc "Stop the reaper the suite ran, and let the application run its own again.".
+-spec hand_back_reaper() -> ok.
+hand_back_reaper() ->
+    _ = case wasm_worker_reaper:alive() of
+            true  -> try wasm_worker_reaper:stop() catch exit:_ -> ok end;
+            false -> ok
+        end,
+    _ = wasm_worker_sup:resume_reaper(),
+    ok.
 
 %% What every adapter must satisfy. The typed adapter failing any of these is
 %% the signal that the kernel is a WASI runner, and it is the only signal

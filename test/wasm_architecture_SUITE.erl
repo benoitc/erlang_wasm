@@ -9,7 +9,7 @@
 %% *fourth* one appearing without anybody deciding it should. A cycle is the
 %% one structural property a reader cannot discover locally: every other
 %% question about a module can be answered by reading that module, and this one
-%% can only be answered by reading all sixty-six.
+%% can only be answered by reading all sixty-seven.
 -module(wasm_architecture_SUITE).
 
 -compile([export_all, nowarn_export_all]).

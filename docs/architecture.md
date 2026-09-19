@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the sixty-six modules are, which
+This page is the map of the runtime: what the sixty-seven modules are, which
 ones depend on which, and where to start reading. You need it before you change
 anything, because every module explains itself and none of them explains the
 shape of the whole.
@@ -57,7 +57,7 @@ L3  wasm_memory  wasm_table  wasm_global  wasm_heap  wasm_store
     wasm_validate_code  wasm_wast
 L2  wasm_decode  wasm_decode_code  wasm_decode_simd  wasm_decode_gc
     wasm_decode_atomic  wasm_keeper  wasm_simd  wasm_types  wasm_wait
-    wasm_wat_sexp  wasm_app
+    wasm_wat_sexp  wasm_app  wasm_worker_sup
 L1  wasm_code_cache  wasm_engine  wasm_leb128  wasm_num_float
     wasm_num_trunc  wasm_sup  wasm_wat_lex  wasm_wat_num  wasi_fs  wasi_sock
     wasm_worker_reaper  wasm_script_v1
@@ -112,7 +112,7 @@ capture copies and what a restore lays over -- and stays out of it.
 Cycles are not forbidden here. What is forbidden is a fourth one appearing
 because nobody noticed. A cycle is the one structural property you cannot
 discover by reading a module: everything else about `wasm_memory` is answered
-inside `wasm_memory`, and this is answered only by reading all sixty-six.
+inside `wasm_memory`, and this is answered only by reading all sixty-seven.
 
 The margin is thinner than it looks. Adding one call from `wasm_error`, at
 level 0, up into `wasm` collapses fourteen modules into a single component, and

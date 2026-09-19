@@ -70,9 +70,11 @@ cases(Adapter) ->
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
+    ok = wasm_adapter_conformance:take_over_reaper(),
     Config.
 
-end_per_suite(_Config) -> ok.
+end_per_suite(_Config) ->
+    wasm_adapter_conformance:hand_back_reaper().
 
 init_per_group(typed, Config)     -> [{adapter, fake_typed_adapter} | Config];
 init_per_group(command, Config)   -> [{adapter, fake_command_adapter} | Config];

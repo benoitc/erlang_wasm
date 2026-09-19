@@ -8,10 +8,9 @@ run to hundreds of kilobytes and megabytes; Lua's holds about 77 KB, which is
 where a mechanism that quietly assumed bulk would show it.
 
 ```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/lua"}),
 {ok, W} = wasm_script_worker:start_link(
             wasm_lua,
-            #{path => "test/fixtures/lang/lua_reactor.wasm", root => scratch,
+            #{path => "test/fixtures/lang/lua_reactor.wasm",
               limits => wasm_lua:limits()}),
 {ok, #{result := #{~"answer" := 42}}} =
     wasm_script_worker:run(W, #{source => <<"function main(c)"

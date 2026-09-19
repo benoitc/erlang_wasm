@@ -10,8 +10,7 @@ has never heard of expressible without changing anything here.
 
 <!-- check: modules my_adapter -->
 ```erlang
-{ok, _} = wasm_worker_reaper:start_link(#{scratch => "/var/tmp/w"}),
-{ok, W} = wasm_script_worker:start_link(my_adapter, #{root => scratch}),
+{ok, W} = wasm_script_worker:start_link(my_adapter, #{}),
 {ok, R} = wasm_script_worker:run(W, MyRequest).
 ```
 
@@ -90,6 +89,7 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 -export([submit/2, await/3, cancel/2, run/2]).
 -export([withdraw_waiter/3, consumed/3, channel_write/2]).
 -export([default_limits/0, runner_heap_words/2, capture_heap_words/2]).
+-export([cleanup_stats/0, cleanup_requests/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -427,12 +427,64 @@ Start a worker for one adapter.
 it is also handed to `Adapter:artifact/1`.
 """.
 -spec start_link(module(), map()) -> {ok, pid()} | {error, term()}.
-start_link(Adapter, Opts) -> gen_server:start_link(?MODULE, {Adapter, Opts}, []).
+start_link(Adapter, Opts) ->
+    case prepare_start(Opts) of
+        {ok, Opts1}    -> gen_server:start_link(?MODULE, {Adapter, Opts1}, []);
+        {error, _} = E -> E
+    end.
 
 -spec start_link(gen_server:server_name(), module(), map()) ->
           {ok, pid()} | {error, term()}.
 start_link(Name, Adapter, Opts) ->
-    gen_server:start_link(Name, ?MODULE, {Adapter, Opts}, []).
+    case prepare_start(Opts) of
+        {ok, Opts1}    -> gen_server:start_link(Name, ?MODULE, {Adapter, Opts1},
+                                                []);
+        {error, _} = E -> E
+    end.
+
+-doc """
+Counts per state of the cleanup that follows requests, node-wide. `capacity`
+is how many reservations are held now; when it reaches `max_cleanup_jobs +
+cleanup_queue_len` from `reaper_options`, `submit` answers
+`cleanup_saturated`.
+""".
+-spec cleanup_stats() -> map() | {error, wasm_worker_error:worker_error()}.
+cleanup_stats() -> wasm_worker_reaper:stats().
+
+-doc """
+Every request whose cleanup is still owned, with the guardian holding it.
+
+A reservation that ends in `held` stays there until a late answer or a `DOWN`,
+on purpose, since deleting a running request's mounts cannot be undone. This
+is how an operator finds which guardian holds it, to kill that guardian if it
+really is stuck.
+""".
+-spec cleanup_requests() ->
+          [#{id := binary(), state := atom(), guardian := pid(),
+             delivered := boolean()}]
+          | {error, wasm_worker_error:worker_error()}.
+cleanup_requests() -> wasm_worker_reaper:requests().
+
+%% Before the worker exists: make sure a reaper runs, and refuse a root it
+%% does not have now rather than at the first request. With no reaper at all
+%% (suspended, or one started by hand and stopped) the worker starts as it
+%% always did and `submit' answers `no_reaper'.
+prepare_start(Opts) ->
+    Root = maps:get(root, Opts, scratch),
+    case wasm_worker_sup:ensure_reaper() of
+        {error, _} = E ->
+            E;
+        ok ->
+            case wasm_worker_reaper:roots() of
+                {error, _} ->
+                    {ok, Opts#{root => Root}};
+                Known ->
+                    case lists:member(Root, Known) of
+                        true  -> {ok, Opts#{root => Root}};
+                        false -> {error, {unknown_root, Root, Known}}
+                    end
+            end
+    end.
 
 -spec stop(gen_server:server_ref()) -> ok.
 stop(W) -> gen_server:stop(W).

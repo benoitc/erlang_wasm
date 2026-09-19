@@ -107,6 +107,7 @@ want first:
 - [The compiled tier](docs/compiled-tier.md): what `compile => true` buys, and when
 - [Security](docs/security.md): the threat model
 - [Features and conformance](docs/features.md)
+- [Upgrading from 0.3](docs/upgrading.md): if you copied modules out of `examples/`
 
 For changing the runtime rather than using it:
 

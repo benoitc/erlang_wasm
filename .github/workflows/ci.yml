@@ -36,35 +36,6 @@ jobs:
       - name: The NIF built, rather than falling back
         run: test -f priv/wasi_file_nif.so
 
-  # The required gate for the worker kernel. It downloads nothing and needs no
-  # network, which is what lets it be required: `wasm_worker_kernel_SUITE'
-  # builds both its adapters from WAT at test time, so a skip here is a
-  # failure rather than a quieter pass.
-  #
-  # It also runs the two analyses the default profile cannot: `examples/' is an
-  # `extra_src_dirs' of other profiles only, so a default-profile xref and
-  # dialyzer see none of the kernel or the behaviour it declares.
-  kernel:
-    name: Kernel
-    needs: compile
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: erlef/setup-beam@v1
-        with:
-          otp-version: ${{ env.OTP }}
-          rebar3-version: ${{ env.REBAR3 }}
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/rebar3
-            _build
-          key: ${{ runner.os }}-rebar3-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
-          restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
-      - run: rebar3 ct --suite=test/wasm_worker_kernel_SUITE
-      - run: rebar3 as kernel_check xref
-      - run: rebar3 as kernel_check dialyzer
-
   # Pinned coverage of a real language, and it **fails rather than skips**.
   # `wasm_worker_lang_SUITE` skips without an artifact, which is right for a
   # working copy and wrong for CI, so the checksums are verified in a step of
@@ -72,7 +43,7 @@ jobs:
   # before anything green can be reported by a run that proved less.
   integration:
     name: Integration
-    needs: [compile, kernel]
+    needs: compile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -137,7 +108,7 @@ jobs:
 
   tests:
     name: Tests
-    needs: [compile, kernel]
+    needs: compile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

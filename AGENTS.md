@@ -10,7 +10,9 @@ here. It is not a binding to Wasmtime, Wasmer, WAMR or wasm3. The only native
 code is an optional file NIF that closes a time-of-check-to-time-of-use window
 in WASI path resolution, and the runtime works without it.
 
-One OTP application, flat `src/`, every module prefixed `wasm_` or `wasi_`:
+One OTP application, every module prefixed `wasm_` or `wasi_`. The runtime
+is flat in `src/`; the workers are in `src/worker/`, which is a folder for
+finding them and not a namespace:
 
 ```
 src/    Front end: wasm_decode(+_code/_simd/_gc/_atomic), wasm_leb128,
@@ -25,6 +27,11 @@ src/    Front end: wasm_decode(+_code/_simd/_gc/_atomic), wasm_leb128,
         Numerics: wasm_num(+_float/_trunc), wasm_simd
         WASI: wasi_preview1, wasi_fs, wasi_path, wasi_net, wasi_sock,
         wasi_file_nif
+src/worker/  wasm_instance_worker, wasm_script_worker (the kernel),
+        wasm_worker_adapter (the behaviour), wasm_worker_error, the adapters
+        wasm_javascript(_command), wasm_python(_command), wasm_lua, the kit
+        wasm_adapter_conformance; internal: wasm_worker_reaper,
+        wasm_worker_sup, wasm_script_v1
 include/    Shared records: wasm.hrl, wasm_exec.hrl, wasi.hrl
 c_src/      The optional file NIF, built by scripts/build-nif.sh
 test/       Common Test only. test/audit/ is the measurement record.
@@ -43,7 +50,7 @@ rebar3 compile      # warnings_as_errors is on
 rebar3 lint         # elvis
 rebar3 xref
 rebar3 dialyzer
-rebar3 ct           # 882 cases
+rebar3 ct           # 900 cases
 ```
 
 The benchmarks are not among them: `wasm_bench_SUITE` and

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+**The workers ship with the application.** Running JavaScript, Python or Lua
+now needs the dependency and a runtime artifact, and nothing copied from
+`examples/`. Nothing breaks: the new modules take names no 0.3 example used,
+so code you copied keeps working. [Upgrading from 0.3](docs/upgrading.md)
+maps each copied module to its installed one.
+
+- `wasm_script_worker` is the worker kernel; `run/3` takes a source and a
+  context. `wasm_worker_adapter` is the behaviour an adapter implements.
+- The adapters are `wasm_javascript`, `wasm_javascript_command`,
+  `wasm_python`, `wasm_python_command` and `wasm_lua`.
+- `wasm_instance_worker` is the 0.3 `examples/wasm_worker.erl`, with the same
+  calls.
+- The application starts the reaper. Set `scratch_roots` so a restarted node
+  cleans up what a crashed one left, and `reaper_options` for the cleanup
+  limits. `wasm_script_worker:cleanup_stats/0` and `cleanup_requests/0` show
+  what it holds.
+
 ## 0.3.0
 
 This release is about running other people's code: safely, and fast enough to

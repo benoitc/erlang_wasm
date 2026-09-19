@@ -11,7 +11,7 @@ To run JavaScript or Python, something has to interpret JavaScript or Python,
 and WebAssembly does not. So you either compile the logic ahead of time, or you
 ship an interpreter inside the module and feed it source at run time.
 
-```
+```text
 OPTION A - compile to wasm                OPTION B - interpret inside wasm
 
   logic written in Rust, C, TinyGo          logic written in JavaScript

@@ -10,7 +10,7 @@ library.
 
 ## Grant capabilities explicitly, because nothing is ambient
 
-```
+```erlang
 Wasi = #{ stdout => group_leader(),
           dirs   => [{<<"/data">>, "/srv/app/data", read}],
           env    => #{<<"MODE">> => <<"production">>},

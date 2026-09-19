@@ -17,7 +17,7 @@ module cache:
 `erlang_wasm` is the engine. There is no second one, and the only thing you
 choose is what goes in the innermost box:
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │ your BEAM application                               │
 │                                                     │

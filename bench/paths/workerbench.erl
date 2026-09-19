@@ -122,7 +122,7 @@ main([Adapter, Config, Arm, N, Cache]) ->
     {ok, W} = script_worker:start_link(Mod, #{root => scratch, path => Path,
                                               limits => Limits}),
     {ok, Artifact} = Mod:artifact(#{path => Path}),
-    #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
+    Echo = echo(Mod, Artifact),
     io:format("# ~s ~s arm=~s n=~s cache=~ts~n",
               [Adapter, Config, Arm, N, case Cache of "" -> "(none)"; _ -> Cache end]),
     Samples = run(W, Echo, list_to_integer(N), 1, []),
@@ -184,9 +184,9 @@ run(_W, _R, N, I, Acc) when I > N ->
     lists:reverse(Acc);
 run(W, R, N, I, Acc) ->
     T0 = erlang:monotonic_time(microsecond),
-    Result = script_worker:run(W, R),
+    Result = script_worker:run(W, request(R)),
     Us = erlang:monotonic_time(microsecond) - T0,
-    ok = check(Result),
+    ok = strict(R, Result),
     Entered = maps:get(entered, wasm_jit:counts(), 0),
     %% Every sample, when the tier is moving; every tenth otherwise. The
     %% transition is the interesting part and averaging over it hides it.
@@ -196,13 +196,10 @@ run(W, R, N, I, Acc) ->
     end,
     run(W, R, N, I + 1, [{I, Us, Entered} | Acc]).
 
-check({ok, _}) -> ok;
-check({error, E}) -> io:format("# REQUEST FAILED: ~p~n", [E]), ok.
-
-%% What `check/1' is not. That one matches any `{ok, _}' and, worse, *prints* on
-%% an error and still answers `ok', so a request that failed is logged and its
-%% timing kept. A timing arm cannot do that: a failed request is faster than a
-%% working one and would flatter whatever produced it.
+%% Every timed request goes through this. A timing arm cannot accept any
+%% `{ok, _}': a failed request is faster than a working one and would flatter
+%% whatever produced it. There used to be a `check/1' that logged an error and
+%% answered `ok' anyway, so a failure was kept as a fast sample.
 %%
 %% This compares the decoded result against what the workload says it should be
 %% and stops the arm otherwise.
@@ -210,6 +207,15 @@ strict(#{expect := Expect}, {ok, #{result := Got}}) when Got =:= Expect ->
     ok;
 strict(#{expect := Expect}, Other) ->
     exit({wrong_result, #{expected => Expect, got => Other}}).
+
+%% The adapters' own echo request, with the answer every one of them gives:
+%% `main' returns `value + 1' for a context of 41.
+echo(Mod, Artifact) ->
+    #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
+    Echo#{expect => #{~"answer" => 42}}.
+
+%% What the worker is sent: the oracle is not part of the request.
+request(Wl) -> maps:with([source, context], Wl).
 
 %% Minimum and median, never a mean: one scheduling hiccup moves a mean and
 %% neither of these, and `bench/paths/README.md` asks for minimums.
@@ -267,7 +273,7 @@ floors(Adapter, Config, N, Floors) ->
     [io:format("# floor ~w -> resolved ~p~n", [F, resolved(Limits, F)])
      || F <- Floors],
     {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
-    #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
+    Echo = echo(Mod, Artifact),
     %% One discarded request each: the first is the module cache, the lowered
     %% IR and every lazily loaded host module, and it belongs to none of them.
     _ = [one(W, Echo) || {_, W} <- Ws],
@@ -319,10 +325,10 @@ rounds(Ws, Req, N, I, Acc) ->
 one(W, Req) ->
     _ = erlang:trace(new_processes, true, ?GC_FLAGS),
     T0 = erlang:monotonic_time(microsecond),
-    Result = script_worker:run(W, Req),
+    Result = script_worker:run(W, request(Req)),
     Us = erlang:monotonic_time(microsecond) - T0,
     _ = erlang:trace(new_processes, false, ?GC_FLAGS),
-    ok = check(Result),
+    ok = strict(Req, Result),
     {Gcs, Native} = drain(#{}, 0, 0),
     {Us, Gcs, erlang:convert_time_unit(Native, native, microsecond)}.
 
@@ -390,7 +396,7 @@ throughput(Adapter, Config, N, Floor, Counts) ->
     {Mod, Path, Limits} = arm(Adapter, Config),
     Guest = guest(Adapter, Path),
     {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
-    #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
+    Echo = echo(Mod, Artifact),
     io:format("# ~s n=~w floor=~w counts=~w schedulers=~w~n",
               [Adapter, N, Floor, Counts, erlang:system_info(schedulers_online)]),
     %% One worker built and thrown away, so the image is captured and filed
@@ -438,7 +444,9 @@ drive(Ws, Req, N) ->
     ok.
 
 client(Parent, W, Req, N) ->
-    lists:foreach(fun(_) -> ok = check(script_worker:run(W, Req)) end,
+    lists:foreach(fun(_) ->
+                          ok = strict(Req, script_worker:run(W, request(Req)))
+                  end,
                   lists:seq(1, N)),
     Parent ! {done, self()}.
 
@@ -495,7 +503,7 @@ tier(Adapter, N, Floor) ->
     {Mod, Path, Compiled} = arm(Adapter, "compiled"),
     Guest = guest(Adapter, Path),
     {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
-    #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
+    Echo = echo(Mod, Artifact),
     io:format("# ~s tier n=~w floor=~w~n# compiled limits ~p~n",
               [Adapter, N, Floor, Compiled]),
     Wm = start_floor(Mod, Guest, Metered, Floor),
@@ -577,9 +585,9 @@ tier_rounds(Wm, Wc, Req, N, I, Ms, Cs, At) ->
 
 req_us(W, Req) ->
     T0 = erlang:monotonic_time(microsecond),
-    R = script_worker:run(W, Req),
+    R = script_worker:run(W, request(Req)),
     Us = erlang:monotonic_time(microsecond) - T0,
-    ok = check(R),
+    ok = strict(Req, R),
     Us.
 
 %% Split at the request the tier engaged on, because an average across that
@@ -707,7 +715,7 @@ steady(Adapter, Arm, N, Floor) ->
     {Mod, Path, _} = arm(Adapter, "metered"),
     Guest = guest(Adapter, Path),
     {ok, Artifact} = Mod:artifact(maps:without([capture_timeout], Guest)),
-    #{base := #{echo := Echo}} = Mod:conformance_fixtures(Artifact),
+    Echo = echo(Mod, Artifact),
     Hash = artifact_hash(Guest),
     io:format("# ~s steady arm=~s n=~w floor=~w~n", [Adapter, Arm, N, Floor]),
     steady_arm(Arm, Adapter, Mod, Guest, Echo, Hash, N, Floor),

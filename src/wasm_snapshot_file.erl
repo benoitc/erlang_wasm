@@ -20,7 +20,7 @@ is decoded through `binary_to_existing_atom/2`, which cannot create one.
 
 ## The shape
 
-```
+```text
 "WASMIMG\\0" | u16 format | u32 image ABI | u32 payload length
 sha256 of the payload, checked before a byte of it is used
 payload: u8 codec | u32 uncompressed length | body

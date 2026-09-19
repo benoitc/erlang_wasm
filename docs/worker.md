@@ -29,7 +29,7 @@ it uses the same process boundary for the same reasons.
 
 ## The request path
 
-```
+```text
   caller                worker process           erlang_wasm            guest
     │                        │                        │                   │
     ├── call(W, Req, 500) ──►│                        │                   │
@@ -68,7 +68,7 @@ time, and `examples/qjs_worker.erl` for logic that arrives as text.
 
 ## Lifecycle
 
-```
+```text
    wasm:load(Bin)                     once per module, node-wide, cached
         |
         v
@@ -182,6 +182,7 @@ does this for you; an inline caller does not get it by passing the key.
 Off unless you set it, and worth setting for any guest whose requests spend
 more time collecting than running:
 
+<!-- check: modules my_adapter -->
 ```erlang
 script_worker:start_link(my_adapter, #{root => scratch,
                                        runner_min_heap_words => 200_000}).
@@ -217,6 +218,7 @@ reason nothing names.
 
 ## Give the capture one too
 
+<!-- check: modules my_adapter -->
 ```erlang
 script_worker:start_link(my_adapter, #{root => scratch,
                                        capture_min_heap_words => 2_000_000}).

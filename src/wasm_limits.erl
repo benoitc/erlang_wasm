@@ -6,7 +6,7 @@ Pass a limits map to `wasm:instantiate/3`, or per call. Reach for the presets
 when you have not measured anything yet: getting these right matters most for
 the people least likely to tune them.
 
-```
+```erlang
 Limits = wasm_limits:untrusted(),
 {ok, Inst} = wasm:instantiate(Module, Imports, Limits).
 ```

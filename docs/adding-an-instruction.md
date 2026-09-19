@@ -31,6 +31,7 @@ atom. Add an entry only if yours takes an immediate.
 
 `i64.extend8_s` is the model. Four files, one line each.
 
+<!-- check: skip "single clauses excerpted from three different files" -->
 ```erlang
 %% src/wasm_decode_code.erl -- the opcode
 instr(16#C2, R) -> {i64_extend8_s, R};
@@ -54,6 +55,7 @@ generated as a call to `wasm_exec:op1/2` or `op2/3`. Writing an inline form in
 
 Three files, and none of them is `wasm_exec`.
 
+<!-- check: skip "single clauses excerpted from three different files" -->
 ```erlang
 %% src/wasm_decode_simd.erl -- the sub-opcode
 sub(186, R) -> {i32x4_dot_i16x8_s, R};
@@ -69,6 +71,7 @@ binary_op(i32x4_dot_i16x8_s, A, B) -> ...
 
 ## A GC instruction, the `0xFB` space
 
+<!-- check: skip "single clauses excerpted from three different files" -->
 ```erlang
 %% src/wasm_decode_gc.erl
 sub(22, R0) -> cast(ref_cast, nonull, R0);

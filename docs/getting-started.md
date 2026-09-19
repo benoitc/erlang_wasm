@@ -45,13 +45,18 @@ instance of it, and `call/3` calls one of its exported functions. Paste it into
 
 ## Load a module from a file
 
-A module built by a real toolchain arrives as a `.wasm` file:
+A module built by a real toolchain arrives as a `.wasm` file. The bytes below
+are the same `add` module as `wat2wasm` writes it, so you can try this without
+a toolchain; with your own module, skip the first line:
 
+<!-- check: fresh -->
 ```erlang
+ok = file:write_file("add.wasm", <<0,97,115,109,1,0,0,0,1,7,1,96,2,127,127,1,127,3,2,1,0,7,7,1,3,97,100,100,0,0,10,9,1,7,0,32,0,32,1,106,11>>),
 {ok, Mod}  = wasm:load_file("add.wasm"),
 {ok, Inst} = wasm:instantiate(Mod, #{}),
 {ok, [7]}  = wasm:call(Inst, ~"add", [3, 4]),
-ok         = wasm:destroy(Inst).
+ok         = wasm:destroy(Inst),
+ok         = file:delete("add.wasm").
 ```
 
 You load once and instantiate as often as you like. `load_file/1` decodes and
@@ -64,19 +69,34 @@ built from text takes a fresh identity every time, so there is nothing stable
 to cache it against. Use `load_file/1` for a module you instantiate
 repeatedly.
 
+Each section of this page starts from a clean shell. If you paste them all
+into one, run `f().` between sections so names like `Mod` and `Inst` can be
+bound again.
+
 ## Give it something to call
 
 Imports are plain Erlang functions. Key them by the module and field name the
-WebAssembly module asks for:
+WebAssembly module asks for. This module imports `env.log` and calls it with a
+pointer and a length into its memory:
 
+<!-- check: fresh -->
 ```erlang
+Src = ~"""
+(module
+  (import "env" "log" (func $log (param i32 i32)))
+  (memory 1)
+  (data (i32.const 0) "hello from wasm")
+  (func (export "run") (call $log (i32.const 0) (i32.const 15))))
+""",
+{ok, Mod} = wasm:compile({wat, Src}),
 Imports = #{{~"env", ~"log"} =>
                 fun(Ctx, [Ptr, Len]) ->
                     {ok, Bin} = wasm:read_memory(Ctx, Ptr, Len),
-                    logger:info("wasm says: ~ts", [Bin]),
+                    logger:notice("wasm says: ~ts", [Bin]),
                     {ok, []}                    % no results
                 end},
-{ok, Inst} = wasm:instantiate(Mod, Imports).
+{ok, Inst} = wasm:instantiate(Mod, Imports),
+{ok, []}   = wasm:call(Inst, ~"run", []).
 ```
 
 Return `{ok, Results}` to continue or `{trap, Reason}` to stop the invocation.
@@ -86,15 +106,22 @@ it escape into your process. See [host-functions.md](host-functions.md).
 ## Run a WASI program
 
 If the module was built with `rustc --target wasm32-wasip1`, TinyGo, or a
-WASI-enabled clang, hand it to `wasi:run/2`:
+WASI-enabled clang, hand it to `wasi:run/2`. The repository has one, built from
+Rust, in `test/fixtures/rust/`:
 
+<!-- check: fresh -->
 ```erlang
-{ok, Mod} = wasm:load_file("hello.wasm"),
+{ok, Mod} = wasm:load_file("test/fixtures/rust/wasi_demo.wasm"),
 {ok, Exit, Stdout, Stderr} =
     wasi:run(Mod, #{args => [~"hello", ~"--verbose"],
                     env  => #{~"MODE" => ~"production"},
-                    dirs => [{~"/data", "/srv/app/data", read}]}).
+                    dirs => [{~"/data", "/srv/app/data", read}]}),
+io:format("~ts", [Stdout]).
 ```
+
+`Exit` is the program's exit status. This one prints what it was given, then
+tries to read a file under `/data`; `/srv/app/data` does not exist here, so it
+reports that and exits with 7.
 
 Grant a network the same way you grant a directory, by naming what may be
 reached:
@@ -109,9 +136,13 @@ out `net` and it has no network. See [wasi.md](wasi.md).
 
 ## Handle failure
 
-Nothing raises. Match on the error:
+Nothing raises. Match on the error. This module's `run` always traps:
 
+<!-- check: fresh -->
 ```erlang
+{ok, Mod}  = wasm:compile({wat, ~"(module (func (export \"run\") (param i32) unreachable))"}),
+{ok, Inst} = wasm:instantiate(Mod, #{}),
+Arg = 1,
 case wasm:call(Inst, ~"run", [Arg]) of
     {ok, Results} ->
         Results;
@@ -123,6 +154,7 @@ case wasm:call(Inst, ~"run", [Arg]) of
         logger:warning("~s", [wasm:format_error(E)]),
         failed
 end.
+%% => module_hit_unreachable
 ```
 
 You get one of five classes: `malformed` for a bad binary, `invalid` for a
@@ -145,6 +177,8 @@ The second line renames the module inside the file to match its new name;
 without it the copy still calls itself `wasm_worker` and `my_wasm_worker:...`
 is undefined.
 
+<!-- check: parse "runs once the worker is copied into your project" -->
+<!-- check: modules my_wasm_worker -->
 ```erlang
 {ok, W} = my_wasm_worker:start_link(Mod, #{limits => wasm_limits:untrusted(),
                                            isolation => fresh}),

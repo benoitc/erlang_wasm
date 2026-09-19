@@ -129,7 +129,7 @@ in between.
 
 Check what the subset leaves for a module of your own:
 
-```
+```sh
 erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/coverage.erl
 erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
     -run coverage main your.wasm

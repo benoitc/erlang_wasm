@@ -463,7 +463,7 @@ needs 13 WASI imports (`args_get`, `args_sizes_get`, `environ_get`,
 `fd_prestat_dir_name`, `fd_prestat_get`, `fd_read`, `fd_write`, `path_open`,
 `proc_exit`), and all of them are implemented.
 
-```
+```text
 hello from rust on wasm
 args: ["prog", "--verbose"]
 MODE=production
@@ -513,7 +513,7 @@ asserts, including the two-argument `sock_accept`.
 Nothing here had ever run a large module written by somebody else, and the
 first one that was tried aborted the emulator:
 
-```
+```text
 ets_alloc: Cannot reallocate 18446744060576004240 bytes  (2^64 minus ~3 GB)
 ```
 

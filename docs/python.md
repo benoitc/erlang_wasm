@@ -117,7 +117,7 @@ next section is how to stop paying for that.
 worker starts, and each request restores an image of that point. Build it, then
 point a worker at it:
 
-```
+```sh
 scripts/build-python-reactor.sh
 ```
 

@@ -17,12 +17,13 @@ Do this before changing any setting. Check the load average first, take
 minimums rather than means, and never compare a number from one run against a
 number from another.
 
+<!-- check: modules allocwords -->
 ```erlang
 %% one process's own allocation and collection time
 allocwords:measure(fun() -> script_worker:run(W, Req) end).
 ```
 
-```
+```erlang
 %% the floors and ceilings a process actually got
 erlang:process_info(Pid, garbage_collection).
 ```
@@ -35,7 +36,7 @@ investigation down the wrong path for an afternoon.
 To compare settings, run them in one emulator, interleaved, with the order
 reversed on alternate rounds:
 
-```
+```sh
 erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples \
     -pa bench/paths -run workerbench main floors qjs_reactor metered 10 0 100000 200000
 ```
@@ -47,6 +48,7 @@ on at all.
 
 ## Give the request runner a heap floor
 
+<!-- check: modules my_adapter -->
 ```erlang
 script_worker:start_link(my_adapter, #{root => scratch,
                                        runner_min_heap_words => 200_000}).
@@ -116,6 +118,7 @@ limits resolves to, so you can check a configuration without starting a worker.
 
 ## Give the capture a floor as well
 
+<!-- check: modules my_adapter -->
 ```erlang
 script_worker:start_link(my_adapter, #{root => scratch,
                                        capture_min_heap_words => 2_000_000}).

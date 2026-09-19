@@ -164,8 +164,10 @@ adapter never calls `snapshot/1` itself. Declare the capability and say what
 the initialisation instance is built from:
 
 ```erlang
-capabilities(_Artifact) ->
-    #{execution => reactor, snapshots => #{version => ~"my-1"}, ...}.
+capabilities(Artifact) ->
+    %% your other capabilities, with these two set
+    (base_capabilities(Artifact))#{execution => reactor,
+                                   snapshots => #{version => ~"my-1"}}.
 
 snapshot_capability(#{module := M}) ->
     #{version => ~"my-1",
@@ -192,6 +194,7 @@ initialisation bindings should be as barren as the guest allows: whatever
 
 `capture_timeout` bounds the whole thing, 60 s by default:
 
+<!-- check: modules my_adapter -->
 ```erlang
 script_worker:start_link(my_adapter, #{root => scratch,
                                        capture_timeout => 180_000}).
@@ -222,12 +225,15 @@ Opts = #{snapshotable => true,
 ```
 
 Say `stateless` for a module that keeps nothing. A module that keeps something
-supplies three funs:
+supplies a map of three funs, of this type:
 
 ```erlang
-#{eligible => fun(Inst) -> ok | {error, wasm_error:error()} end,
-  capture  => fun(Inst) -> {ok, Kept} | {error, wasm_error:error()} end,
-  restore  => fun(Inst, Kept) -> ok | {error, wasm_error:error()} end}
+-type hooks() ::
+        #{eligible := fun((wasm:instance()) -> ok | {error, wasm_error:error()}),
+          capture  := fun((wasm:instance()) ->
+                              {ok, Kept :: term()} | {error, wasm_error:error()}),
+          restore  := fun((wasm:instance(), Kept :: term()) ->
+                              ok | {error, wasm_error:error()})}.
 ```
 
 `Kept` must be portable: binaries, numbers, atoms, lists, tuples and maps of

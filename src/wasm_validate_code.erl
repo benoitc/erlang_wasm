@@ -11,7 +11,7 @@ The polymorphic rule is the part worth stating explicitly, because it is
 where validators go wrong in both directions. After `br`, the rest of the
 block is statically unreachable and may pop values that are not there:
 
-```
+```wat
 (func (result i32) (unreachable) (i32.add))   ;; valid
 ```
 

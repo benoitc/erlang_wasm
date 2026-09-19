@@ -7,25 +7,21 @@ build flags that nothing else in this repository does.
 
 ## Run one
 
-> **Where these modules come from.** `lua_reactor_adapter` and the worker
-> kernel they run on (`script_worker`, `worker_reaper`, `script_v1` and
-> `worker_error`) are in `examples/` in this release, not installed with the
-> application. From a checkout of this repository, `rebar3 as test shell`
-> compiles them and puts them on the path. In your own project, copy those
-> files from `deps/wasm/examples/` into your `src/`.
+> **Where these modules come from.** `wasm_lua` and the worker kernel it runs
+> on (`wasm_script_worker`) are installed with the application; you supply the
+> Lua artifact.
 
 ```sh
 scripts/build-lua-reactor.sh
 ```
 
 ```erlang
-{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/lua"}),
-{ok, W} = script_worker:start_link(
-            lua_reactor_adapter,
-            #{path => "test/fixtures/lang/lua_reactor.wasm", root => scratch,
-              limits => lua_reactor_adapter:limits()}),
+{ok, W} = wasm_script_worker:start_link(
+            wasm_lua,
+            #{path => "test/fixtures/lang/lua_reactor.wasm",
+              limits => wasm_lua:limits()}),
 {ok, #{result := #{~"answer" := 42}}} =
-    script_worker:run(W, #{source => <<"function main(c)"
+    wasm_script_worker:run(W, #{source => <<"function main(c)"
                                        " return {answer = c.value + 1} end">>,
                            context => #{~"value" => 41}}).
 ```
@@ -47,10 +43,10 @@ other two guests here.
 One option, and it more than halves a request:
 
 ```erlang
-{ok, W} = script_worker:start_link(
-            lua_reactor_adapter,
-            #{path => "test/fixtures/lang/lua_reactor.wasm", root => scratch,
-              limits => lua_reactor_adapter:limits(),
+{ok, W} = wasm_script_worker:start_link(
+            wasm_lua,
+            #{path => "test/fixtures/lang/lua_reactor.wasm",
+              limits => wasm_lua:limits(),
               runner_min_heap_words => 200_000}).
 ```
 
@@ -60,7 +56,7 @@ collector gives it the emulator's 233 words and collects constantly through a
 call that allocates far more than that.
 
 Note the option sits beside `root` and **not** inside the map
-`lua_reactor_adapter:limits/0` returns. A floor is not a bound, and one written
+`wasm_lua:limits/0` returns. A floor is not a bound, and one written
 into the limits map is ignored silently.
 
 200,000 words is where Lua plateaus. It is a property of the guest, so a

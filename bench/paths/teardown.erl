@@ -105,10 +105,10 @@ show(What, Us) ->
               [What, lists:min(Us), med(Us)]).
 
 arm("py_reactor") ->
-    {py_reactor_adapter,
+    {wasm_python,
      #{path => "test/fixtures/lang/py_reactor.wasm",
        lib => "test/fixtures/lang/py_reactor_lib"}};
 arm("qjs_reactor") ->
-    {qjs_reactor_adapter, #{path => "test/fixtures/lang/qjs_reactor.wasm"}}.
+    {wasm_javascript, #{path => "test/fixtures/lang/qjs_reactor.wasm"}}.
 
 med(L) -> lists:nth((length(L) + 1) div 2, lists:sort(L)).

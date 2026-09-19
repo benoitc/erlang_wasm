@@ -20,7 +20,7 @@ number from another.
 <!-- check: modules allocwords -->
 ```erlang
 %% one process's own allocation and collection time
-allocwords:measure(fun() -> script_worker:run(W, Req) end).
+allocwords:measure(fun() -> wasm_script_worker:run(W, Req) end).
 ```
 
 ```erlang
@@ -50,7 +50,7 @@ on at all.
 
 <!-- check: modules my_adapter -->
 ```erlang
-script_worker:start_link(my_adapter, #{root => scratch,
+wasm_script_worker:start_link(my_adapter, #{root => scratch,
                                        runner_min_heap_words => 200_000}).
 ```
 
@@ -113,14 +113,14 @@ Two things to know before you set it:
   happens the error names `max_heap_words` and the floor rather than only
   saying `killed`.
 
-`script_worker:runner_heap_words/2` answers what a given pair of options and
+`wasm_script_worker:runner_heap_words/2` answers what a given pair of options and
 limits resolves to, so you can check a configuration without starting a worker.
 
 ## Give the capture a floor as well
 
 <!-- check: modules my_adapter -->
 ```erlang
-script_worker:start_link(my_adapter, #{root => scratch,
+wasm_script_worker:start_link(my_adapter, #{root => scratch,
                                        capture_min_heap_words => 2_000_000}).
 ```
 

@@ -1,6 +1,6 @@
 %% @doc The shape of the module graph, held to what `docs/architecture.md' says.
 %%
-%% That page draws the runtime as nine layers with three cycles in it, and a
+%% That page draws the runtime as eleven layers with three cycles in it, and a
 %% drawing nobody checks stops being true. This recomputes the graph from the
 %% compiled modules and fails when it has changed.
 %%
@@ -9,7 +9,7 @@
 %% *fourth* one appearing without anybody deciding it should. A cycle is the
 %% one structural property a reader cannot discover locally: every other
 %% question about a module can be answered by reading that module, and this one
-%% can only be answered by reading all fifty-five.
+%% can only be answered by reading all sixty-eight.
 -module(wasm_architecture_SUITE).
 
 -compile([export_all, nowarn_export_all]).

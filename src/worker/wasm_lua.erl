@@ -1,4 +1,4 @@
--module(lua_reactor_adapter).
+-module(wasm_lua).
 -moduledoc """
 Run Lua from an image of an already-started interpreter.
 
@@ -8,14 +8,13 @@ run to hundreds of kilobytes and megabytes; Lua's holds about 77 KB, which is
 where a mechanism that quietly assumed bulk would show it.
 
 ```erlang
-{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/lua"}),
-{ok, W} = script_worker:start_link(
-            lua_reactor_adapter,
-            #{path => "test/fixtures/lang/lua_reactor.wasm", root => scratch,
-              limits => lua_reactor_adapter:limits()}),
+{ok, W} = wasm_script_worker:start_link(
+            wasm_lua,
+            #{path => "test/fixtures/lang/lua_reactor.wasm",
+              limits => wasm_lua:limits()}),
 {ok, #{result := #{~"answer" := 42}}} =
-    script_worker:run(W, #{source => ~"function main(c)"
-                                     " return {answer = c.value + 1} end",
+    wasm_script_worker:run(W, #{source => <<"function main(c)"
+                                             " return {answer = c.value + 1} end">>,
                            context => #{~"value" => 41}}).
 ```
 
@@ -42,7 +41,7 @@ The one thing it did need was a **build flag**: Lua signals errors with
 superseded encoding by default. `LUA.md` has it.
 """.
 
--behaviour(script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,
@@ -61,7 +60,7 @@ limits() ->
 artifact(Opts) ->
     case maps:find(path, Opts) of
         error ->
-            {error, worker_error:adapter(
+            {error, wasm_worker_error:adapter(
                       adapter_failure, ~"no `path' to a Lua reactor", #{})};
         {ok, Path} ->
             load(Path)
@@ -70,7 +69,7 @@ artifact(Opts) ->
 load(Path) ->
     case file:read_file(Path) of
         {error, Why} ->
-            {error, worker_error:adapter(
+            {error, wasm_worker_error:adapter(
                       adapter_failure, ~"cannot read the interpreter",
                       #{path => iolist_to_binary(Path), reason => Why})};
         {ok, Bytes} ->
@@ -78,13 +77,13 @@ load(Path) ->
             %% is the module-cache handle, and an inline module has none.
             case wasm:load(Bytes) of
                 {ok, Module} -> {ok, #{module => Module}};
-                {error, E}   -> {error, worker_error:runtime(E)}
+                {error, E}   -> {error, wasm_worker_error:runtime(E)}
             end
     end.
 
 requirements(Request, _Artifact) when is_map(Request) ->
     Source = maps:get(source, Request, ?DEFAULT_SOURCE),
-    Context = script_v1:encode_context(maps:get(context, Request, #{})),
+    Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
     Staged = byte_size(Source) + byte_size(Context),
     {ok, #{min_timeout => 250,
            min_memory_pages => 16,
@@ -92,12 +91,12 @@ requirements(Request, _Artifact) when is_map(Request) ->
            staged_bytes => Staged, staged_files => 2,
            mounts => #{ro => #{guest_path => ~"/", mode => read}}}};
 requirements(_Request, _Artifact) ->
-    {error, worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
+    {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
 prepare(Request, #{module := M}, Env) ->
     Stage = maps:get(stage, Env),
     Source = maps:get(source, Request, ?DEFAULT_SOURCE),
-    Context = script_v1:encode_context(maps:get(context, Request, #{})),
+    Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
     case stage_all(Stage, [{~"main.lua", Source}, {~"context.json", Context}]) of
         {error, E} ->
             {error, E, #{}};
@@ -119,7 +118,7 @@ imports(Env) ->
     #{host_dir := Dir} = maps:get(ro, Mounts),
     Sink = fun(Which) ->
                C = maps:get(Which, Chans),
-               fun(Data) -> script_worker:channel_write(C, Data) end
+               fun(Data) -> wasm_script_worker:channel_write(C, Data) end
            end,
     import_set(wasi(Dir, Sink(stdout), Sink(stderr)), maps:get(result, Chans)).
 
@@ -142,7 +141,7 @@ import_set(Wasi, Result) ->
 result_import(Channel) ->
     fun(Ctx, [Ptr, Len]) ->
         case wasm:read_memory(Ctx, Ptr, Len) of
-            {ok, Bytes} -> ok = script_worker:channel_write(Channel, Bytes),
+            {ok, Bytes} -> ok = wasm_script_worker:channel_write(Channel, Bytes),
                            {ok, []};
             {error, _}  -> {ok, []}
         end
@@ -150,19 +149,19 @@ result_import(Channel) ->
 
 decode(#{outcome := returned} = R, _State) ->
     #{channels := #{result := Res, stdout := Out, stderr := Err}} = R,
-    case script_v1:decode_channel(Res) of
+    case wasm_script_v1:decode_channel(Res) of
         {ok, Result} ->
             {ok, #{result => Result, stdout => Out, stderr => Err}};
         {error, Code, Msg} ->
-            {error, script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
+            {error, wasm_script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
     end;
 decode(#{outcome := trapped, error := undefined}, _State) ->
-    {error, worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
+    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
 decode(#{outcome := trapped, error := E}, _State) ->
-    {error, worker_error:runtime(E)};
+    {error, wasm_worker_error:runtime(E)};
 decode(#{outcome := exited, exit := Code} = R, _State) ->
     #{channels := #{stdout := Out, stderr := Err}} = R,
-    {error, worker_error:adapter(exit, ~"the interpreter exited",
+    {error, wasm_worker_error:adapter(exit, ~"the interpreter exited",
                                  #{code => Code, stdout => Out, stderr => Err})}.
 
 cleanup(_State) -> ok.
@@ -199,11 +198,11 @@ validate(Inst) ->
         {ok, [1]} ->
             ok;
         {ok, Other} ->
-            {error, worker_error:adapter(
+            {error, wasm_worker_error:adapter(
                       adapter_failure, ~"the runtime did not come up",
                       #{ready => Other})};
         {error, E} ->
-            {error, worker_error:runtime(E)}
+            {error, wasm_worker_error:runtime(E)}
     end.
 
 post_restore(_Inst, _Ctx) -> ok.

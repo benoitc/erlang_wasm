@@ -13,7 +13,7 @@ answering the same thing twice is the isolation claim and a rising number is
 the defect.
 """.
 
--behaviour(script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,
@@ -31,7 +31,7 @@ artifact(Opts) ->
     {ok, Bytes} = file:read_file(Path),
     case wasm:load(Bytes) of
         {ok, M}    -> {ok, #{module => M, opts => Opts}};
-        {error, E} -> {error, worker_error:runtime(E)}
+        {error, E} -> {error, wasm_worker_error:runtime(E)}
     end.
 
 default_path() ->
@@ -42,7 +42,7 @@ requirements(Request, _Artifact) when is_map(Request) ->
            request_bytes => erlang:external_size(Request),
            staged_bytes => 0, staged_files => 0, mounts => #{}}};
 requirements(_Request, _Artifact) ->
-    {error, worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
+    {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
 prepare(Request, #{module := M}, _Env) ->
     Export = maps:get(call, Request, ~"handle"),
@@ -65,9 +65,9 @@ decode(#{outcome := returned, values := Values}, heap) ->
 decode(#{outcome := returned, values := Values}, _State) ->
     {ok, #{values => Values}};
 decode(#{outcome := trapped, error := E}, _State) ->
-    {error, worker_error:runtime(E)};
+    {error, wasm_worker_error:runtime(E)};
 decode(#{outcome := exited, exit := Code}, _State) ->
-    {error, worker_error:adapter(exit, ~"exited", #{code => Code})}.
+    {error, wasm_worker_error:adapter(exit, ~"exited", #{code => Code})}.
 
 cleanup(_State) -> ok.
 
@@ -103,7 +103,7 @@ snapshot_capability(#{module := M, opts := Opts}) ->
 validator(Opts) ->
     case maps:get(validate, Opts, ready) of
         refuse ->
-            fun(_) -> {error, worker_error:adapter(
+            fun(_) -> {error, wasm_worker_error:adapter(
                                 adapter_failure, ~"refused on purpose", #{})}
             end;
         ready ->
@@ -128,10 +128,10 @@ ready(Inst) ->
     persistent_term:put(?COUNT, captures() + 1),
     case wasm:call(Inst, ~"ready", [], #{fuel => infinity, timeout => infinity}) of
         {ok, [1]} -> ok;
-        {ok, Got} -> {error, worker_error:adapter(
+        {ok, Got} -> {error, wasm_worker_error:adapter(
                                adapter_failure, ~"the runtime did not come up",
                                #{ready => Got})};
-        {error, E} -> {error, worker_error:runtime(E)}
+        {error, E} -> {error, wasm_worker_error:runtime(E)}
     end.
 
 post_restore(_Inst, _Ctx) -> ok.

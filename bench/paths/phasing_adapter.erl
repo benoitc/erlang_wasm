@@ -8,10 +8,10 @@ callback and records `erlang:monotonic_time(microsecond)` on each side, so the
 request that is measured is the one a host actually sends: the real guardian,
 the real mounts, the real channels, the real runner.
 
-    {ok, W} = script_worker:start_link(
+    {ok, W} = wasm_script_worker:start_link(
                 phasing_adapter,
                 #{root => scratch, path => "...", limits => L,
-                  under => py_reactor_adapter, mode => timing}).
+                  under => wasm_python, mode => timing}).
 
 The measurement rides out in `decode/2`'s reply under `$phases`, so nothing is
 messaged and no timing leaves the request it belongs to. `workerbench`'s
@@ -19,7 +19,7 @@ messaged and no timing leaves the request it belongs to. `workerbench`'s
 
 ## What the intervals are, and what they are not
 
-`requirements/2` runs first, in the runner (`script_worker.erl:1479`), then
+`requirements/2` runs first, in the runner (`wasm_script_worker.erl:1479`), then
 `prepare/3`, then the `post_restore` fun this wraps, then `classify/2`, then
 `decode/2`. The gaps between them are the kernel's own work, and naming them is
 the point:
@@ -66,7 +66,7 @@ guardian, worker and caller would be most of a small request.
 refused unless the worker asked for it by name.
 """.
 
--behaviour(script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,

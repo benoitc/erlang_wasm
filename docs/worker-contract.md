@@ -19,21 +19,16 @@ component-model guests are outside the guarantee.
 
 ## Write one
 
-> **Where these modules come from.** The behaviour your adapter implements (it
-> is defined in `script_worker`), the conformance kit
-> `wasm_adapter_conformance`, and the worker kernel they run on
-> (`script_worker`, `worker_reaper`, `script_v1` and `worker_error`) are in
-> `examples/` in this release, not installed with the application. From a
-> checkout of this repository, `rebar3 as test shell` compiles them and puts
-> them on the path. In your own project, copy those files from
-> `deps/wasm/examples/` into your `src/`.
+> **Where these modules come from.** The behaviour your adapter implements,
+> `wasm_worker_adapter`, the conformance kit `wasm_adapter_conformance` and
+> the worker kernel are installed with the application.
 
 Eight callbacks. `snapshot_capability/1` is optional and an absent one reads as
 `unsupported`.
 
 ```erlang
 -module(my_adapter).
--behaviour(script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).
@@ -89,7 +84,7 @@ Turn what happened into an answer, and release what you took:
 decode(#{outcome := exited, exit := 0, channels := #{stdout := Out}}, _S) ->
     {ok, Out};
 decode(#{outcome := trapped, error := E}, _S) ->
-    {error, worker_error:runtime(E)}.
+    {error, wasm_worker_error:runtime(E)}.
 
 cleanup(_State) -> ok.
 ```

@@ -159,7 +159,7 @@ refusal by name: `snapshot_corrupt`, `snapshot_truncated`,
 
 ## Let a worker do it for you
 
-`script_worker` captures at `start_link/2` and restores per request, so an
+`wasm_script_worker` captures at `start_link/2` and restores per request, so an
 adapter never calls `snapshot/1` itself. Declare the capability and say what
 the initialisation instance is built from:
 
@@ -196,7 +196,7 @@ initialisation bindings should be as barren as the guest allows: whatever
 
 <!-- check: modules my_adapter -->
 ```erlang
-script_worker:start_link(my_adapter, #{root => scratch,
+wasm_script_worker:start_link(my_adapter, #{root => scratch,
                                        capture_timeout => 180_000}).
 ```
 

@@ -1,4 +1,4 @@
--module(script_worker).
+-module(wasm_script_worker).
 -moduledoc """
 A worker kernel: processes, deadlines, bounded streams, and an adapter.
 
@@ -8,10 +8,10 @@ channels. **It does not know about WASI**, or JSON, or an entry point called
 `main`. Those belong to an adapter, which is what makes a language the kernel
 has never heard of expressible without changing anything here.
 
+<!-- check: modules my_adapter -->
 ```erlang
-{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/w"}),
-{ok, W} = script_worker:start_link(my_adapter, #{root => scratch}),
-{ok, R} = script_worker:run(W, MyRequest).
+{ok, W} = wasm_script_worker:start_link(my_adapter, #{}),
+{ok, R} = wasm_script_worker:run(W, MyRequest).
 ```
 
 ## What it supports, stated exactly
@@ -23,6 +23,31 @@ Not "any language":
 
 Long-lived event loops, threads, native extensions, browser ABIs and
 component-model guests are outside the guarantee.
+
+## What is supported API
+
+These are covered by compatibility and the release notes:
+
+| module | what it is |
+| --- | --- |
+| `wasm_script_worker` | this module: start, run, submit, await, cancel, stop, and the operator view (`cleanup_stats/0`, `cleanup_requests/0`) |
+| `wasm_worker_adapter` | the behaviour an adapter implements, and every type its callbacks name |
+| `wasm_worker_error` | the errors a worker answers with, and the constructors an adapter builds its own with |
+| `wasm_javascript`, `wasm_javascript_command`, `wasm_python`, `wasm_python_command`, `wasm_lua` | the shipped adapters |
+| `wasm_adapter_conformance` | the kit that checks an adapter keeps the contract |
+| `wasm_instance_worker` | the simple worker: one instance, one process, a deadline |
+
+So are the option keys this module takes (`root`, `timeout`, `trusted`,
+`limits`, `capture_timeout`, `runner_min_heap_words`,
+`capture_min_heap_words`, and the `limits` keys `docs/worker.md` lists), the
+`wasm` application settings `scratch_roots` and `reaper_options`, and the
+error shapes: a running worker answers `{error, wasm_worker_error:worker_error()}`,
+and `start_link/2,3` fails with a `gen_server` start reason, one of
+`{missing_option, Key}`, `{unknown_root, Root, Known}`,
+`{unknown_reaper_option, Keys}` or the adapter's own `wasm_worker_error()`.
+
+`wasm_worker_reaper`, `wasm_worker_sup` and `wasm_script_v1` are internal:
+they may change in any release.
 
 ## The execution model is the one every other runtime has
 
@@ -58,7 +83,7 @@ returns, so a `_start` guest that never returns never asks.
 
 ## The process shape
 
-```
+```text
 worker (gen_server)     never blocks; holds at most one request
   |  spawn_monitor           worker learns of guardian death  (DOWN)
   |  <- guardian monitors    guardian learns of worker death  (DOWN)
@@ -80,15 +105,17 @@ link arrives as an `EXIT` it ignores, and it acts on the `DOWN`.
 
 `gen_server:call` on a dead process exits, so every entry point catches it and
 answers with a value, which is the runtime's rule applied to this layer's own
-edges. The kinds these four can produce are in `worker_error`.
+edges. The kinds these four can produce are in `wasm_worker_error`.
 """.
 
 -behaviour(gen_server).
 
 -export([start_link/2, start_link/3, stop/1]).
 -export([submit/2, await/3, cancel/2, run/2]).
+-export([run/3, submit/3]).
 -export([withdraw_waiter/3, consumed/3, channel_write/2]).
 -export([default_limits/0, runner_heap_words/2, capture_heap_words/2]).
+-export([cleanup_stats/0, cleanup_requests/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -96,251 +123,40 @@ edges. The kinds these four can produce are in `worker_error`.
 
 %%% ------------------------------------------------------------ behaviour ---
 
--doc "Whatever the adapter loaded once, at `start_link`. Opaque to the kernel.".
--type artifact() :: term().
--doc "One unit of tenant work. The kernel never reads inside it.".
--type request() :: term().
--doc "Whatever `prepare/3` needs `cleanup/1` to receive. Opaque.".
--type adapter_state() :: term().
--doc "What `decode/2` produced. The profile decides what is in it.".
--type result() :: term().
--doc "What a request answers with.".
--type outcome() :: {ok, result()} | {error, worker_error:worker_error()}.
-
--doc "Names a mount the adapter declared. Its own directory, its own mode.".
--type mount_name() :: atom().
-
--doc """
-One host directory, preopened at `guest_path`, with one mode.
-
-A mode cannot belong to a file: WASI grants rights to a **preopened directory
-and everything opened beneath it**, so a work directory holding one read-only
-and one writable staged path cannot express that. Naming mounts is how an
-adapter says what it meant.
-""".
--type mount() :: #{guest_path := binary(),
-                   host_dir := file:filename_all(),
-                   mode := read | write}.
-
--doc "An opaque sink. The only operation is writing to it.".
--type channel() :: {channel, atom(), ets:tid(), atomics:atomics_ref(),
-                    pos_integer()}.
-
--doc """
-Register a cleanup action, or drop one. **No transfer**, deliberately.
-
-If an adapter could transfer and its runner then died before delivering an
-`adapter_state()`, the transferred action would run only "if a state was
-delivered" and none ever was, so nothing would own it. The kernel transfers
-once, after the guardian holds the complete state.
-
-Every operation can fail, and `register` says which of three things happened,
-because one that returns an error having neither recorded nor performed the
-action leaks exactly the resource the adapter allocated one line earlier.
-""".
--type cleanup_cap() ::
-        #{register := fun((worker_reaper:action()) ->
-                              {ok, worker_reaper:token()}
-                            | {error, worker_error:worker_error(),
-                               released | cleanup_failed}),
-          withdraw := fun((worker_reaper:token()) ->
-                              ok | {error, worker_error:worker_error()})}.
-
--doc """
-What `prepare/3` is handed. The channels come down rather than back, because
-the adapter needs them *while* it builds its imports.
-
-`limits` are **effective, not proposed**: the adapter said what it needed in
-`requirements/2`, the policy has been applied, and the deadline is built from
-the result. An adapter reads them and never returns replacements.
-""".
--type env() :: #{mounts := #{mount_name() => mount()},
-                 channels := #{stdout := channel(), stderr := channel(),
-                               result := channel()},
-                 deadline := integer() | infinity,
-                 limits := map(),
-                 cleanup := cleanup_cap(),
-                 stage := fun((mount_name(), binary(), iodata()) ->
-                                  ok | {error, worker_error:worker_error()})}.
-
--doc """
-Every extern kind the runtime resolves, not just functions.
-
-A guest may import a memory, a table, a global or a tag, and `wasm:extern/2`
-hands those out so two instances can be linked.
-""".
--type import_value() :: fun((term(), [term()]) -> term())
-                      | {module(), atom()}
-                      | wasm:extern().
-
--doc """
-Portable by construction.
-
-No pid, port, reference or fun can enter the identity a snapshot is matched on,
-because every one of those differs between two runs of an identical
-configuration, so the key would stop matching itself.
-""".
--type portable() :: binary() | number() | atom() | [portable()]
-                  | tuple() | #{portable() => portable()}.
-
--type compatibility_key() :: portable().
--type capture() :: portable().
-
--doc """
-How an import module participates in a snapshot. Inert until Phase 6.
-
-Runtime-facing, so these return the runtime's error type: nothing in `src/` may
-depend on this module.
-""".
--type hook() :: stateless
-              | #{eligible := fun((wasm:instance()) ->
-                                      ok | {error, wasm_error:error()}),
-                  capture := fun((wasm:instance()) ->
-                                     {ok, capture()} | {error, wasm_error:error()}),
-                  restore := fun((wasm:instance(), capture()) ->
-                                     ok | {error, wasm_error:error()})}.
-
--doc """
-The import set, as one type from the start so Phase 6 adds no new shape.
-
-**Only `bindings` reaches import resolution**, because the runtime's import map
-is flat and keyed by `{Module, Name}`. The other two are optional and an
-adapter that ignores snapshots writes neither.
-""".
--type import_set() :: #{bindings := #{{binary(), binary()} => import_value()},
-                        snapshot_hooks => #{binary() => hook()},
-                        compatibility_key => compatibility_key()}.
-
--doc "What the kernel needs in order to run the thing.".
--type execution_spec() :: #{mode := command | reactor,
-                            module := wasm:module_(),
-                            imports := import_set(),
-                            invoke := [{call, binary(), [term()]}, ...]}.
-
--doc "What happened, still uninterpreted.".
--type execution_result() :: #{outcome := returned | trapped | exited,
-                              values := [term()],
-                              exit := undefined | integer(),
-                              channels := #{stdout := binary(), stderr := binary(),
-                                            result := binary()},
-                              truncated := #{stdout := boolean(),
-                                             stderr := boolean(),
-                                             result := boolean()},
-                              error := undefined | wasm_error:error()}.
-
--type invocation_result() :: {ok, [term()]} | {error, wasm_error:error()}.
--type stop_class() :: returned | trapped | {exited, integer()}.
-
--doc "What `requirements/2` answers: what this request needs and what it costs.".
--type requirements() :: #{min_timeout := pos_integer(),
-                          min_memory_pages := non_neg_integer(),
-                          request_bytes := non_neg_integer(),
-                          staged_bytes := non_neg_integer(),
-                          staged_files := non_neg_integer(),
-                          mounts := #{mount_name() =>
-                                          #{guest_path := binary(),
-                                            mode := read | write}}}.
-
--doc "What the conformance kit reads to decide what to demand.".
--type capabilities() :: #{execution := command | reactor | both,
-                          input_channels := [typed_args | stdin | files
-                                             | custom_import],
-                          result_channels := [typed_result | custom_import
-                                              | framed_stream],
-                          snapshots := unsupported | #{version := binary()},
-                          wasi := boolean()}.
-
--doc "Opaque requests the kit submits. It never reads them.".
--type fixtures() :: #{base := #{echo := request(), failure := request(),
-                                runaway := request(), state_change := request()},
-                      by_capability := #{atom() => request()}}.
-
--type restore_ctx() :: #{module := wasm:module_(), version := binary()}.
-
--doc """
-What an adapter must supply for the worker to capture an image at start.
-
-`module` and `imports` are what the initialisation instance is built from, and
-they are here rather than derived from `prepare/3` because the two are not the
-same thing: an initialisation instance exists once, before any request and with
-a **trusted** binding set, and is captured. `imports` also carries the
-`compatibility_key` and the `snapshot_hooks` every restore is matched and
-checked against, so the two sides cannot drift apart.
-
-`init` is what to invoke before capturing, `validate` is the adapter's own
-eligibility check, and `post_restore` runs inside every restore, in the runner,
-on the request's remaining deadline.
-""".
--type snapshot_cap() ::
-        #{version := binary(),
-          module := wasm:module_(),
-          imports := import_set(),
-          init := [{call, binary(), [term()]}],
-          validate := fun((wasm:instance()) ->
-                              ok | {error, worker_error:worker_error()}),
-          post_restore := fun((wasm:instance(), restore_ctx()) ->
-                                  ok | {error, worker_error:worker_error()})}.
+%% The adapter behaviour and its types live in `wasm_worker_adapter`. These
+%% aliases keep `wasm_script_worker:outcome()` and the rest meaning what they
+%% always did.
+-type artifact() :: wasm_worker_adapter:artifact().
+-type request() :: wasm_worker_adapter:request().
+-type adapter_state() :: wasm_worker_adapter:adapter_state().
+-type result() :: wasm_worker_adapter:result().
+-type outcome() :: wasm_worker_adapter:outcome().
+-type mount_name() :: wasm_worker_adapter:mount_name().
+-type mount() :: wasm_worker_adapter:mount().
+-type channel() :: wasm_worker_adapter:channel().
+-type cleanup_cap() :: wasm_worker_adapter:cleanup_cap().
+-type env() :: wasm_worker_adapter:env().
+-type import_value() :: wasm_worker_adapter:import_value().
+-type import_set() :: wasm_worker_adapter:import_set().
+-type hook() :: wasm_worker_adapter:hook().
+-type portable() :: wasm_worker_adapter:portable().
+-type capture() :: wasm_worker_adapter:capture().
+-type compatibility_key() :: wasm_worker_adapter:compatibility_key().
+-type execution_spec() :: wasm_worker_adapter:execution_spec().
+-type execution_result() :: wasm_worker_adapter:execution_result().
+-type invocation_result() :: wasm_worker_adapter:invocation_result().
+-type stop_class() :: wasm_worker_adapter:stop_class().
+-type requirements() :: wasm_worker_adapter:requirements().
+-type capabilities() :: wasm_worker_adapter:capabilities().
+-type fixtures() :: wasm_worker_adapter:fixtures().
+-type snapshot_cap() :: wasm_worker_adapter:snapshot_cap().
+-type restore_ctx() :: wasm_worker_adapter:restore_ctx().
 
 -export_type([artifact/0, request/0, adapter_state/0, result/0, outcome/0,
               mount_name/0, mount/0, channel/0, cleanup_cap/0, env/0,
               import_value/0, import_set/0, hook/0, portable/0, capture/0,
-              compatibility_key/0, execution_spec/0, execution_result/0,
-              invocation_result/0, stop_class/0, requirements/0, capabilities/0,
-              fixtures/0, snapshot_cap/0, restore_ctx/0]).
-
--doc "Load whatever this adapter runs, once, when the worker starts.".
--callback artifact(Opts :: map()) -> {ok, artifact()} | {error, worker_error:worker_error()}.
-
--doc """
-What this request would need, and what staging it would cost.
-
-Runs in the runner, under the deadline and the heap bound, because sizing a
-tenant's request means traversing it and may allocate. It is untrusted work and
-is not a pure, allocation-free callback.
-""".
--callback requirements(request(), artifact()) ->
-    {ok, requirements()} | {error, worker_error:worker_error()}.
-
--doc "Build the thing to run. Mounts already exist; limits are already final.".
--callback prepare(request(), artifact(), env()) ->
-    {ok, execution_spec(), adapter_state()}
-  | {error, worker_error:worker_error(), adapter_state()}.
-
--doc "Turn what happened into an answer. Runs in the runner, on the remaining time.".
--callback decode(execution_result(), adapter_state()) -> outcome().
-
--doc "Release whatever `prepare/3` acquired. Runs in a bounded cleanup job.".
--callback cleanup(adapter_state()) -> ok.
-
--doc "What this adapter can do, so the conformance kit knows what to demand.".
--callback capabilities(artifact()) -> capabilities().
-
--doc "Opaque requests the kit submits. Base cases are mandatory.".
--callback conformance_fixtures(artifact()) -> fixtures().
-
--doc """
-Called after **every** invocation, success or trap, and the kernel interprets
-none of them.
-
-A WASI exit arrives here as a trap, and only the adapter knows that. A kernel
-that told a `proc_exit` trap from any other trap would be calling
-`wasi_preview1:exit_code/1`, and a kernel that calls `wasi_preview1` anything
-is not language-neutral.
-""".
--callback classify(invocation_result(), adapter_state()) ->
-    continue | {stop, stop_class()}.
-
--doc """
-How to capture this adapter's runtime once, at `start_link/2`.
-
-An absent callback reads as `unsupported`, so no adapter has to know snapshots
-exist. Declaring one is a promise the worker holds it to: a capture that fails
-**fails the start**, because the alternative is a worker whose requests invoke
-`handle` on an instance that never ran `init`.
-""".
--callback snapshot_capability(artifact()) -> unsupported | snapshot_cap().
-
--optional_callbacks([snapshot_capability/1]).
+              compatibility_key/0, execution_spec/0, execution_result/0, invocation_result/0, stop_class/0,
+              requirements/0, capabilities/0, fixtures/0, snapshot_cap/0, restore_ctx/0]).
 
 %%% ------------------------------------------------------------------ api ---
 
@@ -395,7 +211,7 @@ exist. Declaring one is a promise the worker holds it to: a capture that fails
             %% Resolved once, here, rather than per request: the answer cannot
             %% change over a worker's life and a bad value should be said once.
             runner_heap = 0 :: non_neg_integer(),
-            root           :: worker_reaper:root_id(),
+            root           :: wasm_worker_adapter:root_id(),
             timeout        :: timeout(),
             trusted        :: boolean(),
             %% Captured once at `init/1' and held for the worker's life, so a
@@ -426,12 +242,64 @@ Start a worker for one adapter.
 it is also handed to `Adapter:artifact/1`.
 """.
 -spec start_link(module(), map()) -> {ok, pid()} | {error, term()}.
-start_link(Adapter, Opts) -> gen_server:start_link(?MODULE, {Adapter, Opts}, []).
+start_link(Adapter, Opts) ->
+    case prepare_start(Opts) of
+        {ok, Opts1}    -> gen_server:start_link(?MODULE, {Adapter, Opts1}, []);
+        {error, _} = E -> E
+    end.
 
 -spec start_link(gen_server:server_name(), module(), map()) ->
           {ok, pid()} | {error, term()}.
 start_link(Name, Adapter, Opts) ->
-    gen_server:start_link(Name, ?MODULE, {Adapter, Opts}, []).
+    case prepare_start(Opts) of
+        {ok, Opts1}    -> gen_server:start_link(Name, ?MODULE, {Adapter, Opts1},
+                                                []);
+        {error, _} = E -> E
+    end.
+
+-doc """
+Counts per state of the cleanup that follows requests, node-wide. `capacity`
+is how many reservations are held now; when it reaches `max_cleanup_jobs +
+cleanup_queue_len` from `reaper_options`, `submit` answers
+`cleanup_saturated`.
+""".
+-spec cleanup_stats() -> map() | {error, wasm_worker_error:worker_error()}.
+cleanup_stats() -> wasm_worker_reaper:stats().
+
+-doc """
+Every request whose cleanup is still owned, with the guardian holding it.
+
+A reservation that ends in `held` stays there until a late answer or a `DOWN`,
+on purpose, since deleting a running request's mounts cannot be undone. This
+is how an operator finds which guardian holds it, to kill that guardian if it
+really is stuck.
+""".
+-spec cleanup_requests() ->
+          [#{id := binary(), state := atom(), guardian := pid(),
+             delivered := boolean()}]
+          | {error, wasm_worker_error:worker_error()}.
+cleanup_requests() -> wasm_worker_reaper:requests().
+
+%% Before the worker exists: make sure a reaper runs, and refuse a root it
+%% does not have now rather than at the first request. With no reaper at all
+%% (suspended, or one started by hand and stopped) the worker starts as it
+%% always did and `submit' answers `no_reaper'.
+prepare_start(Opts) ->
+    Root = maps:get(root, Opts, scratch),
+    case wasm_worker_sup:ensure_reaper() of
+        {error, _} = E ->
+            E;
+        ok ->
+            case wasm_worker_reaper:roots() of
+                {error, _} ->
+                    {ok, Opts#{root => Root}};
+                Known ->
+                    case lists:member(Root, Known) of
+                        true  -> {ok, Opts#{root => Root}};
+                        false -> {error, {unknown_root, Root, Known}}
+                    end
+            end
+    end.
 
 -spec stop(gen_server:server_ref()) -> ok.
 stop(W) -> gen_server:stop(W).
@@ -446,7 +314,7 @@ ever find. Intent before action, and it costs nothing extra because the record
 had to be written anyway.
 """.
 -spec submit(gen_server:server_ref(), request()) ->
-          {ok, reference()} | {error, worker_error:worker_error()}.
+          {ok, reference()} | {error, wasm_worker_error:worker_error()}.
 submit(W, Request) -> guard(W, {submit, Request, self()}, infinity).
 
 -doc """
@@ -458,7 +326,7 @@ who stopped waiting has not decided the tenant's code should die. `cancel/2` is
 what decides that.
 """.
 -spec await(gen_server:server_ref(), reference(), timeout()) ->
-          outcome() | {error, worker_error:worker_error()}.
+          outcome() | {error, wasm_worker_error:worker_error()}.
 await(W, Ref, AwaitTimeout) ->
     Token = make_ref(),
     try gen_server:call(W, {await, Ref, Token}, AwaitTimeout) of
@@ -478,7 +346,7 @@ await(W, Ref, AwaitTimeout) ->
                     _ = consumed(W, Ref, Token),
                     Outcome;
                 _ ->
-                    {error, worker_error:worker(
+                    {error, wasm_worker_error:worker(
                               still_running, ~"gave up waiting",
                               #{waited => AwaitTimeout})}
             end;
@@ -488,7 +356,7 @@ await(W, Ref, AwaitTimeout) ->
 
 -doc "Stop a request. This is what ends a tenant's code; `await/3` is not.".
 -spec cancel(gen_server:server_ref(), reference()) ->
-          ok | {error, worker_error:worker_error()}.
+          ok | {error, wasm_worker_error:worker_error()}.
 cancel(W, Ref) -> guard(W, {cancel, Ref}, infinity).
 
 -doc """
@@ -504,12 +372,38 @@ Leave `timeout` finite unless something outside the worker is doing the
 bounding, or use `await/3` and `cancel/2`.
 """.
 -spec run(gen_server:server_ref(), request()) ->
-          outcome() | {error, worker_error:worker_error()}.
+          outcome() | {error, wasm_worker_error:worker_error()}.
 run(W, Request) ->
     case submit(W, Request) of
         {ok, Ref}  -> await(W, Ref, infinity);
         {error, _} = E -> E
     end.
+
+-doc """
+Run `Source` with `Context` and wait for the answer: `run/2` with the request
+every shipped adapter takes, `#{source => Source, context => Context}`.
+
+```erlang
+{ok, W} = wasm_script_worker:start_link(
+            wasm_javascript_command, #{path => "test/fixtures/lang/qjs.wasm"}),
+{ok, #{result := #{~"answer" := 42}}} =
+    wasm_script_worker:run(W, <<"export function main(c)"
+                                " { return {answer: c.value + 1}; }">>,
+                           #{~"value" => 41}).
+```
+""".
+-spec run(gen_server:server_ref(), binary(), term()) ->
+          outcome() | {error, wasm_worker_error:worker_error()}.
+run(W, Source, Context) ->
+    run(W, script_request(Source, Context)).
+
+-doc "`submit/2` with `#{source => Source, context => Context}`, as `run/3`.".
+-spec submit(gen_server:server_ref(), binary(), term()) ->
+          {ok, reference()} | {error, wasm_worker_error:worker_error()}.
+submit(W, Source, Context) ->
+    submit(W, script_request(Source, Context)).
+
+script_request(Source, Context) -> #{source => Source, context => Context}.
 
 -doc """
 Release the waiter slot after a finite `await/3` gave up, and settle the race.
@@ -520,7 +414,7 @@ withdraw naming a token that is not the current waiter is `ok` and changes
 nothing.
 """.
 -spec withdraw_waiter(gen_server:server_ref(), reference(), reference()) ->
-          ok | {ok, outcome()} | {error, worker_error:worker_error()}.
+          ok | {ok, outcome()} | {error, wasm_worker_error:worker_error()}.
 withdraw_waiter(W, Ref, Token) -> guard(W, {withdraw_waiter, Ref, Token}, 5_000).
 
 -doc """
@@ -531,7 +425,7 @@ received, which is the whole reason the abandoning caller has to ask, so the
 outcome is retained until acknowledged rather than until sent.
 """.
 -spec consumed(gen_server:server_ref(), reference(), reference()) ->
-          ok | {error, worker_error:worker_error()}.
+          ok | {error, wasm_worker_error:worker_error()}.
 consumed(W, Ref, Token) -> guard(W, {consumed, Ref, Token}, 5_000).
 
 %% Nothing raises. `gen_server:call' on a dead process exits, so every entry
@@ -541,16 +435,16 @@ guard(W, Msg, Timeout) ->
     catch
         exit:{noproc, _}   -> {error, no_worker()};
         exit:{normal, _}   -> {error, no_worker()};
-        exit:{timeout, _}  -> {error, worker_error:worker(
+        exit:{timeout, _}  -> {error, wasm_worker_error:worker(
                                         still_running, ~"worker did not answer",
                                         #{})};
         exit:{Reason, _}   -> {error, worker_died(Reason)}
     end.
 
-no_worker() -> worker_error:worker(no_worker, ~"worker is gone", #{}).
+no_worker() -> wasm_worker_error:worker(no_worker, ~"worker is gone", #{}).
 
 worker_died(Reason) ->
-    worker_error:worker(worker_died, ~"worker died", #{reason => Reason}).
+    wasm_worker_error:worker(worker_died, ~"worker died", #{reason => Reason}).
 
 %%% --------------------------------------------------------------- server ---
 
@@ -657,12 +551,12 @@ capture_elsewhere(Cap, #{timeout := Timeout, words := Words, floor := Floor}) ->
             reap(Pid, Mon),
             E;
         {'DOWN', Mon, process, Pid, Reason} ->
-            {error, worker_error:worker(crashed, ~"the capture died",
+            {error, wasm_worker_error:worker(crashed, ~"the capture died",
                                         died_why(Reason, Words, Floor))}
     after Timeout ->
         exit(Pid, kill),
         reap(Pid, Mon),
-        {error, worker_error:worker(timeout, ~"the capture did not finish",
+        {error, wasm_worker_error:worker(timeout, ~"the capture did not finish",
                                     #{capture_timeout => Timeout})}
     end.
 
@@ -736,7 +630,7 @@ restore_opts(ImportSet) ->
 
 initialise(M, Bindings, Opts, Limits, Invoke, Cap) ->
     case wasm:instantiate(M, Bindings, Opts) of
-        {error, E} -> {error, worker_error:runtime(E)};
+        {error, E} -> {error, wasm_worker_error:runtime(E)};
         {ok, Inst} -> initialised(Inst, Opts, Limits, Invoke, Cap)
     end.
 
@@ -754,26 +648,26 @@ run_init([], Inst, Opts, _Limits, #{validate := Validate} = Cap) ->
     end;
 run_init([{call, Name, Args} | Rest], Inst, Opts, Limits, Cap) ->
     case wasm:call(Inst, Name, Args, Limits) of
-        {error, E} -> {error, worker_error:runtime(E)};
+        {error, E} -> {error, wasm_worker_error:runtime(E)};
         {ok, _}    -> run_init(Rest, Inst, Opts, Limits, Cap)
     end.
 
 captured(Inst, Opts, #{version := Version} = Cap) ->
     Keys = maps:with([compatibility_key], Opts),
     case wasm:snapshot(Inst, Keys#{version => Version}) of
-        {error, E}  -> {error, worker_error:runtime(E)};
+        {error, E}  -> {error, wasm_worker_error:runtime(E)};
         {ok, Image} -> {ok, Image, Cap}
     end.
 
 handle_call({submit, _Request, _From}, _F, #w{ref = Ref} = W) when Ref =/= undefined ->
-    {reply, {error, worker_error:worker(busy, ~"a request is in flight", #{})}, W};
+    {reply, {error, wasm_worker_error:worker(busy, ~"a request is in flight", #{})}, W};
 handle_call({submit, Request, Caller}, _F, W) ->
     %% Checked at every `submit', not only at `start_link': the reaper can die
     %% at any point afterwards, and a request whose cleanup would have no owner
     %% should not begin.
-    case worker_reaper:alive() of
+    case wasm_worker_reaper:alive() of
         false ->
-            {reply, {error, worker_error:worker(
+            {reply, {error, wasm_worker_error:worker(
                               no_reaper, ~"no cleanup owner is running", #{})}, W};
         true ->
             do_submit(Request, Caller, discard_unacknowledged(W))
@@ -783,12 +677,12 @@ handle_call({await, Ref, _Token}, _F, #w{done_ref = Ref} = W) ->
     {reply, {outcome, W#w.done_outcome}, W};
 handle_call({await, Ref, _Token}, _F, #w{ref = Ref, waiter_token = T} = W)
   when T =/= undefined ->
-    {reply, {error, worker_error:worker(
+    {reply, {error, wasm_worker_error:worker(
                       already_awaited, ~"another caller is waiting", #{})}, W};
 handle_call({await, Ref, Token}, From, #w{ref = Ref} = W) ->
     {noreply, W#w{waiter_from = From, waiter_token = Token, waiter_ref = Ref}};
 handle_call({await, _Ref, _Token}, _F, W) ->
-    {reply, {error, worker_error:worker(
+    {reply, {error, wasm_worker_error:worker(
                       unknown_ref, ~"no such request", #{})}, W};
 
 handle_call({withdraw_waiter, Ref, _Token}, _F, #w{done_ref = Ref} = W) ->
@@ -809,10 +703,10 @@ handle_call({cancel, Ref}, _F, #w{ref = Ref, guardian = G} = W) ->
     G ! {cancel, Ref},
     {reply, ok, W};
 handle_call({cancel, _Ref}, _F, W) ->
-    {reply, {error, worker_error:worker(unknown_ref, ~"no such request", #{})}, W};
+    {reply, {error, wasm_worker_error:worker(unknown_ref, ~"no such request", #{})}, W};
 
 handle_call(_Msg, _F, W) ->
-    {reply, {error, worker_error:worker(unknown_ref, ~"bad call", #{})}, W}.
+    {reply, {error, wasm_worker_error:worker(unknown_ref, ~"bad call", #{})}, W}.
 
 handle_cast(_, W) -> {noreply, W}.
 
@@ -823,7 +717,7 @@ handle_info({'DOWN', Mon, process, _Pid, Reason}, #w{gmon = Mon, ref = Ref} = W)
   when Ref =/= undefined ->
     %% The guardian died without publishing. Whatever it was doing, the request
     %% did not reach a conclusion of its own.
-    {noreply, publish({error, worker_error:worker(
+    {noreply, publish({error, wasm_worker_error:worker(
                                 crashed, ~"the request died",
                                 #{reason => Reason})}, W)};
 
@@ -871,7 +765,7 @@ there is no number that suits all of them. `docs/tuning.md` is how to find your
 own; `test/audit/PERF.md` has the one measured for QuickJS.
 
 Resolved once at `start_link/2` and reported rather than applied silently,
-which is `wasm_jit:resolve_max_heap_words/0`'s arrangement and is here for the
+which is `wasm_jit`'s `resolve_max_heap_words` arrangement and is here for the
 same reason: a setting nobody can read back is a setting nobody can tell is
 being used. Exported so the policy can be asserted without starting a worker.
 
@@ -926,10 +820,10 @@ heap_words(Key, Opts, Limits) ->
 say_heap(_Adapter, _Key, ok) ->
     ok;
 say_heap(Adapter, Key, {bad, Bad}) ->
-    logger:warning("script_worker: ~p: ~s is ~p, which is not a heap size; "
+    logger:warning("wasm_script_worker: ~p: ~s is ~p, which is not a heap size; "
                    "no floor is applied", [Adapter, Key, Bad]);
 say_heap(Adapter, Key, {no_room, Ceiling}) ->
-    logger:warning("script_worker: ~p: ~s does not fit under max_heap_words "
+    logger:warning("wasm_script_worker: ~p: ~s does not fit under max_heap_words "
                    "of ~p with room for the emulator's rounding; no floor is "
                    "applied", [Adapter, Key, Ceiling]).
 
@@ -961,13 +855,13 @@ do_submit(Request, Caller, W) ->
             erlang:demonitor(GMon, [flush]),
             {reply, {error, E}, W};
         {'DOWN', GMon, process, G, Reason} ->
-            {reply, {error, worker_error:worker(
+            {reply, {error, wasm_worker_error:worker(
                               crashed, ~"the request could not start",
                               #{reason => Reason})}, W}
     after ?GUARDIAN_READY_TIMEOUT ->
         exit(G, kill),
         erlang:demonitor(GMon, [flush]),
-        {reply, {error, worker_error:worker(
+        {reply, {error, wasm_worker_error:worker(
                           crashed, ~"the request did not start", #{})}, W}
     end.
 
@@ -977,7 +871,7 @@ do_submit(Request, Caller, W) ->
 %% a dead caller can stop for ever.
 discard_unacknowledged(#w{done_ref = undefined} = W) -> W;
 discard_unacknowledged(#w{done_ref = Ref} = W) ->
-    ?LOG_WARNING("script_worker: discarding unacknowledged outcome for ~p", [Ref]),
+    ?LOG_WARNING("wasm_script_worker: discarding unacknowledged outcome for ~p", [Ref]),
     W#w{done_ref = undefined, done_outcome = undefined,
         discarded = W#w.discarded + 1}.
 
@@ -1018,7 +912,7 @@ clear_waiter(W) ->
             snapshot_cap :: undefined | snapshot_cap(),
             limits      :: map(),
             runner_heap :: non_neg_integer(),
-            root        :: worker_reaper:root_id(),
+            root        :: wasm_worker_adapter:root_id(),
             trusted     :: boolean(),
             wmon        :: reference(),
             dir         :: file:filename_all(),
@@ -1028,7 +922,7 @@ clear_waiter(W) ->
             mounts = #{} :: #{mount_name() => mount()},
             %% The guardian made every `register' call, so it keeps the list as
             %% it goes. That mirror is what survives the reaper.
-            actions = [] :: [{worker_reaper:token(), worker_reaper:action()}],
+            actions = [] :: [{wasm_worker_adapter:token(), wasm_worker_adapter:action()}],
             delivered = false :: boolean(),
             adapter_state      :: undefined | {module(), adapter_state()},
             staged = #{}  :: #{binary() => non_neg_integer()},
@@ -1040,7 +934,7 @@ guardian(#{worker := Worker, ref := Ref, id := Id} = Args) ->
     %% other direction, and it is one of the five terminal events.
     WMon = erlang:monitor(process, Worker),
     Root = maps:get(root, Args),
-    case worker_reaper:reserve(Id, self(), Root, <<"req-", Id/binary>>) of
+    case wasm_worker_reaper:reserve(Id, self(), Root, <<"req-", Id/binary>>) of
         {error, E} ->
             Worker ! {guardian_ready, Ref, {error, E}},
             ok;
@@ -1048,7 +942,7 @@ guardian(#{worker := Worker, ref := Ref, id := Id} = Args) ->
             case filelib:ensure_path(Dir) of
                 {error, Why} ->
                     Worker ! {guardian_ready, Ref,
-                              {error, worker_error:worker(
+                              {error, wasm_worker_error:worker(
                                         crashed, ~"could not create the request",
                                         #{reason => Why})}},
                     ok;
@@ -1113,7 +1007,7 @@ loop(G) ->
             loop(G1);
 
         {withdraw, From, Token} ->
-            From ! {withdraw_reply, worker_reaper:withdraw(G#g.id, Token)},
+            From ! {withdraw_reply, wasm_worker_reaper:withdraw(G#g.id, Token)},
             loop(G#g{actions = lists:keydelete(Token, 1, G#g.actions)});
 
         {deliver_state, From, Mod, AState} ->
@@ -1121,7 +1015,7 @@ loop(G) ->
             %% process holds the complete state. "Transferred" and "a state was
             %% delivered" are then the same event rather than two that can come
             %% apart.
-            Reply = worker_reaper:transfer(G#g.id, Mod, AState),
+            Reply = wasm_worker_reaper:transfer(G#g.id, Mod, AState),
             From ! {deliver_state_reply, Reply},
             loop(G#g{delivered = true, adapter_state = {Mod, AState}});
 
@@ -1132,11 +1026,11 @@ loop(G) ->
             finish(G, runner_died(G, Reason));
 
         {'DOWN', Mon, process, _P, _Reason} when Mon =:= G#g.wmon ->
-            finish(G, {error, worker_error:worker(
+            finish(G, {error, wasm_worker_error:worker(
                                 cancelled, ~"the worker is gone", #{})});
 
         {cancel, _Ref} ->
-            finish(G, {error, worker_error:worker(
+            finish(G, {error, wasm_worker_error:worker(
                                 cancelled, ~"cancelled", #{})});
 
         {worker_reaper_handshake, Reaper, Id} ->
@@ -1154,7 +1048,7 @@ loop(G) ->
             %% twice. The `DOWN' carries the reason and is what is acted on.
             loop(G)
     after remaining(G#g.deadline) ->
-        finish(G, {error, worker_error:worker(
+        finish(G, {error, wasm_worker_error:worker(
                             timeout, ~"deadline reached",
                             #{limit => maps:get(timeout, G#g.limits, undefined)})})
     end.
@@ -1162,16 +1056,16 @@ loop(G) ->
 %% A runner that exits abnormally either passed a channel bound, in which case
 %% the reason says so, or died some other way.
 runner_died(G, {channel_limit, result}) ->
-    {error, worker_error:worker(result_limit, ~"result channel bound passed",
+    {error, wasm_worker_error:worker(result_limit, ~"result channel bound passed",
                                 #{limit => maps:get(max_result_bytes, G#g.limits)})};
 runner_died(G, {channel_limit, Which}) ->
     Bound = stream_bound(maps:get(max_output_bytes, G#g.limits), Which),
-    {error, worker_error:worker(output_limit, ~"stream bound passed",
+    {error, wasm_worker_error:worker(output_limit, ~"stream bound passed",
                                 #{stream => Which, limit => Bound})};
 runner_died(_G, killed) ->
-    {error, worker_error:worker(crashed, ~"the runner was killed", #{})};
+    {error, wasm_worker_error:worker(crashed, ~"the runner was killed", #{})};
 runner_died(_G, Reason) ->
-    {error, worker_error:worker(crashed, ~"the runner died",
+    {error, wasm_worker_error:worker(crashed, ~"the runner died",
                                 #{reason => Reason})}.
 
 remaining(infinity) -> infinity;
@@ -1211,7 +1105,7 @@ kill_runner(#g{runner = Pid, rmon = Mon}) ->
 %% mirror is the fallback: this process made every `register' call and kept the
 %% list, which is the only copy that survives the reaper.
 hand_over_cleanup(G) ->
-    case worker_reaper:alive() of
+    case wasm_worker_reaper:alive() of
         true  -> ok;
         false -> run_mirror(G)
     end.
@@ -1225,7 +1119,7 @@ run_mirror(G) ->
                      ({_T, _}) -> ok
                   end, G#g.actions),
     _ = file:del_dir_r(G#g.dir),
-    worker_reaper:finish(G#g.id).
+    wasm_worker_reaper:finish(G#g.id).
 
 %% The guardian orchestrates and never executes: a hanging action inline would
 %% wedge this process past every deadline it owns.
@@ -1255,7 +1149,7 @@ make_mounts(G, Declared) ->
     case [N || N <- Names, maps:get(mode, maps:get(N, Declared)) =:= write,
                not G#g.trusted] of
         [_ | _] = Bad ->
-            {{error, worker_error:worker(
+            {{error, wasm_worker_error:worker(
                        insufficient_limit,
                        ~"a writable mount needs a trusted worker",
                        #{mounts => Bad})}, G};
@@ -1273,7 +1167,7 @@ create_mounts(G, Declared, [Name | Rest], Acc) ->
             M = #{guest_path => GuestPath, host_dir => Dir, mode => Mode},
             create_mounts(G, Declared, Rest, Acc#{Name => M});
         {error, Why} ->
-            {{error, worker_error:worker(crashed, ~"could not create a mount",
+            {{error, wasm_worker_error:worker(crashed, ~"could not create a mount",
                                          #{mount => Name, reason => Why})}, G}
     end.
 
@@ -1308,11 +1202,11 @@ stage_write(G, Mount, Path, Target, Data) ->
     MaxFiles = maps:get(max_staged_files, G#g.limits),
     if
         Bytes > MaxBytes ->
-            {{error, worker_error:worker(
+            {{error, wasm_worker_error:worker(
                        insufficient_limit, ~"staged bytes exceeded",
                        #{limit => MaxBytes, would_be => Bytes})}, G};
         Files > MaxFiles ->
-            {{error, worker_error:worker(
+            {{error, wasm_worker_error:worker(
                        insufficient_limit, ~"staged files exceeded",
                        #{limit => MaxFiles, would_be => Files})}, G};
         true ->
@@ -1329,7 +1223,7 @@ stage_write(G, Mount, Path, Target, Data) ->
                     %% the error returns: the accounting matches what is on
                     %% disk either way.
                     _ = file:delete(Tmp),
-                    {{error, worker_error:worker(
+                    {{error, wasm_worker_error:worker(
                                crashed, ~"staging failed",
                                #{path => Path, reason => Why})}, G}
             end
@@ -1385,7 +1279,7 @@ walk(Dir, [P | Rest]) ->
         _                                -> walk(Next, Rest)
     end.
 
-bad_stage(Msg, Ctx) -> worker_error:worker(bad_stage_path, Msg, Ctx).
+bad_stage(Msg, Ctx) -> wasm_worker_error:worker(bad_stage_path, Msg, Ctx).
 
 %%% -------------------------------------------------------------- cleanup ---
 
@@ -1396,7 +1290,7 @@ bad_stage(Msg, Ctx) -> worker_error:worker(bad_stage_path, Msg, Ctx).
 %%
 %% The mirror stays bounded for free, because it only grows on `{ok, Token}'.
 do_register(G, Action) ->
-    case worker_reaper:register(G#g.id, Action) of
+    case wasm_worker_reaper:register(G#g.id, Action) of
         {ok, Token} ->
             {{ok, Token}, G#g{actions = [{Token, Action} | G#g.actions]}};
         {error, _, _} = E ->
@@ -1554,10 +1448,10 @@ executed(G, AState, {Outcome, Values, Exit, Err}) ->
 %% an error rather than a no-op.
 check_spec(#{invoke := [_ | _]}) -> ok;
 check_spec(#{invoke := []}) ->
-    {error, worker_error:adapter(adapter_failure, ~"prepare/3 returned no work",
+    {error, wasm_worker_error:adapter(adapter_failure, ~"prepare/3 returned no work",
                                  #{callback => prepare})};
 check_spec(_) ->
-    {error, worker_error:adapter(adapter_failure, ~"prepare/3 returned no invoke",
+    {error, wasm_worker_error:adapter(adapter_failure, ~"prepare/3 returned no invoke",
                                  #{callback => prepare})}.
 
 execute(G, Spec, AState) ->
@@ -1617,7 +1511,7 @@ refused(Inst, WErr) ->
 %% in the context, never a crash the runner carries somewhere else.
 call_fun(F, Args) ->
     try {ok, apply(F, Args)}
-    catch C:R -> {error, worker_error:adapter(
+    catch C:R -> {error, wasm_worker_error:adapter(
                            adapter_failure, ~"post_restore raised",
                            #{callback => post_restore, class => C,
                              reason => iolist_to_binary(
@@ -1685,7 +1579,7 @@ policy(Reqs, G) ->
     case [{K, Need, Have, Msg} || {K, Need, Have, Msg} <- Checks,
                                   over(Need, Have)] of
         [{K, Need, Have, Msg} | _] ->
-            {error, worker_error:worker(insufficient_limit, Msg,
+            {error, wasm_worker_error:worker(insufficient_limit, Msg,
                                         #{need => K, wanted => Need,
                                           available => Have})};
         [] ->
@@ -1705,7 +1599,7 @@ write_mounts_allowed(Reqs, _G) ->
     Mounts = maps:get(mounts, Reqs, #{}),
     case [N || N := #{mode := write} <- Mounts] of
         []  -> ok;
-        Bad -> {error, worker_error:worker(
+        Bad -> {error, wasm_worker_error:worker(
                          insufficient_limit,
                          ~"a writable mount needs a trusted worker",
                          #{mounts => Bad})}
@@ -1754,14 +1648,14 @@ call_back(Mod, Fun, Args) ->
     try {ok, apply(Mod, Fun, Args)}
     catch
         Class:Reason:Stack ->
-            {error, worker_error:adapter(
+            {error, wasm_worker_error:adapter(
                       adapter_failure, ~"adapter callback raised",
                       #{callback => Fun, class => Class, reason => Reason,
                         stack => Stack})}
     end.
 
 bad_shape(Callback, Got) ->
-    {error, worker_error:adapter(
+    {error, wasm_worker_error:adapter(
               adapter_failure, ~"adapter callback answered with a bad shape",
               #{callback => Callback, got => shape_of(Got)})}.
 

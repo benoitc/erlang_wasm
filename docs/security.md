@@ -205,10 +205,10 @@ yours to close.
 
 ```erlang
 {ok, Mod} = wasm:load_file("plugin.wasm"),
-{ok, W}   = wasm_worker:start_link(Mod, #{limits => wasm_limits:untrusted(),
+{ok, W}   = wasm_instance_worker:start_link(Mod, #{limits => wasm_limits:untrusted(),
                                           isolation => fresh,
                                           imports => MinimalImports}),
-{ok, R}   = wasm_worker:call(W, ~"handle", [Req], 500).
+{ok, R}   = wasm_instance_worker:call(W, ~"handle", [Req], 500).
 ```
 
 Check all five before you ship it:

@@ -9,7 +9,7 @@ A kernel that passes `fake_command_adapter` and fails this one is a WASI script
 runner, and that failure would be invisible in every other test.
 """.
 
--behaviour(script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).
@@ -33,7 +33,7 @@ runner, and that failure would be invisible in every other test.
 artifact(_Opts) ->
     case wasm:compile({wat, ?WAT}) of
         {ok, M}    -> {ok, #{module => M}};
-        {error, E} -> {error, worker_error:runtime(E)}
+        {error, E} -> {error, wasm_worker_error:runtime(E)}
     end.
 
 %% Zero memory pages is legitimate: this adapter has no memory, and a
@@ -44,7 +44,7 @@ requirements(Request, _Artifact) when is_map(Request) ->
            request_bytes => erlang:external_size(Request),
            staged_bytes => 0, staged_files => 0, mounts => #{}}};
 requirements(_Request, _Artifact) ->
-    {error, worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
+    {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
 prepare(Request, #{module := M}, Env) ->
     ok = register_marker(Request, Env),
@@ -65,7 +65,7 @@ prepare_spec(Request, M, Env) ->
                  %% channel down without knowing what it was for.
                  {~"host", ~"emit"} =>
                      fun(_Ctx, []) ->
-                         script_worker:channel_write(Result, ~"chunk"),
+                         wasm_script_worker:channel_write(Result, ~"chunk"),
                          {ok, []}
                      end},
     case invocations(Request) of
@@ -144,7 +144,7 @@ register_many(Request, Env) ->
 maybe_kill_reaper(Request) ->
     case maps:get(kill_reaper_in_prepare, Request, false) of
         false -> ok;
-        true  -> try worker_reaper:stop() catch _:_ -> ok end, ok
+        true  -> try wasm_worker_reaper:stop() catch _:_ -> ok end, ok
     end.
 
 invocations(#{op := add, args := [A, B]}) -> {ok, [{call, ~"add", [A, B]}]};
@@ -164,11 +164,11 @@ invocations(_)                            -> {ok, [{call, ~"init", []},
 decode(#{outcome := returned, values := Values}, _State) ->
     {ok, Values};
 decode(#{outcome := trapped, error := undefined}, _State) ->
-    {error, worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
+    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
 decode(#{outcome := trapped, error := E}, _State) ->
-    {error, worker_error:runtime(E)};
+    {error, wasm_worker_error:runtime(E)};
 decode(#{outcome := exited, exit := Code}, _State) ->
-    {error, worker_error:adapter(exit, ~"exited", #{code => Code})}.
+    {error, wasm_worker_error:adapter(exit, ~"exited", #{code => Code})}.
 
 %% Writes its marker so the kit can see it ran, and fails on request so the
 %% kit can see what runs only when it does.

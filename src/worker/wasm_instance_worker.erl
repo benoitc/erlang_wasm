@@ -1,4 +1,4 @@
--module(wasm_worker).
+-module(wasm_instance_worker).
 -moduledoc """
 A worker owning one WebAssembly instance, in the Cloudflare-Workers shape.
 
@@ -143,7 +143,7 @@ init({Module, Opts}) ->
     Name = maps:get(name, Opts, undefined),
     %% Makes the worker identifiable in `observer`, `recon` and crash dumps
     %% instead of being an anonymous pid.
-    proc_lib:set_label({wasm_worker, Name}),
+    proc_lib:set_label({wasm_instance_worker, Name}),
     State = #state{module = Module,
                    imports = maps:get(imports, Opts, #{}),
                    limits = Limits,

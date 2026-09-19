@@ -22,7 +22,7 @@ either.
 
 Build actors *on* this API rather than beside it. A worker is a process that
 calls `instantiate/3` in its `init` and `call/3` in its `handle_call`. See
-`docs/worker.md` and `examples/wasm_worker.erl` for the pattern, including
+`docs/worker.md` and `wasm_instance_worker`, which is that worker, including
 per-request isolation, timeouts, and killing runaway code.
 
 ## You own the instance

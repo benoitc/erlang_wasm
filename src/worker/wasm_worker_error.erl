@@ -1,14 +1,14 @@
--module(worker_error).
+-module(wasm_worker_error).
 -moduledoc """
 The worker's own error type, and the closed set of kinds it can carry.
 
-Every entry point in `script_worker` answers with one of these or with a
+Every entry point in `wasm_script_worker` answers with one of these or with a
 result. Nothing raises, which is the runtime's rule applied to the layer above
 it: a dead worker, an exhausted limit and a guest that trapped are all values.
 
 ## Why this is not a `wasm_error`
 
-`wasm_error:class/0` is `malformed | invalid | link | trap | exhaustion`, and
+`t:wasm_error:class/0` is `malformed | invalid | link | trap | exhaustion`, and
 none of those describes a request that ran out of wall clock or a caller that
 cancelled. Inventing a sixth class would put worker vocabulary in the runtime's
 namespace, where a future runtime change would have to keep it working. So the
@@ -24,7 +24,7 @@ can grow without anything here changing.
 
 ## The kind is always an atom this module names
 
-`kind/0` below is the whole set. That matters because of the other half of the
+`t:kind/0` below is the whole set. That matters because of the other half of the
 rule: **nothing a guest supplies becomes an atom.** The atom table is node-wide
 and never reclaimed, so a language's own vocabulary travels as a **binary** in
 `ctx`, never as a kind:
@@ -40,9 +40,9 @@ profile can add codes for ever and this set does not move.
 ## Building one
 
 ```erlang
-worker_error:worker(timeout, ~"deadline reached", #{after_ms => 5000}),
-worker_error:adapter(exit, ~"non-zero exit", #{code => 2}),
-worker_error:runtime(WasmError).
+wasm_worker_error:worker(timeout, ~"deadline reached", #{after_ms => 5000}),
+wasm_worker_error:adapter(exit, ~"non-zero exit", #{code => 2}),
+wasm_worker_error:runtime(WasmError).
 ```
 """.
 

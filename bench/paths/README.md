@@ -536,7 +536,7 @@ Four things it will not let you get wrong, each of which cost a draft:
 ## Pricing a request rather than a path
 
 `workerbench` is the one arm here that does not time a path inside the runtime.
-It times what a host sees: a request arriving at a `script_worker`, an instance
+It times what a host sees: a request arriving at a `wasm_script_worker`, an instance
 made for it, and the latency changing underneath when generated code lands.
 
 ```sh
@@ -729,6 +729,55 @@ against the floor, so a *lower* floored number is safe to believe and a higher
 one is not; when it mattered, `PERF.md` re-ran the two arms with request counts
 chosen to make them the same length.
 
+### Comparing two revisions of the kernel
+
+`floors` and `steady` control for the box inside one run, and a number from
+one run must never be compared with a number from another. When the question
+is "did this change make the worker slower", both revisions have to run in the
+same emulator, and `revision` does that: the old kernel is compiled twice from
+the other tree with every module renamed, `o1_` and `o2_`, and loaded beside
+the new one. Each side gets its own worker, reaper and scratch root. The
+`null` arm runs o1 against o2, so it has exactly the topology of the `ab` arm,
+which runs o1 against the new kernel.
+
+Build the two copies from the tree to compare against:
+
+```sh
+git worktree add ../base main
+for P in o1 o2; do
+  mkdir -p ../$P
+  for M in script_worker worker_reaper script_v1 worker_error \
+           qjs_reactor_adapter lua_reactor_adapter py_reactor_adapter; do
+    perl -pe 's/\b(script_worker|worker_reaper|script_v1|worker_error|qjs_reactor_adapter|lua_reactor_adapter|py_reactor_adapter)\b(?=[:),. \]\n]|$)/'"$P"'_$1/g' \
+      ../base/examples/$M.erl > ../$P/${P}_$M.erl
+  done
+  (cd ../$P && erlc -pa ../erlang_wasm/_build/test/lib/wasm/ebin -pa . *.erl)
+done
+```
+
+The rename leaves `(` out on purpose: `worker_error()` is also a type, and
+renaming it breaks the module. Then run a whole acceptance set:
+
+```sh
+erl -noshell -pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/test \
+    -pa ../o1 -pa ../o2 -pa bench/paths \
+    -run workerbench main revision_set qjs_reactor latency 200 200000
+```
+
+`revision_set` runs every run in a fresh emulator: pairs in two orderings,
+F (null then ab, o1 first) and R (ab then null, the other side first),
+alternating, three pairs of each for `latency` and six for `throughput`. The
+gate is the one `phases` uses, applied per ordering: the median of the paired
+ratios inside [0.95, 1.05] and no bimodal set, with bimodality taken on raw
+times or raw counts. The null must pass first, or the set is discarded and
+run again, up to three times; a throughput run under 50% idle at either end is
+run again. It prints both orderings' results and a pooled figure that gates
+nothing, and exits non-zero on a failure. `revision null F qjs_reactor
+latency 200 200000` runs a single run, for debugging.
+
+Seen to fail: a new kernel slowed by 3 ms a request fails both orderings at
+about 1.19.
+
 ### Where a request's milliseconds go
 
 `phases` decomposes one request at the five adapter boundaries, using the real
@@ -737,10 +786,10 @@ wraps the real adapter and timestamps both sides of every callback.
 
 ```sh
 erlc -Werror -o bench/paths -pa _build/test/lib/wasm/ebin \
-     -pa _build/test/lib/wasm/examples \
+     -pa _build/test/lib/wasm/test/support \
      bench/paths/phasing_adapter.erl bench/paths/workerbench.erl
 
-erl_paths=(-pa _build/test/lib/wasm/ebin -pa _build/test/lib/wasm/examples
+erl_paths=(-pa _build/test/lib/wasm/ebin
            -pa _build/test/lib/wasm/test/support -pa bench/paths)
 
 erl -noshell "${erl_paths[@]}" -run workerbench main phases smoke

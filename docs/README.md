@@ -52,6 +52,7 @@ You have it working and want it fast, bounded and safe.
 | | |
 | --- | --- |
 | [Features and conformance](features.md) | what is implemented, what it scores, what it costs |
+| [Upgrading from 0.3](upgrading.md) | moving from copied examples to the installed workers |
 | [Changelog](../CHANGELOG.md) | what changed, and what to set |
 
 ## Internals

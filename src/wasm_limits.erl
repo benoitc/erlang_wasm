@@ -18,7 +18,7 @@ Limits = wasm_limits:untrusted(),
 | `fuel` | execution budget, charged at calls and loop back-edges; every unbounded execution passes through one of those |
 | `timeout` | wall clock per call. Enforced by whoever owns the instance, not by the library: an inline call runs in your process and cannot be interrupted. See `docs/worker.md` |
 | `max_depth` | WebAssembly call depth |
-| `max_heap_words` | Erlang terms on the *caller's own heap*, applied by the process owning the instance with `process_flag(max_heap_size, ...)`. Not linear memory and not garbage-collected objects: neither is on that heap. See `examples/wasm_worker.erl` |
+| `max_heap_words` | Erlang terms on the *caller's own heap*, applied by the process owning the instance with `process_flag(max_heap_size, ...)`. Not linear memory and not garbage-collected objects: neither is on that heap. See `wasm_instance_worker` |
 | `max_memory_pages` | node memory this instance can reach: every memory it can address, plus its share of the object store, added together |
 | node page budget | `wasm_engine`, across all instances |
 

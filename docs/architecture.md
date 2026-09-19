@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the fifty-five modules are, which
+This page is the map of the runtime: what the sixty-eight modules are, which
 ones depend on which, and where to start reading. You need it before you change
 anything, because every module explains itself and none of them explains the
 shape of the whole.
@@ -37,15 +37,18 @@ modules a module may call, and nothing about what you do with them. If you are
 running WebAssembly rather than changing the runtime, start at
 [Getting started](getting-started.md) instead.
 
-Ten of them, derived rather than drawn: a module sits one level above the
+Eleven of them, derived rather than drawn: a module sits one level above the
 highest thing it calls, and the three cycles below each occupy a single level
 together. So a module only ever calls **downward**, and level 0 depends on
 nothing else in the project, which is where you can start and be certain of
-finishing.
+finishing. The worker modules, in `src/worker/`, sit on top of the runtime
+they use: the adapters at L10, the kernel below them.
 
 ```text
-L9  wasi
-L8  wasi_preview1  wasm_snapshot_store
+L10 wasm_javascript  wasm_javascript_command  wasm_python
+    wasm_python_command  wasm_lua  wasm_adapter_conformance
+L9  wasi  wasm_script_worker
+L8  wasi_preview1  wasm_snapshot_store  wasm_instance_worker
 L7  wasm  wasm_module_cache  wasm_snapshot_owner  wasm_jit_sup
 L6  wasm_exec  wasm_core  wasm_jit  wasm_snapshot
 L5  wasm_instance  wasm_wat
@@ -54,12 +57,13 @@ L3  wasm_memory  wasm_table  wasm_global  wasm_heap  wasm_store
     wasm_validate_code  wasm_wast
 L2  wasm_decode  wasm_decode_code  wasm_decode_simd  wasm_decode_gc
     wasm_decode_atomic  wasm_keeper  wasm_simd  wasm_types  wasm_wait
-    wasm_wat_sexp  wasm_app
+    wasm_wat_sexp  wasm_app  wasm_worker_sup
 L1  wasm_code_cache  wasm_engine  wasm_leb128  wasm_num_float
     wasm_num_trunc  wasm_sup  wasm_wat_lex  wasm_wat_num  wasi_fs  wasi_sock
+    wasm_worker_reaper  wasm_script_v1
 L0  wasm_error  wasm_num  wasm_limits  wasm_code_slots  wasm_file_cache
     wasm_snapshot_file  wasm_subsup  wasm_validate_simd  wasm_validate_atomic
-    wasi_path  wasi_net  wasi_file_nif
+    wasi_path  wasi_net  wasi_file_nif  wasm_worker_error  wasm_worker_adapter
 ```
 
 `test/wasm_architecture_SUITE.erl` asserts that this block names every module
@@ -108,7 +112,7 @@ capture copies and what a restore lays over -- and stays out of it.
 Cycles are not forbidden here. What is forbidden is a fourth one appearing
 because nobody noticed. A cycle is the one structural property you cannot
 discover by reading a module: everything else about `wasm_memory` is answered
-inside `wasm_memory`, and this is answered only by reading all fifty-five.
+inside `wasm_memory`, and this is answered only by reading all sixty-eight.
 
 The margin is thinner than it looks. Adding one call from `wasm_error`, at
 level 0, up into `wasm` collapses fourteen modules into a single component, and
@@ -153,7 +157,7 @@ called it, so the count cannot live on the instance.
 and taking a second would be two atomic operations per re-entry for nothing.
 
 A request through the worker kernel arrives at this path by a longer road:
-`script_worker` spawns a runner per request, the adapter's `prepare/3` builds
+`wasm_script_worker` spawns a runner per request, the adapter's `prepare/3` builds
 the import set, and a reactor restores an image before `handle` is called. That
 road is drawn in [the worker guide](worker.md), and its cost is broken down
 phase by phase in `test/audit/PERF.md`.

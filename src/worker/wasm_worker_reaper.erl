@@ -1,14 +1,11 @@
--module(worker_reaper).
+-module(wasm_worker_reaper).
 -moduledoc """
 Who cleans up after a request when the process that owned it is gone.
 
-Start one per node from your own supervision tree, naming the roots the workers
-scratch under, and `script_worker` refuses to accept a request without it:
-
-```erlang
-{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/workers"}),
-{ok, W} = script_worker:start_link(my_adapter, #{root => scratch}).
-```
+Internal. The `wasm` application runs one per node, under `wasm_worker_sup`,
+which says where it keeps its files; `wasm_script_worker` refuses a request
+when none is running. `wasm_script_worker:cleanup_stats/0` and
+`wasm_script_worker:cleanup_requests/0` are the supported way to look at it.
 
 ## Why a process and not a table
 
@@ -23,7 +20,7 @@ tenant has no bound.
 So the reaper outlives both. It holds the registry, it monitors every guardian,
 and on a `DOWN` with work outstanding it **spawns a job** and goes straight
 back to its loop. It never runs a cleanup callback itself: it is a singleton,
-and an adapter whose `cleanup/1` hangs would otherwise stop registration and
+and an adapter whose `c:wasm_worker_adapter:cleanup/1` hangs would otherwise stop registration and
 recovery for every worker on the node.
 
 ## Surviving its own death
@@ -40,7 +37,7 @@ and each is the smallest honest option rather than the strongest-sounding one:
 
 The record is a header plus operations:
 
-```
+```text
 v1 <incarnation-hex> <generation> <guardian-pid> <request-id-hex>
 remove_tree <root-id> <escaped-relative-path>
 ```
@@ -90,7 +87,7 @@ supervised reaper will almost always perform.
 
 -behaviour(gen_server).
 
--export([start_link/1, start_link/2, stop/0, alive/0]).
+-export([start_link/1, start_link/2, start_link/3, stop/0, alive/0, roots/0]).
 -export([setting_keys/0]).
 -export([reserve/4, register/2, withdraw/2, transfer/3, finish/1]).
 -export([authorise/2, generation/0, incarnation/0, stats/0, requests/0]).
@@ -120,30 +117,12 @@ supervised reaper will almost always perform.
 -define(HANDSHAKE_TIMEOUT, 1_000).
 -define(HANDSHAKE_RETRIES, 3).
 
--doc "Names a configured scratch root. A closed set, supplied at start.".
--type root_id() :: atom().
--doc "The kernel's own id for a request. Minted at `submit`, never a term.".
--type request_id() :: binary().
--doc "What a registered cleanup action is identified by.".
--type token() :: pos_integer().
-
--doc """
-An operation a replacement reaper can replay from disk.
-
-Deliberately a closed set: this is what the journal is allowed to contain, and
-the reaper is the only thing that understands it.
-""".
--type recover_op() :: {remove_tree, root_id(), binary()}
-                    | {delete_file, root_id(), binary()}.
-
--doc """
-What `register/2` accepts.
-
-A fun is in memory and dies with the reaper. A `recover_op()` is written down
-and survives it. They are different promises and the caller chooses which.
-""".
--type action() :: fun(() -> ok) | recover_op().
-
+%% Defined in `wasm_worker_adapter`, beside the callbacks that name them.
+-type root_id() :: wasm_worker_adapter:root_id().
+-type request_id() :: wasm_worker_adapter:request_id().
+-type token() :: wasm_worker_adapter:token().
+-type recover_op() :: wasm_worker_adapter:recover_op().
+-type action() :: wasm_worker_adapter:action().
 -export_type([root_id/0, request_id/0, token/0, recover_op/0, action/0]).
 
 %% A reservation's monitor is cleared the moment its `DOWN' is processed, so
@@ -178,7 +157,10 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
              quarantined = 0 :: non_neg_integer(),
              gen        :: pos_integer(),
              incarnation :: binary(),
-             opts       :: map()}).
+             opts       :: map(),
+             %% Roots this reaper made for itself and may remove at a clean
+             %% shutdown. Never a root somebody configured.
+             generated = [] :: [root_id()]}).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -196,8 +178,27 @@ start_link(Roots) -> start_link(Roots, #{}).
 
 -spec start_link(#{root_id() => file:filename_all()}, map()) ->
           {ok, pid()} | {error, term()}.
-start_link(Roots, Opts) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, {Roots, Opts}, []).
+start_link(Roots, Opts) -> start_link(Roots, Opts, #{}).
+
+-doc """
+Start the reaper with what only its supervisor may say.
+
+`#{generated := Ids}` names the roots this reaper was given a directory of its
+own for, which it removes at a clean shutdown when nothing is left in them.
+It is a separate argument, not a key in `Opts`, so that no configuration can
+mark a directory somebody else owns for deletion. `wasm_worker_sup` is the
+only caller.
+""".
+-spec start_link(#{root_id() => file:filename_all()}, map(),
+                 #{generated => [root_id()]}) ->
+          {ok, pid()} | {error, term()}.
+start_link(Roots, Opts, Internal) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE,
+                          {Roots, Opts, maps:get(generated, Internal, [])}, []).
+
+-doc "The root ids this reaper was started with.".
+-spec roots() -> [root_id()] | {error, wasm_worker_error:worker_error()}.
+roots() -> call(roots).
 
 -spec stop() -> ok.
 stop() -> gen_server:stop(?SERVER).
@@ -205,7 +206,7 @@ stop() -> gen_server:stop(?SERVER).
 -doc """
 Whether a reaper is running.
 
-`script_worker` checks this at every `submit`, not only when it starts: the
+`wasm_script_worker` checks this at every `submit`, not only when it starts: the
 reaper can die at any point afterwards, and a request whose cleanup would have
 no owner should not begin.
 """.
@@ -231,7 +232,7 @@ running` is at capacity. A host under load gets a refusal it can retry rather
 than a leak it cannot see.
 """.
 -spec reserve(request_id(), pid(), root_id(), binary()) ->
-          {ok, file:filename_all()} | {error, worker_error:worker_error()}.
+          {ok, file:filename_all()} | {error, wasm_worker_error:worker_error()}.
 reserve(Id, Guardian, Root, RelPath) ->
     call({reserve, Id, Guardian, Root, RelPath}).
 
@@ -254,7 +255,7 @@ state is reached precisely when the reaper is unreachable, so it is logged and
 counted and that is all.
 """.
 -spec register(request_id(), action()) ->
-          {ok, token()} | {error, worker_error:worker_error(),
+          {ok, token()} | {error, wasm_worker_error:worker_error(),
                            released | cleanup_failed}.
 register(Id, Action) ->
     try gen_server:call(?SERVER, {register, Id, Action}, infinity)
@@ -262,7 +263,7 @@ register(Id, Action) ->
     end.
 
 -doc "Drop a registered action, for a caller that released the thing itself.".
--spec withdraw(request_id(), token()) -> ok | {error, worker_error:worker_error()}.
+-spec withdraw(request_id(), token()) -> ok | {error, wasm_worker_error:worker_error()}.
 withdraw(Id, Token) -> call({withdraw, Id, Token}).
 
 -doc """
@@ -276,7 +277,7 @@ transfers once, after the guardian holds the complete state, which makes
 "transferred" and "a state was delivered" the same event.
 """.
 -spec transfer(request_id(), module(), term()) ->
-          ok | {error, worker_error:worker_error()}.
+          ok | {error, wasm_worker_error:worker_error()}.
 transfer(Id, Mod, AdapterState) -> call({transfer, Id, Mod, AdapterState}).
 
 -doc "Drop a request whose guardian completed cleanly and cleaned up itself.".
@@ -321,7 +322,7 @@ absent and never rewritten.
 incarnation() -> persistent_term:get(?INCARNATION_KEY, <<>>).
 
 -doc "Counts per state, for the conformance kit and for an operator.".
--spec stats() -> map() | {error, worker_error:worker_error()}.
+-spec stats() -> map() | {error, wasm_worker_error:worker_error()}.
 stats() -> call(stats).
 
 -doc """
@@ -331,11 +332,11 @@ Operator-facing rather than test-only: a reservation that ends in `held` stays
 there until a late answer or a `DOWN`, deliberately, and the way to resolve one
 is to look at what is holding it and kill that guardian if it really is stuck.
 `delivered` says whether the adapter's state has reached the registry yet, and
-so whether `cleanup/1` has an owner.
+so whether `c:wasm_worker_adapter:cleanup/1` has an owner.
 """.
 -spec requests() -> [#{id := request_id(), state := atom(), guardian := pid(),
                        delivered := boolean()}]
-                  | {error, worker_error:worker_error()}.
+                  | {error, wasm_worker_error:worker_error()}.
 requests() -> call(requests).
 
 call(Msg) ->
@@ -349,7 +350,7 @@ cast(Msg) ->
     ok.
 
 no_reaper() ->
-    worker_error:worker(no_reaper, ~"no cleanup owner is running", #{}).
+    wasm_worker_error:worker(no_reaper, ~"no cleanup owner is running", #{}).
 
 %% The registry is unreachable, so perform what could not be recorded. In a
 %% bounded child, never inline: a hanging action inline would wedge the caller
@@ -360,7 +361,7 @@ unreachable(F) when is_function(F, 0) ->
         ok ->
             {error, no_reaper(), released};
         {error, Why} ->
-            ?LOG_ERROR("worker_reaper: unowned resource, action failed: ~p",
+            ?LOG_ERROR("wasm_worker_reaper: unowned resource, action failed: ~p",
                        [Why]),
             {error, no_reaper(), cleanup_failed}
     end;
@@ -368,7 +369,7 @@ unreachable(Op) ->
     %% A durable op is a promise the journal keeps, and the journal has exactly
     %% one writer: the reaper that is not there. There is no honest way to
     %% record this and no second writer to invent, so it is the unowned case.
-    ?LOG_ERROR("worker_reaper: unowned durable op, not recorded: ~p", [Op]),
+    ?LOG_ERROR("wasm_worker_reaper: unowned durable op, not recorded: ~p", [Op]),
     {error, no_reaper(), cleanup_failed}.
 
 %% `cleanup_timeout' bounds **one callback** and `cleanup_job_deadline' bounds
@@ -391,7 +392,7 @@ setting_keys() ->
 
 %%% -------------------------------------------------------------- server ---
 
-init({Roots, Opts}) ->
+init({Roots, Opts, Generated}) ->
     process_flag(trap_exit, true),
     Incarnation = incarnation_of_node(),
     Gen = next_generation(),
@@ -400,19 +401,20 @@ init({Roots, Opts}) ->
     %% than a default lookup in a guard, which cannot call a function.
     Settings = maps:from_list([{K, setting(Opts, K)} || K <- setting_keys()]),
     St = #st{roots = Roots, gen = Gen, incarnation = Incarnation,
-             opts = Settings},
+             opts = Settings,
+             generated = [G || G <- Generated, maps:is_key(G, Roots)]},
     {ok, sweep(St)}.
 
 handle_call({reserve, Id, Guardian, Root, RelPath}, _From, St) ->
     case maps:is_key(Root, St#st.roots) of
         false ->
-            {reply, {error, worker_error:worker(
+            {reply, {error, wasm_worker_error:worker(
                               insufficient_limit, ~"unknown root",
                               #{root => Root})}, St};
         true ->
             case has_capacity(St) of
                 false ->
-                    {reply, {error, worker_error:worker(
+                    {reply, {error, wasm_worker_error:worker(
                                       cleanup_saturated,
                                       ~"no cleanup capacity", #{})}, St};
                 true ->
@@ -441,7 +443,7 @@ handle_call({register, Id, Action}, _From, St) ->
           when length(As) >= map_get(max_cleanup_actions, St#st.opts) ->
             %% The list is adapter-controlled: without a ceiling an adapter in
             %% a loop registers until the reaper's memory is the bound.
-            E = worker_error:worker(cleanup_saturated,
+            E = wasm_worker_error:worker(cleanup_saturated,
                                     ~"too many cleanup actions",
                                     #{max => setting(St, max_cleanup_actions)}),
             {reply, {error, E, cleanup_failed}, St};
@@ -497,6 +499,8 @@ handle_call(requests, _From, St) ->
                delivered => R#req.cleanup =/= undefined}
              || R <- maps:values(St#st.reqs)], St};
 
+handle_call(roots, _From, St) ->
+    {reply, maps:keys(St#st.roots), St};
 handle_call(stats, _From, St) ->
     Counts = lists:foldl(fun(#req{state = S}, Acc) ->
                              maps:update_with(S, fun(N) -> N + 1 end, 1, Acc)
@@ -506,7 +510,7 @@ handle_call(stats, _From, St) ->
                     generation => St#st.gen}, St};
 
 handle_call(_Msg, _From, St) ->
-    {reply, {error, worker_error:worker(crashed, ~"bad call", #{})}, St}.
+    {reply, {error, wasm_worker_error:worker(crashed, ~"bad call", #{})}, St}.
 
 handle_cast({finish, Id}, St) ->
     %% The guardian cleaned up itself and says so. Drop the record last, after
@@ -548,7 +552,38 @@ handle_info({'EXIT', _Pid, _Reason}, St) ->
 handle_info(_, St) ->
     {noreply, St}.
 
-terminate(_Why, _St) -> ok.
+%% A clean shutdown removes the roots this reaper generated, and only when
+%% nothing in them is left to recover: no reservation in any state, and a
+%% journal with no record and nothing quarantined. Otherwise the directory and
+%% its journal stay, for whoever looks next. A crash removes nothing.
+terminate(shutdown, #st{generated = [_ | _] = Gen} = St) ->
+    _ = [remove_if_idle(Id, St) || Id <- Gen],
+    ok;
+terminate(_Why, _St) ->
+    ok.
+
+remove_if_idle(Id, #st{roots = Roots} = St) ->
+    Dir = maps:get(Id, Roots),
+    case idle(St) andalso journal_empty(Dir) of
+        true ->
+            _ = file:del_dir_r(Dir),
+            ok;
+        false ->
+            ?LOG_WARNING("wasm_worker_reaper: keeping ~ts at shutdown: "
+                         "requests or journal records remain", [Dir])
+    end.
+
+idle(#st{reqs = Reqs, queue = Queue, jobs = Jobs}) ->
+    map_size(Reqs) =:= 0 andalso Queue =:= [] andalso map_size(Jobs) =:= 0.
+
+journal_empty(Dir) ->
+    Journal = journal_dir(Dir),
+    case {file:list_dir(Journal),
+          file:list_dir(filename:join(Journal, ?QUARANTINE_DIR))} of
+        {{ok, Names}, {ok, []}} -> Names -- [?QUARANTINE_DIR] =:= [];
+        {{ok, Names}, {error, enoent}} -> Names =:= [];
+        _ -> false
+    end.
 
 %%% ---------------------------------------------------------- registering ---
 
@@ -671,7 +706,7 @@ job_succeeded(#req{ops = Ops}, St) ->
 %% Quarantine has exactly one cause: the retries are spent against a callback
 %% that will not finish. An unresolved handshake is `held', not this.
 quarantine(#req{id = Id} = Req, St) ->
-    ?LOG_ERROR("worker_reaper: quarantining ~ts after ~p attempts",
+    ?LOG_ERROR("wasm_worker_reaper: quarantining ~ts after ~p attempts",
                [Id, Req#req.attempts]),
     _ = quarantine_record(St, Req),
     St#st{reqs = maps:remove(Id, St#st.reqs),
@@ -686,7 +721,7 @@ quarantine(#req{id = Id} = Req, St) ->
 %% deadline, and the job carries on to the next step after killing one.
 job(#req{id = Id} = Req, Roots, Gen, Opts) ->
     process_flag(trap_exit, true),
-    case worker_reaper:authorise(Id, Gen) of
+    case wasm_worker_reaper:authorise(Id, Gen) of
         {error, stale} ->
             ok;
         ok ->
@@ -709,7 +744,7 @@ run_cleanup(#req{cleanup = {Mod, State}}, Deadline, Opts) ->
                      callback_budget(Deadline, Opts)) of
         ok -> ok;
         {error, Why} ->
-            ?LOG_WARNING("worker_reaper: ~p:cleanup/1 failed: ~p", [Mod, Why]),
+            ?LOG_WARNING("wasm_worker_reaper: ~p:cleanup/1 failed: ~p", [Mod, Why]),
             failed
     end.
 
@@ -729,7 +764,7 @@ run_action(Action, Deadline, Opts) ->
                      callback_budget(Deadline, Opts)) of
         ok -> ok;
         {error, Why} ->
-            ?LOG_WARNING("worker_reaper: action ~p failed: ~p", [Action, Why]),
+            ?LOG_WARNING("wasm_worker_reaper: action ~p failed: ~p", [Action, Why]),
             ok
     end.
 
@@ -811,7 +846,7 @@ retry_handshake(Id, St) ->
             %% and it is never replayed. Only a late answer or a `DOWN' moves
             %% it, and neither a timer nor an operator call exists to do so,
             %% because time passing does not prove a guardian is dead.
-            ?LOG_WARNING("worker_reaper: ~ts unresolved, holding", [Id]),
+            ?LOG_WARNING("wasm_worker_reaper: ~ts unresolved, holding", [Id]),
             put_req(Req#req{state = held}, St);
         _ ->
             St
@@ -892,7 +927,7 @@ quarantine_record(St, #req{root = Root, id = Id} = Req) ->
     ok.
 
 io_error(E, Path) ->
-    worker_error:worker(crashed, ~"journal write failed",
+    wasm_worker_error:worker(crashed, ~"journal write failed",
                         #{reason => E, path => iolist_to_binary(Path)}).
 
 %% The identity header never changes and the operation list grows only by
@@ -969,7 +1004,7 @@ sweep_one(RootId, Journal, Name, St) ->
                     %% set, or carries a path escaping its root is quarantined
                     %% and logged, never acted on. This directory is precisely
                     %% where an adversarial file would have to be planted.
-                    ?LOG_ERROR("worker_reaper: quarantining ~ts: ~p",
+                    ?LOG_ERROR("wasm_worker_reaper: quarantining ~ts: ~p",
                                [Name, Why]),
                     _ = file:rename(Path, filename:join(
                                             [Journal, ?QUARANTINE_DIR, Name])),

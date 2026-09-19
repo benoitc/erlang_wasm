@@ -7,9 +7,9 @@ Each takes a claim from `wasm_limits` or `docs/worker.md` and tries to break it:
 an infinite loop, unbounded recursion, unbounded memory growth, a host function
 that crashes, state surviving a request.
 
-They run against `examples/wasm_worker`, which is the code the documentation
-tells people to copy. Testing the example rather than a library-internal
-wrapper means the documented pattern cannot rot: if the advice stops working,
+They run against `wasm_instance_worker`, the worker the documentation tells
+people to use. Testing the module they call rather than a private wrapper
+means the documented pattern cannot rot: if the advice stops working,
 this suite goes red.
 """.
 
@@ -19,7 +19,8 @@ this suite goes red.
 -include_lib("stdlib/include/assert.hrl").
 
 all() ->
-    [state_does_not_leak_between_requests,
+    [every_0_3_call_shape_still_works,
+     state_does_not_leak_between_requests,
      reuse_policy_keeps_state,
      infinite_loop_is_bounded_by_fuel,
      infinite_loop_is_bounded_by_timeout,
@@ -52,7 +53,7 @@ end_per_testcase(_Case, _Config) ->
     lists:foreach(fun(P) -> catch_stop(P) end, get(workers)),
     ok.
 
-catch_stop(P) -> try wasm_worker:stop(P) catch _:_ -> ok end.
+catch_stop(P) -> try wasm_instance_worker:stop(P) catch _:_ -> ok end.
 
 %%% -------------------------------------------------------------- fixtures ---
 
@@ -60,9 +61,35 @@ catch_stop(P) -> try wasm_worker:stop(P) catch _:_ -> ok end.
 %% the suite tracks the ones it starts.
 worker(Wasm, Opts) ->
     {ok, Mod} = wasm:compile(Wasm),
-    {ok, Pid} = wasm_worker:start_link(Mod, Opts),
+    {ok, Pid} = wasm_instance_worker:start_link(Mod, Opts),
     put(workers, [Pid | get(workers)]),
     Pid.
+
+%%% --------------------------------------------------------- compatibility ---
+
+%% `wasm_instance_worker' was `examples/wasm_worker.erl' in 0.3, and the
+%% upgrade page promises that switching is a rename of the calls. So every
+%% call the 0.3 example took, with the argument shapes it took and the values
+%% it answered, is exercised here. A change to any of them is a break for
+%% everybody who copied the example, and this is where it shows.
+every_0_3_call_shape_still_works(_Config) ->
+    {ok, Mod} = wasm:compile(counter_module()),
+    {ok, W1} = wasm_instance_worker:start_link(Mod),
+    {ok, W2} = wasm_instance_worker:start_link(Mod, #{isolation => reuse}),
+    ?assertEqual({ok, [1]}, wasm_instance_worker:call(W1, ~"inc", [])),
+    ?assertEqual({ok, [1]}, wasm_instance_worker:call(W2, ~"inc", [], 1000)),
+    ?assertEqual({ok, [2]}, wasm_instance_worker:call(W2, ~"inc", [], 1000)),
+    ?assertMatch({ok, #{served := 2, isolation := reuse}},
+                 wasm_instance_worker:info(W2)),
+    ?assertMatch({ok, #{served := 1, isolation := fresh}},
+                 wasm_instance_worker:info(W1)),
+    ?assertEqual(ok, wasm_instance_worker:stop(W1)),
+    ?assertEqual(ok, wasm_instance_worker:stop(W2)),
+    Spin = worker(spin_module(), #{limits => #{fuel => infinity}}),
+    unlink(Spin),
+    ?assertMatch({error, #{class := exhaustion, kind := timeout,
+                           ctx := #{timeout := 200}}},
+                 wasm_instance_worker:call(Spin, ~"spin", [], 200)).
 
 %%% ------------------------------------------------------------- isolation ---
 
@@ -71,17 +98,17 @@ worker(Wasm, Opts) ->
 %% one request is invisible to the next.
 state_does_not_leak_between_requests(_Config) ->
     W = worker(counter_module(), #{isolation => fresh}),
-    ?assertEqual({ok, [1]}, wasm_worker:call(W, ~"inc", [])),
-    ?assertEqual({ok, [1]}, wasm_worker:call(W, ~"inc", [])),
-    ?assertEqual({ok, [1]}, wasm_worker:call(W, ~"inc", [])),
-    ?assertEqual({ok, [0]}, wasm_worker:call(W, ~"get", [])).
+    ?assertEqual({ok, [1]}, wasm_instance_worker:call(W, ~"inc", [])),
+    ?assertEqual({ok, [1]}, wasm_instance_worker:call(W, ~"inc", [])),
+    ?assertEqual({ok, [1]}, wasm_instance_worker:call(W, ~"inc", [])),
+    ?assertEqual({ok, [0]}, wasm_instance_worker:call(W, ~"get", [])).
 
 %% The opposite policy, which exists and is documented as the risky one.
 reuse_policy_keeps_state(_Config) ->
     W = worker(counter_module(), #{isolation => reuse}),
-    ?assertEqual({ok, [1]}, wasm_worker:call(W, ~"inc", [])),
-    ?assertEqual({ok, [2]}, wasm_worker:call(W, ~"inc", [])),
-    ?assertEqual({ok, [2]}, wasm_worker:call(W, ~"get", [])).
+    ?assertEqual({ok, [1]}, wasm_instance_worker:call(W, ~"inc", [])),
+    ?assertEqual({ok, [2]}, wasm_instance_worker:call(W, ~"inc", [])),
+    ?assertEqual({ok, [2]}, wasm_instance_worker:call(W, ~"get", [])).
 
 %%% ------------------------------------------------------------ termination ---
 
@@ -89,7 +116,7 @@ infinite_loop_is_bounded_by_fuel(_Config) ->
     W = worker(spin_module(), #{isolation => reuse,
                                 limits => #{fuel => 100000}}),
     ?assertMatch({error, #{class := exhaustion, kind := out_of_fuel}},
-                 wasm_worker:call(W, ~"spin", [], 30000)),
+                 wasm_instance_worker:call(W, ~"spin", [], 30000)),
     %% Fuel exhaustion is a bounded failure of one request, not of the worker.
     ?assert(is_process_alive(W)).
 
@@ -103,7 +130,7 @@ infinite_loop_is_bounded_by_timeout(_Config) ->
     Ref = monitor(process, W),
     T0 = erlang:monotonic_time(millisecond),
     ?assertMatch({error, #{class := exhaustion, kind := timeout}},
-                 wasm_worker:call(W, ~"spin", [], 300)),
+                 wasm_instance_worker:call(W, ~"spin", [], 300)),
     ?assert(erlang:monotonic_time(millisecond) - T0 < 3000),
     receive {'DOWN', Ref, process, W, _} -> ok
     after 2000 -> ct:fail(worker_survived_timeout)
@@ -114,7 +141,7 @@ runaway_recursion_is_bounded(_Config) ->
                                    limits => #{max_depth => 64,
                                                fuel => infinity}}),
     ?assertMatch({error, #{class := exhaustion, kind := call_stack_exhausted}},
-                 wasm_worker:call(W, ~"go", [], 5000)).
+                 wasm_instance_worker:call(W, ~"go", [], 5000)).
 
 %%% ----------------------------------------------------------------- memory ---
 
@@ -148,7 +175,7 @@ pages_are_released_when_worker_stops(_Config) ->
     wait_until(fun() -> wasm_engine:pages_in_use() > Before end, 2000),
     unlink(W),
     Ref = monitor(process, W),
-    ok = wasm_worker:stop(W),
+    ok = wasm_instance_worker:stop(W),
     receive {'DOWN', Ref, process, W, _} -> ok after 2000 -> ct:fail(no_down) end,
     wait_until(fun() -> wasm_engine:pages_in_use() =:= Before end, 2000).
 
@@ -199,7 +226,7 @@ killing_a_worker_does_not_disturb_others(_Config) ->
     exit(Victim, kill),
     timer:sleep(50),
     ?assertNot(is_process_alive(Victim)),
-    [?assertEqual({ok, [7]}, wasm_worker:call(P, ~"add", [3, 4])) || P <- Survivors],
+    [?assertEqual({ok, [7]}, wasm_instance_worker:call(P, ~"add", [3, 4])) || P <- Survivors],
     ?assertEqual(4, length([P || P <- Survivors, is_process_alive(P)])).
 
 crashing_host_function_becomes_a_trap(_Config) ->
@@ -208,20 +235,20 @@ crashing_host_function_becomes_a_trap(_Config) ->
     %% An Erlang exception inside an import must not escape as an exception: the
     %% embedder supplied that code, but the caller still gets a value.
     ?assertMatch({error, #{class := trap, kind := host_error}},
-                 wasm_worker:call(W, ~"run", [])),
+                 wasm_instance_worker:call(W, ~"run", [])),
     ?assert(is_process_alive(W)).
 
 trap_leaves_instance_usable(_Config) ->
     W = worker(trap_module(), #{isolation => reuse}),
     ?assertMatch({error, #{class := trap, kind := unreachable}},
-                 wasm_worker:call(W, ~"boom", [])),
+                 wasm_instance_worker:call(W, ~"boom", [])),
     %% A trap aborts the invocation, not the instance. The specification is
     %% explicit that the instance remains valid afterwards.
-    ?assertEqual({ok, [7]}, wasm_worker:call(W, ~"add", [3, 4])).
+    ?assertEqual({ok, [7]}, wasm_instance_worker:call(W, ~"add", [3, 4])).
 
 worker_is_labelled_for_observability(_Config) ->
     W = worker(add_module(), #{isolation => reuse, name => my_plugin}),
-    ?assertEqual({wasm_worker, my_plugin}, proc_lib:get_label(W)).
+    ?assertEqual({wasm_instance_worker, my_plugin}, proc_lib:get_label(W)).
 
 %%% ---------------------------------------------------------------- limits ---
 

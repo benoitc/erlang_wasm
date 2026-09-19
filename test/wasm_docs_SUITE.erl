@@ -49,9 +49,9 @@
 -define(START_PAGES, ["docs/getting-started.md", "docs/guests.md"]).
 %% The worker start functions whose adapter argument must name an adapter, as
 %% {Module, Function, Arity, ArgumentPosition}.
--define(ADAPTER_ARGS, [{script_worker, start_link, 2, 1},
-                       {script_worker, start_link, 3, 2}]).
--define(ADAPTER_BEHAVIOUR, script_worker).
+-define(ADAPTER_ARGS, [{wasm_script_worker, start_link, 2, 1},
+                       {wasm_script_worker, start_link, 3, 2}]).
+-define(ADAPTER_BEHAVIOUR, wasm_worker_adapter).
 %% Blocks the strict run may not execute, as {Page, Fixture}: reviewed here.
 -define(NOT_IN_CI, []).
 

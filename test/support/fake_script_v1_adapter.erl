@@ -8,7 +8,7 @@ read the per-request marker out of `argv` exactly as a real bootstrap does, and
 frame their result on stdout the same way.
 """.
 
--behaviour(script_worker).
+-behaviour(wasm_worker_adapter).
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2]).
@@ -113,12 +113,12 @@ artifact(_Opts) ->
                    (S, {ok, Acc}) ->
                        case wasm:compile({wat, wat(S)}) of
                            {ok, M}    -> {ok, Acc#{S => M}};
-                           {error, E} -> {error, worker_error:runtime(E)}
+                           {error, E} -> {error, wasm_worker_error:runtime(E)}
                        end
                 end, {ok, #{}}, ?SHAPES).
 
 requirements(Request, _Artifact) when is_map(Request) ->
-    Context = script_v1:encode_context(maps:get(context, Request, #{})),
+    Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
     Source = maps:get(source, Request, ~"export function main(c) {}"),
     {ok, #{min_timeout => 100, min_memory_pages => 1,
            request_bytes => byte_size(Context) + byte_size(Source),
@@ -126,16 +126,16 @@ requirements(Request, _Artifact) when is_map(Request) ->
            staged_files => 2,
            mounts => #{ro => #{guest_path => ~"/", mode => read}}}};
 requirements(_Request, _Artifact) ->
-    {error, worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
+    {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
 prepare(Request, Artifact, Env) ->
     Shape = maps:get(shape, Request, ok),
     case maps:find(Shape, Artifact) of
         error ->
-            {error, worker_error:adapter(adapter_failure, ~"unknown shape",
+            {error, wasm_worker_error:adapter(adapter_failure, ~"unknown shape",
                                          #{shape => Shape}), undefined};
         {ok, M} ->
-            Marker = script_v1:marker(),
+            Marker = wasm_script_v1:marker(),
             case stage(Request, Env) of
                 {error, E} ->
                     {error, E, #{marker => Marker}};
@@ -152,7 +152,7 @@ prepare(Request, Artifact, Env) ->
 stage(Request, Env) ->
     Stage = maps:get(stage, Env),
     Source = maps:get(source, Request, ~"export function main(c) {}"),
-    Context = script_v1:encode_context(maps:get(context, Request, #{})),
+    Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
     case Stage(ro, ~"main.src", Source) of
         {error, _} = E -> E;
         ok             -> Stage(ro, ~"context.json", Context)
@@ -163,7 +163,7 @@ wasi(Marker, Env) ->
     #{host_dir := Dir} = maps:get(ro, Mounts),
     Sink = fun(Which) ->
                C = maps:get(Which, Chans),
-               fun(Data) -> script_worker:channel_write(C, Data) end
+               fun(Data) -> wasm_script_worker:channel_write(C, Data) end
            end,
     wasi_preview1:imports(
       #{args => [~"qjs", Marker], env => #{},
@@ -173,20 +173,20 @@ wasi(Marker, Env) ->
 
 decode(#{outcome := exited, exit := 0} = R, #{marker := Marker}) ->
     #{channels := #{stdout := Out, stderr := Err}} = R,
-    case script_v1:decode_combined(Out, Marker) of
+    case wasm_script_v1:decode_combined(Out, Marker) of
         {ok, #{result := Result, stdout := Printed}} ->
             {ok, #{result => Result, stdout => Printed, stderr => Err}};
         {error, Code, Msg} ->
-            {error, script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
+            {error, wasm_script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
     end;
 decode(#{outcome := exited, exit := Code} = R, _State) ->
     #{channels := #{stdout := Out, stderr := Err}} = R,
-    {error, worker_error:adapter(exit, ~"non-zero exit",
+    {error, wasm_worker_error:adapter(exit, ~"non-zero exit",
                                  #{code => Code, stdout => Out, stderr => Err})};
 decode(#{outcome := trapped, error := undefined}, _State) ->
-    {error, worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
+    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
 decode(#{outcome := trapped, error := E}, _State) ->
-    {error, worker_error:runtime(E)};
+    {error, wasm_worker_error:runtime(E)};
 decode(#{outcome := returned} = R, State) ->
     decode(R#{outcome := exited, exit := 0}, State).
 

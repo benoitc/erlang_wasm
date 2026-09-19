@@ -7,26 +7,21 @@ raises a ceiling behind your back.
 
 ## Run one
 
-> **Where these modules come from.** `python_worker`, `py_adapter`,
-> `py_reactor_adapter` and the worker kernel they run on (`script_worker`,
-> `worker_reaper`, `script_v1` and `worker_error`) are in `examples/` in this
-> release, not installed with the application. From a checkout of this
-> repository, `rebar3 as test shell` compiles them and puts them on the path.
-> In your own project, copy those files from `deps/wasm/examples/` into your
-> `src/`.
+> **Where these modules come from.** `wasm_python_command`, `wasm_python` and
+> the worker kernel they run on (`wasm_script_worker`) are installed with the
+> application; you supply the CPython artifact.
 
 ```erlang
-{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/py"}),
-{ok, W} = python_worker:start_link(
-            "test/fixtures/lang/python.wasm",
-            #{root => scratch,
+{ok, W} = wasm_script_worker:start_link(
+            wasm_python_command,
+            #{path => "test/fixtures/lang/python.wasm",
               limits => #{timeout => 300_000,
                           max_memory_pages => 4096,
                           max_host_calls => 1_000_000,
                           max_heap_words => 16 * 1024 * 1024}}),
 {ok, #{result := #{~"answer" := 42}}} =
-    python_worker:run(W, ~"def main(c):\n    return {'answer': c['value'] + 1}\n",
-                      #{~"value" => 41}).
+    wasm_script_worker:run(W, ~"def main(c):\n    return {'answer': c['value'] + 1}\n",
+                           #{~"value" => 41}).
 ```
 
 The tenant writes one function:
@@ -122,15 +117,14 @@ scripts/build-python-reactor.sh
 ```
 
 ```erlang
-{ok, _} = worker_reaper:start_link(#{scratch => "/var/tmp/py"}),
-{ok, W} = script_worker:start_link(
-            py_reactor_adapter,
+{ok, W} = wasm_script_worker:start_link(
+            wasm_python,
             #{path => "test/fixtures/lang/py_reactor.wasm",
               lib  => "test/fixtures/lang/py_reactor_lib",
               root => scratch,
-              limits => py_reactor_adapter:limits()}),
+              limits => wasm_python:limits()}),
 {ok, #{result := #{~"answer" := 42}}} =
-    script_worker:run(W, #{source => <<"def main(c):\n"
+    wasm_script_worker:run(W, #{source => <<"def main(c):\n"
                                        "    return {'answer': c['value'] + 1}\n">>,
                            context => #{~"value" => 41}}).
 ```
@@ -165,9 +159,9 @@ CPython gains more from this than either other guest here, and it gains on both
 halves: the start and the request.
 
 ```erlang
-Limits = (py_reactor_adapter:limits())#{max_heap_words => 32 * 1024 * 1024},
-{ok, W} = script_worker:start_link(
-            py_reactor_adapter,
+Limits = (wasm_python:limits())#{max_heap_words => 32 * 1024 * 1024},
+{ok, W} = wasm_script_worker:start_link(
+            wasm_python,
             #{path => "test/fixtures/lang/py_reactor.wasm",
               lib  => "test/fixtures/lang/py_reactor_lib",
               root => scratch,
@@ -190,7 +184,7 @@ billions.
 Three things to know:
 
 - **The two options sit beside `root`, not inside `limits`.** A floor is not a
-  bound, and one written into the map `py_reactor_adapter:limits/0` returns is
+  bound, and one written into the map `wasm_python:limits/0` returns is
   ignored silently.
 - **They are separate settings because they are separate processes.** CPython
   wants twice as much to capture as to answer, and a worker reading its image

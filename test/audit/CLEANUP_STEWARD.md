@@ -506,6 +506,58 @@ reason.
     guardian retains the complete mirror, transfers it after recovery, and the
     resource is cleaned without reopening the worker slot.
 
+## How this lands safely
+
+This rewrites the live cleanup path for untrusted requests, where a subtle bug
+means a leaked directory or a double-executed cleanup, so it lands under a
+tighter discipline than a feature change.
+
+**Strangler, not big-bang.** The steward arrives first as a behaviour-preserving
+relay, then semantics shift one operation at a time. Each commit is either
+byte-for-byte identical behaviour (a refactor) or one small tested delta, never
+both. The reaper's legacy `register/2`, `withdraw/2`, `transfer/3`, `finish/1`
+stay untouched throughout, so the new `{apply, ...}` path is additive and a
+rollback is "stop routing through the steward"; a v1 request never notices.
+
+Commit order, each green before the next:
+1. Guardian calls the reaper *through* the steward as a synchronous relay:
+   topology in place, behaviour identical.
+2. `register`/`withdraw`/`transfer` become async forwards: the guardian stops
+   blocking, holds a pending map keyed by correlation, and relays the reply.
+   This is the one real behaviour change and it is isolated.
+3. The op-id ledger and the `send_request`/`check_response` transport.
+4. Terminal handoff: publish and free the slot, then `complete`, then wait for
+   the steward's acknowledgement.
+5. Journal v2 and adoption.
+6. The v1 compatibility path.
+7. The boundary tests and the measurement.
+
+**Seams before logic.** The dangerous cases are interleavings, so the
+fault-injection points are first-class, never `timer:sleep`: a fake reaper the
+test acks/hangs/kills on command, a per-operation injection point so a test can
+kill the reaper "after journal rename, before reply" deterministically, and the
+manager and steward addressable so a test can kill them at a boundary.
+
+**Tests are the spec, written first, failing first** (`AGENTS.md`). The
+north-star regression is written first: a stuck reaper while a request runs,
+asserting the guardian still fires its deadline; it is red on today's code (the
+wedge) until commit 2. Every boundary test is written before the commit that
+satisfies it, run against the parent, and shown to fail for the intended reason.
+The load-bearing invariants are encoded as observable state (the manager's
+counts, `sys:get_state`, monitors), not comments, so a violation is caught and
+the guard goes red on the broken build.
+
+**Isolation and determinism.** Every test that kills a process runs in a peer
+node, so a hang in a broken interleaving cannot wedge the CT run. Synchronisation
+is explicit -- ack-on-message, monitors, `sys:get_state`, barriers -- never a
+sleep used as a barrier.
+
+**Measure and gate.** The accept phase (T0-T1) and the invocation envelope are
+measured before/after with the interleaved `phases`/`workerbench` protocol,
+null-gated `[0.95, 1.05]`, recorded in `test/audit/PERF.md`; the deadline test
+proves latency is unchanged with a stuck reaper. Nothing raises, files are staged
+by name, commits are concise with no attribution lines.
+
 ## Architecture
 
 Three new modules (`wasm_cleanup_steward`, `wasm_cleanup_steward_sup`,

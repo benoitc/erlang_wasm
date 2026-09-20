@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1
+
+Documentation only; no code change beyond one module doc.
+
+- Every figure in `README.md` and `docs/` now cites a run in
+  `test/audit/PERF.md`. Nineteen were stale, mixed two runs, or had no
+  measurement at all: the specification gate (65,481 assertions over 256
+  suites), the WASI syscall count (45), the tier's per-guest numbers, the cost
+  of accepting a request, and the compile and instantiate costs of the
+  committed fixtures.
+- The CPython guide quotes the current reactor numbers: 88 ms a request, and
+  91 to 95 s for a capturing `start_link/2`.
+
 ## 0.4.0
 
 **The workers ship with the application.** Running JavaScript, Python or Lua

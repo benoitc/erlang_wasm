@@ -316,7 +316,16 @@ stdout_and_result_are_bounded_independently(Config) ->
                 #{root => scratch, timeout => 30_000,
                   limits => #{max_output_bytes => 128,
                               max_result_bytes => 1_000_000}}),
-    {error, Flooded} = wasm_script_worker:run(W, request(Config, #{shape => flood_stdout})),
+    %% The output bound kills the runner, so the guardian finishes from the
+    %% runner's own `DOWN'. That path used to wait 5 s for a `DOWN' it had
+    %% already consumed; the trip must return promptly.
+    {Us, {error, Flooded}} =
+        timer:tc(fun() ->
+                         wasm_script_worker:run(W,
+                                                request(Config,
+                                                        #{shape => flood_stdout}))
+                 end),
+    ?assert(Us < 2_000_000, {stalled, Us}),
     ?assertEqual(output_limit, maps:get(kind, Flooded)),
     ?assertEqual(stdout, maps:get(stream, maps:get(ctx, Flooded))),
     ok = wasm_script_worker:stop(W),

@@ -1020,18 +1020,20 @@ loop(G) ->
             loop(G#g{delivered = true, adapter_state = {Mod, AState}});
 
         {result, Runner, Outcome} when Runner =:= G#g.runner ->
-            finish(G, Outcome);
+            finish(G, Outcome, false);
 
         {'DOWN', Mon, process, _P, Reason} when Mon =:= G#g.rmon ->
-            finish(G, runner_died(G, Reason));
+            %% The runner's own `DOWN': it is already gone, so `finish' must not
+            %% wait for a `DOWN' it has just consumed.
+            finish(G, runner_died(G, Reason), true);
 
         {'DOWN', Mon, process, _P, _Reason} when Mon =:= G#g.wmon ->
             finish(G, {error, wasm_worker_error:worker(
-                                cancelled, ~"the worker is gone", #{})});
+                                cancelled, ~"the worker is gone", #{})}, false);
 
         {cancel, _Ref} ->
             finish(G, {error, wasm_worker_error:worker(
-                                cancelled, ~"cancelled", #{})});
+                                cancelled, ~"cancelled", #{})}, false);
 
         {worker_reaper_handshake, Reaper, Id} ->
             %% A timeout is not a denial, so answering promptly is what keeps a
@@ -1050,7 +1052,8 @@ loop(G) ->
     after remaining(G#g.deadline) ->
         finish(G, {error, wasm_worker_error:worker(
                             timeout, ~"deadline reached",
-                            #{limit => maps:get(timeout, G#g.limits, undefined)})})
+                            #{limit => maps:get(timeout, G#g.limits, undefined)})},
+               false)
     end.
 
 %% A runner that exits abnormally either passed a channel bound, in which case
@@ -1076,8 +1079,8 @@ remaining(Deadline) ->
 %% hand the cleanup on. The outcome is relayed *before* cleanup, so a
 %% `cleanup/1' that fails or hangs can never become an error in a result the
 %% caller already has.
-finish(G, Outcome) ->
-    kill_runner(G),
+finish(G, Outcome, RunnerDown) ->
+    kill_runner(G, RunnerDown),
     G#g.worker ! {guardian_done, G#g.ref, with_partial_output(G, Outcome)},
     maps:foreach(fun(_K, C) -> channel_delete(C) end, G#g.channels),
     hand_over_cleanup(G),
@@ -1096,7 +1099,16 @@ with_partial_output(G, {error, #{ctx := Ctx} = E}) ->
 
 %% The guardian only enters its loop with a runner spawned, so there is no
 %% "no runner yet" case to guard against here.
-kill_runner(#g{runner = Pid, rmon = Mon}) ->
+%%
+%% `RunnerDown' is `true' only when we got here from the runner's own `DOWN':
+%% the process is already gone and its `DOWN' already consumed, so waiting for
+%% one would burn the whole timeout. Every other path kills a live runner and
+%% waits, bounded, for it to go. Liveness is passed in rather than inferred with
+%% `is_process_alive/1', which would be its own race.
+kill_runner(#g{rmon = Mon}, true) ->
+    _ = demonitor(Mon, [flush]),
+    ok;
+kill_runner(#g{runner = Pid, rmon = Mon}, false) ->
     exit(Pid, kill),
     receive {'DOWN', Mon, process, Pid, _} -> ok after 5_000 -> ok end,
     ok.

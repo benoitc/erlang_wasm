@@ -49,6 +49,8 @@ reset instead of a permanent leak. See `wasm_keeper:init/1`.
 -export([start_link/0, tables/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
+-include("wasm_snapshot_budget.hrl").
+
 %% Named rather than derived, because a table this does not know about is one
 %% nothing gives a lifetime to. Adding a long-lived table means adding it here.
 -define(TABLES, [wasm_holders, wasm_tables, wasm_waiters,
@@ -71,9 +73,29 @@ init([]) ->
     ok = wasm_engine:ensure_store(),
     ok = wasm_engine:ensure_waiter_table(),
     ok = wasm_code_slots:ensure_table(),
+    ok = ensure_snapshot_counter(),
     Heir = whereis(wasm_store_sup),
     _ = [bequeath(T, Heir) || T <- ?TABLES, is_pid(Heir)],
     {ok, Heir}.
+
+%% The node-wide snapshot byte budget. Seeded here, once, so `charge/1' never
+%% races two lazy creations against each other; `wasm_snapshot_owner' only
+%% reads it. A counter this version wrote is kept across a restart with its live
+%% charges; a counter an older build left is not overwritten, and reads as
+%% untrusted there.
+ensure_snapshot_counter() ->
+    case persistent_term:get(?SNAPSHOT_BUDGET_KEY, undefined) of
+        {snapshot_counter, ?SNAPSHOT_BUDGET_VERSION, _Ref} ->
+            ok;
+        undefined ->
+            _ = persistent_term:put(
+                  ?SNAPSHOT_BUDGET_KEY,
+                  {snapshot_counter, ?SNAPSHOT_BUDGET_VERSION,
+                   atomics:new(1, [])}),
+            ok;
+        _Legacy ->
+            ok
+    end.
 
 %% Only a table this process actually created. After a transfer the supervisor
 %% owns them and setting an heir from here would fail, which is the ordinary

@@ -17,6 +17,7 @@ testing the artifact rather than the mechanism.
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 -include("wasm.hrl").
+-include("wasm_snapshot_budget.hrl").
 
 suite() -> [{timetrap, {seconds, 60}}].
 
@@ -60,6 +61,9 @@ all() ->
      an_image_over_the_ceiling_is_refused,
      a_malformed_ceiling_is_refused,
      an_image_naming_an_unknown_atom_is_refused,
+     concurrent_charges_are_all_counted,
+     charge_fails_closed_on_a_legacy_counter,
+     charge_fails_closed_when_the_counter_is_missing,
      an_injected_external_reference_is_refused,
      an_out_of_range_funcref_is_refused,
      an_image_for_a_module_with_imported_state_is_refused,
@@ -786,6 +790,57 @@ an_image_naming_an_unknown_atom_is_refused(Config) ->
                  wasm:load_snapshot(Path, Handle)).
 
 known_atom() -> zzz_present_in_this_node_always.
+
+%% The counter is seeded once, deterministically, so concurrent charges all
+%% land on the same `atomics' cell and none is lost. The old lazy creation
+%% raced two `atomics:new' calls and dropped charges against the loser.
+concurrent_charges_are_all_counted(_Config) ->
+    Base = wasm_snapshot_owner:charged(),
+    N = 200,
+    Self = self(),
+    Pids = [spawn(fun() ->
+                          ok = wasm_snapshot_owner:charge(1),
+                          Self ! {done, self()}
+                  end) || _ <- lists:seq(1, N)],
+    [receive {done, P} -> ok after 5000 -> ct:fail(timeout) end || P <- Pids],
+    ?assertEqual(Base + N, wasm_snapshot_owner:charged()),
+    _ = wasm_snapshot_owner:refund(N),
+    ?assertEqual(Base, wasm_snapshot_owner:charged()).
+
+%% A counter an older, racy build left is not trusted after an upgrade: a new
+%% charge fails closed by name, and the diagnostics never raise.
+charge_fails_closed_on_a_legacy_counter(_Config) ->
+    with_counter({legacy_bare_ref, atomics:new(1, [])},
+                 fun() ->
+                         ?assertMatch({error, #{kind := snapshot_counter_untrusted}},
+                                      wasm_snapshot_owner:charge(1)),
+                         ?assertEqual(0, wasm_snapshot_owner:charged()),
+                         ?assertEqual(0, wasm_snapshot_owner:refund(1))
+                 end).
+
+%% Reachable on a hot upgrade where the old build never created its lazy
+%% counter: the application is up but the counter is absent.
+charge_fails_closed_when_the_counter_is_missing(_Config) ->
+    Saved = persistent_term:get(?SNAPSHOT_BUDGET_KEY),
+    _ = persistent_term:erase(?SNAPSHOT_BUDGET_KEY),
+    try
+        ?assertMatch({error, #{kind := snapshot_counter_uninitialised}},
+                     wasm_snapshot_owner:charge(1)),
+        ?assertEqual(0, wasm_snapshot_owner:charged()),
+        ?assertEqual(0, wasm_snapshot_owner:refund(1))
+    after
+        persistent_term:put(?SNAPSHOT_BUDGET_KEY, Saved)
+    end.
+
+%% Swap the counter for a given value, run F, and restore the real one so the
+%% node's live budget is untouched.
+with_counter(Value, F) ->
+    Saved = persistent_term:get(?SNAPSHOT_BUDGET_KEY),
+    _ = persistent_term:put(?SNAPSHOT_BUDGET_KEY, Value),
+    try F()
+    after
+        persistent_term:put(?SNAPSHOT_BUDGET_KEY, Saved)
+    end.
 
 %% Restore validates each stored value against the same allowlist capture uses.
 %% An external reference is a bare host term; a forged image that slipped one

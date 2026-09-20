@@ -92,7 +92,10 @@ suspend_and_resume_keep_configured_roots(Config) ->
         ok = on(H, fun wasm_worker_sup:resume_reaper/0),
         [scratch] = on(H, fun wasm_worker_reaper:roots/0),
         ok = until(fun() -> not filelib:is_dir(request_dir(Orphan, Dir)) end),
-        [] = records(Dir)
+        %% The record is dropped last, after everything it names is gone
+        %% (`wasm_worker_reaper:handle_cast({finish, _}, _)'), so the
+        %% directory disappearing does not mean the journal is clear yet.
+        ok = until(fun() -> records(Dir) =:= [] end)
     end).
 
 a_killed_reaper_comes_back_on_the_same_root(_Config) ->

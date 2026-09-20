@@ -39,16 +39,36 @@ start_link() ->
 
 init([]) ->
     persistent_term:put(?SUSPENDED, false),
-    Flags = #{strategy => one_for_one, intensity => 10, period => 60},
+    %% `rest_for_one` so the reaper, which the manager tracks, restarts when the
+    %% manager or the steward supervisor beneath it does; the steward supervisor
+    %% and the manager start first and always, the reaper only when configured.
+    Flags = #{strategy => rest_for_one, intensity => 10, period => 60},
+    Base = [steward_sup_spec(), manager_spec()],
     case configured() of
         false ->
-            {ok, {Flags, []}};
+            {ok, {Flags, Base}};
         true ->
             case check_options() of
-                ok         -> {ok, {Flags, [reaper_spec()]}};
+                ok         -> {ok, {Flags, Base ++ [reaper_spec()]}};
                 {error, E} -> {stop, E}
             end
     end.
+
+steward_sup_spec() ->
+    #{id => wasm_cleanup_steward_sup,
+      start => {wasm_cleanup_steward_sup, start_link, []},
+      restart => permanent,
+      shutdown => infinity,
+      type => supervisor,
+      modules => [wasm_cleanup_steward_sup]}.
+
+manager_spec() ->
+    #{id => wasm_cleanup_manager,
+      start => {wasm_cleanup_manager, start_link, []},
+      restart => permanent,
+      shutdown => 5000,
+      type => worker,
+      modules => [wasm_cleanup_manager]}.
 
 -doc """
 Make sure a reaper is running, starting the supervised one if not.

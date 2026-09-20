@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the sixty-eight modules are, which
+This page is the map of the runtime: what the seventy-one modules are, which
 ones depend on which, and where to start reading. You need it before you change
 anything, because every module explains itself and none of them explains the
 shape of the whole.
@@ -54,16 +54,17 @@ L6  wasm_exec  wasm_core  wasm_jit  wasm_snapshot
 L5  wasm_instance  wasm_wat
 L4  wasm_validate  wasm_wat_instr
 L3  wasm_memory  wasm_table  wasm_global  wasm_heap  wasm_store
-    wasm_validate_code  wasm_wast
+    wasm_validate_code  wasm_wast  wasm_worker_sup
 L2  wasm_decode  wasm_decode_code  wasm_decode_simd  wasm_decode_gc
     wasm_decode_atomic  wasm_keeper  wasm_simd  wasm_types  wasm_wait
-    wasm_wat_sexp  wasm_app  wasm_worker_sup
+    wasm_wat_sexp  wasm_app  wasm_cleanup_manager
 L1  wasm_code_cache  wasm_engine  wasm_leb128  wasm_num_float
     wasm_num_trunc  wasm_sup  wasm_wat_lex  wasm_wat_num  wasi_fs  wasi_sock
-    wasm_worker_reaper  wasm_script_v1
+    wasm_worker_reaper  wasm_script_v1  wasm_cleanup_steward_sup
 L0  wasm_error  wasm_num  wasm_limits  wasm_code_slots  wasm_file_cache
     wasm_snapshot_file  wasm_subsup  wasm_validate_simd  wasm_validate_atomic
     wasi_path  wasi_net  wasi_file_nif  wasm_worker_error  wasm_worker_adapter
+    wasm_cleanup_steward
 ```
 
 `test/wasm_architecture_SUITE.erl` asserts that this block names every module
@@ -112,7 +113,7 @@ capture copies and what a restore lays over -- and stays out of it.
 Cycles are not forbidden here. What is forbidden is a fourth one appearing
 because nobody noticed. A cycle is the one structural property you cannot
 discover by reading a module: everything else about `wasm_memory` is answered
-inside `wasm_memory`, and this is answered only by reading all sixty-eight.
+inside `wasm_memory`, and this is answered only by reading all seventy-one.
 
 The margin is thinner than it looks. Adding one call from `wasm_error`, at
 level 0, up into `wasm` collapses fourteen modules into a single component, and

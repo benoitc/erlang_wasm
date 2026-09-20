@@ -88,7 +88,7 @@ supervised reaper will almost always perform.
 -behaviour(gen_server).
 
 -export([start_link/1, start_link/2, start_link/3, stop/0, alive/0, roots/0]).
--export([setting_keys/0]).
+-export([setting_keys/0, setting/2]).
 -export([reserve/4, register/2, withdraw/2, transfer/3, finish/1]).
 -export([authorise/2, generation/0, incarnation/0, stats/0, requests/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).

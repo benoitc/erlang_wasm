@@ -4,7 +4,7 @@ A WebAssembly runtime implemented in Erlang/OTP.
 
 Decoding, validation, instantiation, execution, linear memory and WASI are all
 implemented here. This is not a binding to Wasmtime, Wasmer, WAMR or wasm3. The
-only native code is an optional 200-line file NIF that closes one specific
+only native code is an optional 900-line file NIF that closes one specific
 security window, and the runtime works without it.
 
 ```erlang
@@ -39,14 +39,14 @@ kind, the specification's message text, and context.
 Runs unmodified real-toolchain output: a Rust `wasm32-wasip1` `std` binary
 through `_start`, and `clang -O2` freestanding modules.
 
-**All 64,774 core specification assertions pass**, across 215 suites, with an
+**All 65,481 core specification assertions pass**, across 256 suites, with an
 empty baseline. Not implemented is refused explicitly rather than approximated.
 
 Implemented: WebAssembly 1.0 core, bulk memory, reference types, multi-value,
 multiple memories, memory64, SIMD, tail calls, typed function references,
 exception handling, garbage collection, relaxed SIMD, threads and shared
 memories, sign extension, saturating
-float-to-int, and 44 WASI preview 1 syscalls with capability-based filesystem
+float-to-int, and 45 WASI preview 1 syscalls with capability-based filesystem
 and network access.
 
 It reads both formats: the binary one and the text format, `.wat` modules and

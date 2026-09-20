@@ -62,7 +62,7 @@ you put each one:
 | what | decoded, validated code | running state: memory, globals, tables |
 | mutable | no | yes |
 | shared | yes, node-wide, cached by content hash | no, owned by one process |
-| cost | ~45 ms to compile, ~16 us to load again | ~15 us, plus its declared memory |
+| cost | 1.6 ms to compile a 46 KB plugin and 310 ms a 1.8 MB QuickJS build, 18 us to load either again | 540 us for that plugin and 3.2 ms for QuickJS, plus its declared memory |
 
 Use `wasm:compile/1` only for one-shot work; it skips the cache. If you
 instantiate more than once, use `load/1`.
@@ -131,7 +131,7 @@ ok        = wasm:write_memory(Inst, Ptr, <<"data">>),
 ```
 
 Budget roughly the declared memory per instance: a module declaring one 64 KiB
-page costs about 64 KB, plus about 11 KB if you put it in a process. Bulk
+page costs about 64 KB, plus the process you put it in. Bulk
 transfers run at roughly 0.5 GB/s, because bytes are assembled from 64-bit
 words.
 

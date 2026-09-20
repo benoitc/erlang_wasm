@@ -6302,3 +6302,34 @@ load 74, then by the code manifest when committing this record moved HEAD;
 re-seeded and rerun below load 20, both gates pass. The null reads 19.6 ms
 against 19.5 ms median for a QuickJS reactor request, envelope paired ratio
 0.999; the probe resolution floor is 67 us.
+
+## Two numbers the docs had been citing without a run behind them
+
+A pass over every figure in `README.md` and `docs/` against this file found
+nineteen claims that no measurement supports, most of them superseded rows
+whose replacement is already here. Two were neither superseded nor recorded,
+so they were measured rather than deleted. Load average 11.8 to 12.7, which is
+high for this box; both are minimums over seven runs of work that takes
+milliseconds, and neither is a comparison, so the load bounds the noise rather
+than the conclusion.
+
+**The Lua reactor image on disk.** `snapshot_dir` set, one `wasm_lua` worker,
+one request, then the file read back: **35,366 bytes**. `docs/snapshots.md`
+said 35,355 and `wasm_snapshot_store` says 35 KB, so both were right and
+neither said where from. Its retained size is 77,280 bytes, recorded with the
+third-language work above; `docs/snapshots.md` had 70,456, which appears in no
+run.
+
+**The committed Rust WASI fixture**, `test/fixtures/rust/wasi_demo.wasm`,
+122,596 bytes:
+
+| | minimum | every run |
+| --- | ---: | --- |
+| compile | **4.06 ms** | 11.7, 4.5, 4.2, 4.1, 4.1, 4.1, 4.1 ms |
+| instantiate, WASI imports | **103 us** | 18.2 ms, 939, 130, 136, 103, 105, 106 us |
+
+`docs/features.md` said a 98 KB build compiles in 20 ms and instantiates in
+11 ms. The artefact is 120 KB and neither time is within 5x of the measurement.
+The first run of each column is the cold one, which is why it is shown: a
+reader who runs this once and sees 11.7 ms should know that is the first
+compile and not the number.

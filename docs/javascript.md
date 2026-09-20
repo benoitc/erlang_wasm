@@ -73,8 +73,8 @@ on them is relying on that artifact rather than on the profile.
 
 ## Skip the engine start, with the reactor build
 
-Starting QuickJS is most of a small request: measured between 173 and 190 ms
-against 21 ms for the same work once the engine is already up. The reactor
+Starting QuickJS is most of a small request: 173 ms against 28.5 ms for the
+same work once the engine is already up, both arms of one run. The reactor
 artifact and `wasm_javascript` are how you get the second number. Build it, then point a
 worker at it:
 

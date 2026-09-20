@@ -45,8 +45,9 @@ each of them lets the test pass without any generated code having run.
 | `compile_force` | `false` | Raise on a compile error instead of interpreting, so a generator bug fails rather than hides. |
 
 `compile_whole` in particular is a conformance option and not a tuning knob.
-Compiling every function of QuickJS is 74 seconds against about 8 for the hot
-set, and it spends most of fifteen megabytes of code space on functions the
+Compiling every function of QuickJS measured 107 s in the run that first
+moved it, against 15.2 s for the 223-function hot set in four units,
+and it spends most of fifteen megabytes of code space on functions the
 workload never calls. Specification modules are a few functions each, which is
 why it is affordable there and nowhere else.
 

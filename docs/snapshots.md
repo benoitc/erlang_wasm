@@ -82,7 +82,7 @@ this guide always says which. For a started CPython:
 
 They differ because an image keeps only the non-zero runs of each memory -- a
 started interpreter is mostly zero -- and the file is then compressed. For Lua
-the same three are 196,608 bytes, 70,456 and 35,355: a much narrower spread,
+the same three are 196,608 bytes, 77,280 and 35,366: a much narrower spread,
 because a small guest has little empty memory to leave out.
 
 An unqualified "image" below means the thing itself, not any one of its sizes.
@@ -175,7 +175,7 @@ The directory is bounded, oldest first:
 application:set_env(wasm, max_snapshot_dir_bytes, 2 * 1024 * 1024 * 1024).
 ```
 
-512 MiB unless you set it, which is about 190 CPython images at 2.7 MB of file
+512 MiB unless you set it, which is about 197 CPython images at 2.7 MB of file
 each. "Oldest" is least recently
 **used**, because reading one touches it.
 

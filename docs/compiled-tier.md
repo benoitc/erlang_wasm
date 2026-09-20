@@ -158,9 +158,8 @@ the "globals that are not shared cells" clause above, and it is easy to trip
 without noticing, because nothing about the module looks different and the
 interpreter answers correctly either way. It is worth checking against
 `subset.erl` if your eligible-function count is lower than the instruction list
-above suggests: on a corpus of generated modules that exported everything, it
-took 121 eligible functions to none, and removing only the global exports put
-all 121 back.
+above suggests: a module that exports its mutable globals can lose every
+eligible function to it, and removing only those exports puts them back.
 
 **Only the functions your workload actually ran are compiled**, which for
 QuickJS is 223 of 1666 and about 23 seconds of a core in the background. A

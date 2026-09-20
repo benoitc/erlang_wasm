@@ -26,8 +26,9 @@ long as that worker is idle, which for a lightly used tenant has no bound.
 
 The cost of that shape is measurable and small. Accepting a request -- the
 reservation, the request directory, the channels and the runner spawn -- is
-1.7 to 2.3 ms, which on a 6 ms QuickJS request is a quarter of it. It has not
-been attacked because nothing yet needs it to be smaller.
+1.2 to 2.0 ms whatever the guest, which is a quarter of a Lua request and 5% of
+a CPython one. It has not been attacked because nothing yet needs it to be
+smaller.
 
 ## The reaper is supervised, and knows which roots are its own
 

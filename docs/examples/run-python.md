@@ -6,7 +6,7 @@ and returns what it returns.
 
 **You need:** the CPython build, fetched by `scripts/fetch-python-fixture.sh`
 into `test/fixtures/lang/python.wasm`, and patience: this build starts CPython
-for every request, which takes most of a minute.
+for every request, which takes a minute or more.
 
 CPython needs more than the untrusted defaults allow, so the limits are raised
 knowingly:
@@ -39,8 +39,8 @@ the CPython adapter. Each limit above was measured; [Python](../python.md)
 says why each is what it is.
 
 The reactor build, `wasm_python`, starts CPython once and restores a snapshot
-per request, which brings a request from most of a minute to about a tenth of
-a second.
+per request, which brings a request from a minute or more to about a third of a second, and
+under 100 ms once you add the heap floors [Python](../python.md) describes.
 
 **Clean up:**
 

@@ -94,8 +94,9 @@ A function left out is not a correctness question: it is interpreted, and since
 the boundary became two-way it can still call back into compiled code.
 
 One shot, and honestly so. A function that becomes hot afterwards is never
-compiled, because there is one slot per module and no mapping from a function to
-a shard. That is the next change and it has not been made.
+compiled, because nothing asks for a recompile. Which unit holds which function
+is decided before anything is generated, so a second cut is a policy question
+rather than a missing mapping, and the measurements have not asked for one.
 
 ## A benchmark that lied, and how it was caught
 
@@ -671,9 +672,10 @@ No `env` means zero variables rather than the host's. `ENOTCAPABLE` is kept
 distinct from `EACCES` so a module can tell "not granted" from "the OS
 refused".
 
-Implemented, 44 of them: `args_*`, `environ_*`, `clock_res_get`,
+Implemented, 45 of them: `args_*`, `environ_*`, `clock_res_get`,
 `clock_time_get`, `random_get`, `fd_write`, `fd_read`, `fd_close`, `fd_seek`,
-`fd_tell`, `fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_prestat_get`,
+`fd_tell`, `fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_fdstat_set_rights`,
+`fd_prestat_get`,
 `fd_prestat_dir_name`, `fd_filestat_get`, `fd_filestat_set_size`,
 `fd_filestat_set_times`, `fd_sync`, `fd_datasync`, `fd_pread`, `fd_pwrite`,
 `fd_readdir`, `fd_advise`, `fd_allocate`, `fd_renumber`, `path_open`,
@@ -824,8 +826,9 @@ generated code having run.
 interprets. That phase is what found `i32.shr_u` answering 4294967295 where the
 specification says -1.
 
-`compile_whole` is not a tuning knob. Compiling every function of QuickJS is 74
-seconds against about 8 for the hot set. Specification modules are a few
+`compile_whole` is not a tuning knob. Compiling every function of QuickJS measured 107 s in the run that first
+moved it, against 15.2 s for the 223-function hot set in four units.
+Specification modules are a few
 functions each, which is why it is affordable there and nowhere else.
 
 **Nowhere else is meant literally.** Pointed at CPython 3.12, whose 11,447

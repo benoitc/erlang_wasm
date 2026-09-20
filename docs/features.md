@@ -43,7 +43,7 @@ rationale lives. Build and test instructions are in the README.
 | Mutable globals shared by reference between instances | complete |
 | Module cache keyed by content hash | complete |
 | Optional native path resolution closing the WASI TOCTOU window | complete |
-| WASI Preview 1: 44 syscalls, capability-based filesystem | complete |
+| WASI Preview 1: 45 syscalls, capability-based filesystem | complete |
 | Runs unmodified Rust `wasm32-wasip1` and `clang -O2` output | complete |
 | Text format: `.wat` modules and `.wast` scripts | complete |
 | Compiling hot functions to Core Erlang, with an on-disk artifact cache | complete, off by default |
@@ -116,8 +116,9 @@ genuine checks and surfaced one real defect: a host reference in the internal
 hierarchy, `(ref.host N)`, had no decoding at all, so `extern.wast` was
 exercising `extern.convert_any` against a placeholder.
 
-The totals are unchanged at 63,231 and 1,180. What changed is that all of them
-now check something.
+The totals of that run were unchanged at 63,231 and 1,180. What changed is that
+all of them now check something. The gate reads 65,481 over 256 suites today,
+after the classification the table above records.
 
 ### What the baseline was hiding
 
@@ -371,7 +372,7 @@ are not quoted.
 | instantiate | 2.9 us |
 | call round trip | 0.40 us |
 
-Instantiation at 1.5 us is the number that matters for plugin and
+Instantiation at 2.9 us is the number that matters for plugin and
 request-per-instance workloads, where a runtime is judged on how cheaply it can
 create and discard an instance rather than on steady-state throughput.
 
@@ -480,7 +481,8 @@ table it built from `fd_prestat_*`. The module never learns the host path
 behind `/data`. Rust reports it as "uncategorized" because its `ErrorKind` has
 no name for `ENOTCAPABLE`.
 
-A 98 KB stripped build compiles in about 20 ms and instantiates in about 11 ms.
+The committed 120 KB stripped build compiles in 4.1 ms and instantiates in
+103 us.
 `scripts/build-rust-fixture.sh` rebuilds it; the artefact is committed so the
 test runs without a Rust toolchain.
 
@@ -493,14 +495,14 @@ Two worked embeddings, both in `examples/` and both exercised by
 | --- | ---: | ---: |
 | guest | a Rust plugin, compiled | QuickJS, interpreting a script |
 | module | 46 KB | 1.8 MB |
-| compile, once | 14 ms | 300 ms |
-| instantiate, per request | 4 us | 12 ms |
+| compile, once | 1.6 ms | 310 ms |
+| instantiate, per request | 540 us | 3.2 ms |
 | a trivial request | under 1 ms | 238 ms |
 | levels of interpretation | one | two |
 
 The second is the more interesting number. A real 1.8 MB QuickJS build, which
-has never heard of this runtime, decodes and validates in 300 ms, instantiates
-in 12 ms and evaluates `print('hello')` in 238 ms end to end. A hundred
+has never heard of this runtime, decodes and validates in 310 ms, instantiates
+in 3.2 ms and evaluates `print('hello')` in 238 ms end to end. A hundred
 thousand iterations of a JavaScript loop take about 7 s, which is the honest
 cost of stacking two interpreters and the reason `plugin_worker` exists.
 
@@ -531,8 +533,8 @@ nothing to download:
   through the calling process's own dictionary, swept so that destroyed
   instances do not accumulate.
 - **A function is lowered the first time it is called**, above 256 functions per
-  module. Instantiating QuickJS went from 78 ms to 12 ms and a script from
-  752 ms to 238 ms. Below the threshold everything is lowered up front as
+  module. Instantiating QuickJS fell from 78 ms, and measures 3.2 ms today; a script
+  went from 752 ms to 238 ms. Below the threshold everything is lowered up front as
   before, because deferring cost a small module 16% of a call round trip and
   buys it nothing.
 

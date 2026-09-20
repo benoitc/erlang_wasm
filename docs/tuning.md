@@ -200,23 +200,26 @@ A floor is paid per concurrent runner, so the question a host actually has is
 whether it still pays with many of them. It does, and by the same factor
 throughout. QuickJS, 25 requests per worker, on 14 cores about 70% idle:
 
-| workers | no floor | at 200,000 | peak process memory |
-| ---: | ---: | ---: | --- |
-| 1 | 17.8 req/s | 44.4 | 38 vs 31 MB |
-| 2 | 34.3 | 89.8 | 59 vs 36 |
-| 4 | 65.1 | 159.7 | 96 vs 57 |
-| 8 | 107.6 | 255.2 | 157 vs 85 |
-| 14 | 126.1 | **300.4** | 204 vs 129 |
+| workers | no floor | at 200,000 |
+| ---: | ---: | ---: |
+| 1 | 17.8 req/s | 44.4 |
+| 2 | 34.3 | 89.8 |
+| 4 | 65.1 | 159.7 |
+| 8 | 107.6 | 255.2 |
+| 14 | 126.1 | **300.4** |
 
 CPython, 20 requests per worker, at a floor of 1,000,000 and about 60% idle:
 
-| workers | no floor | at 1,000,000 | peak process memory |
-| ---: | ---: | ---: | --- |
-| 1 | 2.4 req/s | 7.2 | 64 vs 50 MB |
-| 2 | 4.2 | 13.1 | 113 vs 89 |
-| 4 | 6.4 | 18.7 | 196 vs 145 |
-| 8 | 9.1 | 27.5 | 371 vs 292 |
-| 14 | 10.5 | **30.8** | 556 vs 398 |
+| workers | no floor | at 1,000,000 |
+| ---: | ---: | ---: |
+| 1 | 2.4 req/s | 7.2 |
+| 2 | 4.2 | 13.1 |
+| 4 | 6.4 | 18.7 |
+| 8 | 9.1 | 27.5 |
+| 14 | 10.5 | **30.8** |
+
+Peak process memory was measured at fourteen workers only: 204 MB unfloored
+against 129 floored on QuickJS, 556 against 398 on CPython.
 
 Two things to take from both tables. **The floor is worth a constant factor at
 every worker count**, 2.4x on QuickJS and about 3x on CPython, so it does not

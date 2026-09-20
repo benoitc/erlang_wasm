@@ -72,8 +72,8 @@ timeout is advice rather than a bound.
 
 Use `fresh` for anything untrusted. Data leaking between requests is the
 failure `reuse` gives you, and a single-request test cannot see it. `fresh` is
-affordable because the module is cached and a small instance costs about
-64 KB, so a reset takes microseconds.
+affordable because the module is cached: instantiating and destroying a 46 KB
+plugin measures 79 us.
 
 ## Bound the work and the time
 

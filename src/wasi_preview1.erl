@@ -97,6 +97,7 @@ close_entry(_) ->
     ok.
 
 -define(MODULE_NAME, <<"wasi_snapshot_preview1">>).
+-define(DEFAULT_READDIR_BATCH, (1 bsl 20)).   %% 1 MiB
 
 %% Preopened directories start here; 0/1/2 are stdio.
 -define(FIRST_PREOPEN_FD, 3).
@@ -106,7 +107,15 @@ close_entry(_) ->
 -spec default_config() -> map().
 default_config() ->
     #{args => [], env => #{}, dirs => [], clocks => [monotonic, realtime],
-      random => strong, net => none}.
+      random => strong, net => none,
+      %% `fd_readdir' host-work ceiling: a guest can ask for a ~4 GiB buffer, so
+      %% a batch larger than this is refused before any directory is read.
+      readdir_batch_bytes => ?DEFAULT_READDIR_BATCH,
+      %% The pure-Erlang fallback cannot stream a directory with a bounded
+      %% buffer, so its `fd_readdir' refuses by default; `accept' restores
+      %% listing there at the cost of an unbounded scan (a compatibility
+      %% override, not a safety cap).
+      readdir_fallback => refuse}.
 
 -spec imports(map()) -> map().
 imports(Config) -> imports(Config, ?MODULE_NAME).
@@ -446,28 +455,34 @@ handle(fd_renumber, _Ctx, [From, To], _Config, St) ->
             end
     end;
 
-%% Directory listing. Entries are emitted as `dirent` records followed by the
-%% name, truncated to the caller's buffer; the cookie is the index of the next
-%% entry, so a caller with a small buffer can page through.
-handle(fd_readdir, Ctx, [Fd, Buf, BufLen, Cookie, NUsedPtr], _Config, St) ->
+%% Directory listing, bounded by the guest's buffer and a host-work ceiling.
+%% The native backend streams a persistent directory handle and returns the WASI
+%% wire bytes for one batch, with an opaque cookie; the fallback cannot stream
+%% with a bounded buffer, so it refuses unless the instance turned on the
+%% unbounded compatibility path.
+handle(fd_readdir, Ctx, [Fd, Buf, BufLen0, Cookie0, NUsedPtr], Config, St) ->
     with_fd(St, Fd, ?RIGHT_FD_READDIR,
             fun(#wasi_fd{type = dir, host_path = Dir, root = Root}) ->
-                    %% Through the descriptor's own directory, which on the
-                    %% native backend is the directory rather than its name, so
-                    %% listing it cannot be redirected by a rename between the
-                    %% open and the read.
-                    case wasi_fs:list(Root) of
-                        {error, E} -> {errno, E};
-                        {ok, Bins} ->
-                            Names = [binary_to_list(B) || B <- Bins],
-                            %% "." and ".." are expected by readers that count
-                            %% entries, and sorting makes the cookie stable
-                            %% across calls, which paging depends on.
-                            All = [".", ".."] ++ lists:sort(Names),
-                            Bin = dirents(Dir, All, Cookie, BufLen),
-                            case wasm:write_memory(Ctx, wasm_num:to_u32(Buf), Bin) of
-                                ok -> write_u32(Ctx, NUsedPtr, byte_size(Bin));
-                                _ -> {errno, ?EFAULT}
+                    BufLen = wasm_num:to_u32(BufLen0),
+                    Cookie = wasm_num:to_u64(Cookie0),
+                    Ceiling = maps:get(readdir_batch_bytes, Config,
+                                       ?DEFAULT_READDIR_BATCH),
+                    if
+                        BufLen > Ceiling ->
+                            %% A guest can ask for ~4 GiB; refuse before reading.
+                            {errno, ?ENOMEM};
+                        true ->
+                            case readdir_batch(Root, Cookie, BufLen, Dir,
+                                               Config) of
+                                {error, E} -> {errno, E};
+                                {ok, Bin} ->
+                                    case wasm:write_memory(
+                                           Ctx, wasm_num:to_u32(Buf), Bin) of
+                                        ok ->
+                                            write_u32(Ctx, NUsedPtr,
+                                                      byte_size(Bin));
+                                        _ -> {errno, ?EFAULT}
+                                    end
                             end
                     end;
                (_) -> {errno, ?ENOTDIR}
@@ -1618,10 +1633,29 @@ two_paths(Ctx, St, {FdA, PtrA, LenA}, {FdB, PtrB, LenB}, Right, Fun) ->
           end
       end).
 
+%% Native: the NIF streams a persistent handle and returns the wire bytes,
+%% bounded and cookie-paged. Fallback: refuse by default, since
+%% `file:list_dir/1' has already read the whole directory before any cap could
+%% apply; `accept' turns on the unbounded compatibility listing.
+readdir_batch({native, _} = Root, Cookie, BufLen, _Dir, _Config) ->
+    wasi_fs:readdir(Root, Cookie, BufLen);
+readdir_batch({fallback, _} = Root, Cookie, BufLen, Dir, Config) ->
+    case maps:get(readdir_fallback, Config, refuse) of
+        refuse -> {error, ?ENOTSUP};
+        accept ->
+            case wasi_fs:list(Root) of
+                {error, E} -> {error, E};
+                {ok, Bins} ->
+                    Names = [binary_to_list(B) || B <- Bins],
+                    All = [".", ".."] ++ lists:sort(Names),
+                    {ok, dirents(Dir, All, Cookie, BufLen)}
+            end
+    end.
+
 %% A `dirent' is a fixed 24-byte header followed by the name. Entries are
 %% emitted from `Cookie' onward and the result is truncated to the caller's
 %% buffer, which is how a caller with a small buffer pages through a large
-%% directory.
+%% directory. Used by the fallback compatibility path only.
 dirents(Dir, Names, Cookie, BufLen) ->
     Indexed = lists:zip(lists:seq(1, length(Names)), Names),
     Wanted = [{I, N} || {I, N} <- Indexed, I > Cookie],

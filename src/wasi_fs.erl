@@ -44,7 +44,7 @@ the right to read may still be refused a path that escapes its preopen.
 
 -export([open/3, pread/3, pwrite/3, size/1, stat_fd/1, close/1,
          list_dir/2, backend/0]).
--export([truncate/2, sync/1, preopen/1, forget/1, list/1]).
+-export([truncate/2, sync/1, preopen/1, forget/1, list/1, readdir/3]).
 -export([mkdir/2, unlink/2, rmdir/2, symlink/3, readlink/2, stat/2,
          set_times/4, set_times/5, set_times_fd/3,
          stat/3, rename/4, link/4]).
@@ -554,7 +554,7 @@ puts them back, because a reader that counts entries expects them first.
 """.
 -spec list(root()) -> {ok, [binary()]} | {error, non_neg_integer()}.
 list({native, H}) ->
-    case wasi_file_nif:readdir(H) of
+    case wasi_file_nif:readdir_names(H) of
         {ok, Names} ->
             {ok, [N || N <- Names, N =/= ~".", N =/= ~".."]};
         {error, E} ->
@@ -572,7 +572,7 @@ list_dir(Root, Guest) ->
             case wasi_file_nif:open_at(unicode:characters_to_list(Root), Guest, 0, 1) of
                 {error, E} -> {error, map_posix(E)};
                 {ok, H} ->
-                    Result = case wasi_file_nif:readdir(H) of
+                    Result = case wasi_file_nif:readdir_names(H) of
                                  {ok, Names} -> {ok, Names};
                                  {error, E2} -> {error, map_posix(E2)}
                              end,
@@ -588,6 +588,22 @@ list_dir(Root, Guest) ->
                             {ok, [unicode:characters_to_binary(N) || N <- Names]}; {error, R} -> {error, map_posix(R)}
                     end
             end
+    end.
+
+-doc """
+One bounded `fd_readdir` batch on the descriptor's own directory, native only.
+
+Returns the WASI wire bytes for the batch starting at `Cookie` (`0` to start),
+filling at most `BufLen` bytes plus one straddling entry. The fallback backend
+cannot stream a directory with a bounded buffer, so its listing is handled by
+the caller.
+""".
+-spec readdir(root(), non_neg_integer(), non_neg_integer()) ->
+          {ok, binary()} | {error, non_neg_integer()}.
+readdir({native, H}, Cookie, BufLen) ->
+    case wasi_file_nif:readdir(H, Cookie, BufLen) of
+        {ok, Bin}  -> {ok, Bin};
+        {error, E} -> {error, map_posix(E)}
     end.
 
 %%% --------------------------------------------------------------- mapping ---

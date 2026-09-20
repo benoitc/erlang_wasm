@@ -11,12 +11,16 @@ which is the whole reason it exists and the one thing the fallback cannot do.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("kernel/include/file.hrl").
 -include("wasi.hrl").
 
 all() ->
     [backend_is_reported_honestly,
      legitimate_paths_open,
      every_escape_is_refused,
+     an_inward_symlink_does_not_earn_a_parent,
+     a_followed_final_symlink_stays_in_the_preopen,
+     readdir_pages_a_large_directory_in_bounded_batches,
      symlink_swapped_after_check_is_refused,
      handles_survive_arbitrary_input,
      closing_a_handle_under_a_read_never_yields_another_file,
@@ -172,6 +176,112 @@ every_escape_is_refused(Config) ->
                   ~"outdir/key.txt",
                   ~"sub/../../secret/key.txt",
                   ~"/etc/passwd"]].
+
+%% A symlink that resolves to its own directory or higher must not earn depth.
+%% `walk_from' used to credit `depth + 1' through any followed link, so an
+%% inward-pointing link followed by `..' left the walk one level above where it
+%% really was and bought an escape past the preopen. Both backends refuse it.
+an_inward_symlink_does_not_earn_a_parent(Config) ->
+    Data = ?config(data, Config),
+    %% A link inside the preopen that points back at the preopen itself.
+    ok = file:make_symlink(".", filename:join(Data, "here")),
+    %% Following it and then stepping up reaches the preopen's parent, which
+    %% holds `secret'. It is outside the capability and must be refused.
+    ?assertEqual({error, ?ENOTCAPABLE},
+                 wasi_fs:open(root(Data), ~"here/../secret/key.txt",
+                              [read, follow])),
+    %% The link itself still works for something inside the preopen.
+    ?assertMatch({ok, _},
+                 wasi_fs:open(root(Data), ~"here/note.txt", [read, follow])).
+
+%% `path_filestat_get`/`set_times` with the follow flag used to hand the final
+%% component to `fstatat`/`utimensat` with flags 0, letting the kernel follow an
+%% escaping final symlink anywhere. The final chain is resolved under the walk's
+%% budget now, and the operation acts NOFOLLOW. Native only: the fallback
+%% follows either way, which is its documented limitation.
+a_followed_final_symlink_stays_in_the_preopen(Config) ->
+    case wasi_fs:backend() of
+        fallback ->
+            {skip, "the fallback follows the final component either way"};
+        native ->
+            Data = ?config(data, Config),
+            Secret = ?config(secret, Config),
+            Root = root(Data),
+            KeyPath = filename:join(Secret, "key.txt"),
+
+            %% `escape.txt` (from init) points at the secret. Following it must
+            %% be refused, not resolved to the target outside the preopen.
+            ?assertEqual({error, ?ENOTCAPABLE},
+                         wasi_fs:stat(Root, ~"escape.txt", follow)),
+            {ok, #file_info{mtime = Before}} =
+                file:read_link_info(KeyPath, [{time, posix}]),
+            ?assertEqual({error, ?ENOTCAPABLE},
+                         wasi_fs:set_times(Root, ~"escape.txt", 1, 1, follow)),
+            {ok, #file_info{mtime = After}} =
+                file:read_link_info(KeyPath, [{time, posix}]),
+            ?assertEqual(Before, After),
+
+            %% A final symlink that resolves inside the preopen is followed.
+            ok = file:make_symlink("note.txt", filename:join(Data, "good")),
+            ?assertMatch({ok, _}, wasi_fs:stat(Root, ~"good", follow)),
+
+            %% Following does not need read permission on the target.
+            NoRead = filename:join(Data, "noread.txt"),
+            ok = file:write_file(NoRead, <<"x">>),
+            ok = file:change_mode(NoRead, 8#000),
+            ok = file:make_symlink("noread.txt", filename:join(Data, "toit")),
+            ?assertMatch({ok, _}, wasi_fs:stat(Root, ~"toit", follow)),
+            ?assertEqual(ok, wasi_fs:set_times(Root, ~"toit", 1, 1, follow))
+    end.
+
+%% A `fd_readdir' batch is bounded by the caller's buffer rather than the size
+%% of the directory: a small buffer pages through a big directory in batches no
+%% larger than the buffer, and the cookies cover every entry exactly once. The
+%% old code read the whole directory on every call. Native only; the fallback
+%% cannot stream with a bounded buffer.
+readdir_pages_a_large_directory_in_bounded_batches(Config) ->
+    case wasi_fs:backend() of
+        fallback ->
+            {skip, "the fallback cannot stream with a bounded buffer"};
+        native ->
+            Data = ?config(data, Config),
+            Big = filename:join(Data, "big"),
+            ok = filelib:ensure_path(Big),
+            N = 200,
+            [ok = file:write_file(filename:join(Big, entry_name(I)), <<>>)
+             || I <- lists:seq(1, N)],
+            {ok, Root} = wasi_fs:preopen(Big),
+            BufLen = 128,
+            Names = page(Root, 0, BufLen, []),
+            %% Every entry plus "." and ".." exactly once, and every batch was
+            %% bounded by the buffer.
+            Expected = lists:sort([~".", ~".."] ++
+                                      [list_to_binary(entry_name(I))
+                                       || I <- lists:seq(1, N)]),
+            ?assertEqual(Expected, lists:sort(Names)),
+            ?assertEqual(length(Expected), length(Names))
+    end.
+
+entry_name(I) -> lists:flatten(io_lib:format("f~4..0b.dat", [I])).
+
+page(Root, Cookie, BufLen, Acc) ->
+    {ok, Bin} = wasi_fs:readdir(Root, Cookie, BufLen),
+    true = byte_size(Bin) =< BufLen,
+    case parse_dirents(Bin) of
+        [] -> Acc;
+        Entries ->
+            {LastCookie, _, _} = lists:last(Entries),
+            Names = [Name || {_, _, Name} <- Entries],
+            page(Root, LastCookie, BufLen, Acc ++ Names)
+    end.
+
+%% Parse only the complete leading entries; a straddling tail is dropped, which
+%% is what a guest with a too-small buffer does before it retries.
+parse_dirents(<<Cookie:64/little, _Ino:64/little, NLen:32/little, _Type:8,
+                _:24, Rest/binary>>) when byte_size(Rest) >= NLen ->
+    <<Name:NLen/binary, Tail/binary>> = Rest,
+    [{Cookie, _Ino, Name} | parse_dirents(Tail)];
+parse_dirents(_) -> [].
 
 %% The race the NIF exists for: resolve a path, then swap a component for a
 %% symlink before it is opened. The fallback is documented as vulnerable here,

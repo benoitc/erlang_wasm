@@ -33,6 +33,7 @@
 #include <dirent.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <stdint.h>
 
 #ifndef O_DIRECTORY
 #define O_DIRECTORY 0
@@ -46,6 +47,21 @@
 /* Not an errno. The path walk uses it for its own refusals so that "the
  * sandbox said no" and a real EACCES from the host stay distinguishable. */
 #define E_REFUSED (-1)
+
+/* A `fd_readdir' entry is a 21-byte header (`dircookie', `d_ino', `d_namlen',
+ * `d_type') padded to 24, then the name, matching what the WASI layer packs. */
+#define DIRENT_HDR 24
+
+/* WASI preview 1 filetypes, so the NIF can answer `d_type' without a round trip
+ * through Erlang for every entry. */
+#define WT_UNKNOWN 0
+#define WT_BLOCK 1
+#define WT_CHAR 2
+#define WT_DIR 3
+#define WT_REG 4
+#define WT_SOCK_DGRAM 5
+#define WT_SOCK_STREAM 6
+#define WT_SYMLINK 7
 
 static ErlNifResourceType *FILE_RES = NULL;
 
@@ -69,6 +85,11 @@ typedef struct {
     ErlNifMutex *lock;
     int fd;
     int is_dir;
+    /* Bounded `fd_readdir' state, under `lock'. `dirp' is opened lazily on the
+     * first read and reused, so a listing does not rescan the whole directory on
+     * every call. The cookie a guest passes back is a `telldir' offset on this
+     * same stream. */
+    DIR *dirp;
 } file_handle;
 
 static void file_dtor(ErlNifEnv *env, void *obj) {
@@ -82,6 +103,7 @@ static void file_dtor(ErlNifEnv *env, void *obj) {
      *
      * The garbage collector is the last line of defence: an Erlang process
      * that drops a handle without closing it must not leak a descriptor. */
+    if (h->dirp) { closedir(h->dirp); h->dirp = NULL; }
     if (h->fd >= 0) { close(h->fd); h->fd = -1; }
     if (h->lock) { enif_mutex_destroy(h->lock); h->lock = NULL; }
 }
@@ -94,6 +116,7 @@ static file_handle *new_handle(int fd, int is_dir) {
     h->lock = NULL;
     h->fd = fd;
     h->is_dir = is_dir;
+    h->dirp = NULL;
     h->lock = enif_mutex_create("wasi_file");
     if (!h->lock) {
         /* The descriptor goes with it; the caller has no handle to close. */
@@ -211,7 +234,8 @@ static ERL_NIF_TERM mk_ok(ErlNifEnv *env, ERL_NIF_TERM v) {
 #define MAX_SYMLINKS 8
 
 static int walk_from(int dirfd, const char *path, int flags, mode_t mode,
-                     int depth, int budget, int follow_final, int *out_fd);
+                     int depth, int budget, int follow_final, int *out_fd,
+                     int *out_depth);
 
 /* Open one component, following it if it turns out to be a symlink.
  *
@@ -268,20 +292,22 @@ static int step(int cur, const char *comp, int oflags, mode_t mode,
     /* The link's text, from the directory the link sits in, at the same depth.
      * The last component of the target is what the caller asked for, so it
      * carries the caller's flags. */
-    int rc = walk_from(cur, target, oflags, mode, depth, budget - 1, 1, out_fd);
+    int nd;
+    int rc = walk_from(cur, target, oflags, mode, depth, budget - 1, 1, out_fd,
+                       &nd);
     if (rc != 0) return rc;
-    /* Depth is not knowable exactly through a link that went up and down, and
-     * does not need to be: the recursion enforced containment itself, and
-     * anything after this continues from a directory already inside. Counting
-     * it as one step down is the conservative answer, since it can only make a
-     * later ".." refuse sooner. */
-    *out_depth = depth + 1;
+    /* The real depth the recursion reached, not `depth + 1'. A link that
+     * resolves to the same directory or higher leaves the walk at `depth' or
+     * below; crediting `depth + 1' overcounted it, and each overcount bought
+     * one extra ".." past the preopen. */
+    *out_depth = nd;
     return 0;
 }
 
 /* `path' relative to `dirfd', which sits `depth' components below the preopen. */
 static int walk_from(int dirfd, const char *path, int flags, mode_t mode,
-                     int depth, int budget, int follow_final, int *out_fd) {
+                     int depth, int budget, int follow_final, int *out_fd,
+                     int *out_depth) {
     char buf[MAX_PATH_LEN];
     size_t n = strlen(path);
     if (n == 0) return EINVAL;
@@ -316,13 +342,15 @@ static int walk_from(int dirfd, const char *path, int flags, mode_t mode,
     }
     if (!cur_owned) return EINVAL;               /* path was "." or empty */
     *out_fd = cur;
+    *out_depth = d;
     return 0;
 }
 
 static int walk_open(int dirfd, const char *path, int flags, mode_t mode,
                      int follow_final, int *out_fd) {
+    int nd;
     return walk_from(dirfd, path, flags, mode, 0, MAX_SYMLINKS, follow_final,
-                     out_fd);
+                     out_fd, &nd);
 }
 
 /* Walk to the *parent* of the last component, leaving that component unopened.
@@ -383,6 +411,52 @@ static int walk_parent(int dirfd, const char *path, char *buf, size_t buflen,
     *out_owned = owned;
     *out_name = last;
     return 0;
+}
+
+/* Resolve to the anchored parent and final name a FOLLOW operation should act
+ * on, following the final component's symlink chain under the depth and symlink
+ * budget rather than handing it to the kernel.
+ *
+ * `path_filestat_get`/`set_times` with the follow flag would otherwise pass the
+ * final name to `fstatat`/`utimensat` with `flags == 0`, and the kernel would
+ * follow a relative final symlink out of the preopen. This walks the chain the
+ * same way `step` walks the rest of a path: an absolute target is refused, and
+ * a target that steps up out of its directory is refused by the depth counter.
+ * The caller then acts with `AT_SYMLINK_NOFOLLOW`, so a name swapped for a
+ * symlink after this returns is operated on as the link itself. */
+static int resolve_final(int base, const char *path, char *buf, size_t buflen,
+                         int *out_fd, int *out_owned, char **out_name) {
+    int pfd, owned;
+    char *name;
+    int e = walk_parent(base, path, buf, buflen, &pfd, &owned, &name);
+    if (e != 0) return e;
+
+    char link[MAX_PATH_LEN];
+    char lbuf[MAX_PATH_LEN];
+    for (int budget = MAX_SYMLINKS; budget > 0; budget--) {
+        ssize_t n = readlinkat(pfd, name, link, sizeof(link) - 1);
+        if (n < 0) {
+            /* Not a symlink (EINVAL), or does not exist yet: this is the name
+             * to act on. The caller's NOFOLLOW `*at' call reports any real
+             * error. */
+            *out_fd = pfd; *out_owned = owned; *out_name = name;
+            return 0;
+        }
+        link[n] = '\0';
+        if (link[0] == '/') { if (owned) close(pfd); return E_REFUSED; }
+        /* The target is relative to the directory the link sits in. `readlinkat'
+         * above has already read `name', so reusing `lbuf' for the new parent
+         * name is safe. `walk_parent' resolves intermediate links and refuses a
+         * `..' that would leave the preopen. */
+        int npfd, nowned;
+        char *nname;
+        e = walk_parent(pfd, link, lbuf, sizeof(lbuf), &npfd, &nowned, &nname);
+        if (owned) close(pfd);
+        if (e != 0) return e;
+        pfd = npfd; owned = nowned; name = nname;
+    }
+    if (owned) close(pfd);
+    return ELOOP;
 }
 
 /* A directory handle's descriptor, duplicated under its lock. The copy is
@@ -506,7 +580,13 @@ static ERL_NIF_TERM path_op_nif(ErlNifEnv *env, int argc,
 
     int pfd, owned;
     char *name;
-    e = walk_parent(base, path, buf, sizeof(buf), &pfd, &owned, &name);
+    /* A FOLLOW operation resolves the final symlink chain here, under the walk's
+     * own budget, then acts NOFOLLOW; every other operation acts on the name as
+     * written. */
+    if (op == OP_STAT_FOLLOW || op == OP_SETTIMES_FOLLOW)
+        e = resolve_final(base, path, buf, sizeof(buf), &pfd, &owned, &name);
+    else
+        e = walk_parent(base, path, buf, sizeof(buf), &pfd, &owned, &name);
     if (e != 0) { close(base); return mk_errno(env, e); }
 
     ERL_NIF_TERM result;
@@ -548,11 +628,11 @@ static ERL_NIF_TERM path_op_nif(ErlNifEnv *env, int argc,
     case OP_STAT_FOLLOW:
     case OP_STAT: {
         struct stat st;
-        /* Not following the final component either: `path_filestat_get' with
-         * no follow flag is asking about the link, and following it would be
-         * resolving a name this walk deliberately did not. */
-        rc = fstatat(pfd, name, &st,
-                     (op == OP_STAT_FOLLOW) ? 0 : AT_SYMLINK_NOFOLLOW);
+        /* Always NOFOLLOW: a no-follow `path_filestat_get' asks about the link
+         * itself, and a follow one has already had its final chain resolved by
+         * `resolve_final', so `name' is the resolved target and must not be
+         * followed a second time by the kernel. */
+        rc = fstatat(pfd, name, &st, AT_SYMLINK_NOFOLLOW);
         result = (rc == 0) ? mk_ok(env, stat_map(env, &st))
                            : enif_make_atom(env, "ok");
         break;
@@ -564,16 +644,16 @@ static ERL_NIF_TERM path_op_nif(ErlNifEnv *env, int argc,
          * that stamp alone, which is how the WASI `fstflags' bits are carried
          * across; Erlang builds the pair and this only applies it.
          *
-         * AT_SYMLINK_NOFOLLOW for the same reason OP_STAT uses it: the walk
-         * did not follow the final component, so neither does this. */
+         * Always AT_SYMLINK_NOFOLLOW: `resolve_final' has already resolved a
+         * follow operation's final chain, and a no-follow one acts on the link
+         * itself. Either way the kernel must not follow `name' again. */
         struct timespec ts[2];
         if (!decode_times(&arg, ts)) {
             if (owned) close(pfd);
             close(base);
             return enif_make_badarg(env);
         }
-        rc = utimensat(pfd, name, ts,
-                       (op == OP_SETTIMES_FOLLOW) ? 0 : AT_SYMLINK_NOFOLLOW);
+        rc = utimensat(pfd, name, ts, AT_SYMLINK_NOFOLLOW);
         result = enif_make_atom(env, "ok");
         break;
     }
@@ -811,16 +891,15 @@ static ERL_NIF_TERM fstat_nif(ErlNifEnv *env, int argc,
     return mk_ok(env, stat_map(env, &st));
 }
 
-static ERL_NIF_TERM readdir_nif(ErlNifEnv *env, int argc,
-                                const ERL_NIF_TERM argv[]) {
+/* The whole of a directory as a list of name binaries, unbounded. Kept for the
+ * name-listing helpers (`wasi_fs:list/1`, `list_dir/2`); `fd_readdir' uses the
+ * bounded `readdir/3' below. */
+static ERL_NIF_TERM readdir_names_nif(ErlNifEnv *env, int argc,
+                                      const ERL_NIF_TERM argv[]) {
     file_handle *h;
     (void)argc;
     if (!enif_get_resource(env, argv[0], FILE_RES, (void **)&h))
         return enif_make_badarg(env);
-    /* fdopendir takes ownership of the descriptor, so it gets a duplicate:
-     * the resource must stay usable after this call. Duplicating under the
-     * lock and reading the directory outside it means a long listing does not
-     * hold up a close. */
     int lerr = handle_lock(h);
     if (lerr != 0) return mk_errno(env, lerr);
     if (!h->is_dir) { enif_mutex_unlock(h->lock); return mk_errno(env, ENOTDIR); }
@@ -843,6 +922,153 @@ static ERL_NIF_TERM readdir_nif(ErlNifEnv *env, int argc,
     }
     closedir(d);
     return mk_ok(env, list);
+}
+
+static int wt_of_mode(mode_t m) {
+    if (S_ISDIR(m)) return WT_DIR;
+    if (S_ISREG(m)) return WT_REG;
+    if (S_ISLNK(m)) return WT_SYMLINK;
+    if (S_ISCHR(m)) return WT_CHAR;
+    if (S_ISBLK(m)) return WT_BLOCK;
+    if (S_ISSOCK(m)) return WT_SOCK_STREAM;
+    return WT_UNKNOWN;
+}
+
+static void put_u64(unsigned char *p, uint64_t v) {
+    for (int i = 0; i < 8; i++) p[i] = (unsigned char)(v >> (8 * i));
+}
+static void put_u32(unsigned char *p, uint32_t v) {
+    for (int i = 0; i < 4; i++) p[i] = (unsigned char)(v >> (8 * i));
+}
+
+/* One bounded batch of `fd_readdir' entries, in the WASI wire format the guest
+ * reads directly. Fills at most `buflen' bytes (the guest's buffer, already
+ * capped by the work ceiling in Erlang), plus the single straddling entry WASI
+ * needs so a guest with a too-small buffer can tell it must grow. Cookie 0
+ * starts the listing; any other value is a `d_next' this stream emitted (a
+ * `telldir' offset) and is sought to on the same handle, which is what the WASI
+ * contract and the conformance suite require. Seeking within a guest's own
+ * directory is not a boundary crossing, so an unrecognised cookie is left to
+ * `seekdir' rather than refused. */
+static ERL_NIF_TERM readdir_nif(ErlNifEnv *env, int argc,
+                                const ERL_NIF_TERM argv[]) {
+    file_handle *h;
+    ErlNifUInt64 cookie;
+    unsigned int buflen;
+    (void)argc;
+    if (!enif_get_resource(env, argv[0], FILE_RES, (void **)&h) ||
+        !enif_get_uint64(env, argv[1], &cookie) ||
+        !enif_get_uint(env, argv[2], &buflen))
+        return enif_make_badarg(env);
+
+    int lerr = handle_lock(h);
+    if (lerr != 0) return mk_errno(env, lerr);
+    if (!h->is_dir) { enif_mutex_unlock(h->lock); return mk_errno(env, ENOTDIR); }
+
+    /* Open the stream once and keep it on the handle. `fdopendir' takes
+     * ownership of the descriptor it is given, so it gets a duplicate; the
+     * handle's own `fd' stays usable for stat and close. */
+    if (h->dirp == NULL) {
+        int dup_fd = dup(h->fd);
+        if (dup_fd < 0) { int e = errno; enif_mutex_unlock(h->lock);
+                          return mk_errno(env, e); }
+        h->dirp = fdopendir(dup_fd);
+        if (h->dirp == NULL) { int e = errno; close(dup_fd);
+                               enif_mutex_unlock(h->lock);
+                               return mk_errno(env, e); }
+    }
+
+    if (cookie == 0)
+        rewinddir(h->dirp);
+    else
+        seekdir(h->dirp, (long)cookie);
+
+    unsigned char *out = enif_alloc(buflen ? buflen : 1);
+    if (out == NULL) { enif_mutex_unlock(h->lock);
+                       return mk_errno(env, ENOMEM); }
+    size_t used = 0;
+    int dirfd_for_stat = dirfd(h->dirp);
+    int err = 0;
+
+    for (;;) {
+        errno = 0;
+        struct dirent *de = readdir(h->dirp);
+        if (de == NULL) { err = errno; break; }   /* end, or a read error */
+        size_t nlen = strlen(de->d_name);
+        size_t esz = DIRENT_HDR + nlen;
+
+        /* `d_next': the cookie of the entry after this one, so a guest resumes
+         * exactly past it. */
+        uint64_t d_next = (uint64_t)telldir(h->dirp);
+
+        int type = WT_UNKNOWN;
+        uint64_t ino = 0;
+#ifdef _DIRENT_HAVE_D_TYPE
+        switch (de->d_type) {
+        case DT_DIR: type = WT_DIR; break;
+        case DT_REG: type = WT_REG; break;
+        case DT_LNK: type = WT_SYMLINK; break;
+        case DT_CHR: type = WT_CHAR; break;
+        case DT_BLK: type = WT_BLOCK; break;
+        case DT_SOCK: type = WT_SOCK_STREAM; break;
+        default: type = WT_UNKNOWN; break;
+        }
+#endif
+        if (type == WT_UNKNOWN) {
+            struct stat st;
+            if (fstatat(dirfd_for_stat, de->d_name, &st,
+                        AT_SYMLINK_NOFOLLOW) == 0) {
+                type = wt_of_mode(st.st_mode);
+                ino = (uint64_t)st.st_ino;
+            }
+        }
+        if (ino == 0) ino = (uint64_t)de->d_ino;
+
+        /* Would this entry overflow the guest buffer? Emit it truncated so the
+         * guest learns to grow its buffer, then stop. */
+        if (used + esz > buflen) {
+            if (used < buflen) {
+                unsigned char hdr[DIRENT_HDR];
+                put_u64(hdr, d_next);
+                put_u64(hdr + 8, ino);
+                put_u32(hdr + 16, (uint32_t)nlen);
+                hdr[20] = (unsigned char)type;
+                hdr[21] = hdr[22] = hdr[23] = 0;
+                size_t room = buflen - used;
+                size_t take = room < DIRENT_HDR ? room : DIRENT_HDR;
+                memcpy(out + used, hdr, take);
+                used += take;
+                if (take == DIRENT_HDR) {
+                    size_t nroom = buflen - used;
+                    size_t ntake = nroom < nlen ? nroom : nlen;
+                    memcpy(out + used, de->d_name, ntake);
+                    used += ntake;
+                }
+            }
+            break;
+        }
+
+        unsigned char *p = out + used;
+        put_u64(p, d_next);
+        put_u64(p + 8, ino);
+        put_u32(p + 16, (uint32_t)nlen);
+        p[20] = (unsigned char)type;
+        p[21] = p[22] = p[23] = 0;
+        memcpy(p + DIRENT_HDR, de->d_name, nlen);
+        used += esz;
+    }
+
+    if (err != 0 && used == 0) {
+        enif_free(out);
+        enif_mutex_unlock(h->lock);
+        return mk_errno(env, err);
+    }
+    ERL_NIF_TERM bin;
+    unsigned char *bp = enif_make_new_binary(env, used, &bin);
+    memcpy(bp, out, used);
+    enif_free(out);
+    enif_mutex_unlock(h->lock);
+    return mk_ok(env, bin);
 }
 
 static ERL_NIF_TERM ftruncate_nif(ErlNifEnv *env, int argc,
@@ -886,6 +1112,7 @@ static ERL_NIF_TERM close_nif(ErlNifEnv *env, int argc,
     if (!enif_get_resource(env, argv[0], FILE_RES, (void **)&h))
         return enif_make_badarg(env);
     enif_mutex_lock(h->lock);
+    if (h->dirp) { closedir(h->dirp); h->dirp = NULL; }
     if (h->fd >= 0) { close(h->fd); h->fd = -1; }
     enif_mutex_unlock(h->lock);
     return enif_make_atom(env, "ok");
@@ -906,7 +1133,8 @@ static ErlNifFunc funcs[] = {
     {"pwrite",   3, pwrite_nif,  ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"fstat",    1, fstat_nif,   ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"futimes",  2, futimes_nif, ERL_NIF_DIRTY_JOB_IO_BOUND},
-    {"readdir",  1, readdir_nif, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"readdir",  3, readdir_nif, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"readdir_names", 1, readdir_names_nif, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"close",    1, close_nif,   ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"ftruncate", 2, ftruncate_nif, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"fsync",    1, fsync_nif,   ERL_NIF_DIRTY_JOB_IO_BOUND},

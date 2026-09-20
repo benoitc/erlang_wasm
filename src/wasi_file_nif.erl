@@ -31,7 +31,7 @@ schedulers because they block.
 
 -export([available/0, open_at/4, open_dir/1, pread/3, pwrite/3, fstat/1,
          futimes/2,
-         readdir/1, path_op/4, path_op2/5,
+         readdir/3, readdir_names/1, path_op/4, path_op2/5,
          ftruncate/2, fsync/1, close/1]).
 -on_load(init/0).
 
@@ -87,8 +87,22 @@ cannot go through the path operations the way its `path_*` counterpart does.
 -spec futimes(term(), binary()) -> ok | {error, atom()}.
 futimes(_H, _Spec) -> ?NOT_LOADED.
 
--spec readdir(term()) -> {ok, [binary()]} | {error, integer()}.
-readdir(_H) -> ?NOT_LOADED.
+-doc """
+One bounded `fd_readdir` batch, in the WASI wire format the guest reads.
+
+`Cookie` is `0` to start (or restart) the listing, or the opaque token this
+handle last emitted for its current stream. `BufLen` is the guest's buffer
+size; the batch fills at most that many bytes, plus the single straddling entry
+WASI needs so a guest with a too-small buffer can tell it must grow. A cookie
+that is neither `0` nor the last-emitted token answers `EINVAL`.
+""".
+-spec readdir(term(), non_neg_integer(), non_neg_integer()) ->
+          {ok, binary()} | {error, integer()}.
+readdir(_H, _Cookie, _BufLen) -> ?NOT_LOADED.
+
+-doc "The whole of a directory as name binaries, unbounded. Not for guests.".
+-spec readdir_names(term()) -> {ok, [binary()]} | {error, integer()}.
+readdir_names(_H) -> ?NOT_LOADED.
 
 -doc """
 Act on a name inside a directory, without resolving that name twice.

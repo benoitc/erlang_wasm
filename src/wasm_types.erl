@@ -68,12 +68,20 @@ are the same type.
 -spec is_subtype(non_neg_integer(), non_neg_integer(), tuple(), tuple()) ->
           boolean().
 is_subtype(A, B, Types, Canon) ->
+    is_subtype(A, B, Types, Canon, #{}).
+
+%% `Seen` is defence in depth: validation refuses a circular supertype, so a
+%% cyclic chain should never reach here, but a visited set means it terminates
+%% rather than recurses if one ever does (as `walk_supers/4' carries one).
+is_subtype(A, B, Types, Canon, Seen) ->
     same_canon(A, B, Canon) orelse
-        case A < tuple_size(Types) of
+        case not is_map_key(A, Seen) andalso A < tuple_size(Types) of
             false -> false;
             true ->
                 #subtype{supers = Supers} = element(A + 1, Types),
-                lists:any(fun(S) -> is_subtype(S, B, Types, Canon) end, Supers)
+                Seen1 = Seen#{A => true},
+                lists:any(fun(S) -> is_subtype(S, B, Types, Canon, Seen1) end,
+                          Supers)
         end.
 
 same_canon(A, B, Canon) ->

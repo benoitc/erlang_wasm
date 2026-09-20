@@ -19,6 +19,9 @@ all() ->
      identical_types_in_separate_groups_are_the_same,
      a_forward_reference_is_unknown,
      a_final_type_cannot_be_subtyped,
+     a_self_supertype_is_circular,
+     mutually_subtyping_types_are_circular,
+     a_valid_supertype_chain_is_accepted,
      a_type_may_declare_only_one_supertype,
      a_mutable_field_is_invariant,
      packed_fields_round_trip_through_their_width,
@@ -103,6 +106,24 @@ a_forward_reference_is_unknown(_Config) ->
 a_final_type_cannot_be_subtyped(_Config) ->
     ?assertMatch({error, #{class := invalid, kind := subtype_of_final}},
                  wasm:load(subtype_of_final())).
+
+%% A supertype's index must be smaller than the type declaring it, so the
+%% relation cannot be circular. A type that names itself validated before, and
+%% then any subtype question about it recursed forever; it is refused now.
+a_self_supertype_is_circular(_Config) ->
+    ?assertMatch({error, #{class := invalid, kind := circular_supertype}},
+                 wasm:load(self_supertype())).
+
+%% The same, spread across two types in one recursive group that name each
+%% other. The forward reference is what makes it circular.
+mutually_subtyping_types_are_circular(_Config) ->
+    ?assertMatch({error, #{class := invalid, kind := circular_supertype}},
+                 wasm:load(mutual_supertypes())).
+
+%% A chain where every supertype is declared before its subtype is fine, however
+%% deep; the check refuses only a forward or self reference.
+a_valid_supertype_chain_is_accepted(_Config) ->
+    ?assertMatch({ok, _}, wasm:load(supertype_chain())).
 
 %% The binary format encodes supertypes as a vector, so two of them decode
 %% cleanly; the specification bounds that vector at one. Validation used to walk
@@ -194,6 +215,31 @@ forward_reference() ->
                             [16#60, wasm_asm:uleb(1), <<16#64, 1>>,
                              wasm_asm:uleb(0)],
                             [16#60, wasm_asm:uleb(0), wasm_asm:uleb(0)]])]).
+
+%% One type that declares itself its own supertype.
+self_supertype() ->
+    wasm_asm:module(
+      [wasm_asm:section(1, [wasm_asm:uleb(1),
+                            [16#50, wasm_asm:uleb(1), wasm_asm:uleb(0),
+                             16#5F, wasm_asm:uleb(0)]])]).      % sub of itself
+
+%% A recursive group of two open structs that name each other as supertype.
+mutual_supertypes() ->
+    Group = [16#4E, wasm_asm:uleb(2),
+             [16#50, wasm_asm:uleb(1), wasm_asm:uleb(1), 16#5F, wasm_asm:uleb(0)],
+             [16#50, wasm_asm:uleb(1), wasm_asm:uleb(0), 16#5F, wasm_asm:uleb(0)]],
+    wasm_asm:module([wasm_asm:section(1, [wasm_asm:uleb(1), Group])]).
+
+%% Three open structs, each a subtype of the one before it. Every supertype is
+%% declared first, so nothing is circular.
+supertype_chain() ->
+    wasm_asm:module(
+      [wasm_asm:section(1, [wasm_asm:uleb(3),
+                            [16#50, wasm_asm:uleb(0), 16#5F, wasm_asm:uleb(0)],
+                            [16#50, wasm_asm:uleb(1), wasm_asm:uleb(0),
+                             16#5F, wasm_asm:uleb(0)],
+                            [16#50, wasm_asm:uleb(1), wasm_asm:uleb(1),
+                             16#5F, wasm_asm:uleb(0)]])]).
 
 subtype_of_final() ->
     wasm_asm:module(

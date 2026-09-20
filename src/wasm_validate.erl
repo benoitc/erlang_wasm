@@ -326,6 +326,15 @@ check_super(I, Sup, Body, T, C, Ctx) ->
         false -> invalid(unknown_type, <<"unknown type">>, #{index => Sup});
         true -> ok
     end,
+    %% A supertype is declared before its subtype, so its index is smaller. A
+    %% self or forward reference is circular: it validated before, and any later
+    %% subtype question about it recursed without end.
+    case Sup < I of
+        true -> ok;
+        false -> invalid(circular_supertype,
+                         <<"super type must be declared before its sub type">>,
+                         #{type => I, super => Sup})
+    end,
     #subtype{final = Final, body = SupBody} = element(Sup + 1, T),
     case Final of
         true -> invalid(subtype_of_final,

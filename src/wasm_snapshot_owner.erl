@@ -37,7 +37,8 @@ sees to that.
 -export([start/3, acquire/2, release/2, holders/1]).
 -export([charge/1, refund/1, charged/0]).
 
--define(BUDGET_KEY, {?MODULE, charged}).
+-include("wasm_snapshot_budget.hrl").
+
 -define(ASK_TIMEOUT, 5_000).
 
 -doc """
@@ -152,7 +153,13 @@ drop(Handle, Bytes, Holders, Pid) ->
 
 -doc "Bytes currently charged to images across the node.".
 -spec charged() -> non_neg_integer().
-charged() -> max(0, atomics:get(counter(), 1)).
+charged() ->
+    case counter_state() of
+        {trusted, Ref} -> max(0, atomics:get(Ref, 1));
+        %% An untrusted or absent counter reports zero rather than raise: this
+        %% is diagnostics, and its spec stays `non_neg_integer()'.
+        _              -> 0
+    end.
 
 -doc """
 Charge an image, once, at capture.
@@ -164,26 +171,42 @@ different depending on how many restores were in flight.
 """.
 -spec charge(non_neg_integer()) -> ok | {error, wasm_error:error()}.
 charge(Bytes) ->
-    Limit = application:get_env(wasm, max_snapshot_bytes, infinity),
-    Now = atomics:add_get(counter(), 1, Bytes),
-    case Limit =:= infinity orelse Now =< Limit of
-        true ->
-            ok;
-        false ->
-            _ = refund(Bytes),
-            {error, #{class => exhaustion, kind => snapshot_budget,
-                      msg => ~"the node snapshot budget is exhausted",
-                      ctx => #{limit => Limit, wanted => Bytes}}}
+    case counter_state() of
+        {trusted, Ref} ->
+            Limit = application:get_env(wasm, max_snapshot_bytes, infinity),
+            Now = atomics:add_get(Ref, 1, Bytes),
+            case Limit =:= infinity orelse Now =< Limit of
+                true ->
+                    ok;
+                false ->
+                    _ = atomics:sub_get(Ref, 1, Bytes),
+                    {error, #{class => exhaustion, kind => snapshot_budget,
+                              msg => ~"the node snapshot budget is exhausted",
+                              ctx => #{limit => Limit, wanted => Bytes}}}
+            end;
+        legacy ->
+            %% A same-VM upgrade off the racy build left a counter whose value
+            %% may already be wrong; a new charge fails closed rather than meter
+            %% against it, until the node is restarted.
+            {error, #{class => invalid, kind => snapshot_counter_untrusted,
+                      msg => ~"the snapshot budget predates this version and is untrusted; restart the node",
+                      ctx => #{}}};
+        missing ->
+            {error, #{class => invalid, kind => snapshot_counter_uninitialised,
+                      msg => ~"the snapshot budget counter is not initialised",
+                      ctx => #{}}}
     end.
 
 -spec refund(non_neg_integer()) -> integer().
-refund(Bytes) -> atomics:sub_get(counter(), 1, Bytes).
+refund(Bytes) ->
+    case counter_state() of
+        {trusted, Ref} -> atomics:sub_get(Ref, 1, Bytes);
+        _              -> 0
+    end.
 
-counter() ->
-    case persistent_term:get(?BUDGET_KEY, undefined) of
-        undefined ->
-            _ = persistent_term:put(?BUDGET_KEY, atomics:new(1, [])),
-            persistent_term:get(?BUDGET_KEY);
-        Ref ->
-            Ref
+counter_state() ->
+    case persistent_term:get(?SNAPSHOT_BUDGET_KEY, undefined) of
+        {snapshot_counter, ?SNAPSHOT_BUDGET_VERSION, Ref} -> {trusted, Ref};
+        undefined                                         -> missing;
+        _Legacy                                           -> legacy
     end.

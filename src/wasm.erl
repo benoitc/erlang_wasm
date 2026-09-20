@@ -1035,7 +1035,26 @@ containment rather than authentication.
 """.
 -spec save_snapshot(snapshot(), file:filename_all()) -> ok | {error, wasm_error:error()}.
 save_snapshot(Snapshot, Path) ->
-    Bin = wasm_snapshot_file:encode(wasm_snapshot:to_parts(Snapshot)),
+    Parts = wasm_snapshot:to_parts(Snapshot),
+    case save_encode(Parts) of
+        {error, _} = E -> E;
+        {ok, Bin}      -> save_write(Bin, Path)
+    end.
+
+%% Validate before writing, on the same ceilings and the same representability
+%% rules `load_snapshot/2' enforces, so the runtime never files an image it
+%% would then refuse to read.
+save_encode(Parts) ->
+    case wasm_snapshot_file:limits() of
+        {error, _} = E -> E;
+        {ok, Lim} ->
+            case wasm_snapshot_file:representable(Parts, Lim) of
+                {error, _} = E -> E;
+                ok             -> {ok, wasm_snapshot_file:encode(Parts)}
+            end
+    end.
+
+save_write(Bin, Path) ->
     Tmp = [Path, ".", integer_to_list(erlang:unique_integer([positive])), ".tmp"],
     case file:write_file(Tmp, Bin) of
         ok ->
@@ -1083,24 +1102,24 @@ load_snapshot(Path, Handle) ->
     end.
 
 from_file(Bin, Handle, M) ->
-    case wasm_snapshot_file:decode(Bin, max_image_bytes(M)) of
-        {error, _} = E ->
-            E;
-        {ok, Parts} ->
-            case wasm_snapshot:from_parts(Parts, Handle) of
-                {error, _} = E -> E;
-                {ok, Image}    -> adopt(Image, Handle)
-            end
+    case wasm_snapshot_file:limits() of
+        {error, _} = E -> E;
+        {ok, Lim} ->
+            %% Defence in depth: a validation refusal below is a named value,
+            %% but a planted image reaching an unguarded raise anywhere on the
+            %% decode path is still turned into one rather than escaping.
+            wasm_error:capture(fun() ->
+                case wasm_snapshot_file:decode(Bin, Lim) of
+                    {error, _} = E ->
+                        E;
+                    {ok, Parts} ->
+                        case wasm_snapshot:from_parts(Parts, Handle, M) of
+                            {error, _} = E -> E;
+                            {ok, Image}    -> adopt(Image, Handle)
+                        end
+                end
+            end)
     end.
-
-%% The ceiling comes from the **module**, never from the file: a length a
-%% planted image supplies bounds nothing. A module declares its memories, and
-%% what they may grow to is what an image of it may cover.
-max_image_bytes(#module{mems = Mems}) ->
-    lists:sum([declared_max(L) || #memtype{limits = L} <- Mems]) * 65536.
-
-declared_max(#limits{max = undefined}) -> 65536;
-declared_max(#limits{max = Max})       -> Max.
 
 %% An image off disk gets an owner exactly as a captured one does: it holds the
 %% module claim and the byte charge, and a term cannot say when it is gone.

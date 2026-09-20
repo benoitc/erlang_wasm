@@ -58,7 +58,7 @@ single most important sentence here.
 
 -export([capture/3, restore/4, info/1, bytes/1, module_of/1]).
 -export([owner/1, with_owner/2]).
--export([to_parts/1, from_parts/2, logical_bytes/1]).
+-export([to_parts/1, from_parts/3, logical_bytes/1]).
 
 -include("wasm.hrl").
 -include("wasm_exec.hrl").
@@ -693,15 +693,69 @@ the forgery `restore/3` closes on the live path by taking the module from the
 image. Off disk the direction inverts, so the **caller** decides which module
 an image is for and this refuses one that does not match.
 """.
--spec from_parts(wasm_snapshot_file:parts(), wasm_module_cache:handle()) ->
+-spec from_parts(wasm_snapshot_file:parts(), wasm_module_cache:handle(),
+                 #module{}) ->
           {ok, snapshot()} | {error, wasm_error:error()}.
-from_parts(#{hash := Hash} = P, {wasm_module, Want} = Handle) ->
+from_parts(#{hash := Hash} = P, {wasm_module, Want} = Handle, M) ->
     case Hash of
-        Want -> built(P, Handle);
+        Want ->
+            case restore_admissible(P, M) of
+                ok             -> built(P, Handle);
+                {error, _} = E -> E
+            end;
         _    -> refuse(snapshot_wrong_module,
                        ~"this image was captured from another module",
                        #{expected => Want, found => Hash})
     end.
+
+%% A forged image, with a valid digest, must not be able to produce an instance
+%% that capture could never have produced. Two things are re-checked off disk
+%% that the live capture path enforces on the way in: the module's own
+%% eligibility, and that every value is one the allowlist admits.
+restore_admissible(P, M) ->
+    Checks = [fun() -> no_imported_state(M) end,
+              fun() -> no_defined_shared_memory(M) end,
+              fun() -> restore_values_ok(P, M) end],
+    lists:foldl(fun(_C, {error, _} = E) -> E;
+                   (C, ok) -> C()
+                end, ok, Checks).
+
+no_defined_shared_memory(#module{mems = Mems}) ->
+    case [shared || #memtype{limits = #limits{shared = true}} <- Mems] of
+        [] -> ok;
+        _  -> refuse(shared_memory_not_snapshottable,
+                     ~"a shared memory cannot be restored", #{})
+    end.
+
+%% Every stored global and table entry is checked against the same allowlist
+%% capture uses, so a planted image cannot inject an external reference (which
+%% would later reach a host function as if the host had issued it) or a value
+%% the format could not have produced. Funcrefs are also range-checked against
+%% the module, since restore writes them straight into a table.
+restore_values_ok(#{globals := Gs, tables := Ts}, M) when is_list(Gs),
+                                                          is_list(Ts) ->
+    NFuncs = func_count(M),
+    Values = Gs ++ lists:append([T || T <- Ts, is_list(T)]),
+    case [V || V <- Values, not restore_value_ok(V, NFuncs)] of
+        [] -> ok;
+        [V | _] ->
+            refuse(snapshot_invalid_value,
+                   ~"the image holds a value that could not have been captured",
+                   #{shape => shape_of(V)})
+    end;
+restore_values_ok(_P, _M) ->
+    refuse(snapshot_corrupt, ~"the image's globals or tables are malformed", #{}).
+
+%% On disk a funcref names its own instance as `self'; restore relocates it.
+restore_value_ok({funcref, self, F}, NFuncs) ->
+    is_integer(F) andalso F >= 0 andalso F < NFuncs;
+restore_value_ok(V, _NFuncs) ->
+    %% `self' as the id, because that is the placeholder the on-disk form uses;
+    %% any other funcref shape falls through and is refused.
+    admissible(V, self).
+
+func_count(#module{imports = Imports, funcs = Funcs}) ->
+    length([f || #import{desc = {func, _}} <- Imports]) + length(Funcs).
 
 built(P, Handle) ->
     #{version := V, key := K, globals := Gs, tables := Ts, mems := Ms,

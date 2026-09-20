@@ -16,6 +16,7 @@ testing the artifact rather than the mechanism.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include("wasm.hrl").
 
 suite() -> [{timetrap, {seconds, 60}}].
 
@@ -56,8 +57,13 @@ all() ->
      a_corrupt_image_is_refused,
      a_truncated_image_is_refused,
      an_image_for_another_module_is_refused,
-     an_image_that_claims_more_than_the_module_is_refused,
+     an_image_over_the_ceiling_is_refused,
+     a_malformed_ceiling_is_refused,
      an_image_naming_an_unknown_atom_is_refused,
+     an_injected_external_reference_is_refused,
+     an_out_of_range_funcref_is_refused,
+     an_image_for_a_module_with_imported_state_is_refused,
+     an_image_with_a_shared_memory_is_refused,
      a_filed_image_directory_stays_under_its_cap,
      a_purge_takes_the_half_written_files_too,
      an_unset_cap_is_the_default,
@@ -726,18 +732,30 @@ an_image_for_another_module_is_refused(Config) ->
     ?assertMatch({error, #{kind := snapshot_wrong_module}},
                  wasm:load_snapshot(Path, fixture(started))).
 
-%% The decompression ceiling comes from the module's declared memories, never
-%% from the file: a length a planted image supplies bounds nothing.
-an_image_that_claims_more_than_the_module_is_refused(Config) ->
+%% The size ceilings are operator settings, so an image larger than the
+%% configured stored limit is refused before its payload is read.
+an_image_over_the_ceiling_is_refused(Config) ->
     Path = image_file(Config),
-    Handle = fixture(imports_memory),
-    {ok, Bin} = file:read_file(written_to(Config, Path)),
-    %% `imports_memory` declares no memory of its own, so nothing legitimate
-    %% could claim any space at all.
-    ?assertMatch({error, #{kind := snapshot_too_large}},
-                 begin ok = file:write_file(Path, Bin),
-                       wasm:load_snapshot(Path, Handle)
-                 end).
+    Handle = written(Config, Path),
+    application:set_env(wasm, max_snapshot_stored_bytes, 8),
+    try
+        ?assertMatch({error, #{kind := snapshot_too_large}},
+                     wasm:load_snapshot(Path, Handle))
+    after
+        application:unset_env(wasm, max_snapshot_stored_bytes)
+    end.
+
+%% A malformed ceiling is a named refusal, not a raise out of the public API.
+a_malformed_ceiling_is_refused(Config) ->
+    Path = image_file(Config),
+    Handle = written(Config, Path),
+    application:set_env(wasm, max_snapshot_inflated_bytes, not_a_number),
+    try
+        ?assertMatch({error, #{kind := snapshot_config_invalid}},
+                     wasm:load_snapshot(Path, Handle))
+    after
+        application:unset_env(wasm, max_snapshot_inflated_bytes)
+    end.
 
 %% **Nothing a file supplies becomes an atom.** The name is replaced with one
 %% of the same length that this node has never seen, and the digest recomputed,
@@ -768,6 +786,54 @@ an_image_naming_an_unknown_atom_is_refused(Config) ->
                  wasm:load_snapshot(Path, Handle)).
 
 known_atom() -> zzz_present_in_this_node_always.
+
+%% Restore validates each stored value against the same allowlist capture uses.
+%% An external reference is a bare host term; a forged image that slipped one
+%% into a global would hand it to a host function as if the host had made it.
+an_injected_external_reference_is_refused(_Config) ->
+    ?assertMatch({error, #{kind := snapshot_invalid_value}},
+                 restore_parts(#{globals => [{extern, evil}]}, module_with(1))).
+
+%% A funcref names a function by index; restore writes it straight into a table,
+%% so an index past the module's functions is refused rather than reaching an
+%% out-of-range `element/2`.
+an_out_of_range_funcref_is_refused(_Config) ->
+    ?assertMatch({error, #{kind := snapshot_invalid_value}},
+                 restore_parts(#{tables => [[{funcref, self, 99}]]},
+                               module_with(1))).
+
+%% Restore re-applies the module eligibility capture enforces. An imported
+%% memory, table or global is caller-owned; restoring into it would overwrite
+%% or alias somebody else's state.
+an_image_for_a_module_with_imported_state_is_refused(_Config) ->
+    Imported = (module_with(1))#module{
+                 imports = [#import{module = ~"env", name = ~"g",
+                                    desc = {global,
+                                            #globaltype{valtype = i32,
+                                                        mut = const}}}]},
+    ?assertMatch({error, #{kind := imported_state_not_snapshottable}},
+                 restore_parts(#{}, Imported)).
+
+%% A shared memory has no single owner an image can speak for.
+an_image_with_a_shared_memory_is_refused(_Config) ->
+    Shared = (module_with(1))#module{
+               mems = [#memtype{limits = #limits{min = 1, shared = true}}]},
+    ?assertMatch({error, #{kind := shared_memory_not_snapshottable}},
+                 restore_parts(#{}, Shared)).
+
+%% Build a well-formed parts map with one field overridden, and run it through
+%% the off-disk validation for a given module.
+restore_parts(Overrides, M) ->
+    Hash = <<0:256>>,
+    Parts = maps:merge(#{hash => Hash, version => ~"1", key => ~"k",
+                         shape => undefined, globals => [], tables => [],
+                         mems => [], dropped => {[], []}, hooks => #{}},
+                       Overrides),
+    wasm_snapshot:from_parts(Parts, {wasm_module, Hash}, M).
+
+module_with(NFuncs) ->
+    #module{identity = {sha256, <<0:256>>},
+            funcs = [#func{type = 0} || _ <- lists:seq(1, NFuncs)]}.
 
 written(Config, Path) ->
     Handle = fixture(reactor),

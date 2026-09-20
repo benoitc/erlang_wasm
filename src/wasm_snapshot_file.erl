@@ -43,9 +43,23 @@ count on the way back in, and the directory is documented as being as trusted
 as the release, in the same words `wasm_code_cache` uses.
 """.
 
--export([encode/1, decode/2]).
+-export([encode/1, decode/2, limits/0, representable/2]).
 -export([own_atoms/0]).
 -export([format_version/0, image_abi/0]).
+
+-type limits() :: #{stored := pos_integer(), inflated := pos_integer(),
+                    depth := pos_integer(), nodes := pos_integer()}.
+-export_type([limits/0]).
+
+%% Operator ceilings, generous for a real image (a started CPython is ~2.7 MB
+%% stored / ~42 MB inflated) and tight against abuse. Bytes, then decode depth
+%% and total decoded nodes; the two byte limits are capped to the 32-bit fields
+%% the format actually has.
+-define(DEF_STORED, (256 bsl 20)).            %% 256 MiB
+-define(DEF_INFLATED, (1 bsl 30)).            %% 1 GiB
+-define(DEF_DEPTH, 64).
+-define(DEF_NODES, 16000000).
+-define(U32_MAX, ((1 bsl 32) - 1)).
 
 -define(MAGIC, "WASMIMG\0").
 -define(MAGIC_SIZE, 8).
@@ -187,94 +201,146 @@ Every failure is the same shape, and a caller is expected to treat all of them
 as a miss rather than an error, which is what `wasm_code_cache` promises for
 its own reads and does not deliver.
 """.
--spec decode(binary(), non_neg_integer()) ->
+-spec decode(binary(), limits()) ->
           {ok, parts()} | {error, wasm_error:error()}.
-decode(<<?MAGIC, Format:16, _Abi:32, _/binary>>, _Max) when Format =/= ?FORMAT ->
+decode(<<?MAGIC, Format:16, _Abi:32, _/binary>>, _Lim) when Format =/= ?FORMAT ->
     refuse(snapshot_format_unknown, ~"this image was written by another format",
            #{found => Format, expected => ?FORMAT});
-decode(<<?MAGIC, ?FORMAT:16, Abi:32, _/binary>>, _Max) when Abi =/= ?IMAGE_ABI ->
+decode(<<?MAGIC, ?FORMAT:16, Abi:32, _/binary>>, _Lim) when Abi =/= ?IMAGE_ABI ->
     refuse(snapshot_abi_mismatch, ~"this image was written by another runtime",
            #{found => Abi, expected => ?IMAGE_ABI});
+decode(<<?MAGIC, ?FORMAT:16, ?IMAGE_ABI:32, Len:32, _Digest:32/binary,
+         _Rest/binary>>, #{stored := Stored}) when Len > Stored ->
+    %% The stored payload is refused before it is read, on an operator ceiling
+    %% rather than a length the file itself supplies.
+    refuse(snapshot_too_large, ~"the image's stored payload exceeds the ceiling",
+           #{claimed => Len, allowed => Stored});
 decode(<<?MAGIC, ?FORMAT:16, ?IMAGE_ABI:32, Len:32, Digest:32/binary,
-         Rest/binary>>, Max) ->
+         Rest/binary>>, Lim) ->
     %% The length is checked before the payload is taken, so a truncated file
     %% is a refusal rather than a short digest over whatever arrived.
     case byte_size(Rest) of
-        Len -> digest(Digest, Rest, Max);
+        Len -> digest(Digest, Rest, Lim);
         Got -> refuse(snapshot_truncated, ~"the image is not its stated length",
                       #{expected => Len, got => Got})
     end;
-decode(_Other, _Max) ->
+decode(_Other, _Lim) ->
     refuse(snapshot_not_an_image, ~"this is not a snapshot image", #{}).
 
-digest(Digest, Payload, Max) ->
+digest(Digest, Payload, Lim) ->
     case crypto:hash(sha256, Payload) of
-        Digest -> payload(Payload, Max);
+        Digest -> payload(Payload, Lim);
         _      -> refuse(snapshot_corrupt, ~"the image does not match its digest",
                          #{})
     end.
 
-payload(<<Codec, Raw:32, Stored/binary>>, Max) when Raw =< Max ->
+payload(<<Codec, Raw:32, Stored/binary>>, #{inflated := Max} = Lim)
+  when Raw =< Max ->
     case inflate(Codec, Stored, Raw) of
-        {ok, Body}     -> sections(Body, #{});
+        {ok, Body}     -> sections(Body, #{}, Lim);
         {error, _} = E -> E
     end;
-payload(<<_Codec, Raw:32, _/binary>>, Max) ->
-    %% Refused **before** allocating, which is the whole point of taking the
-    %% ceiling from the module rather than the file.
-    refuse(snapshot_too_large, ~"the image claims more than the module allows",
+payload(<<_Codec, Raw:32, _/binary>>, #{inflated := Max}) ->
+    %% Refused **before** allocating, on the operator's inflated ceiling.
+    refuse(snapshot_too_large, ~"the image's inflated size exceeds the ceiling",
            #{claimed => Raw, allowed => Max});
-payload(_Other, _Max) ->
+payload(_Other, _Lim) ->
     refuse(snapshot_not_an_image, ~"the image has no payload header", #{}).
 
 inflate(?CODEC_RAW, Body, Raw) when byte_size(Body) =:= Raw ->
     {ok, Body};
 inflate(?CODEC_ZLIB, Stored, Raw) ->
-    try zlib:uncompress(Stored) of
-        Body when byte_size(Body) =:= Raw -> {ok, Body};
-        _ -> refuse(snapshot_corrupt, decompress_length_msg(),
-                    #{expected => Raw})
+    %% Streamed rather than `zlib:uncompress/1', which would decompress the
+    %% whole stream before its size was checked: an image can claim `Raw = 1'
+    %% and ship a body that expands to gigabytes. Output is accumulated one
+    %% bounded chunk at a time and abandoned the moment it would exceed the
+    %% ceiling the caller already gated `Raw' against.
+    Z = zlib:open(),
+    try
+        zlib:inflateInit(Z),
+        stream_inflate(zlib:safeInflate(Z, Stored), Z, Raw, [], 0)
     catch _:_ ->
         refuse(snapshot_corrupt, ~"the image did not decompress", #{})
+    after
+        zlib:close(Z)
     end;
 inflate(Codec, _Stored, _Raw) ->
     refuse(snapshot_codec_unknown, ~"this image uses a codec this build has not",
            #{codec => Codec}).
 
-sections(<<>>, Acc) ->
-    complete(Acc);
-sections(<<Tag, Len:32, Rest/binary>>, Acc) when byte_size(Rest) >= Len ->
-    <<Data:Len/binary, Tail/binary>> = Rest,
-    case section(Tag, Data, Acc) of
-        {ok, Acc2}     -> sections(Tail, Acc2);
-        {error, _} = E -> E
+stream_inflate({continue, Out}, Z, Raw, Acc, N) ->
+    N1 = N + iolist_size(Out),
+    case N1 > Raw of
+        true  -> refuse(snapshot_corrupt, decompress_length_msg(),
+                        #{expected => Raw});
+        false -> stream_inflate(zlib:safeInflate(Z, []), Z, Raw, [Acc, Out], N1)
     end;
-sections(_Other, _Acc) ->
-    refuse(snapshot_corrupt, ~"a section runs past the end of the image", #{}).
-
-section(?S_HASH, <<Hash:32/binary>>, Acc) -> {ok, Acc#{hash => Hash}};
-section(?S_HASH, _Other, _Acc) ->
-    refuse(snapshot_corrupt, ~"the module hash is not 32 bytes", #{});
-section(?S_VERSION, Bin, Acc) -> {ok, Acc#{version => Bin}};
-section(Tag, Bin, Acc) ->
-    case unterm(Bin) of
-        {ok, V, <<>>}  -> {ok, keyed(Tag, V, Acc)};
-        {ok, _V, _R}   -> refuse(snapshot_corrupt, ~"a section has trailing bytes",
-                                 #{section => Tag});
-        {error, _} = E -> E
+stream_inflate({finished, Out}, _Z, Raw, Acc, _N) ->
+    Body = iolist_to_binary([Acc, Out]),
+    case byte_size(Body) =:= Raw of
+        true  -> {ok, Body};
+        false -> refuse(snapshot_corrupt, decompress_length_msg(),
+                        #{expected => Raw})
     end.
 
-keyed(?S_KEY, V, Acc)     -> Acc#{key => V};
-keyed(?S_SHAPE, V, Acc)   -> Acc#{shape => V};
-keyed(?S_GLOBALS, V, Acc) -> Acc#{globals => V};
-keyed(?S_TABLES, V, Acc)  -> Acc#{tables => V};
-keyed(?S_MEMS, V, Acc)    -> Acc#{mems => V};
-keyed(?S_DROPPED, V, Acc) -> Acc#{dropped => V};
-keyed(?S_HOOKS, V, Acc)   -> Acc#{hooks => V};
-%% An unknown section is **not** ignored. Skipping one would let a newer writer
-%% hand this build an image whose meaning it does not have, which the ABI check
-%% exists to prevent and this would quietly undo.
-keyed(Tag, _V, Acc)       -> Acc#{{unknown, Tag} => true}.
+%% `Lim` carries the decode depth ceiling and the remaining node budget, which
+%% is spent **across all sections** so a wide value anywhere cannot exhaust the
+%% heap regardless of how the bytes are split into sections.
+sections(<<>>, Acc, _Lim) ->
+    complete(Acc);
+sections(<<Tag, Len:32, Rest/binary>>, Acc, Lim) when byte_size(Rest) >= Len ->
+    <<Data:Len/binary, Tail/binary>> = Rest,
+    case section(Tag, Data, Acc, Lim) of
+        {ok, Acc2, Lim2} -> sections(Tail, Acc2, Lim2);
+        {error, _} = E   -> E
+    end;
+sections(_Other, _Acc, _Lim) ->
+    refuse(snapshot_corrupt, ~"a section runs past the end of the image", #{}).
+
+%% A section whose key is already set is a duplicate: the image was built by
+%% hand to have two of something, and taking the second silently would let it
+%% smuggle a value past whatever validated the first.
+section(Tag, Bin, Acc, Lim) ->
+    case key_for(Tag) of
+        {unknown, _} = U ->
+            refuse(snapshot_corrupt, ~"the image has an unknown section",
+                   #{section => Tag, key => U});
+        Key ->
+            case maps:is_key(Key, Acc) of
+                true ->
+                    refuse(snapshot_corrupt, ~"the image has a duplicate section",
+                           #{section => Tag});
+                false ->
+                    section_value(Tag, Key, Bin, Acc, Lim)
+            end
+    end.
+
+key_for(?S_HASH)    -> hash;
+key_for(?S_VERSION) -> version;
+key_for(?S_KEY)     -> key;
+key_for(?S_SHAPE)   -> shape;
+key_for(?S_GLOBALS) -> globals;
+key_for(?S_TABLES)  -> tables;
+key_for(?S_MEMS)    -> mems;
+key_for(?S_DROPPED) -> dropped;
+key_for(?S_HOOKS)   -> hooks;
+key_for(Tag)        -> {unknown, Tag}.
+
+section_value(?S_HASH, hash, <<Hash:32/binary>>, Acc, Lim) ->
+    {ok, Acc#{hash => Hash}, Lim};
+section_value(?S_HASH, hash, _Other, _Acc, _Lim) ->
+    refuse(snapshot_corrupt, ~"the module hash is not 32 bytes", #{});
+%% The version is raw section bytes, so it is a binary by construction.
+section_value(?S_VERSION, version, Bin, Acc, Lim) ->
+    {ok, Acc#{version => Bin}, Lim};
+section_value(Tag, Key, Bin, Acc, #{depth := D, nodes := N} = Lim) ->
+    case unterm(Bin, D, N) of
+        {ok, V, <<>>, N2} -> {ok, Acc#{Key => V}, Lim#{nodes := N2}};
+        {ok, _V, _R, _N2} -> refuse(snapshot_corrupt,
+                                    ~"a section has trailing bytes",
+                                    #{section => Tag});
+        {error, _} = E    -> E
+    end.
 
 complete(Acc) ->
     Want = [hash, version, key, shape, globals, tables, mems, dropped, hooks],
@@ -302,10 +368,19 @@ mems_shaped(#{mems := Mems} = Acc) ->
 mems_shaped(_Acc) ->
     refuse(snapshot_corrupt, ~"the image has no memories section", #{}).
 
-unterm(<<0, U:64, R/binary>>) -> {ok, unzigzag(U), R};
-unterm(<<1, F:64/float, R/binary>>) -> {ok, F, R};
-unterm(<<2, L:32, B:L/binary, R/binary>>) -> {ok, B, R};
-unterm(<<3, L:16, N:L/binary, R/binary>>) ->
+%% `Depth' is how much nesting is still allowed and `Budget' how many decoded
+%% nodes remain: a small but deeply nested term cannot exhaust the stack, and a
+%% shallow but very wide collection cannot exhaust the heap, even though both
+%% fit under the inflated-bytes ceiling.
+unterm(_Bin, Depth, _Budget) when Depth =< 0 ->
+    refuse(snapshot_too_deep, ~"the image nests deeper than allowed", #{});
+unterm(_Bin, _Depth, Budget) when Budget =< 0 ->
+    refuse(snapshot_too_many_nodes, ~"the image decodes to more nodes than allowed",
+           #{});
+unterm(<<0, U:64, R/binary>>, _D, Budget) -> {ok, unzigzag(U), R, Budget - 1};
+unterm(<<1, F:64/float, R/binary>>, _D, Budget) -> {ok, F, R, Budget - 1};
+unterm(<<2, L:32, B:L/binary, R/binary>>, _D, Budget) -> {ok, B, R, Budget - 1};
+unterm(<<3, L:16, N:L/binary, R/binary>>, _D, Budget) ->
     %% **Existing only.** A name this node has never seen is refused rather
     %% than interned: the atom table is node-wide and never reclaimed, and a
     %% file in a directory is exactly where a guest-shaped name would be
@@ -313,14 +388,17 @@ unterm(<<3, L:16, N:L/binary, R/binary>>) ->
     %%
     %% `own_atoms/0' below is why "existing" is not a lottery for the names the
     %% runtime itself writes.
-    try {ok, binary_to_existing_atom(N, utf8), R}
+    try {ok, binary_to_existing_atom(N, utf8), R, Budget - 1}
     catch error:badarg ->
         refuse(snapshot_unknown_atom, unknown_atom_msg(), #{name => N})
     end;
-unterm(<<4, N:32, R/binary>>) -> collect(N, R, [], fun(Vs) -> Vs end);
-unterm(<<5, N:32, R/binary>>) -> collect(N, R, [], fun list_to_tuple/1);
-unterm(<<6, N:32, R/binary>>) -> collect(N * 2, R, [], fun pairs/1);
-unterm(_Other) ->
+unterm(<<4, N:32, R/binary>>, D, Budget) ->
+    collect(N, R, [], fun(Vs) -> Vs end, D - 1, Budget - 1);
+unterm(<<5, N:32, R/binary>>, D, Budget) ->
+    collect(N, R, [], fun list_to_tuple/1, D - 1, Budget - 1);
+unterm(<<6, N:32, R/binary>>, D, Budget) ->
+    collect(N * 2, R, [], fun pairs/1, D - 1, Budget - 1);
+unterm(_Other, _D, _Budget) ->
     refuse(snapshot_corrupt, no_encoding_msg(), #{}).
 
 %% Adjacent sigils do not concatenate, and a message long enough to want two
@@ -334,18 +412,147 @@ unknown_atom_msg() ->
 no_encoding_msg() ->
     <<"the image holds a value this format has no encoding for">>.
 
-collect(0, R, Acc, Done) ->
-    {ok, Done(lists:reverse(Acc)), R};
-collect(N, R, Acc, Done) ->
-    case unterm(R) of
-        {ok, V, R2}    -> collect(N - 1, R2, [V | Acc], Done);
-        {error, _} = E -> E
+collect(_N, _R, _Acc, _Done, _D, Budget) when Budget =< 0 ->
+    refuse(snapshot_too_many_nodes, ~"the image decodes to more nodes than allowed",
+           #{});
+collect(0, R, Acc, Done, _D, Budget) ->
+    {ok, Done(lists:reverse(Acc)), R, Budget};
+collect(N, R, Acc, Done, D, Budget) ->
+    case unterm(R, D, Budget) of
+        {ok, V, R2, Budget2} -> collect(N - 1, R2, [V | Acc], Done, D, Budget2);
+        {error, _} = E       -> E
     end.
 
 pairs(Vs) -> maps:from_list(pairs_(Vs)).
 
 pairs_([]) -> [];
 pairs_([K, V | Rest]) -> [{K, V} | pairs_(Rest)].
+
+%% The four ceilings, from app env, validated: a malformed value is a named
+%% refusal rather than a silent default or a raise out of the public API. The
+%% byte limits are clamped to the 32-bit length fields the format has, so a
+%% ceiling can never authorise a size the format cannot even represent.
+-spec limits() -> {ok, limits()} | {error, wasm_error:error()}.
+limits() ->
+    Read = [{stored, max_snapshot_stored_bytes, ?DEF_STORED, ?U32_MAX},
+            {inflated, max_snapshot_inflated_bytes, ?DEF_INFLATED, ?U32_MAX},
+            {depth, max_snapshot_decode_depth, ?DEF_DEPTH, infinity},
+            {nodes, max_snapshot_decode_nodes, ?DEF_NODES, infinity}],
+    lists:foldl(
+      fun(_, {error, _} = E) -> E;
+         ({Key, Env, Def, Cap}, {ok, Acc}) ->
+              case one_limit(Env, Def, Cap) of
+                  {ok, V}        -> {ok, Acc#{Key => V}};
+                  {error, _} = E -> E
+              end
+      end, {ok, #{}}, Read).
+
+one_limit(Env, Def, Cap) ->
+    case application:get_env(wasm, Env, Def) of
+        V when is_integer(V), V > 0 -> {ok, clamp(V, Cap)};
+        Bad ->
+            refuse(snapshot_config_invalid,
+                   ~"a snapshot size ceiling is not a positive integer",
+                   #{setting => Env, value => Bad})
+    end.
+
+clamp(V, infinity) -> V;
+clamp(V, Cap)      -> min(V, Cap).
+
+%% What `save_snapshot' checks before it writes: every value is representable in
+%% the format (an integer that fits the 64-bit zigzag field, a length that fits
+%% its 32-bit field, no improper list or unencodable term), and the encoded
+%% payload and inflated body stay under the same ceilings load enforces. The
+%% depth/node walk is the *same* one `decode' counts with, so the two sides
+%% cannot drift.
+-spec representable(parts(), limits()) -> ok | {error, wasm_error:error()}.
+representable(#{key := Key, shape := Shape, globals := Gs, tables := Ts,
+                dropped := Dropped, hooks := Hooks} = Parts,
+             #{depth := D, nodes := N} = Lim) ->
+    Values = [Key, Shape, Gs, Ts, Dropped, Hooks],
+    case walk_terms(Values, D, N) of
+        {error, _} = E -> E;
+        ok             -> representable_size(Parts, Lim)
+    end.
+
+representable_size(Parts, #{stored := Stored, inflated := Inflated}) ->
+    Body = body(Parts),
+    Bsz = byte_size(Body),
+    {_Codec, StoredBin} = compress(Body),
+    Psz = 1 + 4 + byte_size(StoredBin),          %% codec + raw len + stored
+    if
+        Bsz > Inflated ->
+            refuse(snapshot_too_large,
+                   ~"the image's inflated size exceeds the ceiling",
+                   #{size => Bsz, allowed => Inflated});
+        Psz > Stored ->
+            refuse(snapshot_too_large,
+                   ~"the image's stored payload exceeds the ceiling",
+                   #{size => Psz, allowed => Stored});
+        true -> ok
+    end.
+
+walk_terms([], _D, _N) -> ok;
+walk_terms([V | Rest], D, N) ->
+    case walk_term(V, D, N) of
+        {ok, N2}       -> walk_terms(Rest, D, N2);
+        {error, _} = E -> E
+    end.
+
+walk_term(_V, D, _N) when D =< 0 ->
+    refuse(snapshot_too_deep, ~"the image nests deeper than allowed", #{});
+walk_term(_V, _D, N) when N =< 0 ->
+    refuse(snapshot_too_many_nodes,
+           ~"the image decodes to more nodes than allowed", #{});
+walk_term(I, _D, N) when is_integer(I) ->
+    case I >= -(1 bsl 63) andalso I < (1 bsl 63) of
+        true  -> {ok, N - 1};
+        false -> refuse(snapshot_not_representable,
+                        ~"an integer does not fit the format's 64-bit field",
+                        #{value => I})
+    end;
+walk_term(F, _D, N) when is_float(F)  -> {ok, N - 1};
+walk_term(B, _D, N) when is_binary(B) -> length_ok(byte_size(B), N);
+walk_term(A, _D, N) when is_atom(A)   -> {ok, N - 1};
+walk_term(L, D, N) when is_list(L)    ->
+    case length_ok(length_proper(L), N) of
+        {error, _} = E -> E;
+        {ok, N1}       -> walk_children(L, D - 1, N1)
+    end;
+walk_term(T, D, N) when is_tuple(T)   ->
+    Vs = tuple_to_list(T),
+    case length_ok(length(Vs), N) of
+        {error, _} = E -> E;
+        {ok, N1}       -> walk_children(Vs, D - 1, N1)
+    end;
+walk_term(M, D, N) when is_map(M)     ->
+    Ps = lists:append([[K, V] || {K, V} <- maps:to_list(M)]),
+    case length_ok(maps:size(M), N) of
+        {error, _} = E -> E;
+        {ok, N1}       -> walk_children(Ps, D - 1, N1)
+    end;
+walk_term(_Other, _D, _N) ->
+    refuse(snapshot_not_representable, no_encoding_msg(), #{}).
+
+%% A proper list gives its length; an improper one is a term the format has no
+%% encoding for and is refused by returning a sentinel that fails `length_ok'.
+length_proper(L) ->
+    try length(L) catch error:badarg -> improper end.
+
+length_ok(improper, _N) ->
+    refuse(snapshot_not_representable, ~"an improper list cannot be encoded", #{});
+length_ok(Len, _N) when Len > ?U32_MAX ->
+    refuse(snapshot_not_representable,
+           ~"a collection is longer than the format's 32-bit field",
+           #{length => Len});
+length_ok(_Len, N) -> {ok, N - 1}.
+
+walk_children([], _D, N) -> {ok, N};
+walk_children([V | Rest], D, N) ->
+    case walk_term(V, D, N) of
+        {ok, N2}       -> walk_children(Rest, D, N2);
+        {error, _} = E -> E
+    end.
 
 refuse(Kind, Msg, Ctx) ->
     {error, #{class => malformed, kind => Kind, msg => Msg, ctx => Ctx}}.

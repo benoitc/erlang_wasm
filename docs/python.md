@@ -107,7 +107,7 @@ next section is how to stop paying for that.
 
 ## Skip the interpreter start, with the reactor build
 
-**0.12 s a request instead of a minute or more.** CPython starts once when the
+**88 ms a request instead of a minute or more.** CPython starts once when the
 worker starts, and each request restores an image of that point. Build it, then
 point a worker at it:
 
@@ -136,7 +136,7 @@ and out, the same capabilities.
 
 Notes:
 
-- **`start_link/2` takes 83 to 90 seconds**, or 17 with the capture floor
+- **`start_link/2` takes 91 to 95 seconds**, or 17.4 with the capture floor
   below, because that is one interpreter start. It happens once per worker, not
   once per request, and a host should start its workers before it starts taking
   traffic. It is also longer than the 60 s `capture_timeout` default, which is
@@ -178,8 +178,14 @@ Limits = (wasm_python:limits())#{max_heap_words => 32 * 1024 * 1024},
 
 | | without | with |
 | --- | ---: | ---: |
-| `start_link/2`, capturing | 92 s | **17 s** |
+| `start_link/2`, capturing | 91 to 95 s | **17.4 s** |
 | a request | 367 ms | **118 ms** |
+
+Both rows are what the floor sweep measured, and the request row was taken
+before the restore path stopped writing over the image's own zeros. With the
+floors on, an interpreted request is **88 ms** now, and 35 ms once the
+compiled tier has adopted. Read a pair of numbers from one row, never one from
+each: they come from different runs.
 
 Both processes keep almost nothing on their own Erlang heap, because the
 module is a cache handle and the interpreter's memory is off-heap. The

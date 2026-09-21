@@ -26,6 +26,8 @@ all() ->
      an_unknown_reaper_option_refuses_the_start,
      generated_cannot_be_set_through_reaper_options,
      cleanup_requests_names_the_guardian,
+     a_supervised_reaper_kill_is_survived,
+     a_manager_restart_is_survived,
      the_operator_view_answers_while_the_reaper_is_wedged,
      an_idle_fallback_root_is_removed_at_shutdown,
      a_configured_root_is_never_removed,
@@ -154,13 +156,64 @@ generated_cannot_be_set_through_reaper_options(Config) ->
 cleanup_requests_names_the_guardian(_Config) ->
     with_peer(#{}, fun(H) ->
         ok = on(H, fun() ->
-            {ok, W} = wasm_script_worker:start_link(fake_reactor_adapter, #{}),
+            {ok, W} = wasm_script_worker:start_link(
+                       fake_reactor_adapter, #{limits => #{timeout => 60_000}}),
             put(worker, W),
             {ok, _Ref} = wasm_script_worker:submit(W, runaway()),
             ok
         end),
         [#{guardian := G}] = on(H, fun() -> some_requests(50) end),
         true = is_pid(G)
+    end).
+
+%% A supervised reaper killed while a request is in flight is survived, in a peer
+%% node so a broken interleaving cannot wedge CT: the replacement comes up on the
+%% same root, the manager returns to `ready', and the node serves a fresh request.
+%% Live-request adoption across a restart is asserted deterministically by the
+%% conformance kit (`a_stale_job_is_refused_by_the_replacement`,
+%% `a_restarted_reaper_adopts_a_live_request`); this proves the whole subsystem
+%% recovers under a supervised kill.
+a_supervised_reaper_kill_is_survived(_Config) ->
+    with_peer(#{}, fun(H) ->
+        ok = on(H, fun() ->
+            {ok, W} = wasm_script_worker:start_link(fake_reactor_adapter, #{}),
+            put(worker, W),
+            {ok, _Ref} = wasm_script_worker:submit(W, runaway()),
+            ok
+        end),
+        [#{id := _}] = on(H, fun() -> some_requests(50) end),
+        Old = on(H, fun() -> whereis(wasm_worker_reaper) end),
+        on(H, fun() -> exit(whereis(wasm_worker_reaper), kill) end),
+        ok = until(fun() ->
+            case on(H, fun() -> whereis(wasm_worker_reaper) end) of
+                P when is_pid(P), P =/= Old -> true;
+                _                           -> false
+            end
+        end),
+        ok = until(fun() ->
+            on(H, fun() -> wasm_cleanup_manager:phase() end) =:= ready
+        end),
+        ok = on(H, fun serves_a_request/0)
+    end).
+
+%% Killing the manager restarts it and, under `rest_for_one', the reaper beneath
+%% it. The subsystem recovers -- the manager returns to `ready' and the node
+%% serves a fresh request -- so a manager crash does not strand the node.
+a_manager_restart_is_survived(_Config) ->
+    with_peer(#{}, fun(H) ->
+        ok = on(H, fun serves_a_request/0),
+        Old = on(H, fun() -> whereis(wasm_cleanup_manager) end),
+        on(H, fun() -> exit(whereis(wasm_cleanup_manager), kill) end),
+        ok = until(fun() ->
+            case on(H, fun() -> whereis(wasm_cleanup_manager) end) of
+                P when is_pid(P), P =/= Old -> true;
+                _                           -> false
+            end
+        end),
+        ok = until(fun() ->
+            on(H, fun() -> wasm_cleanup_manager:phase() end) =:= ready
+        end),
+        ok = on(H, fun serves_a_request/0)
     end).
 
 %% The operator view is served from the manager, which holds what the reaper
@@ -170,7 +223,8 @@ cleanup_requests_names_the_guardian(_Config) ->
 the_operator_view_answers_while_the_reaper_is_wedged(_Config) ->
     with_peer(#{}, fun(H) ->
         ok = on(H, fun() ->
-            {ok, W} = wasm_script_worker:start_link(fake_reactor_adapter, #{}),
+            {ok, W} = wasm_script_worker:start_link(
+                       fake_reactor_adapter, #{limits => #{timeout => 60_000}}),
             put(worker, W),
             {ok, _Ref} = wasm_script_worker:submit(W, runaway()),
             ok
@@ -207,7 +261,8 @@ a_configured_root_is_never_removed(Config) ->
 a_root_with_work_left_survives_shutdown(_Config) ->
     with_peer(#{}, fun(H) ->
         ok = on(H, fun() ->
-            {ok, W} = wasm_script_worker:start_link(fake_reactor_adapter, #{}),
+            {ok, W} = wasm_script_worker:start_link(
+                       fake_reactor_adapter, #{limits => #{timeout => 60_000}}),
             put(worker, W),
             {ok, _Ref} = wasm_script_worker:submit(W, runaway()),
             ok

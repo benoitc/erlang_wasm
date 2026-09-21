@@ -24,13 +24,9 @@ case wedges and fails; once the guardian stops blocking it passes.
 %% whole point is that a stuck reaper no longer stalls the deadline.
 suite() -> [{timetrap, {seconds, 60}}].
 
-%% The north-star, `the_deadline_fires_while_the_reaper_is_stuck_on_register',
-%% is written and lives below but is not gated here yet: it is red until the
-%% guardian stops blocking on the reaper (the async-forward commit), which is
-%% where it joins this list. What runs now is the check that the fault-injection
-%% harness the later cases depend on behaves as claimed.
 all() ->
-    [the_seam_parks_a_caller_and_releases_it].
+    [the_seam_parks_a_caller_and_releases_it,
+     the_deadline_fires_while_the_reaper_is_stuck_on_register].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -83,8 +79,6 @@ the_seam_parks_a_caller_and_releases_it(_Config) ->
     receive {done, R} -> ?assertMatch({ok, _}, R)
     after 5_000 -> ct:fail(caller_never_returned) end.
 
-%% NOT YET in `all/0': red until the guardian stops blocking on the reaper.
-%%
 %% The guardian starts a request whose `prepare/3' registers a cleanup action.
 %% The reaper hangs on that `register', so on the pre-fix path the guardian is
 %% blocked in the synchronous call and its 500 ms deadline never fires: the

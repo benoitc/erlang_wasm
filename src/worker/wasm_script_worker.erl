@@ -921,6 +921,12 @@ clear_waiter(W) ->
             %% The per-request steward. Every reaper interaction goes through
             %% it, so the reaper is never called from this process directly.
             steward     :: undefined | pid(),
+            %% Cleanup operations forwarded to the steward and not yet answered,
+            %% keyed by a correlation reference. Holds what the reply needs: the
+            %% runner to answer and, for register/transfer, what to record on
+            %% success. The guardian stays in its deadline `receive' while these
+            %% are outstanding, which is how a wedged reaper stops blocking it.
+            pending = #{} :: #{reference() => tuple()},
             channels    :: map(),
             mounts = #{} :: #{mount_name() => mount()},
             %% The guardian made every `register' call, so it keeps the list as
@@ -1011,22 +1017,25 @@ loop(G) ->
             loop(G1);
 
         {register, From, Action} ->
-            {Reply, G1} = do_register(G, Action),
-            From ! {register_reply, Reply},
-            loop(G1);
+            loop(forward(G, {register, Action}, {register, From, Action}));
 
         {withdraw, From, Token} ->
-            From ! {withdraw_reply, wasm_cleanup_steward:withdraw(G#g.steward, Token)},
-            loop(G#g{actions = lists:keydelete(Token, 1, G#g.actions)});
+            %% Dropped from the mirror at forward time, as the synchronous path
+            %% dropped it before continuing: the mirror is what survives the
+            %% reaper, and a withdrawn action must not.
+            G1 = forward(G, {withdraw, Token}, {withdraw, From}),
+            loop(G1#g{actions = lists:keydelete(Token, 1, G1#g.actions)});
 
         {deliver_state, From, Mod, AState} ->
             %% Transfer is the kernel's, and it happens here: once, after this
             %% process holds the complete state. "Transferred" and "a state was
             %% delivered" are then the same event rather than two that can come
-            %% apart.
-            Reply = wasm_cleanup_steward:transfer(G#g.steward, Mod, AState),
-            From ! {deliver_state_reply, Reply},
-            loop(G#g{delivered = true, adapter_state = {Mod, AState}});
+            %% apart, so the flag is set when the steward answers.
+            loop(forward(G, {transfer, Mod, AState},
+                         {deliver_state, From, Mod, AState}));
+
+        {steward_reply, CorrRef, Reply} ->
+            loop(steward_reply(G, CorrRef, Reply));
 
         {result, Runner, Outcome} when Runner =:= G#g.runner ->
             finish(G, Outcome, false);
@@ -1306,18 +1315,37 @@ bad_stage(Msg, Ctx) -> wasm_worker_error:worker(bad_stage_path, Msg, Ctx).
 
 %%% -------------------------------------------------------------- cleanup ---
 
-%% The ceiling on the action list is the reaper's, and only the reaper's. There
-%% was a second one here, a hardcoded 64 that did not track the setting, and
-%% falsification found it: raising the reaper's limit changed nothing because
-%% this refused first. Two numbers for one bound is how they drift.
+%% Hand a cleanup operation to the steward with a fresh correlation reference,
+%% and remember what the reply will need. The guardian returns to its `receive'
+%% at once; the answer arrives later as `{steward_reply, CorrRef, Reply}'.
+forward(G, Operation, Waiting) ->
+    CorrRef = make_ref(),
+    wasm_cleanup_steward:forward(G#g.steward, CorrRef, self(), Operation),
+    G#g{pending = maps:put(CorrRef, Waiting, G#g.pending)}.
+
+%% Relay a steward's answer to the runner that is waiting for it, and record
+%% what the operation established. A reference not in the map is a reply for an
+%% operation whose request already finished, and is dropped.
 %%
-%% The mirror stays bounded for free, because it only grows on `{ok, Token}'.
-do_register(G, Action) ->
-    case wasm_cleanup_steward:register(G#g.steward, Action) of
-        {ok, Token} ->
-            {{ok, Token}, G#g{actions = [{Token, Action} | G#g.actions]}};
-        {error, _, _} = E ->
-            {E, G}
+%% The ceiling on the action list is the reaper's, and only the reaper's: the
+%% mirror stays bounded for free, because it only grows on `{ok, Token}'.
+steward_reply(G, CorrRef, Reply) ->
+    case maps:take(CorrRef, G#g.pending) of
+        error ->
+            G;
+        {{register, From, Action}, Pending} ->
+            From ! {register_reply, Reply},
+            G1 = G#g{pending = Pending},
+            case Reply of
+                {ok, Token} -> G1#g{actions = [{Token, Action} | G1#g.actions]};
+                _           -> G1
+            end;
+        {{withdraw, From}, Pending} ->
+            From ! {withdraw_reply, Reply},
+            G#g{pending = Pending};
+        {{deliver_state, From, Mod, AState}, Pending} ->
+            From ! {deliver_state_reply, Reply},
+            G#g{pending = Pending, delivered = true, adapter_state = {Mod, AState}}
     end.
 
 %%% -------------------------------------------------------------- channels ---

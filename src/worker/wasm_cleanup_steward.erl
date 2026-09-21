@@ -127,11 +127,18 @@ stop(Steward) ->
 init({local_cleanup, RequestId, Mirror}) ->
     {ok, #s{request = RequestId, reqids = gen_server:reqids_new()},
      {continue, {local_cleanup, Mirror}}};
+%% A one-shot job the manager leases to run a single over-limit register action.
+init({bounded_action, Action, ReplyTo, Tag}) ->
+    {ok, #s{request = <<>>, reqids = gen_server:reqids_new()},
+     {continue, {bounded_action, Action, ReplyTo, Tag}}};
 init(RequestId) ->
     {ok, #s{request = RequestId, reqids = gen_server:reqids_new()}}.
 
 handle_continue({local_cleanup, Mirror}, S) ->
     run_local_cleanup(Mirror),
+    {stop, normal, S};
+handle_continue({bounded_action, Action, ReplyTo, Tag}, S) ->
+    ReplyTo ! {Tag, bounded_outcome(Action, callback_timeout())},
     {stop, normal, S}.
 
 handle_call({reserve, Owner, Root, RelPath}, _From, #s{request = Id} = S) ->
@@ -145,10 +152,18 @@ handle_call(_Msg, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
 handle_cast({forward, CorrRef, ReplyTo, Operation}, #s{seq = Seq} = S) ->
-    Entry = #op{corr = CorrRef, reply_to = ReplyTo,
-                operation = Operation, status = pending},
-    S1 = S#s{seq = Seq + 1, ledger = maps:put(Seq, Entry, S#s.ledger)},
-    {noreply, dispatch(S1, Seq)};
+    case Seq > ceiling() of
+        true ->
+            %% Past the per-request operation ceiling. An over-limit mutation
+            %% consumes no sequence and creates no gap, so `finish' stays
+            %% contiguous; the operation is resolved locally rather than sent.
+            {noreply, over_limit(Operation, CorrRef, ReplyTo, S)};
+        false ->
+            Entry = #op{corr = CorrRef, reply_to = ReplyTo,
+                        operation = Operation, status = pending},
+            S1 = S#s{seq = Seq + 1, ledger = maps:put(Seq, Entry, S#s.ledger)},
+            {noreply, dispatch(S1, Seq)}
+    end;
 handle_cast({complete, Guardian}, S) ->
     submit_finish(Guardian, S);
 handle_cast(_Msg, S) ->
@@ -191,6 +206,11 @@ handle_info({'DOWN', RMon, process, _Pid, _Reason}, #s{rmon = RMon} = S) ->
     %% adopts this request during its sweep and the steward resends them then. A
     %% reaper that answered its operations before dying left nothing pending.
     {noreply, S#s{reaper = undefined, rmon = undefined}};
+handle_info({{over_limit, CorrRef, ReplyTo}, Outcome}, S) ->
+    %% The over-limit register's action finished under its lease: answer the
+    %% guardian with the register contract's terminal shape.
+    ReplyTo ! {steward_reply, CorrRef, {error, over_limit_error(), Outcome}},
+    {noreply, S};
 handle_info(Msg, S) ->
     case gen_server:check_response(Msg, S#s.reqids, true) of
         {{reply, _Reply}, {finish, Guardian}, Reqids} ->
@@ -235,6 +255,26 @@ dispatch(S, Seq) ->
         {ok, Reaper} -> send_op(pin(Reaper, S), Seq);
         gone         -> answer_absent(S, Seq)
     end.
+
+%% Resolve an over-limit operation without a sequence. A register still has to
+%% run its unaccepted action, under a lease off this process; the guardian is
+%% answered when the lease reports. A withdraw or transfer is refused locally and
+%% changes no ownership, so the guardian keeps it in its mirror.
+over_limit({register, Action}, CorrRef, ReplyTo, S) ->
+    ok = wasm_cleanup_manager:run_bounded_action(
+           Action, self(), {over_limit, CorrRef, ReplyTo}),
+    S;
+over_limit(_WithdrawOrTransfer, CorrRef, ReplyTo, S) ->
+    ReplyTo ! {steward_reply, CorrRef, {error, over_limit_error()}},
+    S.
+
+over_limit_error() ->
+    wasm_worker_error:worker(cleanup_saturated, ~"too many cleanup operations",
+                             #{max => ceiling()}).
+
+ceiling() ->
+    Opts = application:get_env(wasm, reaper_options, #{}),
+    wasm_worker_reaper:setting(Opts, max_cleanup_operations_per_request).
 
 send_op(#s{reaper = Reaper, request = Id, ledger = L} = S, Seq) ->
     #op{operation = Operation} = maps:get(Seq, L),
@@ -360,3 +400,21 @@ bounded(F, Timeout) ->
     end.
 
 guarded(F) -> try F(), ok catch _:_ -> ok end.
+
+%% Like `bounded/2', but reports the register contract's outcome: `released' when
+%% the action ran, `cleanup_failed' when it raised or ran past its deadline.
+bounded_outcome(F, Timeout) ->
+    Parent = self(),
+    Ref = make_ref(),
+    {Pid, Mon} = spawn_opt(fun() -> Parent ! {Ref, guarded_outcome(F)} end,
+                           [monitor]),
+    receive
+        {Ref, Outcome}                 -> erlang:demonitor(Mon, [flush]), Outcome;
+        {'DOWN', Mon, process, Pid, _} -> cleanup_failed
+    after Timeout ->
+        exit(Pid, kill),
+        receive {'DOWN', Mon, process, Pid, _} -> ok after 1_000 -> ok end,
+        cleanup_failed
+    end.
+
+guarded_outcome(F) -> try F(), released catch _:_ -> cleanup_failed end.

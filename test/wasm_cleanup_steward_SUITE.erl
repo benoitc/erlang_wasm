@@ -31,6 +31,7 @@ all() ->
      the_mirror_runs_an_unacknowledged_register,
      a_live_reaper_is_not_locally_cleaned_on_a_timeout,
      the_deadline_bounds_a_slow_reservation,
+     an_over_limit_register_runs_its_action,
      the_reaper_rejects_an_operation_from_a_foreign_caller,
      a_duplicate_operation_returns_the_stored_result,
      a_gap_asks_the_steward_to_resend,
@@ -210,6 +211,43 @@ the_deadline_bounds_a_slow_reservation(_Config) ->
     {Micros, Result} = timer:tc(fun() -> wasm_script_worker:run(W, Request) end),
     ?assertMatch({error, #{kind := timeout}}, Result),
     ?assert(Micros < 5_000_000, {too_slow, Micros}).
+
+%% Past the per-request operation ceiling a register's action must still run,
+%% under a job lease, rather than leak: the steward answers the register contract
+%% with `released' once it has. Before, an over-limit register was sent to the
+%% reaper, which refused it `cleanup_failed' without the action ever running.
+an_over_limit_register_runs_its_action(Config) ->
+    Old = application:get_env(wasm, reaper_options, #{}),
+    application:set_env(wasm, reaper_options,
+                       Old#{max_cleanup_operations_per_request => 2}),
+    try
+        Marker = filename:join(?config(dir, Config), "overlimit-marker"),
+        Id = ~"overreq",
+        {ok, Steward} = wasm_cleanup_steward:start_link(Id),
+        {ok, _} = wasm_cleanup_steward:reserve(Steward, self(), scratch,
+                                               ~"req-overreq"),
+        %% Two in-limit registers fill the ceiling (sequences 1 and 2).
+        [begin
+             C = make_ref(),
+             ok = wasm_cleanup_steward:forward(Steward, C, self(),
+                                               {register, fun() -> ok end}),
+             receive {steward_reply, C, _} -> ok
+             after 5_000 -> ct:fail(no_reply) end
+         end || _ <- [1, 2]],
+        %% The third is over the ceiling: its action runs and the reply says so.
+        C3 = make_ref(),
+        Action = fun() -> ok = file:write_file(Marker, ~"ran") end,
+        ok = wasm_cleanup_steward:forward(Steward, C3, self(),
+                                          {register, Action}),
+        receive
+            {steward_reply, C3, Reply} ->
+                ?assertMatch({error, #{kind := cleanup_saturated}, released}, Reply)
+        after 5_000 -> ct:fail(no_over_limit_reply) end,
+        ?assert(filelib:is_regular(Marker)),
+        wasm_cleanup_steward:stop(Steward)
+    after
+        application:set_env(wasm, reaper_options, Old)
+    end.
 
 %% The guardian publishes its result before it hands cleanup off, so a reaper
 %% wedged on the finish barrier cannot hold the result up: the request answers on

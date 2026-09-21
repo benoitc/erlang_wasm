@@ -25,7 +25,7 @@ announcement. An announcement from an older generation is ignored.
 
 -export([start_link/0, capacity/0, admitted/0, admit/1, release/1]).
 -export([phase/0, reaper_generation/0, stats/0, requests/0, reaper/0]).
--export([start_local_cleanup/2]).
+-export([start_local_cleanup/2, run_bounded_action/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 %% `admitted` is request id -> a marker; capacity is the ceiling computed once
@@ -125,6 +125,19 @@ once the job is leased or queued; the manager owns it from there.
 start_local_cleanup(RequestId, Mirror) ->
     gen_server:call(?MODULE, {start_local_cleanup, RequestId, Mirror}).
 
+-doc """
+Run one unaccepted cleanup action under a job lease, off the caller.
+
+For a register the steward could not have the reaper own -- past the per-request
+operation ceiling -- the action still has to run rather than leak. It runs under
+the same `max_cleanup_jobs` bound, and `{Tag, released | cleanup_failed}` is sent
+to `ReplyTo` when it is done, so the steward answers the guardian without ever
+running a callback itself.
+""".
+-spec run_bounded_action(fun(() -> any()), pid(), term()) -> ok.
+run_bounded_action(Action, ReplyTo, Tag) when is_function(Action, 0) ->
+    gen_server:call(?MODULE, {run_bounded_action, Action, ReplyTo, Tag}).
+
 init([]) ->
     Opts = application:get_env(wasm, reaper_options, #{}),
     Jobs = wasm_worker_reaper:setting(Opts, max_cleanup_jobs),
@@ -147,7 +160,9 @@ handle_call({admit, Id}, _From, #s{admitted = A, cap = Cap} = S) ->
 handle_call({release, Id}, _From, #s{admitted = A} = S) ->
     {reply, ok, S#s{admitted = maps:remove(Id, A)}};
 handle_call({start_local_cleanup, Id, Mirror}, _From, S) ->
-    {reply, ok, start_or_queue_job(Id, Mirror, S)};
+    {reply, ok, start_or_queue_job({local_cleanup, Id, Mirror}, S)};
+handle_call({run_bounded_action, Action, ReplyTo, Tag}, _From, S) ->
+    {reply, ok, start_or_queue_job({bounded_action, Action, ReplyTo, Tag}, S)};
 handle_call(phase, _From, #s{phase = P} = S) ->
     {reply, P, S};
 handle_call(reaper_generation, _From, #s{reaper = {_, Gen}} = S) ->
@@ -207,27 +222,28 @@ handle_info({'DOWN', Ref, process, _Pid, _Why}, #s{jobs = Jobs} = S)
 handle_info(_Msg, S) ->
     {noreply, S}.
 
-%% Start a local cleanup job now if a lease is free, otherwise queue it. The
-%% guardian never waits on a slot: the manager owns the job once this returns.
-start_or_queue_job(Id, Mirror, #s{jobs = Jobs, job_cap = Cap} = S)
+%% Start a cleanup job now if a lease is free, otherwise queue it. A job Spec is
+%% a steward start argument -- a `local_cleanup' fallback or a `bounded_action'
+%% for an over-limit register. The caller never waits on a slot: the manager owns
+%% the job once this returns.
+start_or_queue_job(Spec, #s{jobs = Jobs, job_cap = Cap} = S)
   when map_size(Jobs) >= Cap ->
-    S#s{lqueue = S#s.lqueue ++ [{Id, Mirror}]};
-start_or_queue_job(Id, Mirror, S) ->
-    start_job(Id, Mirror, S).
+    S#s{lqueue = S#s.lqueue ++ [Spec]};
+start_or_queue_job(Spec, S) ->
+    start_job(Spec, S).
 
-start_job(Id, Mirror, #s{jobs = Jobs} = S) ->
-    {ok, Pid} = wasm_cleanup_steward_sup:start_steward(
-                  {local_cleanup, Id, Mirror}),
+start_job(Spec, #s{jobs = Jobs} = S) ->
+    {ok, Pid} = wasm_cleanup_steward_sup:start_steward(Spec),
     Ref = monitor(process, Pid),
-    S#s{jobs = maps:put(Ref, Id, Jobs)}.
+    S#s{jobs = maps:put(Ref, Spec, Jobs)}.
 
 %% Release the finished job's lease, then start the oldest queued job if a slot
 %% is now free.
 job_done(Ref, #s{jobs = Jobs} = S) ->
     S1 = S#s{jobs = maps:remove(Ref, Jobs)},
     case S1#s.lqueue of
-        []                    -> S1;
-        [{Id, Mirror} | Rest] -> start_job(Id, Mirror, S1#s{lqueue = Rest})
+        []             -> S1;
+        [Spec | Rest]  -> start_job(Spec, S1#s{lqueue = Rest})
     end.
 
 %% Track the reaper that announced. An older generation is ignored; the same

@@ -6383,3 +6383,23 @@ us. The 423 us floor matches the 436 us recorded before this change (within
 noise), and the median sits in the same 711 to 761 us band, so the fallback
 rework costs the caller nothing. The job lease and its queue run only on the
 fallback path, never on a request's own.
+
+## The steward, manager and ceiling stages leave the request path where it was
+
+The cleanup-ownership stages (terminal state, manager lifecycle and operator
+view, pinned resend, leased local cleanup, deadline-aware startup, the operation
+ceiling) all sit off `wasm_exec`, so the guest execution envelope cannot move.
+Confirmed by measuring the `fake_typed_adapter` echo envelope (3000 requests
+after warm-up, minimum is the signal), interleaved and re-bracketed at load
+average 4 to 6:
+
+| build | echo min |
+| --- | --- |
+| before this work (session start) | 446, 454, 464 us |
+| after this work (branch head) | 450, 457, 465, 470 us |
+
+The minima overlap, so the whole span of stages added nothing the caller sees on
+the request path. Against the pre-steward baseline (before the whole PR) the min
+floor is about 420 us, so the per-request steward the PR introduces costs roughly
+30 us; that lands in the accept phase, which the measurement border allows to
+grow, not in the guest execution envelope.

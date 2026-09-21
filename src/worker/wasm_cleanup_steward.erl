@@ -174,6 +174,18 @@ handle_info({cleanup_complete, _Id}, S) ->
 handle_info({cleanup_terminal, _Id}, S) ->
     %% Cleanup was quarantined; the steward exits so the reaper drops the record.
     {stop, normal, S};
+handle_info({'DOWN', RMon, process, _Pid, _Reason},
+            #s{rmon = RMon, pending_finish = PF} = S) when PF =/= undefined ->
+    %% The pinned reaper died with the finish outstanding. Ask the manager
+    %% whether a replacement can be reached: one that can is left to adopt and
+    %% resend the finish, but a definitive `gone' is the signal the guardian
+    %% needs to fall back to local cleanup -- there is no timeout that would
+    %% authorise cleanup against a reaper that is merely slow.
+    S1 = S#s{reaper = undefined, rmon = undefined},
+    case wasm_cleanup_manager:reaper() of
+        {ok, _} -> {noreply, S1};
+        gone    -> notify(PF, cleanup_unavailable), {stop, normal, S1}
+    end;
 handle_info({'DOWN', RMon, process, _Pid, _Reason}, #s{rmon = RMon} = S) ->
     %% The pinned reaper died. Keep the pending operations: a replacement reaper
     %% adopts this request during its sweep and the steward resends them then. A

@@ -29,6 +29,7 @@ all() ->
      the_deadline_fires_while_the_reaper_is_stuck_on_register,
      the_result_is_published_before_the_cleanup_handoff,
      the_mirror_runs_an_unacknowledged_register,
+     a_live_reaper_is_not_locally_cleaned_on_a_timeout,
      the_reaper_rejects_an_operation_from_a_foreign_caller,
      a_duplicate_operation_returns_the_stored_result,
      a_gap_asks_the_steward_to_resend,
@@ -148,13 +149,16 @@ the_deadline_fires_while_the_reaper_is_stuck_on_register(Config) ->
     ?assertMatch({error, #{kind := timeout}}, Outcome).
 
 %% A register the reaper never acknowledged lives only in the guardian's pending
-%% map, not its confirmed mirror. The fallback mirror must still run it: the
-%% adapter's marker action writes `action-marker' when it runs. The reaper hangs
-%% on register and on finish, so the register stays unacknowledged and the
-%% guardian falls back to its mirror after the handoff grace.
+%% map, not its confirmed mirror. The fallback local cleanup must still run it:
+%% the adapter's marker action writes `action-marker' when it runs. The reaper
+%% hangs on register so it stays unacknowledged, and is gone by the finish, so
+%% the guardian falls back through the manager's local cleanup.
 the_mirror_runs_an_unacknowledged_register(Config) ->
     ok = fake_reaper:set_mode(register, hang),
-    ok = fake_reaper:set_mode(finish, hang),
+    %% The reaper is gone by the time the finish is submitted, so the steward
+    %% reports cleanup unavailable and the guardian falls back to local cleanup.
+    %% A merely slow reaper never triggers this: only a definitively gone one.
+    ok = fake_reaper:set_mode(finish, {die, gone}),
     Dir = ?config(dir, Config),
     ActionMarker = filename:join(Dir, "action-marker"),
     {ok, W} = wasm_script_worker:start_link(
@@ -166,9 +170,31 @@ the_mirror_runs_an_unacknowledged_register(Config) ->
     {ok, Ref} = wasm_script_worker:submit(W, Request),
     ?assertMatch({error, #{kind := timeout}},
                  wasm_script_worker:await(W, Ref, 5_000)),
-    %% The unacknowledged register's action runs from the fallback mirror (after
-    %% the handoff grace). Red today: the mirror only ran confirmed actions.
+    %% The unacknowledged register's action runs from the local cleanup fallback.
     ok = wait_until(fun() -> filelib:is_regular(ActionMarker) end, 500).
+
+%% A reaper that is alive but merely slow -- here wedged on the finish barrier --
+%% must never be treated as gone: the guardian waits for it and does not run
+%% local cleanup. Before, a fixed handoff grace fired local cleanup against it,
+%% which the design note forbids. Past that old grace, no cleanup has run.
+a_live_reaper_is_not_locally_cleaned_on_a_timeout(Config) ->
+    %% The request succeeds; only the finish barrier hangs, so the reaper is
+    %% alive but slow to own cleanup and the guardian parks on the handoff.
+    ok = fake_reaper:set_mode(finish, hang),
+    Dir = ?config(dir, Config),
+    Marker = filename:join(Dir, "cleanup-marker"),
+    {ok, W} = wasm_script_worker:start_link(
+                fake_typed_adapter, #{root => scratch, limits => #{timeout => 30_000}}),
+    put(worker, W),
+    Request = maps:merge(
+                wasm_adapter_conformance:fixture(fake_typed_adapter, echo),
+                #{cleanup_marker => Marker}),
+    ?assertMatch({ok, _}, wasm_script_worker:run(W, Request)),
+    %% Well past the old five-second grace: the reaper is still alive, so the
+    %% guardian has not run local cleanup and the adapter's cleanup marker is
+    %% absent.
+    timer:sleep(5_500),
+    ?assertNot(filelib:is_regular(Marker)).
 
 %% The guardian publishes its result before it hands cleanup off, so a reaper
 %% wedged on the finish barrier cannot hold the result up: the request answers on

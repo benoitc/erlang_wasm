@@ -161,11 +161,6 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 %%% ------------------------------------------------------------------ api ---
 
 -define(DEFAULT_TIMEOUT, 5_000).
-%% How long the guardian waits, after publishing its result, for the steward to
-%% confirm the reaper owns cleanup before falling back to its mirror. A finish
-%% round-trip to a healthy reaper is milliseconds; this bounds the wait when the
-%% reaper is wedged or gone so the guardian never lingers indefinitely.
--define(HANDOFF_GRACE, 5_000).
 -define(GUARDIAN_READY_TIMEOUT, 30_000).
 %% One `init()` and its hooks, at `start_link/2`. Generous next to a request's
 %% deadline because it is a whole language runtime coming up once, and finite
@@ -1141,6 +1136,10 @@ drain(G) ->
 %% mirror as the last-resort fallback: the actions it kept as it registered them.
 hand_off(G) ->
     wasm_cleanup_steward:complete(G#g.steward, self()),
+    %% No timeout: a reaper that is merely slow to own cleanup must never be
+    %% mistaken for one that is gone. The steward always resolves the finish --
+    %% owned when a reaper accepts it, unavailable when none can be reached -- or
+    %% dies, and the guardian falls back to local cleanup only on those.
     receive
         {cleanup_owned, _Steward} ->
             ok;
@@ -1148,8 +1147,6 @@ hand_off(G) ->
             local_cleanup(G);
         {'DOWN', SMon, process, _P, _R} when SMon =:= G#g.smon ->
             local_cleanup(G)
-    after ?HANDOFF_GRACE ->
-        local_cleanup(G)
     end.
 
 %% No reaper can own the cleanup, so hand the request's complete mirror to the

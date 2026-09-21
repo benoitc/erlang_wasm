@@ -16,7 +16,8 @@ all() ->
     [capacity_is_positive,
      admission_is_idempotent,
      admission_stops_at_capacity,
-     release_frees_a_slot].
+     release_frees_a_slot,
+     the_manager_learns_the_reaper_generation].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -60,5 +61,21 @@ release_frees_a_slot(_Config) ->
     ?assertEqual(ok, wasm_cleanup_manager:admit(Extra)),
     [ok = wasm_cleanup_manager:release(I) || I <- [Extra | tl(Ids)]],
     ?assertEqual(Base, wasm_cleanup_manager:admitted()).
+
+%% With no reaper the manager is `recovering`. Lazily start one and the manager
+%% learns its generation from the announcement and reaches `ready`.
+the_manager_learns_the_reaper_generation(_Config) ->
+    ok = wasm_worker_sup:ensure_reaper(),
+    true = wait_until(fun() -> wasm_cleanup_manager:phase() =:= ready end, 100),
+    ?assertEqual(ready, wasm_cleanup_manager:phase()),
+    ?assertEqual(wasm_worker_reaper:generation(),
+                 wasm_cleanup_manager:reaper_generation()).
+
+wait_until(_Pred, 0) -> false;
+wait_until(Pred, N) ->
+    case Pred() of
+        true  -> true;
+        false -> timer:sleep(20), wait_until(Pred, N - 1)
+    end.
 
 id() -> {req, erlang:unique_integer([positive])}.

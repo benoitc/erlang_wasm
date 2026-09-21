@@ -444,7 +444,19 @@ init({Roots, Opts, Generated}) ->
     St = #st{roots = Roots, gen = Gen, incarnation = Incarnation,
              opts = Settings,
              generated = [G || G <- Generated, maps:is_key(G, Roots)]},
-    {ok, sweep(St)}.
+    St1 = sweep(St),
+    ok = announce_generation(St1),
+    {ok, St1}.
+
+%% Tell the manager, if one is running, this reaper's generation and how many
+%% records the sweep recovered. Addressed to the manager's pid, never a module
+%% call, so no cycle is formed with a process this one does not depend on. A
+%% reaper started by hand with no manager finds nobody and says nothing.
+announce_generation(#st{gen = Gen} = St) ->
+    case whereis(wasm_cleanup_manager) of
+        undefined -> ok;
+        Manager   -> Manager ! {reaper_ready, self(), Gen, capacity(St)}, ok
+    end.
 
 handle_call({reserve, Id, Guardian, Root, RelPath}, From, St) ->
     case maps:is_key(Root, St#st.roots) of

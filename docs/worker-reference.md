@@ -61,6 +61,7 @@ Inside `reaper_options`:
 | `cleanup_timeout` | 30 s | **one callback**, not one job |
 | `cleanup_job_deadline` | 120 s | the whole job, every callback and action together |
 | `max_cleanup_actions` | 64 | actions an adapter may register per request |
+| `max_cleanup_operations_per_request` | 256 | cleanup operations (register, withdraw, transfer) one request may run |
 
 The last three are different bounds on purpose: a job with eight actions and a
 `cleanup/1` could otherwise spend nine callback timeouts, and an adapter in a

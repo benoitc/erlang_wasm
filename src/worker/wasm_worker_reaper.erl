@@ -115,6 +115,7 @@ supervised reaper will almost always perform.
 -define(CLEANUP_TIMEOUT, 30_000).
 -define(CLEANUP_JOB_DEADLINE, 120_000).
 -define(MAX_CLEANUP_ACTIONS, 64).
+-define(MAX_CLEANUP_OPERATIONS, 256).
 -define(HANDSHAKE_TIMEOUT, 1_000).
 -define(HANDSHAKE_RETRIES, 3).
 
@@ -151,6 +152,13 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
               ops     = []   :: [recover_op()],
               actions = []   :: [{token(), action(), owned | transferred}],
               next_token = 1 :: pos_integer(),
+              %% Operation-id ledger for the `{apply, ...}' transport: the next
+              %% sequence expected in order, and every resolved sequence with the
+              %% result it produced, so a resend after adoption is answered from
+              %% store rather than re-executed. Bounded by
+              %% `max_cleanup_operations_per_request'.
+              next_seq = 1   :: pos_integer(),
+              ledger = #{}   :: #{pos_integer() => term()},
               cleanup        :: undefined | {module(), term()},
               attempts   = 0 :: non_neg_integer(),
               tries      = 0 :: non_neg_integer(),
@@ -405,11 +413,13 @@ default(cleanup_retries)      -> ?CLEANUP_RETRIES;
 default(cleanup_backoff)      -> ?CLEANUP_BACKOFF;
 default(cleanup_timeout)      -> ?CLEANUP_TIMEOUT;
 default(cleanup_job_deadline) -> ?CLEANUP_JOB_DEADLINE;
-default(max_cleanup_actions)  -> ?MAX_CLEANUP_ACTIONS.
+default(max_cleanup_actions)  -> ?MAX_CLEANUP_ACTIONS;
+default(max_cleanup_operations_per_request) -> ?MAX_CLEANUP_OPERATIONS.
 
 setting_keys() ->
     [max_cleanup_jobs, cleanup_queue_len, cleanup_retries, cleanup_backoff,
-     cleanup_timeout, cleanup_job_deadline, max_cleanup_actions].
+     cleanup_timeout, cleanup_job_deadline, max_cleanup_actions,
+     max_cleanup_operations_per_request].
 
 %%% -------------------------------------------------------------- server ---
 
@@ -478,10 +488,10 @@ handle_call({transfer, Id, Mod, AdapterState}, _From, St) ->
 %% request may drive its cleanup. This stage dispatches to the same logic the
 %% legacy calls use; the operation-id ledger, ordering and bound that
 %% `OperationId' carries arrive with adoption, which is what resends them.
-handle_call({apply, Id, _OperationId, Operation}, From, St) ->
+handle_call({apply, Id, OperationId, Operation}, From, St) ->
     case authorised_caller(Id, element(1, From), St) of
         true ->
-            {Reply, St1} = apply_operation(Id, Operation, St),
+            {Reply, St1} = apply_transported(Id, OperationId, Operation, St),
             {reply, Reply, St1};
         false ->
             {reply, {error, unauthorised()}, St}
@@ -596,6 +606,67 @@ journal_empty(Dir) ->
 apply_operation(Id, {register, Action}, St)  -> op_register(Id, Action, St);
 apply_operation(Id, {withdraw, Token}, St)   -> op_withdraw(Id, Token, St);
 apply_operation(Id, {transfer, Mod, A}, St)  -> op_transfer(Id, Mod, A, St).
+
+%% A transported operation carries `OperationId = {RequestId, Sequence}'. For a
+%% known request the sequence orders and de-duplicates it against the ledger; an
+%% unknown request has nothing to order against and is answered as absent.
+apply_transported(Id, {Id, Seq}, Operation, St)
+  when is_integer(Seq), Seq >= 1 ->
+    case maps:find(Id, St#st.reqs) of
+        error     -> apply_operation(Id, Operation, St);
+        {ok, Req} -> apply_sequenced(Seq, Operation, Req, St)
+    end;
+apply_transported(Id, _OperationId, Operation, St) ->
+    apply_operation(Id, Operation, St).
+
+apply_sequenced(Seq, Op, #req{next_seq = Next, ledger = L}, St)
+  when Seq < Next ->
+    %% Already resolved: a recorded operation answers from the ledger,
+    %% re-executing nothing, which is what makes a resend after adoption safe. An
+    %% over-limit operation recorded nothing, so it is answered over-limit again.
+    case maps:find(Seq, L) of
+        {ok, Stored} -> {Stored, St};
+        error        -> {over_limit(Op, St), St}
+    end;
+apply_sequenced(Seq, _Op, #req{next_seq = Next}, St)
+  when Seq > Next ->
+    %% A gap. The reaper acts on operations in order, so it asks for the missing
+    %% one instead of applying this out of order.
+    {{resend, Next}, St};
+apply_sequenced(Seq, Op, #req{id = Id} = Req, St) ->        %% Seq =:= next_seq
+    case Seq > setting(St, max_cleanup_operations_per_request) of
+        true ->
+            %% Over the ceiling: consume the sequence so the next operation is
+            %% not a gap, record nothing so the ledger stays bounded, and answer
+            %% over-limit.
+            {over_limit(Op, St), put_req(Req#req{next_seq = Seq + 1}, St)};
+        false ->
+            {Reply, St1} = apply_operation(Id, Op, St),
+            {Reply, advance_ledger(Id, Seq, Reply, St1)}
+    end.
+
+advance_ledger(Id, Seq, Reply, St) ->
+    case maps:find(Id, St#st.reqs) of
+        {ok, R} ->
+            put_req(R#req{next_seq = Seq + 1,
+                          ledger = maps:put(Seq, Reply, R#req.ledger)}, St);
+        error ->
+            St
+    end.
+
+%% Over the per-request operation ceiling. Not recorded, so the register
+%% contract's `cleanup_failed' (nobody owns it) is the honest answer, and a
+%% withdraw or transfer keeps what it had.
+over_limit(Op, St) ->
+    E = wasm_worker_error:worker(cleanup_saturated,
+                                 ~"too many cleanup operations",
+                                 #{max => setting(
+                                            St, max_cleanup_operations_per_request)}),
+    case Op of
+        {register, _}    -> {error, E, cleanup_failed};
+        {withdraw, _}    -> {error, E};
+        {transfer, _, _} -> {error, E}
+    end.
 
 %% Only the steward that reserved a request may drive its cleanup operations. A
 %% request with no recorded steward -- a v1 record a restart reconstructed --

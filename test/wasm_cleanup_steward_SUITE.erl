@@ -27,7 +27,19 @@ suite() -> [{timetrap, {seconds, 60}}].
 all() ->
     [the_seam_parks_a_caller_and_releases_it,
      the_deadline_fires_while_the_reaper_is_stuck_on_register,
-     the_reaper_rejects_an_operation_from_a_foreign_caller].
+     the_reaper_rejects_an_operation_from_a_foreign_caller,
+     a_duplicate_operation_returns_the_stored_result,
+     a_gap_asks_the_steward_to_resend,
+     the_operation_ceiling_bounds_the_request].
+
+%% These drive the reaper's own apply logic, so they run a real reaper the test
+%% starts itself (the ceiling case needs its own options); the others inject
+%% faults with the fake reaper.
+direct_reaper_cases() ->
+    [the_reaper_rejects_an_operation_from_a_foreign_caller,
+     a_duplicate_operation_returns_the_stored_result,
+     a_gap_asks_the_steward_to_resend,
+     the_operation_ceiling_bounds_the_request].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -35,40 +47,42 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) -> ok.
 
-%% The authentication case drives the real reaper, since it is the reaper's own
-%% check under test; the others inject faults with the fake.
-init_per_testcase(the_reaper_rejects_an_operation_from_a_foreign_caller, Config) ->
-    process_flag(trap_exit, true),
-    ok = wasm_worker_sup:suspend_reaper(),
-    Dir = filename:join([?config(priv_dir, Config), "auth"]),
-    ok = filelib:ensure_path(Dir),
-    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Dir}),
-    [{dir, Dir} | Config];
 init_per_testcase(TC, Config) ->
     process_flag(trap_exit, true),
-    %% Free the reaper's registered name so the fake can take it, and keep the
-    %% supervisor from starting another underneath us.
+    %% Free the reaper's registered name, and keep the supervisor from starting
+    %% another underneath us.
     ok = wasm_worker_sup:suspend_reaper(),
     Dir = filename:join([?config(priv_dir, Config), atom_to_list(TC)]),
     ok = filelib:ensure_path(Dir),
-    {ok, _} = fake_reaper:start_link(#{dir => Dir, roots => [scratch]}),
-    [{dir, Dir} | Config].
+    case lists:member(TC, direct_reaper_cases()) of
+        true  -> [{dir, Dir} | Config];    %% the case starts its own real reaper
+        false ->
+            {ok, _} = fake_reaper:start_link(#{dir => Dir, roots => [scratch]}),
+            [{dir, Dir} | Config]
+    end.
 
-end_per_testcase(the_reaper_rejects_an_operation_from_a_foreign_caller, _Config) ->
-    quietly(fun() -> wasm_worker_reaper:stop() end),
-    quietly(fun() -> wasm_worker_sup:resume_reaper() end),
-    ok;
-end_per_testcase(_TC, _Config) ->
-    %% Let any parked caller go before tearing down, so a wedged guardian from
-    %% the pre-fix path unblocks and exits instead of lingering.
-    quietly(fun() -> fake_reaper:release(register) end),
-    quietly(fun() -> fake_reaper:release(reserve) end),
-    case get(worker) of
-        undefined -> ok;
-        W         -> quietly(fun() -> wasm_script_worker:stop(W) end)
+end_per_testcase(TC, _Config) ->
+    case lists:member(TC, direct_reaper_cases()) of
+        true ->
+            quietly(fun() -> wasm_worker_reaper:stop() end);
+        false ->
+            %% Let any parked caller go, so a wedged guardian from the pre-fix
+            %% path unblocks and exits instead of lingering.
+            quietly(fun() -> fake_reaper:release(register) end),
+            quietly(fun() -> fake_reaper:release(reserve) end),
+            case get(worker) of
+                undefined -> ok;
+                W         -> quietly(fun() -> wasm_script_worker:stop(W) end)
+            end,
+            quietly(fun() -> fake_reaper:stop() end)
     end,
-    quietly(fun() -> fake_reaper:stop() end),
     quietly(fun() -> wasm_worker_sup:resume_reaper() end),
+    ok.
+
+%% Start a real reaper the direct cases drive, rooted at the case's scratch dir.
+start_reaper(Config, Opts) ->
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => ?config(dir, Config)},
+                                            Opts),
     ok.
 
 quietly(F) -> try F() catch _:_ -> ok end.
@@ -123,7 +137,8 @@ the_deadline_fires_while_the_reaper_is_stuck_on_register(Config) ->
 %% makes the reserve call, so it is the steward; an operation from it is
 %% accepted, and the same operation from any other process is refused without
 %% touching the request.
-the_reaper_rejects_an_operation_from_a_foreign_caller(_Config) ->
+the_reaper_rejects_an_operation_from_a_foreign_caller(Config) ->
+    ok = start_reaper(Config, #{}),
     Id = ~"authreq0",
     {ok, _Dir} = wasm_worker_reaper:reserve(Id, self(), scratch, ~"req-authreq0"),
     Op = {register, fun() -> ok end},
@@ -138,6 +153,45 @@ the_reaper_rejects_an_operation_from_a_foreign_caller(_Config) ->
         {foreign, Foreign} ->
             ?assertMatch({error, #{kind := unauthorised}}, Foreign)
     after 5_000 -> ct:fail(no_foreign_reply) end.
+
+%% The same operation id, sent twice, must not run twice: the reaper answers the
+%% duplicate from its ledger, and only one action is owned.
+a_duplicate_operation_returns_the_stored_result(Config) ->
+    ok = start_reaper(Config, #{}),
+    Id = ~"dupreq00",
+    {ok, _} = wasm_worker_reaper:reserve(Id, self(), scratch, ~"req-dupreq00"),
+    Op = {register, fun() -> ok end},
+    First  = gen_server:call(wasm_worker_reaper, {apply, Id, {Id, 1}, Op}),
+    Second = gen_server:call(wasm_worker_reaper, {apply, Id, {Id, 1}, Op}),
+    ?assertMatch({ok, _}, First),
+    %% Same token, not a fresh one: the duplicate was answered from the ledger
+    %% rather than registering a second action.
+    ?assertEqual(First, Second).
+
+%% A sequence the reaper has not reached yet is not applied out of order; it asks
+%% for the one it is still missing.
+a_gap_asks_the_steward_to_resend(Config) ->
+    ok = start_reaper(Config, #{}),
+    Id = ~"gapreq00",
+    {ok, _} = wasm_worker_reaper:reserve(Id, self(), scratch, ~"req-gapreq00"),
+    Op = {register, fun() -> ok end},
+    ?assertEqual({resend, 1},
+                 gen_server:call(wasm_worker_reaper, {apply, Id, {Id, 2}, Op})).
+
+%% Past the per-request operation ceiling the reaper refuses without growing its
+%% ledger, and the sequence stays contiguous so it never wedges on a gap.
+the_operation_ceiling_bounds_the_request(Config) ->
+    ok = start_reaper(Config, #{max_cleanup_operations_per_request => 3}),
+    Id = ~"boundreq",
+    {ok, _} = wasm_worker_reaper:reserve(Id, self(), scratch, ~"req-boundreq"),
+    Op = fun(N) -> {apply, Id, {Id, N}, {register, fun() -> ok end}} end,
+    [?assertMatch({ok, _}, gen_server:call(wasm_worker_reaper, Op(N)))
+     || N <- [1, 2, 3]],
+    ?assertMatch({error, #{kind := cleanup_saturated}, cleanup_failed},
+                 gen_server:call(wasm_worker_reaper, Op(4))),
+    %% The next in-order operation is still served, not stuck behind a gap.
+    ?assertMatch({error, #{kind := cleanup_saturated}, cleanup_failed},
+                 gen_server:call(wasm_worker_reaper, Op(5))).
 
 %%% ---------------------------------------------------------------- helpers ---
 

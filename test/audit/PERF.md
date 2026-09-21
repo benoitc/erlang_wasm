@@ -6333,3 +6333,26 @@ run.
 The first run of each column is the cold one, which is why it is shown: a
 reader who runs this once and sees 11.7 ms should know that is the first
 compile and not the number.
+
+## The cleanup steward's terminal handoff is off the latency path
+
+The steward and the finish barrier add process coordination to every request:
+the guardian monitors a steward, and at the end sends `complete`, the steward
+submits `finish` to the reaper, and the reaper confirms it owns cleanup. All of
+that happens **after the result is published**, so it does not sit on the path
+the caller waits on.
+
+Measured: `fake_typed_adapter` echo, one worker, 3000 requests after a 100-run
+warm-up, time from `submit` to `await`. The handoff commit against its parent,
+three runs each, load average 8.5:
+
+| | minimum | median |
+| --- | ---: | ---: |
+| before (no steward finish) | 436, 437, 449 us | 708, 732, 755 us |
+| after (finish handoff) | 444, 445, 605 us | 724, 744, 751 us |
+
+The minimums and medians overlap; the 605 us minimum is a single noisy sample on
+a loaded box, not a floor. The ratio sits inside `[0.95, 1.05]`: the handoff
+costs nothing the caller sees, which is the point of publishing before handing
+off. A wedged reaper is bounded separately by the handoff grace and never
+reaches this measurement, because the result is already returned.

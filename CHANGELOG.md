@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.2
+
+Security and liveness fixes from a guest-reachable audit of 0.4.1. Fix forward,
+no separate advisory. Nothing in your code changes; the new settings below all
+have safe defaults.
+
+- **WASI path resolution no longer escapes a preopen.** A symlink whose target
+  climbed out of the preopen (`link -> .`, then `path_open("link/../secret")`)
+  read outside it; `fstatat` and `utimensat` with FOLLOW resolved the last
+  component in the kernel; and `fd_readdir` could be walked without a bound. It
+  now streams with a persistent handle and an opaque cursor, bounded by
+  `readdir_batch_bytes`.
+- **A cyclic supertype no longer hangs validation.** `wasm_types:is_subtype/4`
+  looped forever on a recursive type because it kept no visited set; a self- or
+  forward-referencing supertype is now rejected.
+- **A hostile snapshot image is refused, not restored.** Restore reapplies the
+  module-eligibility rules capture used, bounds the decode
+  (`max_snapshot_inflated_bytes`, `max_snapshot_decode_nodes`), and encodes
+  losslessly or refuses.
+- **The snapshot byte counter cannot be raced.** A legacy counter is seeded
+  behind a version marker and read through a `trusted | legacy | missing`
+  accessor, so a restored image cannot start accounting from a forged value.
+- **A cancelled or timed-out request no longer stalls five seconds.** The
+  guardian stopped re-waiting a runner `DOWN` it had already consumed.
+- **A slow or dead cleanup reaper no longer stalls the request deadline.** A
+  per-request cleanup steward carries cleanup to the reaper without blocking the
+  guardian, a node-wide cleanup manager bounds it and serves the operator view
+  even while the reaper is busy, and a request survives a reaper restart with its
+  cleanup state intact. New settings, all defaulted:
+  `max_cleanup_operations_per_request`, `max_cleanup_jobs`, `cleanup_queue_len`,
+  `cleanup_timeout`, `cleanup_job_deadline`, `max_cleanup_actions`.
+
 ## 0.4.1
 
 Documentation only; no code change beyond one module doc.

@@ -184,7 +184,10 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
              opts       :: map(),
              %% Roots this reaper made for itself and may remove at a clean
              %% shutdown. Never a root somebody configured.
-             generated = [] :: [root_id()]}).
+             generated = [] :: [root_id()],
+             %% The last operator view pushed to the manager, so a message that
+             %% did not change it pushes nothing.
+             last_view = undefined :: undefined | map()}).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -446,7 +449,7 @@ init({Roots, Opts, Generated}) ->
              generated = [G || G <- Generated, maps:is_key(G, Roots)]},
     St1 = sweep(St),
     ok = announce_generation(St1),
-    {ok, St1}.
+    {ok, push_view(St1)}.
 
 %% Tell the manager, if one is running, this reaper's generation and how many
 %% records the sweep recovered. Addressed to the manager's pid, never a module
@@ -458,7 +461,57 @@ announce_generation(#st{gen = Gen} = St) ->
         Manager   -> Manager ! {reaper_ready, self(), Gen, capacity(St)}, ok
     end.
 
-handle_call({reserve, Id, Guardian, Root, RelPath}, From, St) ->
+%%% -------------------------------------------------------- operator view ---
+
+%% Every callback runs through these three, which push the operator view to the
+%% manager whenever a message changed it. The manager serves `cleanup_stats/0'
+%% and `cleanup_requests/0' from the pushed copy, so a reaper wedged in journal
+%% I/O never stalls diagnostics (invariant 8). The push is a `!' to the manager
+%% pid, never a module call, so no cycle is formed.
+handle_call(Msg, From, St0) ->
+    case do_handle_call(Msg, From, St0) of
+        {reply, Reply, St1} -> {reply, Reply, push_view(St1)}
+    end.
+
+handle_cast(Msg, St0) ->
+    {noreply, St1} = do_handle_cast(Msg, St0),
+    {noreply, push_view(St1)}.
+
+handle_info(Msg, St0) ->
+    {noreply, St1} = do_handle_info(Msg, St0),
+    {noreply, push_view(St1)}.
+
+%% Push the current view if it differs from the last one pushed. The view is
+%% free of closures, so comparing and sending it is cheap and safe.
+push_view(#st{last_view = Last} = St) ->
+    case operator_view(St) of
+        Last -> St;
+        View ->
+            case whereis(wasm_cleanup_manager) of
+                undefined -> ok;
+                Manager   -> Manager ! {reaper_view, self(), St#st.gen, View}
+            end,
+            St#st{last_view = View}
+    end.
+
+operator_view(St) ->
+    #{stats => stats_of(St), requests => requests_of(St)}.
+
+requests_of(St) ->
+    [#{id => R#req.id, state => R#req.state, guardian => R#req.guardian,
+       delivered => R#req.cleanup =/= undefined,
+       actions => length(R#req.actions)}
+     || R <- maps:values(St#st.reqs)].
+
+stats_of(St) ->
+    Counts = lists:foldl(fun(#req{state = S}, Acc) ->
+                             maps:update_with(S, fun(N) -> N + 1 end, 1, Acc)
+                         end, #{}, maps:values(St#st.reqs)),
+    Counts#{quarantined => St#st.quarantined,
+            capacity => capacity(St),
+            generation => St#st.gen}.
+
+do_handle_call({reserve, Id, Guardian, Root, RelPath}, From, St) ->
     case maps:is_key(Root, St#st.roots) of
         false ->
             {reply, {error, wasm_worker_error:worker(
@@ -494,15 +547,15 @@ handle_call({reserve, Id, Guardian, Root, RelPath}, From, St) ->
             end
     end;
 
-handle_call({register, Id, Action}, _From, St) ->
+do_handle_call({register, Id, Action}, _From, St) ->
     {Reply, St1} = op_register(Id, Action, St),
     {reply, Reply, St1};
 
-handle_call({withdraw, Id, Token}, _From, St) ->
+do_handle_call({withdraw, Id, Token}, _From, St) ->
     {Reply, St1} = op_withdraw(Id, Token, St),
     {reply, Reply, St1};
 
-handle_call({transfer, Id, Mod, AdapterState}, _From, St) ->
+do_handle_call({transfer, Id, Mod, AdapterState}, _From, St) ->
     {Reply, St1} = op_transfer(Id, Mod, AdapterState, St),
     {reply, Reply, St1};
 
@@ -512,7 +565,7 @@ handle_call({transfer, Id, Mod, AdapterState}, _From, St) ->
 %% request may drive its cleanup. This stage dispatches to the same logic the
 %% legacy calls use; the operation-id ledger, ordering and bound that
 %% `OperationId' carries arrive with adoption, which is what resends them.
-handle_call({apply, Id, OperationId, Operation}, From, St) ->
+do_handle_call({apply, Id, OperationId, Operation}, From, St) ->
     case authorised_caller(Id, element(1, From), St) of
         true ->
             {Reply, St1} = apply_transported(Id, OperationId, Operation, St),
@@ -521,36 +574,28 @@ handle_call({apply, Id, OperationId, Operation}, From, St) ->
             {reply, {error, unauthorised()}, St}
     end;
 
-handle_call({authorise, Id, Gen}, _From, #st{gen = Gen} = St) ->
+do_handle_call({authorise, Id, Gen}, _From, #st{gen = Gen} = St) ->
     {reply, case maps:is_key(Id, St#st.reqs) of
                 true  -> ok;
                 false -> {error, stale}
             end, St};
-handle_call({authorise, _Id, _Gen}, _From, St) ->
+do_handle_call({authorise, _Id, _Gen}, _From, St) ->
     {reply, {error, stale}, St};
 
-handle_call(requests, _From, St) ->
+do_handle_call(requests, _From, St) ->
     %% `delivered' says whether an `adapter_state()' has reached the registry,
     %% which is the same thing as saying whether `cleanup/1' has an owner.
-    {reply, [#{id => R#req.id, state => R#req.state, guardian => R#req.guardian,
-               delivered => R#req.cleanup =/= undefined,
-               actions => length(R#req.actions)}
-             || R <- maps:values(St#st.reqs)], St};
+    {reply, requests_of(St), St};
 
-handle_call(roots, _From, St) ->
+do_handle_call(roots, _From, St) ->
     {reply, maps:keys(St#st.roots), St};
-handle_call(stats, _From, St) ->
-    Counts = lists:foldl(fun(#req{state = S}, Acc) ->
-                             maps:update_with(S, fun(N) -> N + 1 end, 1, Acc)
-                         end, #{}, maps:values(St#st.reqs)),
-    {reply, Counts#{quarantined => St#st.quarantined,
-                    capacity => capacity(St),
-                    generation => St#st.gen}, St};
+do_handle_call(stats, _From, St) ->
+    {reply, stats_of(St), St};
 
-handle_call(_Msg, _From, St) ->
+do_handle_call(_Msg, _From, St) ->
     {reply, {error, wasm_worker_error:worker(crashed, ~"bad call", #{})}, St}.
 
-handle_cast({finish, Id}, St) ->
+do_handle_cast({finish, Id}, St) ->
     %% The guardian cleaned up itself and says so. Drop the record last, after
     %% everything it named is gone.
     case maps:find(Id, St#st.reqs) of
@@ -561,34 +606,34 @@ handle_cast({finish, Id}, St) ->
             ok = remove_record(St, Req),
             {noreply, St#st{reqs = maps:remove(Id, St#st.reqs)}}
     end;
-handle_cast(_, St) ->
+do_handle_cast(_, St) ->
     {noreply, St}.
 
-handle_info({'DOWN', Mon, process, _Pid, _Why}, St) ->
+do_handle_info({'DOWN', Mon, process, _Pid, _Why}, St) ->
     {noreply, owner_down(Mon, St)};
 
-handle_info({adopt_reply, Id, Actions, AdapterState}, St) ->
+do_handle_info({adopt_reply, Id, Actions, AdapterState}, St) ->
     {noreply, adopt_reply(Id, Actions, AdapterState, St)};
 
-handle_info({handshake_reply, Id, Answer}, St) ->
+do_handle_info({handshake_reply, Id, Answer}, St) ->
     {noreply, handshake_reply(Id, Answer, St)};
 
-handle_info({retry_handshake, Id}, St) ->
+do_handle_info({retry_handshake, Id}, St) ->
     {noreply, retry_handshake(Id, St)};
 
-handle_info({retry_cleanup, Id}, St) ->
+do_handle_info({retry_cleanup, Id}, St) ->
     case maps:find(Id, St#st.reqs) of
         {ok, Req} -> {noreply, schedule(Req#req{state = queued}, St)};
         error     -> {noreply, St}
     end;
 
-handle_info({'EXIT', _Pid, _Reason}, St) ->
+do_handle_info({'EXIT', _Pid, _Reason}, St) ->
     %% Jobs are linked as well as monitored, so a job dying arrives twice. The
     %% `DOWN' carries the reason and is what this acts on; the `EXIT' is what
     %% would have killed an untrapping parent, and is ignored here.
     {noreply, St};
 
-handle_info(_, St) ->
+do_handle_info(_, St) ->
     {noreply, St}.
 
 %% A clean shutdown removes the roots this reaper generated, and only when

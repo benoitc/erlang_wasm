@@ -26,6 +26,7 @@ all() ->
      an_unknown_reaper_option_refuses_the_start,
      generated_cannot_be_set_through_reaper_options,
      cleanup_requests_names_the_guardian,
+     the_operator_view_answers_while_the_reaper_is_wedged,
      an_idle_fallback_root_is_removed_at_shutdown,
      a_configured_root_is_never_removed,
      a_root_with_work_left_survives_shutdown,
@@ -158,8 +159,32 @@ cleanup_requests_names_the_guardian(_Config) ->
             {ok, _Ref} = wasm_script_worker:submit(W, runaway()),
             ok
         end),
-        [#{guardian := G}] = on(H, fun wasm_script_worker:cleanup_requests/0),
+        [#{guardian := G}] = on(H, fun() -> some_requests(50) end),
         true = is_pid(G)
+    end).
+
+%% The operator view is served from the manager, which holds what the reaper
+%% pushed it, so a reaper stuck in journal I/O never stalls diagnostics. Here the
+%% reaper is suspended outright: a call to it would block, but the manager still
+%% answers.
+the_operator_view_answers_while_the_reaper_is_wedged(_Config) ->
+    with_peer(#{}, fun(H) ->
+        ok = on(H, fun() ->
+            {ok, W} = wasm_script_worker:start_link(fake_reactor_adapter, #{}),
+            put(worker, W),
+            {ok, _Ref} = wasm_script_worker:submit(W, runaway()),
+            ok
+        end),
+        [#{guardian := _}] = on(H, fun() -> some_requests(50) end),
+        ok = on(H, fun() -> sys:suspend(wasm_worker_reaper), ok end),
+        try
+            [#{guardian := _}] =
+                on(H, fun wasm_script_worker:cleanup_requests/0),
+            #{generation := _} =
+                on(H, fun wasm_script_worker:cleanup_stats/0)
+        after
+            on(H, fun() -> sys:resume(wasm_worker_reaper), ok end)
+        end
     end).
 
 an_idle_fallback_root_is_removed_at_shutdown(_Config) ->
@@ -188,7 +213,7 @@ a_root_with_work_left_survives_shutdown(_Config) ->
             ok
         end),
         Root = on(H, fun fallback_root/0),
-        [_] = on(H, fun wasm_script_worker:cleanup_requests/0),
+        [_] = on(H, fun() -> some_requests(50) end),
         ok = on(H, fun() -> application:stop(wasm) end),
         true = filelib:is_dir(Root),
         [_ | _] = records(Root)
@@ -215,7 +240,7 @@ two_nodes_never_share_a_fallback_root(_Config) ->
         RootA = on(HA, fun fallback_root/0),
         RootB = on(HB, fun fallback_root/0),
         true = RootA =/= RootB,
-        [#{id := IdB}] = on(HB, fun wasm_script_worker:cleanup_requests/0),
+        [#{id := IdB}] = on(HB, fun() -> some_requests(50) end),
         true = has_record(RootB, IdB),
         quiet(fun() -> peer:call(PeerA, erlang, halt, [0], 2000) end),
         {PeerA2, HA2} = start_peer(#{}),
@@ -287,7 +312,7 @@ orphaned_request(Config) ->
         {ok, _} = wasm_script_worker:submit(W, runaway()),
         ok
     end),
-    [#{id := Id}] = on(H, fun wasm_script_worker:cleanup_requests/0),
+    [#{id := Id}] = on(H, fun() -> some_requests(50) end),
     quiet(fun() -> peer:call(Peer, erlang, halt, [0], 2000) end),
     quiet(fun() -> peer:stop(Peer) end),
     #{dir => Dir, id => Id}.
@@ -323,6 +348,15 @@ until(F, N) ->
     case F() of
         true  -> ok;
         false -> timer:sleep(100), until(F, N - 1)
+    end.
+
+%% The operator view is served from the cleanup manager, which the reaper feeds
+%% with an asynchronous push, so a read right after a request appears may need a
+%% moment to reflect it.
+some_requests(N) ->
+    case wasm_script_worker:cleanup_requests() of
+        []       when N > 0 -> timer:sleep(20), some_requests(N - 1);
+        Requests            -> Requests
     end.
 
 %%% ------------------------------------------------------------ the peer ---

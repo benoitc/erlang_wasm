@@ -267,9 +267,12 @@ Counts per state of the cleanup that follows requests, node-wide. `capacity`
 is how many reservations are held now; when it reaches `max_cleanup_jobs +
 cleanup_queue_len` from `reaper_options`, `submit` answers
 `cleanup_saturated`.
+
+Served from the cleanup manager, which holds the view the reaper pushes it, so
+it answers even while the reaper is busy in journal I/O.
 """.
--spec cleanup_stats() -> map() | {error, wasm_worker_error:worker_error()}.
-cleanup_stats() -> wasm_worker_reaper:stats().
+-spec cleanup_stats() -> map().
+cleanup_stats() -> wasm_cleanup_manager:stats().
 
 -doc """
 Every request whose cleanup is still owned, with the guardian holding it.
@@ -281,9 +284,8 @@ really is stuck.
 """.
 -spec cleanup_requests() ->
           [#{id := binary(), state := atom(), guardian := pid(),
-             delivered := boolean(), actions := non_neg_integer()}]
-          | {error, wasm_worker_error:worker_error()}.
-cleanup_requests() -> wasm_worker_reaper:requests().
+             delivered := boolean(), actions := non_neg_integer()}].
+cleanup_requests() -> wasm_cleanup_manager:requests().
 
 %% Before the worker exists: make sure a reaper runs, and refuse a root it
 %% does not have now rather than at the first request. With no reaper at all

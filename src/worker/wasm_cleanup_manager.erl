@@ -24,7 +24,7 @@ announcement. An announcement from an older generation is ignored.
 -behaviour(gen_server).
 
 -export([start_link/0, capacity/0, admitted/0, admit/1, release/1]).
--export([phase/0, reaper_generation/0]).
+-export([phase/0, reaper_generation/0, stats/0, requests/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 %% `admitted` is request id -> a marker; capacity is the ceiling computed once
@@ -35,7 +35,11 @@ announcement. An announcement from an older generation is ignored.
             admitted = #{} :: #{term() => true},
             phase = recovering :: recovering | ready,
             reaper = undefined :: undefined | {pid(), pos_integer()},
-            rmon = undefined :: undefined | reference()}).
+            rmon = undefined :: undefined | reference(),
+            %% The operator view the current reaper last pushed. Served to
+            %% `cleanup_stats/0'/`cleanup_requests/0' so a reaper wedged in
+            %% journal I/O never stalls diagnostics.
+            view = undefined :: undefined | map()}).
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
@@ -77,6 +81,19 @@ phase() ->
 reaper_generation() ->
     gen_server:call(?MODULE, reaper_generation).
 
+-doc """
+The operator view's per-state counts, served from the reaper's last push so it
+answers even while the reaper is wedged in journal I/O.
+""".
+-spec stats() -> map().
+stats() ->
+    gen_server:call(?MODULE, stats).
+
+-doc "The operator view's live requests, served from the reaper's last push.".
+-spec requests() -> [map()].
+requests() ->
+    gen_server:call(?MODULE, requests).
+
 init([]) ->
     Opts = application:get_env(wasm, reaper_options, #{}),
     Cap = wasm_worker_reaper:setting(Opts, max_cleanup_jobs) +
@@ -104,6 +121,14 @@ handle_call(reaper_generation, _From, #s{reaper = {_, Gen}} = S) ->
     {reply, Gen, S};
 handle_call(reaper_generation, _From, #s{reaper = undefined} = S) ->
     {reply, 0, S};
+handle_call(stats, _From, #s{view = #{stats := Stats}} = S) ->
+    {reply, Stats, S};
+handle_call(stats, _From, #s{view = undefined} = S) ->
+    {reply, #{quarantined => 0, capacity => 0, generation => 0}, S};
+handle_call(requests, _From, #s{view = #{requests := Requests}} = S) ->
+    {reply, Requests, S};
+handle_call(requests, _From, #s{view = undefined} = S) ->
+    {reply, [], S};
 handle_call(_Msg, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
@@ -116,9 +141,16 @@ handle_cast(_Msg, S) ->
 handle_info({reaper_ready, Pid, Gen, _Recovered}, S)
   when is_pid(Pid), is_integer(Gen), Gen > 0 ->
     {noreply, track_reaper(Pid, Gen, S)};
+handle_info({reaper_view, Pid, Gen, View}, #s{reaper = {Pid, Gen}} = S)
+  when is_map(View) ->
+    %% Only the tracked reaper's own generation updates the view; a straggler
+    %% from an older reaper cannot overwrite the current one.
+    {noreply, S#s{view = View}};
 handle_info({'DOWN', Ref, process, _Pid, _Why}, #s{rmon = Ref} = S) ->
-    %% The tracked reaper died; recovery is closed until its replacement announces.
-    {noreply, S#s{phase = recovering, reaper = undefined, rmon = undefined}};
+    %% The tracked reaper died; recovery is closed and its view is stale until
+    %% the replacement announces and pushes again.
+    {noreply, S#s{phase = recovering, reaper = undefined, rmon = undefined,
+                  view = undefined}};
 handle_info(_Msg, S) ->
     {noreply, S}.
 
@@ -132,7 +164,9 @@ track_reaper(Pid, Gen, #s{reaper = {Pid, Gen}, rmon = R} = S) when R =/= undefin
 track_reaper(Pid, Gen, S) ->
     ok = drop_monitor(S#s.rmon),
     Ref = monitor(process, Pid),
-    S#s{phase = ready, reaper = {Pid, Gen}, rmon = Ref}.
+    %% A new reaper's view has not arrived yet; drop the old one so nothing
+    %% stale is served under the new generation.
+    S#s{phase = ready, reaper = {Pid, Gen}, rmon = Ref, view = undefined}.
 
 drop_monitor(undefined) -> ok;
 drop_monitor(Ref)       -> demonitor(Ref, [flush]), ok.

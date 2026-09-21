@@ -35,6 +35,7 @@ all() ->
      the_operation_ceiling_bounds_the_request,
      finish_is_accepted_over_the_operation_ceiling,
      a_new_operation_after_finish_is_refused,
+     a_pending_operation_is_resent_to_the_replacement,
      a_reaper_restart_recovers_the_volatile_cleanup].
 
 %% These drive the reaper's own apply logic, so they run a real reaper the test
@@ -304,6 +305,35 @@ a_reaper_restart_recovers_the_volatile_cleanup(Config) ->
     ok = wait_until(fun() -> owned_actions() >= 1 end),
     ok = wasm_script_worker:cancel(W, Ref),
     _ = wasm_script_worker:await(W, Ref, 10_000).
+
+%% An operation whose reply the reaper never sent -- here because it hangs -- is
+%% pending in the steward ledger. When a replacement reaper adopts the request,
+%% the steward hands over the ledger and next sequence and then resends the
+%% pending operation, so it survives the restart instead of failing. This is the
+%% pinned transport's whole point: the pre-pin steward answered such an operation
+%% as absent and never resent it, and sent a shorter adopt reply.
+a_pending_operation_is_resent_to_the_replacement(_Config) ->
+    ok = fake_reaper:set_mode(register, hang),
+    Id = ~"resendreq",
+    {ok, Steward} = wasm_cleanup_steward:start_link(Id),
+    {ok, _Dir} = wasm_cleanup_steward:reserve(Steward, self(), scratch,
+                                              ~"req-resendreq"),
+    Corr = make_ref(),
+    ok = wasm_cleanup_steward:forward(Steward, Corr, self(),
+                                      {register, fun() -> ok end}),
+    %% The register reached the reaper and parked, so it is really pending.
+    ok = wait_until(fun() -> fake_reaper:attempts(register) >= 1 end),
+    %% Pose as the replacement reaper adopting the request.
+    Steward ! {adopt_request, self(), 99, Id},
+    receive
+        {adopt_reply, Id, Done, NextSeq, _Actions, _AState} ->
+            ?assert(is_map(Done)),
+            ?assertEqual(1, NextSeq)
+    after 5_000 -> ct:fail(no_adopt_reply) end,
+    receive
+        {'$gen_call', _From, {apply, Id, {Id, 1}, {register, _}}} -> ok
+    after 5_000 -> ct:fail(no_resend) end,
+    ok = wasm_cleanup_steward:stop(Steward).
 
 owned_actions() ->
     case wasm_worker_reaper:requests() of

@@ -612,8 +612,8 @@ do_handle_cast(_, St) ->
 do_handle_info({'DOWN', Mon, process, _Pid, _Why}, St) ->
     {noreply, owner_down(Mon, St)};
 
-do_handle_info({adopt_reply, Id, Actions, AdapterState}, St) ->
-    {noreply, adopt_reply(Id, Actions, AdapterState, St)};
+do_handle_info({adopt_reply, Id, Ledger, NextSeq, Actions, AdapterState}, St) ->
+    {noreply, adopt_reply(Id, Ledger, NextSeq, Actions, AdapterState, St)};
 
 do_handle_info({handshake_reply, Id, Answer}, St) ->
     {noreply, handshake_reply(Id, Answer, St)};
@@ -1367,19 +1367,24 @@ adopt_steward(#req{steward = SPid, id = Id, gen = Gen} = Req, St)
 adopt_steward(Req, St) ->
     put_req(Req, St).
 
-%% The steward answered a restart with the volatile state. Restore the funs and
-%% adapter state; durable ops already came from the journal, so nothing here
-%% touches them, and `run_actions' takes only the funs from `actions' while
-%% `remove_dirs' takes the durable ops -- neither runs the other's, so no action
-%% executes twice. A transfer having happened marks the actions transferred.
-adopt_reply(Id, Actions, AdapterState, St) ->
+%% The steward answered a restart with the volatile state and its operation
+%% ledger. Restore the funs and adapter state; durable ops already came from the
+%% journal, so nothing here touches them, and `run_actions' takes only the funs
+%% from `actions' while `remove_dirs' takes the durable ops -- neither runs the
+%% other's, so no action executes twice. A transfer having happened marks the
+%% actions transferred. The ledger and next sequence let a resent operation be
+%% ordered and a resent duplicate be answered from store, so no operation the
+%% steward already had a result for runs again.
+adopt_reply(Id, Ledger, NextSeq, Actions, AdapterState, St)
+  when is_map(Ledger), is_integer(NextSeq), NextSeq >= 1 ->
     case maps:find(Id, St#st.reqs) of
         error ->
             St;
         {ok, Req} ->
             Own = case AdapterState of undefined -> owned; _ -> transferred end,
             Restored = [{T, A, Own} || {T, A} <- Actions],
-            put_req(Req#req{actions = Restored, cleanup = AdapterState}, St)
+            put_req(Req#req{actions = Restored, cleanup = AdapterState,
+                            next_seq = NextSeq, ledger = Ledger}, St)
     end.
 
 decode_record(Bin, RootId, St) ->

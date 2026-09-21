@@ -24,7 +24,7 @@ announcement. An announcement from an older generation is ignored.
 -behaviour(gen_server).
 
 -export([start_link/0, capacity/0, admitted/0, admit/1, release/1]).
--export([phase/0, reaper_generation/0, stats/0, requests/0]).
+-export([phase/0, reaper_generation/0, stats/0, requests/0, reaper/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 %% `admitted` is request id -> a marker; capacity is the ceiling computed once
@@ -94,6 +94,16 @@ stats() ->
 requests() ->
     gen_server:call(?MODULE, requests).
 
+-doc """
+The hold-vs-fail decision a steward needs when its pinned reaper dies: whether a
+reaper can be reached now. `{ok, Pid}` when one is registered (a supervised
+restart is established first through `wasm_worker_sup:ensure_reaper/0`); `gone`
+when none can be reached, so the steward stops holding and fails the operation.
+""".
+-spec reaper() -> {ok, pid()} | gone.
+reaper() ->
+    gen_server:call(?MODULE, reaper).
+
 init([]) ->
     Opts = application:get_env(wasm, reaper_options, #{}),
     Cap = wasm_worker_reaper:setting(Opts, max_cleanup_jobs) +
@@ -129,6 +139,21 @@ handle_call(requests, _From, #s{view = #{requests := Requests}} = S) ->
     {reply, Requests, S};
 handle_call(requests, _From, #s{view = undefined} = S) ->
     {reply, [], S};
+handle_call(reaper, _From, #s{reaper = {Pid, _}} = S) ->
+    {reply, {ok, Pid}, S};
+handle_call(reaper, _From, #s{reaper = undefined} = S) ->
+    %% Not tracking one: a supervised reaper can be established now; otherwise
+    %% (suspended, unconfigured, or the start errored) none is coming.
+    Reply = case wasm_worker_sup:ensure_reaper() of
+                ok ->
+                    case whereis(wasm_worker_reaper) of
+                        undefined -> gone;
+                        Pid       -> {ok, Pid}
+                    end;
+                {error, _} ->
+                    gone
+            end,
+    {reply, Reply, S};
 handle_call(_Msg, _From, S) ->
     {reply, {error, unknown_call}, S}.
 

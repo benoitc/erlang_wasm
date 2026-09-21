@@ -29,7 +29,7 @@ rather than holding it, so a request whose reaper will not return is not stuck.
 -behaviour(gen_server).
 
 -export([start_link/1, reserve/4, forward/4, complete/2, stop/1]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, handle_continue/2]).
 
 %% What the guardian asks the steward to do to the reaper, and what carries
 %% enough for the steward to make the call and to answer if the reaper is gone.
@@ -120,8 +120,19 @@ stop(Steward) ->
     exit(Steward, shutdown),
     ok.
 
+%% A terminal replacement steward: the manager starts it with a request's
+%% complete mirror to run the local cleanup fallback under a job lease, off the
+%% guardian, which has already published its result. It runs the cleanup and
+%% exits; the manager's monitor releases the lease.
+init({local_cleanup, RequestId, Mirror}) ->
+    {ok, #s{request = RequestId, reqids = gen_server:reqids_new()},
+     {continue, {local_cleanup, Mirror}}};
 init(RequestId) ->
     {ok, #s{request = RequestId, reqids = gen_server:reqids_new()}}.
+
+handle_continue({local_cleanup, Mirror}, S) ->
+    run_local_cleanup(Mirror),
+    {stop, normal, S}.
 
 handle_call({reserve, Owner, Root, RelPath}, _From, #s{request = Id} = S) ->
     Reply = wasm_worker_reaper:reserve(Id, Owner, Root, RelPath),
@@ -298,3 +309,42 @@ mirror({transfer, Mod, AState}, ok, S) ->
     S#s{adapter_state = {Mod, AState}};
 mirror(_Op, _Reply, S) ->
     S.
+
+%%% ----------------------------------------------------------- local cleanup ---
+
+%% Run a request's cleanup from the complete mirror the guardian transferred:
+%% the adapter's `cleanup/1', then the owned and unacknowledged action closures,
+%% then the request directory (which covers the durable operations), and finally
+%% tell the reaper the request is done. Each callback is bounded so a hanging one
+%% cannot wedge this process past its budget.
+run_local_cleanup(#{id := Id, dir := Dir, adapter_state := AState,
+                    actions := Actions}) ->
+    Timeout = callback_timeout(),
+    _ = case AState of
+            undefined     -> ok;
+            {Mod, AState0} -> bounded(fun() -> Mod:cleanup(AState0) end, Timeout)
+        end,
+    lists:foreach(fun(A) -> bounded(A, Timeout) end, Actions),
+    _ = file:del_dir_r(Dir),
+    wasm_worker_reaper:finish(Id).
+
+callback_timeout() ->
+    Opts = application:get_env(wasm, reaper_options, #{}),
+    wasm_worker_reaper:setting(Opts, cleanup_timeout).
+
+%% Run a callback in a monitored child, bounded: this process orchestrates and
+%% never runs a closure inline, so a hanging action cannot wedge it.
+bounded(F, Timeout) ->
+    Parent = self(),
+    Ref = make_ref(),
+    {Pid, Mon} = spawn_opt(fun() -> Parent ! {Ref, guarded(F)} end, [monitor]),
+    receive
+        {Ref, _}                       -> erlang:demonitor(Mon, [flush]), ok;
+        {'DOWN', Mon, process, Pid, _} -> ok
+    after Timeout ->
+        exit(Pid, kill),
+        receive {'DOWN', Mon, process, Pid, _} -> ok after 1_000 -> ok end,
+        ok
+    end.
+
+guarded(F) -> try F(), ok catch _:_ -> ok end.

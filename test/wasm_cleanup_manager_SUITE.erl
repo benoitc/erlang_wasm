@@ -17,7 +17,8 @@ all() ->
      admission_is_idempotent,
      admission_stops_at_capacity,
      release_frees_a_slot,
-     the_manager_learns_the_reaper_generation].
+     the_manager_learns_the_reaper_generation,
+     local_cleanup_jobs_are_bounded].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -77,5 +78,43 @@ wait_until(Pred, N) ->
         true  -> true;
         false -> timer:sleep(20), wait_until(Pred, N - 1)
     end.
+
+%% Local cleanup jobs share the node's `max_cleanup_jobs' bound: a burst of
+%% fallbacks starts at most that many at once and queues the rest, so a reaper
+%% outage cannot make local cleanup an unbounded spawn. Each job's action blocks
+%% until released, so all the started ones hold their leases at once.
+local_cleanup_jobs_are_bounded(_Config) ->
+    Cap = wasm_worker_reaper:setting(#{}, max_cleanup_jobs),
+    Self = self(),
+    Blocker = fun() ->
+                  Self ! {started, self()},
+                  receive release -> ok after 10_000 -> ok end
+              end,
+    Mirror = #{dir => "/nonexistent/cleanup", adapter_state => undefined,
+               actions => [Blocker]},
+    [ok = wasm_cleanup_manager:start_local_cleanup(
+            integer_to_binary(N), Mirror#{id => integer_to_binary(N)})
+     || N <- lists:seq(1, Cap + 1)],
+    Started = collect_started(Cap, 3_000),
+    ?assertEqual(Cap, length(Started)),
+    %% The (Cap + 1)th is queued, not started, while every slot is held.
+    ?assertEqual(timeout, collect_one(300)),
+    %% Release one; the queued job takes its freed slot and runs.
+    hd(Started) ! release,
+    ?assertMatch({started, _}, collect_one(3_000)),
+    %% Release the rest so nothing lingers.
+    [P ! release || P <- tl(Started)],
+    _ = collect_one(2_000),
+    ok.
+
+collect_started(0, _Timeout) -> [];
+collect_started(N, Timeout) ->
+    case collect_one(Timeout) of
+        {started, Pid} -> [Pid | collect_started(N - 1, Timeout)];
+        timeout        -> []
+    end.
+
+collect_one(Timeout) ->
+    receive {started, Pid} -> {started, Pid} after Timeout -> timeout end.
 
 id() -> {req, erlang:unique_integer([positive])}.

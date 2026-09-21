@@ -6369,3 +6369,17 @@ load average 17 (high, so the minimum is the signal): min 436 us, median 711 to
 761 us. The 436 us floor is the same as before the handoff and before adoption,
 so neither change costs the caller anything. Recovery itself runs only on a
 reaper restart, never on a request's own path.
+
+## Local cleanup off the guardian stays off the latency path
+
+Stage 5 moved the local cleanup fallback out of the guardian into a manager-leased
+terminal replacement steward. It runs only after the guardian has published its
+result and freed the worker slot, so no request's own path reaches it; the guest
+execution envelope is untouched (only cleanup ownership changed).
+
+Measured the same way (`fake_typed_adapter` echo, 3000 requests after warm-up),
+load average 8 (moderate, so the minimum is the signal): min 423 us, median 718
+us. The 423 us floor matches the 436 us recorded before this change (within
+noise), and the median sits in the same 711 to 761 us band, so the fallback
+rework costs the caller nothing. The job lease and its queue run only on the
+fallback path, never on a request's own.

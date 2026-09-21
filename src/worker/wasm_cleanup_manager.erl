@@ -25,6 +25,7 @@ announcement. An announcement from an older generation is ignored.
 
 -export([start_link/0, capacity/0, admitted/0, admit/1, release/1]).
 -export([phase/0, reaper_generation/0, stats/0, requests/0, reaper/0]).
+-export([start_local_cleanup/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 %% `admitted` is request id -> a marker; capacity is the ceiling computed once
@@ -39,7 +40,14 @@ announcement. An announcement from an older generation is ignored.
             %% The operator view the current reaper last pushed. Served to
             %% `cleanup_stats/0'/`cleanup_requests/0' so a reaper wedged in
             %% journal I/O never stalls diagnostics.
-            view = undefined :: undefined | map()}).
+            view = undefined :: undefined | map(),
+            %% Local cleanup jobs the manager leased and monitors: monitor ref
+            %% to the request id it runs. Bounded by `job_cap' (max_cleanup_jobs),
+            %% with the overflow held in `lqueue' and started as slots free, so a
+            %% reaper outage cannot make local cleanup an unbounded burst.
+            job_cap :: non_neg_integer(),
+            jobs = #{} :: #{reference() => term()},
+            lqueue = [] :: [{term(), map()}]}).
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
@@ -104,11 +112,24 @@ when none can be reached, so the steward stops holding and fails the operation.
 reaper() ->
     gen_server:call(?MODULE, reaper).
 
+-doc """
+Run a request's local cleanup fallback under a job lease, off the guardian.
+
+The guardian hands over the request's complete mirror when no reaper can own the
+cleanup. The manager starts a terminal replacement steward to run it and holds a
+lease, so local fallback jobs share the node's `max_cleanup_jobs` bound with the
+reaper's own jobs and a reaper outage cannot create an unbounded burst. Returns
+once the job is leased or queued; the manager owns it from there.
+""".
+-spec start_local_cleanup(term(), map()) -> ok.
+start_local_cleanup(RequestId, Mirror) ->
+    gen_server:call(?MODULE, {start_local_cleanup, RequestId, Mirror}).
+
 init([]) ->
     Opts = application:get_env(wasm, reaper_options, #{}),
-    Cap = wasm_worker_reaper:setting(Opts, max_cleanup_jobs) +
-          wasm_worker_reaper:setting(Opts, cleanup_queue_len),
-    {ok, #s{cap = Cap}}.
+    Jobs = wasm_worker_reaper:setting(Opts, max_cleanup_jobs),
+    Cap = Jobs + wasm_worker_reaper:setting(Opts, cleanup_queue_len),
+    {ok, #s{cap = Cap, job_cap = Jobs}}.
 
 handle_call(capacity, _From, #s{cap = Cap} = S) ->
     {reply, Cap, S};
@@ -125,6 +146,8 @@ handle_call({admit, Id}, _From, #s{admitted = A, cap = Cap} = S) ->
     end;
 handle_call({release, Id}, _From, #s{admitted = A} = S) ->
     {reply, ok, S#s{admitted = maps:remove(Id, A)}};
+handle_call({start_local_cleanup, Id, Mirror}, _From, S) ->
+    {reply, ok, start_or_queue_job(Id, Mirror, S)};
 handle_call(phase, _From, #s{phase = P} = S) ->
     {reply, P, S};
 handle_call(reaper_generation, _From, #s{reaper = {_, Gen}} = S) ->
@@ -176,8 +199,36 @@ handle_info({'DOWN', Ref, process, _Pid, _Why}, #s{rmon = Ref} = S) ->
     %% the replacement announces and pushes again.
     {noreply, S#s{phase = recovering, reaper = undefined, rmon = undefined,
                   view = undefined}};
+handle_info({'DOWN', Ref, process, _Pid, _Why}, #s{jobs = Jobs} = S)
+  when is_map_key(Ref, Jobs) ->
+    %% A local cleanup job finished (or died): free its lease and start the next
+    %% queued one, if any.
+    {noreply, job_done(Ref, S)};
 handle_info(_Msg, S) ->
     {noreply, S}.
+
+%% Start a local cleanup job now if a lease is free, otherwise queue it. The
+%% guardian never waits on a slot: the manager owns the job once this returns.
+start_or_queue_job(Id, Mirror, #s{jobs = Jobs, job_cap = Cap} = S)
+  when map_size(Jobs) >= Cap ->
+    S#s{lqueue = S#s.lqueue ++ [{Id, Mirror}]};
+start_or_queue_job(Id, Mirror, S) ->
+    start_job(Id, Mirror, S).
+
+start_job(Id, Mirror, #s{jobs = Jobs} = S) ->
+    {ok, Pid} = wasm_cleanup_steward_sup:start_steward(
+                  {local_cleanup, Id, Mirror}),
+    Ref = monitor(process, Pid),
+    S#s{jobs = maps:put(Ref, Id, Jobs)}.
+
+%% Release the finished job's lease, then start the oldest queued job if a slot
+%% is now free.
+job_done(Ref, #s{jobs = Jobs} = S) ->
+    S1 = S#s{jobs = maps:remove(Ref, Jobs)},
+    case S1#s.lqueue of
+        []                    -> S1;
+        [{Id, Mirror} | Rest] -> start_job(Id, Mirror, S1#s{lqueue = Rest})
+    end.
 
 %% Track the reaper that announced. An older generation is ignored; the same
 %% reaper re-announcing keeps its monitor; a new pid or generation replaces the

@@ -1145,12 +1145,22 @@ hand_off(G) ->
         {cleanup_owned, _Steward} ->
             ok;
         {cleanup_unavailable, _Steward} ->
-            run_mirror(G);
+            local_cleanup(G);
         {'DOWN', SMon, process, _P, _R} when SMon =:= G#g.smon ->
-            run_mirror(G)
+            local_cleanup(G)
     after ?HANDOFF_GRACE ->
-        run_mirror(G)
+        local_cleanup(G)
     end.
+
+%% No reaper can own the cleanup, so hand the request's complete mirror to the
+%% manager, which runs it under a job lease off this process. The guardian has
+%% already published its result and freed the worker slot, so it does not wait
+%% for the cleanup to finish; the manager owns the job from here.
+local_cleanup(G) ->
+    Mirror = #{id => G#g.id, dir => G#g.dir,
+               adapter_state => mirror_adapter_state(G),
+               actions => mirror_actions(G)},
+    ok = wasm_cleanup_manager:start_local_cleanup(G#g.id, Mirror).
 
 %% The tables are this process's, so they survive a killed runner. A `timeout'
 %% or `cancelled' outcome therefore carries what the guest had already written,
@@ -1179,15 +1189,6 @@ kill_runner(#g{runner = Pid, rmon = Mon}, false) ->
     receive {'DOWN', Mon, process, Pid, _} -> ok after 5_000 -> ok end,
     ok.
 
-run_mirror(G) ->
-    _ = case mirror_adapter_state(G) of
-            undefined     -> ok;
-            {Mod, AState} -> bounded(fun() -> Mod:cleanup(AState) end)
-        end,
-    lists:foreach(fun(A) -> bounded(A) end, mirror_actions(G)),
-    _ = file:del_dir_r(G#g.dir),
-    wasm_worker_reaper:finish(G#g.id).
-
 %% The complete mirror (invariant 5): the guardian holds unacknowledged actions
 %% and adapter state in its pending map, so a steward that dies or a reaper that
 %% never answered does not lose them. Confirmed adapter state wins; otherwise an
@@ -1206,23 +1207,6 @@ mirror_actions(#g{actions = As, pending = P}) ->
     Confirmed = [A || {_T, A} <- As, is_function(A, 0)],
     Pending   = [A || {register, _From, A} <- maps:values(P), is_function(A, 0)],
     Confirmed ++ Pending.
-
-%% The guardian orchestrates and never executes: a hanging action inline would
-%% wedge this process past every deadline it owns.
-bounded(F) ->
-    Parent = self(),
-    Ref = make_ref(),
-    {Pid, Mon} = spawn_opt(fun() -> Parent ! {Ref, guarded(F)} end, [monitor]),
-    receive
-        {Ref, _}                         -> erlang:demonitor(Mon, [flush]), ok;
-        {'DOWN', Mon, process, Pid, _}   -> ok
-    after 30_000 ->
-        exit(Pid, kill),
-        receive {'DOWN', Mon, process, Pid, _} -> ok after 1_000 -> ok end,
-        ok
-    end.
-
-guarded(F) -> try F(), ok catch C:R -> {C, R} end.
 
 %%% ---------------------------------------------------------------- mounts ---
 

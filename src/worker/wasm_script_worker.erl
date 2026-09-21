@@ -918,6 +918,9 @@ clear_waiter(W) ->
             dir         :: file:filename_all(),
             runner      :: undefined | pid(),
             rmon        :: undefined | reference(),
+            %% The per-request steward. Every reaper interaction goes through
+            %% it, so the reaper is never called from this process directly.
+            steward     :: undefined | pid(),
             channels    :: map(),
             mounts = #{} :: #{mount_name() => mount()},
             %% The guardian made every `register' call, so it keeps the list as
@@ -934,13 +937,19 @@ guardian(#{worker := Worker, ref := Ref, id := Id} = Args) ->
     %% other direction, and it is one of the five terminal events.
     WMon = erlang:monitor(process, Worker),
     Root = maps:get(root, Args),
-    case wasm_worker_reaper:reserve(Id, self(), Root, <<"req-", Id/binary>>) of
+    %% One steward per request, started before the reservation, because the
+    %% reservation itself is the first reaper interaction and it goes through
+    %% the steward like every other.
+    {ok, Steward} = wasm_cleanup_steward_sup:start_steward(Id),
+    case wasm_cleanup_steward:reserve(Steward, self(), Root, <<"req-", Id/binary>>) of
         {error, E} ->
+            wasm_cleanup_steward:stop(Steward),
             Worker ! {guardian_ready, Ref, {error, E}},
             ok;
         {ok, Dir} ->
             case filelib:ensure_path(Dir) of
                 {error, Why} ->
+                    wasm_cleanup_steward:stop(Steward),
                     Worker ! {guardian_ready, Ref,
                               {error, wasm_worker_error:worker(
                                         crashed, ~"could not create the request",
@@ -948,11 +957,11 @@ guardian(#{worker := Worker, ref := Ref, id := Id} = Args) ->
                     ok;
                 ok ->
                     Worker ! {guardian_ready, Ref, ok},
-                    start_runner(Args, WMon, Dir)
+                    start_runner(Args, WMon, Dir, Steward)
             end
     end.
 
-start_runner(Args, WMon, Dir) ->
+start_runner(Args, WMon, Dir, Steward) ->
     Limits = maps:get(limits, Args),
     G0 = #g{worker = maps:get(worker, Args), ref = maps:get(ref, Args),
             id = maps:get(id, Args), deadline = maps:get(deadline, Args),
@@ -962,7 +971,7 @@ start_runner(Args, WMon, Dir) ->
             snapshot_cap = maps:get(snapshot_cap, Args),
             runner_heap = maps:get(runner_heap, Args),
             root = maps:get(root, Args), trusted = maps:get(trusted, Args),
-            wmon = WMon, dir = Dir,
+            wmon = WMon, dir = Dir, steward = Steward,
             channels = channels(Limits)},
     Self = self(),
     Words = maps:get(max_heap_words, Limits, 8 * 1024 * 1024),
@@ -1007,7 +1016,7 @@ loop(G) ->
             loop(G1);
 
         {withdraw, From, Token} ->
-            From ! {withdraw_reply, wasm_worker_reaper:withdraw(G#g.id, Token)},
+            From ! {withdraw_reply, wasm_cleanup_steward:withdraw(G#g.steward, Token)},
             loop(G#g{actions = lists:keydelete(Token, 1, G#g.actions)});
 
         {deliver_state, From, Mod, AState} ->
@@ -1015,7 +1024,7 @@ loop(G) ->
             %% process holds the complete state. "Transferred" and "a state was
             %% delivered" are then the same event rather than two that can come
             %% apart.
-            Reply = wasm_worker_reaper:transfer(G#g.id, Mod, AState),
+            Reply = wasm_cleanup_steward:transfer(G#g.steward, Mod, AState),
             From ! {deliver_state_reply, Reply},
             loop(G#g{delivered = true, adapter_state = {Mod, AState}});
 
@@ -1084,6 +1093,8 @@ finish(G, Outcome, RunnerDown) ->
     G#g.worker ! {guardian_done, G#g.ref, with_partial_output(G, Outcome)},
     maps:foreach(fun(_K, C) -> channel_delete(C) end, G#g.channels),
     hand_over_cleanup(G),
+    %% The loop is only ever entered with a steward, so `finish' always has one.
+    wasm_cleanup_steward:stop(G#g.steward),
     ok.
 
 %% The tables are this process's, so they survive a killed runner. A `timeout'
@@ -1302,7 +1313,7 @@ bad_stage(Msg, Ctx) -> wasm_worker_error:worker(bad_stage_path, Msg, Ctx).
 %%
 %% The mirror stays bounded for free, because it only grows on `{ok, Token}'.
 do_register(G, Action) ->
-    case wasm_worker_reaper:register(G#g.id, Action) of
+    case wasm_cleanup_steward:register(G#g.steward, Action) of
         {ok, Token} ->
             {{ok, Token}, G#g{actions = [{Token, Action} | G#g.actions]}};
         {error, _, _} = E ->

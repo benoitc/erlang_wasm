@@ -57,14 +57,13 @@ L3  wasm_memory  wasm_table  wasm_global  wasm_heap  wasm_store
     wasm_validate_code  wasm_wast  wasm_worker_sup
 L2  wasm_decode  wasm_decode_code  wasm_decode_simd  wasm_decode_gc
     wasm_decode_atomic  wasm_keeper  wasm_simd  wasm_types  wasm_wait
-    wasm_wat_sexp  wasm_app  wasm_cleanup_manager
+    wasm_wat_sexp  wasm_app  wasm_cleanup_manager  wasm_cleanup_steward
 L1  wasm_code_cache  wasm_engine  wasm_leb128  wasm_num_float
     wasm_num_trunc  wasm_sup  wasm_wat_lex  wasm_wat_num  wasi_fs  wasi_sock
     wasm_worker_reaper  wasm_script_v1  wasm_cleanup_steward_sup
 L0  wasm_error  wasm_num  wasm_limits  wasm_code_slots  wasm_file_cache
     wasm_snapshot_file  wasm_subsup  wasm_validate_simd  wasm_validate_atomic
     wasi_path  wasi_net  wasi_file_nif  wasm_worker_error  wasm_worker_adapter
-    wasm_cleanup_steward
 ```
 
 `test/wasm_architecture_SUITE.erl` asserts that this block names every module

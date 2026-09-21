@@ -81,17 +81,31 @@ handle_call({reserve, _Id, _Guardian, _Root, RelPath}, From, S0) ->
     S = count(reserve, S0),
     Dir = filename:join(S#s.dir, RelPath),
     act(reserve, From, {ok, Dir}, S);
-handle_call({register, _Id, _Action}, From, S0) ->
-    S = count(register, S0#s{token = S0#s.token + 1}),
-    act(register, From, {ok, S#s.token}, S);
-handle_call({withdraw, _Id, _Token}, From, S0) ->
-    S = count(withdraw, S0),
-    act(withdraw, From, ok, S);
-handle_call({transfer, _Id, _Mod, _AState}, From, S0) ->
-    S = count(transfer, S0),
-    act(transfer, From, ok, S);
+%% The legacy synchronous calls (still used directly by a test), and the
+%% steward's `{apply, ...}' transport, land on the same per-operation logic.
+handle_call({register, _Id, Action}, From, S) ->
+    op(register, Action, From, S);
+handle_call({withdraw, _Id, Token}, From, S) ->
+    op(withdraw, Token, From, S);
+handle_call({transfer, _Id, _Mod, _AState}, From, S) ->
+    op(transfer, undefined, From, S);
+handle_call({apply, _Id, _OpId, {register, Action}}, From, S) ->
+    op(register, Action, From, S);
+handle_call({apply, _Id, _OpId, {withdraw, Token}}, From, S) ->
+    op(withdraw, Token, From, S);
+handle_call({apply, _Id, _OpId, {transfer, _Mod, _AState}}, From, S) ->
+    op(transfer, undefined, From, S);
 handle_call(_Msg, _From, S) ->
     {reply, ok, S}.
+
+%% One place register/withdraw/transfer are answered, whichever transport asked.
+%% register answers a fresh token; withdraw and transfer answer `ok'.
+op(register, _Action, From, S0) ->
+    S = count(register, S0#s{token = S0#s.token + 1}),
+    act(register, From, {ok, S#s.token}, S);
+op(Which, _Arg, From, S0) ->
+    S = count(Which, S0),
+    act(Which, From, ok, S).
 
 handle_cast(_Msg, S) -> {noreply, S}.
 

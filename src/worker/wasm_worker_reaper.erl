@@ -90,6 +90,7 @@ supervised reaper will almost always perform.
 -export([start_link/1, start_link/2, start_link/3, stop/0, alive/0, roots/0]).
 -export([setting_keys/0, setting/2]).
 -export([reserve/4, register/2, withdraw/2, transfer/3, finish/1]).
+-export([unreachable_operation/1]).
 -export([authorise/2, generation/0, incarnation/0, stats/0, requests/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -139,6 +140,11 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
 -record(req, {id             :: request_id(),
               state          :: live | pending | held | queued | running,
               guardian       :: pid(),
+              %% The steward that reserved this request. It is the caller
+              %% identity every `{apply, ...}' operation must match, captured
+              %% from the reserve call. `undefined' for a v1 record reconstructed
+              %% by a restart, which never had one.
+              steward        :: undefined | pid(),
               mon            :: undefined | reference(),
               root           :: root_id(),
               relpath        :: binary(),
@@ -352,6 +358,21 @@ cast(Msg) ->
 no_reaper() ->
     wasm_worker_error:worker(no_reaper, ~"no cleanup owner is running", #{}).
 
+-doc """
+What an operation answers when its reaper is gone, run in the caller.
+
+The steward calls this when a forwarded operation's reaper pid has died, so the
+answer is what the guardian would have got had it called the reaper directly and
+found it absent: a `register` runs the action bounded and reports `released` or
+`cleanup_failed`, and a `withdraw` or `transfer` names the missing owner.
+""".
+-spec unreachable_operation(wasm_cleanup_steward:operation()) ->
+          {error, wasm_worker_error:worker_error()} |
+          {error, wasm_worker_error:worker_error(), released | cleanup_failed}.
+unreachable_operation({register, Action})   -> unreachable(Action);
+unreachable_operation({withdraw, _Token})   -> {error, no_reaper()};
+unreachable_operation({transfer, _M, _A})   -> {error, no_reaper()}.
+
 %% The registry is unreachable, so perform what could not be recorded. In a
 %% bounded child, never inline: a hanging action inline would wedge the caller
 %% past its own deadline and defeat cancellation. Killing that child does not
@@ -405,7 +426,7 @@ init({Roots, Opts, Generated}) ->
              generated = [G || G <- Generated, maps:is_key(G, Roots)]},
     {ok, sweep(St)}.
 
-handle_call({reserve, Id, Guardian, Root, RelPath}, _From, St) ->
+handle_call({reserve, Id, Guardian, Root, RelPath}, From, St) ->
     case maps:is_key(Root, St#st.roots) of
         false ->
             {reply, {error, wasm_worker_error:worker(
@@ -418,7 +439,11 @@ handle_call({reserve, Id, Guardian, Root, RelPath}, _From, St) ->
                                       cleanup_saturated,
                                       ~"no cleanup capacity", #{})}, St};
                 true ->
+                    %% The reserve caller is the steward, and it is the identity
+                    %% every later `{apply, ...}' for this request must match.
+                    Steward = element(1, From),
                     Req = #req{id = Id, state = live, guardian = Guardian,
+                               steward = Steward,
                                mon = erlang:monitor(process, Guardian),
                                root = Root, relpath = RelPath,
                                ops = [{remove_tree, Root, RelPath}],
@@ -436,53 +461,25 @@ handle_call({reserve, Id, Guardian, Root, RelPath}, _From, St) ->
     end;
 
 handle_call({register, Id, Action}, _From, St) ->
-    case maps:find(Id, St#st.reqs) of
-        error ->
-            {reply, unreachable(Action), St};
-        {ok, #req{actions = As}}
-          when length(As) >= map_get(max_cleanup_actions, St#st.opts) ->
-            %% The list is adapter-controlled: without a ceiling an adapter in
-            %% a loop registers until the reaper's memory is the bound.
-            E = wasm_worker_error:worker(cleanup_saturated,
-                                    ~"too many cleanup actions",
-                                    #{max => setting(St, max_cleanup_actions)}),
-            {reply, {error, E, cleanup_failed}, St};
-        {ok, Req} ->
-            do_register(Req, Action, St)
-    end;
+    {Reply, St1} = op_register(Id, Action, St),
+    {reply, Reply, St1};
 
 handle_call({withdraw, Id, Token}, _From, St) ->
-    case maps:find(Id, St#st.reqs) of
-        error ->
-            {reply, ok, St};
-        {ok, #req{actions = As} = Req} ->
-            Kept = [A || {T, _, _} = A <- As, T =/= Token],
-            Req1 = Req#req{actions = Kept},
-            %% Only a durable op changes what is on disk. Withdrawing a fun
-            %% costs nothing, which is why the common case writes nothing.
-            case durable(As, Token) of
-                false -> {reply, ok, put_req(Req1, St)};
-                true ->
-                    Req2 = Req1#req{ops = ops_of(Req1)},
-                    case write_record(St, Req2) of
-                        ok         -> {reply, ok, put_req(Req2, St)};
-                        {error, E} -> {reply, {error, E}, St}
-                    end
-            end
-    end;
+    {Reply, St1} = op_withdraw(Id, Token, St),
+    {reply, Reply, St1};
 
 handle_call({transfer, Id, Mod, AdapterState}, _From, St) ->
-    case maps:find(Id, St#st.reqs) of
-        error ->
-            {reply, {error, no_reaper()}, St};
-        {ok, #req{actions = As} = Req} ->
-            %% Marks, never withdraws. A `cleanup/1' that raises would
-            %% otherwise leak precisely the resources whose actions were just
-            %% removed, so success is what drops them.
-            Marked = [{T, A, transferred} || {T, A, _} <- As],
-            {reply, ok, put_req(Req#req{actions = Marked,
-                                        cleanup = {Mod, AdapterState}}, St)}
-    end;
+    {Reply, St1} = op_transfer(Id, Mod, AdapterState, St),
+    {reply, Reply, St1};
+
+%% The steward's transport. A cleanup operation carried by
+%% `gen_server:send_request/2', so the caller is authenticated by OTP as `From'
+%% rather than by a field it could forge. This stage dispatches to the same
+%% logic the legacy calls use; the operation-id ledger, ordering and bound that
+%% `OperationId' carries arrive with the next stage.
+handle_call({apply, Id, _OperationId, Operation}, _From, St) ->
+    {Reply, St1} = apply_operation(Id, Operation, St),
+    {reply, Reply, St1};
 
 handle_call({authorise, Id, Gen}, _From, #st{gen = Gen} = St) ->
     {reply, case maps:is_key(Id, St#st.reqs) of
@@ -587,11 +584,67 @@ journal_empty(Dir) ->
 
 %%% ---------------------------------------------------------- registering ---
 
+%% One place each cleanup operation is carried out, whichever transport asked
+%% for it: the legacy `{register, ...}' call and the steward's `{apply, ...}'
+%% both land here, so the two can never diverge. Each returns `{Reply, St1}'.
+apply_operation(Id, {register, Action}, St)  -> op_register(Id, Action, St);
+apply_operation(Id, {withdraw, Token}, St)   -> op_withdraw(Id, Token, St);
+apply_operation(Id, {transfer, Mod, A}, St)  -> op_transfer(Id, Mod, A, St).
+
+op_register(Id, Action, St) ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            {unreachable(Action), St};
+        {ok, #req{actions = As}}
+          when length(As) >= map_get(max_cleanup_actions, St#st.opts) ->
+            %% The list is adapter-controlled: without a ceiling an adapter in
+            %% a loop registers until the reaper's memory is the bound.
+            E = wasm_worker_error:worker(cleanup_saturated,
+                                    ~"too many cleanup actions",
+                                    #{max => setting(St, max_cleanup_actions)}),
+            {{error, E, cleanup_failed}, St};
+        {ok, Req} ->
+            do_register(Req, Action, St)
+    end.
+
+op_withdraw(Id, Token, St) ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            {ok, St};
+        {ok, #req{actions = As} = Req} ->
+            Kept = [A || {T, _, _} = A <- As, T =/= Token],
+            Req1 = Req#req{actions = Kept},
+            %% Only a durable op changes what is on disk. Withdrawing a fun
+            %% costs nothing, which is why the common case writes nothing.
+            case durable(As, Token) of
+                false -> {ok, put_req(Req1, St)};
+                true ->
+                    Req2 = Req1#req{ops = ops_of(Req1)},
+                    case write_record(St, Req2) of
+                        ok         -> {ok, put_req(Req2, St)};
+                        {error, E} -> {{error, E}, St}
+                    end
+            end
+    end.
+
+op_transfer(Id, Mod, AdapterState, St) ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            {{error, no_reaper()}, St};
+        {ok, #req{actions = As} = Req} ->
+            %% Marks, never withdraws. A `cleanup/1' that raises would
+            %% otherwise leak precisely the resources whose actions were just
+            %% removed, so success is what drops them.
+            Marked = [{T, A, transferred} || {T, A, _} <- As],
+            {ok, put_req(Req#req{actions = Marked,
+                                 cleanup = {Mod, AdapterState}}, St)}
+    end.
+
 do_register(#req{next_token = T, actions = As} = Req, Action, St) ->
     Req1 = Req#req{actions = [{T, Action, owned} | As], next_token = T + 1},
     case is_durable(Action) of
         false ->
-            {reply, {ok, T}, put_req(Req1, St)};
+            {{ok, T}, put_req(Req1, St)};
         true ->
             %% Synchronous with respect to the write and the rename:
             %% acknowledging before the rename completes is exactly the window
@@ -599,9 +652,9 @@ do_register(#req{next_token = T, actions = As} = Req, Action, St) ->
             Req2 = Req1#req{ops = ops_of(Req1)},
             case write_record(St, Req2) of
                 ok ->
-                    {reply, {ok, T}, put_req(Req2, St)};
+                    {{ok, T}, put_req(Req2, St)};
                 {error, E} ->
-                    {reply, {error, E, cleanup_failed}, St}
+                    {{error, E, cleanup_failed}, St}
             end
     end.
 

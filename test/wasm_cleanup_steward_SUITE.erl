@@ -88,8 +88,12 @@ the_seam_parks_a_caller_and_releases_it(_Config) ->
 the_deadline_fires_while_the_reaper_is_stuck_on_register(Config) ->
     ok = fake_reaper:set_mode(register, hang),
     Marker = filename:join(?config(dir, Config), "cleanup-marker"),
+    %% The deadline lives in the limits map, and it is set well under the await
+    %% below, so a fired deadline is unambiguous: a still-running answer means it
+    %% never fired, which is the wedge.
     {ok, W} = wasm_script_worker:start_link(
-                fake_typed_adapter, #{root => scratch, timeout => 500}),
+                fake_typed_adapter,
+                #{root => scratch, limits => #{timeout => 500}}),
     put(worker, W),
     Request = maps:merge(
                 wasm_adapter_conformance:fixture(fake_typed_adapter, echo),

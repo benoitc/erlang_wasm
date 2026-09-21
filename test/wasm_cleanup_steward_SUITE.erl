@@ -30,6 +30,7 @@ all() ->
      the_result_is_published_before_the_cleanup_handoff,
      the_mirror_runs_an_unacknowledged_register,
      a_live_reaper_is_not_locally_cleaned_on_a_timeout,
+     the_deadline_bounds_a_slow_reservation,
      the_reaper_rejects_an_operation_from_a_foreign_caller,
      a_duplicate_operation_returns_the_stored_result,
      a_gap_asks_the_steward_to_resend,
@@ -195,6 +196,20 @@ a_live_reaper_is_not_locally_cleaned_on_a_timeout(Config) ->
     %% absent.
     timer:sleep(5_500),
     ?assertNot(filelib:is_regular(Marker)).
+
+%% Startup spends the request's own deadline. The reaper hangs on the reserve, so
+%% the reservation never resolves; a request with a short finite timeout ends with
+%% a `timeout' in about that time, not after the fixed startup watchdog. Before,
+%% the wait was the 30-second watchdog and the error was the generic one.
+the_deadline_bounds_a_slow_reservation(_Config) ->
+    ok = fake_reaper:set_mode(reserve, hang),
+    {ok, W} = wasm_script_worker:start_link(
+                fake_typed_adapter, #{root => scratch, limits => #{timeout => 500}}),
+    put(worker, W),
+    Request = wasm_adapter_conformance:fixture(fake_typed_adapter, echo),
+    {Micros, Result} = timer:tc(fun() -> wasm_script_worker:run(W, Request) end),
+    ?assertMatch({error, #{kind := timeout}}, Result),
+    ?assert(Micros < 5_000_000, {too_slow, Micros}).
 
 %% The guardian publishes its result before it hands cleanup off, so a reaper
 %% wedged on the finish barrier cannot hold the result up: the request answers on

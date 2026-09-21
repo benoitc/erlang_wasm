@@ -848,6 +848,10 @@ do_submit(Request, Caller, W) ->
              snapshot_cap => W#w.snapshot_cap,
              runner_heap => W#w.runner_heap},
     {G, GMon} = spawn_monitor(fun() -> guardian(Args) end),
+    %% Startup spends out of the request's own deadline: a finite timeout that
+    %% expires while the reservation is still in flight ends the request with a
+    %% `timeout', not the fixed watchdog's generic error. `infinity' keeps the
+    %% watchdog so a wedged startup cannot hang for ever.
     receive
         {guardian_ready, Ref, ok} ->
             SMon = erlang:monitor(process, Caller),
@@ -860,12 +864,22 @@ do_submit(Request, Caller, W) ->
             {reply, {error, wasm_worker_error:worker(
                               crashed, ~"the request could not start",
                               #{reason => Reason})}, W}
-    after ?GUARDIAN_READY_TIMEOUT ->
+    after ready_timeout(Deadline) ->
         exit(G, kill),
         erlang:demonitor(GMon, [flush]),
-        {reply, {error, wasm_worker_error:worker(
-                          crashed, ~"the request did not start", #{})}, W}
+        {reply, {error, startup_timeout(Deadline)}, W}
     end.
+
+%% The startup wait spends the request's remaining deadline when it has a finite
+%% one, and the fixed watchdog otherwise.
+ready_timeout(infinity) -> ?GUARDIAN_READY_TIMEOUT;
+ready_timeout(Deadline) -> max(0, Deadline - erlang:monotonic_time(millisecond)).
+
+startup_timeout(infinity) ->
+    wasm_worker_error:worker(crashed, ~"the request did not start", #{});
+startup_timeout(_Deadline) ->
+    wasm_worker_error:worker(timeout, ~"deadline reached before the request started",
+                             #{}).
 
 %% The worker holds one slot and a caller that never came back must not wedge
 %% it. This is the one window in which a completed result is lost, and it is

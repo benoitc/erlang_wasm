@@ -26,7 +26,8 @@ suite() -> [{timetrap, {seconds, 60}}].
 
 all() ->
     [the_seam_parks_a_caller_and_releases_it,
-     the_deadline_fires_while_the_reaper_is_stuck_on_register].
+     the_deadline_fires_while_the_reaper_is_stuck_on_register,
+     the_reaper_rejects_an_operation_from_a_foreign_caller].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -34,6 +35,15 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) -> ok.
 
+%% The authentication case drives the real reaper, since it is the reaper's own
+%% check under test; the others inject faults with the fake.
+init_per_testcase(the_reaper_rejects_an_operation_from_a_foreign_caller, Config) ->
+    process_flag(trap_exit, true),
+    ok = wasm_worker_sup:suspend_reaper(),
+    Dir = filename:join([?config(priv_dir, Config), "auth"]),
+    ok = filelib:ensure_path(Dir),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Dir}),
+    [{dir, Dir} | Config];
 init_per_testcase(TC, Config) ->
     process_flag(trap_exit, true),
     %% Free the reaper's registered name so the fake can take it, and keep the
@@ -44,6 +54,10 @@ init_per_testcase(TC, Config) ->
     {ok, _} = fake_reaper:start_link(#{dir => Dir, roots => [scratch]}),
     [{dir, Dir} | Config].
 
+end_per_testcase(the_reaper_rejects_an_operation_from_a_foreign_caller, _Config) ->
+    quietly(fun() -> wasm_worker_reaper:stop() end),
+    quietly(fun() -> wasm_worker_sup:resume_reaper() end),
+    ok;
 end_per_testcase(_TC, _Config) ->
     %% Let any parked caller go before tearing down, so a wedged guardian from
     %% the pre-fix path unblocks and exits instead of lingering.
@@ -104,6 +118,26 @@ the_deadline_fires_while_the_reaper_is_stuck_on_register(Config) ->
     %% guardian really faced the wedge rather than skipping it.
     ?assert(fake_reaper:attempts(register) >= 1),
     ?assertMatch({error, #{kind := timeout}}, Outcome).
+
+%% Only the steward that reserved a request may drive its cleanup. This process
+%% makes the reserve call, so it is the steward; an operation from it is
+%% accepted, and the same operation from any other process is refused without
+%% touching the request.
+the_reaper_rejects_an_operation_from_a_foreign_caller(_Config) ->
+    Id = ~"authreq0",
+    {ok, _Dir} = wasm_worker_reaper:reserve(Id, self(), scratch, ~"req-authreq0"),
+    Op = {register, fun() -> ok end},
+    ?assertMatch({ok, _},
+                 gen_server:call(wasm_worker_reaper, {apply, Id, {Id, 1}, Op})),
+    Self = self(),
+    _ = spawn(fun() ->
+                  R = gen_server:call(wasm_worker_reaper, {apply, Id, {Id, 2}, Op}),
+                  Self ! {foreign, R}
+              end),
+    receive
+        {foreign, Foreign} ->
+            ?assertMatch({error, #{kind := unauthorised}}, Foreign)
+    after 5_000 -> ct:fail(no_foreign_reply) end.
 
 %%% ---------------------------------------------------------------- helpers ---
 

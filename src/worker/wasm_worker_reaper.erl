@@ -474,12 +474,18 @@ handle_call({transfer, Id, Mod, AdapterState}, _From, St) ->
 
 %% The steward's transport. A cleanup operation carried by
 %% `gen_server:send_request/2', so the caller is authenticated by OTP as `From'
-%% rather than by a field it could forge. This stage dispatches to the same
-%% logic the legacy calls use; the operation-id ledger, ordering and bound that
-%% `OperationId' carries arrive with the next stage.
-handle_call({apply, Id, _OperationId, Operation}, _From, St) ->
-    {Reply, St1} = apply_operation(Id, Operation, St),
-    {reply, Reply, St1};
+%% rather than by a field it could forge: only the steward that reserved the
+%% request may drive its cleanup. This stage dispatches to the same logic the
+%% legacy calls use; the operation-id ledger, ordering and bound that
+%% `OperationId' carries arrive with adoption, which is what resends them.
+handle_call({apply, Id, _OperationId, Operation}, From, St) ->
+    case authorised_caller(Id, element(1, From), St) of
+        true ->
+            {Reply, St1} = apply_operation(Id, Operation, St),
+            {reply, Reply, St1};
+        false ->
+            {reply, {error, unauthorised()}, St}
+    end;
 
 handle_call({authorise, Id, Gen}, _From, #st{gen = Gen} = St) ->
     {reply, case maps:is_key(Id, St#st.reqs) of
@@ -590,6 +596,20 @@ journal_empty(Dir) ->
 apply_operation(Id, {register, Action}, St)  -> op_register(Id, Action, St);
 apply_operation(Id, {withdraw, Token}, St)   -> op_withdraw(Id, Token, St);
 apply_operation(Id, {transfer, Mod, A}, St)  -> op_transfer(Id, Mod, A, St).
+
+%% Only the steward that reserved a request may drive its cleanup operations. A
+%% request with no recorded steward -- a v1 record a restart reconstructed --
+%% has no identity to check, and an unknown request is answered as absent by the
+%% operation itself, so both pass here and the operation decides.
+authorised_caller(Id, Caller, St) ->
+    case maps:find(Id, St#st.reqs) of
+        {ok, #req{steward = Steward}} when is_pid(Steward) -> Caller =:= Steward;
+        _ -> true
+    end.
+
+unauthorised() ->
+    wasm_worker_error:worker(unauthorised,
+                             ~"cleanup operation from a foreign caller", #{}).
 
 op_register(Id, Action, St) ->
     case maps:find(Id, St#st.reqs) of

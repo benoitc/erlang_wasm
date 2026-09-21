@@ -28,6 +28,7 @@ all() ->
     [the_seam_parks_a_caller_and_releases_it,
      the_deadline_fires_while_the_reaper_is_stuck_on_register,
      the_result_is_published_before_the_cleanup_handoff,
+     the_mirror_runs_an_unacknowledged_register,
      the_reaper_rejects_an_operation_from_a_foreign_caller,
      a_duplicate_operation_returns_the_stored_result,
      a_gap_asks_the_steward_to_resend,
@@ -142,6 +143,29 @@ the_deadline_fires_while_the_reaper_is_stuck_on_register(Config) ->
     %% guardian really faced the wedge rather than skipping it.
     ?assert(fake_reaper:attempts(register) >= 1),
     ?assertMatch({error, #{kind := timeout}}, Outcome).
+
+%% A register the reaper never acknowledged lives only in the guardian's pending
+%% map, not its confirmed mirror. The fallback mirror must still run it: the
+%% adapter's marker action writes `action-marker' when it runs. The reaper hangs
+%% on register and on finish, so the register stays unacknowledged and the
+%% guardian falls back to its mirror after the handoff grace.
+the_mirror_runs_an_unacknowledged_register(Config) ->
+    ok = fake_reaper:set_mode(register, hang),
+    ok = fake_reaper:set_mode(finish, hang),
+    Dir = ?config(dir, Config),
+    ActionMarker = filename:join(Dir, "action-marker"),
+    {ok, W} = wasm_script_worker:start_link(
+                fake_typed_adapter, #{root => scratch, limits => #{timeout => 500}}),
+    put(worker, W),
+    Request = maps:merge(
+                wasm_adapter_conformance:fixture(fake_typed_adapter, echo),
+                #{cleanup_marker => filename:join(Dir, "cleanup-marker")}),
+    {ok, Ref} = wasm_script_worker:submit(W, Request),
+    ?assertMatch({error, #{kind := timeout}},
+                 wasm_script_worker:await(W, Ref, 5_000)),
+    %% The unacknowledged register's action runs from the fallback mirror (after
+    %% the handoff grace). Red today: the mirror only ran confirmed actions.
+    ok = wait_until(fun() -> filelib:is_regular(ActionMarker) end, 500).
 
 %% The guardian publishes its result before it hands cleanup off, so a reaper
 %% wedged on the finish barrier cannot hold the result up: the request answers on

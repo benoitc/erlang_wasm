@@ -1029,11 +1029,10 @@ loop(G) ->
             loop(forward(G, {register, Action}, {register, From, Action}));
 
         {withdraw, From, Token} ->
-            %% Dropped from the mirror at forward time, as the synchronous path
-            %% dropped it before continuing: the mirror is what survives the
-            %% reaper, and a withdrawn action must not.
-            G1 = forward(G, {withdraw, Token}, {withdraw, From}),
-            loop(G1#g{actions = lists:keydelete(Token, 1, G1#g.actions)});
+            %% Not dropped speculatively: the action stays in the mirror until the
+            %% reaper confirms the withdraw, so a withdraw that is refused or lost
+            %% leaves the action owned (the mirror is what survives the reaper).
+            loop(forward(G, {withdraw, Token}, {withdraw, From, Token}));
 
         {deliver_state, From, Mod, AState} ->
             %% Transfer is the kernel's, and it happens here: once, after this
@@ -1106,8 +1105,12 @@ remaining(Deadline) ->
 %% hand the cleanup on. The outcome is relayed *before* cleanup, so a
 %% `cleanup/1' that fails or hangs can never become an error in a result the
 %% caller already has.
-finish(G, Outcome, RunnerDown) ->
-    kill_runner(G, RunnerDown),
+finish(G0, Outcome, RunnerDown) ->
+    kill_runner(G0, RunnerDown),
+    %% Cleanup messages the runner sent before its DOWN may still be in the
+    %% mailbox; forward them so a last-moment action reaches the mirror and the
+    %% steward before the request is handed off.
+    G = drain(G0),
     G#g.worker ! {guardian_done, G#g.ref, with_partial_output(G, Outcome)},
     maps:foreach(fun(_K, C) -> channel_delete(C) end, G#g.channels),
     %% The result is published, so a later worker DOWN is no longer a
@@ -1115,6 +1118,19 @@ finish(G, Outcome, RunnerDown) ->
     _ = demonitor(G#g.wmon, [flush]),
     hand_off(G),
     ok.
+
+drain(G) ->
+    receive
+        {register, From, Action} ->
+            drain(forward(G, {register, Action}, {register, From, Action}));
+        {withdraw, From, Token} ->
+            drain(forward(G, {withdraw, Token}, {withdraw, From, Token}));
+        {deliver_state, From, Mod, AState} ->
+            drain(forward(G, {transfer, Mod, AState},
+                          {deliver_state, From, Mod, AState}))
+    after 0 ->
+        G
+    end.
 
 %% Cleanup is the steward's to complete with the reaper, and the guardian waits
 %% for it -- but only after publishing, so the result is never held up. It exits
@@ -1162,15 +1178,32 @@ kill_runner(#g{runner = Pid, rmon = Mon}, false) ->
     ok.
 
 run_mirror(G) ->
-    _ = case G#g.adapter_state of
-            undefined -> ok;
+    _ = case mirror_adapter_state(G) of
+            undefined     -> ok;
             {Mod, AState} -> bounded(fun() -> Mod:cleanup(AState) end)
         end,
-    lists:foreach(fun({_T, A}) when is_function(A, 0) -> bounded(A);
-                     ({_T, _}) -> ok
-                  end, G#g.actions),
+    lists:foreach(fun(A) -> bounded(A) end, mirror_actions(G)),
     _ = file:del_dir_r(G#g.dir),
     wasm_worker_reaper:finish(G#g.id).
+
+%% The complete mirror (invariant 5): the guardian holds unacknowledged actions
+%% and adapter state in its pending map, so a steward that dies or a reaper that
+%% never answered does not lose them. Confirmed adapter state wins; otherwise an
+%% unacknowledged transfer's.
+mirror_adapter_state(#g{adapter_state = {_, _} = S}) ->
+    S;
+mirror_adapter_state(#g{pending = P}) ->
+    case [{M, A} || {deliver_state, _From, M, A} <- maps:values(P)] of
+        [S | _] -> S;
+        []      -> undefined
+    end.
+
+%% Confirmed owned funs plus unacknowledged register funs. Durable operations are
+%% covered by removing the request directory, so only closures need running here.
+mirror_actions(#g{actions = As, pending = P}) ->
+    Confirmed = [A || {_T, A} <- As, is_function(A, 0)],
+    Pending   = [A || {register, _From, A} <- maps:values(P), is_function(A, 0)],
+    Confirmed ++ Pending.
 
 %% The guardian orchestrates and never executes: a hanging action inline would
 %% wedge this process past every deadline it owns.
@@ -1359,9 +1392,13 @@ steward_reply(G, CorrRef, Reply) ->
                 {ok, Token} -> G1#g{actions = [{Token, Action} | G1#g.actions]};
                 _           -> G1
             end;
-        {{withdraw, From}, Pending} ->
+        {{withdraw, From, Token}, Pending} ->
             From ! {withdraw_reply, Reply},
-            G#g{pending = Pending};
+            G1 = G#g{pending = Pending},
+            case Reply of
+                ok -> G1#g{actions = lists:keydelete(Token, 1, G1#g.actions)};
+                _  -> G1
+            end;
         {{deliver_state, From, Mod, AState}, Pending} ->
             From ! {deliver_state_reply, Reply},
             G#g{pending = Pending, delivered = true, adapter_state = {Mod, AState}}

@@ -101,7 +101,7 @@ supervised reaper will almost always perform.
 -define(GENERATION_KEY, {?MODULE, generation}).
 -define(JOURNAL_DIR, ".journal").
 -define(QUARANTINE_DIR, "quarantine").
--define(RECORD_VERSION, "v1").
+-define(RECORD_VERSION, "v2").
 
 %% Defaults. Every one is a **named setting with a default**, overridable in
 %% the options map, because "a small fixed count" is not something a case can
@@ -353,7 +353,7 @@ is to look at what is holding it and kill that guardian if it really is stuck.
 so whether `c:wasm_worker_adapter:cleanup/1` has an owner.
 """.
 -spec requests() -> [#{id := request_id(), state := atom(), guardian := pid(),
-                       delivered := boolean()}]
+                       delivered := boolean(), actions := non_neg_integer()}]
                   | {error, wasm_worker_error:worker_error()}.
 requests() -> call(requests).
 
@@ -515,7 +515,8 @@ handle_call(requests, _From, St) ->
     %% `delivered' says whether an `adapter_state()' has reached the registry,
     %% which is the same thing as saying whether `cleanup/1' has an owner.
     {reply, [#{id => R#req.id, state => R#req.state, guardian => R#req.guardian,
-               delivered => R#req.cleanup =/= undefined}
+               delivered => R#req.cleanup =/= undefined,
+               actions => length(R#req.actions)}
              || R <- maps:values(St#st.reqs)], St};
 
 handle_call(roots, _From, St) ->
@@ -547,6 +548,9 @@ handle_cast(_, St) ->
 
 handle_info({'DOWN', Mon, process, _Pid, _Why}, St) ->
     {noreply, owner_down(Mon, St)};
+
+handle_info({adopt_reply, Id, Actions, AdapterState}, St) ->
+    {noreply, adopt_reply(Id, Actions, AdapterState, St)};
 
 handle_info({handshake_reply, Id, Answer}, St) ->
     {noreply, handshake_reply(Id, Answer, St)};
@@ -1127,10 +1131,15 @@ io_error(E, Path) ->
 %% atomic whole-record replacement. Never an in-place append: that would
 %% reintroduce the half-written record the temp-and-rename protocol exists to
 %% make impossible.
-encode_record(St, #req{guardian = Pid, id = Id, gen = Gen, ops = Ops}) ->
+encode_record(St, #req{guardian = Pid, steward = SPid, id = Id,
+                       gen = Gen, ops = Ops}) ->
     Header = [?RECORD_VERSION, " ", St#st.incarnation, " ",
-              integer_to_list(Gen), " ", pid_to_list(Pid), " ", Id, "\n"],
+              integer_to_list(Gen), " ", pid_to_list(Pid), " ",
+              steward_field(SPid), " ", Id, "\n"],
     [Header | [encode_op(Op) || Op <- Ops]].
+
+steward_field(undefined)            -> "-";
+steward_field(Pid) when is_pid(Pid) -> pid_to_list(Pid).
 
 encode_op({Verb, Root, Rel}) ->
     [atom_to_list(Verb), " ", atom_to_list(Root), " ", escape(Rel), "\n"].
@@ -1220,7 +1229,39 @@ adopt_or_orphan(Req, live, St) ->
             Mon = erlang:monitor(process, Req#req.guardian),
             Req1 = Req#req{state = pending, mon = Mon, gen = St#st.gen},
             ok = ask(Req1),
-            put_req(Req1, St)
+            adopt_steward(Req1, St)
+    end.
+
+%% A v2 record names the steward. If it is still alive, monitor it -- so the
+%% two-owner logic holds after adoption -- and ask it for the volatile funs and
+%% adapter state the dead reaper could not have kept. The journal already carries
+%% the durable ops, so this recovers only what was lost.
+adopt_steward(#req{steward = SPid, id = Id, gen = Gen} = Req, St)
+  when is_pid(SPid) ->
+    case is_process_alive(SPid) of
+        true ->
+            SMon = erlang:monitor(process, SPid),
+            SPid ! {adopt_request, self(), Gen, Id},
+            put_req(Req#req{smon = SMon}, St);
+        false ->
+            put_req(Req, St)
+    end;
+adopt_steward(Req, St) ->
+    put_req(Req, St).
+
+%% The steward answered a restart with the volatile state. Restore the funs and
+%% adapter state; durable ops already came from the journal, so nothing here
+%% touches them, and `run_actions' takes only the funs from `actions' while
+%% `remove_dirs' takes the durable ops -- neither runs the other's, so no action
+%% executes twice. A transfer having happened marks the actions transferred.
+adopt_reply(Id, Actions, AdapterState, St) ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            St;
+        {ok, Req} ->
+            Own = case AdapterState of undefined -> owned; _ -> transferred end,
+            Restored = [{T, A, Own} || {T, A} <- Actions],
+            put_req(Req#req{actions = Restored, cleanup = AdapterState}, St)
     end.
 
 decode_record(Bin, RootId, St) ->
@@ -1233,19 +1274,26 @@ decode_record(Bin, RootId, St) ->
 %% a reaper restart and not a node restart, which is exactly the lifetime a pid
 %% is meaningful for, so a record from another incarnation is an orphan without
 %% anything having to look at its pid at all.
+%% v2 adds the steward field; a v1 record (from a node upgraded in flight, or a
+%% test that plants one) has no steward and decodes with none.
 decode_header(Header, Ops, RootId, St) ->
     case binary:split(Header, <<" ">>, [global]) of
-        [<<?RECORD_VERSION>>, Inc, GenB, PidB, Id] ->
-            case decode_ops(Ops, [], St) of
-                {error, _} = E -> E;
-                {ok, DecodedOps} ->
-                    decode_owner(Inc, GenB, PidB, Id, RootId, DecodedOps, St)
-            end;
+        [<<"v2">>, Inc, GenB, PidB, SPidB, Id] ->
+            decode_body(Inc, GenB, PidB, SPidB, Id, Ops, RootId, St);
+        [<<"v1">>, Inc, GenB, PidB, Id] ->
+            decode_body(Inc, GenB, PidB, <<"-">>, Id, Ops, RootId, St);
         _ ->
             {error, bad_header}
     end.
 
-decode_owner(Inc, GenB, PidB, Id, RootId, Ops, St) ->
+decode_body(Inc, GenB, PidB, SPidB, Id, Ops, RootId, St) ->
+    case decode_ops(Ops, [], St) of
+        {error, _} = E -> E;
+        {ok, DecodedOps} ->
+            decode_owner(Inc, GenB, PidB, SPidB, Id, RootId, DecodedOps, St)
+    end.
+
+decode_owner(Inc, GenB, PidB, SPidB, Id, RootId, Ops, St) ->
     Base = #req{id = Id, root = RootId, ops = Ops,
                 relpath = relpath_of(Ops, RootId),
                 state = queued, guardian = self(), gen = St#st.gen},
@@ -1255,10 +1303,18 @@ decode_owner(Inc, GenB, PidB, Id, RootId, Ops, St) ->
         true ->
             case {to_integer(GenB), to_pid(PidB)} of
                 {{ok, Gen}, {ok, Pid}} ->
-                    {ok, Base#req{guardian = Pid, gen = Gen}, live};
+                    {ok, Base#req{guardian = Pid, steward = decode_steward(SPidB),
+                                  gen = Gen}, live};
                 _ ->
                     {error, bad_header}
             end
+    end.
+
+decode_steward(<<"-">>) -> undefined;
+decode_steward(SPidB) ->
+    case to_pid(SPidB) of
+        {ok, Pid} -> Pid;
+        _         -> undefined
     end.
 
 %% The reservation's op names the request directory, and it is written first,

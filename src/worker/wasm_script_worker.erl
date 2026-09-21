@@ -281,7 +281,7 @@ really is stuck.
 """.
 -spec cleanup_requests() ->
           [#{id := binary(), state := atom(), guardian := pid(),
-             delivered := boolean()}]
+             delivered := boolean(), actions := non_neg_integer()}]
           | {error, wasm_worker_error:worker_error()}.
 cleanup_requests() -> wasm_worker_reaper:requests().
 

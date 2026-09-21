@@ -45,7 +45,15 @@ operation id enables arrive in the stages after this one too.
             %% Outstanding `send_request' operations, each labelled with the
             %% guardian correlation, the runner to answer and the operation, so
             %% a response can be routed and, on error, answered locally.
-            reqids :: gen_server:request_id_collection()}).
+            reqids :: gen_server:request_id_collection(),
+            %% The volatile cleanup state the reaper accepted: owned actions
+            %% (funs and durable ops, keyed by token) and the adapter state. It
+            %% mirrors what a `register'/`withdraw'/`transfer' the reaper
+            %% acknowledged left there, so a reaper that restarts can recover it
+            %% from this steward. Best-effort, and lost only if this process dies.
+            actions = [] :: [{wasm_worker_adapter:token(),
+                              wasm_worker_adapter:action()}],
+            adapter_state = undefined :: undefined | {module(), term()}}).
 
 -spec start_link(wasm_worker_reaper:request_id()) -> {ok, pid()}.
 start_link(RequestId) ->
@@ -111,6 +119,12 @@ handle_cast({complete, Guardian}, S) ->
 handle_cast(_Msg, S) ->
     {noreply, S}.
 
+handle_info({adopt_request, ReaperPid, _Generation, Id}, #s{request = Id} = S) ->
+    %% A restarted reaper is recovering this request. Hand it the volatile state
+    %% it could not have kept -- the funs and adapter state -- so a reaper-only
+    %% crash does not lose them.
+    ReaperPid ! {adopt_reply, Id, S#s.actions, S#s.adapter_state},
+    {noreply, S};
 handle_info({cleanup_orphaned, _Id}, S) ->
     %% The reaper saw the guardian die and asked the steward to finish. There is
     %% no guardian left to answer.
@@ -126,9 +140,9 @@ handle_info(Msg, S) ->
             %% The reaper is gone, so the guardian must clean up from its mirror.
             notify(Guardian, cleanup_unavailable),
             {stop, normal, S#s{reqids = Reqids}};
-        {{reply, Reply}, {CorrRef, ReplyTo, _Op}, Reqids} ->
+        {{reply, Reply}, {CorrRef, ReplyTo, Op}, Reqids} ->
             ReplyTo ! {steward_reply, CorrRef, Reply},
-            {noreply, S#s{reqids = Reqids}};
+            {noreply, mirror(Op, Reply, S#s{reqids = Reqids})};
         {{error, {_Reason, _}}, {CorrRef, ReplyTo, Op}, Reqids} ->
             %% The reaper did not answer this operation: it was not registered,
             %% or it died before replying. Answer as the reaper would have when
@@ -158,6 +172,18 @@ submit_finish(Guardian, #s{request = Id, seq = Seq} = S) ->
 
 notify(none, _What)      -> ok;
 notify(Guardian, What)   -> Guardian ! {What, self()}, ok.
+
+%% Keep the mirror in step with what the reaper accepted: a registered action is
+%% owned, a withdrawn one is dropped, and a transfer records the adapter state.
+%% Only the reaper's success changes ownership, so nothing speculative is kept.
+mirror({register, Action}, {ok, Token}, S) ->
+    S#s{actions = [{Token, Action} | S#s.actions]};
+mirror({withdraw, Token}, ok, S) ->
+    S#s{actions = lists:keydelete(Token, 1, S#s.actions)};
+mirror({transfer, Mod, AState}, ok, S) ->
+    S#s{adapter_state = {Mod, AState}};
+mirror(_Op, _Reply, S) ->
+    S.
 
 %%% ---------------------------------------------------------------- internal ---
 

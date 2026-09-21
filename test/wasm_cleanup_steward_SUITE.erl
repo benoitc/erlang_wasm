@@ -31,7 +31,8 @@ all() ->
      the_reaper_rejects_an_operation_from_a_foreign_caller,
      a_duplicate_operation_returns_the_stored_result,
      a_gap_asks_the_steward_to_resend,
-     the_operation_ceiling_bounds_the_request].
+     the_operation_ceiling_bounds_the_request,
+     a_reaper_restart_recovers_the_volatile_cleanup].
 
 %% These drive the reaper's own apply logic, so they run a real reaper the test
 %% starts itself (the ceiling case needs its own options); the others inject
@@ -40,7 +41,8 @@ direct_reaper_cases() ->
     [the_reaper_rejects_an_operation_from_a_foreign_caller,
      a_duplicate_operation_returns_the_stored_result,
      a_gap_asks_the_steward_to_resend,
-     the_operation_ceiling_bounds_the_request].
+     the_operation_ceiling_bounds_the_request,
+     a_reaper_restart_recovers_the_volatile_cleanup].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -65,6 +67,10 @@ init_per_testcase(TC, Config) ->
 end_per_testcase(TC, _Config) ->
     case lists:member(TC, direct_reaper_cases()) of
         true ->
+            case get(worker) of
+                undefined -> ok;
+                W         -> quietly(fun() -> wasm_script_worker:stop(W) end)
+            end,
             quietly(fun() -> wasm_worker_reaper:stop() end);
         false ->
             %% Let any parked caller go, so a wedged guardian from the pre-fix
@@ -209,6 +215,39 @@ the_operation_ceiling_bounds_the_request(Config) ->
     %% The next in-order operation is still served, not stuck behind a gap.
     ?assertMatch({error, #{kind := cleanup_saturated}, cleanup_failed},
                  gen_server:call(wasm_worker_reaper, Op(5))).
+
+%% A reaper that restarts mid-request keeps durable ops through its journal but
+%% loses the volatile funs and adapter state, which lived only in its memory. The
+%% v2 record names the steward, so the replacement asks it and recovers them:
+%% the request's action count returns to what it was, from nowhere but the
+%% surviving steward.
+a_reaper_restart_recovers_the_volatile_cleanup(Config) ->
+    Dir = ?config(dir, Config),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Dir}),
+    Marker = filename:join(Dir, "cleanup-marker"),
+    {ok, W} = wasm_script_worker:start_link(
+                fake_typed_adapter,
+                #{root => scratch, limits => #{timeout => 30_000, fuel => infinity}}),
+    put(worker, W),
+    Request = maps:merge(
+                wasm_adapter_conformance:fixture(fake_typed_adapter, runaway),
+                #{cleanup_marker => Marker}),
+    {ok, Ref} = wasm_script_worker:submit(W, Request),
+    %% The register has reached the reaper: it owns the volatile action.
+    ok = wait_until(fun() -> owned_actions() >= 1 end),
+    %% Restart. The journal keeps the durable ops but not the fun.
+    ok = wasm_worker_reaper:stop(),
+    {ok, _} = wasm_worker_reaper:start_link(#{scratch => Dir}),
+    %% The replacement recovered the fun from the steward, not the journal.
+    ok = wait_until(fun() -> owned_actions() >= 1 end),
+    ok = wasm_script_worker:cancel(W, Ref),
+    _ = wasm_script_worker:await(W, Ref, 10_000).
+
+owned_actions() ->
+    case wasm_worker_reaper:requests() of
+        Rs when is_list(Rs) -> lists:sum([maps:get(actions, R, 0) || R <- Rs]);
+        _                   -> 0
+    end.
 
 %%% ---------------------------------------------------------------- helpers ---
 

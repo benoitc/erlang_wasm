@@ -6356,3 +6356,16 @@ a loaded box, not a floor. The ratio sits inside `[0.95, 1.05]`: the handoff
 costs nothing the caller sees, which is the point of publishing before handing
 off. A wedged reaper is bounded separately by the handoff grace and never
 reaches this measurement, because the result is already returned.
+
+## Journal v2 and adoption stay off the latency path too
+
+Adoption adds a v2 journal field (the steward pid), a steward monitor at reserve,
+and a steward-side mirror updated when a `register`/`withdraw`/`transfer` is
+acknowledged. The mirror is not on the echo path at all -- echo registers no
+cleanup action -- and the other two are a few bytes and one monitor.
+
+Measured the same way (`fake_typed_adapter` echo, 3000 requests after warm-up),
+load average 17 (high, so the minimum is the signal): min 436 us, median 711 to
+761 us. The 436 us floor is the same as before the handoff and before adoption,
+so neither change costs the caller anything. Recovery itself runs only on a
+reaper restart, never on a request's own path.

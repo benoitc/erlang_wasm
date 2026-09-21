@@ -88,8 +88,9 @@ supervised reaper will almost always perform.
 -behaviour(gen_server).
 
 -export([start_link/1, start_link/2, start_link/3, stop/0, alive/0, roots/0]).
--export([setting_keys/0]).
+-export([setting_keys/0, setting/2]).
 -export([reserve/4, register/2, withdraw/2, transfer/3, finish/1]).
+-export([unreachable_operation/1]).
 -export([authorise/2, generation/0, incarnation/0, stats/0, requests/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -100,7 +101,7 @@ supervised reaper will almost always perform.
 -define(GENERATION_KEY, {?MODULE, generation}).
 -define(JOURNAL_DIR, ".journal").
 -define(QUARANTINE_DIR, "quarantine").
--define(RECORD_VERSION, "v1").
+-define(RECORD_VERSION, "v2").
 
 %% Defaults. Every one is a **named setting with a default**, overridable in
 %% the options map, because "a small fixed count" is not something a case can
@@ -114,6 +115,7 @@ supervised reaper will almost always perform.
 -define(CLEANUP_TIMEOUT, 30_000).
 -define(CLEANUP_JOB_DEADLINE, 120_000).
 -define(MAX_CLEANUP_ACTIONS, 64).
+-define(MAX_CLEANUP_OPERATIONS, 256).
 -define(HANDSHAKE_TIMEOUT, 1_000).
 -define(HANDSHAKE_RETRIES, 3).
 
@@ -137,14 +139,36 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
 %% it in the journal would mean an atomic rewrite plus a sync at every
 %% transition, so a restart *reconstructs* it from what it can observe instead.
 -record(req, {id             :: request_id(),
-              state          :: live | pending | held | queued | running,
+              state          :: live | pending | held | queued | running
+                              | complete,
               guardian       :: pid(),
+              %% The steward that reserved this request. It is the caller
+              %% identity every `{apply, ...}' operation must match, captured
+              %% from the reserve call. `undefined' for a v1 record reconstructed
+              %% by a restart, which never had one.
+              steward        :: undefined | pid(),
               mon            :: undefined | reference(),
+              %% The steward's monitor. The reaper watches both owners: while
+              %% either is alive it stays passive on the other's death, and it
+              %% cleans up only on an explicit finish or when both are gone.
+              smon           :: undefined | reference(),
               root           :: root_id(),
               relpath        :: binary(),
               ops     = []   :: [recover_op()],
               actions = []   :: [{token(), action(), owned | transferred}],
               next_token = 1 :: pos_integer(),
+              %% Operation-id ledger for the `{apply, ...}' transport: the next
+              %% sequence expected in order, and every resolved sequence with the
+              %% result it produced, so a resend after adoption is answered from
+              %% store rather than re-executed. Bounded by
+              %% `max_cleanup_operations_per_request'.
+              next_seq = 1   :: pos_integer(),
+              ledger = #{}   :: #{pos_integer() => term()},
+              %% Finish has been accepted: the request is terminal. A new
+              %% operation is refused `request_finished` and the record is a
+              %% tombstone, removed only after cleanup completes and the steward
+              %% goes down.
+              finished = false :: boolean(),
               cleanup        :: undefined | {module(), term()},
               attempts   = 0 :: non_neg_integer(),
               tries      = 0 :: non_neg_integer(),
@@ -160,7 +184,10 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
              opts       :: map(),
              %% Roots this reaper made for itself and may remove at a clean
              %% shutdown. Never a root somebody configured.
-             generated = [] :: [root_id()]}).
+             generated = [] :: [root_id()],
+             %% The last operator view pushed to the manager, so a message that
+             %% did not change it pushes nothing.
+             last_view = undefined :: undefined | map()}).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -335,7 +362,7 @@ is to look at what is holding it and kill that guardian if it really is stuck.
 so whether `c:wasm_worker_adapter:cleanup/1` has an owner.
 """.
 -spec requests() -> [#{id := request_id(), state := atom(), guardian := pid(),
-                       delivered := boolean()}]
+                       delivered := boolean(), actions := non_neg_integer()}]
                   | {error, wasm_worker_error:worker_error()}.
 requests() -> call(requests).
 
@@ -351,6 +378,21 @@ cast(Msg) ->
 
 no_reaper() ->
     wasm_worker_error:worker(no_reaper, ~"no cleanup owner is running", #{}).
+
+-doc """
+What an operation answers when its reaper is gone, run in the caller.
+
+The steward calls this when a forwarded operation's reaper pid has died, so the
+answer is what the guardian would have got had it called the reaper directly and
+found it absent: a `register` runs the action bounded and reports `released` or
+`cleanup_failed`, and a `withdraw` or `transfer` names the missing owner.
+""".
+-spec unreachable_operation(wasm_cleanup_steward:operation()) ->
+          {error, wasm_worker_error:worker_error()} |
+          {error, wasm_worker_error:worker_error(), released | cleanup_failed}.
+unreachable_operation({register, Action})   -> unreachable(Action);
+unreachable_operation({withdraw, _Token})   -> {error, no_reaper()};
+unreachable_operation({transfer, _M, _A})   -> {error, no_reaper()}.
 
 %% The registry is unreachable, so perform what could not be recorded. In a
 %% bounded child, never inline: a hanging action inline would wedge the caller
@@ -384,11 +426,13 @@ default(cleanup_retries)      -> ?CLEANUP_RETRIES;
 default(cleanup_backoff)      -> ?CLEANUP_BACKOFF;
 default(cleanup_timeout)      -> ?CLEANUP_TIMEOUT;
 default(cleanup_job_deadline) -> ?CLEANUP_JOB_DEADLINE;
-default(max_cleanup_actions)  -> ?MAX_CLEANUP_ACTIONS.
+default(max_cleanup_actions)  -> ?MAX_CLEANUP_ACTIONS;
+default(max_cleanup_operations_per_request) -> ?MAX_CLEANUP_OPERATIONS.
 
 setting_keys() ->
     [max_cleanup_jobs, cleanup_queue_len, cleanup_retries, cleanup_backoff,
-     cleanup_timeout, cleanup_job_deadline, max_cleanup_actions].
+     cleanup_timeout, cleanup_job_deadline, max_cleanup_actions,
+     max_cleanup_operations_per_request].
 
 %%% -------------------------------------------------------------- server ---
 
@@ -403,9 +447,71 @@ init({Roots, Opts, Generated}) ->
     St = #st{roots = Roots, gen = Gen, incarnation = Incarnation,
              opts = Settings,
              generated = [G || G <- Generated, maps:is_key(G, Roots)]},
-    {ok, sweep(St)}.
+    St1 = sweep(St),
+    ok = announce_generation(St1),
+    {ok, push_view(St1)}.
 
-handle_call({reserve, Id, Guardian, Root, RelPath}, _From, St) ->
+%% Tell the manager, if one is running, this reaper's generation and how many
+%% records the sweep recovered. Addressed to the manager's pid, never a module
+%% call, so no cycle is formed with a process this one does not depend on. A
+%% reaper started by hand with no manager finds nobody and says nothing.
+announce_generation(#st{gen = Gen} = St) ->
+    case whereis(wasm_cleanup_manager) of
+        undefined -> ok;
+        Manager   -> Manager ! {reaper_ready, self(), Gen, capacity(St)}, ok
+    end.
+
+%%% -------------------------------------------------------- operator view ---
+
+%% Every callback runs through these three, which push the operator view to the
+%% manager whenever a message changed it. The manager serves `cleanup_stats/0'
+%% and `cleanup_requests/0' from the pushed copy, so a reaper wedged in journal
+%% I/O never stalls diagnostics (invariant 8). The push is a `!' to the manager
+%% pid, never a module call, so no cycle is formed.
+handle_call(Msg, From, St0) ->
+    case do_handle_call(Msg, From, St0) of
+        {reply, Reply, St1} -> {reply, Reply, push_view(St1)}
+    end.
+
+handle_cast(Msg, St0) ->
+    {noreply, St1} = do_handle_cast(Msg, St0),
+    {noreply, push_view(St1)}.
+
+handle_info(Msg, St0) ->
+    {noreply, St1} = do_handle_info(Msg, St0),
+    {noreply, push_view(St1)}.
+
+%% Push the current view if it differs from the last one pushed. The view is
+%% free of closures, so comparing and sending it is cheap and safe.
+push_view(#st{last_view = Last} = St) ->
+    case operator_view(St) of
+        Last -> St;
+        View ->
+            case whereis(wasm_cleanup_manager) of
+                undefined -> ok;
+                Manager   -> Manager ! {reaper_view, self(), St#st.gen, View}
+            end,
+            St#st{last_view = View}
+    end.
+
+operator_view(St) ->
+    #{stats => stats_of(St), requests => requests_of(St)}.
+
+requests_of(St) ->
+    [#{id => R#req.id, state => R#req.state, guardian => R#req.guardian,
+       delivered => R#req.cleanup =/= undefined,
+       actions => length(R#req.actions)}
+     || R <- maps:values(St#st.reqs)].
+
+stats_of(St) ->
+    Counts = lists:foldl(fun(#req{state = S}, Acc) ->
+                             maps:update_with(S, fun(N) -> N + 1 end, 1, Acc)
+                         end, #{}, maps:values(St#st.reqs)),
+    Counts#{quarantined => St#st.quarantined,
+            capacity => capacity(St),
+            generation => St#st.gen}.
+
+do_handle_call({reserve, Id, Guardian, Root, RelPath}, From, St) ->
     case maps:is_key(Root, St#st.roots) of
         false ->
             {reply, {error, wasm_worker_error:worker(
@@ -418,8 +524,13 @@ handle_call({reserve, Id, Guardian, Root, RelPath}, _From, St) ->
                                       cleanup_saturated,
                                       ~"no cleanup capacity", #{})}, St};
                 true ->
+                    %% The reserve caller is the steward, and it is the identity
+                    %% every later `{apply, ...}' for this request must match.
+                    Steward = element(1, From),
                     Req = #req{id = Id, state = live, guardian = Guardian,
+                               steward = Steward,
                                mon = erlang:monitor(process, Guardian),
+                               smon = erlang:monitor(process, Steward),
                                root = Root, relpath = RelPath,
                                ops = [{remove_tree, Root, RelPath}],
                                gen = St#st.gen},
@@ -430,126 +541,99 @@ handle_call({reserve, Id, Guardian, Root, RelPath}, _From, St) ->
                             {reply, {ok, Dir}, put_req(Req, St)};
                         {error, E} ->
                             erlang:demonitor(Req#req.mon, [flush]),
+                            erlang:demonitor(Req#req.smon, [flush]),
                             {reply, {error, E}, St}
                     end
             end
     end;
 
-handle_call({register, Id, Action}, _From, St) ->
-    case maps:find(Id, St#st.reqs) of
-        error ->
-            {reply, unreachable(Action), St};
-        {ok, #req{actions = As}}
-          when length(As) >= map_get(max_cleanup_actions, St#st.opts) ->
-            %% The list is adapter-controlled: without a ceiling an adapter in
-            %% a loop registers until the reaper's memory is the bound.
-            E = wasm_worker_error:worker(cleanup_saturated,
-                                    ~"too many cleanup actions",
-                                    #{max => setting(St, max_cleanup_actions)}),
-            {reply, {error, E, cleanup_failed}, St};
-        {ok, Req} ->
-            do_register(Req, Action, St)
+do_handle_call({register, Id, Action}, _From, St) ->
+    {Reply, St1} = op_register(Id, Action, St),
+    {reply, Reply, St1};
+
+do_handle_call({withdraw, Id, Token}, _From, St) ->
+    {Reply, St1} = op_withdraw(Id, Token, St),
+    {reply, Reply, St1};
+
+do_handle_call({transfer, Id, Mod, AdapterState}, _From, St) ->
+    {Reply, St1} = op_transfer(Id, Mod, AdapterState, St),
+    {reply, Reply, St1};
+
+%% The steward's transport. A cleanup operation carried by
+%% `gen_server:send_request/2', so the caller is authenticated by OTP as `From'
+%% rather than by a field it could forge: only the steward that reserved the
+%% request may drive its cleanup. This stage dispatches to the same logic the
+%% legacy calls use; the operation-id ledger, ordering and bound that
+%% `OperationId' carries arrive with adoption, which is what resends them.
+do_handle_call({apply, Id, OperationId, Operation}, From, St) ->
+    case authorised_caller(Id, element(1, From), St) of
+        true ->
+            {Reply, St1} = apply_transported(Id, OperationId, Operation, St),
+            {reply, Reply, St1};
+        false ->
+            {reply, {error, unauthorised()}, St}
     end;
 
-handle_call({withdraw, Id, Token}, _From, St) ->
-    case maps:find(Id, St#st.reqs) of
-        error ->
-            {reply, ok, St};
-        {ok, #req{actions = As} = Req} ->
-            Kept = [A || {T, _, _} = A <- As, T =/= Token],
-            Req1 = Req#req{actions = Kept},
-            %% Only a durable op changes what is on disk. Withdrawing a fun
-            %% costs nothing, which is why the common case writes nothing.
-            case durable(As, Token) of
-                false -> {reply, ok, put_req(Req1, St)};
-                true ->
-                    Req2 = Req1#req{ops = ops_of(Req1)},
-                    case write_record(St, Req2) of
-                        ok         -> {reply, ok, put_req(Req2, St)};
-                        {error, E} -> {reply, {error, E}, St}
-                    end
-            end
-    end;
-
-handle_call({transfer, Id, Mod, AdapterState}, _From, St) ->
-    case maps:find(Id, St#st.reqs) of
-        error ->
-            {reply, {error, no_reaper()}, St};
-        {ok, #req{actions = As} = Req} ->
-            %% Marks, never withdraws. A `cleanup/1' that raises would
-            %% otherwise leak precisely the resources whose actions were just
-            %% removed, so success is what drops them.
-            Marked = [{T, A, transferred} || {T, A, _} <- As],
-            {reply, ok, put_req(Req#req{actions = Marked,
-                                        cleanup = {Mod, AdapterState}}, St)}
-    end;
-
-handle_call({authorise, Id, Gen}, _From, #st{gen = Gen} = St) ->
+do_handle_call({authorise, Id, Gen}, _From, #st{gen = Gen} = St) ->
     {reply, case maps:is_key(Id, St#st.reqs) of
                 true  -> ok;
                 false -> {error, stale}
             end, St};
-handle_call({authorise, _Id, _Gen}, _From, St) ->
+do_handle_call({authorise, _Id, _Gen}, _From, St) ->
     {reply, {error, stale}, St};
 
-handle_call(requests, _From, St) ->
+do_handle_call(requests, _From, St) ->
     %% `delivered' says whether an `adapter_state()' has reached the registry,
     %% which is the same thing as saying whether `cleanup/1' has an owner.
-    {reply, [#{id => R#req.id, state => R#req.state, guardian => R#req.guardian,
-               delivered => R#req.cleanup =/= undefined}
-             || R <- maps:values(St#st.reqs)], St};
+    {reply, requests_of(St), St};
 
-handle_call(roots, _From, St) ->
+do_handle_call(roots, _From, St) ->
     {reply, maps:keys(St#st.roots), St};
-handle_call(stats, _From, St) ->
-    Counts = lists:foldl(fun(#req{state = S}, Acc) ->
-                             maps:update_with(S, fun(N) -> N + 1 end, 1, Acc)
-                         end, #{}, maps:values(St#st.reqs)),
-    {reply, Counts#{quarantined => St#st.quarantined,
-                    capacity => capacity(St),
-                    generation => St#st.gen}, St};
+do_handle_call(stats, _From, St) ->
+    {reply, stats_of(St), St};
 
-handle_call(_Msg, _From, St) ->
+do_handle_call(_Msg, _From, St) ->
     {reply, {error, wasm_worker_error:worker(crashed, ~"bad call", #{})}, St}.
 
-handle_cast({finish, Id}, St) ->
+do_handle_cast({finish, Id}, St) ->
     %% The guardian cleaned up itself and says so. Drop the record last, after
     %% everything it named is gone.
     case maps:find(Id, St#st.reqs) of
         error -> {noreply, St};
         {ok, Req} ->
             ok = drop_monitor(Req#req.mon),
+            ok = drop_monitor(Req#req.smon),
             ok = remove_record(St, Req),
             {noreply, St#st{reqs = maps:remove(Id, St#st.reqs)}}
     end;
-handle_cast(_, St) ->
+do_handle_cast(_, St) ->
     {noreply, St}.
 
-handle_info({'DOWN', Mon, process, _Pid, _Why}, St) ->
-    case lists:keyfind(Mon, #req.mon, maps:values(St#st.reqs)) of
-        false -> {noreply, job_down(Mon, St)};
-        Req   -> {noreply, schedule(Req#req{mon = undefined, state = queued}, St)}
-    end;
+do_handle_info({'DOWN', Mon, process, _Pid, _Why}, St) ->
+    {noreply, owner_down(Mon, St)};
 
-handle_info({handshake_reply, Id, Answer}, St) ->
+do_handle_info({adopt_reply, Id, Ledger, NextSeq, Actions, AdapterState}, St) ->
+    {noreply, adopt_reply(Id, Ledger, NextSeq, Actions, AdapterState, St)};
+
+do_handle_info({handshake_reply, Id, Answer}, St) ->
     {noreply, handshake_reply(Id, Answer, St)};
 
-handle_info({retry_handshake, Id}, St) ->
+do_handle_info({retry_handshake, Id}, St) ->
     {noreply, retry_handshake(Id, St)};
 
-handle_info({retry_cleanup, Id}, St) ->
+do_handle_info({retry_cleanup, Id}, St) ->
     case maps:find(Id, St#st.reqs) of
         {ok, Req} -> {noreply, schedule(Req#req{state = queued}, St)};
         error     -> {noreply, St}
     end;
 
-handle_info({'EXIT', _Pid, _Reason}, St) ->
+do_handle_info({'EXIT', _Pid, _Reason}, St) ->
     %% Jobs are linked as well as monitored, so a job dying arrives twice. The
     %% `DOWN' carries the reason and is what this acts on; the `EXIT' is what
     %% would have killed an untrapping parent, and is ignored here.
     {noreply, St};
 
-handle_info(_, St) ->
+do_handle_info(_, St) ->
     {noreply, St}.
 
 %% A clean shutdown removes the roots this reaper generated, and only when
@@ -587,11 +671,231 @@ journal_empty(Dir) ->
 
 %%% ---------------------------------------------------------- registering ---
 
-do_register(#req{next_token = T, actions = As} = Req, Action, St) ->
-    Req1 = Req#req{actions = [{T, Action, owned} | As], next_token = T + 1},
+%% One place each cleanup operation is carried out, whichever transport asked
+%% for it: the legacy `{register, ...}' call and the steward's `{apply, ...}'
+%% both land here, so the two can never diverge. Each returns `{Reply, St1}'.
+apply_operation(Id, {register, Action}, St)  -> op_register(Id, Action, St);
+apply_operation(Id, {withdraw, Token}, St)   -> op_withdraw(Id, Token, St);
+apply_operation(Id, {transfer, Mod, A}, St)  -> op_transfer(Id, Mod, A, St);
+apply_operation(Id, finish, St)              -> op_finish(Id, St).
+
+%% The finish barrier. The steward is done and asks the reaper to own cleanup:
+%% both owners are released and the request is queued, so the cleanup runs once
+%% and neither owner's later `DOWN' schedules it again. An unknown request is
+%% already gone, which is the same answer.
+op_finish(Id, St) ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            {ok, St};
+        {ok, Req} ->
+            %% The guardian is done, so drop its monitor; the steward's stays, so
+            %% the tombstone survives until cleanup completes and the steward goes
+            %% down. `finished' makes a later operation `request_finished'.
+            ok = drop_monitor(Req#req.mon),
+            {ok, schedule(Req#req{mon = undefined, finished = true,
+                                  state = queued}, St)}
+    end.
+
+%% A monitored process died. The reaper watches both the guardian and the
+%% steward, and cleans up only when neither can: while one owner is alive the
+%% other's death leaves the request passive.
+owner_down(Mon, St) ->
+    Reqs = maps:values(St#st.reqs),
+    case lists:keyfind(Mon, #req.mon, Reqs) of
+        #req{} = Req -> guardian_down(Req, St);
+        false ->
+            case lists:keyfind(Mon, #req.smon, Reqs) of
+                #req{} = Req -> steward_down(Req, St);
+                false        -> job_down(Mon, St)
+            end
+    end.
+
+%% Guardian gone. With the steward alive the reaper stays passive and tells the
+%% steward, which reconciles and submits finish; with no steward left it cleans.
+guardian_down(#req{smon = undefined} = Req, St) ->
+    schedule(Req#req{mon = undefined, state = queued}, St);
+guardian_down(#req{steward = Steward} = Req, St) ->
+    Steward ! {cleanup_orphaned, Req#req.id},
+    put_req(Req#req{mon = undefined}, St).
+
+%% Steward gone. A finished request's tombstone is removed once cleanup is also
+%% complete; if cleanup is still running, drop the monitor so `cleanup_done'
+%% removes the record itself. Otherwise: with the guardian alive it owns the
+%% fallback, so the reaper stays passive; with the guardian also gone it cleans
+%% from its replica.
+steward_down(#req{finished = true, state = complete, id = Id} = Req, St) ->
+    ok = remove_record(St, Req),
+    St#st{reqs = maps:remove(Id, St#st.reqs)};
+steward_down(#req{finished = true} = Req, St) ->
+    put_req(Req#req{smon = undefined}, St);
+steward_down(#req{mon = undefined} = Req, St) ->
+    schedule(Req#req{smon = undefined, state = queued}, St);
+steward_down(Req, St) ->
+    put_req(Req#req{smon = undefined}, St).
+
+%% A transported operation carries `OperationId = {RequestId, Sequence}'. For a
+%% known request the sequence orders and de-duplicates it against the ledger; an
+%% unknown request has nothing to order against and is answered as absent.
+apply_transported(Id, {Id, Seq}, Operation, St)
+  when is_integer(Seq), Seq >= 1 ->
+    case maps:find(Id, St#st.reqs) of
+        error     -> apply_operation(Id, Operation, St);
+        {ok, Req} -> apply_sequenced(Seq, Operation, Req, St)
+    end;
+apply_transported(Id, _OperationId, Operation, St) ->
+    apply_operation(Id, Operation, St).
+
+apply_sequenced(Seq, Op, #req{next_seq = Next, ledger = L}, St)
+  when Seq < Next ->
+    %% Already resolved: a recorded operation answers from the ledger,
+    %% re-executing nothing, which is what makes a resend after adoption safe. An
+    %% over-limit operation recorded nothing, so it is answered over-limit again.
+    case maps:find(Seq, L) of
+        {ok, Stored} -> {Stored, St};
+        error        -> {over_limit(Op, St), St}
+    end;
+apply_sequenced(Seq, _Op, #req{finished = true, next_seq = Next}, St)
+  when Seq >= Next ->
+    %% Finish was accepted: a new operation cannot recreate the request.
+    {{error, request_finished()}, St};
+apply_sequenced(Seq, _Op, #req{next_seq = Next}, St)
+  when Seq > Next ->
+    %% A gap. The reaper acts on operations in order, so it asks for the missing
+    %% one instead of applying this out of order.
+    {{resend, Next}, St};
+apply_sequenced(Seq, Op, #req{id = Id} = Req, St) ->        %% Seq =:= next_seq
+    %% `finish' is never over the ceiling: it is always accepted, so terminal
+    %% cleanup can never be blocked, and it has no over-limit answer.
+    case Op =/= finish
+         andalso Seq > setting(St, max_cleanup_operations_per_request) of
+        true ->
+            %% Over the ceiling: consume the sequence so the next operation is
+            %% not a gap, record nothing so the ledger stays bounded, and answer
+            %% over-limit.
+            {over_limit(Op, St), put_req(Req#req{next_seq = Seq + 1}, St)};
+        false ->
+            {Reply, St1} = apply_sequenced_op(Id, Seq, Op, St),
+            {Reply, advance_ledger(Id, Seq, Reply, St1)}
+    end.
+
+%% Register on the transported path takes the sequence as its token; every other
+%% operation is sequence-independent.
+apply_sequenced_op(Id, Seq, {register, Action}, St) ->
+    apply_register(Id, Action, Seq, St);
+apply_sequenced_op(Id, _Seq, Op, St) ->
+    apply_operation(Id, Op, St).
+
+advance_ledger(Id, Seq, Reply, St) ->
+    case maps:find(Id, St#st.reqs) of
+        {ok, R} ->
+            put_req(R#req{next_seq = Seq + 1,
+                          ledger = maps:put(Seq, Reply, R#req.ledger)}, St);
+        error ->
+            St
+    end.
+
+%% Over the per-request operation ceiling. Not recorded, so the register
+%% contract's `cleanup_failed' (nobody owns it) is the honest answer, and a
+%% withdraw or transfer keeps what it had.
+over_limit(Op, St) ->
+    E = wasm_worker_error:worker(cleanup_saturated,
+                                 ~"too many cleanup operations",
+                                 #{max => setting(
+                                            St, max_cleanup_operations_per_request)}),
+    case Op of
+        {register, _}    -> {error, E, cleanup_failed};
+        {withdraw, _}    -> {error, E};
+        {transfer, _, _} -> {error, E}
+    end.
+
+%% Only the steward that reserved a request may drive its cleanup operations. A
+%% request with no recorded steward -- a v1 record a restart reconstructed --
+%% has no identity to check, and an unknown request is answered as absent by the
+%% operation itself, so both pass here and the operation decides.
+authorised_caller(Id, Caller, St) ->
+    case maps:find(Id, St#st.reqs) of
+        {ok, #req{steward = Steward}} when is_pid(Steward) -> Caller =:= Steward;
+        _ -> true
+    end.
+
+unauthorised() ->
+    wasm_worker_error:worker(unauthorised,
+                             ~"cleanup operation from a foreign caller", #{}).
+
+request_finished() ->
+    wasm_worker_error:worker(request_finished,
+                             ~"the request has finished", #{}).
+
+%% Legacy synchronous register: the token is a per-request counter.
+op_register(Id, Action, St) ->
+    case register_target(Id, Action, St) of
+        {reject, Reply}                 -> {Reply, St};
+        {ok, #req{next_token = T} = Req} ->
+            do_register(Req#req{next_token = T + 1}, Action, T, St)
+    end.
+
+%% Transported register: the token **is** the operation sequence, so a retry of
+%% the same operation after adoption reuses the same token (required test 10).
+apply_register(Id, Action, Seq, St) ->
+    case register_target(Id, Action, St) of
+        {reject, Reply} -> {Reply, St};
+        {ok, Req}       -> do_register(Req, Action, Seq, St)
+    end.
+
+register_target(Id, Action, St) ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            {reject, unreachable(Action)};
+        {ok, #req{actions = As}}
+          when length(As) >= map_get(max_cleanup_actions, St#st.opts) ->
+            %% The list is adapter-controlled: without a ceiling an adapter in
+            %% a loop registers until the reaper's memory is the bound.
+            E = wasm_worker_error:worker(cleanup_saturated,
+                                    ~"too many cleanup actions",
+                                    #{max => setting(St, max_cleanup_actions)}),
+            {reject, {error, E, cleanup_failed}};
+        {ok, Req} ->
+            {ok, Req}
+    end.
+
+op_withdraw(Id, Token, St) ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            {ok, St};
+        {ok, #req{actions = As} = Req} ->
+            Kept = [A || {T, _, _} = A <- As, T =/= Token],
+            Req1 = Req#req{actions = Kept},
+            %% Only a durable op changes what is on disk. Withdrawing a fun
+            %% costs nothing, which is why the common case writes nothing.
+            case durable(As, Token) of
+                false -> {ok, put_req(Req1, St)};
+                true ->
+                    Req2 = Req1#req{ops = ops_of(Req1)},
+                    case write_record(St, Req2) of
+                        ok         -> {ok, put_req(Req2, St)};
+                        {error, E} -> {{error, E}, St}
+                    end
+            end
+    end.
+
+op_transfer(Id, Mod, AdapterState, St) ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            {{error, no_reaper()}, St};
+        {ok, #req{actions = As} = Req} ->
+            %% Marks, never withdraws. A `cleanup/1' that raises would
+            %% otherwise leak precisely the resources whose actions were just
+            %% removed, so success is what drops them.
+            Marked = [{T, A, transferred} || {T, A, _} <- As],
+            {ok, put_req(Req#req{actions = Marked,
+                                 cleanup = {Mod, AdapterState}}, St)}
+    end.
+
+do_register(#req{actions = As} = Req, Action, Token, St) ->
+    Req1 = Req#req{actions = [{Token, Action, owned} | As]},
     case is_durable(Action) of
         false ->
-            {reply, {ok, T}, put_req(Req1, St)};
+            {{ok, Token}, put_req(Req1, St)};
         true ->
             %% Synchronous with respect to the write and the rename:
             %% acknowledging before the rename completes is exactly the window
@@ -599,9 +903,9 @@ do_register(#req{next_token = T, actions = As} = Req, Action, St) ->
             Req2 = Req1#req{ops = ops_of(Req1)},
             case write_record(St, Req2) of
                 ok ->
-                    {reply, {ok, T}, put_req(Req2, St)};
+                    {{ok, Token}, put_req(Req2, St)};
                 {error, E} ->
-                    {reply, {error, E, cleanup_failed}, St}
+                    {{error, E, cleanup_failed}, St}
             end
     end.
 
@@ -687,8 +991,7 @@ job_finished(Id, St) ->
         {ok, #req{attempts = N} = Req} ->
             case job_succeeded(Req, St) of
                 true ->
-                    ok = remove_record(St, Req),
-                    St#st{reqs = maps:remove(Id, St#st.reqs)};
+                    cleanup_done(Req, St);
                 false ->
                     Offs = setting(St, cleanup_backoff),
                     Backoff = lists:nth(min(N + 1, length(Offs)), Offs),
@@ -696,6 +999,18 @@ job_finished(Id, St) ->
                     put_req(Req#req{attempts = N + 1, state = queued}, St)
             end
     end.
+
+%% Cleanup succeeded. A finished request whose steward is still alive becomes a
+%% tombstone -- retained with its ledger, the steward told `cleanup_complete' --
+%% and is dropped only when the steward goes down; otherwise the record is dropped
+%% now.
+cleanup_done(#req{finished = true, smon = SMon, steward = Steward, id = Id} = Req,
+             St) when SMon =/= undefined, is_pid(Steward) ->
+    Steward ! {cleanup_complete, Id},
+    put_req(Req#req{state = complete}, St);
+cleanup_done(#req{id = Id} = Req, St) ->
+    ok = remove_record(St, Req),
+    St#st{reqs = maps:remove(Id, St#st.reqs)}.
 
 %% What a job leaves behind is the evidence. Every op is idempotent, so
 %% "succeeded" is "nothing it named is still there" rather than a message the
@@ -934,10 +1249,15 @@ io_error(E, Path) ->
 %% atomic whole-record replacement. Never an in-place append: that would
 %% reintroduce the half-written record the temp-and-rename protocol exists to
 %% make impossible.
-encode_record(St, #req{guardian = Pid, id = Id, gen = Gen, ops = Ops}) ->
+encode_record(St, #req{guardian = Pid, steward = SPid, id = Id,
+                       gen = Gen, ops = Ops}) ->
     Header = [?RECORD_VERSION, " ", St#st.incarnation, " ",
-              integer_to_list(Gen), " ", pid_to_list(Pid), " ", Id, "\n"],
+              integer_to_list(Gen), " ", pid_to_list(Pid), " ",
+              steward_field(SPid), " ", Id, "\n"],
     [Header | [encode_op(Op) || Op <- Ops]].
+
+steward_field(undefined)            -> "-";
+steward_field(Pid) when is_pid(Pid) -> pid_to_list(Pid).
 
 encode_op({Verb, Root, Rel}) ->
     [atom_to_list(Verb), " ", atom_to_list(Root), " ", escape(Rel), "\n"].
@@ -1027,7 +1347,44 @@ adopt_or_orphan(Req, live, St) ->
             Mon = erlang:monitor(process, Req#req.guardian),
             Req1 = Req#req{state = pending, mon = Mon, gen = St#st.gen},
             ok = ask(Req1),
-            put_req(Req1, St)
+            adopt_steward(Req1, St)
+    end.
+
+%% A v2 record names the steward. If it is still alive, monitor it -- so the
+%% two-owner logic holds after adoption -- and ask it for the volatile funs and
+%% adapter state the dead reaper could not have kept. The journal already carries
+%% the durable ops, so this recovers only what was lost.
+adopt_steward(#req{steward = SPid, id = Id, gen = Gen} = Req, St)
+  when is_pid(SPid) ->
+    case is_process_alive(SPid) of
+        true ->
+            SMon = erlang:monitor(process, SPid),
+            SPid ! {adopt_request, self(), Gen, Id},
+            put_req(Req#req{smon = SMon}, St);
+        false ->
+            put_req(Req, St)
+    end;
+adopt_steward(Req, St) ->
+    put_req(Req, St).
+
+%% The steward answered a restart with the volatile state and its operation
+%% ledger. Restore the funs and adapter state; durable ops already came from the
+%% journal, so nothing here touches them, and `run_actions' takes only the funs
+%% from `actions' while `remove_dirs' takes the durable ops -- neither runs the
+%% other's, so no action executes twice. A transfer having happened marks the
+%% actions transferred. The ledger and next sequence let a resent operation be
+%% ordered and a resent duplicate be answered from store, so no operation the
+%% steward already had a result for runs again.
+adopt_reply(Id, Ledger, NextSeq, Actions, AdapterState, St)
+  when is_map(Ledger), is_integer(NextSeq), NextSeq >= 1 ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            St;
+        {ok, Req} ->
+            Own = case AdapterState of undefined -> owned; _ -> transferred end,
+            Restored = [{T, A, Own} || {T, A} <- Actions],
+            put_req(Req#req{actions = Restored, cleanup = AdapterState,
+                            next_seq = NextSeq, ledger = Ledger}, St)
     end.
 
 decode_record(Bin, RootId, St) ->
@@ -1040,19 +1397,26 @@ decode_record(Bin, RootId, St) ->
 %% a reaper restart and not a node restart, which is exactly the lifetime a pid
 %% is meaningful for, so a record from another incarnation is an orphan without
 %% anything having to look at its pid at all.
+%% v2 adds the steward field; a v1 record (from a node upgraded in flight, or a
+%% test that plants one) has no steward and decodes with none.
 decode_header(Header, Ops, RootId, St) ->
     case binary:split(Header, <<" ">>, [global]) of
-        [<<?RECORD_VERSION>>, Inc, GenB, PidB, Id] ->
-            case decode_ops(Ops, [], St) of
-                {error, _} = E -> E;
-                {ok, DecodedOps} ->
-                    decode_owner(Inc, GenB, PidB, Id, RootId, DecodedOps, St)
-            end;
+        [<<"v2">>, Inc, GenB, PidB, SPidB, Id] ->
+            decode_body(Inc, GenB, PidB, SPidB, Id, Ops, RootId, St);
+        [<<"v1">>, Inc, GenB, PidB, Id] ->
+            decode_body(Inc, GenB, PidB, <<"-">>, Id, Ops, RootId, St);
         _ ->
             {error, bad_header}
     end.
 
-decode_owner(Inc, GenB, PidB, Id, RootId, Ops, St) ->
+decode_body(Inc, GenB, PidB, SPidB, Id, Ops, RootId, St) ->
+    case decode_ops(Ops, [], St) of
+        {error, _} = E -> E;
+        {ok, DecodedOps} ->
+            decode_owner(Inc, GenB, PidB, SPidB, Id, RootId, DecodedOps, St)
+    end.
+
+decode_owner(Inc, GenB, PidB, SPidB, Id, RootId, Ops, St) ->
     Base = #req{id = Id, root = RootId, ops = Ops,
                 relpath = relpath_of(Ops, RootId),
                 state = queued, guardian = self(), gen = St#st.gen},
@@ -1062,10 +1426,18 @@ decode_owner(Inc, GenB, PidB, Id, RootId, Ops, St) ->
         true ->
             case {to_integer(GenB), to_pid(PidB)} of
                 {{ok, Gen}, {ok, Pid}} ->
-                    {ok, Base#req{guardian = Pid, gen = Gen}, live};
+                    {ok, Base#req{guardian = Pid, steward = decode_steward(SPidB),
+                                  gen = Gen}, live};
                 _ ->
                     {error, bad_header}
             end
+    end.
+
+decode_steward(<<"-">>) -> undefined;
+decode_steward(SPidB) ->
+    case to_pid(SPidB) of
+        {ok, Pid} -> Pid;
+        _         -> undefined
     end.
 
 %% The reservation's op names the request directory, and it is written first,

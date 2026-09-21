@@ -262,9 +262,12 @@ Counts per state of the cleanup that follows requests, node-wide. `capacity`
 is how many reservations are held now; when it reaches `max_cleanup_jobs +
 cleanup_queue_len` from `reaper_options`, `submit` answers
 `cleanup_saturated`.
+
+Served from the cleanup manager, which holds the view the reaper pushes it, so
+it answers even while the reaper is busy in journal I/O.
 """.
--spec cleanup_stats() -> map() | {error, wasm_worker_error:worker_error()}.
-cleanup_stats() -> wasm_worker_reaper:stats().
+-spec cleanup_stats() -> map().
+cleanup_stats() -> wasm_cleanup_manager:stats().
 
 -doc """
 Every request whose cleanup is still owned, with the guardian holding it.
@@ -276,9 +279,8 @@ really is stuck.
 """.
 -spec cleanup_requests() ->
           [#{id := binary(), state := atom(), guardian := pid(),
-             delivered := boolean()}]
-          | {error, wasm_worker_error:worker_error()}.
-cleanup_requests() -> wasm_worker_reaper:requests().
+             delivered := boolean(), actions := non_neg_integer()}].
+cleanup_requests() -> wasm_cleanup_manager:requests().
 
 %% Before the worker exists: make sure a reaper runs, and refuse a root it
 %% does not have now rather than at the first request. With no reaper at all
@@ -846,6 +848,10 @@ do_submit(Request, Caller, W) ->
              snapshot_cap => W#w.snapshot_cap,
              runner_heap => W#w.runner_heap},
     {G, GMon} = spawn_monitor(fun() -> guardian(Args) end),
+    %% Startup spends out of the request's own deadline: a finite timeout that
+    %% expires while the reservation is still in flight ends the request with a
+    %% `timeout', not the fixed watchdog's generic error. `infinity' keeps the
+    %% watchdog so a wedged startup cannot hang for ever.
     receive
         {guardian_ready, Ref, ok} ->
             SMon = erlang:monitor(process, Caller),
@@ -858,12 +864,22 @@ do_submit(Request, Caller, W) ->
             {reply, {error, wasm_worker_error:worker(
                               crashed, ~"the request could not start",
                               #{reason => Reason})}, W}
-    after ?GUARDIAN_READY_TIMEOUT ->
+    after ready_timeout(Deadline) ->
         exit(G, kill),
         erlang:demonitor(GMon, [flush]),
-        {reply, {error, wasm_worker_error:worker(
-                          crashed, ~"the request did not start", #{})}, W}
+        {reply, {error, startup_timeout(Deadline)}, W}
     end.
+
+%% The startup wait spends the request's remaining deadline when it has a finite
+%% one, and the fixed watchdog otherwise.
+ready_timeout(infinity) -> ?GUARDIAN_READY_TIMEOUT;
+ready_timeout(Deadline) -> max(0, Deadline - erlang:monotonic_time(millisecond)).
+
+startup_timeout(infinity) ->
+    wasm_worker_error:worker(crashed, ~"the request did not start", #{});
+startup_timeout(_Deadline) ->
+    wasm_worker_error:worker(timeout, ~"deadline reached before the request started",
+                             #{}).
 
 %% The worker holds one slot and a caller that never came back must not wedge
 %% it. This is the one window in which a completed result is lost, and it is
@@ -918,6 +934,18 @@ clear_waiter(W) ->
             dir         :: file:filename_all(),
             runner      :: undefined | pid(),
             rmon        :: undefined | reference(),
+            %% The per-request steward. Every reaper interaction goes through
+            %% it, so the reaper is never called from this process directly.
+            steward     :: undefined | pid(),
+            %% The steward's monitor, so the terminal handoff can fall back to
+            %% the mirror if the steward dies before confirming cleanup.
+            smon        :: undefined | reference(),
+            %% Cleanup operations forwarded to the steward and not yet answered,
+            %% keyed by a correlation reference. Holds what the reply needs: the
+            %% runner to answer and, for register/transfer, what to record on
+            %% success. The guardian stays in its deadline `receive' while these
+            %% are outstanding, which is how a wedged reaper stops blocking it.
+            pending = #{} :: #{reference() => tuple()},
             channels    :: map(),
             mounts = #{} :: #{mount_name() => mount()},
             %% The guardian made every `register' call, so it keeps the list as
@@ -934,13 +962,19 @@ guardian(#{worker := Worker, ref := Ref, id := Id} = Args) ->
     %% other direction, and it is one of the five terminal events.
     WMon = erlang:monitor(process, Worker),
     Root = maps:get(root, Args),
-    case wasm_worker_reaper:reserve(Id, self(), Root, <<"req-", Id/binary>>) of
+    %% One steward per request, started before the reservation, because the
+    %% reservation itself is the first reaper interaction and it goes through
+    %% the steward like every other.
+    {ok, Steward} = wasm_cleanup_steward_sup:start_steward(Id),
+    case wasm_cleanup_steward:reserve(Steward, self(), Root, <<"req-", Id/binary>>) of
         {error, E} ->
+            wasm_cleanup_steward:stop(Steward),
             Worker ! {guardian_ready, Ref, {error, E}},
             ok;
         {ok, Dir} ->
             case filelib:ensure_path(Dir) of
                 {error, Why} ->
+                    wasm_cleanup_steward:stop(Steward),
                     Worker ! {guardian_ready, Ref,
                               {error, wasm_worker_error:worker(
                                         crashed, ~"could not create the request",
@@ -948,11 +982,11 @@ guardian(#{worker := Worker, ref := Ref, id := Id} = Args) ->
                     ok;
                 ok ->
                     Worker ! {guardian_ready, Ref, ok},
-                    start_runner(Args, WMon, Dir)
+                    start_runner(Args, WMon, Dir, Steward)
             end
     end.
 
-start_runner(Args, WMon, Dir) ->
+start_runner(Args, WMon, Dir, Steward) ->
     Limits = maps:get(limits, Args),
     G0 = #g{worker = maps:get(worker, Args), ref = maps:get(ref, Args),
             id = maps:get(id, Args), deadline = maps:get(deadline, Args),
@@ -962,7 +996,8 @@ start_runner(Args, WMon, Dir) ->
             snapshot_cap = maps:get(snapshot_cap, Args),
             runner_heap = maps:get(runner_heap, Args),
             root = maps:get(root, Args), trusted = maps:get(trusted, Args),
-            wmon = WMon, dir = Dir,
+            wmon = WMon, dir = Dir, steward = Steward,
+            smon = erlang:monitor(process, Steward),
             channels = channels(Limits)},
     Self = self(),
     Words = maps:get(max_heap_words, Limits, 8 * 1024 * 1024),
@@ -1002,22 +1037,24 @@ loop(G) ->
             loop(G1);
 
         {register, From, Action} ->
-            {Reply, G1} = do_register(G, Action),
-            From ! {register_reply, Reply},
-            loop(G1);
+            loop(forward(G, {register, Action}, {register, From, Action}));
 
         {withdraw, From, Token} ->
-            From ! {withdraw_reply, wasm_worker_reaper:withdraw(G#g.id, Token)},
-            loop(G#g{actions = lists:keydelete(Token, 1, G#g.actions)});
+            %% Not dropped speculatively: the action stays in the mirror until the
+            %% reaper confirms the withdraw, so a withdraw that is refused or lost
+            %% leaves the action owned (the mirror is what survives the reaper).
+            loop(forward(G, {withdraw, Token}, {withdraw, From, Token}));
 
         {deliver_state, From, Mod, AState} ->
             %% Transfer is the kernel's, and it happens here: once, after this
             %% process holds the complete state. "Transferred" and "a state was
             %% delivered" are then the same event rather than two that can come
-            %% apart.
-            Reply = wasm_worker_reaper:transfer(G#g.id, Mod, AState),
-            From ! {deliver_state_reply, Reply},
-            loop(G#g{delivered = true, adapter_state = {Mod, AState}});
+            %% apart, so the flag is set when the steward answers.
+            loop(forward(G, {transfer, Mod, AState},
+                         {deliver_state, From, Mod, AState}));
+
+        {steward_reply, CorrRef, Reply} ->
+            loop(steward_reply(G, CorrRef, Reply));
 
         {result, Runner, Outcome} when Runner =:= G#g.runner ->
             finish(G, Outcome, false);
@@ -1079,12 +1116,62 @@ remaining(Deadline) ->
 %% hand the cleanup on. The outcome is relayed *before* cleanup, so a
 %% `cleanup/1' that fails or hangs can never become an error in a result the
 %% caller already has.
-finish(G, Outcome, RunnerDown) ->
-    kill_runner(G, RunnerDown),
+finish(G0, Outcome, RunnerDown) ->
+    kill_runner(G0, RunnerDown),
+    %% Cleanup messages the runner sent before its DOWN may still be in the
+    %% mailbox; forward them so a last-moment action reaches the mirror and the
+    %% steward before the request is handed off.
+    G = drain(G0),
     G#g.worker ! {guardian_done, G#g.ref, with_partial_output(G, Outcome)},
     maps:foreach(fun(_K, C) -> channel_delete(C) end, G#g.channels),
-    hand_over_cleanup(G),
+    %% The result is published, so a later worker DOWN is no longer a
+    %% cancellation and must not publish a second outcome.
+    _ = demonitor(G#g.wmon, [flush]),
+    hand_off(G),
     ok.
+
+drain(G) ->
+    receive
+        {register, From, Action} ->
+            drain(forward(G, {register, Action}, {register, From, Action}));
+        {withdraw, From, Token} ->
+            drain(forward(G, {withdraw, Token}, {withdraw, From, Token}));
+        {deliver_state, From, Mod, AState} ->
+            drain(forward(G, {transfer, Mod, AState},
+                          {deliver_state, From, Mod, AState}))
+    after 0 ->
+        G
+    end.
+
+%% Cleanup is the steward's to complete with the reaper, and the guardian waits
+%% for it -- but only after publishing, so the result is never held up. It exits
+%% once the steward confirms the reaper owns cleanup. If the steward cannot reach
+%% the reaper, dies first, or is silent past the grace, the guardian runs its
+%% mirror as the last-resort fallback: the actions it kept as it registered them.
+hand_off(G) ->
+    wasm_cleanup_steward:complete(G#g.steward, self()),
+    %% No timeout: a reaper that is merely slow to own cleanup must never be
+    %% mistaken for one that is gone. The steward always resolves the finish --
+    %% owned when a reaper accepts it, unavailable when none can be reached -- or
+    %% dies, and the guardian falls back to local cleanup only on those.
+    receive
+        {cleanup_owned, _Steward} ->
+            ok;
+        {cleanup_unavailable, _Steward} ->
+            local_cleanup(G);
+        {'DOWN', SMon, process, _P, _R} when SMon =:= G#g.smon ->
+            local_cleanup(G)
+    end.
+
+%% No reaper can own the cleanup, so hand the request's complete mirror to the
+%% manager, which runs it under a job lease off this process. The guardian has
+%% already published its result and freed the worker slot, so it does not wait
+%% for the cleanup to finish; the manager owns the job from here.
+local_cleanup(G) ->
+    Mirror = #{id => G#g.id, dir => G#g.dir,
+               adapter_state => mirror_adapter_state(G),
+               actions => mirror_actions(G)},
+    ok = wasm_cleanup_manager:start_local_cleanup(G#g.id, Mirror).
 
 %% The tables are this process's, so they survive a killed runner. A `timeout'
 %% or `cancelled' outcome therefore carries what the guest had already written,
@@ -1113,42 +1200,24 @@ kill_runner(#g{runner = Pid, rmon = Mon}, false) ->
     receive {'DOWN', Mon, process, Pid, _} -> ok after 5_000 -> ok end,
     ok.
 
-%% The reaper sees this process's `DOWN' and spawns a job. If it is gone, the
-%% mirror is the fallback: this process made every `register' call and kept the
-%% list, which is the only copy that survives the reaper.
-hand_over_cleanup(G) ->
-    case wasm_worker_reaper:alive() of
-        true  -> ok;
-        false -> run_mirror(G)
+%% The complete mirror (invariant 5): the guardian holds unacknowledged actions
+%% and adapter state in its pending map, so a steward that dies or a reaper that
+%% never answered does not lose them. Confirmed adapter state wins; otherwise an
+%% unacknowledged transfer's.
+mirror_adapter_state(#g{adapter_state = {_, _} = S}) ->
+    S;
+mirror_adapter_state(#g{pending = P}) ->
+    case [{M, A} || {deliver_state, _From, M, A} <- maps:values(P)] of
+        [S | _] -> S;
+        []      -> undefined
     end.
 
-run_mirror(G) ->
-    _ = case G#g.adapter_state of
-            undefined -> ok;
-            {Mod, AState} -> bounded(fun() -> Mod:cleanup(AState) end)
-        end,
-    lists:foreach(fun({_T, A}) when is_function(A, 0) -> bounded(A);
-                     ({_T, _}) -> ok
-                  end, G#g.actions),
-    _ = file:del_dir_r(G#g.dir),
-    wasm_worker_reaper:finish(G#g.id).
-
-%% The guardian orchestrates and never executes: a hanging action inline would
-%% wedge this process past every deadline it owns.
-bounded(F) ->
-    Parent = self(),
-    Ref = make_ref(),
-    {Pid, Mon} = spawn_opt(fun() -> Parent ! {Ref, guarded(F)} end, [monitor]),
-    receive
-        {Ref, _}                         -> erlang:demonitor(Mon, [flush]), ok;
-        {'DOWN', Mon, process, Pid, _}   -> ok
-    after 30_000 ->
-        exit(Pid, kill),
-        receive {'DOWN', Mon, process, Pid, _} -> ok after 1_000 -> ok end,
-        ok
-    end.
-
-guarded(F) -> try F(), ok catch C:R -> {C, R} end.
+%% Confirmed owned funs plus unacknowledged register funs. Durable operations are
+%% covered by removing the request directory, so only closures need running here.
+mirror_actions(#g{actions = As, pending = P}) ->
+    Confirmed = [A || {_T, A} <- As, is_function(A, 0)],
+    Pending   = [A || {register, _From, A} <- maps:values(P), is_function(A, 0)],
+    Confirmed ++ Pending.
 
 %%% ---------------------------------------------------------------- mounts ---
 
@@ -1295,18 +1364,41 @@ bad_stage(Msg, Ctx) -> wasm_worker_error:worker(bad_stage_path, Msg, Ctx).
 
 %%% -------------------------------------------------------------- cleanup ---
 
-%% The ceiling on the action list is the reaper's, and only the reaper's. There
-%% was a second one here, a hardcoded 64 that did not track the setting, and
-%% falsification found it: raising the reaper's limit changed nothing because
-%% this refused first. Two numbers for one bound is how they drift.
+%% Hand a cleanup operation to the steward with a fresh correlation reference,
+%% and remember what the reply will need. The guardian returns to its `receive'
+%% at once; the answer arrives later as `{steward_reply, CorrRef, Reply}'.
+forward(G, Operation, Waiting) ->
+    CorrRef = make_ref(),
+    wasm_cleanup_steward:forward(G#g.steward, CorrRef, self(), Operation),
+    G#g{pending = maps:put(CorrRef, Waiting, G#g.pending)}.
+
+%% Relay a steward's answer to the runner that is waiting for it, and record
+%% what the operation established. A reference not in the map is a reply for an
+%% operation whose request already finished, and is dropped.
 %%
-%% The mirror stays bounded for free, because it only grows on `{ok, Token}'.
-do_register(G, Action) ->
-    case wasm_worker_reaper:register(G#g.id, Action) of
-        {ok, Token} ->
-            {{ok, Token}, G#g{actions = [{Token, Action} | G#g.actions]}};
-        {error, _, _} = E ->
-            {E, G}
+%% The ceiling on the action list is the reaper's, and only the reaper's: the
+%% mirror stays bounded for free, because it only grows on `{ok, Token}'.
+steward_reply(G, CorrRef, Reply) ->
+    case maps:take(CorrRef, G#g.pending) of
+        error ->
+            G;
+        {{register, From, Action}, Pending} ->
+            From ! {register_reply, Reply},
+            G1 = G#g{pending = Pending},
+            case Reply of
+                {ok, Token} -> G1#g{actions = [{Token, Action} | G1#g.actions]};
+                _           -> G1
+            end;
+        {{withdraw, From, Token}, Pending} ->
+            From ! {withdraw_reply, Reply},
+            G1 = G#g{pending = Pending},
+            case Reply of
+                ok -> G1#g{actions = lists:keydelete(Token, 1, G1#g.actions)};
+                _  -> G1
+            end;
+        {{deliver_state, From, Mod, AState}, Pending} ->
+            From ! {deliver_state_reply, Reply},
+            G#g{pending = Pending, delivered = true, adapter_state = {Mod, AState}}
     end.
 
 %%% -------------------------------------------------------------- channels ---

@@ -6333,3 +6333,73 @@ run.
 The first run of each column is the cold one, which is why it is shown: a
 reader who runs this once and sees 11.7 ms should know that is the first
 compile and not the number.
+
+## The cleanup steward's terminal handoff is off the latency path
+
+The steward and the finish barrier add process coordination to every request:
+the guardian monitors a steward, and at the end sends `complete`, the steward
+submits `finish` to the reaper, and the reaper confirms it owns cleanup. All of
+that happens **after the result is published**, so it does not sit on the path
+the caller waits on.
+
+Measured: `fake_typed_adapter` echo, one worker, 3000 requests after a 100-run
+warm-up, time from `submit` to `await`. The handoff commit against its parent,
+three runs each, load average 8.5:
+
+| | minimum | median |
+| --- | ---: | ---: |
+| before (no steward finish) | 436, 437, 449 us | 708, 732, 755 us |
+| after (finish handoff) | 444, 445, 605 us | 724, 744, 751 us |
+
+The minimums and medians overlap; the 605 us minimum is a single noisy sample on
+a loaded box, not a floor. The ratio sits inside `[0.95, 1.05]`: the handoff
+costs nothing the caller sees, which is the point of publishing before handing
+off. A wedged reaper is bounded separately by the handoff grace and never
+reaches this measurement, because the result is already returned.
+
+## Journal v2 and adoption stay off the latency path too
+
+Adoption adds a v2 journal field (the steward pid), a steward monitor at reserve,
+and a steward-side mirror updated when a `register`/`withdraw`/`transfer` is
+acknowledged. The mirror is not on the echo path at all -- echo registers no
+cleanup action -- and the other two are a few bytes and one monitor.
+
+Measured the same way (`fake_typed_adapter` echo, 3000 requests after warm-up),
+load average 17 (high, so the minimum is the signal): min 436 us, median 711 to
+761 us. The 436 us floor is the same as before the handoff and before adoption,
+so neither change costs the caller anything. Recovery itself runs only on a
+reaper restart, never on a request's own path.
+
+## Local cleanup off the guardian stays off the latency path
+
+Stage 5 moved the local cleanup fallback out of the guardian into a manager-leased
+terminal replacement steward. It runs only after the guardian has published its
+result and freed the worker slot, so no request's own path reaches it; the guest
+execution envelope is untouched (only cleanup ownership changed).
+
+Measured the same way (`fake_typed_adapter` echo, 3000 requests after warm-up),
+load average 8 (moderate, so the minimum is the signal): min 423 us, median 718
+us. The 423 us floor matches the 436 us recorded before this change (within
+noise), and the median sits in the same 711 to 761 us band, so the fallback
+rework costs the caller nothing. The job lease and its queue run only on the
+fallback path, never on a request's own.
+
+## The steward, manager and ceiling stages leave the request path where it was
+
+The cleanup-ownership stages (terminal state, manager lifecycle and operator
+view, pinned resend, leased local cleanup, deadline-aware startup, the operation
+ceiling) all sit off `wasm_exec`, so the guest execution envelope cannot move.
+Confirmed by measuring the `fake_typed_adapter` echo envelope (3000 requests
+after warm-up, minimum is the signal), interleaved and re-bracketed at load
+average 4 to 6:
+
+| build | echo min |
+| --- | --- |
+| before this work (session start) | 446, 454, 464 us |
+| after this work (branch head) | 450, 457, 465, 470 us |
+
+The minima overlap, so the whole span of stages added nothing the caller sees on
+the request path. Against the pre-steward baseline (before the whole PR) the min
+floor is about 420 us, so the per-request steward the PR introduces costs roughly
+30 us; that lands in the accept phase, which the measurement border allows to
+grow, not in the guest execution envelope.

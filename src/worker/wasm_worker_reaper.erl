@@ -697,9 +697,16 @@ apply_sequenced(Seq, Op, #req{id = Id} = Req, St) ->        %% Seq =:= next_seq
             %% over-limit.
             {over_limit(Op, St), put_req(Req#req{next_seq = Seq + 1}, St)};
         false ->
-            {Reply, St1} = apply_operation(Id, Op, St),
+            {Reply, St1} = apply_sequenced_op(Id, Seq, Op, St),
             {Reply, advance_ledger(Id, Seq, Reply, St1)}
     end.
+
+%% Register on the transported path takes the sequence as its token; every other
+%% operation is sequence-independent.
+apply_sequenced_op(Id, Seq, {register, Action}, St) ->
+    apply_register(Id, Action, Seq, St);
+apply_sequenced_op(Id, _Seq, Op, St) ->
+    apply_operation(Id, Op, St).
 
 advance_ledger(Id, Seq, Reply, St) ->
     case maps:find(Id, St#st.reqs) of
@@ -738,10 +745,26 @@ unauthorised() ->
     wasm_worker_error:worker(unauthorised,
                              ~"cleanup operation from a foreign caller", #{}).
 
+%% Legacy synchronous register: the token is a per-request counter.
 op_register(Id, Action, St) ->
+    case register_target(Id, Action, St) of
+        {reject, Reply}                 -> {Reply, St};
+        {ok, #req{next_token = T} = Req} ->
+            do_register(Req#req{next_token = T + 1}, Action, T, St)
+    end.
+
+%% Transported register: the token **is** the operation sequence, so a retry of
+%% the same operation after adoption reuses the same token (required test 10).
+apply_register(Id, Action, Seq, St) ->
+    case register_target(Id, Action, St) of
+        {reject, Reply} -> {Reply, St};
+        {ok, Req}       -> do_register(Req, Action, Seq, St)
+    end.
+
+register_target(Id, Action, St) ->
     case maps:find(Id, St#st.reqs) of
         error ->
-            {unreachable(Action), St};
+            {reject, unreachable(Action)};
         {ok, #req{actions = As}}
           when length(As) >= map_get(max_cleanup_actions, St#st.opts) ->
             %% The list is adapter-controlled: without a ceiling an adapter in
@@ -749,9 +772,9 @@ op_register(Id, Action, St) ->
             E = wasm_worker_error:worker(cleanup_saturated,
                                     ~"too many cleanup actions",
                                     #{max => setting(St, max_cleanup_actions)}),
-            {{error, E, cleanup_failed}, St};
+            {reject, {error, E, cleanup_failed}};
         {ok, Req} ->
-            do_register(Req, Action, St)
+            {ok, Req}
     end.
 
 op_withdraw(Id, Token, St) ->
@@ -787,11 +810,11 @@ op_transfer(Id, Mod, AdapterState, St) ->
                                  cleanup = {Mod, AdapterState}}, St)}
     end.
 
-do_register(#req{next_token = T, actions = As} = Req, Action, St) ->
-    Req1 = Req#req{actions = [{T, Action, owned} | As], next_token = T + 1},
+do_register(#req{actions = As} = Req, Action, Token, St) ->
+    Req1 = Req#req{actions = [{Token, Action, owned} | As]},
     case is_durable(Action) of
         false ->
-            {{ok, T}, put_req(Req1, St)};
+            {{ok, Token}, put_req(Req1, St)};
         true ->
             %% Synchronous with respect to the write and the rename:
             %% acknowledging before the rename completes is exactly the window
@@ -799,7 +822,7 @@ do_register(#req{next_token = T, actions = As} = Req, Action, St) ->
             Req2 = Req1#req{ops = ops_of(Req1)},
             case write_record(St, Req2) of
                 ok ->
-                    {{ok, T}, put_req(Req2, St)};
+                    {{ok, Token}, put_req(Req2, St)};
                 {error, E} ->
                     {{error, E, cleanup_failed}, St}
             end

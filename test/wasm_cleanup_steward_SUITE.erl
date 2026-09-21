@@ -32,6 +32,7 @@ all() ->
      a_duplicate_operation_returns_the_stored_result,
      a_gap_asks_the_steward_to_resend,
      the_operation_ceiling_bounds_the_request,
+     finish_is_accepted_over_the_operation_ceiling,
      a_reaper_restart_recovers_the_volatile_cleanup].
 
 %% These drive the reaper's own apply logic, so they run a real reaper the test
@@ -42,6 +43,7 @@ direct_reaper_cases() ->
      a_duplicate_operation_returns_the_stored_result,
      a_gap_asks_the_steward_to_resend,
      the_operation_ceiling_bounds_the_request,
+     finish_is_accepted_over_the_operation_ceiling,
      a_reaper_restart_recovers_the_volatile_cleanup].
 
 init_per_suite(Config) ->
@@ -215,6 +217,23 @@ the_operation_ceiling_bounds_the_request(Config) ->
     %% The next in-order operation is still served, not stuck behind a gap.
     ?assertMatch({error, #{kind := cleanup_saturated}, cleanup_failed},
                  gen_server:call(wasm_worker_reaper, Op(5))).
+
+%% finish is always accepted, even past the per-request operation ceiling; it
+%% must never be treated as an over-limit operation, which had no reply clause
+%% and crashed the singleton reaper for the whole node.
+finish_is_accepted_over_the_operation_ceiling(Config) ->
+    ok = start_reaper(Config, #{max_cleanup_operations_per_request => 2}),
+    Id = ~"finreq00",
+    {ok, _} = wasm_worker_reaper:reserve(Id, self(), scratch, ~"req-finreq00"),
+    Reg = fun(N) -> {apply, Id, {Id, N}, {register, fun() -> ok end}} end,
+    ?assertMatch({ok, _}, gen_server:call(wasm_worker_reaper, Reg(1))),
+    ?assertMatch({ok, _}, gen_server:call(wasm_worker_reaper, Reg(2))),
+    ?assertMatch({error, #{kind := cleanup_saturated}, cleanup_failed},
+                 gen_server:call(wasm_worker_reaper, Reg(3))),
+    %% Over the ceiling, but finish is accepted and the reaper stays alive.
+    ?assertEqual(ok, gen_server:call(wasm_worker_reaper,
+                                     {apply, Id, {Id, 4}, finish})),
+    ?assert(is_pid(whereis(wasm_worker_reaper))).
 
 %% A reaper that restarts mid-request keeps durable ops through its journal but
 %% loses the volatile funs and adapter state, which lived only in its memory. The

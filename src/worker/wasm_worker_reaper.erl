@@ -687,7 +687,10 @@ apply_sequenced(Seq, _Op, #req{next_seq = Next}, St)
     %% one instead of applying this out of order.
     {{resend, Next}, St};
 apply_sequenced(Seq, Op, #req{id = Id} = Req, St) ->        %% Seq =:= next_seq
-    case Seq > setting(St, max_cleanup_operations_per_request) of
+    %% `finish' is never over the ceiling: it is always accepted, so terminal
+    %% cleanup can never be blocked, and it has no over-limit answer.
+    case Op =/= finish
+         andalso Seq > setting(St, max_cleanup_operations_per_request) of
         true ->
             %% Over the ceiling: consume the sequence so the next operation is
             %% not a gap, record nothing so the ledger stays bounded, and answer

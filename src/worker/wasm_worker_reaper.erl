@@ -139,7 +139,8 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
 %% it in the journal would mean an atomic rewrite plus a sync at every
 %% transition, so a restart *reconstructs* it from what it can observe instead.
 -record(req, {id             :: request_id(),
-              state          :: live | pending | held | queued | running,
+              state          :: live | pending | held | queued | running
+                              | complete,
               guardian       :: pid(),
               %% The steward that reserved this request. It is the caller
               %% identity every `{apply, ...}' operation must match, captured
@@ -163,6 +164,11 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
               %% `max_cleanup_operations_per_request'.
               next_seq = 1   :: pos_integer(),
               ledger = #{}   :: #{pos_integer() => term()},
+              %% Finish has been accepted: the request is terminal. A new
+              %% operation is refused `request_finished` and the record is a
+              %% tombstone, removed only after cleanup completes and the steward
+              %% goes down.
+              finished = false :: boolean(),
               cleanup        :: undefined | {module(), term()},
               attempts   = 0 :: non_neg_integer(),
               tries      = 0 :: non_neg_integer(),
@@ -625,9 +631,11 @@ op_finish(Id, St) ->
         error ->
             {ok, St};
         {ok, Req} ->
+            %% The guardian is done, so drop its monitor; the steward's stays, so
+            %% the tombstone survives until cleanup completes and the steward goes
+            %% down. `finished' makes a later operation `request_finished'.
             ok = drop_monitor(Req#req.mon),
-            ok = drop_monitor(Req#req.smon),
-            {ok, schedule(Req#req{mon = undefined, smon = undefined,
+            {ok, schedule(Req#req{mon = undefined, finished = true,
                                   state = queued}, St)}
     end.
 
@@ -653,8 +661,16 @@ guardian_down(#req{steward = Steward} = Req, St) ->
     Steward ! {cleanup_orphaned, Req#req.id},
     put_req(Req#req{mon = undefined}, St).
 
-%% Steward gone. With the guardian alive it owns the fallback, so the reaper
-%% stays passive; with the guardian also gone the reaper cleans from its replica.
+%% Steward gone. A finished request's tombstone is removed once cleanup is also
+%% complete; if cleanup is still running, drop the monitor so `cleanup_done'
+%% removes the record itself. Otherwise: with the guardian alive it owns the
+%% fallback, so the reaper stays passive; with the guardian also gone it cleans
+%% from its replica.
+steward_down(#req{finished = true, state = complete, id = Id} = Req, St) ->
+    ok = remove_record(St, Req),
+    St#st{reqs = maps:remove(Id, St#st.reqs)};
+steward_down(#req{finished = true} = Req, St) ->
+    put_req(Req#req{smon = undefined}, St);
 steward_down(#req{mon = undefined} = Req, St) ->
     schedule(Req#req{smon = undefined, state = queued}, St);
 steward_down(Req, St) ->
@@ -681,6 +697,10 @@ apply_sequenced(Seq, Op, #req{next_seq = Next, ledger = L}, St)
         {ok, Stored} -> {Stored, St};
         error        -> {over_limit(Op, St), St}
     end;
+apply_sequenced(Seq, _Op, #req{finished = true, next_seq = Next}, St)
+  when Seq >= Next ->
+    %% Finish was accepted: a new operation cannot recreate the request.
+    {{error, request_finished()}, St};
 apply_sequenced(Seq, _Op, #req{next_seq = Next}, St)
   when Seq > Next ->
     %% A gap. The reaper acts on operations in order, so it asks for the missing
@@ -744,6 +764,10 @@ authorised_caller(Id, Caller, St) ->
 unauthorised() ->
     wasm_worker_error:worker(unauthorised,
                              ~"cleanup operation from a foreign caller", #{}).
+
+request_finished() ->
+    wasm_worker_error:worker(request_finished,
+                             ~"the request has finished", #{}).
 
 %% Legacy synchronous register: the token is a per-request counter.
 op_register(Id, Action, St) ->
@@ -910,8 +934,7 @@ job_finished(Id, St) ->
         {ok, #req{attempts = N} = Req} ->
             case job_succeeded(Req, St) of
                 true ->
-                    ok = remove_record(St, Req),
-                    St#st{reqs = maps:remove(Id, St#st.reqs)};
+                    cleanup_done(Req, St);
                 false ->
                     Offs = setting(St, cleanup_backoff),
                     Backoff = lists:nth(min(N + 1, length(Offs)), Offs),
@@ -919,6 +942,18 @@ job_finished(Id, St) ->
                     put_req(Req#req{attempts = N + 1, state = queued}, St)
             end
     end.
+
+%% Cleanup succeeded. A finished request whose steward is still alive becomes a
+%% tombstone -- retained with its ledger, the steward told `cleanup_complete' --
+%% and is dropped only when the steward goes down; otherwise the record is dropped
+%% now.
+cleanup_done(#req{finished = true, smon = SMon, steward = Steward, id = Id} = Req,
+             St) when SMon =/= undefined, is_pid(Steward) ->
+    Steward ! {cleanup_complete, Id},
+    put_req(Req#req{state = complete}, St);
+cleanup_done(#req{id = Id} = Req, St) ->
+    ok = remove_record(St, Req),
+    St#st{reqs = maps:remove(Id, St#st.reqs)}.
 
 %% What a job leaves behind is the evidence. Every op is idempotent, so
 %% "succeeded" is "nothing it named is still there" rather than a message the

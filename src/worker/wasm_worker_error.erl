@@ -139,8 +139,8 @@ which is the check that keeps the set closed.
 kinds() ->
     [timeout, cancelled, output_limit, result_limit, crashed, insufficient_limit,
      bad_stage_path, busy, no_reaper, cleanup_saturated, unauthorised,
-     still_running, already_awaited, unknown_ref, no_worker, worker_died, exit,
-     adapter_failure, runtime_failure].
+     request_finished, still_running, already_awaited, unknown_ref, no_worker,
+     worker_died, exit, adapter_failure, runtime_failure].
 
 -doc """
 Whether a term is a well-formed worker error.

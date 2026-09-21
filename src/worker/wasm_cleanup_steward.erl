@@ -129,13 +129,21 @@ handle_info({cleanup_orphaned, _Id}, S) ->
     %% The reaper saw the guardian die and asked the steward to finish. There is
     %% no guardian left to answer.
     submit_finish(none, S);
+handle_info({cleanup_complete, _Id}, S) ->
+    %% The reaper finished cleanup; the steward's job is done and its tombstone
+    %% can be dropped once it goes down.
+    {stop, normal, S};
+handle_info({cleanup_terminal, _Id}, S) ->
+    %% Cleanup was quarantined; the steward exits so the reaper drops the record.
+    {stop, normal, S};
 handle_info(Msg, S) ->
     case gen_server:check_response(Msg, S#s.reqids, true) of
         {{reply, _Reply}, {finish, Guardian}, Reqids} ->
-            %% The reaper accepted the finish and owns cleanup now. The steward's
-            %% work is done.
+            %% The reaper accepted the finish and owns cleanup. The steward stays
+            %% alive as a passive mirror until `cleanup_complete', so a reaper
+            %% restart during cleanup can re-adopt it and recover volatile state.
             notify(Guardian, cleanup_owned),
-            {stop, normal, S#s{reqids = Reqids}};
+            {noreply, S#s{reqids = Reqids}};
         {{error, {_Reason, _}}, {finish, Guardian}, Reqids} ->
             %% The reaper is gone, so the guardian must clean up from its mirror.
             notify(Guardian, cleanup_unavailable),

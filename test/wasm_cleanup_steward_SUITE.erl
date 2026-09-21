@@ -34,6 +34,7 @@ all() ->
      a_gap_asks_the_steward_to_resend,
      the_operation_ceiling_bounds_the_request,
      finish_is_accepted_over_the_operation_ceiling,
+     a_new_operation_after_finish_is_refused,
      a_reaper_restart_recovers_the_volatile_cleanup].
 
 %% These drive the reaper's own apply logic, so they run a real reaper the test
@@ -45,6 +46,7 @@ direct_reaper_cases() ->
      a_gap_asks_the_steward_to_resend,
      the_operation_ceiling_bounds_the_request,
      finish_is_accepted_over_the_operation_ceiling,
+     a_new_operation_after_finish_is_refused,
      a_reaper_restart_recovers_the_volatile_cleanup].
 
 init_per_suite(Config) ->
@@ -258,6 +260,23 @@ finish_is_accepted_over_the_operation_ceiling(Config) ->
     ?assertEqual(ok, gen_server:call(wasm_worker_reaper,
                                      {apply, Id, {Id, 4}, finish})),
     ?assert(is_pid(whereis(wasm_worker_reaper))).
+
+%% After finish the request is a tombstone, not gone: a new operation cannot
+%% recreate it (it is refused `request_finished`), while a duplicate finish keeps
+%% returning its stored result. This process is the steward, so it stays alive
+%% and the tombstone is retained.
+a_new_operation_after_finish_is_refused(Config) ->
+    ok = start_reaper(Config, #{}),
+    Id = ~"finreq10",
+    {ok, _} = wasm_worker_reaper:reserve(Id, self(), scratch, ~"req-finreq10"),
+    Reg = fun(N) -> {apply, Id, {Id, N}, {register, fun() -> ok end}} end,
+    ?assertMatch({ok, _}, gen_server:call(wasm_worker_reaper, Reg(1))),
+    ?assertEqual(ok, gen_server:call(wasm_worker_reaper, {apply, Id, {Id, 2}, finish})),
+    ?assertMatch({error, #{kind := request_finished}},
+                 gen_server:call(wasm_worker_reaper, Reg(3))),
+    %% A duplicate finish still returns its stored result.
+    ?assertEqual(ok, gen_server:call(wasm_worker_reaper,
+                                     {apply, Id, {Id, 2}, finish})).
 
 %% A reaper that restarts mid-request keeps durable ops through its journal but
 %% loses the volatile funs and adapter state, which lived only in its memory. The

@@ -147,6 +147,10 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
               %% by a restart, which never had one.
               steward        :: undefined | pid(),
               mon            :: undefined | reference(),
+              %% The steward's monitor. The reaper watches both owners: while
+              %% either is alive it stays passive on the other's death, and it
+              %% cleans up only on an explicit finish or when both are gone.
+              smon           :: undefined | reference(),
               root           :: root_id(),
               relpath        :: binary(),
               ops     = []   :: [recover_op()],
@@ -455,6 +459,7 @@ handle_call({reserve, Id, Guardian, Root, RelPath}, From, St) ->
                     Req = #req{id = Id, state = live, guardian = Guardian,
                                steward = Steward,
                                mon = erlang:monitor(process, Guardian),
+                               smon = erlang:monitor(process, Steward),
                                root = Root, relpath = RelPath,
                                ops = [{remove_tree, Root, RelPath}],
                                gen = St#st.gen},
@@ -465,6 +470,7 @@ handle_call({reserve, Id, Guardian, Root, RelPath}, From, St) ->
                             {reply, {ok, Dir}, put_req(Req, St)};
                         {error, E} ->
                             erlang:demonitor(Req#req.mon, [flush]),
+                            erlang:demonitor(Req#req.smon, [flush]),
                             {reply, {error, E}, St}
                     end
             end
@@ -532,6 +538,7 @@ handle_cast({finish, Id}, St) ->
         error -> {noreply, St};
         {ok, Req} ->
             ok = drop_monitor(Req#req.mon),
+            ok = drop_monitor(Req#req.smon),
             ok = remove_record(St, Req),
             {noreply, St#st{reqs = maps:remove(Id, St#st.reqs)}}
     end;
@@ -539,10 +546,7 @@ handle_cast(_, St) ->
     {noreply, St}.
 
 handle_info({'DOWN', Mon, process, _Pid, _Why}, St) ->
-    case lists:keyfind(Mon, #req.mon, maps:values(St#st.reqs)) of
-        false -> {noreply, job_down(Mon, St)};
-        Req   -> {noreply, schedule(Req#req{mon = undefined, state = queued}, St)}
-    end;
+    {noreply, owner_down(Mon, St)};
 
 handle_info({handshake_reply, Id, Answer}, St) ->
     {noreply, handshake_reply(Id, Answer, St)};
@@ -605,7 +609,52 @@ journal_empty(Dir) ->
 %% both land here, so the two can never diverge. Each returns `{Reply, St1}'.
 apply_operation(Id, {register, Action}, St)  -> op_register(Id, Action, St);
 apply_operation(Id, {withdraw, Token}, St)   -> op_withdraw(Id, Token, St);
-apply_operation(Id, {transfer, Mod, A}, St)  -> op_transfer(Id, Mod, A, St).
+apply_operation(Id, {transfer, Mod, A}, St)  -> op_transfer(Id, Mod, A, St);
+apply_operation(Id, finish, St)              -> op_finish(Id, St).
+
+%% The finish barrier. The steward is done and asks the reaper to own cleanup:
+%% both owners are released and the request is queued, so the cleanup runs once
+%% and neither owner's later `DOWN' schedules it again. An unknown request is
+%% already gone, which is the same answer.
+op_finish(Id, St) ->
+    case maps:find(Id, St#st.reqs) of
+        error ->
+            {ok, St};
+        {ok, Req} ->
+            ok = drop_monitor(Req#req.mon),
+            ok = drop_monitor(Req#req.smon),
+            {ok, schedule(Req#req{mon = undefined, smon = undefined,
+                                  state = queued}, St)}
+    end.
+
+%% A monitored process died. The reaper watches both the guardian and the
+%% steward, and cleans up only when neither can: while one owner is alive the
+%% other's death leaves the request passive.
+owner_down(Mon, St) ->
+    Reqs = maps:values(St#st.reqs),
+    case lists:keyfind(Mon, #req.mon, Reqs) of
+        #req{} = Req -> guardian_down(Req, St);
+        false ->
+            case lists:keyfind(Mon, #req.smon, Reqs) of
+                #req{} = Req -> steward_down(Req, St);
+                false        -> job_down(Mon, St)
+            end
+    end.
+
+%% Guardian gone. With the steward alive the reaper stays passive and tells the
+%% steward, which reconciles and submits finish; with no steward left it cleans.
+guardian_down(#req{smon = undefined} = Req, St) ->
+    schedule(Req#req{mon = undefined, state = queued}, St);
+guardian_down(#req{steward = Steward} = Req, St) ->
+    Steward ! {cleanup_orphaned, Req#req.id},
+    put_req(Req#req{mon = undefined}, St).
+
+%% Steward gone. With the guardian alive it owns the fallback, so the reaper
+%% stays passive; with the guardian also gone the reaper cleans from its replica.
+steward_down(#req{mon = undefined} = Req, St) ->
+    schedule(Req#req{smon = undefined, state = queued}, St);
+steward_down(Req, St) ->
+    put_req(Req#req{smon = undefined}, St).
 
 %% A transported operation carries `OperationId = {RequestId, Sequence}'. For a
 %% known request the sequence orders and de-duplicates it against the ledger; an

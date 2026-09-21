@@ -95,6 +95,8 @@ handle_call({apply, _Id, _OpId, {withdraw, Token}}, From, S) ->
     op(withdraw, Token, From, S);
 handle_call({apply, _Id, _OpId, {transfer, _Mod, _AState}}, From, S) ->
     op(transfer, undefined, From, S);
+handle_call({apply, _Id, _OpId, finish}, From, S) ->
+    op(finish, undefined, From, S);
 handle_call(_Msg, _From, S) ->
     {reply, ok, S}.
 

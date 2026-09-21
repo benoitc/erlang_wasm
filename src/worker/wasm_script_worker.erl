@@ -161,6 +161,11 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 %%% ------------------------------------------------------------------ api ---
 
 -define(DEFAULT_TIMEOUT, 5_000).
+%% How long the guardian waits, after publishing its result, for the steward to
+%% confirm the reaper owns cleanup before falling back to its mirror. A finish
+%% round-trip to a healthy reaper is milliseconds; this bounds the wait when the
+%% reaper is wedged or gone so the guardian never lingers indefinitely.
+-define(HANDOFF_GRACE, 5_000).
 -define(GUARDIAN_READY_TIMEOUT, 30_000).
 %% One `init()` and its hooks, at `start_link/2`. Generous next to a request's
 %% deadline because it is a whole language runtime coming up once, and finite
@@ -921,6 +926,9 @@ clear_waiter(W) ->
             %% The per-request steward. Every reaper interaction goes through
             %% it, so the reaper is never called from this process directly.
             steward     :: undefined | pid(),
+            %% The steward's monitor, so the terminal handoff can fall back to
+            %% the mirror if the steward dies before confirming cleanup.
+            smon        :: undefined | reference(),
             %% Cleanup operations forwarded to the steward and not yet answered,
             %% keyed by a correlation reference. Holds what the reply needs: the
             %% runner to answer and, for register/transfer, what to record on
@@ -978,6 +986,7 @@ start_runner(Args, WMon, Dir, Steward) ->
             runner_heap = maps:get(runner_heap, Args),
             root = maps:get(root, Args), trusted = maps:get(trusted, Args),
             wmon = WMon, dir = Dir, steward = Steward,
+            smon = erlang:monitor(process, Steward),
             channels = channels(Limits)},
     Self = self(),
     Words = maps:get(max_heap_words, Limits, 8 * 1024 * 1024),
@@ -1101,10 +1110,29 @@ finish(G, Outcome, RunnerDown) ->
     kill_runner(G, RunnerDown),
     G#g.worker ! {guardian_done, G#g.ref, with_partial_output(G, Outcome)},
     maps:foreach(fun(_K, C) -> channel_delete(C) end, G#g.channels),
-    hand_over_cleanup(G),
-    %% The loop is only ever entered with a steward, so `finish' always has one.
-    wasm_cleanup_steward:stop(G#g.steward),
+    %% The result is published, so a later worker DOWN is no longer a
+    %% cancellation and must not publish a second outcome.
+    _ = demonitor(G#g.wmon, [flush]),
+    hand_off(G),
     ok.
+
+%% Cleanup is the steward's to complete with the reaper, and the guardian waits
+%% for it -- but only after publishing, so the result is never held up. It exits
+%% once the steward confirms the reaper owns cleanup. If the steward cannot reach
+%% the reaper, dies first, or is silent past the grace, the guardian runs its
+%% mirror as the last-resort fallback: the actions it kept as it registered them.
+hand_off(G) ->
+    wasm_cleanup_steward:complete(G#g.steward, self()),
+    receive
+        {cleanup_owned, _Steward} ->
+            ok;
+        {cleanup_unavailable, _Steward} ->
+            run_mirror(G);
+        {'DOWN', SMon, process, _P, _R} when SMon =:= G#g.smon ->
+            run_mirror(G)
+    after ?HANDOFF_GRACE ->
+        run_mirror(G)
+    end.
 
 %% The tables are this process's, so they survive a killed runner. A `timeout'
 %% or `cancelled' outcome therefore carries what the guest had already written,
@@ -1132,15 +1160,6 @@ kill_runner(#g{runner = Pid, rmon = Mon}, false) ->
     exit(Pid, kill),
     receive {'DOWN', Mon, process, Pid, _} -> ok after 5_000 -> ok end,
     ok.
-
-%% The reaper sees this process's `DOWN' and spawns a job. If it is gone, the
-%% mirror is the fallback: this process made every `register' call and kept the
-%% list, which is the only copy that survives the reaper.
-hand_over_cleanup(G) ->
-    case wasm_worker_reaper:alive() of
-        true  -> ok;
-        false -> run_mirror(G)
-    end.
 
 run_mirror(G) ->
     _ = case G#g.adapter_state of

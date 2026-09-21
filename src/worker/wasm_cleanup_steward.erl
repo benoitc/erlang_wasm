@@ -28,7 +28,7 @@ operation id enables arrive in the stages after this one too.
 
 -behaviour(gen_server).
 
--export([start_link/1, reserve/4, forward/4, stop/1]).
+-export([start_link/1, reserve/4, forward/4, complete/2, stop/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 %% What the guardian asks the steward to do to the reaper, and what carries
@@ -76,6 +76,18 @@ forward(Steward, CorrRef, ReplyTo, Operation) ->
     gen_server:cast(Steward, {forward, CorrRef, ReplyTo, Operation}).
 
 -doc """
+Tell the steward the request is done and it should finish it with the reaper.
+
+The steward submits `finish`, which asks the reaper to own cleanup, and answers
+`Guardian` with `{cleanup_owned, Steward}` once the reaper accepts it, or
+`{cleanup_unavailable, Steward}` if the reaper is gone, so the guardian either
+exits or falls back to its mirror.
+""".
+-spec complete(pid(), pid()) -> ok.
+complete(Steward, Guardian) ->
+    gen_server:cast(Steward, {complete, Guardian}).
+
+-doc """
 Stop a steward. Non-blocking, so a caller tearing a request down never waits on
 a steward that is itself waiting on the reaper.
 """.
@@ -94,11 +106,26 @@ handle_call(_Msg, _From, S) ->
 
 handle_cast({forward, CorrRef, ReplyTo, Operation}, S) ->
     {noreply, send_operation(S, CorrRef, ReplyTo, Operation)};
+handle_cast({complete, Guardian}, S) ->
+    submit_finish(Guardian, S);
 handle_cast(_Msg, S) ->
     {noreply, S}.
 
+handle_info({cleanup_orphaned, _Id}, S) ->
+    %% The reaper saw the guardian die and asked the steward to finish. There is
+    %% no guardian left to answer.
+    submit_finish(none, S);
 handle_info(Msg, S) ->
     case gen_server:check_response(Msg, S#s.reqids, true) of
+        {{reply, _Reply}, {finish, Guardian}, Reqids} ->
+            %% The reaper accepted the finish and owns cleanup now. The steward's
+            %% work is done.
+            notify(Guardian, cleanup_owned),
+            {stop, normal, S#s{reqids = Reqids}};
+        {{error, {_Reason, _}}, {finish, Guardian}, Reqids} ->
+            %% The reaper is gone, so the guardian must clean up from its mirror.
+            notify(Guardian, cleanup_unavailable),
+            {stop, normal, S#s{reqids = Reqids}};
         {{reply, Reply}, {CorrRef, ReplyTo, _Op}, Reqids} ->
             ReplyTo ! {steward_reply, CorrRef, Reply},
             {noreply, S#s{reqids = Reqids}};
@@ -115,6 +142,22 @@ handle_info(Msg, S) ->
         no_reply ->
             {noreply, S}
     end.
+
+%% Submit the finish barrier to the reaper. Resolved by name at send time, and if
+%% no reaper is there the guardian is told at once to fall back to its mirror.
+submit_finish(Guardian, #s{request = Id, seq = Seq} = S) ->
+    case whereis(wasm_worker_reaper) of
+        undefined ->
+            notify(Guardian, cleanup_unavailable),
+            {stop, normal, S};
+        Reaper ->
+            Reqids = gen_server:send_request(Reaper, {apply, Id, {Id, Seq}, finish},
+                                             {finish, Guardian}, S#s.reqids),
+            {noreply, S#s{seq = Seq + 1, reqids = Reqids}}
+    end.
+
+notify(none, _What)      -> ok;
+notify(Guardian, What)   -> Guardian ! {What, self()}, ok.
 
 %%% ---------------------------------------------------------------- internal ---
 

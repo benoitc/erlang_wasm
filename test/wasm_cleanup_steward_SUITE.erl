@@ -27,6 +27,7 @@ suite() -> [{timetrap, {seconds, 60}}].
 all() ->
     [the_seam_parks_a_caller_and_releases_it,
      the_deadline_fires_while_the_reaper_is_stuck_on_register,
+     the_result_is_published_before_the_cleanup_handoff,
      the_reaper_rejects_an_operation_from_a_foreign_caller,
      a_duplicate_operation_returns_the_stored_result,
      a_gap_asks_the_steward_to_resend,
@@ -70,6 +71,7 @@ end_per_testcase(TC, _Config) ->
             %% path unblocks and exits instead of lingering.
             quietly(fun() -> fake_reaper:release(register) end),
             quietly(fun() -> fake_reaper:release(reserve) end),
+            quietly(fun() -> fake_reaper:release(finish) end),
             case get(worker) of
                 undefined -> ok;
                 W         -> quietly(fun() -> wasm_script_worker:stop(W) end)
@@ -132,6 +134,21 @@ the_deadline_fires_while_the_reaper_is_stuck_on_register(Config) ->
     %% guardian really faced the wedge rather than skipping it.
     ?assert(fake_reaper:attempts(register) >= 1),
     ?assertMatch({error, #{kind := timeout}}, Outcome).
+
+%% The guardian publishes its result before it hands cleanup off, so a reaper
+%% wedged on the finish barrier cannot hold the result up: the request answers on
+%% its own time, and the finish is still submitted (the steward parks on it).
+the_result_is_published_before_the_cleanup_handoff(_Config) ->
+    ok = fake_reaper:set_mode(finish, hang),
+    {ok, W} = wasm_script_worker:start_link(
+                fake_typed_adapter, #{root => scratch, limits => #{timeout => 30_000}}),
+    put(worker, W),
+    Request = wasm_adapter_conformance:fixture(fake_typed_adapter, echo),
+    {Micros, Result} = timer:tc(fun() -> wasm_script_worker:run(W, Request) end),
+    ?assertMatch({ok, _}, Result),
+    %% Well under the handoff grace: the result is not held behind the wedge.
+    ?assert(Micros < 3_000_000, {stalled, Micros}),
+    ok = wait_until(fun() -> fake_reaper:attempts(finish) >= 1 end).
 
 %% Only the steward that reserved a request may drive its cleanup. This process
 %% makes the reserve call, so it is the steward; an operation from it is

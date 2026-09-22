@@ -27,7 +27,8 @@ canonical exports), the Canonical ABI in the import direction for aggregate
 (non-flat) arguments, and the WASI 0.2 worlds themselves.
 """.
 
--export([decode/1, instantiate/1, instantiate/2, call/4, drop_resource/3]).
+-export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
+         destroy/1, drop_resource/3]).
 -export([import_fun/2, exports/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
@@ -134,6 +135,16 @@ resource gets both.
 -spec instantiate(binary(), #{{binary(), binary()} => function()}) ->
           {ok, instance()} | {error, term()}.
 instantiate(Bin, Imports) ->
+    instantiate(Bin, Imports, #{}).
+
+-doc """
+As `instantiate/2`, passing `Limits` (memory and fuel bounds) to the inner core
+instance, so a component honours the same limits a core module does. This is what
+the worker uses per request.
+""".
+-spec instantiate(binary(), #{{binary(), binary()} => function()}, map()) ->
+          {ok, instance()} | {error, term()}.
+instantiate(Bin, Imports, Limits) ->
     case decode(Bin) of
         {ok, #{core := Core, exports := Exports}} ->
             case wasm:load(Core) of
@@ -141,7 +152,7 @@ instantiate(Bin, Imports) ->
                     CoreImports = core_imports(Core),
                     All = resolve_imports(CoreImports, Imports,
                                           resource_imports(CoreImports)),
-                    case wasm:instantiate(Mod, All) of
+                    case wasm:instantiate(Mod, All, Limits) of
                         {ok, Inst}     -> {ok, #{core => Inst,
                                                  exports => Exports}};
                         {error, _} = E -> E
@@ -152,6 +163,11 @@ instantiate(Bin, Imports) ->
         {error, _} = E ->
             E
     end.
+
+-doc "Destroy a component instance, freeing its inner core instance.".
+-spec destroy(instance()) -> ok.
+destroy(#{core := Inst}) ->
+    wasm:destroy(Inst).
 
 -doc "The export names a decoded component instance offers.".
 -spec exports(instance()) -> [binary()].

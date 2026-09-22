@@ -1,0 +1,7 @@
+package example:wasiudp;
+world app {
+  import wasi:sockets/instance-network;
+  import wasi:sockets/udp-create-socket;
+  import wasi:sockets/udp;
+  export ping: func(a: u8, b: u8, c: u8, d: u8, port: u16, msg: list<u8>) -> list<u8>;
+}

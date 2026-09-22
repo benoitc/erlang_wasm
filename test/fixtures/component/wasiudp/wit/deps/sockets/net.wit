@@ -1,0 +1,40 @@
+package wasi:sockets;
+interface network {
+  resource network;
+  enum error-code {
+    unknown, access-denied, not-supported, invalid-argument, out-of-memory,
+    timeout, concurrency-conflict, not-in-progress, would-block, invalid-state,
+    new-socket-limit, address-not-bindable, address-in-use, remote-unreachable,
+    connection-refused, connection-reset, connection-aborted, datagram-too-large,
+    name-unresolvable, temporary-resolver-failure, permanent-resolver-failure
+  }
+  enum ip-address-family { ipv4, ipv6 }
+  type ipv4-address = tuple<u8, u8, u8, u8>;
+  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
+  record ipv4-socket-address { port: u16, address: ipv4-address }
+  record ipv6-socket-address { port: u16, flow-info: u32, address: ipv6-address, scope-id: u32 }
+  variant ip-socket-address { ipv4(ipv4-socket-address), ipv6(ipv6-socket-address) }
+}
+interface instance-network { use network.{network}; instance-network: func() -> network; }
+interface udp {
+  use network.{network, error-code, ip-socket-address, ip-address-family};
+  record incoming-datagram { data: list<u8>, remote-address: ip-socket-address }
+  record outgoing-datagram { data: list<u8>, remote-address: option<ip-socket-address> }
+  resource incoming-datagram-stream {
+    receive: func(max-results: u64) -> result<list<incoming-datagram>, error-code>;
+  }
+  resource outgoing-datagram-stream {
+    check-send: func() -> result<u64, error-code>;
+    send: func(datagrams: list<outgoing-datagram>) -> result<u64, error-code>;
+  }
+  resource udp-socket {
+    start-bind: func(network: borrow<network>, local-address: ip-socket-address) -> result<_, error-code>;
+    finish-bind: func() -> result<_, error-code>;
+    %stream: func(remote-address: option<ip-socket-address>) -> result<tuple<incoming-datagram-stream, outgoing-datagram-stream>, error-code>;
+  }
+}
+interface udp-create-socket {
+  use network.{error-code, ip-address-family};
+  use udp.{udp-socket};
+  create-udp-socket: func(address-family: ip-address-family) -> result<udp-socket, error-code>;
+}

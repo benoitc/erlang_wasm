@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **The hex package now ships `priv/script_v1`.** The `files` list in
+  `wasm.app.src` replaces the plugin's default and had left `priv/` out, so
+  0.4.1 and 0.4.2 on hex.pm have no `boot.py` or `boot.js` and
+  `wasm_python_command` and `wasm_javascript_command` fail at start unless
+  erlang_wasm comes from a git checkout. Nothing to set; the next release
+  carries the files.
+
 ## 0.4.2
 
 Security and liveness fixes from a guest-reachable audit of 0.4.1. Fix forward,

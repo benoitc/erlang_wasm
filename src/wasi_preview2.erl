@@ -19,7 +19,7 @@ later step.
 -include("wasi.hrl").
 
 -export([imports/0, random/0, clocks/0, environment/0, io/0, io/1,
-         filesystem/1]).
+         filesystem/1, sockets/1]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle); we only ever return ok, so no
@@ -74,6 +74,24 @@ later step.
 -define(STAT_RESULT, {result, ?DESCRIPTOR_STAT, ?ERROR_CODE}).
 -define(DIR_ENTRY, {record, [{<<"type">>, ?DESC_TYPE}, {<<"name">>, string}]}).
 -define(DIR_ENTRY_RESULT, {result, {option, ?DIR_ENTRY}, ?ERROR_CODE}).
+
+%% wasi:sockets/network error-code, its own enum, in WIT order.
+-define(SOCK_ERROR,
+        {enum, [<<"unknown">>, <<"access-denied">>, <<"not-supported">>,
+                <<"invalid-argument">>, <<"out-of-memory">>, <<"timeout">>,
+                <<"concurrency-conflict">>, <<"not-in-progress">>,
+                <<"would-block">>, <<"invalid-state">>, <<"new-socket-limit">>,
+                <<"address-not-bindable">>, <<"address-in-use">>,
+                <<"remote-unreachable">>, <<"connection-refused">>,
+                <<"connection-reset">>, <<"connection-aborted">>,
+                <<"datagram-too-large">>, <<"name-unresolvable">>,
+                <<"temporary-resolver-failure">>,
+                <<"permanent-resolver-failure">>]}).
+-define(IP_ADDRESS,
+        {variant, [{<<"ipv4">>, {tuple, [u8, u8, u8, u8]}},
+                   {<<"ipv6">>, {tuple, [u16, u16, u16, u16,
+                                         u16, u16, u16, u16]}}]}).
+-define(RESOLVE_RESULT, {result, {option, ?IP_ADDRESS}, ?SOCK_ERROR}).
 
 -doc "Every implemented `wasi:*` interface, merged into one imports map.".
 -spec imports() -> #{{binary(), binary()} => fun()}.
@@ -504,6 +522,73 @@ read_directory_entry(Stream) ->
         _ ->
             {error, <<"bad-descriptor">>}
     end.
+
+-doc """
+A slice of `wasi:sockets`: the network foundation and `ip-name-lookup`.
+`instance-network` mints a network resource carrying the grant; `resolve-addresses`
+resolves a name (gated by `wasi_net:resolves/1`, so a component with no grant
+resolves nothing) into a stream of addresses; `resolve-next-address` pops each as
+an `ipv4`/`ipv6` value. The address decision is `wasi_net`, not a second copy of
+it, so a p2 guest reaches only what a p1 grant permits.
+""".
+-spec sockets(#{grant => term()}) -> #{{binary(), binary()} => fun()}.
+sockets(Opts) ->
+    Grant = wasi_net:grant(maps:get(grant, Opts, none)),
+    Inet = <<"wasi:sockets/instance-network">>,
+    Lookup = <<"wasi:sockets/ip-name-lookup">>,
+    Network = <<"wasi:sockets/network">>,
+    #{{Inet, <<"instance-network">>} =>
+          wasm_component:import_fun(
+            {[], handle}, fun([]) -> wasm_component:host_new(net_network, Grant) end),
+      {Lookup, <<"resolve-addresses">>} =>
+          wasm_component:import_fun(
+            {[handle, string], {result, handle, ?SOCK_ERROR}},
+            fun([NetH, Name]) -> resolve_addresses(NetH, Name) end),
+      {Lookup, <<"[method]resolve-address-stream.resolve-next-address">>} =>
+          wasm_component:import_fun(
+            {[handle], ?RESOLVE_RESULT},
+            fun([Stream]) -> resolve_next(Stream) end),
+      {Lookup, <<"[resource-drop]resolve-address-stream">>} => drop_fun(),
+      {Network, <<"[resource-drop]network">>} => drop_fun()}.
+
+%% Resolve only if the grant behind the network permits it: no grant, no network.
+resolve_addresses(NetH, Name) ->
+    case wasm_component:host_get(NetH) of
+        {ok, {net_network, Grant}} ->
+            case wasi_net:resolves(Grant) of
+                false -> {error, <<"access-denied">>};
+                true  -> {ok, wasm_component:host_new(net_addrs, resolve_names(Name))}
+            end;
+        _ ->
+            {error, <<"invalid-argument">>}
+    end.
+
+resolve_names(Name) ->
+    Host = binary_to_list(Name),
+    lists:usort(
+      lists:flatmap(
+        fun(Family) ->
+            case inet:getaddrs(Host, Family) of
+                {ok, Addrs} -> [wasi_net:normalise(A) || A <- Addrs];
+                {error, _}  -> []
+            end
+        end, [inet, inet6])).
+
+resolve_next(Stream) ->
+    case wasm_component:host_get(Stream) of
+        {ok, {net_addrs, []}} ->
+            {ok, none};
+        {ok, {net_addrs, [Addr | Rest]}} ->
+            _ = wasm_component:host_update(Stream, Rest),
+            {ok, {some, ip_address(Addr)}};
+        _ ->
+            {error, <<"invalid-argument">>}
+    end.
+
+ip_address({A, B, C, D}) ->
+    {<<"ipv4">>, {A, B, C, D}};
+ip_address({A, B, C, D, E, F, G, H}) ->
+    {<<"ipv6">>, {A, B, C, D, E, F, G, H}}.
 
 %% Drop a descriptor: close the open file or forget the preopened root, then
 %% free the host handle. A double drop or unknown handle is a no-op.

@@ -32,20 +32,36 @@ default_path() ->
                    "fixtures", "component", "realupper.component.wasm"]).
 
 requirements(Request, _Artifact) when is_map(Request) ->
-    {ok, #{min_timeout => 1000, min_memory_pages => 1,
-           request_bytes => erlang:external_size(Request),
-           staged_bytes => 0, staged_files => 0, mounts => #{}}};
+    Base = #{min_timeout => 1000, min_memory_pages => 1,
+             request_bytes => erlang:external_size(Request),
+             staged_bytes => 0, staged_files => 0, mounts => #{}},
+    case maps:find(file, Request) of
+        {ok, File} ->
+            {ok, Base#{staged_bytes => byte_size(File), staged_files => 1,
+                       mounts => #{data => #{guest_path => ~"/", mode => read}}}};
+        error ->
+            {ok, Base}
+    end;
 requirements(_Request, _Artifact) ->
     {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
-prepare(Request, #{component := Bin}, _Env) ->
+prepare(Request, #{component := Bin}, Env) ->
     Stdin = maps:get(stdin, Request, <<>>),
     Collector = ets:new(component_stdout, [public, ordered_set]),
     Sink = fun(Bytes) ->
                ets:insert(Collector, {erlang:unique_integer([monotonic]), Bytes}),
                ok
            end,
-    Imports = wasi_preview2:command(#{stdin => Stdin, stdout => Sink}),
+    %% A `file' request is staged into a read mount and the command reads it.
+    Extra = case maps:find(file, Request) of
+                {ok, File} ->
+                    #{mounts := #{data := #{host_dir := Dir}}, stage := Stage} = Env,
+                    ok = Stage(data, ~"input.txt", File),
+                    #{preopen => Dir};
+                error ->
+                    #{}
+            end,
+    Imports = wasi_preview2:command(Extra#{stdin => Stdin, stdout => Sink}),
     RunExport = run_export(Bin),
     {ok, #{mode => command, runtime => component, module => Bin,
            imports => #{bindings => Imports, snapshot_hooks => #{},

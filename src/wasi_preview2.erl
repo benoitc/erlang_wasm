@@ -19,7 +19,7 @@ later step.
 -include("wasi.hrl").
 
 -export([imports/0, random/0, clocks/0, environment/0, io/0, io/1,
-         filesystem/1, sockets/1, command/1, run_command/2]).
+         filesystem/1, sockets/1, command/1, run_command/2, run_command/3]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle); we only ever return ok, so no
@@ -74,6 +74,9 @@ later step.
 -define(STAT_RESULT, {result, ?DESCRIPTOR_STAT, ?ERROR_CODE}).
 -define(DIR_ENTRY, {record, [{<<"type">>, ?DESC_TYPE}, {<<"name">>, string}]}).
 -define(DIR_ENTRY_RESULT, {result, {option, ?DIR_ENTRY}, ?ERROR_CODE}).
+-define(FLAGS_RESULT, {result, ?DESC_FLAGS, ?ERROR_CODE}).
+-define(METADATA_HASH, {record, [{<<"lower">>, u64}, {<<"upper">>, u64}]}).
+-define(METADATA_HASH_RESULT, {result, ?METADATA_HASH, ?ERROR_CODE}).
 
 %% wasi:sockets/network error-code, its own enum, in WIT order.
 -define(SOCK_ERROR,
@@ -228,10 +231,15 @@ command(Opts) ->
     Stdin = maps:get(stdin, Opts, <<>>),
     Stdout = maps:get(stdout, Opts, fun(_) -> ok end),
     Stderr = maps:get(stderr, Opts, fun(_) -> ok end),
-    lists:foldl(fun maps:merge/2, #{},
-                [io(#{source => Stdin, sink => Stdout}),
-                 clocks(), random(), environment(),
-                 cli_exit(), cli_stderr(Stderr), cli_terminals()]).
+    Base = [io(#{source => Stdin, sink => Stdout}),
+            clocks(), random(), environment(),
+            cli_exit(), cli_stderr(Stderr), cli_terminals()],
+    Fs = case maps:find(preopen, Opts) of
+             {ok, Dir} -> [filesystem(#{preopen => Dir, name => <<"/">>,
+                                        writable => maps:get(writable, Opts, false)})];
+             error     -> []
+         end,
+    lists:foldl(fun maps:merge/2, #{}, Base ++ Fs).
 
 -doc """
 Run a `wasi:cli/command` component with `Stdin` on its standard input and return
@@ -241,10 +249,19 @@ byte-in/byte-out entry: a real component reads stdin and writes stdout.
 """.
 -spec run_command(binary(), binary()) -> {ok, binary()} | {error, term()}.
 run_command(Bin, Stdin) ->
+    run_command(Bin, Stdin, #{}).
+
+-doc """
+As `run_command/2` with extra `command/1` options, such as `preopen => Dir` to
+give the command a directory to read (a mount).
+""".
+-spec run_command(binary(), binary(), map()) -> {ok, binary()} | {error, term()}.
+run_command(Bin, Stdin, Extra) ->
     Ref = make_ref(),
     Self = self(),
     Sink = fun(B) -> Self ! {Ref, B}, ok end,
-    case wasm_component:instantiate(Bin, command(#{stdin => Stdin, stdout => Sink})) of
+    Opts = Extra#{stdin => Stdin, stdout => Sink},
+    case wasm_component:instantiate(Bin, command(Opts)) of
         {ok, Instance} ->
             case run_export(wasm_component:exports(Instance)) of
                 {ok, Export} ->
@@ -497,6 +514,18 @@ filesystem(Opts) ->
       {Types, <<"[method]descriptor.read-directory">>} =>
           wasm_component:import_fun(
             {[handle], ?OPEN_RESULT}, fun([Dir]) -> read_directory(Dir) end),
+      {Types, <<"[method]descriptor.get-flags">>} =>
+          wasm_component:import_fun(
+            {[handle], ?FLAGS_RESULT}, fun([_H]) -> {ok, descriptor_flags(Writable)} end),
+      {Types, <<"[method]descriptor.metadata-hash">>} =>
+          wasm_component:import_fun(
+            {[handle], ?METADATA_HASH_RESULT}, fun([H]) -> metadata_hash(H) end),
+      {Types, <<"[method]descriptor.write-via-stream">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], ?OPEN_RESULT}, fun([_H, _Off]) -> {error, <<"read-only">>} end),
+      {Types, <<"[method]descriptor.append-via-stream">>} =>
+          wasm_component:import_fun(
+            {[handle], ?OPEN_RESULT}, fun([_H]) -> {error, <<"read-only">>} end),
       {Types, <<"[method]directory-entry-stream.read-directory-entry">>} =>
           wasm_component:import_fun(
             {[handle], ?DIR_ENTRY_RESULT},
@@ -616,6 +645,23 @@ fs_type_name(directory) -> <<"directory">>;
 fs_type_name(regular)   -> <<"regular-file">>;
 fs_type_name(symlink)   -> <<"symbolic-link">>;
 fs_type_name(_Other)    -> <<"unknown">>.
+
+descriptor_flags(true)  -> [<<"read">>, <<"write">>];
+descriptor_flags(false) -> [<<"read">>].
+
+%% A stable identity for a descriptor, from its inode; enough for a guest to tell
+%% two descriptors apart, which is what metadata-hash is for.
+metadata_hash(H) ->
+    case wasm_component:host_get(H) of
+        {ok, {fs_file, Handle}} -> from_hash(wasi_fs:stat_fd(Handle));
+        {ok, {fs_dir, Root}}    -> from_hash(wasi_fs:stat(Root, <<".">>));
+        error                   -> {error, <<"bad-descriptor">>}
+    end.
+
+from_hash({ok, Map}) ->
+    {ok, #{<<"lower">> => maps:get(inode, Map, 0), <<"upper">> => 0}};
+from_hash({error, Errno}) ->
+    {error, errno_name(Errno)}.
 
 stat(H) ->
     case wasm_component:host_get(H) of

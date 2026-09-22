@@ -17,7 +17,8 @@ against a fixed value and, when present, against wasmtime.
 
 all() ->
     [a_real_command_runs_through_the_worker,
-     it_matches_wasmtime_through_the_worker].
+     it_matches_wasmtime_through_the_worker,
+     a_file_is_processed_over_a_mount].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -63,7 +64,26 @@ it_matches_wasmtime_through_the_worker(Config) ->
              end || In <- inputs()]
     end.
 
+%% A file staged into a read mount is read by the component and its contents come
+%% back: the worker's mount is wired to the command's preopen. Uses the realcat
+%% fixture (reads a file, writes stdout).
+a_file_is_processed_over_a_mount(_Config) ->
+    {ok, W} = wasm_script_worker:start_link(
+                fake_component_adapter, #{root => scratch, path => realcat_path()}),
+    try
+        [begin
+             {ok, #{stdout := Out}} = wasm_script_worker:run(W, #{file => Content}),
+             ?assertEqual(Content, Out)
+         end || Content <- [<<"mount contents\n">>, <<>>, binary:copy(<<"x">>, 1000)]]
+    after
+        wasm_script_worker:stop(W)
+    end.
+
 %%% -------------------------------------------------------------- helpers ---
+
+realcat_path() ->
+    filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
+                   "test", "fixtures", "component", "realcat.component.wasm"]).
 
 run_on_wasmtime(Wasmtime, Path, In) ->
     Tmp = string:trim(os:cmd("mktemp")),

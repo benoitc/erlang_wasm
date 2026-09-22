@@ -55,7 +55,7 @@ done
 # wasi:cli/command component (wasmtime runs it directly), so there is no
 # `component new` step. These are the differential fixtures.
 rustup target add wasm32-wasip2 >/dev/null 2>&1 || true
-for name in realupper; do
+for name in realupper realcat; do
   src="$here/test/fixtures/component/$name"
   out="$here/test/fixtures/component/$name.component.wasm"
   ( cd "$src" && cargo build --release --target wasm32-wasip2 )

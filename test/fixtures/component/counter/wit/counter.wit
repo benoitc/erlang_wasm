@@ -1,0 +1,14 @@
+package example:counter;
+
+interface counters {
+  resource counter {
+    constructor(init: u32);
+    increment: func(by: u32) -> u32;
+    get: func() -> u32;
+  }
+  make-counter: func(init: u32) -> counter;
+}
+
+world runtime {
+  export counters;
+}

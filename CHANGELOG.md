@@ -8,6 +8,11 @@
   `wasm_python_command` and `wasm_javascript_command` fail at start unless
   erlang_wasm comes from a git checkout. Nothing to set; the next release
   carries the files.
+- **`scripts/build-python-reactor.sh` can be run again.** A second run found
+  `python.wasm` up to date, got make's "is up to date" line instead of the
+  link command, and failed in `sh`. The link line now comes from
+  `scripts/python-link-line.sh`, which asks make with `-W Programs/python.o`
+  and refuses anything that is not the link command.
 
 ## 0.4.2
 

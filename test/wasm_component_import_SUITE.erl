@@ -19,7 +19,9 @@ import is refused rather than silently absent.
 all() ->
     [the_host_supplies_a_leaf_import,
      a_host_import_sees_its_arguments,
-     a_missing_import_is_refused].
+     a_missing_import_is_refused,
+     a_typed_import_wraps_flat_values,
+     an_aggregate_import_round_trips].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -45,7 +47,37 @@ a_missing_import_is_refused(Config) ->
     ?assertMatch({error, _},
                  wasm_component:instantiate(?config(component, Config), #{})).
 
+%% import_fun/2 wraps a typed host function; here the flat case (u64, u32).
+a_typed_import_wraps_flat_values(Config) ->
+    Now = wasm_component:import_fun({[], u64}, fun([]) -> 777 end),
+    Add = wasm_component:import_fun({[u32, u32], u32}, fun([A, B]) -> A + B end),
+    {ok, I} = instance(Config,
+                       #{{<<"example:host/clock">>, <<"now">>} => Now,
+                         {<<"example:host/clock">>, <<"add">>} => Add}),
+    ?assertEqual({ok, 777}, wasm_component:call(I, <<"read-now">>, {[], u64}, [])),
+    ?assertEqual({ok, 30},
+                 wasm_component:call(I, <<"read-add">>, {[u32, u32], u32}, [10, 20])).
+
+%% A string crosses both ways: the host lifts the guest's argument and lowers its
+%% result into the guest's return area, all through import_fun/2.
+an_aggregate_import_round_trips(Config) ->
+    Bin = agg_component(Config),
+    Shout = wasm_component:import_fun({[string], string},
+                                     fun([S]) -> string:uppercase(S) end),
+    {ok, I} = wasm_component:instantiate(
+                Bin, #{{<<"example:agg/host">>, <<"shout">>} => Shout}),
+    [?assertEqual({ok, <<"<<", (string:uppercase(S))/binary, ">>">>},
+                  wasm_component:call(I, <<"announce">>, {[string], string}, [S]))
+     || S <- [<<>>, <<"hi there">>, <<"h", 16#C3, 16#A9, "llo">>]].
+
 %%% -------------------------------------------------------------- helpers ---
+
+agg_component(_Config) ->
+    {ok, Bin} = file:read_file(
+                  filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
+                                 "test", "fixtures", "component",
+                                 "hostagg.component.wasm"])),
+    Bin.
 
 instance(Config, Imports) ->
     wasm_component:instantiate(?config(component, Config), Imports).

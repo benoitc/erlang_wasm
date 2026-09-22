@@ -28,6 +28,7 @@ canonical exports), the Canonical ABI in the import direction for aggregate
 """.
 
 -export([decode/1, instantiate/1, instantiate/2, call/4, drop_resource/3]).
+-export([import_fun/2]).
 
 -export_type([component/0, instance/0]).
 
@@ -164,6 +165,37 @@ call(#{core := Inst}, Export, {Params, Result}, Args) ->
             {ok, Value};
         {error, _} = E ->
             E
+    end.
+
+-doc """
+Wrap a typed host function as an import, handling the Canonical ABI both ways.
+
+`Sig` is `{Params, Result}` of value descriptors. The returned raw import lifts
+the guest's flat arguments to Erlang terms, calls `Fun(Terms)`, and lowers the
+result -- into the guest's return area for a by-memory result (a `string`, a
+`list`, a `record`), or flat for a small one. `Result` may be `none` for a
+function that returns nothing.
+""".
+-spec import_fun({[wasm_canon:desc()], wasm_canon:desc() | none},
+                 fun(([term()]) -> term())) -> function().
+import_fun({Params, Result}, Fun) ->
+    fun(Ctx, Flats) ->
+        Inst = maps:get(instance, Ctx),
+        {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
+        Value = Fun(Terms),
+        lower_import_result(Inst, Result, Rest, Value)
+    end.
+
+lower_import_result(_Inst, none, _Rest, _Value) ->
+    {ok, []};
+lower_import_result(Inst, Result, Rest, Value) ->
+    case wasm_canon:result_via_memory(Result) of
+        true ->
+            [RetPtr] = Rest,
+            ok = wasm_canon:store_value(Inst, Result, RetPtr, Value),
+            {ok, []};
+        false ->
+            {ok, wasm_canon:lower_value(Inst, Result, Value)}
     end.
 
 -doc """

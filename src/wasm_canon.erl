@@ -33,6 +33,7 @@ current fixtures.
 """.
 
 -export([lower_params/3, lift_result/3, size_align/1, flat_types/1]).
+-export([lift_params/3, lower_value/3, store_value/4, result_via_memory/1]).
 
 -export_type([desc/0]).
 
@@ -150,6 +151,112 @@ lift_flat(_Inst, f64, [V]) -> V;
 lift_flat(_Inst, {enum, Names}, [V]) -> lists:nth(V + 1, Names);
 lift_flat(_Inst, {flags, Names}, [V]) -> bits_flags(Names, V);
 lift_flat(_Inst, _D, []) -> ok.
+
+%%% -------------------------------------------------- host imports (reverse) ---
+
+-doc """
+Lift the flat core arguments a guest passed into an imported function.
+
+The inverse of `lower_params/3`: for each parameter descriptor it consumes the
+flat values the guest lowered and returns the Erlang term. Any flat values left
+over -- a return-area pointer the guest passes for a by-memory result -- are
+returned as the second element.
+""".
+-spec lift_params(wasm:instance(), [desc()], [term()]) -> {[term()], [term()]}.
+lift_params(Inst, Descs, Flats) ->
+    {Rev, Rest} = lists:foldl(
+                    fun(D, {Acc, F0}) ->
+                        {V, F1} = lift_value(Inst, D, F0),
+                        {[V | Acc], F1}
+                    end, {[], Flats}, Descs),
+    {lists:reverse(Rev), Rest}.
+
+-doc "Lower one value to its flat core representation (`lower_flat`, exported).".
+-spec lower_value(wasm:instance(), desc(), term()) -> [term()].
+lower_value(Inst, Desc, Term) -> lower_flat(Inst, Desc, Term).
+
+-doc "Write a value into linear memory at `Ptr` (`store`, exported).".
+-spec store_value(wasm:instance(), desc(), non_neg_integer(), term()) -> ok.
+store_value(Inst, Desc, Ptr, Term) -> store(Inst, Desc, Ptr, Term).
+
+-doc "Whether a result is returned through memory rather than flat.".
+-spec result_via_memory(desc()) -> boolean().
+result_via_memory(Desc) -> length(flat_types(Desc)) > ?MAX_FLAT_RESULTS.
+
+%% Lift one value from the head of the flat list, returning it and the rest.
+lift_value(Inst, D, [V | R]) when D =:= u8; D =:= u16; D =:= u32;
+                                  D =:= s8; D =:= s16; D =:= s32;
+                                  D =:= u64; D =:= s64; D =:= char; D =:= bool;
+                                  D =:= f32; D =:= f64 ->
+    {lift_flat(Inst, D, [V]), R};
+lift_value(Inst, D, [Ptr, Len | R]) when D =:= string; D =:= {list, u8} ->
+    {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
+    {Bin, R};
+lift_value(Inst, {list, ElemD}, [Ptr, Len | R]) ->
+    {ESize, _} = size_align(ElemD),
+    {[load(Inst, ElemD, Ptr + I * ESize) || I <- lists:seq(0, Len - 1)], R};
+lift_value(Inst, {record, Fields}, Flats) ->
+    {Map, Rest} = lists:foldl(
+                    fun({N, FD}, {Acc, F0}) ->
+                        {V, F1} = lift_value(Inst, FD, F0),
+                        {Acc#{N => V}, F1}
+                    end, {#{}, Flats}, Fields),
+    {Map, Rest};
+lift_value(Inst, {tuple, Ds}, Flats) ->
+    {Vals, Rest} = lists:foldl(
+                     fun(FD, {Acc, F0}) ->
+                         {V, F1} = lift_value(Inst, FD, F0),
+                         {[V | Acc], F1}
+                     end, {[], Flats}, Ds),
+    {list_to_tuple(lists:reverse(Vals)), Rest};
+lift_value(_Inst, {enum, Names}, [Disc | R]) ->
+    {lists:nth(Disc + 1, Names), R};
+lift_value(_Inst, {flags, Names}, Flats) ->
+    {Words, R} = lists:split((length(Names) + 31) div 32, Flats),
+    Bits = lists:foldl(fun(W, {Acc, Shift}) -> {Acc bor (W bsl Shift), Shift + 32} end,
+                       {0, 0}, Words),
+    {bits_flags(Names, element(1, Bits)), R};
+lift_value(Inst, {option, D}, Flats) ->
+    case lift_variant(Inst, opt_cases(D), Flats) of
+        {0, _, R} -> {none, R};
+        {1, V, R} -> {{some, V}, R}
+    end;
+lift_value(Inst, {result, OkD, ErrD}, Flats) ->
+    case lift_variant(Inst, [{ok, OkD}, {error, ErrD}], Flats) of
+        {0, V, R} -> {{ok, V}, R};
+        {1, V, R} -> {{error, V}, R}
+    end;
+lift_value(Inst, {variant, Cases}, Flats) ->
+    {Disc, V, R} = lift_variant(Inst, Cases, Flats),
+    {Name, _} = lists:nth(Disc + 1, Cases),
+    {{Name, V}, R}.
+
+%% A discriminant, then the payload read out of the joined slots and un-coerced
+%% back from the wider slot type. The slots the shorter cases did not use are
+%% padding and skipped.
+lift_variant(Inst, Cases, [Disc | Rest0]) ->
+    Joined = join_cases(Cases),
+    {SlotVals, Rest1} = lists:split(length(Joined), Rest0),
+    {_, CaseD} = lists:nth(Disc + 1, Cases),
+    V = case CaseD of
+            none -> undefined;
+            _ ->
+                PayTypes = flat_types(CaseD),
+                Flats = uncoerce(PayTypes, Joined, SlotVals),
+                element(1, lift_value(Inst, CaseD, Flats))
+        end,
+    {Disc, V, Rest1}.
+
+uncoerce([], _Joined, _Slots) -> [];
+uncoerce([T | Ts], [S | Ss], [V | Vs]) ->
+    [uncoerce_one(V, S, T) | uncoerce(Ts, Ss, Vs)].
+
+uncoerce_one(V, T, T)     -> V;
+uncoerce_one(V, i32, f32) -> <<F:32/float>> = <<V:32>>, F;
+uncoerce_one(V, i64, f64) -> <<F:64/float>> = <<V:64>>, F;
+uncoerce_one(V, i64, f32) -> <<F:32/float>> = <<(V band 16#FFFFFFFF):32>>, F;
+uncoerce_one(V, i64, i32) -> V band 16#FFFFFFFF;
+uncoerce_one(V, _S, _T)   -> V.
 
 %%% -------------------------------------------------------------- memory ---
 

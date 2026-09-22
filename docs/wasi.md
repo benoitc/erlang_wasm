@@ -43,7 +43,7 @@ module can tell "you were not granted this" from "the operating system refused".
 | `args` | `env::args()` | zero arguments |
 | `env` | environment variables | zero variables, **not** the host's |
 | `dirs` | preopened directories | **no filesystem at all** |
-| `clocks` | `[monotonic]`, `[realtime]`, or both | that clock returns `ENOTCAPABLE` |
+| `clocks` | `[monotonic]`, `[realtime]`, or both; `monotonic` counts nanoseconds since the node started | that clock returns `ENOTCAPABLE` |
 | `random` | `strong`, or `{seed, N}` for reproducibility | `random_get` refused |
 | `stdout`, `stderr` | a pid, fun, or io device | output discarded |
 | `stdin` | a binary or a fun | end of file |

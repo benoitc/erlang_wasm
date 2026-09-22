@@ -13,6 +13,12 @@
   link command, and failed in `sh`. The link line now comes from
   `scripts/python-link-line.sh`, which asks make with `-W Programs/python.o`
   and refuses anything that is not the link command.
+- **The WASI monotonic clock counts from node start.** It handed the guest
+  BEAM's own monotonic time, which is negative, and as a u64 that wrapped to
+  about 1.8e19: `time.monotonic()` in the Python reactor raised
+  `OverflowError`, and asyncio, `perf_counter` and timeouts went with it. It
+  is now nanoseconds since the node started, never negative and never
+  decreasing. Nothing to set.
 
 ## 0.4.2
 

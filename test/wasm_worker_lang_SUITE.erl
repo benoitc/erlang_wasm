@@ -49,7 +49,7 @@ groups() ->
      %% Not in `all/0` for the same reason the Python groups are not: it starts
      %% with a 90 s capture. Run it deliberately, with
      %% `--group=python_reactor`.
-     {python_reactor, [], python_reactor_cases()},
+     {python_reactor, [], python_reactor_cases() ++ [time_monotonic_is_usable]},
      %% The third language, and the one the mechanism was **not** designed
      %% around: it was written after the kernel, the profile and snapshots, and
      %% none of them changed to admit it. It starts in milliseconds, so unlike
@@ -306,6 +306,28 @@ echo(Config) ->
     ?KIT:fixture(?config(adapter, Config), echo,
                  proplists:get_value(opts, Config, artifact_opts())).
 
+
+%%% ------------------------------------------------------------- the clock ---
+
+%% `time.monotonic()' raised `OverflowError: timestamp out of range for C
+%% PyTime_t': the WASI monotonic clock handed the guest BEAM's raw monotonic
+%% time, negative and wrapped to ~1.8e19 as a u64, and asyncio, timeouts and
+%% `perf_counter' went with it. wasi_SUITE checks the import; this checks
+%% that the interpreter can use it.
+time_monotonic_is_usable(Config) ->
+    W = ?config(worker, Config),
+    Src = <<"def main(c):\n"
+            "    import time\n"
+            "    a = time.monotonic()\n"
+            "    b = time.monotonic()\n"
+            "    return {'a': a, 'b': b}\n">>,
+    {ok, #{result := #{<<"a">> := A, <<"b">> := B}}} =
+        wasm_script_worker:run(W, #{source => Src, context => #{}}),
+    ?assert(is_number(A)),
+    ?assert(A >= 0),
+    ?assert(B >= A),
+    %% Seconds since the node started; three decades of uptime would be news.
+    ?assert(A < 1.0e9).
 
 %%% ------------------------------------------------------------ delegation ---
 

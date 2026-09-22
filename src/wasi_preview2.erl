@@ -366,6 +366,7 @@ refused with `read-only`.
 filesystem(Opts) ->
     HostDir = maps:get(preopen, Opts),
     Name = maps:get(name, Opts, <<"/">>),
+    Writable = maps:get(writable, Opts, false),
     Types = <<"wasi:filesystem/types">>,
     Preopens = <<"wasi:filesystem/preopens">>,
     #{{Preopens, <<"get-directories">>} =>
@@ -376,8 +377,20 @@ filesystem(Opts) ->
           wasm_component:import_fun(
             {[handle, ?PATH_FLAGS, string, ?OPEN_FLAGS, ?DESC_FLAGS], ?OPEN_RESULT},
             fun([Dir, _PF, Path, OpenFlags, DescFlags]) ->
-                open_at(Dir, Path, OpenFlags, DescFlags)
+                open_at(Dir, Path, OpenFlags, DescFlags, Writable)
             end),
+      {Types, <<"[method]descriptor.write">>} =>
+          wasm_component:import_fun(
+            {[handle, {list, u8}, u64], {result, u64, ?ERROR_CODE}},
+            fun([File, Data, Off]) -> write_at(File, Data, Off) end),
+      {Types, <<"[method]descriptor.create-directory-at">>} =>
+          wasm_component:import_fun(
+            {[handle, string], {result, none, ?ERROR_CODE}},
+            fun([Dir, Path]) -> create_directory_at(Dir, Path, Writable) end),
+      {Types, <<"[method]descriptor.unlink-file-at">>} =>
+          wasm_component:import_fun(
+            {[handle, string], {result, none, ?ERROR_CODE}},
+            fun([Dir, Path]) -> unlink_file_at(Dir, Path, Writable) end),
       {Types, <<"[method]descriptor.read">>} =>
           wasm_component:import_fun(
             {[handle, u64, u64], ?READ_AT_RESULT},
@@ -414,17 +427,18 @@ get_directories(HostDir, Name) ->
         {error, _} -> []
     end.
 
-%% Open a path under a directory descriptor, read-only. Write intent is refused
-%% rather than downgraded. The path is not resolved here: wasi_fs:open/3 applies
-%% the same sandbox Preview 1 does.
-open_at(Dir, Path, OpenFlags, DescFlags) ->
+%% Open a path under a directory descriptor. Write intent is refused on a
+%% read-only filesystem and otherwise turned into open modes. The path is not
+%% resolved here: wasi_fs:open/3 applies the same sandbox Preview 1 does.
+open_at(Dir, Path, OpenFlags, DescFlags, Writable) ->
     case wasm_component:host_get(Dir) of
         {ok, {fs_dir, Root}} ->
             case write_intent(OpenFlags, DescFlags) of
-                true ->
+                true when not Writable ->
                     {error, <<"read-only">>};
-                false ->
-                    case wasi_fs:open(Root, Path, [read]) of
+                WantsWrite ->
+                    Modes = open_modes(OpenFlags, WantsWrite),
+                    case wasi_fs:open(Root, Path, Modes) of
                         {ok, Handle} -> {ok, wasm_component:host_new(fs_file, Handle)};
                         {error, Errno} -> {error, errno_name(Errno)}
                     end
@@ -439,6 +453,48 @@ write_intent(OpenFlags, DescFlags) ->
         orelse Wants(<<"exclusive">>, OpenFlags)
         orelse Wants(<<"write">>, DescFlags)
         orelse Wants(<<"mutate-directory">>, DescFlags).
+
+open_modes(_OpenFlags, false) ->
+    [read];
+open_modes(OpenFlags, true) ->
+    Add = fun(Flag, Mode, Acc) ->
+              case lists:member(Flag, OpenFlags) of true -> [Mode | Acc]; false -> Acc end
+          end,
+    Add(<<"create">>, create,
+        Add(<<"truncate">>, truncate,
+            Add(<<"exclusive">>, exclusive, [read, write]))).
+
+%% Write bytes at an offset, reporting how many. A write to a read-opened file is
+%% refused by the OS, so a read-only filesystem needs no extra guard here.
+write_at(File, Data, Off) ->
+    case wasm_component:host_get(File) of
+        {ok, {fs_file, Handle}} ->
+            case wasi_fs:pwrite(Handle, Off, Data) of
+                {ok, Count}    -> {ok, Count};
+                {error, Errno} -> {error, errno_name(Errno)}
+            end;
+        _ ->
+            {error, <<"bad-descriptor">>}
+    end.
+
+create_directory_at(_Dir, _Path, false) ->
+    {error, <<"read-only">>};
+create_directory_at(Dir, Path, true) ->
+    case wasm_component:host_get(Dir) of
+        {ok, {fs_dir, Root}} -> fs_unit(wasi_fs:mkdir(Root, Path));
+        _                    -> {error, <<"bad-descriptor">>}
+    end.
+
+unlink_file_at(_Dir, _Path, false) ->
+    {error, <<"read-only">>};
+unlink_file_at(Dir, Path, true) ->
+    case wasm_component:host_get(Dir) of
+        {ok, {fs_dir, Root}} -> fs_unit(wasi_fs:unlink(Root, Path));
+        _                    -> {error, <<"bad-descriptor">>}
+    end.
+
+fs_unit(ok)             -> {ok, undefined};
+fs_unit({error, Errno}) -> {error, errno_name(Errno)}.
 
 read_at(File, Len, Off) ->
     case wasm_component:host_get(File) of

@@ -47,6 +47,9 @@ interface types {
         -> result<descriptor-stat, error-code>;
     read-via-stream: func(offset: filesize) -> result<input-stream, error-code>;
     read-directory: func() -> result<directory-entry-stream, error-code>;
+    write: func(buffer: list<u8>, offset: filesize) -> result<filesize, error-code>;
+    create-directory-at: func(path: string) -> result<_, error-code>;
+    unlink-file-at: func(path: string) -> result<_, error-code>;
   }
 }
 

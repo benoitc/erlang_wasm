@@ -9,4 +9,7 @@ world app {
   export size: func(name: string) -> u64;
   export entries: func() -> list<string>;
   export slurp: func(name: string) -> list<u8>;
+  export write-file: func(name: string, data: list<u8>) -> u64;
+  export make-dir: func(name: string) -> bool;
+  export remove: func(name: string) -> bool;
 }

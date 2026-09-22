@@ -23,7 +23,12 @@ all() ->
      descriptors_do_not_leak,
      stat_reports_the_size,
      the_directory_is_listed,
-     read_via_stream_reads_the_file].
+     read_via_stream_reads_the_file,
+     a_file_is_written_and_read_back,
+     a_directory_is_created,
+     a_file_is_removed,
+     mutations_are_refused_read_only,
+     the_sandbox_holds_on_writes].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -40,7 +45,10 @@ init_per_suite(Config) ->
     ok = file:write_file(filename:join(Outside, "secret.txt"), <<"secret">>),
     %% A symlink whose target is outside the sandbox, for the escape test.
     _ = file:make_symlink(Outside, filename:join(Root, "escape")),
-    [{component, Bin}, {root, Root}, {big, Big} | Config].
+    %% A separate writable root for the write-side cases.
+    WRoot = filename:join(Priv, "wroot"),
+    ok = filelib:ensure_path(WRoot),
+    [{component, Bin}, {root, Root}, {wroot, WRoot}, {big, Big} | Config].
 
 end_per_suite(_Config) -> ok.
 
@@ -102,7 +110,60 @@ read_via_stream_reads_the_file(Config) ->
     ?assertEqual(<<"hello world">>, slurp(I, <<"hello.txt">>)),
     ?assertEqual(Big, slurp(I, <<"big.bin">>)).
 
+%% On a writable filesystem a file written comes back byte for byte.
+a_file_is_written_and_read_back(Config) ->
+    {ok, I} = writable(Config),
+    ?assertEqual(7, write_file(I, <<"new.txt">>, <<"content">>)),
+    ?assertEqual(<<"content">>, cat(I, <<"new.txt">>)).
+
+%% create-directory-at makes a directory under the sandbox.
+a_directory_is_created(Config) ->
+    {ok, I} = writable(Config),
+    ?assertEqual(true, make_dir(I, <<"sub2">>)),
+    ?assert(filelib:is_dir(filename:join(?config(wroot, Config), "sub2"))).
+
+%% unlink-file-at removes a file.
+a_file_is_removed(Config) ->
+    {ok, I} = writable(Config),
+    _ = write_file(I, <<"temp.txt">>, <<"x">>),
+    ?assertEqual(true, remove(I, <<"temp.txt">>)),
+    ?assertEqual(false, present(I, <<"temp.txt">>)).
+
+%% A read-only filesystem refuses to mutate: create and unlink return an error,
+%% so the guest's is-ok checks are false and nothing changes on disk.
+mutations_are_refused_read_only(Config) ->
+    {ok, I} = instance(Config),
+    ?assertEqual(false, make_dir(I, <<"nope">>)),
+    ?assertEqual(false, remove(I, <<"hello.txt">>)),
+    ?assert(filelib:is_file(filename:join(?config(root, Config), "hello.txt"))).
+
+%% Even writable, a mutation cannot escape the sandbox: wasi_fs refuses the path.
+the_sandbox_holds_on_writes(Config) ->
+    {ok, I} = writable(Config),
+    ?assertEqual(false, make_dir(I, <<"../escape_dir">>)),
+    ?assertEqual(false, remove(I, <<"../../etc/hosts">>)).
+
 %%% -------------------------------------------------------------- helpers ---
+
+write_file(I, Name, Data) ->
+    {ok, V} = wasm_component:call(
+                I, <<"write-file">>, {[string, {list, u8}], u64}, [Name, Data]),
+    V.
+
+make_dir(I, Name) ->
+    {ok, V} = wasm_component:call(I, <<"make-dir">>, {[string], bool}, [Name]),
+    V.
+
+remove(I, Name) ->
+    {ok, V} = wasm_component:call(I, <<"remove">>, {[string], bool}, [Name]),
+    V.
+
+writable(Config) ->
+    Imports = maps:merge(
+                wasi_preview2:filesystem(#{preopen => ?config(wroot, Config),
+                                           writable => true}),
+                wasi_preview2:io()),
+    wasm_component:instantiate(?config(component, Config), Imports).
 
 size(I, Name) ->
     {ok, V} = wasm_component:call(I, <<"size">>, {[string], u64}, [Name]),

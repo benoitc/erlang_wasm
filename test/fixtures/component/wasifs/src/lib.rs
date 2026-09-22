@@ -53,6 +53,17 @@ impl Guest for C {
         }
         out
     }
+    fn write_file(name: String, data: Vec<u8>) -> u64 {
+        let flags = OpenFlags::CREATE | OpenFlags::TRUNCATE;
+        let f = root().open_at(PathFlags::empty(), &name, flags, DescriptorFlags::WRITE).unwrap();
+        f.write(&data, 0).unwrap()
+    }
+    fn make_dir(name: String) -> bool {
+        root().create_directory_at(&name).is_ok()
+    }
+    fn remove(name: String) -> bool {
+        root().unlink_file_at(&name).is_ok()
+    }
 }
 
 export!(C);

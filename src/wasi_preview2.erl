@@ -25,6 +25,10 @@ and the output side of `wasi:io`. Keys are the bare, unversioned interface ids
         {variant, [{<<"last-operation-failed">>, handle}, {<<"closed">>, none}]}).
 -define(WRITE_RESULT, {result, none, ?STREAM_ERROR}).
 -define(READ_RESULT, {result, {list, u8}, ?STREAM_ERROR}).
+-define(COUNT_RESULT, {result, u64, ?STREAM_ERROR}).
+%% The write budget check-write reports for the discarding/buffer sinks: always
+%% ready for a chunk this size.
+-define(WRITE_BUDGET, 65536).
 
 -doc "Every implemented `wasi:*` interface, merged into one imports map.".
 -spec imports() -> #{{binary(), binary()} => fun()}.
@@ -145,24 +149,59 @@ io(Opts) ->
     Error = <<"wasi:io/error">>,
     Stdout = <<"wasi:cli/stdout">>,
     Stdin = <<"wasi:cli/stdin">>,
+    Poll = <<"wasi:io/poll">>,
+    Write = fun([Handle, Bytes]) -> write_stream(Handle, Bytes), {ok, undefined} end,
+    Read = fun([H, Len]) -> read_stream(H, Len) end,
+    Subscribe = fun([_Stream]) -> wasm_component:host_new(pollable, ready) end,
     #{{Stdout, <<"get-stdout">>} =>
           wasm_component:import_fun(
             {[], handle}, fun([]) -> wasm_component:host_new(output_stream, Sink) end),
-      {Streams, <<"[method]output-stream.blocking-write-and-flush">>} =>
+      {Streams, <<"[method]output-stream.check-write">>} =>
           wasm_component:import_fun(
-            {[handle, {list, u8}], ?WRITE_RESULT},
-            fun([Handle, Bytes]) -> write_stream(Handle, Bytes), {ok, undefined} end),
+            {[handle], ?COUNT_RESULT}, fun([_H]) -> {ok, ?WRITE_BUDGET} end),
+      {Streams, <<"[method]output-stream.write">>} =>
+          wasm_component:import_fun({[handle, {list, u8}], ?WRITE_RESULT}, Write),
+      {Streams, <<"[method]output-stream.blocking-write-and-flush">>} =>
+          wasm_component:import_fun({[handle, {list, u8}], ?WRITE_RESULT}, Write),
+      {Streams, <<"[method]output-stream.flush">>} =>
+          wasm_component:import_fun(
+            {[handle], ?WRITE_RESULT}, fun([_H]) -> {ok, undefined} end),
+      {Streams, <<"[method]output-stream.blocking-flush">>} =>
+          wasm_component:import_fun(
+            {[handle], ?WRITE_RESULT}, fun([_H]) -> {ok, undefined} end),
+      {Streams, <<"[method]output-stream.write-zeroes">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], ?WRITE_RESULT},
+            fun([H, Len]) -> write_stream(H, binary:copy(<<0>>, Len)), {ok, undefined} end),
+      {Streams, <<"[method]output-stream.subscribe">>} =>
+          wasm_component:import_fun({[handle], handle}, Subscribe),
       {Streams, <<"[resource-drop]output-stream">>} => drop_fun(),
       {Stdin, <<"get-stdin">>} =>
           wasm_component:import_fun(
             {[], handle}, fun([]) -> wasm_component:host_new(input_stream, Source) end),
       {Streams, <<"[method]input-stream.read">>} =>
-          wasm_component:import_fun(
-            {[handle, u64], ?READ_RESULT}, fun([H, Len]) -> read_stream(H, Len) end),
+          wasm_component:import_fun({[handle, u64], ?READ_RESULT}, Read),
       {Streams, <<"[method]input-stream.blocking-read">>} =>
+          wasm_component:import_fun({[handle, u64], ?READ_RESULT}, Read),
+      {Streams, <<"[method]input-stream.skip">>} =>
           wasm_component:import_fun(
-            {[handle, u64], ?READ_RESULT}, fun([H, Len]) -> read_stream(H, Len) end),
+            {[handle, u64], ?COUNT_RESULT}, fun([H, Len]) -> skip_stream(H, Len) end),
+      {Streams, <<"[method]input-stream.subscribe">>} =>
+          wasm_component:import_fun({[handle], handle}, Subscribe),
       {Streams, <<"[resource-drop]input-stream">>} => drop_fun(),
+      %% A pollable over a synchronous stream is always ready; block returns at
+      %% once and poll reports every input index ready.
+      {Poll, <<"[method]pollable.ready">>} =>
+          wasm_component:import_fun({[handle], bool}, fun([_P]) -> true end),
+      {Poll, <<"[method]pollable.block">>} =>
+          wasm_component:import_fun({[handle], none}, fun([_P]) -> undefined end),
+      {Poll, <<"poll">>} =>
+          wasm_component:import_fun(
+            {[{list, handle}], {list, u32}},
+            fun([Handles]) -> lists:seq(0, length(Handles) - 1) end),
+      {Poll, <<"[resource-drop]pollable">>} => drop_fun(),
+      {Error, <<"[method]error.to-debug-string">>} =>
+          wasm_component:import_fun({[handle], string}, fun([_E]) -> <<"stream error">> end),
       {Error, <<"[resource-drop]error">>} => drop_fun()}.
 
 drop_fun() ->
@@ -188,6 +227,21 @@ read_stream(Handle, Len) ->
             <<Chunk:N/binary, Rest/binary>> = Remaining,
             _ = wasm_component:host_update(Handle, Rest),
             {ok, Chunk};
+        error ->
+            {error, {<<"closed">>, undefined}}
+    end.
+
+%% Advance the source by up to Len bytes without returning them, reporting how
+%% many were skipped; a drained or unknown stream is `closed`.
+skip_stream(Handle, Len) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {input_stream, <<>>}} ->
+            {error, {<<"closed">>, undefined}};
+        {ok, {input_stream, Remaining}} ->
+            N = min(Len, byte_size(Remaining)),
+            <<_Skipped:N/binary, Rest/binary>> = Remaining,
+            _ = wasm_component:host_update(Handle, Rest),
+            {ok, N};
         error ->
             {error, {<<"closed">>, undefined}}
     end.

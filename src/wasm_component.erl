@@ -138,7 +138,9 @@ instantiate(Bin, Imports) ->
         {ok, #{core := Core, exports := Exports}} ->
             case wasm:load(Core) of
                 {ok, Mod} ->
-                    All = maps:merge(resource_imports(core_imports(Core)), Imports),
+                    CoreImports = core_imports(Core),
+                    All = resolve_imports(CoreImports, Imports,
+                                          resource_imports(CoreImports)),
                     case wasm:instantiate(Mod, All) of
                         {ok, Inst}     -> {ok, #{core => Inst,
                                                  exports => Exports}};
@@ -218,6 +220,37 @@ drop_resource(#{core := Inst}, DtorExport, Handle) ->
     _ = wasm:call(Inst, DtorExport, [Handle]),
     _ = untrack(Handle),
     ok.
+
+%%% ------------------------------------------------------ import resolution ---
+
+%% Key each core import to a provider. A real component imports versioned ids
+%% (`wasi:io/streams@0.2.0`) while the host is keyed bare (`wasi:io/streams`), so
+%% resolution strips the version. An explicit provider wins over an auto resource
+%% intrinsic, so a host-owned resource's `[resource-drop]` reaches the host table
+%% rather than the guest's identity table. A core import with no provider is left
+%% out, and instantiation refuses it, as before.
+resolve_imports(CoreImports, Explicit, Auto) ->
+    maps:from_list(
+      lists:filtermap(
+        fun({Mod, Field} = Key) ->
+            case find_provider(Mod, Field, Explicit, Auto) of
+                undefined -> false;
+                Provider  -> {true, {Key, Provider}}
+            end
+        end, CoreImports)).
+
+find_provider(Mod, Field, Explicit, Auto) ->
+    case maps:find({strip_version(Mod), Field}, Explicit) of
+        {ok, Provider} -> Provider;
+        error          -> maps:get({Mod, Field}, Auto, undefined)
+    end.
+
+%% `namespace:package/interface@version` -> `namespace:package/interface`.
+strip_version(Id) ->
+    case binary:split(Id, <<"@">>) of
+        [Base, _Version] -> Base;
+        _                -> Id
+    end.
 
 %%% -------------------------------------------------------- resource table ---
 

@@ -18,6 +18,7 @@
 #     wasisock   -- wasi:sockets ip-name-lookup (network + resolve)
 #     wasitcp    -- wasi:sockets tcp client + listener
 #     wasiudp    -- wasi:sockets udp datagrams
+#     wasiver    -- a versioned import id (@0.2.0), for version normalisation
 #
 # Target wasm32-unknown-unknown, NOT wasm32-wasip1: a wasip1 Rust guest imports
 # wasi_snapshot_preview1, which would need a p1->p2 adapter. unknown-unknown
@@ -31,7 +32,7 @@ rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
 # Fixtures whose core module must import nothing (no host, no WASI world).
 no_import=" echo vectors counter "
 
-for name in echo vectors counter hostcall hostagg wasirandom wasiclocks wasienv wasiio wasiin wasiiofull wasifs wasisock wasitcp wasiudp; do
+for name in echo vectors counter hostcall hostagg wasirandom wasiclocks wasienv wasiio wasiin wasiiofull wasifs wasisock wasitcp wasiudp wasiver; do
   src="$here/test/fixtures/component/$name"
   out="$here/test/fixtures/component/$name.component.wasm"
   ( cd "$src" && cargo build --release --target wasm32-unknown-unknown )

@@ -1,0 +1,33 @@
+package wasi:sockets;
+interface network {
+  resource network;
+  enum error-code {
+    unknown, access-denied, not-supported, invalid-argument, out-of-memory,
+    timeout, concurrency-conflict, not-in-progress, would-block, invalid-state,
+    new-socket-limit, address-not-bindable, address-in-use, remote-unreachable,
+    connection-refused, connection-reset, connection-aborted, datagram-too-large,
+    name-unresolvable, temporary-resolver-failure, permanent-resolver-failure
+  }
+  enum ip-address-family { ipv4, ipv6 }
+  type ipv4-address = tuple<u8, u8, u8, u8>;
+  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
+  record ipv4-socket-address { port: u16, address: ipv4-address }
+  record ipv6-socket-address { port: u16, flow-info: u32, address: ipv6-address, scope-id: u32 }
+  variant ip-socket-address { ipv4(ipv4-socket-address), ipv6(ipv6-socket-address) }
+}
+interface instance-network { use network.{network}; instance-network: func() -> network; }
+interface tcp {
+  use network.{network, error-code, ip-socket-address, ip-address-family};
+  use wasi:io/streams.{input-stream, output-stream};
+  use wasi:io/poll.{pollable};
+  resource tcp-socket {
+    start-connect: func(network: borrow<network>, remote-address: ip-socket-address) -> result<_, error-code>;
+    finish-connect: func() -> result<tuple<input-stream, output-stream>, error-code>;
+    subscribe: func() -> pollable;
+  }
+}
+interface tcp-create-socket {
+  use network.{error-code, ip-address-family};
+  use tcp.{tcp-socket};
+  create-tcp-socket: func(address-family: ip-address-family) -> result<tcp-socket, error-code>;
+}

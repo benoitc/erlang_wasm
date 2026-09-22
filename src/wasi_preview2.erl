@@ -92,6 +92,18 @@ later step.
                    {<<"ipv6">>, {tuple, [u16, u16, u16, u16,
                                          u16, u16, u16, u16]}}]}).
 -define(RESOLVE_RESULT, {result, {option, ?IP_ADDRESS}, ?SOCK_ERROR}).
+-define(SOCK_TIMEOUT, 5000).
+-define(ADDR_FAMILY, {enum, [<<"ipv4">>, <<"ipv6">>]}).
+-define(IPV4_SOCKADDR,
+        {record, [{<<"port">>, u16}, {<<"address">>, {tuple, [u8, u8, u8, u8]}}]}).
+-define(IPV6_SOCKADDR,
+        {record, [{<<"port">>, u16}, {<<"flow-info">>, u32},
+                  {<<"address">>, {tuple, [u16, u16, u16, u16,
+                                           u16, u16, u16, u16]}},
+                  {<<"scope-id">>, u32}]}).
+-define(IP_SOCKADDR,
+        {variant, [{<<"ipv4">>, ?IPV4_SOCKADDR}, {<<"ipv6">>, ?IPV6_SOCKADDR}]}).
+-define(CONNECT_RESULT, {result, {tuple, [handle, handle]}, ?SOCK_ERROR}).
 
 -doc "Every implemented `wasi:*` interface, merged into one imports map.".
 -spec imports() -> #{{binary(), binary()} => fun()}.
@@ -283,9 +295,16 @@ write_stream(Handle, Bytes) ->
 %% waits for. `closed` carries no payload, so no error resource is minted.
 read_stream(Handle, Len) ->
     case wasm_component:host_get(Handle) of
+        {ok, {input_stream, {socket, Sock}}} ->
+            %% A socket-backed stream (from tcp finish-connect) reads live.
+            case wasi_sock:recv(Sock, Len, ?SOCK_TIMEOUT) of
+                {ok, Data}  -> {ok, Data};
+                eof         -> {error, {<<"closed">>, undefined}};
+                {error, _}  -> {error, {<<"closed">>, undefined}}
+            end;
         {ok, {input_stream, <<>>}} ->
             {error, {<<"closed">>, undefined}};
-        {ok, {input_stream, Remaining}} ->
+        {ok, {input_stream, Remaining}} when is_binary(Remaining) ->
             N = min(Len, byte_size(Remaining)),
             <<Chunk:N/binary, Rest/binary>> = Remaining,
             _ = wasm_component:host_update(Handle, Rest),
@@ -549,7 +568,84 @@ sockets(Opts) ->
             {[handle], ?RESOLVE_RESULT},
             fun([Stream]) -> resolve_next(Stream) end),
       {Lookup, <<"[resource-drop]resolve-address-stream">>} => drop_fun(),
-      {Network, <<"[resource-drop]network">>} => drop_fun()}.
+      {Network, <<"[resource-drop]network">>} => drop_fun(),
+      {<<"wasi:sockets/tcp-create-socket">>, <<"create-tcp-socket">>} =>
+          wasm_component:import_fun(
+            {[?ADDR_FAMILY], {result, handle, ?SOCK_ERROR}},
+            fun([Family]) -> create_tcp_socket(Family) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.start-connect">>} =>
+          wasm_component:import_fun(
+            {[handle, handle, ?IP_SOCKADDR], {result, none, ?SOCK_ERROR}},
+            fun([Self, Net, Addr]) -> tcp_start_connect(Self, Net, Addr) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.finish-connect">>} =>
+          wasm_component:import_fun(
+            {[handle], ?CONNECT_RESULT}, fun([Self]) -> tcp_finish_connect(Self) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.subscribe">>} =>
+          wasm_component:import_fun(
+            {[handle], handle}, fun([_Self]) -> wasm_component:host_new(pollable, ready) end),
+      {<<"wasi:sockets/tcp">>, <<"[resource-drop]tcp-socket">>} =>
+          fun(_Ctx, [H]) -> _ = tcp_drop(H), {ok, []} end}.
+
+create_tcp_socket(Family) ->
+    {ok, Handle} = wasi_sock:open(family_inet(Family), stream),
+    {ok, wasm_component:host_new(tcp_socket, {unconnected, Handle})}.
+
+family_inet(<<"ipv6">>) -> inet6;
+family_inet(_Ipv4)      -> inet.
+
+%% The connect state machine, collapsed to a blocking connect: start-connect
+%% checks the grant and connects, finish-connect hands back the streams. The
+%% address decision is wasi_net, so a socket reaches only a granted endpoint.
+tcp_start_connect(Self, Net, Addr) ->
+    case {wasm_component:host_get(Self), wasm_component:host_get(Net)} of
+        {{ok, {tcp_socket, {unconnected, Pending}}}, {ok, {net_network, Grant}}} ->
+            Endpoint = endpoint(Addr),
+            case wasi_net:allows(connect, Endpoint, Grant) of
+                false ->
+                    {error, <<"access-denied">>};
+                true ->
+                    case wasi_sock:connect(Pending, Endpoint, ?SOCK_TIMEOUT) of
+                        {ok, Conn} ->
+                            _ = wasm_component:host_update(Self, {connected, Conn}),
+                            {ok, undefined};
+                        {error, Errno} ->
+                            {error, sock_errno(Errno)}
+                    end
+            end;
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+tcp_finish_connect(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, {connected, Conn}}} ->
+            In = wasm_component:host_new(input_stream, {socket, Conn}),
+            Out = wasm_component:host_new(
+                    output_stream, fun(Bytes) -> _ = wasi_sock:send(Conn, Bytes), ok end),
+            {ok, {In, Out}};
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+tcp_drop(H) ->
+    case wasm_component:host_get(H) of
+        {ok, {tcp_socket, {connected, Conn}}} -> _ = wasi_sock:close(Conn);
+        _                                     -> ok
+    end,
+    wasm_component:host_drop(H).
+
+endpoint({<<"ipv4">>, #{<<"port">> := Port, <<"address">> := {A, B, C, D}}}) ->
+    {tcp, {A, B, C, D}, Port};
+endpoint({<<"ipv6">>, #{<<"port">> := Port, <<"address">> := V6}}) ->
+    {tcp, V6, Port}.
+
+%% A Preview 1 errno to a wasi:sockets error-code name.
+sock_errno(?ECONNREFUSED) -> <<"connection-refused">>;
+sock_errno(?ETIMEDOUT)    -> <<"timeout">>;
+sock_errno(?EHOSTUNREACH) -> <<"remote-unreachable">>;
+sock_errno(?ENETUNREACH)  -> <<"remote-unreachable">>;
+sock_errno(?EACCES)       -> <<"access-denied">>;
+sock_errno(_Other)        -> <<"unknown">>.
 
 %% Resolve only if the grant behind the network permits it: no grant, no network.
 resolve_addresses(NetH, Name) ->

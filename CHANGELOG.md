@@ -1,13 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.4.3
+
+Packaging and clock fixes. Nothing in your code changes, and there is nothing
+new to set. If you install from hex.pm and use the command adapters, this is
+the first version that works.
 
 - **The hex package now ships `priv/script_v1`.** The `files` list in
   `wasm.app.src` replaces the plugin's default and had left `priv/` out, so
   0.4.1 and 0.4.2 on hex.pm have no `boot.py` or `boot.js` and
   `wasm_python_command` and `wasm_javascript_command` fail at start unless
-  erlang_wasm comes from a git checkout. Nothing to set; the next release
-  carries the files.
+  erlang_wasm comes from a git checkout. This release carries the files.
 - **`scripts/build-python-reactor.sh` can be run again.** A second run found
   `python.wasm` up to date, got make's "is up to date" line instead of the
   link command, and failed in `sh`. The link line now comes from

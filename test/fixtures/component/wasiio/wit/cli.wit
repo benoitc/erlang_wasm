@@ -1,0 +1,12 @@
+package wasi:cli;
+
+interface stdout {
+  use wasi:io/streams.{output-stream};
+  get-stdout: func() -> output-stream;
+}
+
+world app {
+  import stdout;
+  import wasi:io/streams;
+  export emit: func(bytes: list<u8>);
+}

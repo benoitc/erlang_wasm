@@ -25,6 +25,7 @@ Value types and their Erlang shapes:
 | `{option, D}` | `none` / `{some, value}` |
 | `{result, Ok, Err}` | `{ok, value}` / `{error, value}` |
 | `{flags, [Name]}` | list of the set name binaries |
+| `handle` | integer (a resource `own`/`borrow`, an opaque i32) |
 
 Names in records, variants, enums and flags come from the type descriptor the
 host holds, not from guest bytes. Not yet: resources, and a parameter list that
@@ -47,7 +48,8 @@ current fixtures.
               | {variant, [{name(), desc() | none}]}
               | {option, desc()}
               | {result, desc() | none, desc() | none}
-              | {flags, [name()]}.
+              | {flags, [name()]}
+              | handle.
 
 -define(MAX_FLAT_RESULTS, 1).
 
@@ -67,6 +69,8 @@ lower_flat(_Inst, D, V) when D =:= u8; D =:= u16; D =:= u32;
     [V band 16#FFFFFFFF];
 lower_flat(_Inst, D, V) when D =:= u64; D =:= s64 ->
     [V band 16#FFFFFFFFFFFFFFFF];
+%% A resource handle (own or borrow) is an i32 the runtime treats as opaque.
+lower_flat(_Inst, handle, V) -> [V band 16#FFFFFFFF];
 lower_flat(_Inst, bool, V) -> [bool_int(V)];
 lower_flat(_Inst, f32, V)  -> [V];
 lower_flat(_Inst, f64, V)  -> [V];
@@ -136,6 +140,7 @@ lift_result(Inst, Desc, CoreResults) ->
 
 %% Only single-flat values are lifted from registers: the primitives and an enum
 %% (just a discriminant). Everything wider came back through memory.
+lift_flat(_Inst, handle, [V]) -> V band 16#FFFFFFFF;
 lift_flat(_Inst, D, [V]) when D =:= u8; D =:= u16; D =:= u32 -> V;
 %% A signed value under 32 bits is a full sign-extended i32 flat, so interpret the
 %% 32-bit value (it then already sits in the narrower range); `V' may arrive
@@ -187,7 +192,7 @@ result_via_memory(Desc) -> length(flat_types(Desc)) > ?MAX_FLAT_RESULTS.
 lift_value(Inst, D, [V | R]) when D =:= u8; D =:= u16; D =:= u32;
                                   D =:= s8; D =:= s16; D =:= s32;
                                   D =:= u64; D =:= s64; D =:= char; D =:= bool;
-                                  D =:= f32; D =:= f64 ->
+                                  D =:= f32; D =:= f64; D =:= handle ->
     {lift_flat(Inst, D, [V]), R};
 lift_value(Inst, D, [Ptr, Len | R]) when D =:= string; D =:= {list, u8} ->
     {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
@@ -264,6 +269,7 @@ uncoerce_one(V, _S, _T)   -> V.
 load(Inst, u8, Ptr)  -> read_int(Inst, Ptr, 1, unsigned);
 load(Inst, u16, Ptr) -> read_int(Inst, Ptr, 2, unsigned);
 load(Inst, u32, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
+load(Inst, handle, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
 load(Inst, u64, Ptr) -> read_int(Inst, Ptr, 8, unsigned);
 load(Inst, s8, Ptr)  -> read_int(Inst, Ptr, 1, signed);
 load(Inst, s16, Ptr) -> read_int(Inst, Ptr, 2, signed);
@@ -338,6 +344,7 @@ size_align(none)                                  -> {0, 1};
 size_align(D) when D =:= u8; D =:= s8; D =:= bool -> {1, 1};
 size_align(D) when D =:= u16; D =:= s16           -> {2, 2};
 size_align(D) when D =:= u32; D =:= s32; D =:= f32; D =:= char -> {4, 4};
+size_align(handle) -> {4, 4};
 size_align(D) when D =:= u64; D =:= s64; D =:= f64 -> {8, 8};
 size_align(string)    -> {8, 4};
 size_align({list, _}) -> {8, 4};
@@ -385,6 +392,7 @@ disc_size(_)                 -> 4.
 -spec flat_types(desc()) -> [i32 | i64 | f32 | f64].
 flat_types(D) when D =:= u8; D =:= u16; D =:= u32;
                    D =:= s8; D =:= s16; D =:= s32; D =:= char; D =:= bool -> [i32];
+flat_types(handle) -> [i32];
 flat_types(D) when D =:= u64; D =:= s64 -> [i64];
 flat_types(f32) -> [f32];
 flat_types(f64) -> [f64];
@@ -438,7 +446,7 @@ store(Inst, bool, Ptr, V) ->
     ok = wasm:write_memory(Inst, Ptr, <<(bool_int(V)):8>>);
 store(Inst, D, Ptr, V) when D =:= u16; D =:= s16 ->
     ok = wasm:write_memory(Inst, Ptr, <<(V band 16#FFFF):16/little>>);
-store(Inst, D, Ptr, V) when D =:= u32; D =:= s32; D =:= char ->
+store(Inst, D, Ptr, V) when D =:= u32; D =:= s32; D =:= char; D =:= handle ->
     ok = wasm:write_memory(Inst, Ptr, <<(V band 16#FFFFFFFF):32/little>>);
 store(Inst, D, Ptr, V) when D =:= u64; D =:= s64 ->
     ok = wasm:write_memory(Inst, Ptr, <<(V band 16#FFFFFFFFFFFFFFFF):64/little>>);

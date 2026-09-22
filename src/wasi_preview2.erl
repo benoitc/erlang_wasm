@@ -10,17 +10,26 @@ holds those functions; `imports/0` is the merged map to hand a component. The
 functions map onto the same hardened internals as Preview 1 (here
 `crypto:strong_rand_bytes/1`).
 
-Worlds land one at a time: `wasi:random`, `wasi:clocks`, `wasi:cli/environment`.
-Keys are the bare, unversioned interface ids (`wasi:random/random`); matching a
-versioned `@0.2.x` import is a later step.
+Worlds land one at a time: `wasi:random`, `wasi:clocks`, `wasi:cli/environment`,
+and the output side of `wasi:io`. Keys are the bare, unversioned interface ids
+(`wasi:random/random`); matching a versioned `@0.2.x` import is a later step.
 """.
 
--export([imports/0, random/0, clocks/0, environment/0]).
+-export([imports/0, random/0, clocks/0, environment/0, io/0, io/1]).
+
+%% result<_, stream-error>, the result every output-stream method returns. The
+%% error arm names an `error` resource (a handle); we only ever return ok, so no
+%% error handle is minted, but the layout must be expressible so the ok result
+%% pads its payload area.
+-define(STREAM_ERROR,
+        {variant, [{<<"last-operation-failed">>, handle}, {<<"closed">>, none}]}).
+-define(WRITE_RESULT, {result, none, ?STREAM_ERROR}).
 
 -doc "Every implemented `wasi:*` interface, merged into one imports map.".
 -spec imports() -> #{{binary(), binary()} => fun()}.
 imports() ->
-    lists:foldl(fun maps:merge/2, #{}, [random(), clocks(), environment()]).
+    lists:foldl(fun maps:merge/2, #{},
+                [random(), clocks(), environment(), io()]).
 
 -doc """
 `wasi:random/random`: `get-random-u64` and `get-random-bytes`, backed by the
@@ -107,3 +116,39 @@ environment() ->
           wasm_component:import_fun({[], {list, string}}, fun([]) -> [] end),
       {E, <<"initial-cwd">>} =>
           wasm_component:import_fun({[], {option, string}}, fun([]) -> none end)}.
+
+-doc """
+The output side of `wasi:io`: `wasi:cli/stdout.get-stdout` mints a host-owned
+`output-stream`, `blocking-write-and-flush` writes its bytes to the stream's
+sink, and the `[resource-drop]` intrinsics free the host handle. The default
+sink discards, so a guest never writes to the node's own stdout.
+""".
+-spec io() -> #{{binary(), binary()} => fun()}.
+io() ->
+    io(fun(_Bytes) -> ok end).
+
+-doc "The output side of `wasi:io` with `Sink` receiving every written chunk.".
+-spec io(fun((binary()) -> ok)) -> #{{binary(), binary()} => fun()}.
+io(Sink) ->
+    Streams = <<"wasi:io/streams">>,
+    Error = <<"wasi:io/error">>,
+    Stdout = <<"wasi:cli/stdout">>,
+    #{{Stdout, <<"get-stdout">>} =>
+          wasm_component:import_fun(
+            {[], handle}, fun([]) -> wasm_component:host_new(output_stream, Sink) end),
+      {Streams, <<"[method]output-stream.blocking-write-and-flush">>} =>
+          wasm_component:import_fun(
+            {[handle, {list, u8}], ?WRITE_RESULT},
+            fun([Handle, Bytes]) -> write_stream(Handle, Bytes), {ok, undefined} end),
+      {Streams, <<"[resource-drop]output-stream">>} =>
+          fun(_Ctx, [Handle]) -> _ = wasm_component:host_drop(Handle), {ok, []} end,
+      {Error, <<"[resource-drop]error">>} =>
+          fun(_Ctx, [Handle]) -> _ = wasm_component:host_drop(Handle), {ok, []} end}.
+
+%% Write to the stream's sink. A write to a handle that is gone is dropped; a
+%% real closed-stream error waits for the error resource.
+write_stream(Handle, Bytes) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {output_stream, Sink}} -> _ = Sink(Bytes), ok;
+        error -> ok
+    end.

@@ -29,6 +29,7 @@ canonical exports), the Canonical ABI in the import direction for aggregate
 
 -export([decode/1, instantiate/1, instantiate/2, call/4, drop_resource/3]).
 -export([import_fun/2]).
+-export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
 -export_type([component/0, instance/0]).
 
@@ -39,6 +40,8 @@ canonical exports), the Canonical ABI in the import direction for aggregate
 -define(EXPORT_SEC, 11).
 -define(CORE_IMPORT_SEC, 2).
 -define(HANDLES, {?MODULE, handles}).
+-define(HOST, {?MODULE, host_resources}).
+-define(HOST_NEXT, {?MODULE, host_next}).
 
 -doc """
 Decode a component binary into its embedded core module and export names.
@@ -154,18 +157,24 @@ Call a lifted export, lowering `Args` and lifting the result by `Sig`.
 `Sig` is `{Params, Result}` of Canonical ABI value descriptors (see `wasm_canon`).
 The post-return `cabi_post_<Export>` is run after the result is lifted.
 """.
--spec call(instance(), binary(), {[wasm_canon:desc()], wasm_canon:desc()},
-           [term()]) -> {ok, term()} | {error, term()}.
+-spec call(instance(), binary(),
+           {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
+          {ok, term()} | {error, term()}.
 call(#{core := Inst}, Export, {Params, Result}, Args) ->
     CoreArgs = wasm_canon:lower_params(Inst, Params, Args),
     case wasm:call(Inst, Export, CoreArgs) of
         {ok, CoreResults} ->
-            Value = wasm_canon:lift_result(Inst, Result, CoreResults),
+            Value = lift_call_result(Inst, Result, CoreResults),
             _ = post_return(Inst, Export, CoreResults),
             {ok, Value};
         {error, _} = E ->
             E
     end.
+
+%% A `none` result (an export that returns nothing) lifts to `undefined`.
+lift_call_result(_Inst, none, _CoreResults) -> undefined;
+lift_call_result(Inst, Result, CoreResults) ->
+    wasm_canon:lift_result(Inst, Result, CoreResults).
 
 -doc """
 Wrap a typed host function as an import, handling the Canonical ABI both ways.
@@ -255,6 +264,55 @@ untrack(Handle) ->
 
 live() ->
     case get(?HANDLES) of
+        undefined -> #{};
+        Map       -> Map
+    end.
+
+%%% -------------------------------------------------- host resource table ---
+
+%% A resource the host owns, kept in the instance-owning process (host imports
+%% run there, like the identity table above). A WASI 0.2 world mints a handle
+%% here when it returns an `own`, dispatches methods by looking the handle up,
+%% and drops it on `[resource-drop]`. Separate from the identity table: a
+%% host-owned resource has state and its own handle space.
+
+-doc "Mint a fresh host-owned resource handle carrying `State`, tagged `Tag`.".
+-spec host_new(atom(), term()) -> pos_integer().
+host_new(Tag, State) ->
+    Handle = case get(?HOST_NEXT) of undefined -> 1; N -> N end,
+    put(?HOST_NEXT, Handle + 1),
+    put(?HOST, maps:put(Handle, {Tag, State}, host_table())),
+    Handle.
+
+-doc "The tag and state behind a host handle, or `error` if it is not live.".
+-spec host_get(pos_integer()) -> {ok, {atom(), term()}} | error.
+host_get(Handle) ->
+    maps:find(Handle, host_table()).
+
+-doc "Replace the state behind a live host handle, keeping its tag.".
+-spec host_update(pos_integer(), term()) -> ok.
+host_update(Handle, State) ->
+    case maps:find(Handle, host_table()) of
+        {ok, {Tag, _Old}} ->
+            put(?HOST, maps:put(Handle, {Tag, State}, host_table())),
+            ok;
+        error ->
+            ok
+    end.
+
+-doc "Drop a host handle. A miss (double drop, unknown handle) is a no-op.".
+-spec host_drop(pos_integer()) -> ok.
+host_drop(Handle) ->
+    put(?HOST, maps:remove(Handle, host_table())),
+    ok.
+
+-doc "The live host handles in this process, for tests and teardown checks.".
+-spec host_live() -> [pos_integer()].
+host_live() ->
+    lists:sort(maps:keys(host_table())).
+
+host_table() ->
+    case get(?HOST) of
         undefined -> #{};
         Map       -> Map
     end.

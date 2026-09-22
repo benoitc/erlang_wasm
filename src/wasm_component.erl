@@ -23,10 +23,11 @@ handle. `drop_resource/3` runs the guest destructor for a handle the host owns.
 
 Not yet handled (later phases): nested components, multiple core instances,
 aliases and canon parsing (the wiring is taken from the core module's own
-canonical exports), imports other than resource intrinsics, and WASI 0.2.
+canonical exports), the Canonical ABI in the import direction for aggregate
+(non-flat) arguments, and the WASI 0.2 worlds themselves.
 """.
 
--export([decode/1, instantiate/1, call/4, drop_resource/3]).
+-export([decode/1, instantiate/1, instantiate/2, call/4, drop_resource/3]).
 
 -export_type([component/0, instance/0]).
 
@@ -115,12 +116,26 @@ skip_sortidx(Bin) ->
 -doc "Decode and instantiate a component, wiring any resource intrinsics.".
 -spec instantiate(binary()) -> {ok, instance()} | {error, term()}.
 instantiate(Bin) ->
+    instantiate(Bin, #{}).
+
+-doc """
+Instantiate a component, providing host functions for the interfaces it imports.
+
+`Imports` is a map keyed `{InterfaceName, FieldName}` (e.g.
+`{~"example:host/clock", ~"now"}`) to a `fun(Ctx, Args)` host function, the way
+the host supplies a WASI 0.2 world. It is merged over the resource intrinsics the
+component needs, so a component that both imports an interface and exports a
+resource gets both.
+""".
+-spec instantiate(binary(), #{{binary(), binary()} => function()}) ->
+          {ok, instance()} | {error, term()}.
+instantiate(Bin, Imports) ->
     case decode(Bin) of
         {ok, #{core := Core, exports := Exports}} ->
             case wasm:load(Core) of
                 {ok, Mod} ->
-                    Imports = resource_imports(core_imports(Core)),
-                    case wasm:instantiate(Mod, Imports) of
+                    All = maps:merge(resource_imports(core_imports(Core)), Imports),
+                    case wasm:instantiate(Mod, All) of
                         {ok, Inst}     -> {ok, #{core => Inst,
                                                  exports => Exports}};
                         {error, _} = E -> E

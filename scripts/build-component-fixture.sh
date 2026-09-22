@@ -13,7 +13,7 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 
 rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
 
-for name in echo vectors counter; do
+for name in echo vectors counter hostcall; do
   src="$here/test/fixtures/component/$name"
   out="$here/test/fixtures/component/$name.component.wasm"
   ( cd "$src" && cargo build --release --target wasm32-unknown-unknown )

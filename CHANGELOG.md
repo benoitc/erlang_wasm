@@ -19,6 +19,16 @@
   `OverflowError`, and asyncio, `perf_counter` and timeouts went with it. It
   is now nanoseconds since the node started, never negative and never
   decreasing. Nothing to set.
+- **A clock id that is not a clock here says so.** `clock_time_get` and
+  `clock_res_get` answered `ENOTCAPABLE` to every id but the two clocks,
+  which told a guest asking for CPU time that the host had withheld it. The
+  CPU time ids now answer `ENOTSUP` and an id outside the four the
+  specification defines answers `EINVAL`. A clock that exists and was not
+  granted still answers `ENOTCAPABLE`.
+- **`poll_oneoff` honours an absolute deadline.** A clock subscription with
+  the ABSTIME flag set was dropped from the wait, so the call returned at
+  once and `clock_nanosleep(TIMER_ABSTIME)` did not sleep. It now waits
+  until that clock reads the deadline.
 
 ## 0.4.2
 

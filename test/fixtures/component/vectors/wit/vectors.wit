@@ -1,0 +1,31 @@
+package example:vectors;
+
+world vectors {
+  record point { x: s32, y: s32 }
+  variant shape { circle(f64), rect(point), unit }
+  enum color { red, green, blue }
+  flags perms { read, write, exec }
+
+  export echo-u8: func(v: u8) -> u8;
+  export echo-u16: func(v: u16) -> u16;
+  export echo-u32: func(v: u32) -> u32;
+  export echo-u64: func(v: u64) -> u64;
+  export echo-s8: func(v: s8) -> s8;
+  export echo-s16: func(v: s16) -> s16;
+  export echo-s32: func(v: s32) -> s32;
+  export echo-s64: func(v: s64) -> s64;
+  export echo-f32: func(v: f32) -> f32;
+  export echo-f64: func(v: f64) -> f64;
+  export echo-bool: func(v: bool) -> bool;
+  export echo-char: func(v: char) -> char;
+  export echo-string: func(v: string) -> string;
+  export echo-list-u32: func(v: list<u32>) -> list<u32>;
+  export echo-list-string: func(v: list<string>) -> list<string>;
+  export echo-point: func(v: point) -> point;
+  export echo-shape: func(v: shape) -> shape;
+  export echo-color: func(v: color) -> color;
+  export echo-option: func(v: option<u32>) -> option<u32>;
+  export echo-result: func(v: result<u32, string>) -> result<u32, string>;
+  export echo-perms: func(v: perms) -> perms;
+  export echo-tuple: func(v: tuple<u8, string, bool>) -> tuple<u8, string, bool>;
+}

@@ -1721,10 +1721,10 @@ read_subscriptions(Ctx, Ptr, N0) ->
 %% sleeping its 30 ms. Worth noting how that hid: the program only checked
 %% `elapsed >= 25ms', which a 60 second sleep satisfies just as well.
 subscription(<<UserData:64/little, ?EVENTTYPE_CLOCK:8, _:7/binary,
-               _ClockId:32/little, _:32, Timeout:64/little,
+               ClockId:32/little, _:32, Timeout:64/little,
                _Precision:64/little, Flags:16/little, _/binary>>) ->
     %% Bit 0 of the flags selects an absolute deadline over a relative one.
-    {clock, UserData, {Timeout, Flags band 1}};
+    {clock, UserData, {ClockId, Timeout, Flags band 1}};
 %% The read and write arms share a union holding one descriptor, at the same
 %% 8-byte-aligned offset the clock arm's id sits at.
 subscription(<<UserData:64/little, Tag:8, _:7/binary, Fd:32/little, _/binary>>)
@@ -1736,10 +1736,22 @@ subscription(<<UserData:64/little, Tag:8, _/binary>>) ->
 %% Sleeping the whole subscription set means waiting for the earliest deadline,
 %% since that is the first that could fire.
 shortest_delay(Subs) ->
-    Ns = [T || {clock, _, {T, 0}} <- Subs],
+    Ns = [delay_ns(D) || {clock, _, D} <- Subs],
     case Ns of
         [] -> 0;
         _ -> lists:min(Ns) div 1000000
+    end.
+
+%% A relative subscription waits its timeout. An absolute one waits until its
+%% clock reads the timeout, which may already have passed; it used to be
+%% dropped, so `clock_nanosleep(TIMER_ABSTIME)' returned at once. A clock
+%% that is not one here has no reading to wait for, and fires like the
+%% specification's zero timeout.
+delay_ns({_ClockId, Timeout, 0}) -> Timeout;
+delay_ns({ClockId, Deadline, 1}) ->
+    case clock_named(ClockId) of
+        {ok, Clock} -> max(0, Deadline - clock_now(Clock));
+        {errno, _} -> 0
     end.
 
 %% Blocking the instance process is acceptable here and nowhere else: the

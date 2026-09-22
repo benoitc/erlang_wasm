@@ -25,6 +25,10 @@
   CPU time ids now answer `ENOTSUP` and an id outside the four the
   specification defines answers `EINVAL`. A clock that exists and was not
   granted still answers `ENOTCAPABLE`.
+- **`poll_oneoff` honours an absolute deadline.** A clock subscription with
+  the ABSTIME flag set was dropped from the wait, so the call returned at
+  once and `clock_nanosleep(TIMER_ABSTIME)` did not sleep. It now waits
+  until that clock reads the deadline.
 
 ## 0.4.2
 

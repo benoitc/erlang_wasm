@@ -33,7 +33,8 @@ all() ->
      a_guest_open_goes_through_the_native_backend,
      renumbering_moves_a_descriptor_onto_a_free_number,
      the_monotonic_clock_counts_nanoseconds_since_the_node_started,
-     a_clock_id_that_is_not_a_clock_here_says_so].
+     a_clock_id_that_is_not_a_clock_here_says_so,
+     an_absolute_deadline_waits_for_the_clock_to_reach_it].
 
 init_per_suite(Config) ->
     Priv = ?config(priv_dir, Config),
@@ -156,6 +157,52 @@ a_clock_id_that_is_not_a_clock_here_says_so(Config) ->
     %% A clock that exists and was not granted is still the capability answer.
     ?assertEqual({ok, [?ENOTCAPABLE]},
                  wasm:call(I, <<"clock">>, [?CLOCK_REALTIME])).
+
+%% `poll_oneoff' only ever read the relative arm of a clock subscription. One
+%% with the ABSTIME flag set contributed nothing to the wait, so the call
+%% returned at once with the clock event, and a `clock_nanosleep' with
+%% `TIMER_ABSTIME' did not sleep. Its own module, because the shared fixture
+%% has no `poll_oneoff' export.
+an_absolute_deadline_waits_for_the_clock_to_reach_it(_Config) ->
+    {ok, Parsed} = wasm_wat:module(poll_module()),
+    {ok, Mod} = wasm_validate:module(Parsed),
+    {ok, I} = wasm:instantiate(Mod, wasi_preview1:imports(#{clocks => [monotonic]})),
+    %% Due 200 ms from the clock the guest just read; the wait is that long,
+    %% less what elapsed between the two readings and the millisecond floor.
+    T0 = erlang:monotonic_time(millisecond),
+    ?assertEqual({ok, [?ESUCCESS]}, wasm:call(I, ~"poll_abs", [200_000_000])),
+    Waited = erlang:monotonic_time(millisecond) - T0,
+    ?assert(Waited >= 190, Waited),
+    ?assertEqual({ok, [1]}, wasm:call(I, ~"nevents", [])),
+    %% A deadline already behind the clock is not an error and not a wait.
+    T1 = erlang:monotonic_time(millisecond),
+    ?assertEqual({ok, [?ESUCCESS]}, wasm:call(I, ~"poll_abs", [0])),
+    ?assert(erlang:monotonic_time(millisecond) - T1 < 100).
+
+%% `poll_abs' subscribes to the monotonic clock at 200, absolute, due `delay'
+%% nanoseconds after the reading it takes at 100, with the event at 300 and
+%% the event count at 400. The subscription layout is the one
+%% `wasi_preview1:subscription/1' documents.
+poll_module() -> ~"""
+(module
+  (import "wasi_snapshot_preview1" "clock_time_get"
+    (func $clock_time_get (param i32 i64 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "poll_oneoff"
+    (func $poll_oneoff (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (func (export "poll_abs") (param $delay i64) (result i32)
+    (drop (call $clock_time_get (i32.const 1) (i64.const 0) (i32.const 100)))
+    (i64.store (i32.const 200) (i64.const 7))
+    (i32.store8 (i32.const 208) (i32.const 0))
+    (i32.store (i32.const 216) (i32.const 1))
+    (i64.store (i32.const 224)
+               (i64.add (i64.load (i32.const 100)) (local.get $delay)))
+    (i64.store (i32.const 232) (i64.const 0))
+    (i32.store16 (i32.const 240) (i32.const 1))
+    (call $poll_oneoff (i32.const 200) (i32.const 300) (i32.const 1)
+                       (i32.const 400)))
+  (func (export "nevents") (result i32) (i32.load (i32.const 400))))
+""".
 
 %% The fixture's `clock' export writes the timestamp at address 40.
 read_clock(I) ->

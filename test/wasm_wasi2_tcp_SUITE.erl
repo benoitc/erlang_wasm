@@ -19,7 +19,9 @@ opens, because start-connect asks `wasi_net:allows(connect, ...)`.
 all() ->
     [an_echo_round_trips,
      connect_needs_a_grant,
-     the_socket_and_streams_do_not_leak].
+     the_socket_and_streams_do_not_leak,
+     an_accepted_connection_echoes,
+     listen_needs_a_grant].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -59,7 +61,56 @@ the_socket_and_streams_do_not_leak(Config) ->
     _ = echo_to(I, Port, <<"data">>),
     ?assertEqual([], wasm_component:host_live()).
 
+%% The guest binds, listens and accepts; a client connects and its message comes
+%% back. The guest runs in its own process (accept blocks and the instance is
+%% owned by the calling process), while the test connects as the client.
+an_accepted_connection_echoes(Config) ->
+    Bin = ?config(component, Config),
+    Port = free_port(),
+    Test = self(),
+    _ = spawn(fun() -> Test ! {served, serve(Bin, Port, listen_grant(Port))} end),
+    {ok, Sock} = connect_retry({127, 0, 0, 1}, Port, 100),
+    ok = gen_tcp:send(Sock, <<"ping">>),
+    {ok, Echo} = gen_tcp:recv(Sock, 4, 5000),
+    _ = gen_tcp:close(Sock),
+    ?assertEqual(<<"ping">>, Echo),
+    receive {served, R} -> ?assertEqual(<<"ping">>, R)
+    after 6000 -> ct:fail(server_did_not_return) end.
+
+%% With no listen grant the guest never binds: start-bind is access-denied.
+listen_needs_a_grant(Config) ->
+    Bin = ?config(component, Config),
+    Port = free_port(),
+    Test = self(),
+    _ = spawn(fun() -> Test ! {served, serve(Bin, Port, none)} end),
+    receive {served, R} -> ?assertEqual(<<>>, R)
+    after 6000 -> ct:fail(server_did_not_return) end.
+
 %%% -------------------------------------------------------------- helpers ---
+
+%% Instantiate and run the guest server in this (fresh) process.
+serve(Bin, Port, Grant) ->
+    {ok, I} = wasm_component:instantiate(
+                Bin, maps:merge(wasi_preview2:sockets(#{grant => Grant}),
+                                wasi_preview2:io())),
+    {ok, V} = wasm_component:call(I, <<"serve-on">>, {[u16], {list, u8}}, [Port]),
+    V.
+
+connect_retry(_Addr, _Port, 0) -> {error, timeout};
+connect_retry(Addr, Port, N) ->
+    case gen_tcp:connect(Addr, Port, [binary, {active, false}], 100) of
+        {ok, Sock}      -> {ok, Sock};
+        {error, _}      -> timer:sleep(20), connect_retry(Addr, Port, N - 1)
+    end.
+
+free_port() ->
+    {ok, L} = gen_tcp:listen(0, [{ip, {127, 0, 0, 1}}]),
+    {ok, P} = inet:port(L),
+    _ = gen_tcp:close(L),
+    P.
+
+listen_grant(Port) ->
+    #{listen => [{tcp, <<"127.0.0.1">>, Port}]}.
 
 echo_to(I, Port, Msg) ->
     <<A, B, C, D>> = <<127, 0, 0, 1>>,

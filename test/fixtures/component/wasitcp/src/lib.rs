@@ -15,7 +15,31 @@ impl Guest for C {
         }
         let (rx, tx) = sock.finish_connect().unwrap();
         tx.blocking_write_and_flush(&msg).unwrap();
-        rx.blocking_read(msg.len() as u64).unwrap_or_default()
+        let mut out = Vec::new();
+        while out.len() < msg.len() {
+            match rx.blocking_read((msg.len() - out.len()) as u64) {
+                Ok(chunk) => out.extend_from_slice(&chunk),
+                Err(_) => break,
+            }
+        }
+        out
+    }
+
+    // Bind to 127.0.0.1:port, listen, accept one connection, echo one read.
+    fn serve_on(port: u16) -> Vec<u8> {
+        let net = instance_network();
+        let sock = create_tcp_socket(IpAddressFamily::Ipv4).unwrap();
+        let addr = IpSocketAddress::Ipv4(Ipv4SocketAddress { port, address: (127, 0, 0, 1) });
+        if sock.start_bind(&net, addr).is_err() {
+            return Vec::new();
+        }
+        sock.finish_bind().unwrap();
+        sock.start_listen().unwrap();
+        sock.finish_listen().unwrap();
+        let (_client, rx, tx) = sock.accept().unwrap();
+        let data = rx.blocking_read(64).unwrap_or_default();
+        let _ = tx.blocking_write_and_flush(&data);
+        data
     }
 }
 export!(C);

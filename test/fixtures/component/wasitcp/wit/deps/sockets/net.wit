@@ -23,6 +23,12 @@ interface tcp {
   resource tcp-socket {
     start-connect: func(network: borrow<network>, remote-address: ip-socket-address) -> result<_, error-code>;
     finish-connect: func() -> result<tuple<input-stream, output-stream>, error-code>;
+    start-bind: func(network: borrow<network>, local-address: ip-socket-address) -> result<_, error-code>;
+    finish-bind: func() -> result<_, error-code>;
+    start-listen: func() -> result<_, error-code>;
+    finish-listen: func() -> result<_, error-code>;
+    accept: func() -> result<tuple<tcp-socket, input-stream, output-stream>, error-code>;
+    local-address: func() -> result<ip-socket-address, error-code>;
     subscribe: func() -> pollable;
   }
 }

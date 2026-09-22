@@ -104,6 +104,9 @@ later step.
 -define(IP_SOCKADDR,
         {variant, [{<<"ipv4">>, ?IPV4_SOCKADDR}, {<<"ipv6">>, ?IPV6_SOCKADDR}]}).
 -define(CONNECT_RESULT, {result, {tuple, [handle, handle]}, ?SOCK_ERROR}).
+-define(ACCEPT_RESULT, {result, {tuple, [handle, handle, handle]}, ?SOCK_ERROR}).
+-define(LOCAL_RESULT, {result, ?IP_SOCKADDR, ?SOCK_ERROR}).
+-define(SOCK_BACKLOG, 128).
 
 -doc "Every implemented `wasi:*` interface, merged into one imports map.".
 -spec imports() -> #{{binary(), binary()} => fun()}.
@@ -295,13 +298,11 @@ write_stream(Handle, Bytes) ->
 %% waits for. `closed` carries no payload, so no error resource is minted.
 read_stream(Handle, Len) ->
     case wasm_component:host_get(Handle) of
-        {ok, {input_stream, {socket, Sock}}} ->
-            %% A socket-backed stream (from tcp finish-connect) reads live.
-            case wasi_sock:recv(Sock, Len, ?SOCK_TIMEOUT) of
-                {ok, Data}  -> {ok, Data};
-                eof         -> {error, {<<"closed">>, undefined}};
-                {error, _}  -> {error, {<<"closed">>, undefined}}
-            end;
+        {ok, {input_stream, {socket, Sock, Buf}}} ->
+            %% A socket-backed stream (from tcp finish-connect/accept). Return up
+            %% to Len bytes, blocking for at least one; buffer any it read past
+            %% Len so the next read hands them over.
+            socket_read(Handle, Sock, Buf, Len);
         {ok, {input_stream, <<>>}} ->
             {error, {<<"closed">>, undefined}};
         {ok, {input_stream, Remaining}} when is_binary(Remaining) ->
@@ -312,6 +313,21 @@ read_stream(Handle, Len) ->
         error ->
             {error, {<<"closed">>, undefined}}
     end.
+
+socket_read(Handle, Sock, <<>>, Len) ->
+    case wasi_sock:recv(Sock, 0, ?SOCK_TIMEOUT) of
+        {ok, Data}  -> socket_deliver(Handle, Sock, Data, Len);
+        eof         -> {error, {<<"closed">>, undefined}};
+        {error, _}  -> {error, {<<"closed">>, undefined}}
+    end;
+socket_read(Handle, Sock, Buf, Len) ->
+    socket_deliver(Handle, Sock, Buf, Len).
+
+socket_deliver(Handle, Sock, Data, Len) ->
+    N = min(Len, byte_size(Data)),
+    <<Chunk:N/binary, Rest/binary>> = Data,
+    _ = wasm_component:host_update(Handle, {socket, Sock, Rest}),
+    {ok, Chunk}.
 
 %% Advance the source by up to Len bytes without returning them, reporting how
 %% many were skipped; a drained or unknown stream is `closed`.
@@ -580,6 +596,25 @@ sockets(Opts) ->
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.finish-connect">>} =>
           wasm_component:import_fun(
             {[handle], ?CONNECT_RESULT}, fun([Self]) -> tcp_finish_connect(Self) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.start-bind">>} =>
+          wasm_component:import_fun(
+            {[handle, handle, ?IP_SOCKADDR], {result, none, ?SOCK_ERROR}},
+            fun([Self, Net, Addr]) -> tcp_start_bind(Self, Net, Addr) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.finish-bind">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, none, ?SOCK_ERROR}}, fun([_Self]) -> {ok, undefined} end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.start-listen">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, none, ?SOCK_ERROR}}, fun([Self]) -> tcp_start_listen(Self) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.finish-listen">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, none, ?SOCK_ERROR}}, fun([_Self]) -> {ok, undefined} end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.accept">>} =>
+          wasm_component:import_fun(
+            {[handle], ?ACCEPT_RESULT}, fun([Self]) -> tcp_accept(Self) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.local-address">>} =>
+          wasm_component:import_fun(
+            {[handle], ?LOCAL_RESULT}, fun([Self]) -> tcp_local(Self) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.subscribe">>} =>
           wasm_component:import_fun(
             {[handle], handle}, fun([_Self]) -> wasm_component:host_new(pollable, ready) end),
@@ -619,7 +654,7 @@ tcp_start_connect(Self, Net, Addr) ->
 tcp_finish_connect(Self) ->
     case wasm_component:host_get(Self) of
         {ok, {tcp_socket, {connected, Conn}}} ->
-            In = wasm_component:host_new(input_stream, {socket, Conn}),
+            In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
             Out = wasm_component:host_new(
                     output_stream, fun(Bytes) -> _ = wasi_sock:send(Conn, Bytes), ok end),
             {ok, {In, Out}};
@@ -627,10 +662,81 @@ tcp_finish_connect(Self) ->
             {error, <<"invalid-state">>}
     end.
 
+%% Bind and listen collapse like connect: start-bind checks the grant and binds,
+%% start-listen listens, accept blocks for a connection and returns its streams.
+tcp_start_bind(Self, Net, Addr) ->
+    case {wasm_component:host_get(Self), wasm_component:host_get(Net)} of
+        {{ok, {tcp_socket, {unconnected, Pending}}}, {ok, {net_network, Grant}}} ->
+            Endpoint = endpoint(Addr),
+            case wasi_net:allows(listen, Endpoint, Grant) of
+                false ->
+                    {error, <<"access-denied">>};
+                true ->
+                    case wasi_sock:bind(Pending, Endpoint) of
+                        {ok, Bound}     -> bind_ok(Self, Bound);
+                        {error, Errno}  -> {error, sock_errno(Errno)}
+                    end
+            end;
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+bind_ok(Self, Bound) ->
+    _ = wasm_component:host_update(Self, {bound, Bound}),
+    {ok, undefined}.
+
+tcp_start_listen(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, {bound, Bound}}} ->
+            case wasi_sock:listen(Bound, ?SOCK_BACKLOG) of
+                {ok, Listen}   -> _ = wasm_component:host_update(Self, {listening, Listen}),
+                                  {ok, undefined};
+                {error, Errno} -> {error, sock_errno(Errno)}
+            end;
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+tcp_accept(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, {listening, Listen}}} ->
+            case wasi_sock:accept(Listen, ?SOCK_TIMEOUT) of
+                {ok, Conn} ->
+                    Sock = wasm_component:host_new(tcp_socket, {connected, Conn}),
+                    In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
+                    Out = wasm_component:host_new(
+                            output_stream, fun(B) -> _ = wasi_sock:send(Conn, B), ok end),
+                    {ok, {Sock, In, Out}};
+                {error, Errno} ->
+                    {error, sock_errno(Errno)}
+            end;
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+tcp_local(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, {State, Handle}}}
+          when State =:= listening; State =:= connected ->
+            case wasi_sock:local(Handle) of
+                {ok, {Addr, Port}} -> {ok, ip_sockaddr(Addr, Port)};
+                {error, Errno}     -> {error, sock_errno(Errno)}
+            end;
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+ip_sockaddr({A, B, C, D}, Port) ->
+    {<<"ipv4">>, #{<<"port">> => Port, <<"address">> => {A, B, C, D}}};
+ip_sockaddr({A, B, C, D, E, F, G, H}, Port) ->
+    {<<"ipv6">>, #{<<"port">> => Port, <<"flow-info">> => 0,
+                   <<"address">> => {A, B, C, D, E, F, G, H}, <<"scope-id">> => 0}}.
+
 tcp_drop(H) ->
     case wasm_component:host_get(H) of
-        {ok, {tcp_socket, {connected, Conn}}} -> _ = wasi_sock:close(Conn);
-        _                                     -> ok
+        {ok, {tcp_socket, {connected, Conn}}}  -> _ = wasi_sock:close(Conn);
+        {ok, {tcp_socket, {listening, Listen}}} -> _ = wasi_sock:close(Listen);
+        _                                      -> ok
     end,
     wasm_component:host_drop(H).
 

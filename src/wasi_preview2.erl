@@ -10,17 +10,17 @@ holds those functions; `imports/0` is the merged map to hand a component. The
 functions map onto the same hardened internals as Preview 1 (here
 `crypto:strong_rand_bytes/1`).
 
-Worlds land one at a time: `wasi:random`, then `wasi:clocks`. Keys are the
-bare, unversioned interface ids (`wasi:random/random`); matching a versioned
-`@0.2.x` import is a later step.
+Worlds land one at a time: `wasi:random`, `wasi:clocks`, `wasi:cli/environment`.
+Keys are the bare, unversioned interface ids (`wasi:random/random`); matching a
+versioned `@0.2.x` import is a later step.
 """.
 
--export([imports/0, random/0, clocks/0]).
+-export([imports/0, random/0, clocks/0, environment/0]).
 
 -doc "Every implemented `wasi:*` interface, merged into one imports map.".
 -spec imports() -> #{{binary(), binary()} => fun()}.
 imports() ->
-    maps:merge(random(), clocks()).
+    lists:foldl(fun maps:merge/2, #{}, [random(), clocks(), environment()]).
 
 -doc """
 `wasi:random/random`: `get-random-u64` and `get-random-bytes`, backed by the
@@ -91,3 +91,19 @@ wall_now() ->
 
 datetime(Seconds, Nanoseconds) ->
     #{<<"seconds">> => Seconds, <<"nanoseconds">> => Nanoseconds}.
+
+-doc """
+`wasi:cli/environment`: `get-environment`, `get-arguments`, `initial-cwd`. The
+default exposes nothing, the sandboxed posture: an empty environment, no
+arguments, no working directory. It never reads the node's real environment.
+""".
+-spec environment() -> #{{binary(), binary()} => fun()}.
+environment() ->
+    E = <<"wasi:cli/environment">>,
+    #{{E, <<"get-environment">>} =>
+          wasm_component:import_fun(
+            {[], {list, {tuple, [string, string]}}}, fun([]) -> [] end),
+      {E, <<"get-arguments">>} =>
+          wasm_component:import_fun({[], {list, string}}, fun([]) -> [] end),
+      {E, <<"initial-cwd">>} =>
+          wasm_component:import_fun({[], {option, string}}, fun([]) -> none end)}.

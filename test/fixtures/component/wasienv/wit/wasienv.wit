@@ -1,0 +1,17 @@
+// wasi:cli/environment 0.2, declared locally so the fixture pins no external
+// WIT. Unversioned, so the host key is the bare interface id. The host supplies
+// it (see src/wasi_preview2.erl).
+package wasi:cli;
+
+interface environment {
+  get-environment: func() -> list<tuple<string, string>>;
+  get-arguments: func() -> list<string>;
+  initial-cwd: func() -> option<string>;
+}
+
+world app {
+  import environment;
+  export env: func() -> list<tuple<string, string>>;
+  export args: func() -> list<string>;
+  export cwd: func() -> option<string>;
+}

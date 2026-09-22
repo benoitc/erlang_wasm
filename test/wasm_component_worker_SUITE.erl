@@ -18,7 +18,8 @@ against a fixed value and, when present, against wasmtime.
 all() ->
     [a_real_command_runs_through_the_worker,
      it_matches_wasmtime_through_the_worker,
-     a_file_is_processed_over_a_mount].
+     a_file_is_processed_over_a_mount,
+     a_typed_service_export_is_called_per_request].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -75,6 +76,26 @@ a_file_is_processed_over_a_mount(_Config) ->
              {ok, #{stdout := Out}} = wasm_script_worker:run(W, #{file => Content}),
              ?assertEqual(Content, Out)
          end || Content <- [<<"mount contents\n">>, <<>>, binary:copy(<<"x">>, 1000)]]
+    after
+        wasm_script_worker:stop(W)
+    end.
+
+%% The worker calls a component's typed export (list<u8> -> result<list<u8>,
+%% string>) with typed input per request and lifts the typed result: the
+%% reactor/service shape, not a command. The echo service returns its input.
+a_typed_service_export_is_called_per_request(_Config) ->
+    {ok, W} = wasm_script_worker:start_link(
+                fake_component_reactor_adapter, #{root => scratch}),
+    try
+        %% The service upper-cases non-empty input; it comes back through the
+        %% typed ok arm.
+        [begin
+             {ok, #{output := Out}} = wasm_script_worker:run(W, #{input => In}),
+             ?assertEqual(string:uppercase(In), Out)
+         end || In <- [<<"service request">>, binary:copy(<<1, 2, 3>>, 200)]],
+        %% The echo service refuses empty input: the typed error arm crosses back
+        %% as the adapter's error.
+        ?assertMatch({error, _}, wasm_script_worker:run(W, #{input => <<>>}))
     after
         wasm_script_worker:stop(W)
     end.

@@ -1,6 +1,7 @@
 package wasi:filesystem;
 
 interface types {
+  use wasi:io/streams.{input-stream};
   enum error-code {
     access, would-block, already, bad-descriptor, busy, deadlock, quota,
     exist, file-too-large, illegal-byte-sequence, in-progress, interrupted,
@@ -21,12 +22,31 @@ interface types {
     requested-write-sync, mutate-directory
   }
   type filesize = u64;
+  type link-count = u64;
+  record datetime { seconds: u64, nanoseconds: u32 }
+  record descriptor-stat {
+    %type: descriptor-type,
+    link-count: link-count,
+    size: filesize,
+    data-access-timestamp: option<datetime>,
+    data-modification-timestamp: option<datetime>,
+    status-change-timestamp: option<datetime>,
+  }
+  record directory-entry { %type: descriptor-type, name: string }
+  resource directory-entry-stream {
+    read-directory-entry: func() -> result<option<directory-entry>, error-code>;
+  }
   resource descriptor {
     read: func(length: filesize, offset: filesize)
         -> result<tuple<list<u8>, bool>, error-code>;
     get-type: func() -> result<descriptor-type, error-code>;
     open-at: func(path-flags: path-flags, path: string, open-flags: open-flags,
                   %flags: descriptor-flags) -> result<descriptor, error-code>;
+    stat: func() -> result<descriptor-stat, error-code>;
+    stat-at: func(path-flags: path-flags, path: string)
+        -> result<descriptor-stat, error-code>;
+    read-via-stream: func(offset: filesize) -> result<input-stream, error-code>;
+    read-directory: func() -> result<directory-entry-stream, error-code>;
   }
 }
 

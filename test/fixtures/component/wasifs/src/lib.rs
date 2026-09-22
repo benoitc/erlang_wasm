@@ -1,12 +1,18 @@
 wit_bindgen::generate!({ world: "app", generate_all });
+
 use wasi::filesystem::preopens::get_directories;
 use wasi::filesystem::types::{OpenFlags, PathFlags, DescriptorFlags, DescriptorType};
+
 struct C;
+
+fn root() -> wasi::filesystem::types::Descriptor {
+    let mut dirs = get_directories();
+    dirs.remove(0).0
+}
+
 impl Guest for C {
     fn cat(name: String) -> Vec<u8> {
-        let dirs = get_directories();
-        let (dir, _) = &dirs[0];
-        let f = dir.open_at(PathFlags::empty(), &name, OpenFlags::empty(), DescriptorFlags::READ).unwrap();
+        let f = root().open_at(PathFlags::empty(), &name, OpenFlags::empty(), DescriptorFlags::READ).unwrap();
         let mut out = Vec::new();
         let mut off = 0u64;
         loop {
@@ -18,14 +24,35 @@ impl Guest for C {
         out
     }
     fn present(name: String) -> bool {
-        let dirs = get_directories();
-        let (dir, _) = &dirs[0];
-        dir.open_at(PathFlags::empty(), &name, OpenFlags::empty(), DescriptorFlags::READ).is_ok()
+        root().open_at(PathFlags::empty(), &name, OpenFlags::empty(), DescriptorFlags::READ).is_ok()
     }
     fn root_is_dir() -> bool {
-        let dirs = get_directories();
-        let (dir, _) = &dirs[0];
-        matches!(dir.get_type(), Ok(DescriptorType::Directory))
+        matches!(root().get_type(), Ok(DescriptorType::Directory))
+    }
+    fn size(name: String) -> u64 {
+        let f = root().open_at(PathFlags::empty(), &name, OpenFlags::empty(), DescriptorFlags::READ).unwrap();
+        f.stat().unwrap().size
+    }
+    fn entries() -> Vec<String> {
+        let des = root().read_directory().unwrap();
+        let mut names = Vec::new();
+        while let Ok(Some(e)) = des.read_directory_entry() {
+            names.push(e.name);
+        }
+        names
+    }
+    fn slurp(name: String) -> Vec<u8> {
+        let f = root().open_at(PathFlags::empty(), &name, OpenFlags::empty(), DescriptorFlags::READ).unwrap();
+        let s = f.read_via_stream(0).unwrap();
+        let mut out = Vec::new();
+        loop {
+            match s.blocking_read(4096) {
+                Ok(c) => out.extend_from_slice(&c),
+                Err(_) => break,
+            }
+        }
+        out
     }
 }
+
 export!(C);

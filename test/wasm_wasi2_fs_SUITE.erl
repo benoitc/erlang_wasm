@@ -20,7 +20,10 @@ all() ->
     [a_file_reads_back_whole,
      the_root_is_a_directory,
      the_sandbox_holds,
-     descriptors_do_not_leak].
+     descriptors_do_not_leak,
+     stat_reports_the_size,
+     the_directory_is_listed,
+     read_via_stream_reads_the_file].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -77,7 +80,41 @@ descriptors_do_not_leak(Config) ->
     _ = cat(I, <<"hello.txt">>),
     ?assertEqual([], wasm_component:host_live()).
 
+%% stat via the NIF-backed wasi_fs reports the real file size.
+stat_reports_the_size(Config) ->
+    {ok, I} = instance(Config),
+    ?assertEqual(11, size(I, <<"hello.txt">>)),
+    ?assertEqual(0, size(I, <<"empty.txt">>)),
+    ?assertEqual(10000, size(I, <<"big.bin">>)).
+
+%% read-directory lists the entries; the known names are all there.
+the_directory_is_listed(Config) ->
+    {ok, I} = instance(Config),
+    Names = entries(I),
+    [?assert(lists:member(N, Names))
+     || N <- [<<"hello.txt">>, <<"big.bin">>, <<"empty.txt">>, <<"sub">>]].
+
+%% read-via-stream returns a wasi:io input-stream over the file; reading it back
+%% yields the file (exercises the filesystem-to-io bridge).
+read_via_stream_reads_the_file(Config) ->
+    Big = ?config(big, Config),
+    {ok, I} = instance(Config),
+    ?assertEqual(<<"hello world">>, slurp(I, <<"hello.txt">>)),
+    ?assertEqual(Big, slurp(I, <<"big.bin">>)).
+
 %%% -------------------------------------------------------------- helpers ---
+
+size(I, Name) ->
+    {ok, V} = wasm_component:call(I, <<"size">>, {[string], u64}, [Name]),
+    V.
+
+entries(I) ->
+    {ok, V} = wasm_component:call(I, <<"entries">>, {[], {list, string}}, []),
+    V.
+
+slurp(I, Name) ->
+    {ok, V} = wasm_component:call(I, <<"slurp">>, {[string], {list, u8}}, [Name]),
+    V.
 
 cat(I, Name) ->
     {ok, V} = wasm_component:call(I, <<"cat">>, {[string], {list, u8}}, [Name]),
@@ -92,9 +129,12 @@ root_is_dir(I) ->
     V.
 
 instance(Config) ->
-    wasm_component:instantiate(
-      ?config(component, Config),
-      wasi_preview2:filesystem(#{preopen => ?config(root, Config)})).
+    %% The guest also imports wasi:io/streams (read-via-stream returns an
+    %% input-stream), so filesystem and io are both supplied.
+    Imports = maps:merge(
+                wasi_preview2:filesystem(#{preopen => ?config(root, Config)}),
+                wasi_preview2:io()),
+    wasm_component:instantiate(?config(component, Config), Imports).
 
 fixture_path() ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",

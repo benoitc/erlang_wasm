@@ -63,6 +63,17 @@ later step.
 -define(OPEN_RESULT, {result, handle, ?ERROR_CODE}).
 -define(READ_AT_RESULT, {result, {tuple, [{list, u8}, bool]}, ?ERROR_CODE}).
 -define(TYPE_RESULT, {result, ?DESC_TYPE, ?ERROR_CODE}).
+-define(DATETIME2, {record, [{<<"seconds">>, u64}, {<<"nanoseconds">>, u32}]}).
+-define(DESCRIPTOR_STAT,
+        {record, [{<<"type">>, ?DESC_TYPE},
+                  {<<"link-count">>, u64},
+                  {<<"size">>, u64},
+                  {<<"data-access-timestamp">>, {option, ?DATETIME2}},
+                  {<<"data-modification-timestamp">>, {option, ?DATETIME2}},
+                  {<<"status-change-timestamp">>, {option, ?DATETIME2}}]}).
+-define(STAT_RESULT, {result, ?DESCRIPTOR_STAT, ?ERROR_CODE}).
+-define(DIR_ENTRY, {record, [{<<"type">>, ?DESC_TYPE}, {<<"name">>, string}]}).
+-define(DIR_ENTRY_RESULT, {result, {option, ?DIR_ENTRY}, ?ERROR_CODE}).
 
 -doc "Every implemented `wasi:*` interface, merged into one imports map.".
 -spec imports() -> #{{binary(), binary()} => fun()}.
@@ -313,6 +324,26 @@ filesystem(Opts) ->
       {Types, <<"[method]descriptor.get-type">>} =>
           wasm_component:import_fun(
             {[handle], ?TYPE_RESULT}, fun([H]) -> type_of(H) end),
+      {Types, <<"[method]descriptor.stat">>} =>
+          wasm_component:import_fun(
+            {[handle], ?STAT_RESULT}, fun([H]) -> stat(H) end),
+      {Types, <<"[method]descriptor.stat-at">>} =>
+          wasm_component:import_fun(
+            {[handle, ?PATH_FLAGS, string], ?STAT_RESULT},
+            fun([Dir, PathFlags, Path]) -> stat_at(Dir, PathFlags, Path) end),
+      {Types, <<"[method]descriptor.read-via-stream">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], ?OPEN_RESULT},
+            fun([File, Off]) -> read_via_stream(File, Off) end),
+      {Types, <<"[method]descriptor.read-directory">>} =>
+          wasm_component:import_fun(
+            {[handle], ?OPEN_RESULT}, fun([Dir]) -> read_directory(Dir) end),
+      {Types, <<"[method]directory-entry-stream.read-directory-entry">>} =>
+          wasm_component:import_fun(
+            {[handle], ?DIR_ENTRY_RESULT},
+            fun([Stream]) -> read_directory_entry(Stream) end),
+      {Types, <<"[resource-drop]directory-entry-stream">>} =>
+          fun(_Ctx, [H]) -> _ = wasm_component:host_drop(H), {ok, []} end,
       {Types, <<"[resource-drop]descriptor">>} =>
           fun(_Ctx, [H]) -> _ = fs_drop(H), {ok, []} end}.
 
@@ -383,6 +414,96 @@ fs_type_name(directory) -> <<"directory">>;
 fs_type_name(regular)   -> <<"regular-file">>;
 fs_type_name(symlink)   -> <<"symbolic-link">>;
 fs_type_name(_Other)    -> <<"unknown">>.
+
+stat(H) ->
+    case wasm_component:host_get(H) of
+        {ok, {fs_file, Handle}} -> from_stat(wasi_fs:stat_fd(Handle));
+        {ok, {fs_dir, Root}}    -> from_stat(wasi_fs:stat(Root, <<".">>));
+        error                   -> {error, <<"bad-descriptor">>}
+    end.
+
+stat_at(Dir, PathFlags, Path) ->
+    case wasm_component:host_get(Dir) of
+        {ok, {fs_dir, Root}} ->
+            Follow = case lists:member(<<"symlink-follow">>, PathFlags) of
+                         true -> follow;
+                         false -> nofollow
+                     end,
+            from_stat(wasi_fs:stat(Root, Path, Follow));
+        _ ->
+            {error, <<"bad-descriptor">>}
+    end.
+
+from_stat({ok, Map}) -> {ok, stat_record(Map)};
+from_stat({error, Errno}) -> {error, errno_name(Errno)}.
+
+stat_record(#{size := Size, type := Type} = M) ->
+    #{<<"type">> => fs_type_name(Type),
+      <<"link-count">> => maps:get(nlink, M, 1),
+      <<"size">> => Size,
+      <<"data-access-timestamp">> => opt_datetime(maps:get(atim, M, undefined)),
+      <<"data-modification-timestamp">> => opt_datetime(maps:get(mtim, M, undefined)),
+      <<"status-change-timestamp">> => opt_datetime(maps:get(ctim, M, undefined))}.
+
+opt_datetime(Nsec) when is_integer(Nsec) ->
+    {some, #{<<"seconds">> => Nsec div 1000000000,
+             <<"nanoseconds">> => Nsec rem 1000000000}};
+opt_datetime(_) ->
+    none.
+
+%% read-via-stream snapshots the file from the offset into an input-stream (the
+%% wasi:io kind), so a caller must also supply io/1 to read it. pread does the
+%% reading, so the sandbox is unchanged.
+read_via_stream(File, Off) ->
+    case wasm_component:host_get(File) of
+        {ok, {fs_file, Handle}} ->
+            case read_all(Handle, Off, <<>>) of
+                {ok, Bytes}     -> {ok, wasm_component:host_new(input_stream, Bytes)};
+                {error, Errno}  -> {error, errno_name(Errno)}
+            end;
+        _ ->
+            {error, <<"bad-descriptor">>}
+    end.
+
+read_all(Handle, Off, Acc) ->
+    case wasi_fs:pread(Handle, Off, 65536) of
+        {ok, <<>>}     -> {ok, Acc};
+        {ok, Bin}      -> read_all(Handle, Off + byte_size(Bin), <<Acc/binary, Bin/binary>>);
+        eof            -> {ok, Acc};
+        {error, Errno} -> {error, Errno}
+    end.
+
+read_directory(Dir) ->
+    case wasm_component:host_get(Dir) of
+        {ok, {fs_dir, Root}} ->
+            case wasi_fs:list(Root) of
+                {ok, Names} ->
+                    Entries = [dir_entry(Root, N) || N <- Names],
+                    {ok, wasm_component:host_new(dir_entries, Entries)};
+                {error, Errno} ->
+                    {error, errno_name(Errno)}
+            end;
+        _ ->
+            {error, <<"bad-descriptor">>}
+    end.
+
+dir_entry(Root, Name) ->
+    Type = case wasi_fs:stat(Root, Name, nofollow) of
+               {ok, #{type := T}} -> fs_type_name(T);
+               _ -> <<"unknown">>
+           end,
+    #{<<"type">> => Type, <<"name">> => Name}.
+
+read_directory_entry(Stream) ->
+    case wasm_component:host_get(Stream) of
+        {ok, {dir_entries, []}} ->
+            {ok, none};
+        {ok, {dir_entries, [Entry | Rest]}} ->
+            _ = wasm_component:host_update(Stream, Rest),
+            {ok, {some, Entry}};
+        _ ->
+            {error, <<"bad-descriptor">>}
+    end.
 
 %% Drop a descriptor: close the open file or forget the preopened root, then
 %% free the host handle. A double drop or unknown handle is a no-op.

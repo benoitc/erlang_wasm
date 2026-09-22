@@ -1,0 +1,9 @@
+package wasi:io;
+interface error { resource error; }
+interface streams {
+  use error.{error};
+  variant stream-error { last-operation-failed(error), closed }
+  resource input-stream {
+    blocking-read: func(len: u64) -> result<list<u8>, stream-error>;
+  }
+}

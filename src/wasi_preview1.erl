@@ -44,7 +44,7 @@ capability model they belong to:
 | you want | look at |
 | --- | --- |
 | the import set handed to an instance | `imports/1`, in `%%% api` |
-| **the descriptor table**, and what an `fd` is | `%%% file I/O`, and `#wasi{}` in `include/wasi.hrl` |
+| **the descriptor table**, and what an `fd` is | `%%% file I/O`, `initial_state/1` under `%%% state`, and `#wasi_fd{}` in `include/wasi.hrl` |
 | preopened directories and their numbering | `%%% preopens` |
 | a path syscall, and the sandbox it goes through | `%%% path syscalls`, then `wasi_path` |
 | sockets | `%%% sockets`, `%%% sockets: the extension`, then `wasi_sock` |

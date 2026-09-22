@@ -32,7 +32,8 @@ all() ->
      stdin_is_a_capability,
      a_guest_open_goes_through_the_native_backend,
      renumbering_moves_a_descriptor_onto_a_free_number,
-     the_monotonic_clock_counts_nanoseconds_since_the_node_started].
+     the_monotonic_clock_counts_nanoseconds_since_the_node_started,
+     a_clock_id_that_is_not_a_clock_here_says_so].
 
 init_per_suite(Config) ->
     Priv = ?config(priv_dir, Config),
@@ -139,6 +140,22 @@ the_monotonic_clock_counts_nanoseconds_since_the_node_started(Config) ->
     ?assert(T1 =< Uptime),
     ?assert(Uptime - T1 < 1_000_000_000),
     ?assert(T2 < 1 bsl 63).
+
+a_clock_id_that_is_not_a_clock_here_says_so(Config) ->
+    %% Every id that was not `realtime' or `monotonic' answered
+    %% `ENOTCAPABLE', as if the host had withheld a clock it had. The CPU time
+    %% clocks are valid ids with nothing behind them, and anything past the
+    %% four the specification defines is not a clock id at all.
+    I = instance(Config, #{}),
+    ?assertEqual({ok, [?ENOTSUP]},
+                 wasm:call(I, <<"clock">>, [?CLOCK_PROCESS_CPUTIME_ID])),
+    ?assertEqual({ok, [?ENOTSUP]},
+                 wasm:call(I, <<"clock">>, [?CLOCK_THREAD_CPUTIME_ID])),
+    ?assertEqual({ok, [?EINVAL]}, wasm:call(I, <<"clock">>, [7])),
+    ?assertEqual({ok, [?EINVAL]}, wasm:call(I, <<"clock">>, [-1])),
+    %% A clock that exists and was not granted is still the capability answer.
+    ?assertEqual({ok, [?ENOTCAPABLE]},
+                 wasm:call(I, <<"clock">>, [?CLOCK_REALTIME])).
 
 %% The fixture's `clock' export writes the timestamp at address 40.
 read_clock(I) ->

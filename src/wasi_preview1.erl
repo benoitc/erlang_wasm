@@ -191,18 +191,14 @@ handle(environ_get, Ctx, [PtrsPtr, BufPtr], Config, _St) ->
 %%% --------------------------------------------------------------- clocks ---
 
 handle(clock_res_get, Ctx, [ClockId, OutPtr], Config, _St) ->
-    case clock_allowed(ClockId, Config) of
-        false -> {errno, ?ENOTCAPABLE};
-        true -> write_u64(Ctx, OutPtr, 1000)          % 1 us, honestly reported
+    case clock_of(ClockId, Config) of
+        {ok, _} -> write_u64(Ctx, OutPtr, 1000);      % 1 us, honestly reported
+        Refused -> Refused
     end;
 handle(clock_time_get, Ctx, [ClockId, _Precision, OutPtr], Config, _St) ->
-    case clock_allowed(ClockId, Config) of
-        false -> {errno, ?ENOTCAPABLE};
-        true ->
-            case clock_now(ClockId) of
-                {ok, Nanos} -> write_u64(Ctx, OutPtr, Nanos);
-                error -> {errno, ?EINVAL}
-            end
+    case clock_of(ClockId, Config) of
+        {ok, Clock} -> write_u64(Ctx, OutPtr, clock_now(Clock));
+        Refused -> Refused
     end;
 
 %%% --------------------------------------------------------------- random ---
@@ -2167,11 +2163,30 @@ env_list(Config) ->
     [<<K/binary, "=", V/binary>>
      || {K, V} <- lists:sort(maps:to_list(maps:get(env, Config, #{})))].
 
-clock_allowed(?CLOCK_REALTIME, C) -> lists:member(realtime, maps:get(clocks, C, []));
-clock_allowed(?CLOCK_MONOTONIC, C) -> lists:member(monotonic, maps:get(clocks, C, []));
-clock_allowed(_, _) -> false.
+%% The clock an id names, and whether this configuration granted it. Three
+%% answers, because they mean three things: a clock that exists here but was
+%% not granted is `ENOTCAPABLE' like any other absent capability; the two CPU
+%% time ids are valid and have no clock behind them, which is `ENOTSUP'; and
+%% an id outside the four the specification defines is `EINVAL'. Answering
+%% `ENOTCAPABLE' to all of them told a guest asking for `process_time' that
+%% the host had withheld something it could have granted.
+clock_of(Id, Config) ->
+    case clock_named(Id) of
+        {ok, Clock} ->
+            case lists:member(Clock, maps:get(clocks, Config, [])) of
+                true -> {ok, Clock};
+                false -> {errno, ?ENOTCAPABLE}
+            end;
+        Refused -> Refused
+    end.
 
-clock_now(?CLOCK_REALTIME) -> {ok, erlang:system_time(nanosecond)};
+clock_named(?CLOCK_REALTIME) -> {ok, realtime};
+clock_named(?CLOCK_MONOTONIC) -> {ok, monotonic};
+clock_named(Id) when Id =:= ?CLOCK_PROCESS_CPUTIME_ID;
+                     Id =:= ?CLOCK_THREAD_CPUTIME_ID -> {errno, ?ENOTSUP};
+clock_named(_) -> {errno, ?EINVAL}.
+
+clock_now(realtime) -> erlang:system_time(nanosecond);
 %% WASI's `timestamp' is a u64 of nanoseconds from an origin that is
 %% unspecified but must not run backwards. BEAM's monotonic time starts at an
 %% arbitrary, negative point, and written as a u64 that wrapped to ~1.8e19,
@@ -2179,11 +2194,10 @@ clock_now(?CLOCK_REALTIME) -> {ok, erlang:system_time(nanosecond)};
 %% never negative, never decreases, and is the same clock in every process on
 %% the node, which an image captured in one process and restored in another
 %% needs. `wasm_instance:uptime_seconds/0' does the same for the same reason.
-clock_now(?CLOCK_MONOTONIC) ->
+clock_now(monotonic) ->
     Start = erlang:convert_time_unit(erlang:system_info(start_time),
                                      native, nanosecond),
-    {ok, erlang:monotonic_time(nanosecond) - Start};
-clock_now(_) -> error.
+    erlang:monotonic_time(nanosecond) - Start.
 
 %% The whole buffer is filled, however large, in pieces.
 %%

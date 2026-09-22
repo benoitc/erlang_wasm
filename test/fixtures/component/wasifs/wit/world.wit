@@ -1,0 +1,8 @@
+package example:wasifs;
+world app {
+  import wasi:filesystem/types;
+  import wasi:filesystem/preopens;
+  export cat: func(name: string) -> list<u8>;
+  export present: func(name: string) -> bool;
+  export root-is-dir: func() -> bool;
+}

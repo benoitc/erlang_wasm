@@ -11,11 +11,15 @@ functions map onto the same hardened internals as Preview 1 (here
 `crypto:strong_rand_bytes/1`).
 
 Worlds land one at a time: `wasi:random`, `wasi:clocks`, `wasi:cli/environment`,
-and the output side of `wasi:io`. Keys are the bare, unversioned interface ids
-(`wasi:random/random`); matching a versioned `@0.2.x` import is a later step.
+`wasi:io`, and a read-only `wasi:filesystem`. Keys are the bare, unversioned
+interface ids (`wasi:random/random`); matching a versioned `@0.2.x` import is a
+later step.
 """.
 
--export([imports/0, random/0, clocks/0, environment/0, io/0, io/1]).
+-include("wasi.hrl").
+
+-export([imports/0, random/0, clocks/0, environment/0, io/0, io/1,
+         filesystem/1]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle); we only ever return ok, so no
@@ -29,6 +33,36 @@ and the output side of `wasi:io`. Keys are the bare, unversioned interface ids
 %% The write budget check-write reports for the discarding/buffer sinks: always
 %% ready for a chunk this size.
 -define(WRITE_BUDGET, 65536).
+
+%% wasi:filesystem enums, in WIT order (the enum discriminant is the index).
+-define(ERROR_CODE,
+        {enum, [<<"access">>, <<"would-block">>, <<"already">>,
+                <<"bad-descriptor">>, <<"busy">>, <<"deadlock">>, <<"quota">>,
+                <<"exist">>, <<"file-too-large">>, <<"illegal-byte-sequence">>,
+                <<"in-progress">>, <<"interrupted">>, <<"invalid">>, <<"io">>,
+                <<"is-directory">>, <<"loop">>, <<"too-many-links">>,
+                <<"message-size">>, <<"name-too-long">>, <<"no-device">>,
+                <<"no-entry">>, <<"no-lock">>, <<"insufficient-memory">>,
+                <<"insufficient-space">>, <<"not-directory">>, <<"not-empty">>,
+                <<"not-recoverable">>, <<"unsupported">>, <<"no-tty">>,
+                <<"no-such-device">>, <<"overflow">>, <<"not-permitted">>,
+                <<"pipe">>, <<"read-only">>, <<"invalid-seek">>,
+                <<"text-file-busy">>, <<"cross-device">>]}).
+-define(DESC_TYPE,
+        {enum, [<<"unknown">>, <<"block-device">>, <<"character-device">>,
+                <<"directory">>, <<"fifo">>, <<"symbolic-link">>,
+                <<"regular-file">>, <<"socket">>]}).
+-define(PATH_FLAGS, {flags, [<<"symlink-follow">>]}).
+-define(OPEN_FLAGS,
+        {flags, [<<"create">>, <<"directory">>, <<"exclusive">>,
+                 <<"truncate">>]}).
+-define(DESC_FLAGS,
+        {flags, [<<"read">>, <<"write">>, <<"file-integrity-sync">>,
+                 <<"data-integrity-sync">>, <<"requested-write-sync">>,
+                 <<"mutate-directory">>]}).
+-define(OPEN_RESULT, {result, handle, ?ERROR_CODE}).
+-define(READ_AT_RESULT, {result, {tuple, [{list, u8}, bool]}, ?ERROR_CODE}).
+-define(TYPE_RESULT, {result, ?DESC_TYPE, ?ERROR_CODE}).
 
 -doc "Every implemented `wasi:*` interface, merged into one imports map.".
 -spec imports() -> #{{binary(), binary()} => fun()}.
@@ -245,3 +279,133 @@ skip_stream(Handle, Len) ->
         error ->
             {error, {<<"closed">>, undefined}}
     end.
+
+-doc """
+A read-only `wasi:filesystem` over one preopened directory. `get-directories`
+hands the guest a descriptor for `preopen` (named `name`, default `/`);
+`open-at` resolves a path under it and opens it read-only; `read` is a pread and
+`get-type` says file or directory. Path resolution and the sandbox are not
+reimplemented here: `open-at` passes the guest path straight to `wasi_fs:open/3`,
+the same call Preview 1 makes, so the same escapes are refused. Write intent is
+refused with `read-only`.
+""".
+-spec filesystem(#{preopen := file:filename_all(), name => binary()}) ->
+          #{{binary(), binary()} => fun()}.
+filesystem(Opts) ->
+    HostDir = maps:get(preopen, Opts),
+    Name = maps:get(name, Opts, <<"/">>),
+    Types = <<"wasi:filesystem/types">>,
+    Preopens = <<"wasi:filesystem/preopens">>,
+    #{{Preopens, <<"get-directories">>} =>
+          wasm_component:import_fun(
+            {[], {list, {tuple, [handle, string]}}},
+            fun([]) -> get_directories(HostDir, Name) end),
+      {Types, <<"[method]descriptor.open-at">>} =>
+          wasm_component:import_fun(
+            {[handle, ?PATH_FLAGS, string, ?OPEN_FLAGS, ?DESC_FLAGS], ?OPEN_RESULT},
+            fun([Dir, _PF, Path, OpenFlags, DescFlags]) ->
+                open_at(Dir, Path, OpenFlags, DescFlags)
+            end),
+      {Types, <<"[method]descriptor.read">>} =>
+          wasm_component:import_fun(
+            {[handle, u64, u64], ?READ_AT_RESULT},
+            fun([File, Len, Off]) -> read_at(File, Len, Off) end),
+      {Types, <<"[method]descriptor.get-type">>} =>
+          wasm_component:import_fun(
+            {[handle], ?TYPE_RESULT}, fun([H]) -> type_of(H) end),
+      {Types, <<"[resource-drop]descriptor">>} =>
+          fun(_Ctx, [H]) -> _ = fs_drop(H), {ok, []} end}.
+
+get_directories(HostDir, Name) ->
+    case wasi_fs:preopen(HostDir) of
+        {ok, Root} -> [{wasm_component:host_new(fs_dir, Root), Name}];
+        {error, _} -> []
+    end.
+
+%% Open a path under a directory descriptor, read-only. Write intent is refused
+%% rather than downgraded. The path is not resolved here: wasi_fs:open/3 applies
+%% the same sandbox Preview 1 does.
+open_at(Dir, Path, OpenFlags, DescFlags) ->
+    case wasm_component:host_get(Dir) of
+        {ok, {fs_dir, Root}} ->
+            case write_intent(OpenFlags, DescFlags) of
+                true ->
+                    {error, <<"read-only">>};
+                false ->
+                    case wasi_fs:open(Root, Path, [read]) of
+                        {ok, Handle} -> {ok, wasm_component:host_new(fs_file, Handle)};
+                        {error, Errno} -> {error, errno_name(Errno)}
+                    end
+            end;
+        _ ->
+            {error, <<"bad-descriptor">>}
+    end.
+
+write_intent(OpenFlags, DescFlags) ->
+    Wants = fun(Name, Set) -> lists:member(Name, Set) end,
+    Wants(<<"create">>, OpenFlags) orelse Wants(<<"truncate">>, OpenFlags)
+        orelse Wants(<<"exclusive">>, OpenFlags)
+        orelse Wants(<<"write">>, DescFlags)
+        orelse Wants(<<"mutate-directory">>, DescFlags).
+
+read_at(File, Len, Off) ->
+    case wasm_component:host_get(File) of
+        {ok, {fs_file, Handle}} ->
+            case wasi_fs:pread(Handle, Off, Len) of
+                {ok, Bin} -> {ok, {Bin, at_eof(Handle, Off, byte_size(Bin), Len)}};
+                eof -> {ok, {<<>>, true}};
+                {error, Errno} -> {error, errno_name(Errno)}
+            end;
+        _ ->
+            {error, <<"bad-descriptor">>}
+    end.
+
+at_eof(Handle, Off, Got, Len) ->
+    case wasi_fs:size(Handle) of
+        {ok, Size} -> (Off + Got) >= Size;
+        {error, _} -> Got < Len
+    end.
+
+type_of(H) ->
+    case wasm_component:host_get(H) of
+        {ok, {fs_dir, _Root}} ->
+            {ok, <<"directory">>};
+        {ok, {fs_file, Handle}} ->
+            case wasi_fs:stat_fd(Handle) of
+                {ok, #{type := Type}} -> {ok, fs_type_name(Type)};
+                {error, Errno} -> {error, errno_name(Errno)}
+            end;
+        error ->
+            {error, <<"bad-descriptor">>}
+    end.
+
+fs_type_name(directory) -> <<"directory">>;
+fs_type_name(regular)   -> <<"regular-file">>;
+fs_type_name(symlink)   -> <<"symbolic-link">>;
+fs_type_name(_Other)    -> <<"unknown">>.
+
+%% Drop a descriptor: close the open file or forget the preopened root, then
+%% free the host handle. A double drop or unknown handle is a no-op.
+fs_drop(H) ->
+    case wasm_component:host_get(H) of
+        {ok, {fs_file, Handle}} -> _ = wasi_fs:close(Handle);
+        {ok, {fs_dir, Root}}    -> _ = wasi_fs:forget(Root);
+        error                   -> ok
+    end,
+    wasm_component:host_drop(H).
+
+%% A Preview 1 errno to a wasi:filesystem error-code name; anything not mapped is
+%% the generic `io`.
+errno_name(?EACCES)       -> <<"access">>;
+errno_name(?ENOENT)       -> <<"no-entry">>;
+errno_name(?ELOOP)        -> <<"loop">>;
+errno_name(?ENOTDIR)      -> <<"not-directory">>;
+errno_name(?EISDIR)       -> <<"is-directory">>;
+errno_name(?ENAMETOOLONG) -> <<"name-too-long">>;
+errno_name(?EEXIST)       -> <<"exist">>;
+errno_name(?EBADF)        -> <<"bad-descriptor">>;
+errno_name(?EINVAL)       -> <<"invalid">>;
+errno_name(?ENOSPC)       -> <<"insufficient-space">>;
+errno_name(?ENOMEM)       -> <<"insufficient-memory">>;
+errno_name(?ENOTEMPTY)    -> <<"not-empty">>;
+errno_name(_Other)        -> <<"io">>.

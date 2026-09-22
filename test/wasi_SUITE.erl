@@ -31,7 +31,8 @@ all() ->
      proc_exit_reports_status,
      stdin_is_a_capability,
      a_guest_open_goes_through_the_native_backend,
-     renumbering_moves_a_descriptor_onto_a_free_number].
+     renumbering_moves_a_descriptor_onto_a_free_number,
+     the_monotonic_clock_counts_nanoseconds_since_the_node_started].
 
 init_per_suite(Config) ->
     Priv = ?config(priv_dir, Config),
@@ -121,6 +122,29 @@ absent_capabilities_are_refused(Config) ->
     ?assertEqual({ok, [?ENOTCAPABLE]}, wasm:call(I, <<"clock">>, [?CLOCK_REALTIME])),
     NoRandom = instance(Config, #{dirs => [], random => none}),
     ?assertEqual({ok, [?ENOTCAPABLE]}, wasm:call(NoRandom, <<"rand">>, [])).
+
+the_monotonic_clock_counts_nanoseconds_since_the_node_started(Config) ->
+    %% WASI's `timestamp' is a u64 of nanoseconds. BEAM's monotonic time was
+    %% handed through as it was: negative from an arbitrary origin, so it
+    %% wrapped to ~1.8e19 and CPython's `time.monotonic()' raised
+    %% `OverflowError'. It is counted from node start now, so it must sit
+    %% just under the same measurement taken here and fit a signed 64 bits.
+    I = instance(Config, #{}),
+    T1 = read_clock(I),
+    Uptime = erlang:monotonic_time(nanosecond)
+             - erlang:convert_time_unit(erlang:system_info(start_time),
+                                        native, nanosecond),
+    T2 = read_clock(I),
+    ?assert(T1 =< T2),
+    ?assert(T1 =< Uptime),
+    ?assert(Uptime - T1 < 1_000_000_000),
+    ?assert(T2 < 1 bsl 63).
+
+%% The fixture's `clock' export writes the timestamp at address 40.
+read_clock(I) ->
+    {ok, [?ESUCCESS]} = wasm:call(I, <<"clock">>, [?CLOCK_MONOTONIC]),
+    {ok, <<T:64/little>>} = wasm:read_memory(I, 40, 8),
+    T.
 
 %%% ------------------------------------------------------------ filesystem ---
 

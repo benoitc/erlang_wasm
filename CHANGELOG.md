@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- **The hex package now ships `priv/script_v1`.** The `files` list in
+  `wasm.app.src` replaces the plugin's default and had left `priv/` out, so
+  0.4.1 and 0.4.2 on hex.pm have no `boot.py` or `boot.js` and
+  `wasm_python_command` and `wasm_javascript_command` fail at start unless
+  erlang_wasm comes from a git checkout. Nothing to set; the next release
+  carries the files.
+- **`scripts/build-python-reactor.sh` can be run again.** A second run found
+  `python.wasm` up to date, got make's "is up to date" line instead of the
+  link command, and failed in `sh`. The link line now comes from
+  `scripts/python-link-line.sh`, which asks make with `-W Programs/python.o`
+  and refuses anything that is not the link command.
+- **The WASI monotonic clock counts from node start.** It handed the guest
+  BEAM's own monotonic time, which is negative, and as a u64 that wrapped to
+  about 1.8e19: `time.monotonic()` in the Python reactor raised
+  `OverflowError`, and asyncio, `perf_counter` and timeouts went with it. It
+  is now nanoseconds since the node started, never negative and never
+  decreasing. Nothing to set.
+
 ## 0.4.2
 
 Security and liveness fixes from a guest-reachable audit of 0.4.1. Fix forward,

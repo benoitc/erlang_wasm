@@ -15,6 +15,9 @@
     {modules, []},
     {licenses, ["Apache-2.0"]},
     {links, [{"GitHub", "https://github.com/benoitc/erlang_wasm"}]},
-    {files, ["src", "include", "c_src", "scripts", "examples", "docs",
-             "rebar.config", "README.md", "LICENSE", "CHANGELOG.md"]}
+    %% `priv/script_v1', not `priv': the worker adapters read the boot
+    %% scripts at start, and the NIF built beside them is not ours to ship.
+    {files, ["src", "include", "c_src", "priv/script_v1", "scripts",
+             "examples", "docs", "rebar.config", "README.md", "LICENSE",
+             "CHANGELOG.md"]}
 ]}.

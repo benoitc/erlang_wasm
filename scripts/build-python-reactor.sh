@@ -66,11 +66,21 @@ echo "compiling the reactor shim"
 
 # The Makefile knows every object and library that goes into `python.wasm`.
 # Ask it, swap the command's entry point for ours, and add the reactor model.
+# python-link-line.sh fails rather than print anything that is not the link
+# line, and the entry-point swap is checked, because a line that kept
+# Programs/python.o would link CPython's own `main` under the reactor model
+# and produce a broken artifact without a word.
 echo "linking"
-(cd "$B" && make -n python.wasm 2>/dev/null | tail -1 \
+LINK="$("$ROOT/scripts/python-link-line.sh" "$B")"
+LINK="$(printf '%s\n' "$LINK" \
     | sed 's| Programs/python.o | worker_reactor.o |' \
-    | sed 's|-o python.wasm|-mexec-model=reactor -o py_reactor.wasm|' \
-    | sh)
+    | sed 's|-o python.wasm|-mexec-model=reactor -o py_reactor.wasm|')"
+case "$LINK" in
+    *worker_reactor.o*) ;;
+    *) echo "the link line does not name Programs/python.o: $LINK" >&2
+       exit 1 ;;
+esac
+(cd "$B" && sh -c "$LINK")
 cp "$B/py_reactor.wasm" "$DEST/py_reactor.wasm"
 
 # The standard library, beside it, for the read-only mount the adapter

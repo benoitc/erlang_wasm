@@ -2172,7 +2172,17 @@ clock_allowed(?CLOCK_MONOTONIC, C) -> lists:member(monotonic, maps:get(clocks, C
 clock_allowed(_, _) -> false.
 
 clock_now(?CLOCK_REALTIME) -> {ok, erlang:system_time(nanosecond)};
-clock_now(?CLOCK_MONOTONIC) -> {ok, erlang:monotonic_time(nanosecond)};
+%% WASI's `timestamp' is a u64 of nanoseconds from an origin that is
+%% unspecified but must not run backwards. BEAM's monotonic time starts at an
+%% arbitrary, negative point, and written as a u64 that wrapped to ~1.8e19,
+%% past what CPython's signed PyTime_t holds. Counted from node start it is
+%% never negative, never decreases, and is the same clock in every process on
+%% the node, which an image captured in one process and restored in another
+%% needs. `wasm_instance:uptime_seconds/0' does the same for the same reason.
+clock_now(?CLOCK_MONOTONIC) ->
+    Start = erlang:convert_time_unit(erlang:system_info(start_time),
+                                     native, nanosecond),
+    {ok, erlang:monotonic_time(nanosecond) - Start};
 clock_now(_) -> error.
 
 %% The whole buffer is filled, however large, in pieces.

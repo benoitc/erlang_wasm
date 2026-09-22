@@ -1,0 +1,12 @@
+[package]
+name = "wasirandom"
+version = "0.0.0"
+edition = "2021"
+[lib]
+crate-type = ["cdylib"]
+[dependencies]
+wit-bindgen = "0.62"
+[profile.release]
+opt-level = "s"
+strip = true
+panic = "abort"

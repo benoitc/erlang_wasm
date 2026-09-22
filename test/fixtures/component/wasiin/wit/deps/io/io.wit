@@ -1,0 +1,19 @@
+// The input slice of wasi:io 0.2: an input-stream with read and blocking-read.
+// Declared locally so the fixture pins no external WIT.
+package wasi:io;
+
+interface error {
+  resource error;
+}
+
+interface streams {
+  use error.{error};
+  variant stream-error {
+    last-operation-failed(error),
+    closed,
+  }
+  resource input-stream {
+    read: func(len: u64) -> result<list<u8>, stream-error>;
+    blocking-read: func(len: u64) -> result<list<u8>, stream-error>;
+  }
+}

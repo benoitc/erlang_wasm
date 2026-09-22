@@ -61,7 +61,7 @@ two_emits_accumulate(Config) ->
 %% A sink that forwards each chunk to this process, so the test reads them back.
 sink() ->
     Self = self(),
-    wasi_preview2:io(fun(B) -> Self ! {out, B}, ok end).
+    wasi_preview2:io(#{sink => fun(B) -> Self ! {out, B}, ok end}).
 
 drain() ->
     receive {out, B} -> [B | drain()] after 0 -> [] end.

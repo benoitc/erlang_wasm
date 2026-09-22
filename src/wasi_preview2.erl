@@ -24,6 +24,7 @@ and the output side of `wasi:io`. Keys are the bare, unversioned interface ids
 -define(STREAM_ERROR,
         {variant, [{<<"last-operation-failed">>, handle}, {<<"closed">>, none}]}).
 -define(WRITE_RESULT, {result, none, ?STREAM_ERROR}).
+-define(READ_RESULT, {result, {list, u8}, ?STREAM_ERROR}).
 
 -doc "Every implemented `wasi:*` interface, merged into one imports map.".
 -spec imports() -> #{{binary(), binary()} => fun()}.
@@ -118,21 +119,32 @@ environment() ->
           wasm_component:import_fun({[], {option, string}}, fun([]) -> none end)}.
 
 -doc """
-The output side of `wasi:io`: `wasi:cli/stdout.get-stdout` mints a host-owned
-`output-stream`, `blocking-write-and-flush` writes its bytes to the stream's
-sink, and the `[resource-drop]` intrinsics free the host handle. The default
-sink discards, so a guest never writes to the node's own stdout.
+The stream side of `wasi:io` with default endpoints: `get-stdout` over a sink
+that discards, `get-stdin` over an empty source.
 """.
 -spec io() -> #{{binary(), binary()} => fun()}.
 io() ->
-    io(fun(_Bytes) -> ok end).
+    io(#{}).
 
--doc "The output side of `wasi:io` with `Sink` receiving every written chunk.".
--spec io(fun((binary()) -> ok)) -> #{{binary(), binary()} => fun()}.
-io(Sink) ->
+-doc """
+The stream side of `wasi:io`. `wasi:cli/stdout.get-stdout` mints a host-owned
+`output-stream` whose `blocking-write-and-flush` writes to `sink`, and
+`wasi:cli/stdin.get-stdin` mints an `input-stream` that hands out `source`
+through `read`/`blocking-read` until it is drained, then `closed`. The
+`[resource-drop]` intrinsics free the host handle.
+
+`sink` defaults to discarding (so a guest never writes to the node's own
+stdout); `source` defaults to empty.
+""".
+-spec io(#{sink => fun((binary()) -> ok), source => binary()}) ->
+          #{{binary(), binary()} => fun()}.
+io(Opts) ->
+    Sink = maps:get(sink, Opts, fun(_Bytes) -> ok end),
+    Source = maps:get(source, Opts, <<>>),
     Streams = <<"wasi:io/streams">>,
     Error = <<"wasi:io/error">>,
     Stdout = <<"wasi:cli/stdout">>,
+    Stdin = <<"wasi:cli/stdin">>,
     #{{Stdout, <<"get-stdout">>} =>
           wasm_component:import_fun(
             {[], handle}, fun([]) -> wasm_component:host_new(output_stream, Sink) end),
@@ -140,10 +152,21 @@ io(Sink) ->
           wasm_component:import_fun(
             {[handle, {list, u8}], ?WRITE_RESULT},
             fun([Handle, Bytes]) -> write_stream(Handle, Bytes), {ok, undefined} end),
-      {Streams, <<"[resource-drop]output-stream">>} =>
-          fun(_Ctx, [Handle]) -> _ = wasm_component:host_drop(Handle), {ok, []} end,
-      {Error, <<"[resource-drop]error">>} =>
-          fun(_Ctx, [Handle]) -> _ = wasm_component:host_drop(Handle), {ok, []} end}.
+      {Streams, <<"[resource-drop]output-stream">>} => drop_fun(),
+      {Stdin, <<"get-stdin">>} =>
+          wasm_component:import_fun(
+            {[], handle}, fun([]) -> wasm_component:host_new(input_stream, Source) end),
+      {Streams, <<"[method]input-stream.read">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], ?READ_RESULT}, fun([H, Len]) -> read_stream(H, Len) end),
+      {Streams, <<"[method]input-stream.blocking-read">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], ?READ_RESULT}, fun([H, Len]) -> read_stream(H, Len) end),
+      {Streams, <<"[resource-drop]input-stream">>} => drop_fun(),
+      {Error, <<"[resource-drop]error">>} => drop_fun()}.
+
+drop_fun() ->
+    fun(_Ctx, [Handle]) -> _ = wasm_component:host_drop(Handle), {ok, []} end.
 
 %% Write to the stream's sink. A write to a handle that is gone is dropped; a
 %% real closed-stream error waits for the error resource.
@@ -151,4 +174,20 @@ write_stream(Handle, Bytes) ->
     case wasm_component:host_get(Handle) of
         {ok, {output_stream, Sink}} -> _ = Sink(Bytes), ok;
         error -> ok
+    end.
+
+%% Read up to Len bytes from the source, advancing it. An empty source (drained
+%% or unknown handle) reads `closed`, the end-of-stream signal blocking-read
+%% waits for. `closed` carries no payload, so no error resource is minted.
+read_stream(Handle, Len) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {input_stream, <<>>}} ->
+            {error, {<<"closed">>, undefined}};
+        {ok, {input_stream, Remaining}} ->
+            N = min(Len, byte_size(Remaining)),
+            <<Chunk:N/binary, Rest/binary>> = Remaining,
+            _ = wasm_component:host_update(Handle, Rest),
+            {ok, Chunk};
+        error ->
+            {error, {<<"closed">>, undefined}}
     end.

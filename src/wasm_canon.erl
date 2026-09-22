@@ -134,7 +134,10 @@ pointer to a guest-allocated area, read from memory.
 -spec lift_result(wasm:instance(), desc(), [term()]) -> term().
 lift_result(Inst, Desc, CoreResults) ->
     case length(flat_types(Desc)) =< ?MAX_FLAT_RESULTS of
-        true  -> lift_flat(Inst, Desc, CoreResults);
+        %% lift_value decodes any descriptor from flats, including a single-flat
+        %% aggregate such as `result<_, _>` (just a discriminant), which lift_flat
+        %% alone does not.
+        true  -> {Value, _Rest} = lift_value(Inst, Desc, CoreResults), Value;
         false -> [Ptr] = CoreResults, load(Inst, Desc, Ptr)
     end.
 
@@ -152,10 +155,7 @@ lift_flat(_Inst, s64, [V]) -> from_signed(V band 16#FFFFFFFFFFFFFFFF, 64);
 lift_flat(_Inst, char, [V]) -> V;
 lift_flat(_Inst, bool, [V]) -> V =/= 0;
 lift_flat(_Inst, f32, [V]) -> V;
-lift_flat(_Inst, f64, [V]) -> V;
-lift_flat(_Inst, {enum, Names}, [V]) -> lists:nth(V + 1, Names);
-lift_flat(_Inst, {flags, Names}, [V]) -> bits_flags(Names, V);
-lift_flat(_Inst, _D, []) -> ok.
+lift_flat(_Inst, f64, [V]) -> V.
 
 %%% -------------------------------------------------- host imports (reverse) ---
 

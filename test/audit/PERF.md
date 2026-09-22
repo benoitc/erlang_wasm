@@ -6403,3 +6403,24 @@ the request path. Against the pre-steward baseline (before the whole PR) the min
 floor is about 420 us, so the per-request steward the PR introduces costs roughly
 30 us; that lands in the accept phase, which the measurement border allows to
 grow, not in the guest execution envelope.
+
+## Running a real WASI 0.2 component costs a cold instantiation per call
+
+`wasi_preview2:run_command/2` decodes a `wasi:cli/command` component, instantiates
+its inner core module with the full command import bundle (io, clocks, random,
+environment, exit, terminals), calls `wasi:cli/run.run`, and drops it. Measured
+on the committed `realupper` fixture (a real `wasm32-wasip2` Rust program that
+upper-cases stdin), 200 calls after warm-up, minimum-of-run the signal:
+
+| step | per call |
+| --- | --- |
+| decode only | ~17 us |
+| run_command (decode + instantiate + run + drop) | ~810 us |
+
+So a real command is dominated by instantiation, not decode: wiring the WASI host
+and loading the inner core module per request is the ~795 us. This is the
+cold-start-per-request cost of a component with no snapshot; component snapshot is
+deferred (live resource handles), so there is no warm path to compare against yet.
+The number is for orientation, not a regression gate; the core-module worker
+envelope above is unchanged, since the component path is a separate default-off
+branch.

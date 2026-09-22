@@ -50,3 +50,16 @@ for name in echo vectors counter hostcall hostagg wasirandom wasiclocks wasienv 
   wasm-tools validate --features component-model "$out"
   echo "built $out"
 done
+
+# Real components: a normal Rust `fn main` built for wasm32-wasip2 is already a
+# wasi:cli/command component (wasmtime runs it directly), so there is no
+# `component new` step. These are the differential fixtures.
+rustup target add wasm32-wasip2 >/dev/null 2>&1 || true
+for name in realupper; do
+  src="$here/test/fixtures/component/$name"
+  out="$here/test/fixtures/component/$name.component.wasm"
+  ( cd "$src" && cargo build --release --target wasm32-wasip2 )
+  cp "$src/target/wasm32-wasip2/release/$name.wasm" "$out"
+  wasm-tools validate --features component-model "$out"
+  echo "built $out"
+done

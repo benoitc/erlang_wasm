@@ -19,7 +19,7 @@ later step.
 -include("wasi.hrl").
 
 -export([imports/0, random/0, clocks/0, environment/0, io/0, io/1,
-         filesystem/1, sockets/1]).
+         filesystem/1, sockets/1, command/1, run_command/2]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle); we only ever return ok, so no
@@ -160,6 +160,9 @@ clocks() ->
           wasm_component:import_fun({[], u64}, fun([]) -> monotonic_now() end),
       {M, <<"resolution">>} =>
           wasm_component:import_fun({[], u64}, fun([]) -> 1 end),
+      {M, <<"subscribe-duration">>} =>
+          wasm_component:import_fun(
+            {[u64], handle}, fun([_When]) -> wasm_component:host_new(pollable, ready) end),
       {W, <<"now">>} =>
           wasm_component:import_fun({[], Datetime}, fun([]) -> wall_now() end),
       {W, <<"resolution">>} =>
@@ -207,6 +210,88 @@ environment() ->
           wasm_component:import_fun({[], {list, string}}, fun([]) -> [] end),
       {E, <<"initial-cwd">>} =>
           wasm_component:import_fun({[], {option, string}}, fun([]) -> none end)}.
+
+-doc """
+Every import a `wasi:cli/command` component needs, merged into one map: io (with
+`stdin` as the input source and `stdout`/`stderr` as sinks), clocks, random, the
+environment, `exit`, and the terminal interfaces (which report no tty). Hand it
+to a command component and call its `wasi:cli/run.run` export.
+
+Options: `stdin` (a binary, default empty), `stdout` and `stderr`
+(`fun((binary()) -> ok)` sinks, default discard).
+""".
+-spec command(#{stdin => binary(),
+                stdout => fun((binary()) -> ok),
+                stderr => fun((binary()) -> ok)}) ->
+          #{{binary(), binary()} => fun()}.
+command(Opts) ->
+    Stdin = maps:get(stdin, Opts, <<>>),
+    Stdout = maps:get(stdout, Opts, fun(_) -> ok end),
+    Stderr = maps:get(stderr, Opts, fun(_) -> ok end),
+    lists:foldl(fun maps:merge/2, #{},
+                [io(#{source => Stdin, sink => Stdout}),
+                 clocks(), random(), environment(),
+                 cli_exit(), cli_stderr(Stderr), cli_terminals()]).
+
+-doc """
+Run a `wasi:cli/command` component with `Stdin` on its standard input and return
+what it wrote to standard output. Instantiates with `command/1`, calls the
+`wasi:cli/run.run` export, and collects the output stream. This is the
+byte-in/byte-out entry: a real component reads stdin and writes stdout.
+""".
+-spec run_command(binary(), binary()) -> {ok, binary()} | {error, term()}.
+run_command(Bin, Stdin) ->
+    Ref = make_ref(),
+    Self = self(),
+    Sink = fun(B) -> Self ! {Ref, B}, ok end,
+    case wasm_component:instantiate(Bin, command(#{stdin => Stdin, stdout => Sink})) of
+        {ok, Instance} ->
+            case run_export(wasm_component:exports(Instance)) of
+                {ok, Export} ->
+                    case wasm_component:call(
+                           Instance, Export, {[], {result, none, none}}, []) of
+                        {ok, _RunResult} -> {ok, collect_output(Ref)};
+                        {error, _} = E   -> E
+                    end;
+                error ->
+                    {error, no_run_export}
+            end;
+        {error, _} = E ->
+            E
+    end.
+
+run_export(Exports) ->
+    case [E || E <- Exports, binary:match(E, <<"wasi:cli/run">>) =/= nomatch] of
+        [Interface | _] -> {ok, <<Interface/binary, "#run">>};
+        []              -> error
+    end.
+
+collect_output(Ref) ->
+    collect_output(Ref, []).
+
+collect_output(Ref, Acc) ->
+    receive {Ref, Bytes} -> collect_output(Ref, [Bytes | Acc])
+    after 0 -> iolist_to_binary(lists:reverse(Acc))
+    end.
+
+cli_exit() ->
+    #{{<<"wasi:cli/exit">>, <<"exit">>} =>
+          wasm_component:import_fun(
+            {[{result, none, none}], none}, fun([_Status]) -> undefined end)}.
+
+cli_stderr(Sink) ->
+    #{{<<"wasi:cli/stderr">>, <<"get-stderr">>} =>
+          wasm_component:import_fun(
+            {[], handle}, fun([]) -> wasm_component:host_new(output_stream, Sink) end)}.
+
+%% Not a terminal: get-terminal-* report none, so a guest writes plainly.
+cli_terminals() ->
+    #{{<<"wasi:cli/terminal-stdin">>, <<"get-terminal-stdin">>} =>
+          wasm_component:import_fun({[], {option, handle}}, fun([]) -> none end),
+      {<<"wasi:cli/terminal-stdout">>, <<"get-terminal-stdout">>} =>
+          wasm_component:import_fun({[], {option, handle}}, fun([]) -> none end),
+      {<<"wasi:cli/terminal-stderr">>, <<"get-terminal-stderr">>} =>
+          wasm_component:import_fun({[], {option, handle}}, fun([]) -> none end)}.
 
 -doc """
 The stream side of `wasi:io` with default endpoints: `get-stdout` over a sink

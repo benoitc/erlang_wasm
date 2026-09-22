@@ -28,7 +28,7 @@ canonical exports), the Canonical ABI in the import direction for aggregate
 """.
 
 -export([decode/1, instantiate/1, instantiate/2, call/4, drop_resource/3]).
--export([import_fun/2]).
+-export([import_fun/2, exports/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
 -export_type([component/0, instance/0]).
@@ -152,6 +152,11 @@ instantiate(Bin, Imports) ->
         {error, _} = E ->
             E
     end.
+
+-doc "The export names a decoded component instance offers.".
+-spec exports(instance()) -> [binary()].
+exports(#{exports := Exports}) ->
+    Exports.
 
 -doc """
 Call a lifted export, lowering `Args` and lifting the result by `Sig`.

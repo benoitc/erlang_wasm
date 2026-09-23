@@ -39,8 +39,10 @@ inputs() ->
 %% means something even without wasmtime.
 a_real_command_uppercases_stdin(Config) ->
     Bin = ?config(component, Config),
-    [?assertEqual({ok, string:uppercase(In)}, wasi_preview2:run_command(Bin, In))
-     || In <- inputs()].
+    [begin
+         {ok, #{stdout := Out}} = wasi_preview2:run_command(Bin, In),
+         ?assertEqual(string:uppercase(In), Out)
+     end || In <- inputs()].
 
 %% Byte for byte, our output equals wasmtime's on the same component and input.
 it_matches_wasmtime(Config) ->
@@ -51,7 +53,7 @@ it_matches_wasmtime(Config) ->
             Bin = ?config(component, Config),
             Path = ?config(path, Config),
             [begin
-                 {ok, Ours} = wasi_preview2:run_command(Bin, In),
+                 {ok, #{stdout := Ours}} = wasi_preview2:run_command(Bin, In),
                  Ref = run_on_wasmtime(Wasmtime, Path, In),
                  ?assertEqual(Ref, Ours)
              end || In <- inputs()]
@@ -63,8 +65,9 @@ a_real_command_reads_a_mounted_file(Config) ->
     {ok, Bin} = file:read_file(realcat_path()),
     [begin
          Dir = mount_with(Priv, "input.txt", Content),
-         ?assertEqual({ok, Content},
-                      wasi_preview2:run_command(Bin, <<>>, #{preopen => Dir}))
+         {ok, #{stdout := Out}} =
+             wasi_preview2:run_command(Bin, <<>>, #{preopen => Dir}),
+         ?assertEqual(Content, Out)
      end || Content <- [<<"one line\n">>, <<>>, binary:copy(<<"data ">>, 300)]].
 
 %% Reading the mounted file matches wasmtime run --dir.
@@ -77,7 +80,8 @@ reading_a_file_matches_wasmtime(Config) ->
             {ok, Bin} = file:read_file(realcat_path()),
             Content = <<"mounted content\nfor the diff\n">>,
             Dir = mount_with(Priv, "input.txt", Content),
-            {ok, Ours} = wasi_preview2:run_command(Bin, <<>>, #{preopen => Dir}),
+            {ok, #{stdout := Ours}} =
+                wasi_preview2:run_command(Bin, <<>>, #{preopen => Dir}),
             Ref = os_cmd(io_lib:format("~ts run --dir ~ts::/ ~ts input.txt",
                                        [Wasmtime, Dir, realcat_path()])),
             ?assertEqual(Ref, Ours)

@@ -144,10 +144,16 @@ the worker uses per request.
 """.
 -spec instantiate(binary(), #{{binary(), binary()} => function()}, map()) ->
           {ok, instance()} | {error, term()}.
-instantiate(Bin, Imports, Limits) ->
+instantiate(Bin, Imports, Opts) ->
+    %% `loader => compile` builds an inline module with `wasm:compile` instead of
+    %% `wasm:load`, whose node cache is rate-limited to 50/s; a runner that
+    %% instantiates many single-use components (the wasi-testsuite) needs it to
+    %% avoid `load_rate_exceeded`. Everything else in Opts is instance limits.
+    Loader = maps:get(loader, Opts, load),
+    Limits = maps:remove(loader, Opts),
     case decode(Bin) of
         {ok, #{core := Core, exports := Exports}} ->
-            case wasm:load(Core) of
+            case load_core(Loader, Core) of
                 {ok, Mod} ->
                     CoreImports = core_imports(Core),
                     All = resolve_imports(CoreImports, Imports,
@@ -163,6 +169,9 @@ instantiate(Bin, Imports, Limits) ->
         {error, _} = E ->
             E
     end.
+
+load_core(compile, Core) -> wasm:compile(Core);
+load_core(_Load, Core)   -> wasm:load(Core).
 
 -doc "Destroy a component instance, freeing its inner core instance.".
 -spec destroy(instance()) -> ok.

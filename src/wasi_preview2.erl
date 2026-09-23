@@ -18,7 +18,7 @@ later step.
 
 -include("wasi.hrl").
 
--export([imports/0, random/0, clocks/0, environment/0, io/0, io/1,
+-export([imports/0, random/0, clocks/0, environment/0, environment/2, io/0, io/1,
          filesystem/1, sockets/1, command/1, run_command/2, run_command/3]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
@@ -33,6 +33,8 @@ later step.
 %% The write budget check-write reports for the discarding/buffer sinks: always
 %% ready for a chunk this size.
 -define(WRITE_BUDGET, 65536).
+%% Where cli_exit records the status for run_command to read (same process).
+-define(EXIT_STATUS, {?MODULE, exit_status}).
 
 %% wasi:filesystem enums, in WIT order (the enum discriminant is the index).
 -define(ERROR_CODE,
@@ -205,12 +207,23 @@ arguments, no working directory. It never reads the node's real environment.
 """.
 -spec environment() -> #{{binary(), binary()} => fun()}.
 environment() ->
+    environment([], []).
+
+-doc """
+`wasi:cli/environment` with a given argv and environment. `get-arguments` returns
+`Args` verbatim (the caller includes `argv[0]`; nothing is prepended), and
+`get-environment` returns `Env` as name/value pairs.
+""".
+-spec environment([binary()], [{binary(), binary()}]) ->
+          #{{binary(), binary()} => fun()}.
+environment(Args, Env) ->
     E = <<"wasi:cli/environment">>,
+    Pairs = [{K, V} || {K, V} <- Env],
     #{{E, <<"get-environment">>} =>
           wasm_component:import_fun(
-            {[], {list, {tuple, [string, string]}}}, fun([]) -> [] end),
+            {[], {list, {tuple, [string, string]}}}, fun([]) -> Pairs end),
       {E, <<"get-arguments">>} =>
-          wasm_component:import_fun({[], {list, string}}, fun([]) -> [] end),
+          wasm_component:import_fun({[], {list, string}}, fun([]) -> Args end),
       {E, <<"initial-cwd">>} =>
           wasm_component:import_fun({[], {option, string}}, fun([]) -> none end)}.
 
@@ -225,14 +238,20 @@ Options: `stdin` (a binary, default empty), `stdout` and `stderr`
 """.
 -spec command(#{stdin => binary(),
                 stdout => fun((binary()) -> ok),
-                stderr => fun((binary()) -> ok)}) ->
+                stderr => fun((binary()) -> ok),
+                args => [binary()],
+                env => [{binary(), binary()}],
+                preopen => file:filename_all(),
+                writable => boolean()}) ->
           #{{binary(), binary()} => fun()}.
 command(Opts) ->
     Stdin = maps:get(stdin, Opts, <<>>),
     Stdout = maps:get(stdout, Opts, fun(_) -> ok end),
     Stderr = maps:get(stderr, Opts, fun(_) -> ok end),
+    Args = maps:get(args, Opts, []),
+    Env = maps:get(env, Opts, []),
     Base = [io(#{source => Stdin, sink => Stdout}),
-            clocks(), random(), environment(),
+            clocks(), random(), environment(Args, Env),
             cli_exit(), cli_stderr(Stderr), cli_terminals()],
     Fs = case maps:find(preopen, Opts) of
              {ok, Dir} -> [filesystem(#{preopen => Dir, name => <<"/">>,
@@ -255,26 +274,53 @@ run_command(Bin, Stdin) ->
 As `run_command/2` with extra `command/1` options, such as `preopen => Dir` to
 give the command a directory to read (a mount).
 """.
--spec run_command(binary(), binary(), map()) -> {ok, binary()} | {error, term()}.
+-spec run_command(binary(), binary(),
+                  #{args => [binary()], env => [{binary(), binary()}],
+                    preopen => file:filename_all(), writable => boolean(),
+                    compile => boolean()}) ->
+          {ok, #{stdout := binary(), stderr := binary(),
+                 exit_code := integer()}} | {error, term()}.
 run_command(Bin, Stdin, Extra) ->
-    Ref = make_ref(),
+    _ = erase(?EXIT_STATUS),
+    OutRef = make_ref(),
+    ErrRef = make_ref(),
     Self = self(),
-    Sink = fun(B) -> Self ! {Ref, B}, ok end,
-    Opts = Extra#{stdin => Stdin, stdout => Sink},
-    case wasm_component:instantiate(Bin, command(Opts)) of
+    Opts = (maps:without([compile], Extra))#{
+             stdin => Stdin,
+             stdout => fun(B) -> Self ! {OutRef, B}, ok end,
+             stderr => fun(B) -> Self ! {ErrRef, B}, ok end},
+    Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
+    case wasm_component:instantiate(Bin, command(Opts), #{loader => Loader}) of
         {ok, Instance} ->
             case run_export(wasm_component:exports(Instance)) of
                 {ok, Export} ->
-                    case wasm_component:call(
-                           Instance, Export, {[], {result, none, none}}, []) of
-                        {ok, _RunResult} -> {ok, collect_output(Ref)};
-                        {error, _} = E   -> E
+                    RunResult = wasm_component:call(
+                                  Instance, Export, {[], {result, none, none}}, []),
+                    Stdout = collect_output(OutRef),
+                    Stderr = collect_output(ErrRef),
+                    case exit_outcome(RunResult) of
+                        {ok, Code} ->
+                            {ok, #{stdout => Stdout, stderr => Stderr,
+                                   exit_code => Code}};
+                        {error, _} = E ->
+                            E
                     end;
                 error ->
                     {error, no_run_export}
             end;
         {error, _} = E ->
             E
+    end.
+
+%% run returns result<_,_> (ok -> 0, err -> 1); a trap that recorded an exit
+%% status is that code; any other trap is a real error.
+exit_outcome({ok, {ok, _}})    -> {ok, 0};
+exit_outcome({ok, {error, _}}) -> {ok, 1};
+exit_outcome({ok, _Other})     -> {ok, 0};
+exit_outcome({error, E}) ->
+    case get(?EXIT_STATUS) of
+        undefined -> {error, E};
+        Code      -> {ok, Code}
     end.
 
 run_export(Exports) ->
@@ -291,10 +337,18 @@ collect_output(Ref, Acc) ->
     after 0 -> iolist_to_binary(lists:reverse(Acc))
     end.
 
+%% exit(status: result<_,_>) records the status and traps: the code cannot ride a
+%% component trap value (call_host wraps it and reason_kind collapses it), so
+%% run_command reads it from the process dictionary. ok disc 0 -> 0, err disc 1 -> 1.
 cli_exit() ->
     #{{<<"wasi:cli/exit">>, <<"exit">>} =>
-          wasm_component:import_fun(
-            {[{result, none, none}], none}, fun([_Status]) -> undefined end)}.
+          fun(_Ctx, [Disc]) ->
+              put(?EXIT_STATUS, exit_of(Disc)),
+              {trap, wasi_exit}
+          end}.
+
+exit_of(0) -> 0;
+exit_of(_) -> 1.
 
 cli_stderr(Sink) ->
     #{{<<"wasi:cli/stderr">>, <<"get-stderr">>} =>
@@ -399,8 +453,17 @@ drop_fun() ->
 %% real closed-stream error waits for the error resource.
 write_stream(Handle, Bytes) ->
     case wasm_component:host_get(Handle) of
-        {ok, {output_stream, Sink}} -> _ = Sink(Bytes), ok;
-        error -> ok
+        {ok, {output_stream, {file, Fh, Off}}} ->
+            %% A file-backed stream (from write/append-via-stream): pwrite and
+            %% advance the offset so the next write continues where this ended.
+            case wasi_fs:pwrite(Fh, Off, Bytes) of
+                {ok, N}    -> _ = wasm_component:host_update(Handle, {file, Fh, Off + N}), ok;
+                {error, _} -> ok
+            end;
+        {ok, {output_stream, Sink}} when is_function(Sink) ->
+            _ = Sink(Bytes), ok;
+        _ ->
+            ok
     end.
 
 %% Read up to Len bytes from the source, advancing it. An empty source (drained
@@ -522,10 +585,11 @@ filesystem(Opts) ->
             {[handle], ?METADATA_HASH_RESULT}, fun([H]) -> metadata_hash(H) end),
       {Types, <<"[method]descriptor.write-via-stream">>} =>
           wasm_component:import_fun(
-            {[handle, u64], ?OPEN_RESULT}, fun([_H, _Off]) -> {error, <<"read-only">>} end),
+            {[handle, u64], ?OPEN_RESULT},
+            fun([H, Off]) -> write_via_stream(H, Off, Writable) end),
       {Types, <<"[method]descriptor.append-via-stream">>} =>
           wasm_component:import_fun(
-            {[handle], ?OPEN_RESULT}, fun([_H]) -> {error, <<"read-only">>} end),
+            {[handle], ?OPEN_RESULT}, fun([H]) -> append_via_stream(H, Writable) end),
       {Types, <<"[method]directory-entry-stream.read-directory-entry">>} =>
           wasm_component:import_fun(
             {[handle], ?DIR_ENTRY_RESULT},
@@ -580,6 +644,29 @@ open_modes(OpenFlags, true) ->
 
 %% Write bytes at an offset, reporting how many. A write to a read-opened file is
 %% refused by the OS, so a read-only filesystem needs no extra guard here.
+%% A file-backed output stream, from the given offset (write) or the file end
+%% (append). Refused on a read-only filesystem. `write_stream` does the pwrite.
+write_via_stream(_File, _Off, false) ->
+    {error, <<"read-only">>};
+write_via_stream(File, Off, true) ->
+    case wasm_component:host_get(File) of
+        {ok, {fs_file, Handle}} ->
+            {ok, wasm_component:host_new(output_stream, {file, Handle, Off})};
+        _ ->
+            {error, <<"bad-descriptor">>}
+    end.
+
+append_via_stream(_File, false) ->
+    {error, <<"read-only">>};
+append_via_stream(File, true) ->
+    case wasm_component:host_get(File) of
+        {ok, {fs_file, Handle}} ->
+            End = case wasi_fs:size(Handle) of {ok, S} -> S; _ -> 0 end,
+            {ok, wasm_component:host_new(output_stream, {file, Handle, End})};
+        _ ->
+            {error, <<"bad-descriptor">>}
+    end.
+
 write_at(File, Data, Off) ->
     case wasm_component:host_get(File) of
         {ok, {fs_file, Handle}} ->

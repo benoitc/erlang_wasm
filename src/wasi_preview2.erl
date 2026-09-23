@@ -708,9 +708,26 @@ open_at(Dir, PathFlags, Path, OpenFlags, DescFlags, Writable) ->
 %% reports. This mirrors Preview 1's path_open: a directory has a root and no file
 %% handle. A directory asked for with write intent is is-directory, and the
 %% `directory` open flag on a non-directory is not-directory.
+open_target(_Root, _PathFlags, Path, _OpenFlags, _DescFlags, _WantsWrite)
+  when Path =:= <<>> ->
+    {error, <<"invalid">>};
 open_target(Root, PathFlags, Path, OpenFlags, DescFlags, WantsWrite) ->
-    WantDir = lists:member(<<"directory">>, OpenFlags),
-    case wasi_fs:stat(Root, Path, follow_of(PathFlags)) of
+    case binary:match(Path, <<0>>) of
+        nomatch -> open_named(Root, PathFlags, Path, OpenFlags, DescFlags, WantsWrite);
+        %% A NUL truncates the name in C, so it must be refused, not silently
+        %% opening whatever comes before it.
+        _       -> {error, <<"invalid">>}
+    end.
+
+open_named(Root, PathFlags, Path0, OpenFlags, DescFlags, WantsWrite) ->
+    %% A trailing slash names a directory: it forces the directory expectation and
+    %% is stripped before the name reaches the backend, so a file named with one is
+    %% not-directory rather than the backend's mishandling of the slash.
+    Slash = trailing_slash(Path0),
+    Path = strip_trailing_slashes(Path0),
+    WantDir = Slash orelse lists:member(<<"directory">>, OpenFlags),
+    Follow = follow_of(PathFlags),
+    case wasi_fs:stat(Root, Path, Follow) of
         {ok, #{type := directory}} when WantsWrite ->
             {error, <<"is-directory">>};
         {ok, #{type := directory}} ->
@@ -718,13 +735,19 @@ open_target(Root, PathFlags, Path, OpenFlags, DescFlags, WantsWrite) ->
         {ok, _} when WantDir ->
             {error, <<"not-directory">>};
         {ok, _} ->
-            open_file(Root, Path, OpenFlags, DescFlags, WantsWrite);
+            open_file(Root, Path, OpenFlags, DescFlags, WantsWrite, Follow);
         {error, Errno} when WantDir ->
             {error, errno_name(Errno)};
         {error, _} ->
             %% Absent (a create) or a symlink stat could not follow: let the open
             %% produce the errno, as Preview 1 hands the name to wasi_fs.
-            open_file(Root, Path, OpenFlags, DescFlags, WantsWrite)
+            open_file(Root, Path, OpenFlags, DescFlags, WantsWrite, Follow)
+    end.
+
+strip_trailing_slashes(Path) ->
+    case trailing_slash(Path) of
+        true  -> strip_trailing_slashes(binary:part(Path, 0, byte_size(Path) - 1));
+        false -> Path
     end.
 
 open_dir(Root, Path) ->
@@ -733,8 +756,9 @@ open_dir(Root, Path) ->
         {error, Errno} -> {error, errno_name(Errno)}
     end.
 
-open_file(Root, Path, OpenFlags, DescFlags, WantsWrite) ->
-    Modes = open_modes(OpenFlags, DescFlags, WantsWrite),
+open_file(Root, Path, OpenFlags, DescFlags, WantsWrite, Follow) ->
+    Modes = open_modes(OpenFlags, DescFlags, WantsWrite)
+        ++ [follow || Follow =:= follow],
     case wasi_fs:open(Root, Path, Modes) of
         {ok, Handle} ->
             Flags = eff_flags(DescFlags, WantsWrite),
@@ -900,10 +924,16 @@ link_at(Dir, PathFlags, Path, NewDir, NewPath, true) ->
         true ->
             {error, <<"invalid">>};
         false ->
-            with_two_dirs(Dir, NewDir,
-                          fun(From, To) ->
-                              fs_unit(wasi_fs:link(From, Path, To, NewPath))
-                          end)
+            case trailing_slash(NewPath) of
+                %% The link location ending in `/` names a directory not there.
+                true ->
+                    {error, <<"no-entry">>};
+                false ->
+                    with_two_dirs(Dir, NewDir,
+                                  fun(From, To) ->
+                                      fs_unit(wasi_fs:link(From, Path, To, NewPath))
+                                  end)
+            end
     end.
 
 with_two_dirs(A, B, Fun) ->

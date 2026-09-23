@@ -27,23 +27,21 @@ all() -> [preview2_cases, directories_present].
 
 %% Known-failing counts per directory. The whole `wasi:filesystem` and
 %% `wasi:clocks` surface is implemented (no stubs); the c directory passes in
-%% full and all but four rust cases do. What remains:
+%% full and rust to all but one case. What remains:
 %%
-%% - rust: `symlink_create` opens a symlink as a directory (a symlink-follow
-%%   detail); `interesting_paths` opens a path with a trailing NUL byte;
-%%   `path_link` hard-links a dangling symlink (the native-NIF-only case, as in
-%%   Preview 1's fallback baseline); and `poll_oneoff_stdio` needs a real poll,
-%%   which is the async phase.
+%% - rust: `poll_oneoff_stdio` needs a real poll rather than the always-ready
+%%   one, which is the async phase.
 %% - assemblyscript: `args_get`/`environ_get` trip an adapter-internal assertion
-%%   on the argument/environment layout, and `fd_write-to-invalid-fd` expects a
-%%   specific non-zero exit the command model normalises away.
+%%   on the argument/environment layout (the same host serves rust and c, which
+%%   pass), and `fd_write-to-invalid-fd` expects a specific non-zero exit the
+%%   command model normalises away.
 %%
 %% Lower these as the fidelity work lands; the `stale_baseline` guard forbids
 %% leaving a number too high.
 baseline() ->
     #{~"assemblyscript/wasm32-wasip1" => 3,
       ~"c/wasm32-wasip1" => 0,
-      ~"rust/wasm32-wasip1" => 4}.
+      ~"rust/wasm32-wasip1" => 1}.
 
 init_per_suite(Config) ->
     case wasi_testsuite_runner:dirs() of

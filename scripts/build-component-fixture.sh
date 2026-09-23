@@ -74,3 +74,15 @@ for name in twocore; do
   wasm-tools validate --features component-model "$out"
   echo "built $out"
 done
+
+# The wasmtime preview1->preview2 adapter, pinned to the wasmtime we test against.
+# It turns a wasm32-wasip1 program into a preview2 command component (many core
+# modules linked by the component graph), which is how the official wasi-testsuite
+# is reused. Committed at test/fixtures/component/wasi_snapshot_preview1.command.wasm.
+adapter="$here/test/fixtures/component/wasi_snapshot_preview1.command.wasm"
+adapter_ver="v48.0.1"
+if [ ! -f "$adapter" ]; then
+  curl -fsSL -o "$adapter" \
+    "https://github.com/bytecodealliance/wasmtime/releases/download/$adapter_ver/wasi_snapshot_preview1.command.wasm"
+  echo "fetched $adapter ($adapter_ver)"
+fi

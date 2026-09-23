@@ -277,7 +277,7 @@ give the command a directory to read (a mount).
 -spec run_command(binary(), binary(),
                   #{args => [binary()], env => [{binary(), binary()}],
                     preopen => file:filename_all(), writable => boolean(),
-                    compile => boolean()}) ->
+                    compile => boolean(), stub => boolean()}) ->
           {ok, #{stdout := binary(), stderr := binary(),
                  exit_code := integer()}} | {error, term()}.
 run_command(Bin, Stdin, Extra) ->
@@ -285,12 +285,13 @@ run_command(Bin, Stdin, Extra) ->
     OutRef = make_ref(),
     ErrRef = make_ref(),
     Self = self(),
-    Opts = (maps:without([compile], Extra))#{
+    Opts = (maps:without([compile, stub], Extra))#{
              stdin => Stdin,
              stdout => fun(B) -> Self ! {OutRef, B}, ok end,
              stderr => fun(B) -> Self ! {ErrRef, B}, ok end},
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
-    case wasm_component:instantiate(Bin, command(Opts), #{loader => Loader}) of
+    InstOpts = #{loader => Loader, stub => maps:get(stub, Extra, false)},
+    case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
         {ok, Instance} ->
             case run_export(wasm_component:exports(Instance)) of
                 {ok, Export} ->

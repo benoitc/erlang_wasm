@@ -35,8 +35,13 @@ current fixtures.
 
 -export([lower_params/3, lift_result/3, size_align/1, flat_types/1]).
 -export([lift_params/3, lower_value/3, store_value/4, result_via_memory/1]).
+-export([with_realloc/2]).
 
 -export_type([desc/0]).
+
+%% The realloc override for the current host-import call (a multi-core component
+%% names its own realloc), installed by `with_realloc/2` for the call's duration.
+-define(REALLOC, {?MODULE, realloc}).
 
 -type name() :: binary().
 -type desc() :: u8 | u16 | u32 | u64 | s8 | s16 | s32 | s64
@@ -183,6 +188,30 @@ lower_value(Inst, Desc, Term) -> lower_flat(Inst, Desc, Term).
 -doc "Write a value into linear memory at `Ptr` (`store`, exported).".
 -spec store_value(wasm:instance(), desc(), non_neg_integer(), term()) -> ok.
 store_value(Inst, Desc, Ptr, Term) -> store(Inst, Desc, Ptr, Term).
+
+-doc """
+Run `Body` with `Realloc` as the allocator for any result it lowers by memory.
+
+`Realloc` is a `fun(Ctx, [0, 0, Align, Size]) -> {ok, [Ptr]}` (a core function),
+or `undefined` to keep the default (the guest's `cabi_realloc` export). A
+multi-core component names a realloc that is not reachable by that name on the
+instance calling the import, so the linker installs it here around the host
+function; the override is scoped to `Body` and restored after.
+""".
+-spec with_realloc(fun((map(), [integer()]) -> {ok, [integer()]}) | undefined,
+                   fun(() -> T)) -> T.
+with_realloc(undefined, Body) ->
+    Body();
+with_realloc(Realloc, Body) ->
+    Prev = get(?REALLOC),
+    put(?REALLOC, Realloc),
+    try Body()
+    after
+        case Prev of
+            undefined -> erase(?REALLOC);
+            _         -> put(?REALLOC, Prev)
+        end
+    end.
 
 -doc "Whether a result is returned through memory rather than flat.".
 -spec result_via_memory(desc()) -> boolean().
@@ -534,9 +563,20 @@ bits_flags(Names, Bits) ->
 
 align_up(N, A) -> ((N + A - 1) div A) * A.
 
+%% Allocate `Size` bytes aligned to `Align` in the guest and return the pointer.
+%% A component whose realloc is not a `cabi_realloc` export reachable on this
+%% instance (a multi-core component, where the lowering names its own realloc)
+%% installs that function with `with_realloc/2`; otherwise the guest's
+%% `cabi_realloc` export is called, as a single-core component has always done.
 realloc(Inst, Align, Size) ->
-    {ok, [Ptr]} = wasm:call(Inst, <<"cabi_realloc">>, [0, 0, Align, Size]),
-    Ptr.
+    case get(?REALLOC) of
+        undefined ->
+            {ok, [Ptr]} = wasm:call(Inst, <<"cabi_realloc">>, [0, 0, Align, Size]),
+            Ptr;
+        Fun ->
+            {ok, [Ptr]} = Fun(#{}, [0, 0, Align, Size]),
+            Ptr
+    end.
 
 read_int(Inst, Ptr, Bytes, Sign) ->
     {ok, Bin} = wasm:read_memory(Inst, Ptr, Bytes),

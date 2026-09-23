@@ -27,7 +27,7 @@ error value carrying a kind and context, and no name a component supplies become
 an atom.
 """.
 
--export([parse/1, providers/5, core_imports/1]).
+-export([parse/1, link/4, core_imports/1]).
 
 -export_type([graph/0, item/0]).
 
@@ -39,7 +39,12 @@ an atom.
                          [{binary(), non_neg_integer()}]}}
       | {core_instance, {exports, [{binary(), core_sort(), non_neg_integer()}]}}
       | {core_alias, core_sort(), non_neg_integer(), binary()}
-      | {comp_func_alias, non_neg_integer(), binary()}.
+      | {comp_func_alias, non_neg_integer(), binary()}
+      | {canon_lower, non_neg_integer(), non_neg_integer() | none}
+      | {canon_lift, non_neg_integer()}
+      | {canon_resource, new | drop | rep, non_neg_integer()}
+      | {comp_import_instance, binary()}
+      | {comp_import_func, binary()}.
 
 -type core_sort() :: func | table | memory | global.
 
@@ -48,6 +53,8 @@ an atom.
 -define(SEC_CORE_MODULE, 1).
 -define(SEC_CORE_INSTANCE, 2).
 -define(SEC_ALIAS, 6).
+-define(SEC_CANON, 8).
+-define(SEC_COMP_IMPORT, 10).
 
 %% The import section id inside a *core* module's own section stream (not a
 %% component section).
@@ -85,6 +92,10 @@ section(?SEC_CORE_INSTANCE, Content) ->
     vec(Content, fun core_instance/1, fun(E) -> {core_instance, E} end);
 section(?SEC_ALIAS, Content) ->
     vec(Content, fun alias_entry/1, fun(E) -> E end);
+section(?SEC_CANON, Content) ->
+    vec(Content, fun canon/1, fun(E) -> E end);
+section(?SEC_COMP_IMPORT, Content) ->
+    vec(Content, fun comp_import/1, fun(E) -> E end);
 section(_Other, _Content) ->
     {ok, []}.
 
@@ -103,134 +114,281 @@ vec(N, Bin, Parse, Wrap, Acc) ->
         {Entry, Rest}         -> vec(N - 1, Rest, Parse, Wrap, [Wrap(Entry) | Acc])
     end.
 
-%%% ---------------------------------------------------------------- providers ---
+%%% ------------------------------------------------------------------ the linker ---
 
 -doc """
-Build the provider cores that satisfy an entry core's non-host imports.
+Instantiate a component by interpreting its whole core-instance graph.
 
-`Graph` is the parsed item list; `EntryModIdx` the 0-based index of the entry
-core module; `Leftovers` the entry's imports left unbound by a host function;
-`HostResolve` a fun mapping a core's `[{Mod, Field}]` imports to a
-`#{{Mod, Field} => value}` map drawn from the host set; `LoadOpts` the loader and
-limits for `wasm:instantiate`.
+`Graph` is the parsed items; `EntryModIdx` the largest core's index (the entry
+for a program whose exports the caller calls directly, e.g. a reactor);
+`HostResolve` maps a core's `[{Mod, Field}]` imports to the host functions that
+satisfy them (version-normalised); `Opts` the loader and limits.
 
-Returns `{ok, ImportMap, Anchor, BuiltInsts}`: `ImportMap` wires each leftover to
-an `extern()` of a provider core, `Anchor` the instance whose store the entry
-links to, `BuiltInsts` every provider built (for teardown). Milestone 1 resolves
-a provider whose own imports are all host-bound (the non-cyclic case); a deeper
-or cyclic graph is a returned `{error, {unsupported_graph, _}}`.
+Every core instance is built in graph order: a core's imports come from the cores
+named in its `with` args (an `extern()` carried across a shared store) or, for a
+namespace of lowered host functions, from `HostResolve`. The entry is the core
+that exports `wasi:cli/run...#run` (a command) or, failing that, the largest core
+(a reactor). Returns `{ok, #{core, cores}}` -- `core` is the entry instance,
+`cores` every built instance for teardown -- or a named `{error, _}`.
 """.
--spec providers(graph(), non_neg_integer(), [{binary(), binary()}],
-                fun(([{binary(), binary()}]) -> map()), map()) ->
-          {ok, map(), wasm:instance(), [wasm:instance()]} | {error, term()}.
-providers(Graph, EntryModIdx, Leftovers, HostResolve, LoadOpts) ->
-    ModVec = list_to_tuple([B || {core_module, B} <- Graph]),
-    InstVec = list_to_tuple([E || {core_instance, E} <- Graph]),
-    case entry_args(InstVec, EntryModIdx) of
-        {ok, Args} ->
-            Ctx = #{mods => ModVec, insts => InstVec, resolve => HostResolve,
-                    opts => LoadOpts},
-            build_leftovers(Leftovers, Args, Ctx, #{}, #{}, []);
+-spec link(graph(), non_neg_integer(),
+           fun(([{binary(), binary()}]) -> map()), map()) ->
+          {ok, #{core := wasm:instance(), cores := [wasm:instance()]}}
+          | {error, term()}.
+link(Graph, EntryModIdx, HostResolve, Opts) ->
+    S0 = #{mods => list_to_tuple([B || {core_module, B} <- Graph]),
+           resolve => HostResolve, opts => Opts, anchor => undefined,
+           core_insts => #{}, n_ci => 0, core_funcs => #{}, n_cf => 0,
+           core_mems => #{}, n_cm => 0, core_tables => #{}, n_ct => 0,
+           core_globals => #{}, n_cg => 0, comp_insts => #{}, n_pi => 0,
+           comp_funcs => #{}, n_pf => 0, built => [], entry_mod => EntryModIdx,
+           entry_by_mod => undefined, run_inst => undefined},
+    case fold(Graph, S0) of
+        {ok, S} ->
+            Built = lists:reverse(maps:get(built, S)),
+            case entry(S) of
+                {ok, Core} -> {ok, #{core => Core, cores => Built}};
+                {error, _} = E -> E
+            end;
         {error, _} = E ->
             E
     end.
 
-%% The `with` args of the core instance that instantiates the entry module, as a
-%% `#{Namespace => CoreInstanceIdx}` map. A component instantiates each core once,
-%% so the first match is it.
-entry_args(InstVec, EntryModIdx) ->
-    entry_args(InstVec, EntryModIdx, 1, tuple_size(InstVec)).
+%% The entry instance: the core that exports the run function, else the largest.
+entry(#{run_inst := Idx, core_insts := CI}) when Idx =/= undefined ->
+    {real, Inst} = maps:get(Idx, CI),
+    {ok, Inst};
+entry(#{entry_by_mod := Inst}) when Inst =/= undefined ->
+    {ok, Inst};
+entry(_S) ->
+    {error, no_entry_core}.
 
-entry_args(_InstVec, EntryModIdx, I, N) when I > N ->
-    {error, {no_instantiate_for_core, EntryModIdx}};
-entry_args(InstVec, EntryModIdx, I, N) ->
-    case element(I, InstVec) of
-        {instantiate, EntryModIdx, Args} -> {ok, maps:from_list(Args)};
-        _                                -> entry_args(InstVec, EntryModIdx, I + 1, N)
+fold([], S) ->
+    {ok, S};
+fold([Item | Rest], S) ->
+    case step(Item, S) of
+        {ok, S1}       -> fold(Rest, S1);
+        {error, _} = E -> E
     end.
 
-build_leftovers([], _Args, _Ctx, ImportMap, Built, Order) ->
-    Insts = [maps:get(K, Built) || K <- lists:reverse(Order)],
-    case Insts of
-        [Anchor | _] -> {ok, ImportMap, Anchor, Insts};
-        []           -> {error, no_providers}
+step({core_module, _}, S) ->
+    {ok, S};
+step({comp_import_instance, Name}, S) ->
+    {ok, bump(S, n_pi, comp_insts, Name)};
+step({comp_import_func, Name}, S) ->
+    {ok, bump(S, n_pf, comp_funcs, {import_func, Name})};
+step({comp_func_alias, InstIdx, Field}, S) ->
+    Iface = maps:get(InstIdx, maps:get(comp_insts, S)),
+    {ok, bump(S, n_pf, comp_funcs, {host, Iface, Field})};
+step({canon_lift, CoreFuncIdx}, S) ->
+    {ok, bump(S, n_pf, comp_funcs, {lift, CoreFuncIdx})};
+step({canon_lower, CompFuncIdx, ReallocIdx}, S) ->
+    case host_fun(maps:get(CompFuncIdx, maps:get(comp_funcs, S)), S) of
+        {ok, Fun} ->
+            Realloc = realloc_callable(ReallocIdx, S),
+            {ok, bump(S, n_cf, core_funcs, lowered(Fun, Realloc, S))};
+        {error, _} = E ->
+            E
     end;
-build_leftovers([{NS, Field} = Key | Rest], Args, Ctx, ImportMap, Built, Order) ->
-    case source_instance(NS, Args, Ctx) of
-        {instantiate, InstIdx} ->
-            case get_or_build(InstIdx, Ctx, Built, Order) of
-                {ok, Inst, Built1, Order1} ->
-                    case wasm:extern(Inst, Field) of
-                        {ok, Extern} ->
-                            build_leftovers(Rest, Args, Ctx,
-                                            ImportMap#{Key => Extern}, Built1, Order1);
-                        {error, _} = E ->
-                            E
-                    end;
-                {error, _} = E ->
-                    E
+step({canon_resource, Kind, _Rt}, S) ->
+    {ok, bump(S, n_cf, core_funcs, resource_fun(Kind))};
+step({core_alias, func, InstIdx, Name}, S) ->
+    case export_val(S, InstIdx, Name) of
+        {ok, Val}      -> {ok, note_run(Name, InstIdx, bump(S, n_cf, core_funcs, Val))};
+        {error, _} = E -> E
+    end;
+step({core_alias, memory, InstIdx, Name}, S) ->
+    alias_into(S, n_cm, core_mems, InstIdx, Name);
+step({core_alias, table, InstIdx, Name}, S) ->
+    alias_into(S, n_ct, core_tables, InstIdx, Name);
+step({core_alias, global, InstIdx, Name}, S) ->
+    alias_into(S, n_cg, core_globals, InstIdx, Name);
+step({core_instance, {exports, Entries}}, S) ->
+    case synthetic(Entries, S) of
+        {ok, Map}      -> {ok, add_inst(S, {synthetic, Map})};
+        {error, _} = E -> E
+    end;
+step({core_instance, {instantiate, ModIdx, Args}}, S) ->
+    instantiate_core(ModIdx, Args, S).
+
+alias_into(S, Counter, Space, InstIdx, Name) ->
+    case export_val(S, InstIdx, Name) of
+        {ok, Val}      -> {ok, bump(S, Counter, Space, Val)};
+        {error, _} = E -> E
+    end.
+
+%% Append Val at the next index of Space, advancing its counter.
+bump(S, Counter, Space, Val) ->
+    N = maps:get(Counter, S),
+    S#{Counter => N + 1, Space => maps:put(N, Val, maps:get(Space, S))}.
+
+%% Record the entry when an alias pulls the run export out of a core instance.
+note_run(Name, InstIdx, S) ->
+    case is_run(Name) of
+        true  -> S#{run_inst => InstIdx};
+        false -> S
+    end.
+
+is_run(Name) ->
+    binary:match(Name, <<"wasi:cli/run">>) =/= nomatch
+        andalso binary:longest_common_suffix([Name, <<"#run">>]) =:= 4.
+
+%% A component func resolved to a host function: a `{host, Iface, Field}` alias is
+%% our WASI implementation for that interface and method (version-normalised by
+%% `HostResolve`); unresolved otherwise.
+host_fun({host, Iface, Field}, S) ->
+    Resolve = maps:get(resolve, S),
+    case maps:get({Iface, Field}, Resolve([{Iface, Field}]), undefined) of
+        undefined -> missing({Iface, Field}, S);
+        Fun       -> {ok, Fun}
+    end;
+host_fun({import_func, Name}, _S) ->
+    {error, {unsupported, {comp_func_import, Name}}};
+host_fun({lift, _CoreFuncIdx}, _S) ->
+    {error, {unsupported, lower_of_lift}}.
+
+%% A lowered host function runs with the guest instance as its context (for its
+%% shared memory: the adapter's lowering memory is the guest's, and both cores
+%% share it) and, for a result that allocates, with the realloc the lower's
+%% options name (the adapter's own, reached indirectly through the shim table, not
+%% by name on any single instance). Before any core is built (a single-core
+%% component) there is no guest to bind, so the function keeps its own context.
+lowered(Fun, _Realloc, #{entry_by_mod := undefined}) ->
+    Fun;
+lowered(Fun, Realloc, #{entry_by_mod := Guest}) ->
+    fun(Ctx, Flats) ->
+        wasm_canon:with_realloc(Realloc,
+                                fun() -> Fun(Ctx#{instance => Guest}, Flats) end)
+    end.
+
+%% The realloc function a lower names, as a callable, or `undefined` when the
+%% lower has no realloc (its result does not allocate).
+realloc_callable(none, _S) ->
+    undefined;
+realloc_callable(Idx, S) ->
+    case maps:get(Idx, maps:get(core_funcs, S), undefined) of
+        {wasm_func, Fun, _Type}    -> Fun;
+        Fun when is_function(Fun)  -> Fun;
+        _                          -> undefined
+    end.
+
+%% An import the host set does not cover. The preview1 adapter lowers the whole
+%% preview2 surface, so a program that uses one interface still names them all; a
+%% caller running such a component (`stub => true`) fills the unused ones with a
+%% function that traps only if actually called, rather than failing to link.
+%% Otherwise it is a named error, so a real missing import is visible.
+missing(Key, S) ->
+    case maps:get(stub, maps:get(opts, S), false) of
+        true  -> {ok, fun(_Ctx, _Args) -> {trap, {unimplemented_import, Key}} end};
+        false -> {error, {unresolved_import, Key}}
+    end.
+
+%% Identity handle intrinsics for `canon resource.{new,drop,rep}`; the host owns
+%% real resource state elsewhere, so these just pass the handle through.
+resource_fun(new)  -> fun(_Ctx, [Rep])    -> {ok, [Rep]} end;
+resource_fun(drop) -> fun(_Ctx, [_Handle]) -> {ok, []} end;
+resource_fun(rep)  -> fun(_Ctx, [Handle]) -> {ok, [Handle]} end.
+
+%% The value of core instance `InstIdx`'s export `Name`: an `extern()` from a real
+%% instance, or the stored value of a synthetic one.
+export_val(S, InstIdx, Name) ->
+    case maps:get(InstIdx, maps:get(core_insts, S), undefined) of
+        {real, Inst} ->
+            wasm:extern(Inst, Name);
+        {synthetic, Map} ->
+            case maps:find(Name, Map) of
+                {ok, Val} -> {ok, Val};
+                error     -> {error, {unknown_export, InstIdx, Name}}
             end;
-        unresolved ->
-            %% Either the entry core does not name a source for this namespace,
-            %% or the graph feeds it from a synthetic namespace of host functions
-            %% the component expected to be supplied. Neither is another core's
-            %% export, so it is a host import the caller left unbound, named.
-            {error, {unresolved_import, Key}}
-    end.
-
-%% Where the entry's `with` args draw namespace `NS` from: a real core instance
-%% we can build, or nothing we can wire (a synthetic host-function namespace, or
-%% an absent arg).
-source_instance(NS, Args, Ctx) ->
-    case maps:get(NS, Args, undefined) of
         undefined ->
-            unresolved;
-        InstIdx ->
-            case element(InstIdx + 1, maps:get(insts, Ctx)) of
-                {instantiate, _ModIdx, _Args} -> {instantiate, InstIdx};
-                {exports, _}                  -> unresolved
-            end
+            {error, {unknown_core_instance, InstIdx}}
     end.
 
-get_or_build(InstIdx, Ctx, Built, Order) ->
-    case maps:find(InstIdx, Built) of
-        {ok, Inst} ->
-            {ok, Inst, Built, Order};
-        error ->
-            {instantiate, ModIdx, _Args} = element(InstIdx + 1, maps:get(insts, Ctx)),
-            build_instance(InstIdx, ModIdx, Ctx, Built, Order)
+%% A synthetic instance groups already-built index-space items under names.
+synthetic(Entries, S) ->
+    synthetic(Entries, S, #{}).
+
+synthetic([], _S, Map) ->
+    {ok, Map};
+synthetic([{Name, Sort, Idx} | Rest], S, Map) ->
+    Space = space_of(Sort),
+    case maps:get(Idx, maps:get(Space, S), undefined) of
+        undefined -> {error, {unknown_index, Sort, Idx}};
+        Val       -> synthetic(Rest, S, Map#{Name => Val})
     end.
 
-%% Instantiate a provider core whose own imports are all host-bound. A provider
-%% that itself needs another core (a deeper or cyclic link) is milestone 2.
-build_instance(InstIdx, ModIdx, Ctx, Built, Order) ->
-    Bytes = element(ModIdx + 1, maps:get(mods, Ctx)),
-    Imports = core_imports(Bytes),
-    Host = (maps:get(resolve, Ctx))(Imports),
-    case [K || K <- Imports, not maps:is_key(K, Host)] of
-        [] ->
-            Opts = maps:get(opts, Ctx),
+space_of(func)   -> core_funcs;
+space_of(memory) -> core_mems;
+space_of(table)  -> core_tables;
+space_of(global) -> core_globals.
+
+%% Build a core instance's imports from its `with` args and instantiate it,
+%% sharing one store across the component's cores.
+instantiate_core(ModIdx, Args, S) ->
+    Bytes = element(ModIdx + 1, maps:get(mods, S)),
+    case imports_for(core_imports(Bytes), maps:from_list(Args), S) of
+        {ok, ImportMap} ->
+            Opts = maps:get(opts, S),
             Loader = maps:get(loader, Opts, load),
-            Limits = link_to(Built, maps:remove(loader, Opts)),
+            Limits = link_to(maps:get(anchor, S), maps:without([loader, stub], Opts)),
             case load_core(Loader, Bytes) of
                 {ok, Mod} ->
-                    case wasm:instantiate(Mod, Host, Limits) of
-                        {ok, Inst} ->
-                            {ok, Inst, Built#{InstIdx => Inst}, [InstIdx | Order]};
-                        {error, _} = E ->
-                            E
+                    case wasm:instantiate(Mod, ImportMap, Limits) of
+                        {ok, Inst}     -> {ok, record_inst(S, ModIdx, Inst)};
+                        {error, _} = E -> E
                     end;
                 {error, _} = E ->
                     E
             end;
-        Deeper ->
-            {error, {unsupported_graph, {deeper_core_link, Deeper}}}
+        {error, _} = E ->
+            E
     end.
 
-%% Every core of one component shares one store; the first built starts it and the
-%% rest link to any already-built member of that store.
-link_to(Built, Limits) when map_size(Built) =:= 0 -> Limits;
-link_to(Built, Limits) -> Limits#{link => hd(maps:values(Built))}.
+%% One import at a time: from the source core instance the args name for its
+%% namespace, or, for a namespace with no arg, straight from the host set.
+imports_for(CoreImports, ArgsMap, S) ->
+    imports_for(CoreImports, ArgsMap, S, #{}).
+
+imports_for([], _ArgsMap, _S, Acc) ->
+    {ok, Acc};
+imports_for([{NS, Name} = Key | Rest], ArgsMap, S, Acc) ->
+    Result = case maps:get(NS, ArgsMap, undefined) of
+                 undefined -> host_import(Key, S);
+                 SrcIdx    -> export_val(S, SrcIdx, Name)
+             end,
+    case Result of
+        {ok, Val}      -> imports_for(Rest, ArgsMap, S, Acc#{Key => Val});
+        {error, _} = E -> E
+    end.
+
+host_import(Key, S) ->
+    Resolve = maps:get(resolve, S),
+    case maps:get(Key, Resolve([Key]), undefined) of
+        undefined -> missing(Key, S);
+        Val       -> {ok, Val}
+    end.
+
+%% Add a real instance to the index space; the first starts the shared store, and
+%% the instance built from the entry module is the reactor fallback entry.
+record_inst(S, ModIdx, Inst) ->
+    S1 = add_inst(S, {real, Inst}),
+    S2 = S1#{built => [Inst | maps:get(built, S1)]},
+    S3 = case maps:get(anchor, S2) of
+             undefined -> S2#{anchor => Inst};
+             _         -> S2
+         end,
+    case ModIdx =:= maps:get(entry_mod, S3) andalso
+         maps:get(entry_by_mod, S3) =:= undefined of
+        true  -> S3#{entry_by_mod => Inst};
+        false -> S3
+    end.
+
+add_inst(S, Entry) ->
+    N = maps:get(n_ci, S),
+    S#{n_ci => N + 1, core_insts => maps:put(N, Entry, maps:get(core_insts, S))}.
+
+link_to(undefined, Limits) -> Limits;
+link_to(Anchor, Limits)    -> Limits#{link => Anchor}.
 
 load_core(compile, Bytes) -> wasm:compile(Bytes);
 load_core(_Load, Bytes)   -> wasm:load(Bytes).
@@ -300,6 +458,81 @@ alias_entry(<<_Sort, 16#02, Rest0/binary>>) ->
     {_Ct, Rest1} = wasm_leb128:u32(Rest0),
     {_Idx, Rest2} = wasm_leb128:u32(Rest1),
     {skip, Rest2}.
+
+%%% --------------------------------------------------------------------- canon ---
+
+%% `0x00 0x00 f opts ft` lift (a component func over core func `f`);
+%% `0x01 0x00 f opts` lower (a core func over component func `f`);
+%% `0x02/03/04 rt` resource new/drop/rep (a core func). `opts` is skipped: the
+%% linker binds host functions by name and does not read the ABI options here.
+canon(<<16#00, 16#00, R0/binary>>) ->
+    {F, R1} = wasm_leb128:u32(R0),
+    R2 = canonopts(R1),
+    {_Ft, R3} = wasm_leb128:u32(R2),
+    {{canon_lift, F}, R3};
+canon(<<16#01, 16#00, R0/binary>>) ->
+    {F, R1} = wasm_leb128:u32(R0),
+    {Realloc, R2} = lower_opts(R1),
+    {{canon_lower, F, Realloc}, R2};
+canon(<<16#02, R0/binary>>) ->
+    {Rt, R1} = wasm_leb128:u32(R0),
+    {{canon_resource, new, Rt}, R1};
+canon(<<16#03, R0/binary>>) ->
+    {Rt, R1} = wasm_leb128:u32(R0),
+    {{canon_resource, drop, Rt}, R1};
+canon(<<16#04, R0/binary>>) ->
+    {Rt, R1} = wasm_leb128:u32(R0),
+    {{canon_resource, rep, Rt}, R1}.
+
+%% A vec of canonopt; step over each. `0x00/01/02` are flags (no operand);
+%% `0x03 m`, `0x04 f`, `0x05 f`, `0x07 f` carry an index; `0x06`/`0x08` none.
+canonopts(Bin) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    canonopts(Count, Rest).
+
+canonopts(0, Rest) ->
+    Rest;
+canonopts(N, <<Op, Rest0/binary>>) when Op =:= 16#03; Op =:= 16#04;
+                                        Op =:= 16#05; Op =:= 16#07 ->
+    {_Idx, Rest1} = wasm_leb128:u32(Rest0),
+    canonopts(N - 1, Rest1);
+canonopts(N, <<_Op, Rest0/binary>>) ->
+    canonopts(N - 1, Rest0).
+
+%% A lower's options, keeping the realloc function index (`0x04 f`); a result that
+%% crosses by memory (a string or list) allocates through it, and the adapter
+%% names its own realloc, not one reachable on the instance calling the import.
+lower_opts(Bin) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    lower_opts(Count, Rest, none).
+
+lower_opts(0, Rest, Realloc) ->
+    {Realloc, Rest};
+lower_opts(N, <<16#04, Rest0/binary>>, _Realloc) ->
+    {Idx, Rest1} = wasm_leb128:u32(Rest0),
+    lower_opts(N - 1, Rest1, Idx);
+lower_opts(N, <<Op, Rest0/binary>>, Realloc) when Op =:= 16#03; Op =:= 16#05;
+                                                  Op =:= 16#07 ->
+    {_Idx, Rest1} = wasm_leb128:u32(Rest0),
+    lower_opts(N - 1, Rest1, Realloc);
+lower_opts(N, <<_Op, Rest0/binary>>, Realloc) ->
+    lower_opts(N - 1, Rest0, Realloc).
+
+%%% ---------------------------------------------------------- component import ---
+
+%% `namekind name externdesc`. Only the instance and function forms are wired
+%% (the adapter imports WASI interfaces as instances); each names the interface
+%% or field its index later binds to a host function.
+comp_import(<<16#00, R0/binary>>) ->
+    {Name, R1} = name(R0),
+    externdesc(Name, R1).
+
+externdesc(Name, <<16#05, R0/binary>>) ->
+    {_TypeIdx, R1} = wasm_leb128:u32(R0),
+    {{comp_import_instance, Name}, R1};
+externdesc(Name, <<16#01, R0/binary>>) ->
+    {_TypeIdx, R1} = wasm_leb128:u32(R0),
+    {{comp_import_func, Name}, R1}.
 
 %%% -------------------------------------------------------------- core imports ---
 

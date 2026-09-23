@@ -6449,3 +6449,19 @@ the full graph in every `decode` and cost ~11 us on realupper (~5x); making the
 parse lazy removed that. The graph parse runs only for a component that actually
 links core to core (the two-core fixture, the preview1 adapter), where it precedes
 a per-request instantiate already dominated by loading the inner core module.
+
+## Multi-core linking: the realloc override is off the guarded path (2026-09-23)
+
+Running a preview1->preview2 adapter component needs a canon-lowered host function
+to allocate its result through the realloc the lowering names (the adapter's own,
+reached through a shim table), not a `cabi_realloc` export on the calling
+instance. `wasm_canon:realloc/3` now consults a per-call override
+(`wasm_canon:with_realloc/2`, installed by the linker around the host function)
+before the default export call.
+
+The override is one `get/1` on the by-memory result path, and it is `undefined`
+for every single-core component (native fixtures), so their path is byte-for-byte
+the one they had. This is not on `wasm_exec:run/3`/`branch/3`/`do_call/4` -- the
+core-execution path the realbench guard covers -- so it needs no realbench run;
+`wasm_canon` is the component ABI, entered only on a component call. The component
+suites (vectors, import, resource) that exercise the lowering path stay green.

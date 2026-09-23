@@ -171,8 +171,10 @@ instantiate(Bin, Imports, Opts) ->
     %% `loader => compile` builds an inline module with `wasm:compile` instead of
     %% `wasm:load`, whose node cache is rate-limited to 50/s; a runner that
     %% instantiates many single-use components (the wasi-testsuite) needs it to
-    %% avoid `load_rate_exceeded`. Everything else in Opts is instance limits.
-    Limits = maps:remove(loader, Opts),
+    %% avoid `load_rate_exceeded`. `stub => true` lets the linker fill a
+    %% preview1-adapter's unused preview2 imports with trap-if-called stubs.
+    %% Everything else in Opts is instance limits.
+    Limits = maps:without([loader, stub], Opts),
     case decode(Bin) of
         {ok, Decoded} ->
             instantiate_decoded(Decoded, Imports, Opts, Limits);
@@ -191,24 +193,23 @@ instantiate_decoded(#{core := Core, exports := Exports} = Decoded,
     case [K || K <- EntryImports, not maps:is_key(K, Host)] of
         [] ->
             start(Loader, Core, Host, Limits, Exports, []);
-        Leftovers ->
-            link_in(Decoded, Imports, Opts, Limits, Host, Leftovers)
+        _Leftovers ->
+            link_in(Decoded, Imports, Opts)
     end.
 
-link_in(#{core := Core, sec := Sec, entry_idx := EntryIdx,
-          exports := Exports}, Imports, Opts, Limits, Host, Leftovers) ->
-    Loader = maps:get(loader, Opts, load),
+%% The entry core imports something the host set does not cover (another core's
+%% export). Interpret the whole core-instance graph: `wasm_component_link:link/4`
+%% builds every core, wiring core-to-core imports and binding lowered WASI imports
+%% to the host set, and returns the entry instance plus every built core.
+link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts) ->
     Resolve = fun(Imps) ->
                   resolve_imports(Imps, Imports, resource_imports(Imps))
               end,
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
-            case wasm_component_link:providers(Graph, EntryIdx, Leftovers,
-                                               Resolve, Opts) of
-                {ok, ProviderMap, Anchor, ProviderInsts} ->
-                    All = maps:merge(Host, ProviderMap),
-                    start(Loader, Core, All, Limits#{link => Anchor}, Exports,
-                          ProviderInsts);
+            case wasm_component_link:link(Graph, EntryIdx, Resolve, Opts) of
+                {ok, #{core := Inst, cores := Cores}} ->
+                    {ok, #{core => Inst, exports => Exports, cores => Cores}};
                 {error, _} = E ->
                     E
             end;

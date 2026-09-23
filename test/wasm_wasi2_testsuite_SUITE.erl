@@ -26,16 +26,14 @@ Skipped without a wasi-testsuite checkout or without `wasm-tools` and the adapte
 all() -> [preview2_cases, directories_present].
 
 %% Known-failing counts per directory. The whole `wasi:filesystem` and
-%% `wasi:clocks` surface is implemented (no stubs), so the c directory passes in
-%% full and most of rust does. What remains is behaviour fidelity, each a detail
-%% Preview 1 handles that Preview 2 does not yet:
+%% `wasi:clocks` surface is implemented (no stubs); the c directory passes in
+%% full and all but four rust cases do. What remains:
 %%
-%% - rust: `path_open_read_write` and `path_filestat` want `get-flags` to report
-%%   the flags a file was opened with (this host reports the mount's); the two
-%%   `*_trailing_slashes` cases want a path ending in `/` refused; `symlink_create`
-%%   and `interesting_paths` open a symlink as a directory; `path_link` hard-links
-%%   a dangling symlink (the native-NIF-only case, as in Preview 1); and
-%%   `poll_oneoff_stdio` needs a real poll (the async phase).
+%% - rust: `symlink_create` opens a symlink as a directory (a symlink-follow
+%%   detail); `interesting_paths` opens a path with a trailing NUL byte;
+%%   `path_link` hard-links a dangling symlink (the native-NIF-only case, as in
+%%   Preview 1's fallback baseline); and `poll_oneoff_stdio` needs a real poll,
+%%   which is the async phase.
 %% - assemblyscript: `args_get`/`environ_get` trip an adapter-internal assertion
 %%   on the argument/environment layout, and `fd_write-to-invalid-fd` expects a
 %%   specific non-zero exit the command model normalises away.
@@ -45,7 +43,7 @@ all() -> [preview2_cases, directories_present].
 baseline() ->
     #{~"assemblyscript/wasm32-wasip1" => 3,
       ~"c/wasm32-wasip1" => 0,
-      ~"rust/wasm32-wasip1" => 8}.
+      ~"rust/wasm32-wasip1" => 4}.
 
 init_per_suite(Config) ->
     case wasi_testsuite_runner:dirs() of

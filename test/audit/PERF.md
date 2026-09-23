@@ -6424,3 +6424,28 @@ deferred (live resource handles), so there is no warm path to compare against ye
 The number is for orientation, not a regression gate; the core-module worker
 envelope above is unchanged, since the component path is a separate default-off
 branch.
+
+## Multi-core component linking: native decode unchanged (2026-09-23)
+
+`wasm_component` now reads a component's core-instance graph so a core can take an
+import from another core (the linker, `wasm_component_link`), not only from a host
+function. The risk was slowing the common path, where the guest core imports WASI
+directly and no linking is needed.
+
+The graph is parsed only when the entry core has a cross-core import; the common
+`decode/1` keeps its single cheap section walk. Measured on the committed
+fixtures, 5000 decodes after warm-up, minimum the signal, the linker build against
+the pre-change shortcut interleaved:
+
+| fixture | decode, shortcut | decode, linker |
+| --- | --- | --- |
+| realupper | ~2 us | ~2 us |
+| realcat | ~3 us | ~3 us |
+| filewrite | ~3 us | ~3 us |
+| counter | ~0 us | ~0 us |
+
+Identical: a native component never parses the graph. An earlier version parsed
+the full graph in every `decode` and cost ~11 us on realupper (~5x); making the
+parse lazy removed that. The graph parse runs only for a component that actually
+links core to core (the two-core fixture, the preview1 adapter), where it precedes
+a per-request instantiate already dominated by loading the inner core module.

@@ -21,10 +21,15 @@ The guest here uses identity handles (it imports no `[resource-rep]`), so a hand
 is its representation; a resource value crosses the Canonical ABI as a `u32`
 handle. `drop_resource/3` runs the guest destructor for a handle the host owns.
 
-Not yet handled (later phases): nested components, multiple core instances,
-aliases and canon parsing (the wiring is taken from the core module's own
-canonical exports), the Canonical ABI in the import direction for aggregate
-(non-flat) arguments, and the WASI 0.2 worlds themselves.
+A component whose entry core imports only WASI (every program we build) stays on
+this single-core path. When the entry core imports from *another* core,
+`wasm_component_link` reads the core-instance graph and wires those imports from
+the other cores' exports; `instantiate/3` keeps every built core in `cores` so
+`destroy/1` frees them all.
+
+Not yet handled (later phases): nested components, the preview1-to-preview2
+adapter's startup cycle (a shim table filled at instantiate) and its canon
+lower/lift, and the async Canonical ABI.
 """.
 
 -export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
@@ -34,12 +39,14 @@ canonical exports), the Canonical ABI in the import direction for aggregate
 
 -export_type([component/0, instance/0]).
 
--opaque component() :: #{core := binary(), exports := [binary()]}.
--opaque instance() :: #{core := wasm:instance(), exports := [binary()]}.
+-opaque component() :: #{core := binary(), cores := [binary()],
+                         sec := binary(), entry_idx := non_neg_integer(),
+                         exports := [binary()]}.
+-opaque instance() :: #{core := wasm:instance(), exports := [binary()],
+                        cores := [wasm:instance()]}.
 
 -define(CORE_MODULE_SEC, 1).
 -define(EXPORT_SEC, 11).
--define(CORE_IMPORT_SEC, 2).
 -define(HANDLES, {?MODULE, handles}).
 -define(HOST, {?MODULE, host_resources}).
 -define(HOST_NEXT, {?MODULE, host_next}).
@@ -54,13 +61,17 @@ decode(<<16#00, 16#61, 16#73, 16#6d, 16#0d, 16#00, 16#01, 16#00, Rest/binary>>) 
     case sections(Rest, #{exports => [], cores => []}) of
         {ok, #{cores := []}} ->
             {error, no_core_module};
-        {ok, #{cores := Cores, exports := Exports}} ->
-            %% A resource component embeds a tiny intrinsics shim beside the guest;
-            %% the guest is the larger module. Selecting it by size is a spike
-            %% shortcut for parsing the instance/alias graph.
-            [Core | _] = lists:sort(fun(A, B) -> byte_size(A) >= byte_size(B) end,
-                                    Cores),
-            {ok, #{core => Core, exports => Exports}};
+        {ok, #{cores := RevCores, exports := Exports}} ->
+            %% The entry core is the guest: the largest module (a resource or
+            %% WASI component embeds smaller shim/adapter cores beside it). Its
+            %% index in the module space lets the linker, if the entry has a
+            %% cross-core import, find how the graph wires it. Section 11 gives
+            %% the names in the same cheap walk; the fuller graph is parsed only
+            %% when linking (`sec` keeps the section stream for that).
+            Cores = lists:reverse(RevCores),
+            {EntryIdx, Core} = largest(Cores),
+            {ok, #{core => Core, cores => Cores, sec => Rest,
+                   entry_idx => EntryIdx, exports => Exports}};
         {error, _} = E ->
             E
     end;
@@ -69,9 +80,21 @@ decode(<<16#00, 16#61, 16#73, 16#6d, _/binary>>) ->
 decode(_) ->
     {error, not_wasm}.
 
+%% The largest core module and its 0-based index in the module space. A strict
+%% `>` keeps the earliest on a tie, so the pick is stable.
+largest([First | _] = Cores) ->
+    Indexed = lists:zip(lists:seq(0, length(Cores) - 1), Cores),
+    lists:foldl(fun({I, B}, {_BI, Best} = Acc) ->
+                    case byte_size(B) > byte_size(Best) of
+                        true  -> {I, B};
+                        false -> Acc
+                    end
+                end, {0, First}, Indexed).
+
 %% Walk the top-level sections: each is a one-byte id, a u32 size, then that many
-%% content bytes. Only the core module and the export section matter here;
-%% everything else (types, instances, aliases, canon, customs) is skipped by size.
+%% content bytes. Only the core module and export sections matter here; the
+%% instance/alias/canon graph is parsed later (`wasm_component_link`) and only
+%% when the entry core has a cross-core import, so the common path skips it.
 sections(<<>>, Acc) ->
     {ok, Acc};
 sections(<<Id, Rest0/binary>>, Acc) ->
@@ -149,20 +172,57 @@ instantiate(Bin, Imports, Opts) ->
     %% `wasm:load`, whose node cache is rate-limited to 50/s; a runner that
     %% instantiates many single-use components (the wasi-testsuite) needs it to
     %% avoid `load_rate_exceeded`. Everything else in Opts is instance limits.
-    Loader = maps:get(loader, Opts, load),
     Limits = maps:remove(loader, Opts),
     case decode(Bin) of
-        {ok, #{core := Core, exports := Exports}} ->
-            case load_core(Loader, Core) of
-                {ok, Mod} ->
-                    CoreImports = core_imports(Core),
-                    All = resolve_imports(CoreImports, Imports,
-                                          resource_imports(CoreImports)),
-                    case wasm:instantiate(Mod, All, Limits) of
-                        {ok, Inst}     -> {ok, #{core => Inst,
-                                                 exports => Exports}};
-                        {error, _} = E -> E
-                    end;
+        {ok, Decoded} ->
+            instantiate_decoded(Decoded, Imports, Opts, Limits);
+        {error, _} = E ->
+            E
+    end.
+
+instantiate_decoded(#{core := Core, exports := Exports} = Decoded,
+                    Imports, Opts, Limits) ->
+    Loader = maps:get(loader, Opts, load),
+    EntryImports = wasm_component_link:core_imports(Core),
+    Host = resolve_imports(EntryImports, Imports, resource_imports(EntryImports)),
+    %% Imports the host set does not cover are wired from other cores of this
+    %% component (the linker); a program that asks for WASI directly has none, so
+    %% it stays on the single-core path unchanged.
+    case [K || K <- EntryImports, not maps:is_key(K, Host)] of
+        [] ->
+            start(Loader, Core, Host, Limits, Exports, []);
+        Leftovers ->
+            link_in(Decoded, Imports, Opts, Limits, Host, Leftovers)
+    end.
+
+link_in(#{core := Core, sec := Sec, entry_idx := EntryIdx,
+          exports := Exports}, Imports, Opts, Limits, Host, Leftovers) ->
+    Loader = maps:get(loader, Opts, load),
+    Resolve = fun(Imps) ->
+                  resolve_imports(Imps, Imports, resource_imports(Imps))
+              end,
+    case wasm_component_link:parse(Sec) of
+        {ok, Graph} ->
+            case wasm_component_link:providers(Graph, EntryIdx, Leftovers,
+                                               Resolve, Opts) of
+                {ok, ProviderMap, Anchor, ProviderInsts} ->
+                    All = maps:merge(Host, ProviderMap),
+                    start(Loader, Core, All, Limits#{link => Anchor}, Exports,
+                          ProviderInsts);
+                {error, _} = E ->
+                    E
+            end;
+        {error, _} = E ->
+            E
+    end.
+
+start(Loader, Core, Imports, Limits, Exports, Extra) ->
+    case load_core(Loader, Core) of
+        {ok, Mod} ->
+            case wasm:instantiate(Mod, Imports, Limits) of
+                {ok, Inst} ->
+                    {ok, #{core => Inst, exports => Exports,
+                           cores => [Inst | Extra]}};
                 {error, _} = E ->
                     E
             end;
@@ -173,8 +233,11 @@ instantiate(Bin, Imports, Opts) ->
 load_core(compile, Core) -> wasm:compile(Core);
 load_core(_Load, Core)   -> wasm:load(Core).
 
--doc "Destroy a component instance, freeing its inner core instance.".
+-doc "Destroy a component instance, freeing every core it built.".
 -spec destroy(instance()) -> ok.
+destroy(#{cores := Insts}) ->
+    lists:foreach(fun wasm:destroy/1, Insts),
+    ok;
 destroy(#{core := Inst}) ->
     wasm:destroy(Inst).
 
@@ -379,54 +442,6 @@ host_table() ->
         undefined -> #{};
         Map       -> Map
     end.
-
-%%% ----------------------------------------------------------- core imports ---
-
-%% The `{Module, Field}` of every function import in the core module, so the
-%% resource intrinsics can be matched and provided. Non-function imports are
-%% skipped past.
-core_imports(<<16#00, 16#61, 16#73, 16#6d, _:4/binary, Rest/binary>>) ->
-    core_import_sections(Rest).
-
-core_import_sections(<<>>) ->
-    [];
-core_import_sections(<<Id, Rest0/binary>>) ->
-    {Size, Rest1} = wasm_leb128:u32(Rest0),
-    <<Content:Size/binary, Rest2/binary>> = Rest1,
-    case Id of
-        ?CORE_IMPORT_SEC -> import_entries(Content);
-        _                -> core_import_sections(Rest2)
-    end.
-
-import_entries(Bin) ->
-    {Count, Rest} = wasm_leb128:u32(Bin),
-    import_entries(Count, Rest, []).
-
-import_entries(0, _Rest, Acc) ->
-    lists:reverse(Acc);
-import_entries(N, Bin, Acc) ->
-    {Mod, Rest1} = name(Bin),
-    {Field, Rest2} = name(Rest1),
-    Rest3 = skip_importdesc(Rest2),
-    import_entries(N - 1, Rest3, [{Mod, Field} | Acc]).
-
-name(Bin) ->
-    {Len, Rest} = wasm_leb128:u32(Bin),
-    <<Name:Len/binary, Rest1/binary>> = Rest,
-    {Name, Rest1}.
-
-%% Skip one import descriptor: kind byte then its type. Only func (0x00) imports
-%% are matched above; the others are stepped over so parsing reaches the next.
-skip_importdesc(<<16#00, Rest/binary>>) -> {_T, R} = wasm_leb128:u32(Rest), R;
-skip_importdesc(<<16#01, _Reftype, Rest/binary>>) -> skip_limits(Rest);
-skip_importdesc(<<16#02, Rest/binary>>) -> skip_limits(Rest);
-skip_importdesc(<<16#03, _Valtype, _Mut, Rest/binary>>) -> Rest.
-
-skip_limits(<<0, Rest/binary>>) -> {_Min, R} = wasm_leb128:u32(Rest), R;
-skip_limits(<<1, Rest/binary>>) ->
-    {_Min, R1} = wasm_leb128:u32(Rest),
-    {_Max, R2} = wasm_leb128:u32(R1),
-    R2.
 
 %%% --------------------------------------------------------------- helpers ---
 

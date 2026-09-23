@@ -526,7 +526,8 @@ reimplemented here: `open-at` passes the guest path straight to `wasi_fs:open/3`
 the same call Preview 1 makes, so the same escapes are refused. Write intent is
 refused with `read-only`.
 """.
--spec filesystem(#{preopen := file:filename_all(), name => binary()}) ->
+-spec filesystem(#{preopen := file:filename_all(), name => binary(),
+                   writable => boolean()}) ->
           #{{binary(), binary()} => fun()}.
 filesystem(Opts) ->
     HostDir = maps:get(preopen, Opts),

@@ -63,3 +63,14 @@ for name in realupper realcat argv envvar exitcode catcat filewrite; do
   wasm-tools validate --features component-model "$out"
   echo "built $out"
 done
+
+# Hand-authored components (WebAssembly component text), for the linker: a two-core
+# component whose larger core imports a function from the smaller one, so it links
+# only by wiring core to core, never by a host name.
+for name in twocore; do
+  wat="$here/test/fixtures/component/$name/$name.wat"
+  out="$here/test/fixtures/component/$name.component.wasm"
+  wasm-tools parse "$wat" -o "$out"
+  wasm-tools validate --features component-model "$out"
+  echo "built $out"
+done

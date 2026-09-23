@@ -540,6 +540,12 @@ filesystem(Opts) ->
           wasm_component:import_fun(
             {[], {list, {tuple, [handle, string]}}},
             fun([]) -> get_directories(HostDir, Name) end),
+      %% Map a stream error back to a filesystem error-code. Our stream errors do
+      %% not carry one (a filesystem operation reports its code directly), so this
+      %% is `none`: the io error was not a filesystem error.
+      {Types, <<"filesystem-error-code">>} =>
+          wasm_component:import_fun({[handle], {option, ?ERROR_CODE}},
+                                    fun([_Err]) -> none end),
       {Types, <<"[method]descriptor.open-at">>} =>
           wasm_component:import_fun(
             {[handle, ?PATH_FLAGS, string, ?OPEN_FLAGS, ?DESC_FLAGS], ?OPEN_RESULT},

@@ -25,16 +25,27 @@ Skipped without a wasi-testsuite checkout or without `wasm-tools` and the adapte
 
 all() -> [preview2_cases, directories_present].
 
-%% Known-failing counts per directory for the adapter path. The rust directory is
-%% filesystem-heavy and this host implements the read side and part of the write
-%% side, so most of its cases reach an unimplemented function; the assemblyscript
-%% and c directories exercise less of it. Every entry is a preview2 function not
-%% yet implemented, not a defect in the linker: the passing cases drive the same
-%% adapter machinery. Lower these as `wasi_preview2` grows.
+%% Known-failing counts per directory. The whole `wasi:filesystem` and
+%% `wasi:clocks` surface is implemented (no stubs), so the c directory passes in
+%% full and most of rust does. What remains is behaviour fidelity, each a detail
+%% Preview 1 handles that Preview 2 does not yet:
+%%
+%% - rust: `path_open_read_write` and `path_filestat` want `get-flags` to report
+%%   the flags a file was opened with (this host reports the mount's); the two
+%%   `*_trailing_slashes` cases want a path ending in `/` refused; `symlink_create`
+%%   and `interesting_paths` open a symlink as a directory; `path_link` hard-links
+%%   a dangling symlink (the native-NIF-only case, as in Preview 1); and
+%%   `poll_oneoff_stdio` needs a real poll (the async phase).
+%% - assemblyscript: `args_get`/`environ_get` trip an adapter-internal assertion
+%%   on the argument/environment layout, and `fd_write-to-invalid-fd` expects a
+%%   specific non-zero exit the command model normalises away.
+%%
+%% Lower these as the fidelity work lands; the `stale_baseline` guard forbids
+%% leaving a number too high.
 baseline() ->
-    #{~"assemblyscript/wasm32-wasip1" => 4,
-      ~"c/wasm32-wasip1" => 4,
-      ~"rust/wasm32-wasip1" => 41}.
+    #{~"assemblyscript/wasm32-wasip1" => 3,
+      ~"c/wasm32-wasip1" => 0,
+      ~"rust/wasm32-wasip1" => 8}.
 
 init_per_suite(Config) ->
     case wasi_testsuite_runner:dirs() of

@@ -74,7 +74,7 @@ run_collecting(Component, Wasm, Spec) ->
     Opts = maps:merge(dir_opt(Config),
                       #{args => maps:get(args, Config, []),
                         env => maps:to_list(maps:get(env, Config, #{})),
-                        stub => true, compile => true}),
+                        compile => true}),
     try wasi_preview2:run_command(Component, <<>>, Opts) of
         {ok, #{exit_code := Code, stdout := Out, stderr := Err}} ->
             {ok, Code, Out, Err};

@@ -135,6 +135,14 @@ later step.
 -define(ACCEPT_RESULT, {result, {tuple, [handle, handle, handle]}, ?SOCK_ERROR}).
 -define(LOCAL_RESULT, {result, ?IP_SOCKADDR, ?SOCK_ERROR}).
 -define(SOCK_BACKLOG, 128).
+%% Default answers for the best-effort socket options: a live socket reports
+%% these until the exact-clamping sockopts pass wires the real getsockopt/
+%% setsockopt values. Durations are nanoseconds (the wasi:clocks unit).
+-define(KEEPIDLE_NS, 7200000000000).
+-define(KEEPINTVL_NS, 75000000000).
+-define(KEEPCNT, 9).
+-define(HOP_LIMIT, 64).
+-define(SOCK_BUFSIZE, 65536).
 -define(INCOMING_DATAGRAM,
         {record, [{<<"data">>, {list, u8}}, {<<"remote-address">>, ?IP_SOCKADDR}]}).
 -define(OUTGOING_DATAGRAM,
@@ -1646,6 +1654,79 @@ sockets(Opts) ->
             {[handle, {enum, [<<"receive">>, <<"send">>, <<"both">>]}],
              {result, none, ?SOCK_ERROR}},
             fun([Self, How]) -> tcp_shutdown(Self, How) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.remote-address">>} =>
+          wasm_component:import_fun(
+            {[handle], ?LOCAL_RESULT}, fun([Self]) -> tcp_remote(Self) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.is-listening">>} =>
+          wasm_component:import_fun(
+            {[handle], bool}, fun([Self]) -> tcp_is_listening(Self) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.address-family">>} =>
+          wasm_component:import_fun(
+            {[handle], ?ADDR_FAMILY}, fun([Self]) -> tcp_family(Self) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.set-listen-backlog-size">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.keep-alive-enabled">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, bool, ?SOCK_ERROR}},
+            fun([Self]) -> tcp_opt_get(Self, false) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.set-keep-alive-enabled">>} =>
+          wasm_component:import_fun(
+            {[handle, bool], {result, none, ?SOCK_ERROR}},
+            fun([Self, _On]) -> tcp_set_ok(Self) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.keep-alive-idle-time">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, u64, ?SOCK_ERROR}},
+            fun([Self]) -> tcp_opt_get(Self, ?KEEPIDLE_NS) end),
+      {<<"wasi:sockets/tcp">>,
+       <<"[method]tcp-socket.set-keep-alive-idle-time">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.keep-alive-interval">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, u64, ?SOCK_ERROR}},
+            fun([Self]) -> tcp_opt_get(Self, ?KEEPINTVL_NS) end),
+      {<<"wasi:sockets/tcp">>,
+       <<"[method]tcp-socket.set-keep-alive-interval">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.keep-alive-count">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, u32, ?SOCK_ERROR}},
+            fun([Self]) -> tcp_opt_get(Self, ?KEEPCNT) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.set-keep-alive-count">>} =>
+          wasm_component:import_fun(
+            {[handle, u32], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.hop-limit">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, u8, ?SOCK_ERROR}},
+            fun([Self]) -> tcp_opt_get(Self, ?HOP_LIMIT) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.set-hop-limit">>} =>
+          wasm_component:import_fun(
+            {[handle, u8], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.receive-buffer-size">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, u64, ?SOCK_ERROR}},
+            fun([Self]) -> tcp_opt_get(Self, ?SOCK_BUFSIZE) end),
+      {<<"wasi:sockets/tcp">>,
+       <<"[method]tcp-socket.set-receive-buffer-size">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.send-buffer-size">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, u64, ?SOCK_ERROR}},
+            fun([Self]) -> tcp_opt_get(Self, ?SOCK_BUFSIZE) end),
+      {<<"wasi:sockets/tcp">>,
+       <<"[method]tcp-socket.set-send-buffer-size">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
       {<<"wasi:sockets/tcp">>, <<"[resource-drop]tcp-socket">>} =>
           fun(_Ctx, [H]) -> _ = tcp_drop(H), {ok, []} end,
       {<<"wasi:sockets/udp-create-socket">>, <<"create-udp-socket">>} =>
@@ -1659,7 +1740,45 @@ sockets(Opts) ->
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.finish-bind">>} =>
           wasm_component:import_fun(
             {[handle], {result, none, ?SOCK_ERROR}},
-            fun([Self]) -> finish(Self, udp_socket, udp_binding, udp_bound) end),
+            fun([Self]) -> udp_finish_bind(Self) end),
+      {<<"wasi:sockets/udp">>, <<"[method]udp-socket.local-address">>} =>
+          wasm_component:import_fun(
+            {[handle], ?LOCAL_RESULT}, fun([Self]) -> udp_local(Self) end),
+      {<<"wasi:sockets/udp">>, <<"[method]udp-socket.remote-address">>} =>
+          wasm_component:import_fun(
+            {[handle], ?LOCAL_RESULT}, fun([Self]) -> udp_remote_addr(Self) end),
+      {<<"wasi:sockets/udp">>, <<"[method]udp-socket.address-family">>} =>
+          wasm_component:import_fun(
+            {[handle], ?ADDR_FAMILY}, fun([Self]) -> udp_family(Self) end),
+      {<<"wasi:sockets/udp">>, <<"[method]udp-socket.subscribe">>} =>
+          wasm_component:import_fun(
+            {[handle], handle},
+            fun([_Self]) -> wasm_component:host_new(pollable, ready) end),
+      {<<"wasi:sockets/udp">>, <<"[method]udp-socket.unicast-hop-limit">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, u8, ?SOCK_ERROR}},
+            fun([Self]) -> udp_opt_get(Self, ?HOP_LIMIT) end),
+      {<<"wasi:sockets/udp">>, <<"[method]udp-socket.set-unicast-hop-limit">>} =>
+          wasm_component:import_fun(
+            {[handle, u8], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> udp_set_nonzero(Self, N) end),
+      {<<"wasi:sockets/udp">>, <<"[method]udp-socket.receive-buffer-size">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, u64, ?SOCK_ERROR}},
+            fun([Self]) -> udp_opt_get(Self, ?SOCK_BUFSIZE) end),
+      {<<"wasi:sockets/udp">>,
+       <<"[method]udp-socket.set-receive-buffer-size">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> udp_set_nonzero(Self, N) end),
+      {<<"wasi:sockets/udp">>, <<"[method]udp-socket.send-buffer-size">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, u64, ?SOCK_ERROR}},
+            fun([Self]) -> udp_opt_get(Self, ?SOCK_BUFSIZE) end),
+      {<<"wasi:sockets/udp">>, <<"[method]udp-socket.set-send-buffer-size">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], {result, none, ?SOCK_ERROR}},
+            fun([Self, N]) -> udp_set_nonzero(Self, N) end),
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.stream">>} =>
           wasm_component:import_fun(
             {[handle, {option, ?IP_SOCKADDR}], ?UDP_STREAM_RESULT},
@@ -1744,7 +1863,9 @@ tcp_finish_connect(Self) ->
                     output_stream, {socket, Conn}),
             {ok, {In, Out}};
         _ ->
-            {error, <<"invalid-state">>}
+            %% No connect in progress is not-in-progress, not invalid-state,
+            %% the same contract finish/4 gives bind and listen.
+            {error, <<"not-in-progress">>}
     end.
 
 %% Bind and listen collapse like connect: start-bind checks the grant and binds,
@@ -1821,13 +1942,72 @@ accept_connection(Listen) ->
 tcp_local(Self) ->
     case wasm_component:host_get(Self) of
         {ok, {tcp_socket, {State, Handle}}}
-          when State =:= listening; State =:= connected ->
+          when State =:= bound; State =:= listening; State =:= connected ->
             case wasi_sock:local(Handle) of
                 {ok, {Addr, Port}} -> {ok, ip_sockaddr(Addr, Port)};
                 {error, Errno}     -> {error, sock_errno(Errno)}
             end;
         _ ->
             {error, <<"invalid-state">>}
+    end.
+
+%% Remote address is only defined once connected; every other state is
+%% invalid-state, as the tcp state machine requires.
+tcp_remote(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, {connected, Conn}}} ->
+            case wasi_sock:peer(Conn) of
+                {ok, {Addr, Port}} -> {ok, ip_sockaddr(Addr, Port)};
+                {error, Errno}     -> {error, sock_errno(Errno)}
+            end;
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+tcp_is_listening(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, {listening, _}}} -> true;
+        _                                  -> false
+    end.
+
+%% The family is fixed at create and readable from the live handle in any state.
+tcp_family(Self) ->
+    case tcp_handle(Self) of
+        {ok, Handle} -> family_enum(wasi_sock:family(Handle));
+        error        -> <<"ipv4">>
+    end.
+
+tcp_handle(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, {_State, Handle}}} -> {ok, Handle};
+        _                                    -> error
+    end.
+
+family_enum(inet6) -> <<"ipv6">>;
+family_enum(_)     -> <<"ipv4">>.
+
+%% Socket options are best-effort: a live socket reports a sane default and
+%% accepts any set, while a value the ABI forbids to be zero (buffer sizes,
+%% durations, hop limit, listen backlog) is invalid-argument, and a set on a
+%% dropped socket is invalid-state. Exact clamping and persistence are the
+%% dedicated sockopts pass; the state machine only needs each call to answer.
+tcp_opt_get(Self, Value) ->
+    case tcp_handle(Self) of
+        {ok, _} -> {ok, Value};
+        error   -> {error, <<"invalid-state">>}
+    end.
+
+tcp_set_ok(Self) ->
+    case tcp_handle(Self) of
+        {ok, _} -> {ok, undefined};
+        error   -> {error, <<"invalid-state">>}
+    end.
+
+tcp_set_nonzero(Self, Value) ->
+    case tcp_handle(Self) of
+        error                    -> {error, <<"invalid-state">>};
+        {ok, _} when Value =:= 0 -> {error, <<"invalid-argument">>};
+        {ok, _}                  -> {ok, undefined}
     end.
 
 ip_sockaddr({A, B, C, D}, Port) ->
@@ -1898,21 +2078,82 @@ udp_start_bind(Self, Net, Addr) ->
             {error, <<"invalid-state">>}
     end.
 
+%% Finishing a bind moves the socket to bound with no connected remote yet; the
+%% third field records the address a later stream(some(_)) connects to, which is
+%% what remote-address reports.
+udp_finish_bind(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {udp_socket, {udp_binding, Bound}}} ->
+            _ = wasm_component:host_update(Self, {udp_bound, Bound, none}),
+            {ok, undefined};
+        _ ->
+            {error, <<"not-in-progress">>}
+    end.
+
 %% stream splits the socket into an incoming and outgoing datagram stream. A
-%% connected stream (a remote address) checks the peer against the grant.
+%% connected stream (a remote address) checks the peer against the grant and is
+%% remembered on the socket so remote-address can report it.
 udp_stream(Self, Remote, Grant) ->
     case wasm_component:host_get(Self) of
-        {ok, {udp_socket, {udp_bound, Sock}}} ->
+        {ok, {udp_socket, {udp_bound, Sock, _Was}}} ->
             case udp_remote(Remote, Grant) of
                 {error, _} = E ->
                     E;
                 {ok, Peer} ->
+                    Conn = case Remote of {some, Addr} -> Addr; none -> none end,
+                    _ = wasm_component:host_update(Self, {udp_bound, Sock, Conn}),
                     In = wasm_component:host_new(udp_in, {Sock, Peer}),
                     Out = wasm_component:host_new(udp_out, {Sock, Peer, Grant}),
                     {ok, {In, Out}}
             end;
         _ ->
             {error, <<"invalid-state">>}
+    end.
+
+udp_local(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {udp_socket, {udp_bound, Sock, _Conn}}} ->
+            case wasi_sock:local(Sock) of
+                {ok, {Addr, Port}} -> {ok, ip_sockaddr(Addr, Port)};
+                {error, Errno}     -> {error, sock_errno(Errno)}
+            end;
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+%% Remote address is defined only once a stream connected the socket to a peer.
+udp_remote_addr(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {udp_socket, {udp_bound, _Sock, Conn}}} when Conn =/= none ->
+            {ok, Conn};
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+udp_family(Self) ->
+    case udp_handle(Self) of
+        {ok, Handle} -> family_enum(wasi_sock:family(Handle));
+        error        -> <<"ipv4">>
+    end.
+
+udp_handle(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {udp_socket, {udp_bound, Sock, _Conn}}} -> {ok, Sock};
+        {ok, {udp_socket, {_State, Handle}}}         -> {ok, Handle};
+        _                                            -> error
+    end.
+
+udp_opt_get(Self, Value) ->
+    case udp_handle(Self) of
+        {ok, _} -> {ok, Value};
+        error   -> {error, <<"invalid-state">>}
+    end.
+
+udp_set_nonzero(Self, Value) ->
+    case udp_handle(Self) of
+        error                    -> {error, <<"invalid-state">>};
+        {ok, _} when Value =:= 0 -> {error, <<"invalid-argument">>};
+        {ok, _}                  -> {ok, undefined}
     end.
 
 udp_remote(none, _Grant) ->
@@ -1989,8 +2230,9 @@ peer_matches({udp, _, _}, _Addr, _Port)          -> false.
 
 udp_drop(H) ->
     case wasm_component:host_get(H) of
-        {ok, {udp_socket, {_State, Handle}}} -> _ = wasi_sock:close(Handle);
-        _                                    -> ok
+        {ok, {udp_socket, {udp_bound, Sock, _Conn}}} -> _ = wasi_sock:close(Sock);
+        {ok, {udp_socket, {_State, Handle}}}         -> _ = wasi_sock:close(Handle);
+        _                                            -> ok
     end,
     wasm_component:host_drop(H).
 

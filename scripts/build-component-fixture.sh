@@ -66,14 +66,27 @@ done
 
 # Hand-authored components (WebAssembly component text), for the linker: a two-core
 # component whose larger core imports a function from the smaller one, so it links
-# only by wiring core to core, never by a host name.
-for name in twocore; do
+# only by wiring core to core, never by a host name. `twocore_trap` is the same
+# shape but the entry core traps in its start function, so linking fails after the
+# provider core is built: the linker must free that core rather than leak it.
+# `statecore` has one core with a mutable global exported as `bump`, so a per-request
+# cold instance returns 1 every call and a reused one would climb: it proves the
+# worker gives each request a fresh component instance.
+for name in twocore twocore_trap statecore; do
   wat="$here/test/fixtures/component/$name/$name.wat"
   out="$here/test/fixtures/component/$name.component.wasm"
   wasm-tools parse "$wat" -o "$out"
   wasm-tools validate --features component-model "$out"
   echo "built $out"
 done
+
+# A bare core module (not a component) whose start function traps, the baseline
+# for the linker leak test: one failed instantiate leaves one instance behind.
+trapwat="$here/test/fixtures/component/trapcore/trapcore.wat"
+trapout="$here/test/fixtures/component/trapcore.wasm"
+wasm-tools parse "$trapwat" -o "$trapout"
+wasm-tools validate "$trapout"
+echo "built $trapout"
 
 # The wasmtime preview1->preview2 adapter, pinned to the wasmtime we test against.
 # It turns a wasm32-wasip1 program into a preview2 command component (many core

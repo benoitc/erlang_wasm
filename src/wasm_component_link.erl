@@ -147,12 +147,18 @@ link(Graph, EntryModIdx, HostResolve, Opts) ->
         {ok, S} ->
             Built = lists:reverse(maps:get(built, S)),
             case entry(S) of
-                {ok, Core} -> {ok, #{core => Core, cores => Built}};
-                {error, _} = E -> E
+                {ok, Core}     -> {ok, #{core => Core, cores => Built}};
+                {error, _} = E -> destroy_built(S), E
             end;
-        {error, _} = E ->
-            E
+        {error, Reason, S} ->
+            destroy_built(S),
+            {error, Reason}
     end.
+
+%% A partial link that failed still built some cores; free them so a mid-graph
+%% error leaks nothing.
+destroy_built(S) ->
+    lists:foreach(fun wasm:destroy/1, maps:get(built, S)).
 
 %% The entry instance: the core that exports the run function, else the largest.
 entry(#{run_inst := Idx, core_insts := CI}) when Idx =/= undefined ->
@@ -167,8 +173,8 @@ fold([], S) ->
     {ok, S};
 fold([Item | Rest], S) ->
     case step(Item, S) of
-        {ok, S1}       -> fold(Rest, S1);
-        {error, _} = E -> E
+        {ok, S1}           -> fold(Rest, S1);
+        {error, Reason}    -> {error, Reason, S}
     end.
 
 step({core_module, _}, S) ->

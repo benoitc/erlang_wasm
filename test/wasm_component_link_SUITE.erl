@@ -7,7 +7,9 @@ exports `foo`, and a larger entry core that imports `foo` from it and exports
 `run`. Its import is not a WASI name, so binding by host name (the single-core
 path) cannot satisfy it (`unknown import {a, foo}`); only wiring one core's import
 to another core's export runs it. This suite pins that: the entry returns the
-value it got across the core boundary, and every core is freed on destroy.
+value it got across the core boundary, every core is freed on destroy, a link that
+fails partway frees the cores it had already built, and destroy closes the host
+resources an instance still holds.
 """.
 
 -compile([export_all, nowarn_export_all]).
@@ -18,7 +20,9 @@ value it got across the core boundary, and every core is freed on destroy.
 all() ->
     [links_a_cross_core_import,
      frees_every_core_on_destroy,
-     an_unbound_host_import_is_named].
+     an_unbound_host_import_is_named,
+     a_failed_link_frees_the_cores_it_built,
+     destroy_closes_host_resources_and_clears_the_tables].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -49,14 +53,61 @@ an_unbound_host_import_is_named(_Config) ->
     ?assert(is_binary(Iface) andalso byte_size(Iface) > 0),
     ?assert(is_binary(Method) andalso byte_size(Method) > 0).
 
-component() ->
-    {ok, Bin} = file:read_file(path()),
+%% When a later core fails to instantiate, the cores the linker already built must
+%% be freed, not leaked. `twocore_trap` builds its provider core, then traps in the
+%% entry core's start function. A failed instantiate leaves its own instance table
+%% behind (a property of wasm:instantiate, measured by `trapcore` alone), so the
+%% test asserts the two-core link leaks no more than that single unavoidable table:
+%% the provider core is freed. Before the fix the provider leaked too, so the
+%% two-core link left one extra table and this fails.
+a_failed_link_frees_the_cores_it_built(_Config) ->
+    {ok, Core} = wasm:load(read(trapcore_path())),
+    SelfLeak = leaked(fun() -> wasm:instantiate(Core, #{}) end),
+    Comp = read(trap_path()),
+    LinkLeak = leaked(fun() -> wasm_component:instantiate(Comp, #{}) end),
+    ?assertEqual(SelfLeak, LinkLeak).
+
+%% destroy/2 must be a complete teardown: close every OS handle a host resource
+%% owns and clear the per-process tables. A gen_tcp socket is port-owned and is not
+%% reclaimed by GC, so a leaked one stays open until the process dies. The test
+%% mints a host resource holding a live socket, destroys with the WASI closer, and
+%% asserts the port is gone and the tables are empty.
+destroy_closes_host_resources_and_clears_the_tables(_Config) ->
+    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}]),
+    {ok, Port} = inet:port(Listen),
+    {ok, Sock} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}]),
+    _ = wasm_component:host_new(tcp_socket, {connected, {stream, Sock}}),
+    _ = wasm_component:host_new(pollable, {clock, 0}),
+    ?assertNotEqual([], wasm_component:host_live()),
+    ok = wasm_component:destroy(#{cores => []},
+                                fun wasi_preview2:close_resource/1),
+    ?assertEqual([], wasm_component:host_live()),
+    ?assertEqual(undefined, erlang:port_info(Sock)),
+    gen_tcp:close(Listen).
+
+leaked(F) ->
+    Before = live_instance_tables(),
+    ?assertMatch({error, _}, F()),
+    live_instance_tables() - Before.
+
+live_instance_tables() ->
+    length([T || T <- ets:all(), ets:info(T, name) =:= wasm_instance_store]).
+
+read(P) ->
+    {ok, Bin} = file:read_file(P),
     Bin.
+
+component() ->
+    read(path()).
 
 real_path() ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
                    "test", "fixtures", "component", "realupper.component.wasm"]).
 
-path() ->
+path() -> fixture("twocore.component.wasm").
+trap_path() -> fixture("twocore_trap.component.wasm").
+trapcore_path() -> fixture("trapcore.wasm").
+
+fixture(Name) ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
-                   "test", "fixtures", "component", "twocore.component.wasm"]).
+                   "test", "fixtures", "component", Name]).

@@ -53,6 +53,7 @@ later step.
 %% Where cli_exit records the status for run_command to read (same process).
 -define(EXIT_STATUS, {?MODULE, exit_status}).
 -define(INSECURE_SEED, {?MODULE, insecure_seed}).
+-define(SOCKOPT, {?MODULE, sockopt}).
 
 %% wasi:filesystem enums, in WIT order (the enum discriminant is the index).
 -define(ERROR_CODE,
@@ -1757,63 +1758,63 @@ sockets(Opts) ->
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.keep-alive-enabled">>} =>
           wasm_component:import_fun(
             {[handle], {result, bool, ?SOCK_ERROR}},
-            fun([Self]) -> tcp_opt_get(Self, false) end),
+            fun([Self]) -> opt_get(Self, keep_alive_enabled) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.set-keep-alive-enabled">>} =>
           wasm_component:import_fun(
             {[handle, bool], {result, none, ?SOCK_ERROR}},
-            fun([Self, _On]) -> tcp_set_ok(Self) end),
+            fun([Self, On]) -> opt_set(Self, keep_alive_enabled, On) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.keep-alive-idle-time">>} =>
           wasm_component:import_fun(
             {[handle], {result, u64, ?SOCK_ERROR}},
-            fun([Self]) -> tcp_opt_get(Self, ?KEEPIDLE_NS) end),
+            fun([Self]) -> opt_get(Self, keep_alive_idle_time) end),
       {<<"wasi:sockets/tcp">>,
        <<"[method]tcp-socket.set-keep-alive-idle-time">>} =>
           wasm_component:import_fun(
             {[handle, u64], {result, none, ?SOCK_ERROR}},
-            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+            fun([Self, N]) -> opt_set_nonzero(Self, keep_alive_idle_time, N) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.keep-alive-interval">>} =>
           wasm_component:import_fun(
             {[handle], {result, u64, ?SOCK_ERROR}},
-            fun([Self]) -> tcp_opt_get(Self, ?KEEPINTVL_NS) end),
+            fun([Self]) -> opt_get(Self, keep_alive_interval) end),
       {<<"wasi:sockets/tcp">>,
        <<"[method]tcp-socket.set-keep-alive-interval">>} =>
           wasm_component:import_fun(
             {[handle, u64], {result, none, ?SOCK_ERROR}},
-            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+            fun([Self, N]) -> opt_set_nonzero(Self, keep_alive_interval, N) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.keep-alive-count">>} =>
           wasm_component:import_fun(
             {[handle], {result, u32, ?SOCK_ERROR}},
-            fun([Self]) -> tcp_opt_get(Self, ?KEEPCNT) end),
+            fun([Self]) -> opt_get(Self, keep_alive_count) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.set-keep-alive-count">>} =>
           wasm_component:import_fun(
             {[handle, u32], {result, none, ?SOCK_ERROR}},
-            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+            fun([Self, N]) -> opt_set_nonzero(Self, keep_alive_count, N) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.hop-limit">>} =>
           wasm_component:import_fun(
             {[handle], {result, u8, ?SOCK_ERROR}},
-            fun([Self]) -> tcp_opt_get(Self, ?HOP_LIMIT) end),
+            fun([Self]) -> opt_get(Self, hop_limit) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.set-hop-limit">>} =>
           wasm_component:import_fun(
             {[handle, u8], {result, none, ?SOCK_ERROR}},
-            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+            fun([Self, N]) -> opt_set_nonzero(Self, hop_limit, N) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.receive-buffer-size">>} =>
           wasm_component:import_fun(
             {[handle], {result, u64, ?SOCK_ERROR}},
-            fun([Self]) -> tcp_opt_get(Self, ?SOCK_BUFSIZE) end),
+            fun([Self]) -> opt_get(Self, recv_buffer) end),
       {<<"wasi:sockets/tcp">>,
        <<"[method]tcp-socket.set-receive-buffer-size">>} =>
           wasm_component:import_fun(
             {[handle, u64], {result, none, ?SOCK_ERROR}},
-            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+            fun([Self, N]) -> opt_set_nonzero(Self, recv_buffer, N) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.send-buffer-size">>} =>
           wasm_component:import_fun(
             {[handle], {result, u64, ?SOCK_ERROR}},
-            fun([Self]) -> tcp_opt_get(Self, ?SOCK_BUFSIZE) end),
+            fun([Self]) -> opt_get(Self, send_buffer) end),
       {<<"wasi:sockets/tcp">>,
        <<"[method]tcp-socket.set-send-buffer-size">>} =>
           wasm_component:import_fun(
             {[handle, u64], {result, none, ?SOCK_ERROR}},
-            fun([Self, N]) -> tcp_set_nonzero(Self, N) end),
+            fun([Self, N]) -> opt_set_nonzero(Self, send_buffer, N) end),
       {<<"wasi:sockets/tcp">>, <<"[resource-drop]tcp-socket">>} =>
           fun(_Ctx, [H]) -> _ = tcp_drop(H), {ok, []} end,
       {<<"wasi:sockets/udp-create-socket">>, <<"create-udp-socket">>} =>
@@ -1844,28 +1845,28 @@ sockets(Opts) ->
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.unicast-hop-limit">>} =>
           wasm_component:import_fun(
             {[handle], {result, u8, ?SOCK_ERROR}},
-            fun([Self]) -> udp_opt_get(Self, ?HOP_LIMIT) end),
+            fun([Self]) -> opt_get(Self, hop_limit) end),
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.set-unicast-hop-limit">>} =>
           wasm_component:import_fun(
             {[handle, u8], {result, none, ?SOCK_ERROR}},
-            fun([Self, N]) -> udp_set_nonzero(Self, N) end),
+            fun([Self, N]) -> opt_set_nonzero(Self, hop_limit, N) end),
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.receive-buffer-size">>} =>
           wasm_component:import_fun(
             {[handle], {result, u64, ?SOCK_ERROR}},
-            fun([Self]) -> udp_opt_get(Self, ?SOCK_BUFSIZE) end),
+            fun([Self]) -> opt_get(Self, recv_buffer) end),
       {<<"wasi:sockets/udp">>,
        <<"[method]udp-socket.set-receive-buffer-size">>} =>
           wasm_component:import_fun(
             {[handle, u64], {result, none, ?SOCK_ERROR}},
-            fun([Self, N]) -> udp_set_nonzero(Self, N) end),
+            fun([Self, N]) -> opt_set_nonzero(Self, recv_buffer, N) end),
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.send-buffer-size">>} =>
           wasm_component:import_fun(
             {[handle], {result, u64, ?SOCK_ERROR}},
-            fun([Self]) -> udp_opt_get(Self, ?SOCK_BUFSIZE) end),
+            fun([Self]) -> opt_get(Self, send_buffer) end),
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.set-send-buffer-size">>} =>
           wasm_component:import_fun(
             {[handle, u64], {result, none, ?SOCK_ERROR}},
-            fun([Self, N]) -> udp_set_nonzero(Self, N) end),
+            fun([Self, N]) -> opt_set_nonzero(Self, send_buffer, N) end),
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.stream">>} =>
           wasm_component:import_fun(
             {[handle, {option, ?IP_SOCKADDR}], ?UDP_STREAM_RESULT},
@@ -1896,6 +1897,10 @@ sockets(Opts) ->
       {<<"wasi:sockets/udp">>, <<"[resource-drop]udp-socket">>} =>
           fun(_Ctx, [H]) -> _ = udp_drop(H), {ok, []} end}.
 
+%% A socket with no grant is created but reaches nowhere (every connect, bind and
+%% listen is checked against the grant): p2_cli_no_tcp wants creation itself denied
+%% without a capability, but that is indistinguishable from the grant-less socket
+%% the connect/listen-needs-a-grant tests rely on, so creation stays permitted.
 create_tcp_socket(Family, Grant) ->
     case socket_room(Grant) of
         false ->
@@ -2019,21 +2024,29 @@ tcp_accept(Self, Grant) ->
                 false ->
                     {error, <<"new-socket-limit">>};
                 true ->
-                    accept_connection(Listen)
+                    accept_connection(Self, Listen)
             end;
         _ ->
             {error, <<"invalid-state">>}
     end.
 
-accept_connection(Listen) ->
+accept_connection(Listener, Listen) ->
     case wasi_sock:accept(Listen, ?SOCK_TIMEOUT) of
         {ok, Conn} ->
             Sock = wasm_component:host_new(tcp_socket, {connected, Conn}),
+            %% An accepted connection inherits the listener's socket options.
+            _ = inherit_sockopts(Listener, Sock),
             In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
             Out = wasm_component:host_new(output_stream, {socket, Conn}),
             {ok, {Sock, In, Out}};
         {error, Errno} ->
             {error, sock_errno(Errno)}
+    end.
+
+inherit_sockopts(From, To) ->
+    case get({?SOCKOPT, From}) of
+        undefined -> ok;
+        Opts      -> put({?SOCKOPT, To}, Opts)
     end.
 
 tcp_local(Self) ->
@@ -2083,29 +2096,62 @@ tcp_handle(Self) ->
 family_enum(inet6) -> <<"ipv6">>;
 family_enum(_)     -> <<"ipv4">>.
 
-%% Socket options are best-effort: a live socket reports a sane default and
-%% accepts any set, while a value the ABI forbids to be zero (buffer sizes,
-%% durations, hop limit, listen backlog) is invalid-argument, and a set on a
-%% dropped socket is invalid-state. Exact clamping and persistence are the
-%% dedicated sockopts pass; the state machine only needs each call to answer.
-tcp_opt_get(Self, Value) ->
-    case tcp_handle(Self) of
-        {ok, _} -> {ok, Value};
-        error   -> {error, <<"invalid-state">>}
+%% Socket options persist per socket so a set reads back: a live socket reports a
+%% stored value or its default, and stores what a set gives (the OS is not
+%% consulted, so no silent clamping is needed for these to round-trip). A value the
+%% ABI forbids to be zero (durations, counts, hop limit, buffer sizes, listen
+%% backlog) is invalid-argument, and any call on a dropped socket is invalid-state.
+%% The store lives in the instance process, keyed by the resource, freed on drop.
+opt_get(Self, Which) ->
+    case live_socket(Self) of
+        true  -> {ok, maps:get(Which, socket_opts(Self), sockopt_default(Which))};
+        false -> {error, <<"invalid-state">>}
     end.
 
-tcp_set_ok(Self) ->
-    case tcp_handle(Self) of
-        {ok, _} -> {ok, undefined};
-        error   -> {error, <<"invalid-state">>}
+opt_set(Self, Which, Value) ->
+    case live_socket(Self) of
+        true  -> put_socket_opt(Self, Which, Value), {ok, undefined};
+        false -> {error, <<"invalid-state">>}
     end.
 
+opt_set_nonzero(Self, Which, Value) ->
+    case live_socket(Self) of
+        false                 -> {error, <<"invalid-state">>};
+        true when Value =:= 0 -> {error, <<"invalid-argument">>};
+        true                  -> put_socket_opt(Self, Which, Value), {ok, undefined}
+    end.
+
+%% set-listen-backlog-size is not read back, so it only validates and is dropped.
 tcp_set_nonzero(Self, Value) ->
-    case tcp_handle(Self) of
-        error                    -> {error, <<"invalid-state">>};
-        {ok, _} when Value =:= 0 -> {error, <<"invalid-argument">>};
-        {ok, _}                  -> {ok, undefined}
+    case live_socket(Self) of
+        false                 -> {error, <<"invalid-state">>};
+        true when Value =:= 0 -> {error, <<"invalid-argument">>};
+        true                  -> {ok, undefined}
     end.
+
+live_socket(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, _}} -> true;
+        {ok, {udp_socket, _}} -> true;
+        _                     -> false
+    end.
+
+socket_opts(Self) ->
+    case get({?SOCKOPT, Self}) of
+        undefined -> #{};
+        Map       -> Map
+    end.
+
+put_socket_opt(Self, Which, Value) ->
+    put({?SOCKOPT, Self}, (socket_opts(Self))#{Which => Value}).
+
+sockopt_default(keep_alive_enabled)   -> false;
+sockopt_default(keep_alive_idle_time) -> ?KEEPIDLE_NS;
+sockopt_default(keep_alive_interval)  -> ?KEEPINTVL_NS;
+sockopt_default(keep_alive_count)     -> ?KEEPCNT;
+sockopt_default(hop_limit)            -> ?HOP_LIMIT;
+sockopt_default(recv_buffer)          -> ?SOCK_BUFSIZE;
+sockopt_default(send_buffer)          -> ?SOCK_BUFSIZE.
 
 ip_sockaddr({A, B, C, D}, Port) ->
     {<<"ipv4">>, #{<<"port">> => Port, <<"address">> => {A, B, C, D}}};
@@ -2133,6 +2179,7 @@ tcp_drop(H) ->
         {ok, {tcp_socket, {_State, Handle}}} -> _ = wasi_sock:close(Handle);
         _                                    -> ok
     end,
+    _ = erase({?SOCKOPT, H}),
     wasm_component:host_drop(H).
 
 endpoint(Addr) ->
@@ -2267,19 +2314,6 @@ udp_handle(Self) ->
         _                                            -> error
     end.
 
-udp_opt_get(Self, Value) ->
-    case udp_handle(Self) of
-        {ok, _} -> {ok, Value};
-        error   -> {error, <<"invalid-state">>}
-    end.
-
-udp_set_nonzero(Self, Value) ->
-    case udp_handle(Self) of
-        error                    -> {error, <<"invalid-state">>};
-        {ok, _} when Value =:= 0 -> {error, <<"invalid-argument">>};
-        {ok, _}                  -> {ok, undefined}
-    end.
-
 udp_remote(none, _Grant) ->
     {ok, none};
 udp_remote({some, Addr}, Grant) ->
@@ -2387,6 +2421,7 @@ udp_drop(H) ->
         {ok, {udp_socket, {_State, Handle}}}         -> _ = wasi_sock:close(Handle);
         _                                            -> ok
     end,
+    _ = erase({?SOCKOPT, H}),
     wasm_component:host_drop(H).
 
 %% A Preview 1 errno to a wasi:sockets error-code name.
@@ -2408,7 +2443,10 @@ resolve_addresses(NetH, Name) ->
     case wasm_component:host_get(NetH) of
         {ok, {net_network, Grant}} ->
             case wasi_net:resolves(Grant) of
-                false -> {error, <<"access-denied">>};
+                %% No resolve capability is a permanent resolver failure, the code
+                %% a resolver-less host reports (a grant-less guest maps any error
+                %% to no addresses either way).
+                false -> {error, <<"permanent-resolver-failure">>};
                 true  -> {ok, wasm_component:host_new(net_addrs, resolve_names(Name))}
             end;
         _ ->

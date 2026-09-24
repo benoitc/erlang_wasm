@@ -125,7 +125,7 @@ config(Name, Preopen) ->
         {_, _} = C -> C;
         default ->
             case group_name(Name) of
-                ~"sockets"    -> {<<>>, #{network => loopback()}};
+                ~"sockets"    -> {<<>>, #{network => socket_grant(Name)}};
                 ~"filesystem" -> fs_config(Name, Preopen);
                 _             -> {<<>>, #{}}
             end
@@ -201,6 +201,12 @@ program_config("p2_cli_stdin") ->
     {<<"So rested he by the Tumtum tree">>, #{}};
 program_config(_) ->
     default.
+
+%% p2_cli_no_ip_name_lookup is offered the sockets interface but no resolve
+%% capability, so it asserts the lookup is a permanent resolver failure; everything
+%% else gets a loopback grant.
+socket_grant("p2_cli_no_ip_name_lookup") -> none;
+socket_grant(_)                          -> loopback().
 
 loopback() ->
     #{connect => [{tcp, <<"127.0.0.1">>, {0, 65535}},

@@ -37,7 +37,7 @@ baseline() ->
       ~"filesystem" => 1,
       ~"io"         => 2,
       ~"random"     => 0,
-      ~"sockets"    => 15}.
+      ~"sockets"    => 12}.
 
 init_per_suite(Config) ->
     case wasi_p2_runner:have_fixtures() of

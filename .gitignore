@@ -37,3 +37,7 @@ priv/*.dSYM/
 #   git clone --depth 1 --branch prod/testsuite-base https://github.com/WebAssembly/wasi-testsuite.git
 # wasi_conformance_SUITE skips with that message when it is absent.
 /wasi-testsuite
+
+# wasmtime p2 interop fixtures (built on demand, not vendored)
+test/fixtures/wasmtime-p2/
+/.wasmtime-src/

@@ -1,4 +1,4 @@
-.PHONY: all compile check test ct lint xref dialyzer docs publish bench suites clean
+.PHONY: all compile check test ct lint xref dialyzer docs publish bench suites p2-fixtures clean
 
 all: compile
 
@@ -42,6 +42,11 @@ suites:
 	@test -d wasi-testsuite || \
 	    git clone --depth 1 --branch prod/testsuite-base \
 	        https://github.com/WebAssembly/wasi-testsuite.git
+
+# wasmtime's native WASI 0.2 test programs for the interop track
+# (wasm_wasi2_p2_SUITE). Not vendored: built on demand, skipped when absent.
+p2-fixtures:
+	./scripts/build-wasmtime-p2.sh
 
 clean:
 	rebar3 clean

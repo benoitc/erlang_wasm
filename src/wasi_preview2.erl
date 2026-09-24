@@ -396,7 +396,8 @@ Options: `stdin` (a binary, default empty), `stdout` and `stderr`
                 args => [binary()],
                 env => [{binary(), binary()}],
                 preopen => file:filename_all(),
-                writable => boolean()}) ->
+                writable => boolean(),
+                network => term()}) ->
           #{{binary(), binary()} => fun()}.
 command(Opts) ->
     Stdin = maps:get(stdin, Opts, <<>>),
@@ -415,7 +416,14 @@ command(Opts) ->
                                         writable => maps:get(writable, Opts, false)})];
              error     -> [filesystem(#{name => <<"/">>})]
          end,
-    lists:foldl(fun maps:merge/2, #{}, Base ++ Fs).
+    %% Sockets are opt-in: only a caller that passes a network grant gets the
+    %% wasi:sockets slice, so the default capability posture is unchanged and a
+    %% command that imports no sockets still links.
+    Net = case maps:find(network, Opts) of
+              {ok, Grant} -> [sockets(#{grant => Grant})];
+              error       -> []
+          end,
+    lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net).
 
 -doc """
 Run a `wasi:cli/command` component with `Stdin` on its standard input and return
@@ -429,11 +437,13 @@ run_command(Bin, Stdin) ->
 
 -doc """
 As `run_command/2` with extra `command/1` options, such as `preopen => Dir` to
-give the command a directory to read (a mount).
+give the command a directory to read (a mount), or `network => Grant` to grant the
+`wasi:sockets` slice (opt-in; without it a command imports no sockets).
 """.
 -spec run_command(binary(), binary(),
                   #{args => [binary()], env => [{binary(), binary()}],
                     preopen => file:filename_all(), writable => boolean(),
+                    network => term(),
                     compile => boolean(), stub => boolean()}) ->
           {ok, #{stdout := binary(), stderr := binary(),
                  exit_code := integer()}} | {error, term()}.

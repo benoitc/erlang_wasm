@@ -536,6 +536,11 @@ cli_exit() ->
           fun(_Ctx, [Disc]) ->
               put(?EXIT_STATUS, exit_of(Disc)),
               {trap, wasi_exit}
+          end,
+      {<<"wasi:cli/exit">>, <<"exit-with-code">>} =>
+          fun(_Ctx, [Code]) ->
+              put(?EXIT_STATUS, Code),
+              {trap, wasi_exit}
           end}.
 
 exit_of(0) -> 0;

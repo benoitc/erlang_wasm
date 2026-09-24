@@ -32,7 +32,7 @@ all() -> [p2_cases, groups_present].
 %% lowers a number, a regression raises the actual above it and fails, and a
 %% number left too high (the `stale_baseline` guard) also fails.
 baseline() ->
-    #{~"cli"        => 12,
+    #{~"cli"        => 8,
       ~"clocks"     => 0,
       ~"filesystem" => 11,
       ~"io"         => 2,

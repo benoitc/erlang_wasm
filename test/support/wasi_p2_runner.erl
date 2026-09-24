@@ -121,11 +121,27 @@ classify({caught, Class, Reason}, _Name, Acc, Wasm) ->
 %% environment and stdin that a specific program expects are added per phase as
 %% the group is burned down; until then such a program lands in the baseline.
 config(Name, Preopen) ->
-    case group_name(Name) of
-        ~"sockets"    -> {<<>>, #{network => loopback()}};
-        ~"filesystem" -> {<<>>, #{preopen => Preopen, writable => true}};
-        _             -> {<<>>, #{}}
+    case program_config(Name) of
+        {_, _} = C -> C;
+        default ->
+            case group_name(Name) of
+                ~"sockets"    -> {<<>>, #{network => loopback()}};
+                ~"filesystem" -> {<<>>, #{preopen => Preopen, writable => true}};
+                _             -> {<<>>, #{}}
+            end
     end.
+
+%% The arguments, environment and stdin each program asserts. argv[0] is the
+%% program name (the guests skip it), so it leads the args list.
+program_config("p2_cli_args") ->
+    {<<>>, #{args => [<<"p2_cli_args">>, <<"hello">>, <<"this">>, <<>>,
+                      <<"is an argument">>, <<"with ", 240,159,154,169, " emoji">>]}};
+program_config("p2_cli_env") ->
+    {<<>>, #{env => [{<<"frabjous">>, <<"day">>}, {<<"callooh">>, <<"callay">>}]}};
+program_config("p2_cli_stdin") ->
+    {<<"So rested he by the Tumtum tree">>, #{}};
+program_config(_) ->
+    default.
 
 loopback() ->
     #{connect => [{tcp, <<"127.0.0.1">>, {0, 65535}},

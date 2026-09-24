@@ -40,4 +40,5 @@ priv/*.dSYM/
 
 # wasmtime p2 interop fixtures (built on demand, not vendored)
 test/fixtures/wasmtime-p2/
+test/fixtures/wasmtime-p2-serve/
 /.wasmtime-src/

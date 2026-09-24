@@ -13,9 +13,10 @@
 # adapters via wit-component), then strips each command component (7.6 MB -> ~115
 # KB) into test/fixtures/wasmtime-p2/.
 #
-# Needs rustup's wasm32-wasip1 target, cargo, and wasm-tools. The reactor/http
-# programs (p2_http_*, p2_api_*, p2_cli_serve_*, p2_tls_*) are left out until the
-# wasi:http world lands.
+# Needs rustup's wasm32-wasip1 target, cargo, and wasm-tools. The p2_cli_serve_*
+# reactors go in a separate `-serve` dir (served through run_serve by
+# wasm_wasi2_serve_SUITE, not run as commands); the p2_api_* and p2_tls_* proxy/tls
+# programs are still left out.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -44,14 +45,25 @@ out="$(find target -type d -path '*wasm32-wasip1*' -name debug \
          -exec test -e '{}/p2_random.component.wasm' ';' -print | head -1)"
 [ -n "$out" ] || { echo "no componentized p2_* output found" >&2; exit 1; }
 
-mkdir -p "$dest"
+# Command programs (exit-0 oracles) go in $dest, driven by wasm_wasi2_p2_SUITE via
+# run_command. The reactor serve programs export wasi:http/incoming-handler and are
+# served, not run, so they go in a separate dir the command runner never globs;
+# wasm_wasi2_serve_SUITE drives them through wasi_preview2:run_serve.
+serve_dest="$dest-serve"
+mkdir -p "$dest" "$serve_dest"
 n=0
+s=0
 for f in "$out"/p2_*.component.wasm; do
   base="$(basename "$f")"
   case "$base" in
-    p2_api_*|p2_cli_serve_*|p2_tls_*) continue ;;  # reactor/proxy: not yet driven
+    p2_cli_serve_*)
+      wasm-tools strip "$f" -o "$serve_dest/$base"
+      s=$((s + 1))
+      continue ;;
+    p2_api_*|p2_tls_*) continue ;;  # proxy/tls: not yet driven
   esac
   wasm-tools strip "$f" -o "$dest/$base"
   n=$((n + 1))
 done
 echo "built $n command components into $dest ($(du -sh "$dest" | cut -f1))"
+echo "built $s serve reactors into $serve_dest ($(du -sh "$serve_dest" | cut -f1))"

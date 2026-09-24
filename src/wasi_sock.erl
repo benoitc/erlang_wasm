@@ -41,6 +41,12 @@ middle of a stream, silently, and only under load.
 %% backlog; the host-opened path has nobody to ask.
 -define(DEFAULT_BACKLOG, 128).
 
+%% A connected stream socket carries a send timeout so a stalled peer cannot block
+%% the sending process forever; the socket is closed on a send timeout, since a
+%% half-sent stream cannot recover. `send/2` has no timeout argument of its own.
+-define(SEND_TIMEOUT, 5000).
+-define(SEND_OPTS, [{send_timeout, ?SEND_TIMEOUT}, {send_timeout_close, true}]).
+
 -doc """
 An open socket, tagged with what it is.
 
@@ -131,7 +137,10 @@ backlog(_) -> ?DEFAULT_BACKLOG.
           {ok, handle()} | {error, non_neg_integer()}.
 accept({listen, S}, Timeout) ->
     case gen_tcp:accept(S, Timeout) of
-        {ok, Conn} -> {ok, {stream, Conn}};
+        {ok, Conn} ->
+            %% send_timeout is per-socket and not inherited from the listener.
+            _ = inet:setopts(Conn, ?SEND_OPTS),
+            {ok, {stream, Conn}};
         {error, Reason} -> {error, errno(Reason)}
     end;
 accept(_Other, _Timeout) ->
@@ -167,7 +176,8 @@ tcp_connect(Family, Addr, Port, Opts, Timeout) ->
         false ->
             {error, ?EAFNOSUPPORT};
         true ->
-            case gen_tcp:connect(Addr, Port, [binary, {active, false} | Opts],
+            case gen_tcp:connect(Addr, Port,
+                                 [binary, {active, false} | ?SEND_OPTS ++ Opts],
                                  Timeout) of
                 {ok, Conn} -> {ok, {stream, Conn}};
                 {error, Reason} -> {error, errno(Reason)}

@@ -1195,6 +1195,12 @@ write_at(File, Data, Off) ->
             {error, <<"bad-descriptor">>}
     end.
 
+%% The directory mutations below are gated on the mount being writable, not on a
+%% per-descriptor `mutate-directory` right. Enforcing the per-descriptor right is
+%% not possible on the preview1-to-preview2 adapter path, which does not request the
+%% `mutate-directory` descriptor flag: a native p2 host could enforce it, but doing
+%% so here would refuse every adapted preview1 program that mutates a directory. The
+%% mount's writable flag is therefore the boundary.
 create_directory_at(_Dir, _Path, false) ->
     {error, <<"read-only">>};
 create_directory_at(Dir, Path, true) ->

@@ -9,7 +9,7 @@
     {mod, {wasm_app, []}},
     %% `common_test' is optional: only `wasm_adapter_conformance', the kit an
     %% adapter author runs from Common Test, calls it.
-    {applications, [kernel, stdlib, crypto, common_test]},
+    {applications, [kernel, stdlib, crypto, common_test, h1, h2]},
     {optional_applications, [common_test]},
     {env, []},
     {modules, []},

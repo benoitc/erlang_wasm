@@ -44,25 +44,31 @@ programs() ->
 -spec run_all() -> [map()].
 run_all() ->
     Preopen = fresh_preopen(),
-    Tally = lists:foldl(
-              fun(Wasm, Acc) ->
-                  Group = group(Wasm),
-                  G0 = maps:get(Group, Acc,
-                               #{dir => Group, pass => 0, fail => 0,
-                                 skip => 0, failures => []}),
-                  Acc#{Group => case_result(Wasm, Preopen, G0)}
-              end, #{}, programs()),
-    [G || {_, G} <- lists:sort(maps:to_list(Tally))].
+    {ok, Server} = wasi_http_server:start(),
+    Ctx = #{preopen => Preopen, http => wasi_http_server:address(Server)},
+    try
+        Tally = lists:foldl(
+                  fun(Wasm, Acc) ->
+                      Group = group(Wasm),
+                      G0 = maps:get(Group, Acc,
+                                   #{dir => Group, pass => 0, fail => 0,
+                                     skip => 0, failures => []}),
+                      Acc#{Group => case_result(Wasm, Ctx, G0)}
+                  end, #{}, programs()),
+        [G || {_, G} <- lists:sort(maps:to_list(Tally))]
+    after
+        wasi_http_server:stop(Server)
+    end.
 
 %%% -------------------------------------------------------------- one case ---
 
-case_result(Wasm, Preopen, Acc) ->
+case_result(Wasm, Ctx, Acc) ->
     Name = filename:basename(Wasm, ".component.wasm"),
     case skip_reason(Name) of
         {skip, Why} ->
             bump(skip, Acc, Wasm, Why);
         run ->
-            {Stdin, Opts} = config(Name, Preopen),
+            {Stdin, Opts} = config(Name, Ctx),
             case file:read_file(Wasm) of
                 {ok, Bin} ->
                     R = run_bounded(Bin, Stdin, Opts#{compile => true}),
@@ -120,13 +126,16 @@ classify({caught, Class, Reason}, _Name, Acc, Wasm) ->
 %% network grant; filesystem programs need a writable preopen. Arguments,
 %% environment and stdin that a specific program expects are added per phase as
 %% the group is burned down; until then such a program lands in the baseline.
-config(Name, Preopen) ->
+config(Name, Ctx) ->
     case program_config(Name) of
         {_, _} = C -> C;
         default ->
             case group_name(Name) of
                 ~"sockets"    -> {<<>>, #{network => socket_grant(Name)}};
-                ~"filesystem" -> fs_config(Name, Preopen);
+                ~"filesystem" -> fs_config(Name, maps:get(preopen, Ctx));
+                ~"http"       -> {<<>>, #{network => loopback(),
+                                          env => [{<<"HTTP_SERVER">>,
+                                                   maps:get(http, Ctx)}]}};
                 _             -> {<<>>, #{}}
             end
     end.
@@ -234,7 +243,8 @@ group(Wasm) ->
 
 group_name(Name) ->
     classify_group(Name,
-                   [{["random"], ~"random"},
+                   [{["http"], ~"http"},
+                    {["random"], ~"random"},
                     {["tcp", "udp", "ip_name_lookup", "no_tcp", "no_udp",
                       "no_ip"], ~"sockets"},
                     {["file", "directory", "preopen", "initial_cwd",

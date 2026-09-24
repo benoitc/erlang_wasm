@@ -49,7 +49,7 @@ n=0
 for f in "$out"/p2_*.component.wasm; do
   base="$(basename "$f")"
   case "$base" in
-    p2_http_*|p2_api_*|p2_cli_serve_*|p2_tls_*) continue ;;  # reactor/http: Phase 4
+    p2_api_*|p2_cli_serve_*|p2_tls_*) continue ;;  # reactor/proxy: not yet driven
   esac
   wasm-tools strip "$f" -o "$dest/$base"
   n=$((n + 1))

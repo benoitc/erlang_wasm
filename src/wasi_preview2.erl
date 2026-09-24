@@ -452,7 +452,8 @@ command(Opts) ->
     %% wasi:sockets slice, so the default capability posture is unchanged and a
     %% command that imports no sockets still links.
     Net = case maps:find(network, Opts) of
-              {ok, Grant} -> [sockets(#{grant => Grant})];
+              {ok, Grant} -> [sockets(#{grant => Grant}),
+                              wasi_http:http(#{grant => Grant})];
               error       -> []
           end,
     lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net).

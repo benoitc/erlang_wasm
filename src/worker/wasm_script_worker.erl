@@ -1576,7 +1576,8 @@ execute(G, Spec, AState) ->
 
 %% A component instance is a map over an inner core instance; a core instance is
 %% the instance itself. Default is core, so the existing path is unchanged.
-destroy_instance(component, Inst) -> wasm_component:destroy(Inst);
+destroy_instance(component, Inst) ->
+    wasm_component:destroy(Inst, fun wasi_preview2:close_resource/1);
 destroy_instance(_Core, Inst)     -> wasm:destroy(Inst).
 
 %% One instance per request either way. The image only changes where the

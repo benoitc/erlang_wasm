@@ -33,7 +33,7 @@ lower/lift, and the async Canonical ABI.
 """.
 
 -export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
-         destroy/1, drop_resource/3]).
+         destroy/1, destroy/2, drop_resource/3]).
 -export([import_fun/2, exports/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
@@ -175,12 +175,18 @@ instantiate(Bin, Imports, Opts) ->
     %% preview1-adapter's unused preview2 imports with trap-if-called stubs.
     %% Everything else in Opts is instance limits.
     Limits = maps:without([loader, stub], Opts),
-    case decode(Bin) of
-        {ok, Decoded} ->
-            instantiate_decoded(Decoded, Imports, Opts, Limits);
-        {error, _} = E ->
-            E
-    end.
+    %% Decode and the graph parsers match bytes strictly and signal by throwing;
+    %% capture turns a malformed component into a value here, the same boundary the
+    %% core decoder uses, while letting an in-flight guest exception pass through.
+    wasm_error:capture(
+      fun() ->
+          case decode(Bin) of
+              {ok, Decoded} ->
+                  instantiate_decoded(Decoded, Imports, Opts, Limits);
+              {error, _} = E ->
+                  E
+          end
+      end).
 
 instantiate_decoded(#{core := Core, exports := Exports} = Decoded,
                     Imports, Opts, Limits) ->
@@ -234,13 +240,42 @@ start(Loader, Core, Imports, Limits, Exports, Extra) ->
 load_core(compile, Core) -> wasm:compile(Core);
 load_core(_Load, Core)   -> wasm:load(Core).
 
--doc "Destroy a component instance, freeing every core it built.".
+-doc """
+Destroy a component instance, freeing every core it built and sweeping the host
+resource tables. A resource may own an OS handle (a file descriptor, a socket)
+that GC does not reclaim, so `destroy/2` takes a closer the host layer supplies to
+close each one; `destroy/1` closes nothing, for pure components with no OS state.
+Call it from the process that ran the instance: the tables are process-scoped.
+""".
 -spec destroy(instance()) -> ok.
-destroy(#{cores := Insts}) ->
-    lists:foreach(fun wasm:destroy/1, Insts),
-    ok;
-destroy(#{core := Inst}) ->
-    wasm:destroy(Inst).
+destroy(Inst) ->
+    destroy(Inst, fun(_Resource) -> ok end).
+
+-doc "As `destroy/1`, closing each live host resource with `Closer` first.".
+-spec destroy(instance(), fun(({atom(), term()}) -> ok)) -> ok.
+destroy(Inst, Closer) ->
+    lists:foreach(fun wasm:destroy/1, cores_of(Inst)),
+    sweep_host(Closer),
+    ok.
+
+cores_of(#{cores := Insts}) -> Insts;
+cores_of(#{core := Inst})   -> [Inst].
+
+%% Close and drop every live host resource so no OS handle outlives the instance,
+%% and clear the identity table. The handle counter is left advancing rather than
+%% reset, so a fresh handle never collides with one still held elsewhere in a
+%% process that runs more than one instance in sequence.
+sweep_host(Closer) ->
+    lists:foreach(
+      fun(H) ->
+          case host_get(H) of
+              {ok, Resource} -> _ = Closer(Resource);
+              error          -> ok
+          end,
+          host_drop(H)
+      end, host_live()),
+    _ = erase(?HANDLES),
+    ok.
 
 -doc "The export names a decoded component instance offers.".
 -spec exports(instance()) -> [binary()].
@@ -446,6 +481,9 @@ host_table() ->
 
 %%% --------------------------------------------------------------- helpers ---
 
+%% Post-return frees the guest memory the result was lifted from. It is best
+%% effort: a component without a `cabi_post_<export>`, or one that traps during
+%% cleanup, must not turn an otherwise-successful call into a failure.
 post_return(Inst, Export, [RetPtr]) when is_integer(RetPtr) ->
     Post = <<"cabi_post_", Export/binary>>,
     try wasm:call(Inst, Post, [RetPtr]) of

@@ -19,7 +19,8 @@ all() ->
     [a_core_module_is_not_a_component,
      the_component_decodes_to_its_core_and_exports,
      a_component_round_trips_bytes_in_and_out,
-     a_result_error_lifts_as_the_error_string].
+     a_result_error_lifts_as_the_error_string,
+     a_truncated_component_is_an_error_not_a_crash].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -58,6 +59,28 @@ a_result_error_lifts_as_the_error_string(Config) ->
 %% run: func(input: list<u8>) -> result<list<u8>, string>
 sig() -> {[{list, u8}], {result, {list, u8}, string}}.
 
+%% A component cut off at any length is malformed input, which the runtime turns
+%% into a value, never a raise. The multi-core `twocore` bytes exercise the graph
+%% linker's strict binary parsers; a prefix that stops mid-section would badmatch
+%% or function_clause without the guard. Fail-first: remove the try/catch in
+%% wasm_component:link_in/3 and some prefix crashes this case.
+a_truncated_component_is_an_error_not_a_crash(_Config) ->
+    {ok, Good} = file:read_file(twocore_path()),
+    lists:foreach(
+      fun(Len) ->
+          Bad = binary:part(Good, 0, Len),
+          try wasm_component:instantiate(Bad, #{}) of
+              {ok, Inst}     -> wasm_component:destroy(Inst);
+              {error, _}     -> ok
+          catch
+              Class:Reason -> ct:fail({raised, Len, Class, Reason})
+          end
+      end, lists:seq(8, byte_size(Good))).
+
 fixture_path() ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
                    "test", "fixtures", "component", "echo.component.wasm"]).
+
+twocore_path() ->
+    filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
+                   "test", "fixtures", "component", "twocore.component.wasm"]).

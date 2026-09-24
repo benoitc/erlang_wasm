@@ -20,6 +20,10 @@ later step.
 
 -export([imports/0, random/0, clocks/0, environment/0, environment/2, io/0, io/1,
          filesystem/1, sockets/1, command/1, run_command/2, run_command/3]).
+%% The poll_oneoff readiness logic over host pollable handles, and the monotonic
+%% clock its deadlines use, exported so a test can drive poll directly (as
+%% host_new/host_get are).
+-export([poll/1, monotonic_now/0]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle); we only ever return ok, so no
@@ -173,10 +177,14 @@ clocks() ->
           wasm_component:import_fun({[], u64}, fun([]) -> 1 end),
       {M, <<"subscribe-duration">>} =>
           wasm_component:import_fun(
-            {[u64], handle}, fun([_When]) -> wasm_component:host_new(pollable, ready) end),
+            {[u64], handle},
+            fun([When]) ->
+                wasm_component:host_new(pollable, {clock, monotonic_now() + When})
+            end),
       {M, <<"subscribe-instant">>} =>
           wasm_component:import_fun(
-            {[u64], handle}, fun([_When]) -> wasm_component:host_new(pollable, ready) end),
+            {[u64], handle},
+            fun([When]) -> wasm_component:host_new(pollable, {clock, When}) end),
       {W, <<"now">>} =>
           wasm_component:import_fun({[], Datetime}, fun([]) -> wall_now() end),
       {W, <<"resolution">>} =>
@@ -201,6 +209,53 @@ monotonic_base() ->
         Base ->
             Base
     end.
+
+%%% --------------------------------------------------------------------- poll ---
+
+%% A pollable's state: `{clock, Deadline}` for a timer, `ready` for a stream or
+%% socket (always readable in this synchronous model). A handle that is gone reads
+%% as ready, so a stale entry never wedges a poll.
+state_of(Handle) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {pollable, State}} -> State;
+        _                       -> ready
+    end.
+
+pollable_ready(ready)            -> true;
+pollable_ready({clock, Deadline}) -> monotonic_now() >= Deadline.
+
+%% Wait for a pollable: a clock sleeps to its deadline, anything ready returns now.
+block_pollable(ready)             -> undefined;
+block_pollable({clock, Deadline}) -> sleep_until(Deadline), undefined.
+
+%% poll_oneoff: the indices ready now. When none are ready the set is all clocks,
+%% so wait for the earliest deadline and return whichever have then elapsed.
+-spec poll([non_neg_integer()]) -> [non_neg_integer()].
+poll(Handles) ->
+    States = [state_of(H) || H <- Handles],
+    case ready_indices(States) of
+        []      -> wait_for_earliest(States);
+        Indices -> Indices
+    end.
+
+ready_indices(States) ->
+    [I || {I, S} <- lists:enumerate(0, States), pollable_ready(S)].
+
+wait_for_earliest(States) ->
+    case earliest_deadline(States) of
+        none     -> [];
+        Deadline -> sleep_until(Deadline), ready_indices(States)
+    end.
+
+earliest_deadline(States) ->
+    case [D || {clock, D} <- States] of
+        []        -> none;
+        Deadlines -> lists:min(Deadlines)
+    end.
+
+sleep_until(Deadline) ->
+    Ms = (Deadline - monotonic_now() + 999999) div 1000000,
+    timer:sleep(max(0, Ms)).
 
 wall_now() ->
     Ns = erlang:system_time(nanosecond),
@@ -444,16 +499,17 @@ io(Opts) ->
       {Streams, <<"[method]input-stream.subscribe">>} =>
           wasm_component:import_fun({[handle], handle}, Subscribe),
       {Streams, <<"[resource-drop]input-stream">>} => drop_fun(),
-      %% A pollable over a synchronous stream is always ready; block returns at
-      %% once and poll reports every input index ready.
+      %% A stream/socket pollable is always ready; a clock pollable is ready only
+      %% once its deadline has passed, so poll does not report an unelapsed timer.
       {Poll, <<"[method]pollable.ready">>} =>
-          wasm_component:import_fun({[handle], bool}, fun([_P]) -> true end),
+          wasm_component:import_fun(
+            {[handle], bool}, fun([P]) -> pollable_ready(state_of(P)) end),
       {Poll, <<"[method]pollable.block">>} =>
-          wasm_component:import_fun({[handle], none}, fun([_P]) -> undefined end),
+          wasm_component:import_fun(
+            {[handle], none}, fun([P]) -> block_pollable(state_of(P)) end),
       {Poll, <<"poll">>} =>
           wasm_component:import_fun(
-            {[{list, handle}], {list, u32}},
-            fun([Handles]) -> lists:seq(0, length(Handles) - 1) end),
+            {[{list, handle}], {list, u32}}, fun([Handles]) -> poll(Handles) end),
       {Poll, <<"[resource-drop]pollable">>} => drop_fun(),
       {Error, <<"[method]error.to-debug-string">>} =>
           wasm_component:import_fun({[handle], string}, fun([_E]) -> <<"stream error">> end),

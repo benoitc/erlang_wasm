@@ -29,19 +29,18 @@ all() -> [preview2_cases, directories_present].
 %% `wasi:clocks` surface is implemented (no stubs); the c directory passes in
 %% full and rust to all but one case. What remains:
 %%
-%% - rust: `poll_oneoff_stdio` needs a real poll rather than the always-ready
-%%   one, which is the async phase.
-%% - assemblyscript: `args_get`/`environ_get` trip an adapter-internal assertion
-%%   on the argument/environment layout (the same host serves rust and c, which
-%%   pass), and `fd_write-to-invalid-fd` expects a specific non-zero exit the
-%%   command model normalises away.
+%% The rust and c directories pass in full. What remains is assemblyscript:
+%% `args_get`/`environ_get` trip an adapter-internal assertion on the argument and
+%% environment layout (the same host serves rust and c, which pass, so it is a
+%% guest/adapter quirk, not this host), and `fd_write-to-invalid-fd` expects a
+%% specific non-zero exit the command model normalises away.
 %%
 %% Lower these as the fidelity work lands; the `stale_baseline` guard forbids
 %% leaving a number too high.
 baseline() ->
     #{~"assemblyscript/wasm32-wasip1" => 3,
       ~"c/wasm32-wasip1" => 0,
-      ~"rust/wasm32-wasip1" => 1}.
+      ~"rust/wasm32-wasip1" => 0}.
 
 init_per_suite(Config) ->
     case wasi_testsuite_runner:dirs() of

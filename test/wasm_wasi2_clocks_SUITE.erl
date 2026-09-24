@@ -22,7 +22,9 @@ guest's memory, the guest lifts it, returns it, and the call lifts it again.
 all() ->
     [the_wall_clock_is_a_plausible_time,
      the_monotonic_clock_does_not_go_backward,
-     a_fixed_clock_reaches_the_guest].
+     a_fixed_clock_reaches_the_guest,
+     poll_reports_ready_pollables_and_not_an_unelapsed_clock,
+     poll_over_only_a_clock_waits_for_its_deadline].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -48,6 +50,25 @@ the_monotonic_clock_does_not_go_backward(Config) ->
     B = mono_now(I),
     ?assert(B >= A),
     ?assert(mono_res(I) > 0).
+
+%% poll reports the always-ready pollables and skips a clock whose deadline is
+%% still in the future -- the filtering that stops poll_oneoff from reporting a
+%% timer that has not fired. A clock already past is reported.
+poll_reports_ready_pollables_and_not_an_unelapsed_clock(_Config) ->
+    Now = wasi_preview2:monotonic_now(),
+    Future = wasm_component:host_new(pollable, {clock, Now + 10 * 1000000000}),
+    Stream = wasm_component:host_new(pollable, ready),
+    Past = wasm_component:host_new(pollable, {clock, Now - 1000000}),
+    ?assertEqual([1, 2], wasi_preview2:poll([Future, Stream, Past])).
+
+%% With nothing ready, poll waits for the earliest deadline rather than returning
+%% an empty set, then reports the clock that elapsed.
+poll_over_only_a_clock_waits_for_its_deadline(_Config) ->
+    Now = wasi_preview2:monotonic_now(),
+    Clock = wasm_component:host_new(pollable, {clock, Now + 40 * 1000000}),
+    T0 = erlang:monotonic_time(millisecond),
+    ?assertEqual([0], wasi_preview2:poll([Clock])),
+    ?assert(erlang:monotonic_time(millisecond) - T0 >= 30).
 
 %% A fixed clock proves the record round-trip deterministically: a host that
 %% returns a known datetime and a known instant must reach the guest unchanged.

@@ -453,7 +453,9 @@ command(Opts) ->
     %% command that imports no sockets still links.
     Net = case maps:find(network, Opts) of
               {ok, Grant} -> [sockets(#{grant => Grant}),
-                              wasi_http:http(#{grant => Grant})];
+                              wasi_http:http(#{grant => Grant,
+                                               transport => maps:get(http_transport, Opts,
+                                                                     wasi_http_h1)})];
               error       -> []
           end,
     lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net).

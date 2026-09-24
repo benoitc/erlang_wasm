@@ -152,7 +152,7 @@ http(Opts) ->
       {T, <<"[method]outgoing-request.set-method">>} =>
           wasm_component:import_fun(
             {[handle, ?METHOD], {result, none, none}},
-            fun([R, M]) -> set_req(R, method, method_bin(M)) end),
+            fun([R, M]) -> set_method(R, method_bin(M)) end),
       {T, <<"[method]outgoing-request.set-path-with-query">>} =>
           wasm_component:import_fun(
             {[handle, {option, string}], {result, none, none}},
@@ -215,7 +215,10 @@ http(Opts) ->
 %%% -------------------------------------------------------------- fields ---
 
 fields_from_list(Entries) ->
-    {ok, wasm_component:host_new(http_fields, [{N, V} || {N, V} <- Entries])}.
+    case lists:all(fun({N, _}) -> valid_token(N) end, Entries) of
+        true  -> {ok, wasm_component:host_new(http_fields, Entries)};
+        false -> {error, {<<"invalid-syntax">>, none}}
+    end.
 
 fields_entries(F) ->
     case wasm_component:host_get(F) of
@@ -237,17 +240,26 @@ fields_has(F, Name) ->
 
 %% set replaces all values for the name (kept together where the first was).
 fields_set(F, Name, Values) ->
-    Rest = [{N, V} || {N, V} <- fields_list(F), N =/= Name],
-    _ = wasm_component:host_update(F, Rest ++ [{Name, V} || V <- Values]),
-    {ok, undefined}.
+    with_valid_name(Name, fun() ->
+        Rest = [{N, V} || {N, V} <- fields_list(F), N =/= Name],
+        wasm_component:host_update(F, Rest ++ [{Name, V} || V <- Values])
+    end).
 
 fields_delete(F, Name) ->
     _ = wasm_component:host_update(F, [{N, V} || {N, V} <- fields_list(F), N =/= Name]),
     {ok, undefined}.
 
 fields_append(F, Name, Value) ->
-    _ = wasm_component:host_update(F, fields_list(F) ++ [{Name, Value}]),
-    {ok, undefined}.
+    with_valid_name(Name, fun() ->
+        wasm_component:host_update(F, fields_list(F) ++ [{Name, Value}])
+    end).
+
+%% A malformed field name is invalid-syntax, the header-error the ABI defines.
+with_valid_name(Name, Fun) ->
+    case valid_token(Name) of
+        true  -> _ = Fun(), {ok, undefined};
+        false -> {error, {<<"invalid-syntax">>, none}}
+    end.
 
 fields_clone(F) ->
     wasm_component:host_new(http_fields, fields_list(F)).
@@ -260,9 +272,27 @@ outgoing_request(Hdrs) ->
                   _                      -> []
               end,
     wasm_component:host_new(http_out_req,
-                            #{method => <<"GET">>, path => <<"/">>,
+                            #{method => <<"GET">>, path => undefined,
                               scheme => <<"http">>, authority => <<>>,
                               headers => Headers, body => <<>>}).
+
+%% An HTTP token (method or field name): one or more tchar, no spaces or controls.
+valid_token(<<>>)  -> false;
+valid_token(Bin) when is_binary(Bin) ->
+    lists:all(fun tchar/1, binary_to_list(Bin));
+valid_token(_) -> false.
+
+tchar(C) ->
+    (C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z)
+        orelse (C >= $0 andalso C =< $9)
+        orelse lists:member(C, "!#$%&'*+-.^_`|~").
+
+%% A method must be a valid HTTP token; a control character (a newline) is refused.
+set_method(R, Method) ->
+    case valid_token(Method) of
+        true  -> set_req(R, method, Method);
+        false -> {error, undefined}
+    end.
 
 set_req(R, Key, Value) ->
     case wasm_component:host_get(R) of
@@ -332,7 +362,14 @@ handle(Req, Grant, Transport) ->
     end.
 
 %% Resolve the authority and grant, then hand the abstract request to the pluggable
-%% transport (h1 by default). The wire protocol is the transport's concern.
+%% transport (h1 by default). The wire protocol is the transport's concern. A scheme
+%% other than http/https is a protocol error, and a request with no path was never
+%% given a target.
+perform(#{scheme := Scheme}, _Grant, _Transport)
+  when Scheme =/= <<"http">>, Scheme =/= <<"https">> ->
+    {error, {<<"HTTP-protocol-error">>, none}};
+perform(#{path := undefined}, _Grant, _Transport) ->
+    {error, {<<"HTTP-request-URI-invalid">>, none}};
 perform(#{authority := Authority} = R, Grant, Transport) ->
     case authority_endpoint(Authority) of
         {error, _} = E ->

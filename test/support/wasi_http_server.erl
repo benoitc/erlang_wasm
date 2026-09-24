@@ -27,7 +27,9 @@ start(Transport) ->
     Handler = fun(Conn, Id, Method, Path, Headers) ->
                   handle(Transport, Conn, Id, Method, Path, Headers)
               end,
-    {ok, Ref} = Transport:start_server(0, #{handler => Handler}),
+    %% h2 serves over TLS by default; cleartext (h2c) is what the tests use.
+    Extra = case Transport of h2 -> #{transport => tcp}; _ -> #{} end,
+    {ok, Ref} = Transport:start_server(0, Extra#{handler => Handler}),
     {ok, {Transport, Ref}}.
 
 -spec address(server()) -> binary().

@@ -109,8 +109,12 @@ sections(<<Id, Rest0/binary>>, Acc) ->
 
 section(?CORE_MODULE_SEC, Content, #{cores := Cs} = Acc) ->
     Acc#{cores => [Content | Cs]};
-section(?EXPORT_SEC, Content, Acc) ->
-    Acc#{exports => export_names(Content)};
+section(?EXPORT_SEC, Content, #{exports := Es} = Acc) ->
+    %% A component may split its exports across several export sections (one per
+    %% export is what the standard toolchain emits), so accumulate rather than
+    %% replace: overwriting kept only the last section and dropped, for a proxy
+    %% component, `wasi:http/incoming-handler` in favour of `wasi:cli/run`.
+    Acc#{exports => Es ++ export_names(Content)};
 section(_Other, _Content, Acc) ->
     Acc.
 
@@ -129,7 +133,7 @@ export_names(N, <<_Kind, Rest0/binary>>, Acc) ->
     {Len, Rest1} = wasm_leb128:u32(Rest0),
     case Rest1 of
         <<Name:Len/binary, Rest2/binary>> ->
-            export_names(N - 1, skip_sortidx(Rest2), [Name | Acc]);
+            export_names(N - 1, skip_desc(skip_sortidx(Rest2)), [Name | Acc]);
         _ ->
             lists:reverse(Acc)
     end;
@@ -141,6 +145,13 @@ skip_sortidx(<<_Sort, Rest0/binary>>) ->
     Rest1;
 skip_sortidx(Bin) ->
     Bin.
+
+%% The optional type ascription after a sortidx: `0x00` absent (the common case,
+%% and all the standard toolchain emits), `0x01` present. Only the absent form is
+%% skipped past to reach the next entry; a present descriptor stops the walk, which
+%% is harmless because each export sits in its own section (count 1).
+skip_desc(<<0, Rest/binary>>) -> Rest;
+skip_desc(Bin)               -> Bin.
 
 -doc "Decode and instantiate a component, wiring any resource intrinsics.".
 -spec instantiate(binary()) -> {ok, instance()} | {error, term()}.
@@ -316,8 +327,14 @@ The post-return `cabi_post_<Export>` is run after the result is lifted.
 -spec call(instance(), binary(),
            {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
           {ok, term()} | {error, term()}.
-call(#{core := Inst} = I, Export, {Params, Result}, Args) ->
+call(#{} = I, Export, {Params, Result}, Args) ->
     CoreName = resolve_export(I, Export),
+    %% A multi-core component lifts different exports from different cores (a proxy
+    %% component lifts `wasi:cli/run#run` from a command shim and
+    %% `wasi:http/incoming-handler#handle` from the main module). The entry core is
+    %% the run shim, so an export the entry core does not carry is looked up on the
+    %% core that does.
+    Inst = core_with_export(I, CoreName),
     CoreArgs = wasm_canon:lower_params(Inst, Params, Args),
     case wasm:call(Inst, CoreName, CoreArgs) of
         {ok, CoreResults} ->
@@ -326,6 +343,19 @@ call(#{core := Inst} = I, Export, {Params, Result}, Args) ->
             {ok, Value};
         {error, _} = E ->
             E
+    end.
+
+%% The core instance that exports `CoreName`: the entry core when it carries it
+%% (the common single-core path), else the first other core that does, falling back
+%% to the entry so the existing `unknown_export` value is what surfaces.
+core_with_export(#{core := Entry} = I, CoreName) ->
+    case maps:is_key(CoreName, wasm:exports(Entry)) of
+        true  -> Entry;
+        false ->
+            case [C || C <- cores_of(I), maps:is_key(CoreName, wasm:exports(C))] of
+                [C | _] -> C;
+                []      -> Entry
+            end
     end.
 
 %% A `none` result (an export that returns nothing) lifts to `undefined`.

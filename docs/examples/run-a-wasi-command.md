@@ -47,4 +47,4 @@ your working directory; leave `net` out and it has no network. See
 ok = file:del_dir_r(Dir).
 ```
 
-**Next:** [Stop a runaway](stop-a-runaway.md).
+**Next:** [Run a WASI 0.2 component](run-a-wasi-2-component.md).

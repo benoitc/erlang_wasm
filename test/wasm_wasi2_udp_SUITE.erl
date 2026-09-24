@@ -18,7 +18,8 @@ without a connect grant the datagram stream is refused, because stream asks
 
 all() ->
     [a_datagram_round_trips,
-     send_needs_a_grant].
+     send_needs_a_grant,
+     a_datagram_destination_is_checked_against_the_grant].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -39,6 +40,24 @@ send_needs_a_grant(Config) ->
     Port = start_udp_echo(),
     {ok, I} = instance(Config, none),
     ?assertEqual(<<>>, ping(I, Port, <<"blocked">>)).
+
+%% Every explicit per-datagram destination is checked against the grant, so an
+%% unconnected stream cannot send to an address the grant does not name. Fail-first:
+%% before the check, send_datagram reached any address with no grant at all.
+a_datagram_destination_is_checked_against_the_grant(_Config) ->
+    None = wasi_net:grant(none),
+    Grant = wasi_net:grant(#{connect => [{udp, <<"127.0.0.1">>, 9000}]}),
+    To = fun(Port) ->
+             #{<<"data">> => <<"x">>,
+               <<"remote-address">> =>
+                   {some, {<<"ipv4">>, #{<<"port">> => Port,
+                                         <<"address">> => {127, 0, 0, 1}}}}}
+         end,
+    %% No grant refuses any explicit destination.
+    ?assertNot(wasi_preview2:datagram_allowed(To(9000), none, None)),
+    %% A granted address is allowed; one outside the grant is refused.
+    ?assert(wasi_preview2:datagram_allowed(To(9000), none, Grant)),
+    ?assertNot(wasi_preview2:datagram_allowed(To(9999), none, Grant)).
 
 %%% -------------------------------------------------------------- helpers ---
 

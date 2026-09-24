@@ -21,7 +21,8 @@ all() ->
     [a_real_command_uppercases_stdin,
      it_matches_wasmtime,
      a_real_command_reads_a_mounted_file,
-     reading_a_file_matches_wasmtime].
+     reading_a_file_matches_wasmtime,
+     run_command_leaves_no_live_handles].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -34,6 +35,17 @@ end_per_suite(_Config) -> ok.
 inputs() ->
     [<<>>, <<"hello">>, <<"Hello, World!\n">>, <<"mixed 123 aBc\nsecond line\n">>,
      binary:copy(<<"abcdefghij ">>, 500)].
+
+%% A command is one-shot: run_command must destroy the instance and sweep the host
+%% resource tables it filled (stream, pollable and directory handles that own fds),
+%% so repeated runs in one process do not accumulate handles. Fail-first: before
+%% run_command destroyed the instance, three runs left 2, 4 then 6 live handles.
+run_command_leaves_no_live_handles(Config) ->
+    Bin = ?config(component, Config),
+    [begin
+         {ok, _} = wasi_preview2:run_command(Bin, <<"data">>),
+         ?assertEqual([], wasm_component:host_live())
+     end || _ <- lists:seq(1, 3)].
 
 %% The real component upper-cases its input. A fixed expected value, so the case
 %% means something even without wasmtime.

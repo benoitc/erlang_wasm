@@ -24,8 +24,8 @@ later step.
 %% clock its deadlines use, exported so a test can drive poll directly (as
 %% host_new/host_get are).
 -export([poll/1, monotonic_now/0, next_sleep_ms/1, close_resource/1]).
-%% Exported so a test can drive the stream write path directly.
--export([write_stream/2]).
+%% Exported so a test can drive the stream write and udp grant paths directly.
+-export([write_stream/2, datagram_allowed/3]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle), minted when a file-backed write
@@ -217,21 +217,53 @@ monotonic_base() ->
 
 %%% --------------------------------------------------------------------- poll ---
 
-%% A pollable's state: `{clock, Deadline}` for a timer, `ready` for a stream or
-%% socket (always readable in this synchronous model). A handle that is gone reads
-%% as ready, so a stale entry never wedges a poll.
+%% A pollable's state: `{clock, Deadline}` for a timer, `{stream, Handle}` for a
+%% stream whose readiness is asked of the stream itself, or the bare atom `ready`
+%% for something always ready. A handle that is gone reads as ready, so a stale
+%% entry never wedges a poll.
 state_of(Handle) ->
     case wasm_component:host_get(Handle) of
         {ok, {pollable, State}} -> State;
         _                       -> ready
     end.
 
-pollable_ready(ready)            -> true;
-pollable_ready({clock, Deadline}) -> monotonic_now() >= Deadline.
+pollable_ready(ready)             -> true;
+pollable_ready({clock, Deadline}) -> monotonic_now() >= Deadline;
+pollable_ready({stream, Handle})  -> stream_ready(Handle).
 
-%% Wait for a pollable: a clock sleeps to its deadline, anything ready returns now.
+%% A stream is ready when a read (or write) would not block. Our sinks and the
+%% in-memory, file and drained input streams are always ready; a socket input
+%% stream is ready only when data is buffered or waiting, which a non-blocking peek
+%% answers without consuming (any bytes it reads are buffered for the next read).
+stream_ready(Handle) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {input_stream, {socket, Sock, <<>>}}} ->
+            case wasi_sock:recv(Sock, 0, 0) of
+                {ok, Data} -> _ = wasm_component:host_update(Handle, {socket, Sock, Data}),
+                              Data =/= <<>>;
+                eof        -> true;
+                {error, _} -> false
+            end;
+        error -> true;
+        _     -> true
+    end.
+
+%% Wait for a pollable: a clock sleeps to its deadline, a socket stream blocks for
+%% data, anything already ready returns now.
 block_pollable(ready)             -> undefined;
-block_pollable({clock, Deadline}) -> sleep_until(Deadline), undefined.
+block_pollable({clock, Deadline}) -> sleep_until(Deadline), undefined;
+block_pollable({stream, Handle})  -> block_stream(Handle), undefined.
+
+block_stream(Handle) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {input_stream, {socket, Sock, <<>>}}} ->
+            case wasi_sock:recv(Sock, 0, ?SOCK_TIMEOUT) of
+                {ok, Data} -> wasm_component:host_update(Handle, {socket, Sock, Data});
+                _          -> ok
+            end;
+        _ ->
+            ok
+    end.
 
 %% poll_oneoff: the indices ready now. When none are ready the set is all clocks,
 %% so wait for the earliest deadline and return whichever have then elapsed.
@@ -379,24 +411,32 @@ run_command(Bin, Stdin, Extra) ->
     InstOpts = #{loader => Loader, stub => maps:get(stub, Extra, false)},
     case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
         {ok, Instance} ->
-            case run_export(wasm_component:exports(Instance)) of
-                {ok, Export} ->
-                    RunResult = wasm_component:call(
-                                  Instance, Export, {[], {result, none, none}}, []),
-                    Stdout = collect_output(OutRef),
-                    Stderr = collect_output(ErrRef),
-                    case exit_outcome(RunResult) of
-                        {ok, Code} ->
-                            {ok, #{stdout => Stdout, stderr => Stderr,
-                                   exit_code => Code}};
-                        {error, _} = E ->
-                            E
-                    end;
-                error ->
-                    {error, no_run_export}
+            %% Destroy on every path: a run mints stream, pollable and directory
+            %% handles that own fds, and a command is one-shot.
+            try
+                run_collect(Instance, OutRef, ErrRef)
+            after
+                wasm_component:destroy(Instance, fun close_resource/1)
             end;
         {error, _} = E ->
             E
+    end.
+
+run_collect(Instance, OutRef, ErrRef) ->
+    case run_export(wasm_component:exports(Instance)) of
+        {ok, Export} ->
+            RunResult = wasm_component:call(
+                          Instance, Export, {[], {result, none, none}}, []),
+            Stdout = collect_output(OutRef),
+            Stderr = collect_output(ErrRef),
+            case exit_outcome(RunResult) of
+                {ok, Code} ->
+                    {ok, #{stdout => Stdout, stderr => Stderr, exit_code => Code}};
+                {error, _} = E ->
+                    E
+            end;
+        error ->
+            {error, no_run_export}
     end.
 
 %% run returns result<_,_> (ok -> 0, err -> 1); a trap that recorded an exit
@@ -479,9 +519,10 @@ io(Opts) ->
     Stdout = <<"wasi:cli/stdout">>,
     Stdin = <<"wasi:cli/stdin">>,
     Poll = <<"wasi:io/poll">>,
-    Write = fun([Handle, Bytes]) -> write_result(write_stream(Handle, Bytes)) end,
+    Write = fun([Handle, Bytes]) -> write_result(checked_write(Handle, Bytes)) end,
     Read = fun([H, Len]) -> read_stream(H, Len) end,
-    Subscribe = fun([_Stream]) -> wasm_component:host_new(pollable, ready) end,
+    BlockingRead = fun([H, Len]) -> blocking_read_stream(H, Len) end,
+    Subscribe = fun([Stream]) -> wasm_component:host_new(pollable, {stream, Stream}) end,
     #{{Stdout, <<"get-stdout">>} =>
           wasm_component:import_fun(
             {[], handle}, fun([]) -> wasm_component:host_new(output_stream, Sink) end),
@@ -501,7 +542,19 @@ io(Opts) ->
       {Streams, <<"[method]output-stream.write-zeroes">>} =>
           wasm_component:import_fun(
             {[handle, u64], ?WRITE_RESULT},
-            fun([H, Len]) -> write_result(write_stream(H, binary:copy(<<0>>, Len))) end),
+            fun([H, Len]) -> write_result(write_zeroes(H, Len)) end),
+      {Streams, <<"[method]output-stream.blocking-write-zeroes-and-flush">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], ?WRITE_RESULT},
+            fun([H, Len]) -> write_result(and_flush(H, write_zeroes(H, Len))) end),
+      {Streams, <<"[method]output-stream.splice">>} =>
+          wasm_component:import_fun(
+            {[handle, handle, u64], ?COUNT_RESULT},
+            fun([Dst, Src, Len]) -> splice_stream(Dst, Src, Len) end),
+      {Streams, <<"[method]output-stream.blocking-splice">>} =>
+          wasm_component:import_fun(
+            {[handle, handle, u64], ?COUNT_RESULT},
+            fun([Dst, Src, Len]) -> splice_stream(Dst, Src, Len) end),
       {Streams, <<"[method]output-stream.subscribe">>} =>
           wasm_component:import_fun({[handle], handle}, Subscribe),
       {Streams, <<"[resource-drop]output-stream">>} => drop_fun(),
@@ -511,15 +564,19 @@ io(Opts) ->
       {Streams, <<"[method]input-stream.read">>} =>
           wasm_component:import_fun({[handle, u64], ?READ_RESULT}, Read),
       {Streams, <<"[method]input-stream.blocking-read">>} =>
-          wasm_component:import_fun({[handle, u64], ?READ_RESULT}, Read),
+          wasm_component:import_fun({[handle, u64], ?READ_RESULT}, BlockingRead),
       {Streams, <<"[method]input-stream.skip">>} =>
+          wasm_component:import_fun(
+            {[handle, u64], ?COUNT_RESULT}, fun([H, Len]) -> skip_stream(H, Len) end),
+      {Streams, <<"[method]input-stream.blocking-skip">>} =>
           wasm_component:import_fun(
             {[handle, u64], ?COUNT_RESULT}, fun([H, Len]) -> skip_stream(H, Len) end),
       {Streams, <<"[method]input-stream.subscribe">>} =>
           wasm_component:import_fun({[handle], handle}, Subscribe),
       {Streams, <<"[resource-drop]input-stream">>} => drop_fun(),
-      %% A stream/socket pollable is always ready; a clock pollable is ready only
-      %% once its deadline has passed, so poll does not report an unelapsed timer.
+      %% A clock pollable is ready once its deadline has passed; a stream pollable
+      %% is ready when the stream is, which for a socket means data is waiting, so
+      %% poll reports neither an unelapsed timer nor a socket with nothing to read.
       {Poll, <<"[method]pollable.ready">>} =>
           wasm_component:import_fun(
             {[handle], bool}, fun([P]) -> pollable_ready(state_of(P)) end),
@@ -528,7 +585,11 @@ io(Opts) ->
             {[handle], none}, fun([P]) -> block_pollable(state_of(P)) end),
       {Poll, <<"poll">>} =>
           wasm_component:import_fun(
-            {[{list, handle}], {list, u32}}, fun([Handles]) -> poll(Handles) end),
+            {[{list, handle}], {list, u32}},
+            %% poll of an empty list would block forever; the WIT requires a trap.
+            fun([[]])      -> error(poll_empty_list);
+               ([Handles]) -> poll(Handles)
+            end),
       {Poll, <<"[resource-drop]pollable">>} => drop_fun(),
       {Error, <<"[method]error.to-debug-string">>} =>
           wasm_component:import_fun({[handle], string}, fun([_E]) -> <<"stream error">> end),
@@ -555,6 +616,40 @@ write_stream(Handle, Bytes) ->
             ok
     end.
 
+%% Enforce the permit check-write reports. A write no larger than the budget goes
+%% through; a larger one is refused rather than trusted, which also bounds the host
+%% allocation a guest can drive.
+checked_write(_Handle, Bytes) when byte_size(Bytes) > ?WRITE_BUDGET ->
+    {error, exceeds_write_budget};
+checked_write(Handle, Bytes) ->
+    write_stream(Handle, Bytes).
+
+%% write-zeroes with the same permit, so the host never materialises more than one
+%% budget's worth of zeroes for a guest-chosen length.
+write_zeroes(_Handle, Len) when Len > ?WRITE_BUDGET ->
+    {error, exceeds_write_budget};
+write_zeroes(Handle, Len) ->
+    write_stream(Handle, binary:copy(<<0>>, Len)).
+
+%% Sequence a write with a flush for the blocking-*-and-flush methods: flush only
+%% if the write succeeded.
+and_flush(Handle, ok)              -> flush_stream(Handle);
+and_flush(_Handle, {error, _} = E) -> E.
+
+%% Move up to `Len` bytes (capped to the permit) from an input stream to an output
+%% stream, returning how many moved.
+splice_stream(Dst, Src, Len) ->
+    N = min(Len, ?WRITE_BUDGET),
+    case read_stream(Src, N) of
+        {ok, Chunk} ->
+            case write_stream(Dst, Chunk) of
+                ok               -> {ok, byte_size(Chunk)};
+                {error, Reason}  -> write_result({error, Reason})
+            end;
+        {error, _} = E ->
+            E
+    end.
+
 %% Turn a write result into the WIT `result<_, stream-error>`. A failure mints an
 %% error resource and returns the `last-operation-failed` case, mirroring how
 %% read_stream reports `closed`.
@@ -576,22 +671,33 @@ flush_stream(Handle) ->
 %% preopen dir root and an error carry none.
 -spec close_resource({atom(), term()}) -> ok.
 close_resource({fs_file, {Handle, _Flags}})        -> _ = wasi_fs:close(Handle), ok;
+close_resource({fs_dir, Root})                     -> _ = wasi_fs:forget(Root), ok;
 close_resource({output_stream, {file, Handle, _}}) -> _ = wasi_fs:close(Handle), ok;
 close_resource({input_stream, {socket, Sock, _}})  -> _ = wasi_sock:close(Sock), ok;
 close_resource({tcp_socket, {_State, Handle}})     -> _ = wasi_sock:close(Handle), ok;
 close_resource({udp_socket, {_State, Handle}})     -> _ = wasi_sock:close(Handle), ok;
 close_resource(_)                                  -> ok.
 
-%% Read up to Len bytes from the source, advancing it. An empty source (drained
-%% or unknown handle) reads `closed`, the end-of-stream signal blocking-read
-%% waits for. `closed` carries no payload, so no error resource is minted.
+%% Non-blocking read: return whatever is available, up to Len bytes, without
+%% waiting. On a socket with nothing buffered or waiting this returns an empty
+%% chunk (the guest polls, then reads), never blocking for it.
 read_stream(Handle, Len) ->
+    read_stream(Handle, Len, 0).
+
+%% Blocking read: wait for at least one byte (or end of stream) before returning.
+blocking_read_stream(Handle, Len) ->
+    read_stream(Handle, Len, ?SOCK_TIMEOUT).
+
+%% An empty in-memory source (drained or unknown handle) reads `closed`, the
+%% end-of-stream signal blocking-read waits for. `closed` carries no payload, so no
+%% error resource is minted.
+read_stream(Handle, Len, Timeout) ->
     case wasm_component:host_get(Handle) of
         {ok, {input_stream, {socket, Sock, Buf}}} ->
             %% A socket-backed stream (from tcp finish-connect/accept). Return up
-            %% to Len bytes, blocking for at least one; buffer any it read past
-            %% Len so the next read hands them over.
-            socket_read(Handle, Sock, Buf, Len);
+            %% to Len bytes; buffer any it read past Len so the next read hands
+            %% them over.
+            socket_read(Handle, Sock, Buf, Len, Timeout);
         {ok, {input_stream, <<>>}} ->
             {error, {<<"closed">>, undefined}};
         {ok, {input_stream, Remaining}} when is_binary(Remaining) ->
@@ -603,13 +709,17 @@ read_stream(Handle, Len) ->
             {error, {<<"closed">>, undefined}}
     end.
 
-socket_read(Handle, Sock, <<>>, Len) ->
-    case wasi_sock:recv(Sock, 0, ?SOCK_TIMEOUT) of
+socket_read(Handle, Sock, <<>>, Len, Timeout) ->
+    case wasi_sock:recv(Sock, 0, Timeout) of
         {ok, Data}  -> socket_deliver(Handle, Sock, Data, Len);
         eof         -> {error, {<<"closed">>, undefined}};
+        %% A non-blocking read with nothing waiting is not an error: zero bytes,
+        %% so the guest can poll and read again. A blocking read that timed out
+        %% reports the stream drained.
+        {error, _} when Timeout =:= 0 -> {ok, <<>>};
         {error, _}  -> {error, {<<"closed">>, undefined}}
     end;
-socket_read(Handle, Sock, Buf, Len) ->
+socket_read(Handle, Sock, Buf, Len, _Timeout) ->
     socket_deliver(Handle, Sock, Buf, Len).
 
 socket_deliver(Handle, Sock, Data, Len) ->
@@ -624,12 +734,12 @@ skip_stream(Handle, Len) ->
     case wasm_component:host_get(Handle) of
         {ok, {input_stream, <<>>}} ->
             {error, {<<"closed">>, undefined}};
-        {ok, {input_stream, Remaining}} ->
+        {ok, {input_stream, Remaining}} when is_binary(Remaining) ->
             N = min(Len, byte_size(Remaining)),
             <<_Skipped:N/binary, Rest/binary>> = Remaining,
             _ = wasm_component:host_update(Handle, Rest),
             {ok, N};
-        error ->
+        _ ->
             {error, {<<"closed">>, undefined}}
     end.
 
@@ -1234,6 +1344,11 @@ opt_datetime(_) ->
 %% read-via-stream snapshots the file from the offset into an input-stream (the
 %% wasi:io kind), so a caller must also supply io/1 to read it. pread does the
 %% reading, so the sandbox is unchanged.
+%% The stream reads the file's bytes up front. A lazy stream that reads on demand
+%% would bound host memory better, but it would have to hold the descriptor's own
+%% handle, and sharing that handle interferes with later operations on the same
+%% descriptor (a readonly descriptor's write then reports the wrong error). Reading
+%% eagerly keeps the stream self-contained.
 read_via_stream(File, Off) ->
     case wasm_component:host_get(File) of
         {ok, {fs_file, {Handle, _}}} ->
@@ -1315,7 +1430,7 @@ sockets(Opts) ->
       {<<"wasi:sockets/tcp-create-socket">>, <<"create-tcp-socket">>} =>
           wasm_component:import_fun(
             {[?ADDR_FAMILY], {result, handle, ?SOCK_ERROR}},
-            fun([Family]) -> create_tcp_socket(Family) end),
+            fun([Family]) -> create_tcp_socket(Family, Grant) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.start-connect">>} =>
           wasm_component:import_fun(
             {[handle, handle, ?IP_SOCKADDR], {result, none, ?SOCK_ERROR}},
@@ -1329,13 +1444,15 @@ sockets(Opts) ->
             fun([Self, Net, Addr]) -> tcp_start_bind(Self, Net, Addr) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.finish-bind">>} =>
           wasm_component:import_fun(
-            {[handle], {result, none, ?SOCK_ERROR}}, fun([_Self]) -> {ok, undefined} end),
+            {[handle], {result, none, ?SOCK_ERROR}},
+            fun([Self]) -> finish(Self, tcp_socket, binding, bound) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.start-listen">>} =>
           wasm_component:import_fun(
             {[handle], {result, none, ?SOCK_ERROR}}, fun([Self]) -> tcp_start_listen(Self) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.finish-listen">>} =>
           wasm_component:import_fun(
-            {[handle], {result, none, ?SOCK_ERROR}}, fun([_Self]) -> {ok, undefined} end),
+            {[handle], {result, none, ?SOCK_ERROR}},
+            fun([Self]) -> finish(Self, tcp_socket, listen_pending, listening) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.accept">>} =>
           wasm_component:import_fun(
             {[handle], ?ACCEPT_RESULT}, fun([Self]) -> tcp_accept(Self) end),
@@ -1350,14 +1467,15 @@ sockets(Opts) ->
       {<<"wasi:sockets/udp-create-socket">>, <<"create-udp-socket">>} =>
           wasm_component:import_fun(
             {[?ADDR_FAMILY], {result, handle, ?SOCK_ERROR}},
-            fun([Family]) -> create_udp_socket(Family) end),
+            fun([Family]) -> create_udp_socket(Family, Grant) end),
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.start-bind">>} =>
           wasm_component:import_fun(
             {[handle, handle, ?IP_SOCKADDR], {result, none, ?SOCK_ERROR}},
-            fun([Self, _Net, Addr]) -> udp_start_bind(Self, Addr) end),
+            fun([Self, Net, Addr]) -> udp_start_bind(Self, Net, Addr) end),
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.finish-bind">>} =>
           wasm_component:import_fun(
-            {[handle], {result, none, ?SOCK_ERROR}}, fun([_Self]) -> {ok, undefined} end),
+            {[handle], {result, none, ?SOCK_ERROR}},
+            fun([Self]) -> finish(Self, udp_socket, udp_binding, udp_bound) end),
       {<<"wasi:sockets/udp">>, <<"[method]udp-socket.stream">>} =>
           wasm_component:import_fun(
             {[handle, {option, ?IP_SOCKADDR}], ?UDP_STREAM_RESULT},
@@ -1378,9 +1496,31 @@ sockets(Opts) ->
       {<<"wasi:sockets/udp">>, <<"[resource-drop]udp-socket">>} =>
           fun(_Ctx, [H]) -> _ = udp_drop(H), {ok, []} end}.
 
-create_tcp_socket(Family) ->
-    {ok, Handle} = wasi_sock:open(family_inet(Family), stream),
-    {ok, wasm_component:host_new(tcp_socket, {unconnected, Handle})}.
+create_tcp_socket(Family, Grant) ->
+    case socket_room(Grant) of
+        false ->
+            {error, <<"new-socket-limit">>};
+        true ->
+            {ok, Handle} = wasi_sock:open(family_inet(Family), stream),
+            {ok, wasm_component:host_new(tcp_socket, {unconnected, Handle})}
+    end.
+
+%% Cap the sockets an instance holds at once at the grant's `max_sockets`. A
+%% component with no grant reaches nowhere, so its sockets are harmless and left
+%% uncapped; a granted one is bounded so a guest cannot exhaust descriptors.
+socket_room(Grant) ->
+    case wasi_net:max_sockets(Grant) of
+        0   -> true;
+        Max -> live_sockets() < Max
+    end.
+
+live_sockets() ->
+    length([H || H <- wasm_component:host_live(),
+                 case wasm_component:host_get(H) of
+                     {ok, {tcp_socket, _}} -> true;
+                     {ok, {udp_socket, _}} -> true;
+                     _                     -> false
+                 end]).
 
 family_inet(<<"ipv6">>) -> inet6;
 family_inet(_Ipv4)      -> inet.
@@ -1398,7 +1538,7 @@ tcp_start_connect(Self, Net, Addr) ->
                 true ->
                     case wasi_sock:connect(Pending, Endpoint, ?SOCK_TIMEOUT) of
                         {ok, Conn} ->
-                            _ = wasm_component:host_update(Self, {connected, Conn}),
+                            _ = wasm_component:host_update(Self, {connecting, Conn}),
                             {ok, undefined};
                         {error, Errno} ->
                             {error, sock_errno(Errno)}
@@ -1408,9 +1548,13 @@ tcp_start_connect(Self, Net, Addr) ->
             {error, <<"invalid-state">>}
     end.
 
+%% finish-connect completes a start-connect exactly once: the socket must be in the
+%% `connecting` state a start-connect left it in. A finish with no connect pending
+%% (never started, or already finished) is `not-in-progress`, as the contract says.
 tcp_finish_connect(Self) ->
     case wasm_component:host_get(Self) of
-        {ok, {tcp_socket, {connected, Conn}}} ->
+        {ok, {tcp_socket, {connecting, Conn}}} ->
+            _ = wasm_component:host_update(Self, {connected, Conn}),
             In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
             Out = wasm_component:host_new(
                     output_stream, fun(Bytes) -> _ = wasi_sock:send(Conn, Bytes), ok end),
@@ -1439,14 +1583,26 @@ tcp_start_bind(Self, Net, Addr) ->
     end.
 
 bind_ok(Self, Bound) ->
-    _ = wasm_component:host_update(Self, {bound, Bound}),
+    _ = wasm_component:host_update(Self, {binding, Bound}),
     {ok, undefined}.
+
+%% Complete a start operation exactly once. The socket must be in the intermediate
+%% state the matching start left it in; a finish with nothing pending is
+%% `not-in-progress`, which is what the wasi:sockets contract requires.
+finish(Self, Tag, From, To) ->
+    case wasm_component:host_get(Self) of
+        {ok, {Tag, {From, Handle}}} ->
+            _ = wasm_component:host_update(Self, {To, Handle}),
+            {ok, undefined};
+        _ ->
+            {error, <<"not-in-progress">>}
+    end.
 
 tcp_start_listen(Self) ->
     case wasm_component:host_get(Self) of
         {ok, {tcp_socket, {bound, Bound}}} ->
             case wasi_sock:listen(Bound, ?SOCK_BACKLOG) of
-                {ok, Listen}   -> _ = wasm_component:host_update(Self, {listening, Listen}),
+                {ok, Listen}   -> _ = wasm_component:host_update(Self, {listen_pending, Listen}),
                                   {ok, undefined};
                 {error, Errno} -> {error, sock_errno(Errno)}
             end;
@@ -1491,9 +1647,8 @@ ip_sockaddr({A, B, C, D, E, F, G, H}, Port) ->
 
 tcp_drop(H) ->
     case wasm_component:host_get(H) of
-        {ok, {tcp_socket, {connected, Conn}}}  -> _ = wasi_sock:close(Conn);
-        {ok, {tcp_socket, {listening, Listen}}} -> _ = wasi_sock:close(Listen);
-        _                                      -> ok
+        {ok, {tcp_socket, {_State, Handle}}} -> _ = wasi_sock:close(Handle);
+        _                                    -> ok
     end,
     wasm_component:host_drop(H).
 
@@ -1512,17 +1667,24 @@ sockaddr({<<"ipv6">>, #{<<"port">> := Port, <<"address">> := V6}}) ->
 
 %%% ----------------------------------------------------------------- udp ---
 
-create_udp_socket(Family) ->
-    {ok, Handle} = wasi_sock:open(family_inet(Family), dgram),
-    {ok, wasm_component:host_new(udp_socket, {udp_unbound, Handle})}.
+create_udp_socket(Family, Grant) ->
+    case socket_room(Grant) of
+        false ->
+            {error, <<"new-socket-limit">>};
+        true ->
+            {ok, Handle} = wasi_sock:open(family_inet(Family), dgram),
+            {ok, wasm_component:host_new(udp_socket, {udp_unbound, Handle})}
+    end.
 
-%% Bind to the local address. The source port is the guest's own, so it is not a
-%% capability; the peer is checked at stream time.
-udp_start_bind(Self, Addr) ->
-    case wasm_component:host_get(Self) of
-        {ok, {udp_socket, {udp_unbound, Pending}}} ->
+%% Bind to the local address. Binding the guest's own source address is not a
+%% reach capability, so the local address is not checked against the grant; the
+%% peer is checked at stream time and every send destination at send time. The
+%% network handle must be a real network resource, as the contract requires.
+udp_start_bind(Self, Net, Addr) ->
+    case {wasm_component:host_get(Self), wasm_component:host_get(Net)} of
+        {{ok, {udp_socket, {udp_unbound, Pending}}}, {ok, {net_network, _Grant}}} ->
             case wasi_sock:bind(Pending, endpoint_udp(Addr)) of
-                {ok, Bound}    -> _ = wasm_component:host_update(Self, {udp_bound, Bound}),
+                {ok, Bound}    -> _ = wasm_component:host_update(Self, {udp_binding, Bound}),
                                   {ok, undefined};
                 {error, Errno} -> {error, sock_errno(Errno)}
             end;
@@ -1540,7 +1702,7 @@ udp_stream(Self, Remote, Grant) ->
                     E;
                 {ok, Peer} ->
                     In = wasm_component:host_new(udp_in, {Sock, Peer}),
-                    Out = wasm_component:host_new(udp_out, {Sock, Peer}),
+                    Out = wasm_component:host_new(udp_out, {Sock, Peer, Grant}),
                     {ok, {In, Out}}
             end;
         _ ->
@@ -1558,13 +1720,28 @@ udp_remote({some, Addr}, Grant) ->
 
 udp_send(Out, Datagrams) ->
     case wasm_component:host_get(Out) of
-        {ok, {udp_out, {Sock, Peer}}} ->
-            Sent = lists:foldl(
-                     fun(D, Acc) -> Acc + send_datagram(Sock, Peer, D) end, 0, Datagrams),
-            {ok, Sent};
+        {ok, {udp_out, {Sock, Peer, Grant}}} ->
+            %% Every explicit destination must be granted before anything is sent,
+            %% so a datagram never reaches an address outside the grant. A datagram
+            %% with no remote uses the connected peer, checked when the stream was
+            %% opened.
+            case lists:all(fun(D) -> datagram_allowed(D, Peer, Grant) end, Datagrams) of
+                false ->
+                    {error, <<"access-denied">>};
+                true ->
+                    Sent = lists:foldl(
+                             fun(D, Acc) -> Acc + send_datagram(Sock, Peer, D) end,
+                             0, Datagrams),
+                    {ok, Sent}
+            end;
         _ ->
             {error, <<"invalid-state">>}
     end.
+
+datagram_allowed(#{<<"remote-address">> := {some, Addr}}, _Peer, Grant) ->
+    wasi_net:allows(connect, endpoint_udp(Addr), Grant);
+datagram_allowed(#{<<"remote-address">> := none}, Peer, _Grant) ->
+    Peer =/= none.
 
 send_datagram(Sock, Peer, #{<<"data">> := Data, <<"remote-address">> := Remote}) ->
     Dest = case Remote of
@@ -1597,8 +1774,8 @@ udp_receive(In, Max) ->
 
 udp_drop(H) ->
     case wasm_component:host_get(H) of
-        {ok, {udp_socket, {udp_bound, Sock}}} -> _ = wasi_sock:close(Sock);
-        _                                     -> ok
+        {ok, {udp_socket, {_State, Handle}}} -> _ = wasi_sock:close(Handle);
+        _                                    -> ok
     end,
     wasm_component:host_drop(H).
 

@@ -45,7 +45,7 @@ the right to read may still be refused a path that escapes its preopen.
 -export([open/3, pread/3, pwrite/3, size/1, stat_fd/1, close/1,
          list_dir/2, backend/0]).
 -export([truncate/2, sync/1, preopen/1, forget/1, list/1, readdir/3]).
--export([open_dir_at/2]).
+-export([open_dir_at/2, dup/1]).
 -export([mkdir/2, unlink/2, rmdir/2, symlink/3, readlink/2, stat/2,
          set_times/4, set_times/5, set_times_fd/3,
          stat/3, rename/4, link/4]).
@@ -565,6 +565,26 @@ size({fallback, D, _}) ->
 -spec close(handle()) -> ok.
 close({native, H}) -> wasi_file_nif:close(H);
 close({fallback, D, _}) -> _ = file:close(D), ok.
+
+-doc """
+Duplicate a handle into an independent one, closed on its own.
+
+A read stream taken from a descriptor duplicates it so the stream owns its own
+descriptor: dropping or closing the descriptor does not close the stream, and the
+stream reads positionally without touching the descriptor's offset. The fallback
+reopens the file read-only for the same reason.
+""".
+-spec dup(handle()) -> {ok, handle()} | {error, non_neg_integer()}.
+dup({native, H}) ->
+    case wasi_file_nif:dup(H) of
+        {ok, H2}       -> {ok, {native, H2}};
+        {error, Errno} -> {error, map_posix(Errno)}
+    end;
+dup({fallback, _D, Path}) ->
+    case file:open(Path, [read, binary, raw]) of
+        {ok, D2}   -> {ok, {fallback, D2, Path}};
+        {error, R} -> {error, map_posix(R)}
+    end.
 
 -spec list_dir(file:filename_all(), binary()) ->
           {ok, [binary()]} | {error, non_neg_integer()}.

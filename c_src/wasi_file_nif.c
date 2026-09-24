@@ -1125,10 +1125,37 @@ static int load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {
     return FILE_RES == NULL ? -1 : 0;
 }
 
+/* Duplicate a file handle into an independent one. The copy has its own
+ * descriptor, so closing either does not touch the other: a read stream taken
+ * from a descriptor can outlive it and read after it is dropped, without the
+ * stream sharing the descriptor's fd. `dup` copies only the descriptor, so both
+ * refer to the same open file description; positional reads (pread) are what the
+ * stream uses, so the shared file offset does not matter. */
+static ERL_NIF_TERM dup_nif(ErlNifEnv *env, int argc,
+                            const ERL_NIF_TERM argv[]) {
+    file_handle *h;
+    (void)argc;
+    if (!enif_get_resource(env, argv[0], FILE_RES, (void **)&h))
+        return enif_make_badarg(env);
+    int e = handle_lock(h);
+    if (e != 0) return mk_errno(env, e);
+    int fd = dup(h->fd);
+    int is_dir = h->is_dir;
+    e = (fd < 0) ? errno : 0;
+    enif_mutex_unlock(h->lock);
+    if (e != 0) return mk_errno(env, e);
+    file_handle *nh = new_handle(fd, is_dir);
+    if (!nh) { close(fd); return mk_errno(env, ENOMEM); }
+    ERL_NIF_TERM term = enif_make_resource(env, nh);
+    enif_release_resource(nh);
+    return mk_ok(env, term);
+}
+
 /* All of these block, which is exactly what dirty I/O schedulers are for. */
 static ErlNifFunc funcs[] = {
     {"open_at",  4, open_at_nif, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"open_dir", 1, open_dir_nif, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"dup",      1, dup_nif,     ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"pread",    3, pread_nif,   ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"pwrite",   3, pwrite_nif,  ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"fstat",    1, fstat_nif,   ERL_NIF_DIRTY_JOB_IO_BOUND},

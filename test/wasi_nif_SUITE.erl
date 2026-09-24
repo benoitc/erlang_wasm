@@ -25,6 +25,7 @@ all() ->
      handles_survive_arbitrary_input,
      closing_a_handle_under_a_read_never_yields_another_file,
      a_root_replaced_after_it_was_opened_is_not_followed,
+     a_duplicated_handle_reads_after_the_original_is_closed,
      path_operations_refuse_what_the_walk_refuses].
 
 init_per_testcase(_Case, Config) ->
@@ -42,6 +43,18 @@ init_per_testcase(_Case, Config) ->
     [{data, Data}, {secret, Secret} | Config].
 
 end_per_testcase(_, _) -> ok.
+
+%% A duplicated handle owns its own descriptor: it reads the same file and keeps
+%% working after the original is closed. A read-via-stream uses this so the stream
+%% can outlive the descriptor it was taken from.
+a_duplicated_handle_reads_after_the_original_is_closed(Config) ->
+    Data = ?config(data, Config),
+    {ok, H} = wasi_fs:open(root(Data), ~"note.txt", [read]),
+    {ok, H2} = wasi_fs:dup(H),
+    ?assertEqual({ok, ~"hel"}, wasi_fs:pread(H2, 0, 3)),
+    ok = wasi_fs:close(H),
+    ?assertEqual({ok, ~"lo"}, wasi_fs:pread(H2, 3, 2)),
+    ok = wasi_fs:close(H2).
 
 %% The preopen is a directory, opened once. Naming it by path on every open
 %% would leave it to be resolved again every time, so replacing it between two

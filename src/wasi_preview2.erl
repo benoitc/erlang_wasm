@@ -573,7 +573,8 @@ io(Opts) ->
             {[handle, u64], ?COUNT_RESULT}, fun([H, Len]) -> skip_stream(H, Len) end),
       {Streams, <<"[method]input-stream.subscribe">>} =>
           wasm_component:import_fun({[handle], handle}, Subscribe),
-      {Streams, <<"[resource-drop]input-stream">>} => drop_fun(),
+      {Streams, <<"[resource-drop]input-stream">>} =>
+          fun(_Ctx, [H]) -> _ = input_drop(H), {ok, []} end,
       %% A clock pollable is ready once its deadline has passed; a stream pollable
       %% is ready when the stream is, which for a socket means data is waiting, so
       %% poll reports neither an unelapsed timer nor a socket with nothing to read.
@@ -597,6 +598,16 @@ io(Opts) ->
 
 drop_fun() ->
     fun(_Ctx, [Handle]) -> _ = wasm_component:host_drop(Handle), {ok, []} end.
+
+%% Dropping an input stream closes the descriptor it owns (a file stream holds its
+%% own duplicated handle). A socket stream only borrows the socket's connection,
+%% which the socket resource owns and closes, so it is left alone.
+input_drop(Handle) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {input_stream, {file, Fh, _}}} -> _ = wasi_fs:close(Fh);
+        _                                   -> ok
+    end,
+    wasm_component:host_drop(Handle).
 
 %% Write to the stream's sink. A write to a handle that is gone is dropped. A
 %% file-backed write that fails is reported: the caller mints an error resource.
@@ -673,6 +684,7 @@ flush_stream(Handle) ->
 close_resource({fs_file, {Handle, _Flags}})        -> _ = wasi_fs:close(Handle), ok;
 close_resource({fs_dir, Root})                     -> _ = wasi_fs:forget(Root), ok;
 close_resource({output_stream, {file, Handle, _}}) -> _ = wasi_fs:close(Handle), ok;
+close_resource({input_stream, {file, Handle, _}})  -> _ = wasi_fs:close(Handle), ok;
 close_resource({input_stream, {socket, Sock, _}})  -> _ = wasi_sock:close(Sock), ok;
 close_resource({tcp_socket, {_State, Handle}})     -> _ = wasi_sock:close(Handle), ok;
 close_resource({udp_socket, {_State, Handle}})     -> _ = wasi_sock:close(Handle), ok;
@@ -698,6 +710,8 @@ read_stream(Handle, Len, Timeout) ->
             %% to Len bytes; buffer any it read past Len so the next read hands
             %% them over.
             socket_read(Handle, Sock, Buf, Len, Timeout);
+        {ok, {input_stream, {file, Fh, Off}}} ->
+            file_read(Handle, Fh, Off, Len);
         {ok, {input_stream, <<>>}} ->
             {error, {<<"closed">>, undefined}};
         {ok, {input_stream, Remaining}} when is_binary(Remaining) ->
@@ -728,10 +742,29 @@ socket_deliver(Handle, Sock, Data, Len) ->
     _ = wasm_component:host_update(Handle, {socket, Sock, Rest}),
     {ok, Chunk}.
 
+%% Read one chunk of a file-backed input stream, capped to the permit so a huge
+%% requested length never materialises more than one chunk. An empty read is EOF,
+%% reported as `closed`.
+file_read(Handle, Fh, Off, Len) ->
+    case wasi_fs:pread(Fh, Off, min(Len, ?WRITE_BUDGET)) of
+        {ok, <<>>}     -> {error, {<<"closed">>, undefined}};
+        eof            -> {error, {<<"closed">>, undefined}};
+        {ok, Chunk}    ->
+            _ = wasm_component:host_update(Handle, {file, Fh, Off + byte_size(Chunk)}),
+            {ok, Chunk};
+        {error, Errno} ->
+            {error, {<<"last-operation-failed">>, wasm_component:host_new(error, Errno)}}
+    end.
+
 %% Advance the source by up to Len bytes without returning them, reporting how
 %% many were skipped; a drained or unknown stream is `closed`.
 skip_stream(Handle, Len) ->
     case wasm_component:host_get(Handle) of
+        {ok, {input_stream, {file, Fh, Off}}} ->
+            case file_read(Handle, Fh, Off, Len) of
+                {ok, Chunk}    -> {ok, byte_size(Chunk)};
+                {error, _} = E -> E
+            end;
         {ok, {input_stream, <<>>}} ->
             {error, {<<"closed">>, undefined}};
         {ok, {input_stream, Remaining}} when is_binary(Remaining) ->
@@ -1344,28 +1377,35 @@ opt_datetime(_) ->
 %% read-via-stream snapshots the file from the offset into an input-stream (the
 %% wasi:io kind), so a caller must also supply io/1 to read it. pread does the
 %% reading, so the sandbox is unchanged.
-%% The stream reads the file's bytes up front. A lazy stream that reads on demand
-%% would bound host memory better, but it would have to hold the descriptor's own
-%% handle, and sharing that handle interferes with later operations on the same
-%% descriptor (a readonly descriptor's write then reports the wrong error). Reading
-%% eagerly keeps the stream self-contained.
+%% The stream reads the file lazily, one chunk per read, so a guest reading a
+%% small prefix of a large file never makes the host materialise the rest. It
+%% duplicates the descriptor's handle (`wasi_fs:dup/1`) and owns the copy, so
+%% dropping the descriptor does not close the stream and the stream never touches
+%% the descriptor's own fd. The stream closes its handle on drop and teardown.
 read_via_stream(File, Off) ->
+    %% Check read permission up front, before deferring any I/O: a descriptor with
+    %% no read right must fail here as a bad descriptor, not later as a stream
+    %% error, which is the error code the caller expects and how the eager read
+    %% reported it.
+    case readable_file(File) of
+        {ok, Handle} ->
+            case wasi_fs:dup(Handle) of
+                {ok, Own}      -> {ok, wasm_component:host_new(input_stream, {file, Own, Off})};
+                {error, Errno} -> {error, errno_name(Errno)}
+            end;
+        {error, _} = E ->
+            E
+    end.
+
+readable_file(File) ->
     case wasm_component:host_get(File) of
-        {ok, {fs_file, {Handle, _}}} ->
-            case read_all(Handle, Off, <<>>) of
-                {ok, Bytes}     -> {ok, wasm_component:host_new(input_stream, Bytes)};
-                {error, Errno}  -> {error, errno_name(Errno)}
+        {ok, {fs_file, {Handle, Flags}}} ->
+            case lists:member(<<"read">>, Flags) of
+                true  -> {ok, Handle};
+                false -> {error, <<"bad-descriptor">>}
             end;
         _ ->
             {error, <<"bad-descriptor">>}
-    end.
-
-read_all(Handle, Off, Acc) ->
-    case wasi_fs:pread(Handle, Off, 65536) of
-        {ok, <<>>}     -> {ok, Acc};
-        {ok, Bin}      -> read_all(Handle, Off + byte_size(Bin), <<Acc/binary, Bin/binary>>);
-        eof            -> {ok, Acc};
-        {error, Errno} -> {error, Errno}
     end.
 
 read_directory(Dir) ->

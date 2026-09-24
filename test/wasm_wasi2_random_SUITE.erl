@@ -21,7 +21,8 @@ guest unchanged, and that the default source varies.
 all() ->
     [random_bytes_have_the_requested_length,
      a_fixed_source_reaches_the_guest,
-     the_default_source_varies].
+     the_default_source_varies,
+     an_absurd_random_length_is_refused].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -60,6 +61,14 @@ the_default_source_varies(Config) ->
     {ok, I} = instance(Config, wasi_preview2:random()),
     ?assertNotEqual(roll(I), roll(I)),
     ?assertNotEqual(binary:copy(<<0>>, 64), bytes(I, 64)).
+
+%% get-random-bytes of an absurd count is refused rather than allocating the whole
+%% buffer in the host. Fail-first: the host materialised the guest-requested length
+%% before any bound applied.
+an_absurd_random_length_is_refused(_Config) ->
+    ?assertEqual(8, byte_size(wasi_preview2:random_bytes(8))),
+    ?assertError(random_bytes_too_large,
+                 wasi_preview2:random_bytes(16 * 1024 * 1024 + 1)).
 
 %%% -------------------------------------------------------------- helpers ---
 

@@ -19,7 +19,8 @@ without a connect grant the datagram stream is refused, because stream asks
 all() ->
     [a_datagram_round_trips,
      send_needs_a_grant,
-     a_datagram_destination_is_checked_against_the_grant].
+     a_datagram_destination_is_checked_against_the_grant,
+     a_connected_stream_hears_only_its_peer].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -58,6 +59,17 @@ a_datagram_destination_is_checked_against_the_grant(_Config) ->
     %% A granted address is allowed; one outside the grant is refused.
     ?assert(wasi_preview2:datagram_allowed(To(9000), none, Grant)),
     ?assertNot(wasi_preview2:datagram_allowed(To(9999), none, Grant)).
+
+%% A connected datagram stream (a chosen peer) delivers datagrams from that peer
+%% and drops any from a different sender. Fail-first: receive ignored the peer and
+%% handed over whatever arrived.
+a_connected_stream_hears_only_its_peer(_Config) ->
+    Peer = {udp, {127, 0, 0, 1}, 9000},
+    ?assert(wasi_preview2:peer_matches(Peer, {127, 0, 0, 1}, 9000)),
+    ?assertNot(wasi_preview2:peer_matches(Peer, {127, 0, 0, 1}, 9001)),
+    ?assertNot(wasi_preview2:peer_matches(Peer, {10, 0, 0, 1}, 9000)),
+    %% An unconnected stream hears anyone.
+    ?assert(wasi_preview2:peer_matches(none, {10, 0, 0, 1}, 1234)).
 
 %%% -------------------------------------------------------------- helpers ---
 

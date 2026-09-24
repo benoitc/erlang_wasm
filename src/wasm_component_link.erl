@@ -172,9 +172,14 @@ entry(_S) ->
 fold([], S) ->
     {ok, S};
 fold([Item | Rest], S) ->
-    case step(Item, S) of
-        {ok, S1}           -> fold(Rest, S1);
-        {error, Reason}    -> {error, Reason, S}
+    %% A malformed graph can make `step` raise (a bad index, a strict match); carry
+    %% the state out so `link/4` frees the cores already built rather than leaking
+    %% them on the exception path.
+    try step(Item, S) of
+        {ok, S1}        -> fold(Rest, S1);
+        {error, Reason} -> {error, Reason, S}
+    catch
+        Class:Reason -> {error, {link_crashed, {Class, Reason}}, S}
     end.
 
 step({core_module, _}, S) ->

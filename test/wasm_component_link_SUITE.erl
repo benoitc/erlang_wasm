@@ -22,6 +22,7 @@ all() ->
      frees_every_core_on_destroy,
      an_unbound_host_import_is_named,
      a_failed_link_frees_the_cores_it_built,
+     a_malformed_component_link_leaks_no_cores,
      destroy_closes_host_resources_and_clears_the_tables].
 
 init_per_suite(Config) ->
@@ -84,6 +85,21 @@ destroy_closes_host_resources_and_clears_the_tables(_Config) ->
     ?assertEqual([], wasm_component:host_live()),
     ?assertEqual(undefined, erlang:port_info(Sock)),
     gen_tcp:close(Listen).
+
+%% A graph item that makes the linker raise after it has built a core must still
+%% free that core. The two-core graph is parsed and a component-function alias to a
+%% component instance that does not exist is appended; linking builds both cores and
+%% then raises on the alias (a bad map key). Fail-first: without freeing on the
+%% exception path, the two built cores leak.
+a_malformed_component_link_leaks_no_cores(_Config) ->
+    {ok, Decoded} = wasm_component:decode(component()),
+    #{sec := Sec, entry_idx := EntryIdx} = Decoded,
+    {ok, Graph} = wasm_component_link:parse(Sec),
+    BadGraph = Graph ++ [{comp_func_alias, 99, <<"nope">>}],
+    Before = live_instance_tables(),
+    Result = wasm_component_link:link(BadGraph, EntryIdx, fun(_) -> #{} end, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(Before, live_instance_tables()).
 
 leaked(F) ->
     Before = live_instance_tables(),

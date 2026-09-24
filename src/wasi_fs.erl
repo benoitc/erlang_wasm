@@ -569,10 +569,12 @@ close({fallback, D, _}) -> _ = file:close(D), ok.
 -doc """
 Duplicate a handle into an independent one, closed on its own.
 
-A read stream taken from a descriptor duplicates it so the stream owns its own
-descriptor: dropping or closing the descriptor does not close the stream, and the
-stream reads positionally without touching the descriptor's offset. The fallback
-reopens the file read-only for the same reason.
+Native only: it duplicates the open descriptor, so the copy owns its own fd and
+reads positionally without touching the descriptor's offset, and closing either
+does not affect the other. The fallback cannot duplicate an `io_device`, and
+reopening by pathname would resolve the name a second time and could follow a
+symlink swapped in since the descriptor was opened, so `dup` is refused there and
+the caller reads eagerly instead.
 """.
 -spec dup(handle()) -> {ok, handle()} | {error, non_neg_integer()}.
 dup({native, H}) ->
@@ -580,11 +582,8 @@ dup({native, H}) ->
         {ok, H2}       -> {ok, {native, H2}};
         {error, Errno} -> {error, map_posix(Errno)}
     end;
-dup({fallback, _D, Path}) ->
-    case file:open(Path, [read, binary, raw]) of
-        {ok, D2}   -> {ok, {fallback, D2, Path}};
-        {error, R} -> {error, map_posix(R)}
-    end.
+dup({fallback, _D, _Path}) ->
+    {error, ?ENOTSUP}.
 
 -spec list_dir(file:filename_all(), binary()) ->
           {ok, [binary()]} | {error, non_neg_integer()}.

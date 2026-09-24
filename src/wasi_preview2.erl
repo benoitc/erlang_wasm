@@ -25,7 +25,7 @@ later step.
 %% host_new/host_get are).
 -export([poll/1, monotonic_now/0, next_sleep_ms/1, close_resource/1]).
 %% Exported so a test can drive the stream write and udp grant paths directly.
--export([write_stream/2, datagram_allowed/3]).
+-export([write_stream/2, datagram_allowed/3, peer_matches/3, random_bytes/1]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle), minted when a file-backed write
@@ -39,6 +39,10 @@ later step.
 %% Longest single timer:sleep a clock wait uses. A guest deadline can be months
 %% out, past `receive after`'s ceiling; `sleep_until/1` chunks the wait by this.
 -define(SLEEP_CHUNK_MS, 60000).
+
+%% Most random bytes the host will materialise for one get-random-bytes call. A
+%% guest u64 length beyond this is refused rather than allocated up front.
+-define(MAX_RANDOM_BYTES, 16 * 1024 * 1024).
 %% The write budget check-write reports for the discarding/buffer sinks: always
 %% ready for a chunk this size.
 -define(WRITE_BUDGET, 65536).
@@ -161,6 +165,11 @@ random_u64() ->
     X.
 
 random_bytes(0) -> <<>>;
+random_bytes(Len) when is_integer(Len), Len > ?MAX_RANDOM_BYTES ->
+    %% A guest u64 length would otherwise drive an unbounded host allocation before
+    %% the result is lowered into (bounded) guest memory. Refuse an absurd request
+    %% rather than allocate it.
+    error(random_bytes_too_large);
 random_bytes(Len) when is_integer(Len), Len > 0 ->
     crypto:strong_rand_bytes(Len).
 
@@ -554,10 +563,11 @@ io(Opts) ->
       {Streams, <<"[method]output-stream.blocking-splice">>} =>
           wasm_component:import_fun(
             {[handle, handle, u64], ?COUNT_RESULT},
-            fun([Dst, Src, Len]) -> splice_stream(Dst, Src, Len) end),
+            fun([Dst, Src, Len]) -> blocking_splice_stream(Dst, Src, Len) end),
       {Streams, <<"[method]output-stream.subscribe">>} =>
           wasm_component:import_fun({[handle], handle}, Subscribe),
-      {Streams, <<"[resource-drop]output-stream">>} => drop_fun(),
+      {Streams, <<"[resource-drop]output-stream">>} =>
+          fun(_Ctx, [H]) -> _ = output_drop(H), {ok, []} end,
       {Stdin, <<"get-stdin">>} =>
           wasm_component:import_fun(
             {[], handle}, fun([]) -> wasm_component:host_new(input_stream, Source) end),
@@ -609,17 +619,41 @@ input_drop(Handle) ->
     end,
     wasm_component:host_drop(Handle).
 
+%% Dropping an output stream closes the descriptor it owns (a native file stream
+%% holds its own duplicated handle). A borrowed handle and a socket connection are
+%% owned by the descriptor or socket resource and left alone.
+output_drop(Handle) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {output_stream, {file, own, Fh, _}}}     -> _ = wasi_fs:close(Fh);
+        {ok, {output_stream, {file_append, own, Fh}}} -> _ = wasi_fs:close(Fh);
+        _                                             -> ok
+    end,
+    wasm_component:host_drop(Handle).
+
 %% Write to the stream's sink. A write to a handle that is gone is dropped. A
 %% file-backed write that fails is reported: the caller mints an error resource.
 %% Returns `ok` or `{error, Reason}`.
 write_stream(Handle, Bytes) ->
     case wasm_component:host_get(Handle) of
-        {ok, {output_stream, {file, Fh, Off}}} ->
-            %% A file-backed stream (from write/append-via-stream): pwrite and
-            %% advance the offset so the next write continues where this ended.
+        {ok, {output_stream, {file, Own, Fh, Off}}} ->
+            %% A file-backed write stream: pwrite and advance the offset so the
+            %% next write continues where this ended.
             case wasi_fs:pwrite(Fh, Off, Bytes) of
-                {ok, N}          -> wasm_component:host_update(Handle, {file, Fh, Off + N});
+                {ok, N}          -> wasm_component:host_update(Handle, {file, Own, Fh, Off + N});
                 {error, _} = Err -> Err
+            end;
+        {ok, {output_stream, {file_append, _Own, Fh}}} ->
+            %% Append: write at the current end each time.
+            End = case wasi_fs:size(Fh) of {ok, S} -> S; _ -> 0 end,
+            case wasi_fs:pwrite(Fh, End, Bytes) of
+                {ok, _}          -> ok;
+                {error, _} = Err -> Err
+            end;
+        {ok, {output_stream, {socket, Conn}}} ->
+            %% A socket-backed stream: a failed send is a real error, not silent.
+            case wasi_sock:send(Conn, Bytes) of
+                ok             -> ok;
+                {error, Errno} -> {error, sock_errno(Errno)}
             end;
         {ok, {output_stream, Sink}} when is_function(Sink) ->
             _ = Sink(Bytes), ok;
@@ -648,10 +682,17 @@ and_flush(Handle, ok)              -> flush_stream(Handle);
 and_flush(_Handle, {error, _} = E) -> E.
 
 %% Move up to `Len` bytes (capped to the permit) from an input stream to an output
-%% stream, returning how many moved.
+%% stream, returning how many moved. splice reads the source non-blocking;
+%% blocking-splice waits for at least one byte.
 splice_stream(Dst, Src, Len) ->
+    splice_with(fun read_stream/2, Dst, Src, Len).
+
+blocking_splice_stream(Dst, Src, Len) ->
+    splice_with(fun blocking_read_stream/2, Dst, Src, Len).
+
+splice_with(Read, Dst, Src, Len) ->
     N = min(Len, ?WRITE_BUDGET),
-    case read_stream(Src, N) of
+    case Read(Src, N) of
         {ok, Chunk} ->
             case write_stream(Dst, Chunk) of
                 ok               -> {ok, byte_size(Chunk)};
@@ -673,22 +714,25 @@ write_result({error, Reason}) ->
 %% function sink has nothing to flush. A gone handle is a no-op.
 flush_stream(Handle) ->
     case wasm_component:host_get(Handle) of
-        {ok, {output_stream, {file, Fh, _Off}}} -> wasi_fs:sync(Fh);
-        _                                        -> ok
+        {ok, {output_stream, {file, _Own, Fh, _Off}}}  -> wasi_fs:sync(Fh);
+        {ok, {output_stream, {file_append, _Own, Fh}}} -> wasi_fs:sync(Fh);
+        _                                              -> ok
     end.
 
 %% Close the OS resource a host handle owns, called from teardown for every live
 %% handle. Only file descriptors and sockets hold OS state; a clock pollable, a
 %% preopen dir root and an error carry none.
 -spec close_resource({atom(), term()}) -> ok.
-close_resource({fs_file, {Handle, _Flags}})        -> _ = wasi_fs:close(Handle), ok;
-close_resource({fs_dir, Root})                     -> _ = wasi_fs:forget(Root), ok;
-close_resource({output_stream, {file, Handle, _}}) -> _ = wasi_fs:close(Handle), ok;
-close_resource({input_stream, {file, Handle, _}})  -> _ = wasi_fs:close(Handle), ok;
-close_resource({input_stream, {socket, Sock, _}})  -> _ = wasi_sock:close(Sock), ok;
-close_resource({tcp_socket, {_State, Handle}})     -> _ = wasi_sock:close(Handle), ok;
-close_resource({udp_socket, {_State, Handle}})     -> _ = wasi_sock:close(Handle), ok;
-close_resource(_)                                  -> ok.
+%% A socket-backed stream only borrows its socket's connection, which the
+%% tcp_socket resource owns and closes, so it is not closed here.
+close_resource({fs_file, {Handle, _Flags}})             -> _ = wasi_fs:close(Handle), ok;
+close_resource({fs_dir, Root})                          -> _ = wasi_fs:forget(Root), ok;
+close_resource({output_stream, {file, own, Fh, _}})     -> _ = wasi_fs:close(Fh), ok;
+close_resource({output_stream, {file_append, own, Fh}}) -> _ = wasi_fs:close(Fh), ok;
+close_resource({input_stream, {file, Handle, _}})       -> _ = wasi_fs:close(Handle), ok;
+close_resource({tcp_socket, {_State, Handle}})          -> _ = wasi_sock:close(Handle), ok;
+close_resource({udp_socket, {_State, Handle}})          -> _ = wasi_sock:close(Handle), ok;
+close_resource(_)                                       -> ok.
 
 %% Non-blocking read: return whatever is available, up to Len bytes, without
 %% waiting. On a socket with nothing buffered or waiting this returns an empty
@@ -762,6 +806,13 @@ skip_stream(Handle, Len) ->
     case wasm_component:host_get(Handle) of
         {ok, {input_stream, {file, Fh, Off}}} ->
             case file_read(Handle, Fh, Off, Len) of
+                {ok, Chunk}    -> {ok, byte_size(Chunk)};
+                {error, _} = E -> E
+            end;
+        {ok, {input_stream, {socket, Sock, Buf}}} ->
+            %% Skip consumes bytes from the socket rather than reporting closed:
+            %% read up to Len and discard, returning how many were consumed.
+            case socket_read(Handle, Sock, Buf, Len, 0) of
                 {ok, Chunk}    -> {ok, byte_size(Chunk)};
                 {error, _} = E -> E
             end;
@@ -1051,7 +1102,8 @@ write_via_stream(_File, _Off, false) ->
     {error, <<"read-only">>};
 write_via_stream(File, Off, true) ->
     case writable_file(File) of
-        {ok, Handle} -> {ok, wasm_component:host_new(output_stream, {file, Handle, Off})};
+        {ok, Handle}   -> {ok, wasm_component:host_new(output_stream,
+                                                       output_file(Handle, {write, Off}))};
         {error, _} = E -> E
     end.
 
@@ -1059,11 +1111,24 @@ append_via_stream(_File, false) ->
     {error, <<"read-only">>};
 append_via_stream(File, true) ->
     case writable_file(File) of
-        {ok, Handle} ->
-            End = case wasi_fs:size(Handle) of {ok, S} -> S; _ -> 0 end,
-            {ok, wasm_component:host_new(output_stream, {file, Handle, End})};
-        {error, _} = E ->
-            E
+        {ok, Handle}   -> {ok, wasm_component:host_new(output_stream,
+                                                       output_file(Handle, append))};
+        {error, _} = E -> E
+    end.
+
+%% A file-backed output stream owns a duplicated descriptor on the native backend,
+%% so it outlives the descriptor it was taken from; the fallback cannot duplicate a
+%% handle, so it borrows the descriptor's and is closed with it. An append stream
+%% carries no offset: each write goes to the current end, so concurrent appends do
+%% not overwrite each other.
+output_file(Handle, Mode) ->
+    {Own, Fh} = case wasi_fs:dup(Handle) of
+                    {ok, Dup}  -> {own, Dup};
+                    {error, _} -> {borrow, Handle}
+                end,
+    case Mode of
+        {write, Off} -> {file, Own, Fh, Off};
+        append       -> {file_append, Own, Fh}
     end.
 
 %% A file that was opened for writing; a read-only descriptor cannot produce a
@@ -1390,11 +1455,29 @@ read_via_stream(File, Off) ->
     case readable_file(File) of
         {ok, Handle} ->
             case wasi_fs:dup(Handle) of
-                {ok, Own}      -> {ok, wasm_component:host_new(input_stream, {file, Own, Off})};
-                {error, Errno} -> {error, errno_name(Errno)}
+                {ok, Own} ->
+                    %% Native: an owned fd, read lazily one chunk at a time.
+                    {ok, wasm_component:host_new(input_stream, {file, Own, Off})};
+                {error, _} ->
+                    %% Fallback: no safe dup, so read eagerly into a self-contained
+                    %% binary rather than hold a re-resolvable pathname.
+                    case read_all(Handle, Off, <<>>) of
+                        {ok, Bytes}  -> {ok, wasm_component:host_new(input_stream, Bytes)};
+                        {error, Errno} -> {error, errno_name(Errno)}
+                    end
             end;
         {error, _} = E ->
             E
+    end.
+
+%% Read a whole file (from Off) into one binary, for the fallback backend where a
+%% lazy stream cannot own an independent descriptor.
+read_all(Handle, Off, Acc) ->
+    case wasi_fs:pread(Handle, Off, 65536) of
+        {ok, <<>>}     -> {ok, Acc};
+        eof            -> {ok, Acc};
+        {ok, Bin}      -> read_all(Handle, Off + byte_size(Bin), <<Acc/binary, Bin/binary>>);
+        {error, Errno} -> {error, Errno}
     end.
 
 readable_file(File) ->
@@ -1495,7 +1578,7 @@ sockets(Opts) ->
             fun([Self]) -> finish(Self, tcp_socket, listen_pending, listening) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.accept">>} =>
           wasm_component:import_fun(
-            {[handle], ?ACCEPT_RESULT}, fun([Self]) -> tcp_accept(Self) end),
+            {[handle], ?ACCEPT_RESULT}, fun([Self]) -> tcp_accept(Self, Grant) end),
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.local-address">>} =>
           wasm_component:import_fun(
             {[handle], ?LOCAL_RESULT}, fun([Self]) -> tcp_local(Self) end),
@@ -1597,7 +1680,7 @@ tcp_finish_connect(Self) ->
             _ = wasm_component:host_update(Self, {connected, Conn}),
             In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
             Out = wasm_component:host_new(
-                    output_stream, fun(Bytes) -> _ = wasi_sock:send(Conn, Bytes), ok end),
+                    output_stream, {socket, Conn}),
             {ok, {In, Out}};
         _ ->
             {error, <<"invalid-state">>}
@@ -1650,21 +1733,28 @@ tcp_start_listen(Self) ->
             {error, <<"invalid-state">>}
     end.
 
-tcp_accept(Self) ->
+tcp_accept(Self, Grant) ->
     case wasm_component:host_get(Self) of
         {ok, {tcp_socket, {listening, Listen}}} ->
-            case wasi_sock:accept(Listen, ?SOCK_TIMEOUT) of
-                {ok, Conn} ->
-                    Sock = wasm_component:host_new(tcp_socket, {connected, Conn}),
-                    In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
-                    Out = wasm_component:host_new(
-                            output_stream, fun(B) -> _ = wasi_sock:send(Conn, B), ok end),
-                    {ok, {Sock, In, Out}};
-                {error, Errno} ->
-                    {error, sock_errno(Errno)}
+            case socket_room(Grant) of
+                false ->
+                    {error, <<"new-socket-limit">>};
+                true ->
+                    accept_connection(Listen)
             end;
         _ ->
             {error, <<"invalid-state">>}
+    end.
+
+accept_connection(Listen) ->
+    case wasi_sock:accept(Listen, ?SOCK_TIMEOUT) of
+        {ok, Conn} ->
+            Sock = wasm_component:host_new(tcp_socket, {connected, Conn}),
+            In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
+            Out = wasm_component:host_new(output_stream, {socket, Conn}),
+            {ok, {Sock, In, Out}};
+        {error, Errno} ->
+            {error, sock_errno(Errno)}
     end.
 
 tcp_local(Self) ->
@@ -1798,11 +1888,16 @@ send_datagram(Sock, Peer, #{<<"data">> := Data, <<"remote-address">> := Remote})
 
 udp_receive(In, Max) ->
     case wasm_component:host_get(In) of
-        {ok, {udp_in, {Sock, _Peer}}} when Max > 0 ->
+        {ok, {udp_in, {Sock, Peer}}} when Max > 0 ->
             case wasi_sock:recv_from(Sock, 0, ?SOCK_TIMEOUT) of
                 {ok, Data, {Addr, Port}} ->
-                    {ok, [#{<<"data">> => Data,
-                            <<"remote-address">> => ip_sockaddr(Addr, Port)}]};
+                    %% A connected stream (a chosen peer) hears only that peer; a
+                    %% datagram from anyone else is dropped, not handed over.
+                    case peer_matches(Peer, Addr, Port) of
+                        true  -> {ok, [#{<<"data">> => Data,
+                                         <<"remote-address">> => ip_sockaddr(Addr, Port)}]};
+                        false -> {ok, []}
+                    end;
                 {error, _} ->
                     {ok, []}
             end;
@@ -1811,6 +1906,10 @@ udp_receive(In, Max) ->
         _ ->
             {error, <<"invalid-state">>}
     end.
+
+peer_matches(none, _Addr, _Port)                 -> true;
+peer_matches({udp, Addr, Port}, Addr, Port)      -> true;
+peer_matches({udp, _, _}, _Addr, _Port)          -> false.
 
 udp_drop(H) ->
     case wasm_component:host_get(H) of

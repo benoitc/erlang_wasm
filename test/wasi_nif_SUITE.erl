@@ -26,6 +26,7 @@ all() ->
      closing_a_handle_under_a_read_never_yields_another_file,
      a_root_replaced_after_it_was_opened_is_not_followed,
      a_duplicated_handle_reads_after_the_original_is_closed,
+     a_fallback_handle_is_not_duplicated_by_reopening,
      path_operations_refuse_what_the_walk_refuses].
 
 init_per_testcase(_Case, Config) ->
@@ -55,6 +56,12 @@ a_duplicated_handle_reads_after_the_original_is_closed(Config) ->
     ok = wasi_fs:close(H),
     ?assertEqual({ok, ~"lo"}, wasi_fs:pread(H2, 3, 2)),
     ok = wasi_fs:close(H2).
+
+%% dup is refused on the fallback backend rather than reopening the pathname: a
+%% reopen would resolve the name a second time and could follow a symlink swapped
+%% in since the descriptor was opened. The read stream reads eagerly there instead.
+a_fallback_handle_is_not_duplicated_by_reopening(_Config) ->
+    ?assertMatch({error, _}, wasi_fs:dup({fallback, self(), "/tmp/anything"})).
 
 %% The preopen is a directory, opened once. Naming it by path on every open
 %% would leave it to be resolved again every time, so replacing it between two

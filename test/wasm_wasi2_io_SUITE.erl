@@ -21,7 +21,10 @@ all() ->
     [bytes_written_reach_the_sink,
      the_handle_is_freed_after_use,
      two_emits_accumulate,
-     a_failed_file_write_is_reported].
+     a_failed_file_write_is_reported,
+     a_failed_socket_write_is_reported,
+     two_append_streams_both_append,
+     an_output_stream_outlives_its_descriptor].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -66,9 +69,55 @@ a_failed_file_write_is_reported(Config) ->
     {ok, Root} = wasi_fs:preopen(Dir),
     {ok, Fh} = wasi_fs:open(Root, <<"f">>, [write, create]),
     ok = wasi_fs:close(Fh),
-    H = wasm_component:host_new(output_stream, {file, Fh, 0}),
+    H = wasm_component:host_new(output_stream, {file, own, Fh, 0}),
     ?assertMatch({error, _}, wasi_preview2:write_stream(H, <<"lost?">>)),
     wasm_component:host_drop(H).
+
+%% A socket-backed output stream reports a failed send instead of swallowing it.
+%% The socket is not connected, so the send fails. Fail-first: the socket sink
+%% used to return `ok` unconditionally, losing the write silently.
+a_failed_socket_write_is_reported(_Config) ->
+    {ok, Pending} = wasi_sock:open(inet, stream),
+    H = wasm_component:host_new(output_stream, {socket, Pending}),
+    ?assertMatch({error, _}, wasi_preview2:write_stream(H, <<"x">>)),
+    wasm_component:host_drop(H).
+
+%% Two append streams on the same file both append rather than overwriting. Each
+%% write goes to the current end. Fail-first: the append offset was captured once
+%% at stream creation, so the second stream wrote over the first (abcB not abcAB).
+two_append_streams_both_append(Config) ->
+    Dir = ?config(priv_dir, Config),
+    ok = filelib:ensure_path(filename:join(Dir, "append")),
+    {ok, Root} = wasi_fs:preopen(filename:join(Dir, "append")),
+    {ok, Fh} = wasi_fs:open(Root, <<"f">>, [read, write, create]),
+    {ok, _} = wasi_fs:pwrite(Fh, 0, <<"abc">>),
+    S1 = wasm_component:host_new(output_stream, {file_append, own, Fh}),
+    S2 = wasm_component:host_new(output_stream, {file_append, own, Fh}),
+    ok = wasi_preview2:write_stream(S1, <<"A">>),
+    ok = wasi_preview2:write_stream(S2, <<"B">>),
+    ?assertEqual({ok, <<"abcAB">>}, wasi_fs:pread(Fh, 0, 5)),
+    wasm_component:host_drop(S1), wasm_component:host_drop(S2).
+
+%% An output stream taken from a descriptor keeps working after the descriptor is
+%% dropped: on the native backend it owns a duplicated handle. Fail-first: the
+%% output stream used to share the descriptor's handle, so closing it broke the
+%% stream with EBADF.
+an_output_stream_outlives_its_descriptor(Config) ->
+    case wasi_fs:backend() of
+        fallback -> {skip, "fallback cannot duplicate a handle"};
+        native ->
+            Dir = ?config(priv_dir, Config),
+            ok = filelib:ensure_path(filename:join(Dir, "outlive")),
+            {ok, Root} = wasi_fs:preopen(filename:join(Dir, "outlive")),
+            {ok, Fh} = wasi_fs:open(Root, <<"f">>, [write, create]),
+            {ok, Dup} = wasi_fs:dup(Fh),
+            S = wasm_component:host_new(output_stream, {file, own, Dup, 0}),
+            ok = wasi_fs:close(Fh),
+            ok = wasi_preview2:write_stream(S, <<"kept">>),
+            {ok, Rd} = wasi_fs:open(Root, <<"f">>, [read]),
+            ?assertEqual({ok, <<"kept">>}, wasi_fs:pread(Rd, 0, 4)),
+            wasm_component:host_drop(S)
+    end.
 
 %%% -------------------------------------------------------------- helpers ---
 

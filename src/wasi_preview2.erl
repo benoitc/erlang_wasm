@@ -849,6 +849,10 @@ socket_deliver(Handle, Sock, Data, Len) ->
 %% Read one chunk of a file-backed input stream, capped to the permit so a huge
 %% requested length never materialises more than one chunk. An empty read is EOF,
 %% reported as `closed`.
+%% A zero-length read is a no-op that returns no bytes, not end-of-stream: only a
+%% read that asked for bytes and got none is closed.
+file_read(_Handle, _Fh, _Off, 0) ->
+    {ok, <<>>};
 file_read(Handle, Fh, Off, Len) ->
     case wasi_fs:pread(Fh, Off, min(Len, ?WRITE_BUDGET)) of
         {ok, <<>>}     -> {error, {<<"closed">>, undefined}};
@@ -1524,10 +1528,17 @@ opt_datetime(_) ->
 %% dropping the descriptor does not close the stream and the stream never touches
 %% the descriptor's own fd. The stream closes its handle on drop and teardown.
 read_via_stream(File, Off) ->
-    %% Check read permission up front, before deferring any I/O: a descriptor with
-    %% no read right must fail here as a bad descriptor, not later as a stream
-    %% error, which is the error code the caller expects and how the eager read
-    %% reported it.
+    %% A directory is not a byte stream: streaming it is is-directory, not a bad
+    %% descriptor. Check read permission up front otherwise, before deferring any
+    %% I/O: a descriptor with no read right must fail here as a bad descriptor, not
+    %% later as a stream error, which is the error code the caller expects and how
+    %% the eager read reported it.
+    case wasm_component:host_get(File) of
+        {ok, {fs_dir, _}} -> {error, <<"is-directory">>};
+        _                 -> read_via_stream_file(File, Off)
+    end.
+
+read_via_stream_file(File, Off) ->
     case readable_file(File) of
         {ok, Handle} ->
             case wasi_fs:dup(Handle) of

@@ -134,6 +134,30 @@ config(Name, Preopen) ->
 %% Filesystem programs get a writable scratch mount; the cross-permission ones
 %% also get a read-only mount named "readonly" holding the fixture file they read,
 %% and their scratch mount's name as the single argument they expect.
+fs_config(Name, Scratch) when Name =:= "p2_cli_file_read";
+                              Name =:= "p2_cli_file_append";
+                              Name =:= "p2_cli_file_dir_sync" ->
+    %% Each opens "bar.txt"; file_read asserts its exact 27-byte contents.
+    ok = file:write_file(filename:join(Scratch, "bar.txt"),
+                         <<"And stood awhile in thought">>),
+    {<<>>, #{preopen => Scratch, writable => true}};
+fs_config("p2_cli_directory_list", Scratch) ->
+    [ok = file:write_file(filename:join(Scratch, F), <<>>)
+     || F <- ["foo.txt", "bar.txt", "baz.txt"]],
+    Sub = filename:join(Scratch, "sub"),
+    ok = filelib:ensure_path(Sub),
+    [ok = file:write_file(filename:join(Sub, F), <<>>)
+     || F <- ["wow.txt", "yay.txt"]],
+    {<<>>, #{preopen => Scratch, writable => true}};
+fs_config("p2_cli_multiple_preopens", Scratch) ->
+    B = fresh_dir(),
+    C = fresh_dir(),
+    {<<>>, #{preopens => [{<<"/a">>, Scratch, true},
+                          {<<"/b">>, B, true},
+                          {<<"/c">>, C, true}]}};
+fs_config("p2_cli_initial_cwd", Scratch) ->
+    {<<>>, #{preopen => Scratch, writable => true,
+             initial_cwd => <<"/sandbox">>}};
 fs_config(Name, Scratch) ->
     case needs_readonly(Name) of
         true ->
@@ -143,6 +167,12 @@ fs_config(Name, Scratch) ->
         false ->
             {<<>>, #{preopen => Scratch, writable => true}}
     end.
+
+fresh_dir() ->
+    Dir = filename:join(tmp_dir(),
+                        "p2d_" ++ integer_to_list(erlang:unique_integer([positive]))),
+    ok = filelib:ensure_path(Dir),
+    Dir.
 
 needs_readonly("p2_file_rename_across_perms")   -> true;
 needs_readonly("p2_file_hardlink_across_perms") -> true;

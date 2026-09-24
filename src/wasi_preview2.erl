@@ -18,7 +18,7 @@ later step.
 
 -include("wasi.hrl").
 
--export([imports/0, random/0, clocks/0, environment/0, environment/2, io/0, io/1,
+-export([imports/0, random/0, clocks/0, environment/0, environment/3, io/0, io/1,
          filesystem/1, sockets/1, command/1, run_command/2, run_command/3]).
 %% The poll_oneoff readiness logic over host pollable handles, and the monotonic
 %% clock its deadlines use, exported so a test can drive poll directly (as
@@ -376,16 +376,18 @@ arguments, no working directory. It never reads the node's real environment.
 """.
 -spec environment() -> #{{binary(), binary()} => fun()}.
 environment() ->
-    environment([], []).
+    environment([], [], none).
 
 -doc """
-`wasi:cli/environment` with a given argv and environment. `get-arguments` returns
-`Args` verbatim (the caller includes `argv[0]`; nothing is prepended), and
-`get-environment` returns `Env` as name/value pairs.
+`wasi:cli/environment` with a given argv, environment and initial working
+directory. `get-arguments` returns `Args` verbatim (the caller includes `argv[0]`;
+nothing is prepended), `get-environment` returns `Env` as name/value pairs, and
+`initial-cwd` returns `Cwd` (`none` or `{some, Path}`).
 """.
--spec environment([binary()], [{binary(), binary()}]) ->
+-spec environment([binary()], [{binary(), binary()}],
+                  none | {some, binary()}) ->
           #{{binary(), binary()} => fun()}.
-environment(Args, Env) ->
+environment(Args, Env, Cwd) ->
     E = <<"wasi:cli/environment">>,
     Pairs = [{K, V} || {K, V} <- Env],
     #{{E, <<"get-environment">>} =>
@@ -394,7 +396,7 @@ environment(Args, Env) ->
       {E, <<"get-arguments">>} =>
           wasm_component:import_fun({[], {list, string}}, fun([]) -> Args end),
       {E, <<"initial-cwd">>} =>
-          wasm_component:import_fun({[], {option, string}}, fun([]) -> none end)}.
+          wasm_component:import_fun({[], {option, string}}, fun([]) -> Cwd end)}.
 
 -doc """
 Every import a `wasi:cli/command` component needs, merged into one map: io (with
@@ -413,6 +415,7 @@ Options: `stdin` (a binary, default empty), `stdout` and `stderr`
                 preopen => file:filename_all(),
                 writable => boolean(),
                 preopens => [{binary(), file:filename_all(), boolean()}],
+                initial_cwd => binary(),
                 network => term()}) ->
           #{{binary(), binary()} => fun()}.
 command(Opts) ->
@@ -421,8 +424,12 @@ command(Opts) ->
     Stderr = maps:get(stderr, Opts, fun(_) -> ok end),
     Args = maps:get(args, Opts, []),
     Env = maps:get(env, Opts, []),
+    Cwd = case maps:find(initial_cwd, Opts) of
+              {ok, C} -> {some, C};
+              error   -> none
+          end,
     Base = [io(#{source => Stdin, sink => Stdout}),
-            clocks(), random(), environment(Args, Env),
+            clocks(), random(), environment(Args, Env, Cwd),
             cli_exit(), cli_stderr(Stderr), cli_terminals()],
     %% The filesystem is always present so a component that imports it links even
     %% with no mount; without one it simply offers no directories. That is what lets
@@ -470,6 +477,7 @@ give the command a directory to read (a mount), or `network => Grant` to grant t
                   #{args => [binary()], env => [{binary(), binary()}],
                     preopen => file:filename_all(), writable => boolean(),
                     preopens => [{binary(), file:filename_all(), boolean()}],
+                    initial_cwd => binary(),
                     network => term(),
                     compile => boolean(), stub => boolean()}) ->
           {ok, #{stdout := binary(), stderr := binary(),

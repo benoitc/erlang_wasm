@@ -34,7 +34,7 @@ all() -> [p2_cases, groups_present].
 baseline() ->
     #{~"cli"        => 8,
       ~"clocks"     => 0,
-      ~"filesystem" => 7,
+      ~"filesystem" => 1,
       ~"io"         => 2,
       ~"random"     => 1,
       ~"sockets"    => 15}.

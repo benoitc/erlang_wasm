@@ -20,7 +20,9 @@ cases of each variant, option and result.
 all() ->
     [unsigned_integers, signed_integers, floats_bool_char,
      strings_and_byte_lists, typed_lists, records_and_tuples,
-     variants, enums, options, results, flags].
+     variants, enums, options, results, flags,
+     wide_parameter_lists_spill_to_memory,
+     an_invalid_char_is_rejected].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -95,6 +97,27 @@ flags(Config) ->
     rt(Config, <<"echo-perms">>, perms(),
        [[], [<<"read">>], [<<"read">>, <<"exec">>],
         [<<"read">>, <<"write">>, <<"exec">>]]).
+
+%% A parameter list that flattens past 16 values is passed as one pointer to the
+%% parameters stored in memory. Lowering then lifting a wide signature round-trips
+%% through that spill path. Fail-first: without spilling, lower_params returned 20
+%% flats and lift_params read them as registers, which is the wrong ABI.
+wide_parameter_lists_spill_to_memory(Config) ->
+    #{core := Core} = ?config(inst, Config),
+    Descs = lists:duplicate(20, u32),
+    Args = lists:seq(1, 20),
+    Flats = wasm_canon:lower_params(Core, Descs, Args),
+    ?assertEqual(1, length(Flats)),
+    {Lifted, _} = wasm_canon:lift_params(Core, Descs, Flats),
+    ?assertEqual(Args, Lifted).
+
+%% A char must be a Unicode scalar value; a surrogate or an out-of-range code
+%% point is rejected on lift. Fail-first: char used to lift any i32 unchecked.
+an_invalid_char_is_rejected(Config) ->
+    #{core := Core} = ?config(inst, Config),
+    ?assertError({invalid_char, _}, wasm_canon:lift_params(Core, [char], [16#D800])),
+    ?assertError({invalid_char, _}, wasm_canon:lift_params(Core, [char], [16#110000])),
+    ?assertEqual({[16#20AC], []}, wasm_canon:lift_params(Core, [char], [16#20AC])).
 
 %%% -------------------------------------------------------------- helpers ---
 

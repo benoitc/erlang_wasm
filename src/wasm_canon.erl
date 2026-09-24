@@ -57,14 +57,31 @@ current fixtures.
               | handle.
 
 -define(MAX_FLAT_RESULTS, 1).
+%% Past this many flattened parameters the Canonical ABI passes a single pointer to
+%% the parameters stored contiguously in memory, rather than the flats directly.
+-define(MAX_FLAT_PARAMS, 16).
 
 %%% -------------------------------------------------------------- params ---
 
 -doc "Lower each parameter to the flat core values its function takes.".
 -spec lower_params(wasm:instance(), [desc()], [term()]) -> [term()].
 lower_params(Inst, Descs, Args) ->
-    lists:append(lists:zipwith(fun(D, A) -> lower_flat(Inst, D, A) end,
-                               Descs, Args)).
+    case params_spill(Descs) of
+        false ->
+            lists:append(lists:zipwith(fun(D, A) -> lower_flat(Inst, D, A) end,
+                                       Descs, Args));
+        true ->
+            %% Too many flats: store the parameters as one tuple in memory and pass
+            %% the pointer.
+            {Size, Align} = size_align({tuple, Descs}),
+            Ptr = realloc(Inst, Align, Size),
+            ok = store(Inst, {tuple, Descs}, Ptr, list_to_tuple(Args)),
+            [Ptr]
+    end.
+
+%% Whether a parameter list flattens past `?MAX_FLAT_PARAMS` and so spills to memory.
+params_spill(Descs) ->
+    lists:sum([length(flat_types(D)) || D <- Descs]) > ?MAX_FLAT_PARAMS.
 
 %% Lower one value to its flat core representation. Aggregates concatenate; a
 %% `list`/`string` is placed in memory and becomes `(ptr, len)`; a variant is a
@@ -157,7 +174,7 @@ lift_flat(_Inst, D, [V]) when D =:= s8; D =:= s16; D =:= s32 ->
     from_signed(V band 16#FFFFFFFF, 32);
 lift_flat(_Inst, u64, [V]) -> V band 16#FFFFFFFFFFFFFFFF;
 lift_flat(_Inst, s64, [V]) -> from_signed(V band 16#FFFFFFFFFFFFFFFF, 64);
-lift_flat(_Inst, char, [V]) -> V;
+lift_flat(_Inst, char, [V]) -> valid_char(V);
 lift_flat(_Inst, bool, [V]) -> V =/= 0;
 lift_flat(_Inst, f32, [V]) -> V;
 lift_flat(_Inst, f64, [V]) -> V.
@@ -174,12 +191,21 @@ returned as the second element.
 """.
 -spec lift_params(wasm:instance(), [desc()], [term()]) -> {[term()], [term()]}.
 lift_params(Inst, Descs, Flats) ->
-    {Rev, Rest} = lists:foldl(
-                    fun(D, {Acc, F0}) ->
-                        {V, F1} = lift_value(Inst, D, F0),
-                        {[V | Acc], F1}
-                    end, {[], Flats}, Descs),
-    {lists:reverse(Rev), Rest}.
+    case params_spill(Descs) of
+        false ->
+            {Rev, Rest} = lists:foldl(
+                            fun(D, {Acc, F0}) ->
+                                {V, F1} = lift_value(Inst, D, F0),
+                                {[V | Acc], F1}
+                            end, {[], Flats}, Descs),
+            {lists:reverse(Rev), Rest};
+        true ->
+            %% The parameters were spilled to memory: one pointer, then any
+            %% remaining flats (a by-memory result's return-area pointer).
+            [Ptr | Rest] = Flats,
+            Tuple = load(Inst, {tuple, Descs}, Ptr),
+            {tuple_to_list(Tuple), Rest}
+    end.
 
 -doc "Lower one value to its flat core representation (`lower_flat`, exported).".
 -spec lower_value(wasm:instance(), desc(), term()) -> [term()].
@@ -223,7 +249,10 @@ lift_value(Inst, D, [V | R]) when D =:= u8; D =:= u16; D =:= u32;
                                   D =:= u64; D =:= s64; D =:= char; D =:= bool;
                                   D =:= f32; D =:= f64; D =:= handle ->
     {lift_flat(Inst, D, [V]), R};
-lift_value(Inst, D, [Ptr, Len | R]) when D =:= string; D =:= {list, u8} ->
+lift_value(Inst, string, [Ptr, Len | R]) ->
+    {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
+    {valid_utf8(Bin), R};
+lift_value(Inst, {list, u8}, [Ptr, Len | R]) ->
     {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
     {Bin, R};
 lift_value(Inst, {list, ElemD}, [Ptr, Len | R]) ->
@@ -304,13 +333,17 @@ load(Inst, s8, Ptr)  -> read_int(Inst, Ptr, 1, signed);
 load(Inst, s16, Ptr) -> read_int(Inst, Ptr, 2, signed);
 load(Inst, s32, Ptr) -> read_int(Inst, Ptr, 4, signed);
 load(Inst, s64, Ptr) -> read_int(Inst, Ptr, 8, signed);
-load(Inst, char, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
+load(Inst, char, Ptr) -> valid_char(read_int(Inst, Ptr, 4, unsigned));
 load(Inst, bool, Ptr) -> read_int(Inst, Ptr, 1, unsigned) =/= 0;
 load(Inst, f32, Ptr) ->
     {ok, <<V:32/float-little>>} = wasm:read_memory(Inst, Ptr, 4), V;
 load(Inst, f64, Ptr) ->
     {ok, <<V:64/float-little>>} = wasm:read_memory(Inst, Ptr, 8), V;
-load(Inst, D, Ptr) when D =:= string; D =:= {list, u8} ->
+load(Inst, string, Ptr) ->
+    {P, Len} = read_ptr_len(Inst, Ptr),
+    {ok, Bin} = wasm:read_memory(Inst, P, Len),
+    valid_utf8(Bin);
+load(Inst, {list, u8}, Ptr) ->
     {P, Len} = read_ptr_len(Inst, Ptr),
     {ok, Bin} = wasm:read_memory(Inst, P, Len),
     Bin;
@@ -536,6 +569,20 @@ from_signed(V, Bits) ->
     case (V bsr (Bits - 1)) band 1 of
         1 -> V - (1 bsl Bits);
         0 -> V
+    end.
+
+%% A lifted char must be a Unicode scalar value: in range and not a surrogate. An
+%% out-of-range or surrogate code point is a guest error, which traps.
+valid_char(V) when V >= 0, V =< 16#D7FF -> V;
+valid_char(V) when V >= 16#E000, V =< 16#10FFFF -> V;
+valid_char(V) -> error({invalid_char, V}).
+
+%% A lifted string must be valid UTF-8; invalid bytes are a guest error, which
+%% traps. `characters_to_binary` returns the binary unchanged when it is valid.
+valid_utf8(Bin) ->
+    case unicode:characters_to_binary(Bin, utf8, utf8) of
+        Out when is_binary(Out) -> Out;
+        _                       -> error(invalid_utf8)
     end.
 
 opt_cases(D) -> [{<<"none">>, none}, {<<"some">>, D}].

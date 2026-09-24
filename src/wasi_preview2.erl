@@ -412,6 +412,7 @@ Options: `stdin` (a binary, default empty), `stdout` and `stderr`
                 env => [{binary(), binary()}],
                 preopen => file:filename_all(),
                 writable => boolean(),
+                preopens => [{binary(), file:filename_all(), boolean()}],
                 network => term()}) ->
           #{{binary(), binary()} => fun()}.
 command(Opts) ->
@@ -424,13 +425,11 @@ command(Opts) ->
             clocks(), random(), environment(Args, Env),
             cli_exit(), cli_stderr(Stderr), cli_terminals()],
     %% The filesystem is always present so a component that imports it links even
-    %% with no mount; without a preopen it simply offers no directories. That is
-    %% what lets a command run with no stubbed imports.
-    Fs = case maps:find(preopen, Opts) of
-             {ok, Dir} -> [filesystem(#{preopen => Dir, name => <<"/">>,
-                                        writable => maps:get(writable, Opts, false)})];
-             error     -> [filesystem(#{name => <<"/">>})]
-         end,
+    %% with no mount; without one it simply offers no directories. That is what lets
+    %% a command run with no stubbed imports. A caller gives one mount with
+    %% `preopen`/`writable`, or several named mounts with `preopens` (a list of
+    %% {name, dir, writable}), each carrying its own writability.
+    Fs = [filesystem(#{mounts => command_mounts(Opts)})],
     %% Sockets are opt-in: only a caller that passes a network grant gets the
     %% wasi:sockets slice, so the default capability posture is unchanged and a
     %% command that imports no sockets still links.
@@ -439,6 +438,18 @@ command(Opts) ->
               error       -> []
           end,
     lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net).
+
+%% The mounts a command exposes: an explicit named list, or the single preopen.
+command_mounts(Opts) ->
+    case maps:find(preopens, Opts) of
+        {ok, Mounts} ->
+            Mounts;
+        error ->
+            case maps:find(preopen, Opts) of
+                {ok, Dir} -> [{<<"/">>, Dir, maps:get(writable, Opts, false)}];
+                error     -> []
+            end
+    end.
 
 -doc """
 Run a `wasi:cli/command` component with `Stdin` on its standard input and return
@@ -458,6 +469,7 @@ give the command a directory to read (a mount), or `network => Grant` to grant t
 -spec run_command(binary(), binary(),
                   #{args => [binary()], env => [{binary(), binary()}],
                     preopen => file:filename_all(), writable => boolean(),
+                    preopens => [{binary(), file:filename_all(), boolean()}],
                     network => term(),
                     compile => boolean(), stub => boolean()}) ->
           {ok, #{stdout := binary(), stderr := binary(),
@@ -786,7 +798,7 @@ flush_stream(Handle) ->
 %% A socket-backed stream only borrows its socket's connection, which the
 %% tcp_socket resource owns and closes, so it is not closed here.
 close_resource({fs_file, {Handle, _Flags}})             -> _ = wasi_fs:close(Handle), ok;
-close_resource({fs_dir, Root})                          -> _ = wasi_fs:forget(Root), ok;
+close_resource({fs_dir, {Root, _}})                          -> _ = wasi_fs:forget(Root), ok;
 close_resource({output_stream, {file, own, Fh, _}})     -> _ = wasi_fs:close(Fh), ok;
 close_resource({output_stream, {file_append, own, Fh}}) -> _ = wasi_fs:close(Fh), ok;
 close_resource({input_stream, {file, Handle, _}})       -> _ = wasi_fs:close(Handle), ok;
@@ -901,18 +913,17 @@ the same call Preview 1 makes, so the same escapes are refused. Write intent is
 refused with `read-only`.
 """.
 -spec filesystem(#{preopen => file:filename_all(), name => binary(),
-                   writable => boolean()}) ->
+                   writable => boolean(),
+                   mounts => [{binary(), file:filename_all(), boolean()}]}) ->
           #{{binary(), binary()} => fun()}.
 filesystem(Opts) ->
-    HostDir = maps:get(preopen, Opts, none),
-    Name = maps:get(name, Opts, <<"/">>),
-    Writable = maps:get(writable, Opts, false),
+    Mounts = mounts_of(Opts),
     Types = <<"wasi:filesystem/types">>,
     Preopens = <<"wasi:filesystem/preopens">>,
     #{{Preopens, <<"get-directories">>} =>
           wasm_component:import_fun(
             {[], {list, {tuple, [handle, string]}}},
-            fun([]) -> get_directories(HostDir, Name) end),
+            fun([]) -> get_directories(Mounts) end),
       %% Map a stream error back to a filesystem error-code. Our stream errors do
       %% not carry one (a filesystem operation reports its code directly), so this
       %% is `none`: the io error was not a filesystem error.
@@ -933,7 +944,7 @@ filesystem(Opts) ->
           wasm_component:import_fun(
             {[handle, ?PATH_FLAGS, string, ?OPEN_FLAGS, ?DESC_FLAGS], ?OPEN_RESULT},
             fun([Dir, PF, Path, OpenFlags, DescFlags]) ->
-                open_at(Dir, PF, Path, OpenFlags, DescFlags, Writable)
+                open_at(Dir, PF, Path, OpenFlags, DescFlags)
             end),
       {Types, <<"[method]descriptor.write">>} =>
           wasm_component:import_fun(
@@ -942,33 +953,33 @@ filesystem(Opts) ->
       {Types, <<"[method]descriptor.create-directory-at">>} =>
           wasm_component:import_fun(
             {[handle, string], {result, none, ?ERROR_CODE}},
-            fun([Dir, Path]) -> create_directory_at(Dir, Path, Writable) end),
+            fun([Dir, Path]) -> create_directory_at(Dir, Path) end),
       {Types, <<"[method]descriptor.unlink-file-at">>} =>
           wasm_component:import_fun(
             {[handle, string], {result, none, ?ERROR_CODE}},
-            fun([Dir, Path]) -> unlink_file_at(Dir, Path, Writable) end),
+            fun([Dir, Path]) -> unlink_file_at(Dir, Path) end),
       {Types, <<"[method]descriptor.remove-directory-at">>} =>
           wasm_component:import_fun(
             {[handle, string], {result, none, ?ERROR_CODE}},
-            fun([Dir, Path]) -> remove_directory_at(Dir, Path, Writable) end),
+            fun([Dir, Path]) -> remove_directory_at(Dir, Path) end),
       {Types, <<"[method]descriptor.rename-at">>} =>
           wasm_component:import_fun(
             {[handle, string, handle, string], {result, none, ?ERROR_CODE}},
             fun([Dir, Path, NewDir, NewPath]) ->
-                rename_at(Dir, Path, NewDir, NewPath, Writable)
+                rename_at(Dir, Path, NewDir, NewPath)
             end),
       {Types, <<"[method]descriptor.symlink-at">>} =>
           wasm_component:import_fun(
             {[handle, string, string], {result, none, ?ERROR_CODE}},
             fun([Dir, OldPath, NewPath]) ->
-                symlink_at(Dir, OldPath, NewPath, Writable)
+                symlink_at(Dir, OldPath, NewPath)
             end),
       {Types, <<"[method]descriptor.link-at">>} =>
           wasm_component:import_fun(
             {[handle, ?PATH_FLAGS, string, handle, string],
              {result, none, ?ERROR_CODE}},
             fun([Dir, PathFlags, Path, NewDir, NewPath]) ->
-                link_at(Dir, PathFlags, Path, NewDir, NewPath, Writable)
+                link_at(Dir, PathFlags, Path, NewDir, NewPath)
             end),
       {Types, <<"[method]descriptor.readlink-at">>} =>
           wasm_component:import_fun(
@@ -977,17 +988,17 @@ filesystem(Opts) ->
       {Types, <<"[method]descriptor.set-size">>} =>
           wasm_component:import_fun(
             {[handle, u64], {result, none, ?ERROR_CODE}},
-            fun([File, Size]) -> set_size(File, Size, Writable) end),
+            fun([File, Size]) -> set_size(File, Size) end),
       {Types, <<"[method]descriptor.set-times">>} =>
           wasm_component:import_fun(
             {[handle, ?NEW_TIMESTAMP, ?NEW_TIMESTAMP], {result, none, ?ERROR_CODE}},
-            fun([H, Atime, Mtime]) -> set_times(H, Atime, Mtime, Writable) end),
+            fun([H, Atime, Mtime]) -> set_times(H, Atime, Mtime) end),
       {Types, <<"[method]descriptor.set-times-at">>} =>
           wasm_component:import_fun(
             {[handle, ?PATH_FLAGS, string, ?NEW_TIMESTAMP, ?NEW_TIMESTAMP],
              {result, none, ?ERROR_CODE}},
             fun([Dir, PathFlags, Path, Atime, Mtime]) ->
-                set_times_at(Dir, PathFlags, Path, Atime, Mtime, Writable)
+                set_times_at(Dir, PathFlags, Path, Atime, Mtime)
             end),
       {Types, <<"[method]descriptor.advise">>} =>
           wasm_component:import_fun(
@@ -1029,17 +1040,17 @@ filesystem(Opts) ->
             {[handle], ?OPEN_RESULT}, fun([Dir]) -> read_directory(Dir) end),
       {Types, <<"[method]descriptor.get-flags">>} =>
           wasm_component:import_fun(
-            {[handle], ?FLAGS_RESULT}, fun([H]) -> get_flags(H, Writable) end),
+            {[handle], ?FLAGS_RESULT}, fun([H]) -> get_flags(H) end),
       {Types, <<"[method]descriptor.metadata-hash">>} =>
           wasm_component:import_fun(
             {[handle], ?METADATA_HASH_RESULT}, fun([H]) -> metadata_hash(H) end),
       {Types, <<"[method]descriptor.write-via-stream">>} =>
           wasm_component:import_fun(
             {[handle, u64], ?OPEN_RESULT},
-            fun([H, Off]) -> write_via_stream(H, Off, Writable) end),
+            fun([H, Off]) -> write_via_stream(H, Off) end),
       {Types, <<"[method]descriptor.append-via-stream">>} =>
           wasm_component:import_fun(
-            {[handle], ?OPEN_RESULT}, fun([H]) -> append_via_stream(H, Writable) end),
+            {[handle], ?OPEN_RESULT}, fun([H]) -> append_via_stream(H) end),
       {Types, <<"[method]directory-entry-stream.read-directory-entry">>} =>
           wasm_component:import_fun(
             {[handle], ?DIR_ENTRY_RESULT},
@@ -1049,25 +1060,47 @@ filesystem(Opts) ->
       {Types, <<"[resource-drop]descriptor">>} =>
           fun(_Ctx, [H]) -> _ = fs_drop(H), {ok, []} end}.
 
-get_directories(none, _Name) ->
-    [];
-get_directories(HostDir, Name) ->
-    case wasi_fs:preopen(HostDir) of
-        {ok, Root} -> [{wasm_component:host_new(fs_dir, Root), Name}];
-        {error, _} -> []
+%% The mounts a filesystem slice offers: an explicit list of {name, dir, writable}
+%% for several preopens, or the single legacy preopen/name/writable.
+mounts_of(Opts) ->
+    case maps:find(mounts, Opts) of
+        {ok, Mounts} ->
+            Mounts;
+        error ->
+            case maps:find(preopen, Opts) of
+                {ok, Dir} -> [{maps:get(name, Opts, <<"/">>), Dir,
+                               maps:get(writable, Opts, false)}];
+                error     -> []
+            end
     end.
+
+%% Each mount becomes one preopened directory descriptor carrying its own
+%% writability, so a command can hold a read-only mount and a writable one at once
+%% and the mutation gates read the descriptor, not one mount-wide flag.
+get_directories(Mounts) ->
+    lists:flatmap(
+      fun({Name, HostDir, Writable}) ->
+          case wasi_fs:preopen(HostDir) of
+              {ok, Root} -> [{wasm_component:host_new(fs_dir, {Root, Writable}), Name}];
+              {error, _} -> []
+          end
+      end, Mounts).
 
 %% Open a path under a directory descriptor. Write intent is refused on a
 %% read-only filesystem and otherwise turned into open modes. The path is not
 %% resolved here: wasi_fs:open/3 applies the same sandbox Preview 1 does.
-open_at(Dir, PathFlags, Path, OpenFlags, DescFlags, Writable) ->
+open_at(Dir, PathFlags, Path, OpenFlags, DescFlags) ->
     case wasm_component:host_get(Dir) of
-        {ok, {fs_dir, Root}} ->
+        {ok, {fs_dir, {Root, Writable}}} ->
             case write_intent(OpenFlags, DescFlags) of
                 true when not Writable ->
-                    {error, <<"read-only">>};
+                    %% A descriptor without write rights (a read-only mount) refuses
+                    %% a write-intent open as not-permitted, the descriptor-rights
+                    %% error, not the read-only-filesystem one.
+                    {error, <<"not-permitted">>};
                 WantsWrite ->
-                    open_target(Root, PathFlags, Path, OpenFlags, DescFlags, WantsWrite)
+                    open_target(Root, Writable, PathFlags, Path,
+                                OpenFlags, DescFlags, WantsWrite)
             end;
         _ ->
             {error, <<"bad-descriptor">>}
@@ -1079,18 +1112,18 @@ open_at(Dir, PathFlags, Path, OpenFlags, DescFlags, Writable) ->
 %% reports. This mirrors Preview 1's path_open: a directory has a root and no file
 %% handle. A directory asked for with write intent is is-directory, and the
 %% `directory` open flag on a non-directory is not-directory.
-open_target(_Root, _PathFlags, Path, _OpenFlags, _DescFlags, _WantsWrite)
+open_target(_Root, _W, _PathFlags, Path, _OpenFlags, _DescFlags, _WantsWrite)
   when Path =:= <<>> ->
     {error, <<"invalid">>};
-open_target(Root, PathFlags, Path, OpenFlags, DescFlags, WantsWrite) ->
+open_target(Root, W, PathFlags, Path, OpenFlags, DescFlags, WantsWrite) ->
     case binary:match(Path, <<0>>) of
-        nomatch -> open_named(Root, PathFlags, Path, OpenFlags, DescFlags, WantsWrite);
+        nomatch -> open_named(Root, W, PathFlags, Path, OpenFlags, DescFlags, WantsWrite);
         %% A NUL truncates the name in C, so it must be refused, not silently
         %% opening whatever comes before it.
         _       -> {error, <<"invalid">>}
     end.
 
-open_named(Root, PathFlags, Path0, OpenFlags, DescFlags, WantsWrite) ->
+open_named(Root, W, PathFlags, Path0, OpenFlags, DescFlags, WantsWrite) ->
     %% A trailing slash names a directory: it forces the directory expectation and
     %% is stripped before the name reaches the backend, so a file named with one is
     %% not-directory rather than the backend's mishandling of the slash.
@@ -1102,7 +1135,7 @@ open_named(Root, PathFlags, Path0, OpenFlags, DescFlags, WantsWrite) ->
         {ok, #{type := directory}} when WantsWrite ->
             {error, <<"is-directory">>};
         {ok, #{type := directory}} ->
-            open_dir(Root, Path);
+            open_dir(Root, W, Path);
         {ok, _} when WantDir ->
             {error, <<"not-directory">>};
         {ok, _} ->
@@ -1121,9 +1154,9 @@ strip_trailing_slashes(Path) ->
         false -> Path
     end.
 
-open_dir(Root, Path) ->
+open_dir(Root, W, Path) ->
     case wasi_fs:open_dir_at(Root, Path) of
-        {ok, SubRoot} -> {ok, wasm_component:host_new(fs_dir, SubRoot)};
+        {ok, SubRoot} -> {ok, wasm_component:host_new(fs_dir, {SubRoot, W})};
         {error, Errno} -> {error, errno_name(Errno)}
     end.
 
@@ -1172,18 +1205,16 @@ open_modes(OpenFlags, DescFlags, WantsWrite) ->
 %% refused by the OS, so a read-only filesystem needs no extra guard here.
 %% A file-backed output stream, from the given offset (write) or the file end
 %% (append). Refused on a read-only filesystem. `write_stream` does the pwrite.
-write_via_stream(_File, _Off, false) ->
-    {error, <<"read-only">>};
-write_via_stream(File, Off, true) ->
+%% Writability is the file's own: a file opened without the write flag (which a
+%% read-only mount never grants) cannot make a write stream.
+write_via_stream(File, Off) ->
     case writable_file(File) of
         {ok, Handle}   -> {ok, wasm_component:host_new(output_stream,
                                                        output_file(Handle, {write, Off}))};
         {error, _} = E -> E
     end.
 
-append_via_stream(_File, false) ->
-    {error, <<"read-only">>};
-append_via_stream(File, true) ->
+append_via_stream(File) ->
     case writable_file(File) of
         {ok, Handle}   -> {ok, wasm_component:host_new(output_stream,
                                                        output_file(Handle, append))};
@@ -1212,6 +1243,11 @@ writable_file(File) ->
         {ok, {fs_file, {Handle, Flags}}} ->
             case lists:member(<<"write">>, Flags) of
                 true  -> {ok, Handle};
+                %% Opened without write rights: the preview1 fd_write contract
+                %% wants a bad descriptor here (the p1->p2 adapter's
+                %% path_open_read_write asserts EBADF/ENOTCAPABLE/EACCES), so a
+                %% read-only file's write stream is bad-descriptor, not
+                %% not-permitted.
                 false -> {error, <<"bad-descriptor">>}
             end;
         _ ->
@@ -1235,27 +1271,33 @@ write_at(File, Data, Off) ->
 %% `mutate-directory` descriptor flag: a native p2 host could enforce it, but doing
 %% so here would refuse every adapted preview1 program that mutates a directory. The
 %% mount's writable flag is therefore the boundary.
-create_directory_at(_Dir, _Path, false) ->
-    {error, <<"read-only">>};
-create_directory_at(Dir, Path, true) ->
-    case wasm_component:host_get(Dir) of
-        {ok, {fs_dir, Root}} -> fs_unit(wasi_fs:mkdir(Root, Path));
-        _                    -> {error, <<"bad-descriptor">>}
+create_directory_at(Dir, Path) ->
+    case writable_dir(Dir) of
+        {ok, Root}     -> fs_unit(wasi_fs:mkdir(Root, Path));
+        {error, _} = E -> E
     end.
 
-unlink_file_at(_Dir, _Path, false) ->
-    {error, <<"read-only">>};
-unlink_file_at(Dir, Path, true) ->
-    case wasm_component:host_get(Dir) of
-        {ok, {fs_dir, Root}} ->
+unlink_file_at(Dir, Path) ->
+    case writable_dir(Dir) of
+        {ok, Root} ->
             %% A trailing slash on a name that is not a directory is not-directory;
             %% on a directory, unlink itself reports is-directory / not-permitted.
             case trailing_slash(Path) andalso not is_dir(Root, Path) of
                 true  -> {error, <<"not-directory">>};
                 false -> fs_unit(wasi_fs:unlink(Root, Path))
             end;
-        _ ->
-            {error, <<"bad-descriptor">>}
+        {error, _} = E ->
+            E
+    end.
+
+%% A directory descriptor open for mutation: its own mount's writable flag governs
+%% here, so a read-only mount refuses while a writable one proceeds, and each
+%% descriptor carries the flag it was preopened or opened-at with.
+writable_dir(Dir) ->
+    case wasm_component:host_get(Dir) of
+        {ok, {fs_dir, {Root, true}}}   -> {ok, Root};
+        {ok, {fs_dir, {_Root, false}}} -> {error, <<"not-permitted">>};
+        _                              -> {error, <<"bad-descriptor">>}
     end.
 
 is_dir(Root, Path) ->
@@ -1271,46 +1313,39 @@ fs_unit(ok)             -> {ok, undefined};
 fs_unit({error, Errno}) -> {error, errno_name(Errno)}.
 
 %% Remove an empty directory. A mutation, so refused on a read-only mount.
-remove_directory_at(_Dir, _Path, false) ->
-    {error, <<"read-only">>};
-remove_directory_at(Dir, Path, true) ->
-    case wasm_component:host_get(Dir) of
-        {ok, {fs_dir, Root}} -> fs_unit(wasi_fs:rmdir(Root, Path));
-        _                    -> {error, <<"bad-descriptor">>}
+remove_directory_at(Dir, Path) ->
+    case writable_dir(Dir) of
+        {ok, Root}     -> fs_unit(wasi_fs:rmdir(Root, Path));
+        {error, _} = E -> E
     end.
 
-%% Rename within the sandbox. Both descriptors are directories; a mutation.
-rename_at(_Dir, _Path, _NewDir, _NewPath, false) ->
-    {error, <<"read-only">>};
-rename_at(Dir, Path, NewDir, NewPath, true) ->
-    with_two_dirs(Dir, NewDir,
-                  fun(From, To) ->
-                      fs_unit(wasi_fs:rename(From, Path, To, NewPath))
-                  end).
+%% Rename within the sandbox. Both descriptors are directories; a mutation, so both
+%% must be writable.
+rename_at(Dir, Path, NewDir, NewPath) ->
+    with_two_writable_dirs(Dir, NewDir,
+                           fun(From, To) ->
+                               fs_unit(wasi_fs:rename(From, Path, To, NewPath))
+                           end).
 
 %% Create a symlink at NewPath pointing at OldPath. An absolute target is refused
 %% at creation, as Preview 1 does, so a symlink can never name outside the sandbox.
-symlink_at(_Dir, _OldPath, _NewPath, false) ->
-    {error, <<"read-only">>};
-symlink_at(_Dir, <<$/, _/binary>>, _NewPath, true) ->
+symlink_at(_Dir, <<$/, _/binary>>, _NewPath) ->
     {error, <<"access">>};
-symlink_at(Dir, OldPath, NewPath, true) ->
+symlink_at(Dir, OldPath, NewPath) ->
     case trailing_slash(NewPath) of
         %% The link location ending in `/` names a directory that is not there.
         true ->
             {error, <<"no-entry">>};
         false ->
-            case wasm_component:host_get(Dir) of
-                {ok, {fs_dir, Root}} -> fs_unit(wasi_fs:symlink(Root, NewPath, OldPath));
-                _                    -> {error, <<"bad-descriptor">>}
+            case writable_dir(Dir) of
+                {ok, Root}     -> fs_unit(wasi_fs:symlink(Root, NewPath, OldPath));
+                {error, _} = E -> E
             end
     end.
 
 %% Hard-link Path under Dir to NewPath under NewDir. Following the source symlink
 %% is rejected as invalid, as Preview 1's path_link does.
-link_at(_Dir, _PathFlags, _Path, _NewDir, _NewPath, false) ->
-    {error, <<"read-only">>};
-link_at(Dir, PathFlags, Path, NewDir, NewPath, true) ->
+link_at(Dir, PathFlags, Path, NewDir, NewPath) ->
     case lists:member(<<"symlink-follow">>, PathFlags) of
         true ->
             {error, <<"invalid">>};
@@ -1320,22 +1355,25 @@ link_at(Dir, PathFlags, Path, NewDir, NewPath, true) ->
                 true ->
                     {error, <<"no-entry">>};
                 false ->
-                    with_two_dirs(Dir, NewDir,
-                                  fun(From, To) ->
-                                      fs_unit(wasi_fs:link(From, Path, To, NewPath))
-                                  end)
+                    with_two_writable_dirs(
+                      Dir, NewDir,
+                      fun(From, To) ->
+                          fs_unit(wasi_fs:link(From, Path, To, NewPath))
+                      end)
             end
     end.
 
-with_two_dirs(A, B, Fun) ->
-    case {wasm_component:host_get(A), wasm_component:host_get(B)} of
-        {{ok, {fs_dir, RA}}, {ok, {fs_dir, RB}}} -> Fun(RA, RB);
-        _                                        -> {error, <<"bad-descriptor">>}
+%% Both descriptors must be writable directories for a cross-directory mutation.
+with_two_writable_dirs(A, B, Fun) ->
+    case {writable_dir(A), writable_dir(B)} of
+        {{ok, RA}, {ok, RB}}        -> Fun(RA, RB);
+        {{error, _} = E, _}         -> E;
+        {_, {error, _} = E}         -> E
     end.
 
 readlink_at(Dir, Path) ->
     case wasm_component:host_get(Dir) of
-        {ok, {fs_dir, Root}} ->
+        {ok, {fs_dir, {Root, _}}} ->
             case wasi_fs:readlink(Root, Path) of
                 {ok, Target}   -> {ok, Target};
                 {error, Errno} -> {error, errno_name(Errno)}
@@ -1344,35 +1382,38 @@ readlink_at(Dir, Path) ->
             {error, <<"bad-descriptor">>}
     end.
 
-set_size(_File, _Size, false) ->
-    {error, <<"read-only">>};
-set_size(File, Size, true) ->
-    case wasm_component:host_get(File) of
-        {ok, {fs_file, {Handle, _}}} -> fs_unit(wasi_fs:truncate(Handle, Size));
-        _                       -> {error, <<"bad-descriptor">>}
+set_size(File, Size) ->
+    case writable_file(File) of
+        {ok, Handle}   -> fs_unit(wasi_fs:truncate(Handle, Size));
+        {error, _} = E -> E
     end.
 
-set_times(_H, _Atime, _Mtime, false) ->
-    {error, <<"read-only">>};
-set_times(H, Atime, Mtime, true) ->
+set_times(H, Atime, Mtime) ->
     case wasm_component:host_get(H) of
-        {ok, {fs_file, {Handle, _}}} ->
-            fs_unit(wasi_fs:set_times_fd(Handle, new_ts(Atime), new_ts(Mtime)));
-        {ok, {fs_dir, Root}} ->
-            fs_unit(wasi_fs:set_times(Root, <<".">>, new_ts(Atime), new_ts(Mtime)));
-        error ->
-            {error, <<"bad-descriptor">>}
-    end.
-
-set_times_at(_Dir, _PathFlags, _Path, _Atime, _Mtime, false) ->
-    {error, <<"read-only">>};
-set_times_at(Dir, PathFlags, Path, Atime, Mtime, true) ->
-    case wasm_component:host_get(Dir) of
-        {ok, {fs_dir, Root}} ->
-            fs_unit(wasi_fs:set_times(Root, Path, new_ts(Atime), new_ts(Mtime),
-                                      follow_of(PathFlags)));
+        {ok, {fs_file, _}} ->
+            case writable_file(H) of
+                {ok, Handle}   ->
+                    fs_unit(wasi_fs:set_times_fd(Handle, new_ts(Atime), new_ts(Mtime)));
+                {error, _} = E -> E
+            end;
+        {ok, {fs_dir, {_, _}}} ->
+            case writable_dir(H) of
+                {ok, Root}     ->
+                    fs_unit(wasi_fs:set_times(Root, <<".">>,
+                                              new_ts(Atime), new_ts(Mtime)));
+                {error, _} = E -> E
+            end;
         _ ->
             {error, <<"bad-descriptor">>}
+    end.
+
+set_times_at(Dir, PathFlags, Path, Atime, Mtime) ->
+    case writable_dir(Dir) of
+        {ok, Root} ->
+            fs_unit(wasi_fs:set_times(Root, Path, new_ts(Atime), new_ts(Mtime),
+                                      follow_of(PathFlags)));
+        {error, _} = E ->
+            E
     end.
 
 %% The new-timestamp variant: leave unchanged, set to now, or a given datetime.
@@ -1393,7 +1434,7 @@ follow_of(PathFlags) ->
 sync_fd(H) ->
     case wasm_component:host_get(H) of
         {ok, {fs_file, {Handle, _}}} -> fs_unit(wasi_fs:sync(Handle));
-        {ok, {fs_dir, _Root}}   -> {ok, undefined};
+        {ok, {fs_dir, {_Root, _}}}   -> {ok, undefined};
         error                   -> {error, <<"bad-descriptor">>}
     end.
 
@@ -1407,7 +1448,7 @@ is_same_object(A, B) ->
 ino(H) ->
     case wasm_component:host_get(H) of
         {ok, {fs_file, {Handle, _}}} -> ino_of(wasi_fs:stat_fd(Handle));
-        {ok, {fs_dir, Root}}    -> ino_of(wasi_fs:stat(Root, <<".">>));
+        {ok, {fs_dir, {Root, _}}}    -> ino_of(wasi_fs:stat(Root, <<".">>));
         error                   -> error
     end.
 
@@ -1416,7 +1457,7 @@ ino_of({error, _}) -> error.
 
 metadata_hash_at(Dir, PathFlags, Path) ->
     case wasm_component:host_get(Dir) of
-        {ok, {fs_dir, Root}} ->
+        {ok, {fs_dir, {Root, _}}} ->
             from_hash(wasi_fs:stat(Root, Path, follow_of(PathFlags)));
         _ ->
             {error, <<"bad-descriptor">>}
@@ -1442,7 +1483,7 @@ at_eof(Handle, Off, Got, Len) ->
 
 type_of(H) ->
     case wasm_component:host_get(H) of
-        {ok, {fs_dir, _Root}} ->
+        {ok, {fs_dir, {_Root, _}}} ->
             {ok, <<"directory">>};
         {ok, {fs_file, {Handle, _}}} ->
             case wasi_fs:stat_fd(Handle) of
@@ -1462,11 +1503,11 @@ descriptor_flags(true)  -> [<<"read">>, <<"write">>];
 descriptor_flags(false) -> [<<"read">>].
 
 %% A file reports the flags it was opened with; a directory reports the mount's.
-get_flags(H, Writable) ->
+get_flags(H) ->
     case wasm_component:host_get(H) of
         {ok, {fs_file, {_Handle, Flags}}} -> {ok, Flags};
-        {ok, {fs_dir, _Root}}             -> {ok, descriptor_flags(Writable)};
-        error                             -> {error, <<"bad-descriptor">>}
+        {ok, {fs_dir, {_Root, W}}}        -> {ok, descriptor_flags(W)};
+        _                                 -> {error, <<"bad-descriptor">>}
     end.
 
 %% A stable identity for a descriptor, from its inode; enough for a guest to tell
@@ -1474,7 +1515,7 @@ get_flags(H, Writable) ->
 metadata_hash(H) ->
     case wasm_component:host_get(H) of
         {ok, {fs_file, {Handle, _}}} -> from_hash(wasi_fs:stat_fd(Handle));
-        {ok, {fs_dir, Root}}    -> from_hash(wasi_fs:stat(Root, <<".">>));
+        {ok, {fs_dir, {Root, _}}}    -> from_hash(wasi_fs:stat(Root, <<".">>));
         error                   -> {error, <<"bad-descriptor">>}
     end.
 
@@ -1486,13 +1527,13 @@ from_hash({error, Errno}) ->
 stat(H) ->
     case wasm_component:host_get(H) of
         {ok, {fs_file, {Handle, _}}} -> from_stat(wasi_fs:stat_fd(Handle));
-        {ok, {fs_dir, Root}}    -> from_stat(wasi_fs:stat(Root, <<".">>));
+        {ok, {fs_dir, {Root, _}}}    -> from_stat(wasi_fs:stat(Root, <<".">>));
         error                   -> {error, <<"bad-descriptor">>}
     end.
 
 stat_at(Dir, PathFlags, Path) ->
     case wasm_component:host_get(Dir) of
-        {ok, {fs_dir, Root}} ->
+        {ok, {fs_dir, {Root, _}}} ->
             Follow = case lists:member(<<"symlink-follow">>, PathFlags) of
                          true -> follow;
                          false -> nofollow
@@ -1534,7 +1575,7 @@ read_via_stream(File, Off) ->
     %% later as a stream error, which is the error code the caller expects and how
     %% the eager read reported it.
     case wasm_component:host_get(File) of
-        {ok, {fs_dir, _}} -> {error, <<"is-directory">>};
+        {ok, {fs_dir, {_, _}}} -> {error, <<"is-directory">>};
         _                 -> read_via_stream_file(File, Off)
     end.
 
@@ -1580,7 +1621,7 @@ readable_file(File) ->
 
 read_directory(Dir) ->
     case wasm_component:host_get(Dir) of
-        {ok, {fs_dir, Root}} ->
+        {ok, {fs_dir, {Root, _}}} ->
             case wasi_fs:list(Root) of
                 {ok, Names} ->
                     Entries = [dir_entry(Root, N) || N <- Names],
@@ -2387,7 +2428,7 @@ ip_address({A, B, C, D, E, F, G, H}) ->
 fs_drop(H) ->
     case wasm_component:host_get(H) of
         {ok, {fs_file, {Handle, _}}} -> _ = wasi_fs:close(Handle);
-        {ok, {fs_dir, Root}}    -> _ = wasi_fs:forget(Root);
+        {ok, {fs_dir, {Root, _}}}    -> _ = wasi_fs:forget(Root);
         error                   -> ok
     end,
     wasm_component:host_drop(H).

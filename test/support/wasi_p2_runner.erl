@@ -126,10 +126,39 @@ config(Name, Preopen) ->
         default ->
             case group_name(Name) of
                 ~"sockets"    -> {<<>>, #{network => loopback()}};
-                ~"filesystem" -> {<<>>, #{preopen => Preopen, writable => true}};
+                ~"filesystem" -> fs_config(Name, Preopen);
                 _             -> {<<>>, #{}}
             end
     end.
+
+%% Filesystem programs get a writable scratch mount; the cross-permission ones
+%% also get a read-only mount named "readonly" holding the fixture file they read,
+%% and their scratch mount's name as the single argument they expect.
+fs_config(Name, Scratch) ->
+    case needs_readonly(Name) of
+        true ->
+            {<<>>, #{args => [list_to_binary(Name), <<"rw">>],
+                     preopens => [{<<"rw">>, Scratch, true},
+                                  {<<"readonly">>, readonly_mount(), false}]}};
+        false ->
+            {<<>>, #{preopen => Scratch, writable => true}}
+    end.
+
+needs_readonly("p2_file_rename_across_perms")   -> true;
+needs_readonly("p2_file_hardlink_across_perms") -> true;
+needs_readonly("p2_file_truncation_readonly")   -> true;
+needs_readonly("p2_file_stream_not_permitted")  -> true;
+needs_readonly(_)                               -> false.
+
+readonly_mount() ->
+    Dir = filename:join(tmp_dir(),
+                        "p2ro_" ++ integer_to_list(erlang:unique_integer([positive]))),
+    ok = filelib:ensure_path(Dir),
+    ok = file:write_file(filename:join(Dir, "test.txt"),
+                         <<"read only test file\n">>),
+    ok = file:write_file(filename:join(Dir, "stream-perms.txt"),
+                         <<"stream permission test\n">>),
+    Dir.
 
 %% The arguments, environment and stdin each program asserts. argv[0] is the
 %% program name (the guests skip it), so it leads the args list.

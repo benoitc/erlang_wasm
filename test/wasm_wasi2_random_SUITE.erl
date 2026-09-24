@@ -22,7 +22,8 @@ all() ->
     [random_bytes_have_the_requested_length,
      a_fixed_source_reaches_the_guest,
      the_default_source_varies,
-     an_absurd_random_length_is_refused].
+     an_absurd_random_length_is_refused,
+     the_insecure_interfaces_are_offered].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -69,6 +70,14 @@ an_absurd_random_length_is_refused(_Config) ->
     ?assertEqual(8, byte_size(wasi_preview2:random_bytes(8))),
     ?assertError(random_bytes_too_large,
                  wasi_preview2:random_bytes(16 * 1024 * 1024 + 1)).
+
+%% The insecure random interfaces of the wasi:random world are wired, so a guest
+%% that imports them links.
+the_insecure_interfaces_are_offered(_Config) ->
+    M = wasi_preview2:random(),
+    ?assert(maps:is_key({<<"wasi:random/insecure">>, <<"get-insecure-random-u64">>}, M)),
+    ?assert(maps:is_key({<<"wasi:random/insecure">>, <<"get-insecure-random-bytes">>}, M)),
+    ?assert(maps:is_key({<<"wasi:random/insecure-seed">>, <<"insecure-seed">>}, M)).
 
 %%% -------------------------------------------------------------- helpers ---
 

@@ -154,11 +154,24 @@ guest's own linear-memory limit when the result is lowered.
 -spec random() -> #{{binary(), binary()} => fun()}.
 random() ->
     I = <<"wasi:random/random">>,
+    Insecure = <<"wasi:random/insecure">>,
+    Seed = <<"wasi:random/insecure-seed">>,
+    %% The insecure interfaces do not need cryptographic strength, only speed and
+    %% independence; backing them by the same CSPRNG is stronger than required and
+    %% keeps one source of randomness.
     #{{I, <<"get-random-u64">>} =>
           wasm_component:import_fun({[], u64}, fun([]) -> random_u64() end),
       {I, <<"get-random-bytes">>} =>
           wasm_component:import_fun({[u64], {list, u8}},
-                                    fun([Len]) -> random_bytes(Len) end)}.
+                                    fun([Len]) -> random_bytes(Len) end),
+      {Insecure, <<"get-insecure-random-u64">>} =>
+          wasm_component:import_fun({[], u64}, fun([]) -> random_u64() end),
+      {Insecure, <<"get-insecure-random-bytes">>} =>
+          wasm_component:import_fun({[u64], {list, u8}},
+                                    fun([Len]) -> random_bytes(Len) end),
+      {Seed, <<"insecure-seed">>} =>
+          wasm_component:import_fun({[], {tuple, [u64, u64]}},
+                                    fun([]) -> {random_u64(), random_u64()} end)}.
 
 random_u64() ->
     <<X:64/unsigned>> = crypto:strong_rand_bytes(8),
@@ -853,8 +866,18 @@ filesystem(Opts) ->
       %% not carry one (a filesystem operation reports its code directly), so this
       %% is `none`: the io error was not a filesystem error.
       {Types, <<"filesystem-error-code">>} =>
-          wasm_component:import_fun({[handle], {option, ?ERROR_CODE}},
-                                    fun([_Err]) -> none end),
+          wasm_component:import_fun(
+            {[handle], {option, ?ERROR_CODE}},
+            fun([Err]) ->
+                %% A file stream mints its error resource carrying the raw errno,
+                %% which maps to a filesystem error-code; anything else is none.
+                case wasm_component:host_get(Err) of
+                    {ok, {error, Errno}} when is_integer(Errno) ->
+                        {some, errno_name(Errno)};
+                    _ ->
+                        none
+                end
+            end),
       {Types, <<"[method]descriptor.open-at">>} =>
           wasm_component:import_fun(
             {[handle, ?PATH_FLAGS, string, ?OPEN_FLAGS, ?DESC_FLAGS], ?OPEN_RESULT},
@@ -1585,6 +1608,11 @@ sockets(Opts) ->
       {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.subscribe">>} =>
           wasm_component:import_fun(
             {[handle], handle}, fun([_Self]) -> wasm_component:host_new(pollable, ready) end),
+      {<<"wasi:sockets/tcp">>, <<"[method]tcp-socket.shutdown">>} =>
+          wasm_component:import_fun(
+            {[handle, {enum, [<<"receive">>, <<"send">>, <<"both">>]}],
+             {result, none, ?SOCK_ERROR}},
+            fun([Self, How]) -> tcp_shutdown(Self, How) end),
       {<<"wasi:sockets/tcp">>, <<"[resource-drop]tcp-socket">>} =>
           fun(_Ctx, [H]) -> _ = tcp_drop(H), {ok, []} end,
       {<<"wasi:sockets/udp-create-socket">>, <<"create-udp-socket">>} =>
@@ -1774,6 +1802,21 @@ ip_sockaddr({A, B, C, D}, Port) ->
 ip_sockaddr({A, B, C, D, E, F, G, H}, Port) ->
     {<<"ipv6">>, #{<<"port">> => Port, <<"flow-info">> => 0,
                    <<"address">> => {A, B, C, D, E, F, G, H}, <<"scope-id">> => 0}}.
+
+tcp_shutdown(Self, How) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, {connected, Conn}}} ->
+            case wasi_sock:shutdown(Conn, shutdown_flags(How)) of
+                ok             -> {ok, undefined};
+                {error, Errno} -> {error, sock_errno(Errno)}
+            end;
+        _ ->
+            {error, <<"invalid-state">>}
+    end.
+
+shutdown_flags(<<"receive">>) -> ?SDFLAGS_RD;
+shutdown_flags(<<"send">>)    -> ?SDFLAGS_WR;
+shutdown_flags(<<"both">>)    -> ?SDFLAGS_RD bor ?SDFLAGS_WR.
 
 tcp_drop(H) ->
     case wasm_component:host_get(H) of

@@ -245,7 +245,13 @@ Destroy a component instance, freeing every core it built and sweeping the host
 resource tables. A resource may own an OS handle (a file descriptor, a socket)
 that GC does not reclaim, so `destroy/2` takes a closer the host layer supplies to
 close each one; `destroy/1` closes nothing, for pure components with no OS state.
-Call it from the process that ran the instance: the tables are process-scoped.
+
+The host resource tables are per-process, not per-instance, so `destroy` sweeps
+every live host resource in the calling process. The contract is therefore one
+live instance per process, destroyed from that same process: the worker runs one
+instance per request and destroys it in its runner, and the inline API instantiates
+and destroys in order in one process. Running two instances concurrently in one
+process and destroying one would free the other's handles; do not.
 """.
 -spec destroy(instance()) -> ok.
 destroy(Inst) ->
@@ -438,7 +444,12 @@ live() ->
 %% and drops it on `[resource-drop]`. Separate from the identity table: a
 %% host-owned resource has state and its own handle space.
 
--doc "Mint a fresh host-owned resource handle carrying `State`, tagged `Tag`.".
+-doc """
+Mint a fresh host-owned resource handle carrying `State`, tagged `Tag`.
+
+The table is per-process, shared by every instance in the process; `destroy`
+sweeps all of it, so the contract is one live instance per process (see `destroy/2`).
+""".
 -spec host_new(atom(), term()) -> pos_integer().
 host_new(Tag, State) ->
     Handle = case get(?HOST_NEXT) of undefined -> 1; N -> N end,

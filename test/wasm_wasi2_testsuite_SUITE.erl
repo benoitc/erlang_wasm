@@ -29,14 +29,17 @@ all() -> [preview2_cases, directories_present].
 %% `wasi:clocks` surface is implemented (no stubs); the c directory passes in
 %% full and rust to all but one case. What remains:
 %%
-%% The rust and c directories pass in full. What remains is assemblyscript:
-%% `args_get`/`environ_get` trip an adapter-internal assertion on the argument and
-%% environment layout (the same host serves rust and c, which pass, so it is a
-%% guest/adapter quirk, not this host), and `fd_write-to-invalid-fd` expects a
-%% specific non-zero exit the command model normalises away.
+%% The rust and c directories pass in full. The three assemblyscript failures are
+%% an upstream limitation of the wasmtime preview1 adapter, not this host: adapting
+%% these assemblyscript guests to a preview2 component produces a module that traps
+%% on the adapter's own assertion ("assertion failed at adapter line ~2858") and
+%% aborts *on wasmtime itself*, reproduced across every adapter version tried
+%% (v24 through v48). The same programs pass as native preview1 on wasmtime and on
+%% this runtime (`wasi_conformance_SUITE` is zero-fail), so the WASI behaviour is
+%% correct; only the assemblyscript-through-adapter path is broken, and no host
+%% change or adapter version fixes it. This is the ceiling for the adapter route.
 %%
-%% Lower these as the fidelity work lands; the `stale_baseline` guard forbids
-%% leaving a number too high.
+%% The `stale_baseline` guard forbids leaving a number too high.
 baseline() ->
     #{~"assemblyscript/wasm32-wasip1" => 3,
       ~"c/wasm32-wasip1" => 0,

@@ -66,9 +66,9 @@ run_case(Wasm, Spec) ->
     end.
 
 %% Run the adapted component through the command entry, with the case's arguments,
-%% environment and (when it names a root) a writable preopen. Unimplemented
-%% preview2 imports are stubbed, so a program that only reaches implemented ones
-%% runs; `compile` avoids the load cache's rate limit over a whole directory.
+%% environment and (when it names a root) a writable preopen. The whole preview2
+%% surface is implemented, so no imports are stubbed; `compile` avoids the load
+%% cache's rate limit over a whole directory.
 run_collecting(Component, Wasm, Spec) ->
     Config = wasi_testsuite_runner:config(Wasm, Spec),
     Opts = maps:merge(dir_opt(Config),

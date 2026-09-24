@@ -52,6 +52,7 @@ later step.
 -define(WRITE_BUDGET, 65536).
 %% Where cli_exit records the status for run_command to read (same process).
 -define(EXIT_STATUS, {?MODULE, exit_status}).
+-define(INSECURE_SEED, {?MODULE, insecure_seed}).
 
 %% wasi:filesystem enums, in WIT order (the enum discriminant is the index).
 -define(ERROR_CODE,
@@ -183,7 +184,16 @@ random() ->
                                     fun([Len]) -> random_bytes(Len) end),
       {Seed, <<"insecure-seed">>} =>
           wasm_component:import_fun({[], {tuple, [u64, u64]}},
-                                    fun([]) -> {random_u64(), random_u64()} end)}.
+                                    fun([]) -> insecure_seed() end)}.
+
+%% The insecure seed is a fixed 128-bit value for the life of the instance: a
+%% guest seeds a pseudo-random generator with it and every call must return the
+%% same seed. The instance runs in one process, so it is cached there.
+insecure_seed() ->
+    case get(?INSECURE_SEED) of
+        undefined -> V = {random_u64(), random_u64()}, put(?INSECURE_SEED, V), V;
+        V         -> V
+    end.
 
 random_u64() ->
     <<X:64/unsigned>> = crypto:strong_rand_bytes(8),
@@ -484,6 +494,7 @@ give the command a directory to read (a mount), or `network => Grant` to grant t
                  exit_code := integer()}} | {error, term()}.
 run_command(Bin, Stdin, Extra) ->
     _ = erase(?EXIT_STATUS),
+    _ = erase(?INSECURE_SEED),
     OutRef = make_ref(),
     ErrRef = make_ref(),
     Self = self(),

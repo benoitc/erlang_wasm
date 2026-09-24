@@ -36,7 +36,7 @@ baseline() ->
       ~"clocks"     => 0,
       ~"filesystem" => 1,
       ~"io"         => 2,
-      ~"random"     => 1,
+      ~"random"     => 0,
       ~"sockets"    => 15}.
 
 init_per_suite(Config) ->

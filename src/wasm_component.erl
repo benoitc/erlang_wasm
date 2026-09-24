@@ -43,7 +43,8 @@ lower/lift, and the async Canonical ABI.
                          sec := binary(), entry_idx := non_neg_integer(),
                          exports := [binary()]}.
 -opaque instance() :: #{core := wasm:instance(), exports := [binary()],
-                        cores := [wasm:instance()]}.
+                        cores := [wasm:instance()],
+                        export_map => #{binary() => binary()}}.
 
 -define(CORE_MODULE_SEC, 1).
 -define(EXPORT_SEC, 11).
@@ -188,19 +189,37 @@ instantiate(Bin, Imports, Opts) ->
           end
       end).
 
-instantiate_decoded(#{core := Core, exports := Exports} = Decoded,
+instantiate_decoded(#{core := Core, exports := Exports, sec := Sec} = Decoded,
                     Imports, Opts, Limits) ->
     Loader = maps:get(loader, Opts, load),
     EntryImports = wasm_component_link:core_imports(Core),
     Host = resolve_imports(EntryImports, Imports, resource_imports(EntryImports)),
+    %% The export map lets `call/4` reach a core function whose name differs from the
+    %% component export name; where they coincide it is the identity and the same-name
+    %% fallback in `call/4` covers exports it does not resolve.
+    ExportMap = wasm_component_link:export_map(Sec),
     %% Imports the host set does not cover are wired from other cores of this
     %% component (the linker); a program that asks for WASI directly has none, so
     %% it stays on the single-core path unchanged.
-    case [K || K <- EntryImports, not maps:is_key(K, Host)] of
-        [] ->
-            start(Loader, Core, Host, Limits, Exports, []);
-        _Leftovers ->
-            link_in(Decoded, Imports, Opts)
+    Result = case [K || K <- EntryImports, not maps:is_key(K, Host)] of
+                 [] ->
+                     start(Loader, Core, Host, Limits, Exports, []);
+                 _Leftovers ->
+                     link_in(Decoded, Imports, Opts)
+             end,
+    with_export_map(Result, ExportMap).
+
+with_export_map({ok, Inst}, ExportMap) -> {ok, Inst#{export_map => ExportMap}};
+with_export_map(Other, _ExportMap)     -> Other.
+
+%% The core function that implements a component export. A core export of the same
+%% name is used directly, so a working component is never affected; only when the
+%% export name is not a core export is the export map consulted for the renamed core
+%% function, with the same name as the last fallback.
+resolve_export(#{core := Inst} = I, Export) ->
+    case maps:is_key(Export, wasm:exports(Inst)) of
+        true  -> Export;
+        false -> maps:get(Export, maps:get(export_map, I, #{}), Export)
     end.
 
 %% The entry core imports something the host set does not cover (another core's
@@ -297,12 +316,13 @@ The post-return `cabi_post_<Export>` is run after the result is lifted.
 -spec call(instance(), binary(),
            {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
           {ok, term()} | {error, term()}.
-call(#{core := Inst}, Export, {Params, Result}, Args) ->
+call(#{core := Inst} = I, Export, {Params, Result}, Args) ->
+    CoreName = resolve_export(I, Export),
     CoreArgs = wasm_canon:lower_params(Inst, Params, Args),
-    case wasm:call(Inst, Export, CoreArgs) of
+    case wasm:call(Inst, CoreName, CoreArgs) of
         {ok, CoreResults} ->
             Value = lift_call_result(Inst, Result, CoreResults),
-            _ = post_return(Inst, Export, CoreResults),
+            _ = post_return(Inst, CoreName, CoreResults),
             {ok, Value};
         {error, _} = E ->
             E

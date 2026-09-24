@@ -27,7 +27,7 @@ error value carrying a kind and context, and no name a component supplies become
 an atom.
 """.
 
--export([parse/1, link/4, core_imports/1]).
+-export([parse/1, link/4, core_imports/1, export_map/1]).
 
 -export_type([graph/0, item/0]).
 
@@ -44,7 +44,8 @@ an atom.
       | {canon_lift, non_neg_integer()}
       | {canon_resource, new | drop | rep, non_neg_integer()}
       | {comp_import_instance, binary()}
-      | {comp_import_func, binary()}.
+      | {comp_import_func, binary()}
+      | {comp_export, binary(), byte(), non_neg_integer()}.
 
 -type core_sort() :: func | table | memory | global.
 
@@ -55,6 +56,7 @@ an atom.
 -define(SEC_ALIAS, 6).
 -define(SEC_CANON, 8).
 -define(SEC_COMP_IMPORT, 10).
+-define(SEC_EXPORT, 11).
 
 %% The import section id inside a *core* module's own section stream (not a
 %% component section).
@@ -96,8 +98,80 @@ section(?SEC_CANON, Content) ->
     vec(Content, fun canon/1, fun(E) -> E end);
 section(?SEC_COMP_IMPORT, Content) ->
     vec(Content, fun comp_import/1, fun(E) -> E end);
+section(?SEC_EXPORT, Content) ->
+    %% Export entries are advisory for linking (see `export_map/1`); an entry shape
+    %% this parser does not read must not break the whole parse, so a failure here
+    %% yields no export items rather than raising.
+    try vec(Content, fun comp_export/1, fun(E) -> E end)
+    catch
+        _:_ -> {ok, []}
+    end;
 section(_Other, _Content) ->
     {ok, []}.
+
+%% A component export: a name, a sort byte and an index into that sort's space.
+%% Only func exports (sort 1) are resolved to a core function; the rest are carried
+%% so linking can skip them without misreading the section.
+comp_export(<<_Kind, R0/binary>>) ->
+    {Len, R1} = wasm_leb128:u32(R0),
+    <<Name:Len/binary, R2/binary>> = R1,
+    <<Sort, R3/binary>> = R2,
+    {Idx, R4} = wasm_leb128:u32(R3),
+    {{comp_export, Name, Sort, Idx}, R4}.
+
+-doc """
+Map each component func export name to the core function that implements it.
+
+Resolves the export section (name -> component-func index) through the graph
+(component-func index -> `canon lift` of a core-func index -> the core alias'
+export name), so an export renamed from its core function is callable by its
+component name. An export that does not resolve to a lifted core function (an
+instance export, an imported function) is omitted, and the caller falls back to the
+name it was given.
+""".
+-spec export_map(binary()) -> #{binary() => binary()}.
+export_map(Sec) ->
+    %% Never fail: an export section this parser cannot read yields an empty map, and
+    %% the caller falls back to calling the export by its own name.
+    try
+        case parse(Sec) of
+            {ok, Graph} ->
+                {CompFuncs, CoreNames} = index_spaces(Graph),
+                maps:from_list(
+                  [{Name, CoreName}
+                   || {comp_export, Name, 1, Idx} <- Graph,
+                      {lift, CFI} <- [maps:get(Idx, CompFuncs, undefined)],
+                      CoreName <- [maps:get(CFI, CoreNames, undefined)],
+                      is_binary(CoreName)]);
+            {error, _} ->
+                #{}
+        end
+    catch
+        _:_ -> #{}
+    end.
+
+%% Fold the graph into the component-func index space (index -> what implements it)
+%% and the core-func index space (index -> the core export name it aliases), in the
+%% same order `step/2` assigns them.
+index_spaces(Graph) ->
+    {CompF, CoreN, _PF, _CF} =
+        lists:foldl(fun index_step/2, {#{}, #{}, 0, 0}, Graph),
+    {CompF, CoreN}.
+
+index_step({comp_import_func, _}, {CompF, CoreN, PF, CF}) ->
+    {CompF#{PF => import}, CoreN, PF + 1, CF};
+index_step({comp_func_alias, _, _}, {CompF, CoreN, PF, CF}) ->
+    {CompF#{PF => alias}, CoreN, PF + 1, CF};
+index_step({canon_lift, CFI}, {CompF, CoreN, PF, CF}) ->
+    {CompF#{PF => {lift, CFI}}, CoreN, PF + 1, CF};
+index_step({canon_lower, _, _}, {CompF, CoreN, PF, CF}) ->
+    {CompF, CoreN, PF, CF + 1};
+index_step({canon_resource, _, _}, {CompF, CoreN, PF, CF}) ->
+    {CompF, CoreN, PF, CF + 1};
+index_step({core_alias, func, _InstIdx, Name}, {CompF, CoreN, PF, CF}) ->
+    {CompF, CoreN#{CF => Name}, PF, CF + 1};
+index_step(_Other, Acc) ->
+    Acc.
 
 %% Read a vec(count, entries), applying Parse to each and Wrap to the result.
 %% Parse returns `{Entry, Rest}` or `skip` (an entry that defines no item, e.g. a
@@ -183,6 +257,10 @@ fold([Item | Rest], S) ->
     end.
 
 step({core_module, _}, S) ->
+    {ok, S};
+step({comp_export, _Name, _Sort, _Idx}, S) ->
+    %% Export entries name what the component offers; they do not wire anything, so
+    %% linking skips them (`export_map/1` reads them instead).
     {ok, S};
 step({comp_import_instance, Name}, S) ->
     {ok, bump(S, n_pi, comp_insts, Name)};

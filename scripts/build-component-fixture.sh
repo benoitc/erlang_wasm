@@ -72,7 +72,7 @@ done
 # `statecore` has one core with a mutable global exported as `bump`, so a per-request
 # cold instance returns 1 every call and a reused one would climb: it proves the
 # worker gives each request a fresh component instance.
-for name in twocore twocore_trap statecore; do
+for name in twocore twocore_trap statecore renamedexport; do
   wat="$here/test/fixtures/component/$name/$name.wat"
   out="$here/test/fixtures/component/$name.component.wasm"
   wasm-tools parse "$wat" -o "$out"

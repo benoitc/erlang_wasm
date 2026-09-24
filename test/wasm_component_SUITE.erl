@@ -20,7 +20,8 @@ all() ->
      the_component_decodes_to_its_core_and_exports,
      a_component_round_trips_bytes_in_and_out,
      a_result_error_lifts_as_the_error_string,
-     a_truncated_component_is_an_error_not_a_crash].
+     a_truncated_component_is_an_error_not_a_crash,
+     a_renamed_export_is_called_through_its_wiring].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -77,9 +78,23 @@ a_truncated_component_is_an_error_not_a_crash(_Config) ->
           end
       end, lists:seq(8, byte_size(Good))).
 
+%% The component export "step" is implemented by the core function "bump"; calling
+%% by the component name reaches it through the export wiring. Fail-first: without
+%% the export map, call/4 used the component name as a core export name and got
+%% unknown_export.
+a_renamed_export_is_called_through_its_wiring(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("renamedexport.component.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 1}, wasm_component:call(I, <<"step">>, {[], u32}, [])),
+    ?assertEqual({ok, 2}, wasm_component:call(I, <<"step">>, {[], u32}, [])),
+    wasm_component:destroy(I).
+
 fixture_path() ->
+    component_fixture("echo.component.wasm").
+
+component_fixture(Name) ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
-                   "test", "fixtures", "component", "echo.component.wasm"]).
+                   "test", "fixtures", "component", Name]).
 
 twocore_path() ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",

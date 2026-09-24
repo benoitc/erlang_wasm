@@ -15,7 +15,7 @@ uses HTTP/1.1 (`h1`). Requests are gated by the same `wasi_net` grant the socket
 slice uses, so a component reaches only a granted authority.
 """.
 
--export([http/1]).
+-export([http/1, append_body/2]).
 
 %%% ---------------------------------------------------------------- types ---
 
@@ -90,19 +90,46 @@ slice uses, so a component reaches only a granted authority.
 The `wasi:http/types` + `outgoing-handler` import map. `Opts` carries the
 `grant` (a `wasi_net` grant) the outbound request is checked against.
 """.
--spec http(#{grant => term()}) -> #{{binary(), binary()} => fun()}.
+-spec http(#{grant => term(), transport => module()}) ->
+          #{{binary(), binary()} => fun()}.
 http(Opts) ->
     Grant = wasi_net:grant(maps:get(grant, Opts, none)),
+    Transport = maps:get(transport, Opts, wasi_http_h1),
     T = <<"wasi:http/types">>,
     H = <<"wasi:http/outgoing-handler">>,
     #{%% fields
+      {T, <<"[constructor]fields">>} =>
+          wasm_component:import_fun(
+            {[], handle}, fun([]) -> wasm_component:host_new(http_fields, []) end),
       {T, <<"[static]fields.from-list">>} =>
           wasm_component:import_fun(
             {[{list, ?FIELD_ENTRY}], {result, handle, ?HEADER_ERROR}},
             fun([Entries]) -> fields_from_list(Entries) end),
+      {T, <<"[method]fields.get">>} =>
+          wasm_component:import_fun(
+            {[handle, string], {list, {list, u8}}},
+            fun([F, N]) -> fields_get(F, N) end),
+      {T, <<"[method]fields.has">>} =>
+          wasm_component:import_fun(
+            {[handle, string], bool}, fun([F, N]) -> fields_has(F, N) end),
+      {T, <<"[method]fields.set">>} =>
+          wasm_component:import_fun(
+            {[handle, string, {list, {list, u8}}], {result, none, ?HEADER_ERROR}},
+            fun([F, N, Vs]) -> fields_set(F, N, Vs) end),
+      {T, <<"[method]fields.delete">>} =>
+          wasm_component:import_fun(
+            {[handle, string], {result, none, ?HEADER_ERROR}},
+            fun([F, N]) -> fields_delete(F, N) end),
+      {T, <<"[method]fields.append">>} =>
+          wasm_component:import_fun(
+            {[handle, string, {list, u8}], {result, none, ?HEADER_ERROR}},
+            fun([F, N, V]) -> fields_append(F, N, V) end),
       {T, <<"[method]fields.entries">>} =>
           wasm_component:import_fun(
             {[handle], {list, ?FIELD_ENTRY}}, fun([F]) -> fields_entries(F) end),
+      {T, <<"[method]fields.clone">>} =>
+          wasm_component:import_fun(
+            {[handle], handle}, fun([F]) -> fields_clone(F) end),
       {T, <<"[resource-drop]fields">>} => drop(),
       %% request-options
       {T, <<"[constructor]request-options">>} =>
@@ -183,7 +210,7 @@ http(Opts) ->
           wasm_component:import_fun(
             {[handle, {option, handle}],
              {result, handle, ?ERROR_CODE}},
-            fun([Req, _Opts]) -> handle(Req, Grant) end)}.
+            fun([Req, _Opts]) -> handle(Req, Grant, Transport) end)}.
 
 %%% -------------------------------------------------------------- fields ---
 
@@ -195,6 +222,35 @@ fields_entries(F) ->
         {ok, {http_fields, List}} -> [{N, V} || {N, V} <- List];
         _                         -> []
     end.
+
+fields_list(F) ->
+    case wasm_component:host_get(F) of
+        {ok, {http_fields, List}} -> List;
+        _                         -> []
+    end.
+
+fields_get(F, Name) ->
+    [V || {N, V} <- fields_list(F), N =:= Name].
+
+fields_has(F, Name) ->
+    lists:keymember(Name, 1, fields_list(F)).
+
+%% set replaces all values for the name (kept together where the first was).
+fields_set(F, Name, Values) ->
+    Rest = [{N, V} || {N, V} <- fields_list(F), N =/= Name],
+    _ = wasm_component:host_update(F, Rest ++ [{Name, V} || V <- Values]),
+    {ok, undefined}.
+
+fields_delete(F, Name) ->
+    _ = wasm_component:host_update(F, [{N, V} || {N, V} <- fields_list(F), N =/= Name]),
+    {ok, undefined}.
+
+fields_append(F, Name, Value) ->
+    _ = wasm_component:host_update(F, fields_list(F) ++ [{Name, Value}]),
+    {ok, undefined}.
+
+fields_clone(F) ->
+    wasm_component:host_new(http_fields, fields_list(F)).
 
 %%% ----------------------------------------------------- outgoing-request ---
 
@@ -217,93 +273,82 @@ set_req(R, Key, Value) ->
             {error, undefined}
     end.
 
-%% One outgoing-body per request, writing into the request's body buffer.
+%% One outgoing-body per request, with its own buffer that outlives the request
+%% handle (the guest writes the body after handing the request to the handler).
 request_body(R) ->
     case wasm_component:host_get(R) of
-        {ok, {http_out_req, _}} -> {ok, wasm_component:host_new(http_out_body, R)};
-        _                       -> {error, undefined}
-    end.
-
-%%% -------------------------------------------------------- outgoing-body ---
-
-%% The body's write stream appends to the owning request's body buffer.
-body_write(B) ->
-    case wasm_component:host_get(B) of
-        {ok, {http_out_body, Req}} ->
-            {ok, wasm_component:host_new(output_stream, {http_body, Req})};
+        {ok, {http_out_req, Req}} ->
+            BodyH = wasm_component:host_new(http_out_body, <<>>),
+            _ = wasm_component:host_update(R, Req#{body_handle => BodyH}),
+            {ok, BodyH};
         _ ->
             {error, undefined}
     end.
 
-body_finish(_B) ->
+%%% -------------------------------------------------------- outgoing-body ---
+
+%% The body's write stream appends to the outgoing-body's own buffer.
+body_write(B) ->
+    case wasm_component:host_get(B) of
+        {ok, {http_out_body, _Buffer}} ->
+            {ok, wasm_component:host_new(output_stream, {http_body, B})};
+        _ ->
+            {error, undefined}
+    end.
+
+%% finish consumes the outgoing-body (the guest drops the handle after), so snapshot
+%% its buffer where the future can still read it once the request is performed.
+body_finish(B) ->
+    case wasm_component:host_get(B) of
+        {ok, {http_out_body, Buffer}} -> put({http_final_body, B}, Buffer);
+        _                             -> ok
+    end,
     {ok, undefined}.
+
+-doc "Append bytes to an outgoing-body's buffer (its write stream).".
+-spec append_body(term(), binary()) -> ok.
+append_body(B, Bytes) ->
+    case wasm_component:host_get(B) of
+        {ok, {http_out_body, Buffer}} ->
+            _ = wasm_component:host_update(B, <<Buffer/binary, Bytes/binary>>),
+            ok;
+        _ ->
+            ok
+    end.
 
 %%% ------------------------------------------------------------- handle ---
 
-%% Perform the request now (a synchronous client), storing the result in a
-%% future-incoming-response the guest reads back. A denied authority or a failed
-%% request is an http error-code.
-handle(Req, Grant) ->
+%% handle takes the request but does not send yet: the guest writes the body to the
+%% outgoing-body stream after this returns. The request is captured into a pending
+%% future and performed when the guest first reads the future (by which time the
+%% body is written and finished).
+handle(Req, Grant, Transport) ->
     case wasm_component:host_get(Req) of
-        {ok, {http_out_req, R}} ->
-            {ok, wasm_component:host_new(http_future, perform(R, Grant))};
+        {ok, {http_out_req, Map}} ->
+            {ok, wasm_component:host_new(http_future,
+                                        {pending, Map, Grant, Transport})};
         _ ->
             {error, {<<"HTTP-request-URI-invalid">>, none}}
     end.
 
-perform(#{authority := Authority} = R, Grant) ->
+%% Resolve the authority and grant, then hand the abstract request to the pluggable
+%% transport (h1 by default). The wire protocol is the transport's concern.
+perform(#{authority := Authority} = R, Grant, Transport) ->
     case authority_endpoint(Authority) of
         {error, _} = E ->
             E;
         {ok, Host, Port} ->
             case wasi_net:allows(connect, {tcp, resolve_host(Host), Port}, Grant) of
-                false -> {error, {<<"HTTP-request-denied">>, none}};
-                true  -> do_request(Host, Port, R)
+                false ->
+                    {error, {<<"HTTP-request-denied">>, none}};
+                true ->
+                    Transport:request(
+                      #{host => Host, port => Port,
+                        method => maps:get(method, R), path => maps:get(path, R),
+                        headers => maps:get(headers, R), body => maps:get(body, R)},
+                      ?HTTP_TIMEOUT)
             end
     end.
-
-do_request(Host, Port, #{method := Method, path := Path, headers := Headers,
-                         body := Body}) ->
-    case h1:connect(Host, Port, #{}) of
-        {ok, Conn} ->
-            HdrList = [{N, V} || {N, V} <- Headers],
-            Result =
-                case h1:request(Conn, Method, Path, HdrList, Body) of
-                    {ok, Sid} -> collect(Conn, Sid);
-                    {error, _} -> {error, {<<"HTTP-protocol-error">>, none}}
-                end,
-            _ = h1:close(Conn),
-            Result;
-        {error, _} ->
-            {error, {<<"connection-refused">>, none}}
-    end.
-
-collect(Conn, Sid) ->
-    receive
-        {h1, Conn, {response, Sid, Status, Headers}} ->
-            collect_body(Conn, Sid, Status, Headers, <<>>);
-        {h1, Conn, {closed, _}} ->
-            {error, {<<"HTTP-response-incomplete">>, none}}
-    after ?HTTP_TIMEOUT ->
-        {error, {<<"HTTP-response-timeout">>, none}}
-    end.
-
-collect_body(Conn, Sid, Status, Headers, Acc) ->
-    receive
-        {h1, Conn, {data, Sid, Data, false}} ->
-            collect_body(Conn, Sid, Status, Headers, <<Acc/binary, Data/binary>>);
-        {h1, Conn, {data, Sid, Data, true}} ->
-            {ok, Status, header_pairs(Headers), <<Acc/binary, Data/binary>>};
-        {h1, Conn, {trailers, Sid, _}} ->
-            {ok, Status, header_pairs(Headers), Acc}
-    after ?HTTP_TIMEOUT ->
-        {error, {<<"HTTP-response-timeout">>, none}}
-    end.
-
-header_pairs(Headers) ->
-    [{to_bin(N), to_bin(V)} || {N, V} <- Headers, is_field(N)].
-
-is_field(N) -> binary:first(to_bin(N)) =/= $:.
 
 %%% --------------------------------------------- future/incoming-response ---
 
@@ -313,12 +358,30 @@ future_get(F) ->
     case wasm_component:host_get(F) of
         {ok, {http_future, taken}} ->
             none;
-        {ok, {http_future, Result}} ->
+        {ok, {http_future, {pending, Map, Grant, Transport}}} ->
+            Result = perform(resolve_body(Map), Grant, Transport),
             _ = wasm_component:host_update(F, taken),
             {some, {ok, future_result(Result)}};
         _ ->
             none
     end.
+
+%% Read the body the guest wrote to the request's outgoing-body, if it made one.
+%% finish snapshots it (the handle is dropped by then), so prefer the snapshot and
+%% fall back to a still-live body handle.
+resolve_body(#{body_handle := BodyH} = Map) ->
+    Body = case erase({http_final_body, BodyH}) of
+               undefined ->
+                   case wasm_component:host_get(BodyH) of
+                       {ok, {http_out_body, Buf}} -> Buf;
+                       _                          -> <<>>
+                   end;
+               Snapshot ->
+                   Snapshot
+           end,
+    Map#{body => Body};
+resolve_body(Map) ->
+    Map.
 
 future_result({ok, Status, Headers, Body}) ->
     {ok, wasm_component:host_new(http_in_resp,
@@ -394,6 +457,3 @@ resolve_host(Host) ->
         {ok, Ip} -> Ip;
         _        -> {127, 0, 0, 1}
     end.
-
-to_bin(B) when is_binary(B) -> B;
-to_bin(L) when is_list(L)   -> list_to_binary(L).

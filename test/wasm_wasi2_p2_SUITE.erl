@@ -36,7 +36,7 @@ baseline() ->
       ~"clocks"     => 0,
       ~"filesystem" => 1,
       ~"io"         => 2,
-      ~"http"       => 11,
+      ~"http"       => 9,
       ~"random"     => 0,
       ~"sockets"    => 12}.
 

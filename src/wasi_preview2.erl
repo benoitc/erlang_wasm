@@ -748,6 +748,10 @@ write_stream(Handle, Bytes) ->
                 ok             -> ok;
                 {error, Errno} -> {error, sock_errno(Errno)}
             end;
+        {ok, {output_stream, {http_body, Req}}} ->
+            %% An outgoing HTTP request body: append to the request the body
+            %% belongs to, so outgoing-handler sends what the guest wrote.
+            wasi_http:append_body(Req, Bytes);
         {ok, {output_stream, Sink}} when is_function(Sink) ->
             _ = Sink(Bytes), ok;
         _ ->

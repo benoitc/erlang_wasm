@@ -15,7 +15,7 @@ uses HTTP/1.1 (`h1`). Requests are gated by the same `wasi_net` grant the socket
 slice uses, so a component reaches only a granted authority.
 """.
 
--export([http/1, append_body/2]).
+-export([http/1, append_body/2, incoming_request/1, read_outparam/1]).
 
 %%% ---------------------------------------------------------------- types ---
 
@@ -156,15 +156,18 @@ http(Opts) ->
       {T, <<"[method]outgoing-request.set-path-with-query">>} =>
           wasm_component:import_fun(
             {[handle, {option, string}], {result, none, none}},
-            fun([R, P]) -> set_req(R, path, opt(P)) end),
+            fun([R, P]) -> set_path(R, opt(P)) end),
       {T, <<"[method]outgoing-request.set-scheme">>} =>
           wasm_component:import_fun(
             {[handle, {option, ?SCHEME}], {result, none, none}},
-            fun([R, S]) -> set_req(R, scheme, scheme_opt(S)) end),
+            fun([R, S]) -> set_scheme(R, S) end),
       {T, <<"[method]outgoing-request.set-authority">>} =>
           wasm_component:import_fun(
             {[handle, {option, string}], {result, none, none}},
-            fun([R, A]) -> set_req(R, authority, opt(A)) end),
+            fun([R, A]) -> set_authority(R, opt(A)) end),
+      {T, <<"[method]outgoing-request.headers">>} =>
+          wasm_component:import_fun(
+            {[handle], handle}, fun([R]) -> out_req_headers(R) end),
       {T, <<"[method]outgoing-request.body">>} =>
           wasm_component:import_fun(
             {[handle], {result, handle, none}}, fun([R]) -> request_body(R) end),
@@ -205,6 +208,56 @@ http(Opts) ->
           wasm_component:import_fun(
             {[handle], {result, handle, none}}, fun([B]) -> body_stream(B) end),
       {T, <<"[resource-drop]incoming-body">>} => drop(),
+      %% incoming-request (the reactor's request, synthesized by the host)
+      {T, <<"[method]incoming-request.method">>} =>
+          wasm_component:import_fun(
+            {[handle], ?METHOD}, fun([R]) -> in_req_method(R) end),
+      {T, <<"[method]incoming-request.path-with-query">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, string}}, fun([R]) -> in_req(R, path) end),
+      {T, <<"[method]incoming-request.scheme">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, ?SCHEME}}, fun([R]) -> in_req_scheme(R) end),
+      {T, <<"[method]incoming-request.authority">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, string}}, fun([R]) -> in_req(R, authority) end),
+      {T, <<"[method]incoming-request.headers">>} =>
+          wasm_component:import_fun(
+            {[handle], handle}, fun([R]) -> in_req_headers(R) end),
+      {T, <<"[method]incoming-request.consume">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, handle, none}}, fun([R]) -> in_req_consume(R) end),
+      {T, <<"[resource-drop]incoming-request">>} => drop(),
+      %% outgoing-response (the guest builds it and sets it on the outparam)
+      {T, <<"[constructor]outgoing-response">>} =>
+          wasm_component:import_fun(
+            {[handle], handle}, fun([Hdrs]) -> outgoing_response(Hdrs) end),
+      {T, <<"[method]outgoing-response.set-status-code">>} =>
+          wasm_component:import_fun(
+            {[handle, u16], {result, none, none}},
+            fun([R, Code]) -> set_resp(R, status, Code) end),
+      {T, <<"[method]outgoing-response.status-code">>} =>
+          wasm_component:import_fun(
+            {[handle], u16}, fun([R]) -> resp_status(R) end),
+      {T, <<"[method]outgoing-response.headers">>} =>
+          wasm_component:import_fun(
+            {[handle], handle}, fun([R]) -> out_resp_headers(R) end),
+      {T, <<"[method]outgoing-response.body">>} =>
+          wasm_component:import_fun(
+            {[handle], {result, handle, none}}, fun([R]) -> response_body(R) end),
+      {T, <<"[resource-drop]outgoing-response">>} => drop(),
+      %% response-outparam (the reactor sets its response here)
+      {T, <<"[static]response-outparam.set">>} =>
+          wasm_component:import_fun(
+            {[handle, {result, handle, ?ERROR_CODE}], none},
+            fun([Param, Resp]) -> outparam_set(Param, Resp) end),
+      {T, <<"[resource-drop]response-outparam">>} => drop(),
+      %% http-error-code: recover an http error-code from a wasi:io error. The one
+      %% this host raises is the body-size overrun a bounded outgoing-body reports
+      %% on write; any other io-error carries no http error-code.
+      {T, <<"http-error-code">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, ?ERROR_CODE}}, fun([Err]) -> http_error_code(Err) end),
       %% outgoing-handler
       {H, <<"handle">>} =>
           wasm_component:import_fun(
@@ -214,53 +267,120 @@ http(Opts) ->
 
 %%% -------------------------------------------------------------- fields ---
 
+%% Each entry is validated as if appended: a bad name or value is invalid-syntax,
+%% a connection-level (or host-configured) name is forbidden. The whole list is
+%% refused on the first offending entry.
 fields_from_list(Entries) ->
-    case lists:all(fun({N, _}) -> valid_token(N) end, Entries) of
-        true  -> {ok, wasm_component:host_new(http_fields, Entries)};
-        false -> {error, {<<"invalid-syntax">>, none}}
+    case check_entries(Entries) of
+        ok      -> {ok, wasm_component:host_new(http_fields, Entries)};
+        {error, _} = E -> E
+    end.
+
+check_entries([]) -> ok;
+check_entries([{N, V} | Rest]) ->
+    case field_error(N, V) of
+        none  -> check_entries(Rest);
+        Error -> {error, Error}
     end.
 
 fields_entries(F) ->
-    case wasm_component:host_get(F) of
-        {ok, {http_fields, List}} -> [{N, V} || {N, V} <- List];
-        _                         -> []
-    end.
+    [{N, V} || {N, V} <- fields_list(F)].
 
+%% Fields are mutable (`http_fields`) until an accessor hands back an immutable
+%% clone (`http_fields_ro`, what request/response `.headers()` returns); reads see
+%% the list either way, mutations refuse the read-only form as `immutable`.
 fields_list(F) ->
     case wasm_component:host_get(F) of
-        {ok, {http_fields, List}} -> List;
-        _                         -> []
+        {ok, {http_fields, List}}    -> List;
+        {ok, {http_fields_ro, List}} -> List;
+        _                            -> []
+    end.
+
+fields_mutable(F) ->
+    case wasm_component:host_get(F) of
+        {ok, {http_fields, _}} -> true;
+        _                      -> false
     end.
 
 fields_get(F, Name) ->
-    [V || {N, V} <- fields_list(F), N =:= Name].
+    [V || {N, V} <- fields_list(F), eqi(N, Name)].
 
 fields_has(F, Name) ->
-    lists:keymember(Name, 1, fields_list(F)).
+    lists:any(fun({N, _}) -> eqi(N, Name) end, fields_list(F)).
 
 %% set replaces all values for the name (kept together where the first was).
 fields_set(F, Name, Values) ->
-    with_valid_name(Name, fun() ->
-        Rest = [{N, V} || {N, V} <- fields_list(F), N =/= Name],
+    with_mutation(F, Name, hd0(Values), fun() ->
+        Rest = [{N, V} || {N, V} <- fields_list(F), not eqi(N, Name)],
         wasm_component:host_update(F, Rest ++ [{Name, V} || V <- Values])
     end).
 
 fields_delete(F, Name) ->
-    _ = wasm_component:host_update(F, [{N, V} || {N, V} <- fields_list(F), N =/= Name]),
-    {ok, undefined}.
+    case fields_mutable(F) of
+        false -> {error, {<<"immutable">>, none}};
+        true ->
+            _ = wasm_component:host_update(
+                  F, [{N, V} || {N, V} <- fields_list(F), not eqi(N, Name)]),
+            {ok, undefined}
+    end.
 
 fields_append(F, Name, Value) ->
-    with_valid_name(Name, fun() ->
+    with_mutation(F, Name, Value, fun() ->
         wasm_component:host_update(F, fields_list(F) ++ [{Name, Value}])
     end).
 
-%% A malformed field name is invalid-syntax, the header-error the ABI defines.
-with_valid_name(Name, Fun) ->
-    case valid_token(Name) of
-        true  -> _ = Fun(), {ok, undefined};
-        false -> {error, {<<"invalid-syntax">>, none}}
+%% A mutation validates the name and value, refuses a forbidden name, and refuses
+%% an immutable fields, before running. The header-errors are the ABI's variant.
+with_mutation(F, Name, Value, Fun) ->
+    case fields_mutable(F) of
+        false -> {error, {<<"immutable">>, none}};
+        true ->
+            case field_error(Name, Value) of
+                none  -> _ = Fun(), {ok, undefined};
+                Error -> {error, Error}
+            end
     end.
 
+%% The header-error for a name/value pair, or `none` when it is admissible: a
+%% malformed name or value is invalid-syntax, a connection-level or host-configured
+%% name is forbidden. Name syntax is checked first so a forbidden test only ever
+%% sees a real token.
+field_error(Name, Value) ->
+    case valid_token(Name) of
+        false -> {<<"invalid-syntax">>, none};
+        true ->
+            case forbidden_header(Name) of
+                true  -> {<<"forbidden">>, none};
+                false ->
+                    case valid_value(Value) of
+                        true  -> none;
+                        false -> {<<"invalid-syntax">>, none}
+                    end
+            end
+    end.
+
+%% Connection-level headers the guest may not set, plus the host-configured
+%% `custom-forbidden-header` the wasmtime conformance programs expect. Matched
+%% case-insensitively.
+forbidden_header(Name) ->
+    lists:member(string:lowercase(Name),
+                 [<<"connection">>, <<"keep-alive">>, <<"proxy-connection">>,
+                  <<"transfer-encoding">>, <<"upgrade">>, <<"host">>,
+                  <<"http2-settings">>, <<"custom-forbidden-header">>]).
+
+%% A field value carries no NUL, CR or LF (what would let a value inject a header).
+valid_value(V) when is_binary(V) ->
+    not lists:any(fun(C) -> C =:= 0 orelse C =:= $\r orelse C =:= $\n end,
+                  binary_to_list(V));
+valid_value(_) -> false.
+
+hd0([V | _]) -> V;
+hd0([])      -> <<>>.
+
+%% Field names compare case-insensitively.
+eqi(A, B) -> string:lowercase(A) =:= string:lowercase(B).
+
+%% A clone is mutable again (the immutable form exists only behind an accessor).
 fields_clone(F) ->
     wasm_component:host_new(http_fields, fields_list(F)).
 
@@ -303,16 +423,63 @@ set_req(R, Key, Value) ->
             {error, undefined}
     end.
 
+%% The path-with-query, scheme and authority are each validated on the way in: a
+%% control character (a newline is what the conformance program injects) makes the
+%% whole URI invalid, so the setter refuses it rather than carrying it to the wire.
+set_path(R, Path) ->
+    case no_controls(Path) of
+        true  -> set_req(R, path, Path);
+        false -> {error, undefined}
+    end.
+
+set_scheme(R, Scheme) ->
+    Bin = scheme_opt(Scheme),
+    case no_controls(Bin) of
+        true  -> set_req(R, scheme, Bin);
+        false -> {error, undefined}
+    end.
+
+set_authority(R, Authority) ->
+    case no_controls(Authority) of
+        true  -> set_req(R, authority, Authority);
+        false -> {error, undefined}
+    end.
+
+no_controls(Bin) when is_binary(Bin) ->
+    not lists:any(fun(C) -> C < 16#20 orelse C =:= 16#7F end, binary_to_list(Bin));
+no_controls(_) -> false.
+
+%% An immutable clone of the request's headers (a fresh fields resource).
+out_req_headers(R) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_out_req, #{headers := H}}} -> ro_fields(H);
+        _                                     -> ro_fields([])
+    end.
+
+%% The immutable fields an accessor returns: a mutation on it is `immutable`.
+ro_fields(List) -> wasm_component:host_new(http_fields_ro, List).
+
 %% One outgoing-body per request, with its own buffer that outlives the request
-%% handle (the guest writes the body after handing the request to the handler).
+%% handle (the guest writes the body after handing the request to the handler). A
+%% declared content-length bounds the body: writing past it, or finishing short of
+%% it, is an HTTP-request-body-size error.
 request_body(R) ->
     case wasm_component:host_get(R) of
-        {ok, {http_out_req, Req}} ->
-            BodyH = wasm_component:host_new(http_out_body, <<>>),
+        {ok, {http_out_req, #{headers := H} = Req}} ->
+            BodyH = wasm_component:host_new(http_out_body, new_body(content_length(H))),
             _ = wasm_component:host_update(R, Req#{body_handle => BodyH}),
             {ok, BodyH};
         _ ->
             {error, undefined}
+    end.
+
+new_body(Limit) -> #{data => <<>>, limit => Limit, over => undefined}.
+
+%% The declared content-length of a header list, or `undefined` when unset.
+content_length(Headers) ->
+    case [V || {N, V} <- Headers, string:lowercase(N) =:= <<"content-length">>] of
+        [V | _] -> try binary_to_integer(V) catch _:_ -> undefined end;
+        []      -> undefined
     end.
 
 %%% -------------------------------------------------------- outgoing-body ---
@@ -320,28 +487,49 @@ request_body(R) ->
 %% The body's write stream appends to the outgoing-body's own buffer.
 body_write(B) ->
     case wasm_component:host_get(B) of
-        {ok, {http_out_body, _Buffer}} ->
+        {ok, {http_out_body, #{}}} ->
             {ok, wasm_component:host_new(output_stream, {http_body, B})};
         _ ->
             {error, undefined}
     end.
 
 %% finish consumes the outgoing-body (the guest drops the handle after), so snapshot
-%% its buffer where the future can still read it once the request is performed.
+%% its buffer where the future can still read it once the request is performed. A
+%% body that overran its content-length, or fell short of it, fails here.
 body_finish(B) ->
     case wasm_component:host_get(B) of
-        {ok, {http_out_body, Buffer}} -> put({http_final_body, B}, Buffer);
-        _                             -> ok
-    end,
-    {ok, undefined}.
+        {ok, {http_out_body, #{over := N}}} when N =/= undefined ->
+            {error, body_size(N)};
+        {ok, {http_out_body, #{data := Data, limit := Limit}}}
+          when Limit =/= undefined, byte_size(Data) =/= Limit ->
+            {error, body_size(byte_size(Data))};
+        {ok, {http_out_body, #{data := Data}}} ->
+            put({http_final_body, B}, Data),
+            {ok, undefined};
+        _ ->
+            {ok, undefined}
+    end.
 
--doc "Append bytes to an outgoing-body's buffer (its write stream).".
--spec append_body(term(), binary()) -> ok.
+body_size(N) -> {<<"HTTP-request-body-size">>, {some, N}}.
+
+-doc """
+Append bytes to an outgoing-body's buffer (its write stream). A write that would
+carry the body past its declared content-length fails with an io-error the guest
+recovers through `http-error-code` as HTTP-request-body-size.
+""".
+-spec append_body(term(), binary()) -> ok | {error, {http_body_size, non_neg_integer()}}.
 append_body(B, Bytes) ->
     case wasm_component:host_get(B) of
-        {ok, {http_out_body, Buffer}} ->
-            _ = wasm_component:host_update(B, <<Buffer/binary, Bytes/binary>>),
-            ok;
+        {ok, {http_out_body, #{data := Data, limit := Limit} = Body}} ->
+            Total = byte_size(Data) + byte_size(Bytes),
+            case Limit =/= undefined andalso Total > Limit of
+                true ->
+                    _ = wasm_component:host_update(B, Body#{over => Total}),
+                    {error, {http_body_size, Total}};
+                false ->
+                    _ = wasm_component:host_update(B, Body#{data => <<Data/binary, Bytes/binary>>}),
+                    ok
+            end;
         _ ->
             ok
     end.
@@ -352,24 +540,33 @@ append_body(B, Bytes) ->
 %% outgoing-body stream after this returns. The request is captured into a pending
 %% future and performed when the guest first reads the future (by which time the
 %% body is written and finished).
+%% A request whose target is malformed (no path, an unsupported scheme) can never
+%% be sent, so `handle` refuses it at once rather than handing back a future that
+%% would only fail on `get`; a well-formed request is deferred, and any connection
+%% failure surfaces when the guest polls the future.
 handle(Req, Grant, Transport) ->
     case wasm_component:host_get(Req) of
         {ok, {http_out_req, Map}} ->
-            {ok, wasm_component:host_new(http_future,
-                                        {pending, Map, Grant, Transport})};
+            case request_error(Map) of
+                none  -> {ok, wasm_component:host_new(http_future,
+                                                      {pending, Map, Grant, Transport})};
+                Error -> {error, Error}
+            end;
         _ ->
             {error, {<<"HTTP-request-URI-invalid">>, none}}
     end.
 
-%% Resolve the authority and grant, then hand the abstract request to the pluggable
-%% transport (h1 by default). The wire protocol is the transport's concern. A scheme
-%% other than http/https is a protocol error, and a request with no path was never
-%% given a target.
-perform(#{scheme := Scheme}, _Grant, _Transport)
+%% The handle-time defect in a request's target, or `none` when it is sendable.
+request_error(#{path := undefined}) ->
+    {<<"HTTP-request-URI-invalid">>, none};
+request_error(#{scheme := Scheme})
   when Scheme =/= <<"http">>, Scheme =/= <<"https">> ->
-    {error, {<<"HTTP-protocol-error">>, none}};
-perform(#{path := undefined}, _Grant, _Transport) ->
-    {error, {<<"HTTP-request-URI-invalid">>, none}};
+    {<<"HTTP-protocol-error">>, none};
+request_error(_) ->
+    none.
+
+%% Resolve the authority and grant, then hand the abstract request to the pluggable
+%% transport (h1 by default). The wire protocol is the transport's concern.
 perform(#{authority := Authority} = R, Grant, Transport) ->
     case authority_endpoint(Authority) of
         {error, _} = E ->
@@ -408,13 +605,8 @@ future_get(F) ->
 %% fall back to a still-live body handle.
 resolve_body(#{body_handle := BodyH} = Map) ->
     Body = case erase({http_final_body, BodyH}) of
-               undefined ->
-                   case wasm_component:host_get(BodyH) of
-                       {ok, {http_out_body, Buf}} -> Buf;
-                       _                          -> <<>>
-                   end;
-               Snapshot ->
-                   Snapshot
+               undefined -> body_data(BodyH);
+               Snapshot  -> Snapshot
            end,
     Map#{body => Body};
 resolve_body(Map) ->
@@ -435,10 +627,8 @@ resp_field(R, Key, Default) ->
 
 resp_headers(R) ->
     case wasm_component:host_get(R) of
-        {ok, {http_in_resp, #{headers := H}}} ->
-            wasm_component:host_new(http_fields, H);
-        _ ->
-            wasm_component:host_new(http_fields, [])
+        {ok, {http_in_resp, #{headers := H}}} -> ro_fields(H);
+        _                                     -> ro_fields([])
     end.
 
 resp_consume(R) ->
@@ -457,9 +647,158 @@ body_stream(B) ->
             {error, undefined}
     end.
 
+%%% ---------------------------------------------- incoming (reactor) side ---
+
+-doc "Create the incoming-request resource the host hands a reactor's handle.".
+-spec incoming_request(map()) -> non_neg_integer().
+incoming_request(Request) ->
+    wasm_component:host_new(http_in_req, Request).
+
+in_req(R, Key) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_in_req, Map}} ->
+            case maps:get(Key, Map, undefined) of
+                undefined -> none;
+                Value     -> {some, Value}
+            end;
+        _ ->
+            none
+    end.
+
+in_req_method(R) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_in_req, #{method := M}}} -> method_variant(M);
+        _                                   -> {<<"get">>, none}
+    end.
+
+in_req_scheme(R) ->
+    case in_req(R, scheme) of
+        {some, <<"https">>} -> {some, {<<"HTTPS">>, none}};
+        {some, _}           -> {some, {<<"HTTP">>, none}};
+        none                -> none
+    end.
+
+in_req_headers(R) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_in_req, #{headers := H}}} -> ro_fields(H);
+        _                                    -> ro_fields([])
+    end.
+
+in_req_consume(R) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_in_req, #{body := Body}}} ->
+            {ok, wasm_component:host_new(http_in_body, Body)};
+        _ ->
+            {error, undefined}
+    end.
+
+method_variant(M) ->
+    case string:lowercase(M) of
+        <<"get">>     -> {<<"get">>, none};
+        <<"head">>    -> {<<"head">>, none};
+        <<"post">>    -> {<<"post">>, none};
+        <<"put">>     -> {<<"put">>, none};
+        <<"delete">>  -> {<<"delete">>, none};
+        <<"connect">> -> {<<"connect">>, none};
+        <<"options">> -> {<<"options">>, none};
+        <<"trace">>   -> {<<"trace">>, none};
+        <<"patch">>   -> {<<"patch">>, none};
+        _             -> {<<"other">>, M}
+    end.
+
+%%% ------------------------------------------------------- outgoing-response ---
+
+outgoing_response(Hdrs) ->
+    Headers = case wasm_component:host_get(Hdrs) of
+                  {ok, {http_fields, L}} -> L;
+                  _                      -> []
+              end,
+    wasm_component:host_new(http_out_resp,
+                            #{status => 200, headers => Headers,
+                              body_handle => undefined}).
+
+set_resp(R, Key, Value) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_out_resp, Resp}} ->
+            _ = wasm_component:host_update(R, Resp#{Key => Value}),
+            {ok, undefined};
+        _ ->
+            {error, undefined}
+    end.
+
+resp_status(R) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_out_resp, #{status := S}}} -> S;
+        _                                     -> 0
+    end.
+
+out_resp_headers(R) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_out_resp, #{headers := H}}} -> ro_fields(H);
+        _                                      -> ro_fields([])
+    end.
+
+response_body(R) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_out_resp, #{headers := H} = Resp}} ->
+            BodyH = wasm_component:host_new(http_out_body, new_body(content_length(H))),
+            _ = wasm_component:host_update(R, Resp#{body_handle => BodyH}),
+            {ok, BodyH};
+        _ ->
+            {error, undefined}
+    end.
+
+%% The bytes buffered in an outgoing-body (empty for a gone or never-written one).
+body_data(BodyH) ->
+    case wasm_component:host_get(BodyH) of
+        {ok, {http_out_body, #{data := Data}}} -> Data;
+        _                                      -> <<>>
+    end.
+
+%%% -------------------------------------------------------- response-outparam ---
+
+outparam_set(Param, Response) ->
+    _ = wasm_component:host_update(Param, Response),
+    undefined.
+
+-doc "Read the response a reactor set on its outparam, after handle returns.".
+-spec read_outparam(non_neg_integer()) ->
+          {ok, 0..65535, [{binary(), binary()}], binary()} | {error, term()}.
+read_outparam(Param) ->
+    case wasm_component:host_get(Param) of
+        {ok, {http_outparam, {ok, RespH}}}     -> read_response(RespH);
+        {ok, {http_outparam, {error, Code}}}   -> {error, Code};
+        _                                      -> {error, no_response}
+    end.
+
+read_response(RespH) ->
+    case wasm_component:host_get(RespH) of
+        {ok, {http_out_resp, #{status := S, headers := H, body_handle := BodyH}}} ->
+            {ok, S, H, response_body_bytes(BodyH)};
+        _ ->
+            {error, no_response}
+    end.
+
+response_body_bytes(undefined) ->
+    <<>>;
+response_body_bytes(BodyH) ->
+    case erase({http_final_body, BodyH}) of
+        undefined -> body_data(BodyH);
+        Snapshot  -> Snapshot
+    end.
+
 %%% ----------------------------------------------------------- helpers ---
 
 drop() -> fun(_Ctx, [H]) -> _ = wasm_component:host_drop(H), {ok, []} end.
+
+%% The http error-code carried by an io-error, if any. A bounded body's overrun is
+%% stored as `{http_body_size, N}` in the io-error resource (minted by the stream
+%% write in wasi_preview2); nothing else maps to an http error-code.
+http_error_code(Err) ->
+    case wasm_component:host_get(Err) of
+        {ok, {error, {http_body_size, N}}} -> {some, body_size(N)};
+        _                                  -> none
+    end.
 
 opt(none)         -> <<>>;
 opt({some, V})    -> V.

@@ -19,7 +19,8 @@ later step.
 -include("wasi.hrl").
 
 -export([imports/0, random/0, clocks/0, environment/0, environment/3, io/0, io/1,
-         filesystem/1, sockets/1, command/1, run_command/2, run_command/3]).
+         filesystem/1, sockets/1, command/1, run_command/2, run_command/3,
+         run_serve/3]).
 %% The poll_oneoff readiness logic over host pollable handles, and the monotonic
 %% clock its deadlines use, exported so a test can drive poll directly (as
 %% host_new/host_get are).
@@ -452,13 +453,15 @@ command(Opts) ->
     %% wasi:sockets slice, so the default capability posture is unchanged and a
     %% command that imports no sockets still links.
     Net = case maps:find(network, Opts) of
-              {ok, Grant} -> [sockets(#{grant => Grant}),
-                              wasi_http:http(#{grant => Grant,
-                                               transport => maps:get(http_transport, Opts,
-                                                                     wasi_http_h1)})];
+              {ok, Grant} -> [sockets(#{grant => Grant})];
               error       -> []
           end,
-    lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net).
+    %% wasi:http is always present (like the filesystem) so a reactor that imports
+    %% its types links with no mount; outbound requests are gated by the grant, so
+    %% without a network grant the types work but a request reaches nowhere.
+    Http = [wasi_http:http(#{grant => maps:get(network, Opts, none),
+                             transport => maps:get(http_transport, Opts, wasi_http_h1)})],
+    lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net ++ Http).
 
 %% The mounts a command exposes: an explicit named list, or the single preopen.
 command_mounts(Opts) ->
@@ -552,6 +555,49 @@ exit_outcome({error, E}) ->
 run_export(Exports) ->
     case [E || E <- Exports, binary:match(E, <<"wasi:cli/run">>) =/= nomatch] of
         [Interface | _] -> {ok, <<Interface/binary, "#run">>};
+        []              -> error
+    end.
+
+-doc """
+Serve one request to a `wasi:http/incoming-handler` reactor component. `Request`
+is `#{method, path, scheme, authority, headers, body}`; the host synthesizes the
+incoming-request, calls the guest's `handle`, and returns the response the guest
+set on the outparam as `{ok, Status, Headers, Body}`. `Extra` is the `command/1`
+options (a `network` grant lets the reactor make its own outbound requests).
+""".
+-spec run_serve(binary(), map(),
+                #{network => term(), compile => boolean()}) ->
+          {ok, 0..65535, [{binary(), binary()}], binary()} | {error, term()}.
+run_serve(Bin, Request, Extra) ->
+    _ = erase(?EXIT_STATUS),
+    _ = erase(?INSECURE_SEED),
+    Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
+    InstOpts = #{loader => Loader},
+    Opts = maps:without([compile], Extra),
+    case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
+        {ok, Instance} ->
+            try serve(Instance, Request)
+            after wasm_component:destroy(Instance, fun close_resource/1) end;
+        {error, _} = E ->
+            E
+    end.
+
+serve(Instance, Request) ->
+    case serve_export(wasm_component:exports(Instance)) of
+        {ok, Export} ->
+            ReqH = wasi_http:incoming_request(Request),
+            OutparamH = wasm_component:host_new(http_outparam, undefined),
+            _ = wasm_component:call(Instance, Export, {[handle, handle], none},
+                                    [ReqH, OutparamH]),
+            wasi_http:read_outparam(OutparamH);
+        error ->
+            {error, no_incoming_handler}
+    end.
+
+serve_export(Exports) ->
+    case [E || E <- Exports,
+               binary:match(E, <<"wasi:http/incoming-handler">>) =/= nomatch] of
+        [Interface | _] -> {ok, <<Interface/binary, "#handle">>};
         []              -> error
     end.
 

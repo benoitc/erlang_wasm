@@ -31,12 +31,18 @@ all() -> [p2_cases, groups_present].
 %% Known-failing counts per interface group. Filled from the first run; a fix
 %% lowers a number, a regression raises the actual above it and fails, and a
 %% number left too high (the `stale_baseline` guard) also fails.
+%%
+%% The http residue is three programs the host cannot satisfy in this harness:
+%% `p2_http_outbound_request_timeout` and `_invalid_version` assert a wire-level
+%% connect timeout / protocol error that only a real remote peer produces, and
+%% `p2_cli_http_headers` is a multi-run program driven by arguments this single
+%% invocation does not pass.
 baseline() ->
     #{~"cli"        => 7,
       ~"clocks"     => 0,
       ~"filesystem" => 1,
       ~"io"         => 2,
-      ~"http"       => 7,
+      ~"http"       => 3,
       ~"random"     => 0,
       ~"sockets"    => 12}.
 

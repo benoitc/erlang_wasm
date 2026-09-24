@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the eighty modules are, which
+This page is the map of the runtime: what the eighty-one modules are, which
 ones depend on which, and where to start reading. You need it before you change
 anything, because every module explains itself and none of them explains the
 shape of the whole.
@@ -47,7 +47,7 @@ they use: the adapters at L10, the kernel below them.
 ```text
 L10 wasm_javascript  wasm_javascript_command  wasm_python
     wasm_python_command  wasm_lua  wasm_adapter_conformance
-L9  wasi  wasm_script_worker  wasi_preview2  wasi_http  wasi_http_transport  wasi_http_h1  wasi_http_h2
+L9  wasi  wasm_script_worker  wasi_preview2  wasi_http  wasi_http_transport  wasi_http_h1  wasi_http_h2  wasi_http_listener
 L8  wasi_preview1  wasm_snapshot_store  wasm_instance_worker
     wasm_component  wasm_component_link  wasm_canon
 L7  wasm  wasm_module_cache  wasm_snapshot_owner  wasm_jit_sup

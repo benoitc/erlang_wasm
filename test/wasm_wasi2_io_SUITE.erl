@@ -20,7 +20,8 @@ and repeated use neither leaks nor loses order.
 all() ->
     [bytes_written_reach_the_sink,
      the_handle_is_freed_after_use,
-     two_emits_accumulate].
+     two_emits_accumulate,
+     a_failed_file_write_is_reported].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -55,6 +56,19 @@ two_emits_accumulate(Config) ->
     ok = emit(I, <<"cd">>),
     ?assertEqual(<<"abcd">>, iolist_to_binary(drain())),
     ?assertEqual([], wasm_component:host_live()).
+
+%% A write to a file-backed stream whose pwrite fails is reported, not dropped.
+%% The stream carries a closed descriptor, so pwrite returns EBADF; write_stream
+%% must surface it. Fail-first: the pre-fix branch returned `ok` on a pwrite error,
+%% so the bytes were silently lost.
+a_failed_file_write_is_reported(Config) ->
+    Dir = ?config(priv_dir, Config),
+    {ok, Root} = wasi_fs:preopen(Dir),
+    {ok, Fh} = wasi_fs:open(Root, <<"f">>, [write, create]),
+    ok = wasi_fs:close(Fh),
+    H = wasm_component:host_new(output_stream, {file, Fh, 0}),
+    ?assertMatch({error, _}, wasi_preview2:write_stream(H, <<"lost?">>)),
+    wasm_component:host_drop(H).
 
 %%% -------------------------------------------------------------- helpers ---
 

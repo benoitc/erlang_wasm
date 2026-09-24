@@ -24,7 +24,8 @@ all() ->
      the_monotonic_clock_does_not_go_backward,
      a_fixed_clock_reaches_the_guest,
      poll_reports_ready_pollables_and_not_an_unelapsed_clock,
-     poll_over_only_a_clock_waits_for_its_deadline].
+     poll_over_only_a_clock_waits_for_its_deadline,
+     a_far_deadline_never_overflows_the_sleep].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -69,6 +70,23 @@ poll_over_only_a_clock_waits_for_its_deadline(_Config) ->
     T0 = erlang:monotonic_time(millisecond),
     ?assertEqual([0], wasi_preview2:poll([Clock])),
     ?assert(erlang:monotonic_time(millisecond) - T0 >= 30).
+
+%% A guest chooses a pollable's deadline, so it can be months out. The raw
+%% milliseconds to such a deadline exceed `receive after`'s ~49.7 day ceiling, and
+%% timer:sleep raises on an out-of-range value; the wait must be capped to a chunk
+%% so poll neither crashes nor blocks for weeks. `next_sleep_ms/1` is the capped
+%% step; a near deadline still returns about the time remaining.
+a_far_deadline_never_overflows_the_sleep(_Config) ->
+    Now = wasi_preview2:monotonic_now(),
+    Far = Now + 100 * 24 * 3600 * 1000000000,
+    %% The uncapped value the pre-fix code passed straight to timer:sleep.
+    Uncapped = (Far - Now + 999999) div 1000000,
+    ?assert(Uncapped > 4294967295),
+    Ms = wasi_preview2:next_sleep_ms(Far),
+    ?assert(Ms =< 60000),
+    ?assert(Ms < 4294967296),
+    Near = wasi_preview2:next_sleep_ms(Now + 40 * 1000000),
+    ?assert(Near >= 30 andalso Near =< 41).
 
 %% A fixed clock proves the record round-trip deterministically: a host that
 %% returns a known datetime and a known instant must reach the guest unchanged.

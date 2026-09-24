@@ -23,17 +23,22 @@ later step.
 %% The poll_oneoff readiness logic over host pollable handles, and the monotonic
 %% clock its deadlines use, exported so a test can drive poll directly (as
 %% host_new/host_get are).
--export([poll/1, monotonic_now/0]).
+-export([poll/1, monotonic_now/0, next_sleep_ms/1, close_resource/1]).
+%% Exported so a test can drive the stream write path directly.
+-export([write_stream/2]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
-%% error arm names an `error` resource (a handle); we only ever return ok, so no
-%% error handle is minted, but the layout must be expressible so the ok result
-%% pads its payload area.
+%% error arm names an `error` resource (a handle), minted when a file-backed write
+%% fails; a discarding/buffer sink never fails, so it returns ok.
 -define(STREAM_ERROR,
         {variant, [{<<"last-operation-failed">>, handle}, {<<"closed">>, none}]}).
 -define(WRITE_RESULT, {result, none, ?STREAM_ERROR}).
 -define(READ_RESULT, {result, {list, u8}, ?STREAM_ERROR}).
 -define(COUNT_RESULT, {result, u64, ?STREAM_ERROR}).
+
+%% Longest single timer:sleep a clock wait uses. A guest deadline can be months
+%% out, past `receive after`'s ceiling; `sleep_until/1` chunks the wait by this.
+-define(SLEEP_CHUNK_MS, 60000).
 %% The write budget check-write reports for the discarding/buffer sinks: always
 %% ready for a chunk this size.
 -define(WRITE_BUDGET, 65536).
@@ -253,9 +258,23 @@ earliest_deadline(States) ->
         Deadlines -> lists:min(Deadlines)
     end.
 
+%% Sleep to the deadline in bounded chunks. A guest chooses the deadline, so the
+%% remaining time can exceed `receive after`'s ~49.7 day ceiling; passing that to
+%% timer:sleep raises. Chunking keeps the true deadline (honest), never hands
+%% timer:sleep an out-of-range value, and lets the worker reaper interrupt between
+%% chunks.
 sleep_until(Deadline) ->
-    Ms = (Deadline - monotonic_now() + 999999) div 1000000,
-    timer:sleep(max(0, Ms)).
+    case next_sleep_ms(Deadline) of
+        0  -> ok;
+        Ms -> timer:sleep(Ms), sleep_until(Deadline)
+    end.
+
+%% Milliseconds to sleep now: the time left to the deadline, rounded up, capped to
+%% one chunk and floored at 0. Never exceeds `?SLEEP_CHUNK_MS`, so it is always a
+%% valid `timer:sleep` value.
+next_sleep_ms(Deadline) ->
+    Remaining = (Deadline - monotonic_now() + 999999) div 1000000,
+    min(max(0, Remaining), ?SLEEP_CHUNK_MS).
 
 wall_now() ->
     Ns = erlang:system_time(nanosecond),
@@ -460,7 +479,7 @@ io(Opts) ->
     Stdout = <<"wasi:cli/stdout">>,
     Stdin = <<"wasi:cli/stdin">>,
     Poll = <<"wasi:io/poll">>,
-    Write = fun([Handle, Bytes]) -> write_stream(Handle, Bytes), {ok, undefined} end,
+    Write = fun([Handle, Bytes]) -> write_result(write_stream(Handle, Bytes)) end,
     Read = fun([H, Len]) -> read_stream(H, Len) end,
     Subscribe = fun([_Stream]) -> wasm_component:host_new(pollable, ready) end,
     #{{Stdout, <<"get-stdout">>} =>
@@ -475,14 +494,14 @@ io(Opts) ->
           wasm_component:import_fun({[handle, {list, u8}], ?WRITE_RESULT}, Write),
       {Streams, <<"[method]output-stream.flush">>} =>
           wasm_component:import_fun(
-            {[handle], ?WRITE_RESULT}, fun([_H]) -> {ok, undefined} end),
+            {[handle], ?WRITE_RESULT}, fun([H]) -> write_result(flush_stream(H)) end),
       {Streams, <<"[method]output-stream.blocking-flush">>} =>
           wasm_component:import_fun(
-            {[handle], ?WRITE_RESULT}, fun([_H]) -> {ok, undefined} end),
+            {[handle], ?WRITE_RESULT}, fun([H]) -> write_result(flush_stream(H)) end),
       {Streams, <<"[method]output-stream.write-zeroes">>} =>
           wasm_component:import_fun(
             {[handle, u64], ?WRITE_RESULT},
-            fun([H, Len]) -> write_stream(H, binary:copy(<<0>>, Len)), {ok, undefined} end),
+            fun([H, Len]) -> write_result(write_stream(H, binary:copy(<<0>>, Len))) end),
       {Streams, <<"[method]output-stream.subscribe">>} =>
           wasm_component:import_fun({[handle], handle}, Subscribe),
       {Streams, <<"[resource-drop]output-stream">>} => drop_fun(),
@@ -518,22 +537,50 @@ io(Opts) ->
 drop_fun() ->
     fun(_Ctx, [Handle]) -> _ = wasm_component:host_drop(Handle), {ok, []} end.
 
-%% Write to the stream's sink. A write to a handle that is gone is dropped; a
-%% real closed-stream error waits for the error resource.
+%% Write to the stream's sink. A write to a handle that is gone is dropped. A
+%% file-backed write that fails is reported: the caller mints an error resource.
+%% Returns `ok` or `{error, Reason}`.
 write_stream(Handle, Bytes) ->
     case wasm_component:host_get(Handle) of
         {ok, {output_stream, {file, Fh, Off}}} ->
             %% A file-backed stream (from write/append-via-stream): pwrite and
             %% advance the offset so the next write continues where this ended.
             case wasi_fs:pwrite(Fh, Off, Bytes) of
-                {ok, N}    -> _ = wasm_component:host_update(Handle, {file, Fh, Off + N}), ok;
-                {error, _} -> ok
+                {ok, N}          -> wasm_component:host_update(Handle, {file, Fh, Off + N});
+                {error, _} = Err -> Err
             end;
         {ok, {output_stream, Sink}} when is_function(Sink) ->
             _ = Sink(Bytes), ok;
         _ ->
             ok
     end.
+
+%% Turn a write result into the WIT `result<_, stream-error>`. A failure mints an
+%% error resource and returns the `last-operation-failed` case, mirroring how
+%% read_stream reports `closed`.
+write_result(ok) ->
+    {ok, undefined};
+write_result({error, Reason}) ->
+    {error, {<<"last-operation-failed">>, wasm_component:host_new(error, Reason)}}.
+
+%% Flush a stream. A file-backed stream fsyncs so blocking-flush is durable; a
+%% function sink has nothing to flush. A gone handle is a no-op.
+flush_stream(Handle) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {output_stream, {file, Fh, _Off}}} -> wasi_fs:sync(Fh);
+        _                                        -> ok
+    end.
+
+%% Close the OS resource a host handle owns, called from teardown for every live
+%% handle. Only file descriptors and sockets hold OS state; a clock pollable, a
+%% preopen dir root and an error carry none.
+-spec close_resource({atom(), term()}) -> ok.
+close_resource({fs_file, {Handle, _Flags}})        -> _ = wasi_fs:close(Handle), ok;
+close_resource({output_stream, {file, Handle, _}}) -> _ = wasi_fs:close(Handle), ok;
+close_resource({input_stream, {socket, Sock, _}})  -> _ = wasi_sock:close(Sock), ok;
+close_resource({tcp_socket, {_State, Handle}})     -> _ = wasi_sock:close(Handle), ok;
+close_resource({udp_socket, {_State, Handle}})     -> _ = wasi_sock:close(Handle), ok;
+close_resource(_)                                  -> ok.
 
 %% Read up to Len bytes from the source, advancing it. An empty source (drained
 %% or unknown handle) reads `closed`, the end-of-stream signal blocking-read

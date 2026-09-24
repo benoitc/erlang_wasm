@@ -21,7 +21,8 @@ all() ->
      connect_needs_a_grant,
      the_socket_and_streams_do_not_leak,
      an_accepted_connection_echoes,
-     listen_needs_a_grant].
+     listen_needs_a_grant,
+     poll_blocks_then_wakes_on_socket_data].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -85,6 +86,23 @@ listen_needs_a_grant(Config) ->
     _ = spawn(fun() -> Test ! {served, serve(Bin, Port, none)} end),
     receive {served, R} -> ?assertEqual(<<>>, R)
     after 6000 -> ct:fail(server_did_not_return) end.
+
+%% Polling an input stream backed by a socket with no data yet blocks (it does not
+%% return an empty set) and wakes once data arrives. Fail-first: poll returned [] at
+%% once for a non-empty set of not-ready sockets and never woke on data.
+poll_blocks_then_wakes_on_socket_data(_Config) ->
+    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}]),
+    {ok, Port} = inet:port(Listen),
+    {ok, Client} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}]),
+    {ok, Server} = gen_tcp:accept(Listen),
+    In = wasm_component:host_new(input_stream, {socket, {stream, Server}, <<>>}),
+    P = wasm_component:host_new(pollable, {stream, In}),
+    _ = spawn(fun() -> timer:sleep(150), gen_tcp:send(Client, <<"hi">>) end),
+    T0 = erlang:monotonic_time(millisecond),
+    ?assertEqual([0], wasi_preview2:poll([P])),
+    ?assert(erlang:monotonic_time(millisecond) - T0 >= 100),
+    wasm_component:host_drop(P), wasm_component:host_drop(In),
+    gen_tcp:close(Server), gen_tcp:close(Client), gen_tcp:close(Listen).
 
 %%% -------------------------------------------------------------- helpers ---
 

@@ -43,6 +43,10 @@ later step.
 %% Most random bytes the host will materialise for one get-random-bytes call. A
 %% guest u64 length beyond this is refused rather than allocated up front.
 -define(MAX_RANDOM_BYTES, 16 * 1024 * 1024).
+
+%% How long a blocking poll waits between readiness re-checks: short enough that a
+%% socket's data wakes the poll promptly, long enough not to busy-spin.
+-define(POLL_SLICE_MS, 50).
 %% The write budget check-write reports for the discarding/buffer sinks: always
 %% ready for a chunk this size.
 -define(WRITE_BUDGET, 65536).
@@ -293,17 +297,30 @@ block_stream(Handle) ->
 poll(Handles) ->
     States = [state_of(H) || H <- Handles],
     case ready_indices(States) of
-        []      -> wait_for_earliest(States);
+        []      -> wait_ready(States);
         Indices -> Indices
     end.
 
 ready_indices(States) ->
     [I || {I, S} <- lists:enumerate(0, States), pollable_ready(S)].
 
-wait_for_earliest(States) ->
+%% Block until at least one pollable is ready, never returning an empty set for a
+%% non-empty poll. Readiness is re-checked in short slices, so a socket that
+%% receives data wakes the poll within a slice rather than only at a clock
+%% deadline; a slice is shortened so a clock still fires close to its deadline. The
+%% slices sleep (no busy-spin) and the worker reaper bounds a poll that never
+%% becomes ready.
+wait_ready(States) ->
+    case ready_indices(States) of
+        []      -> timer:sleep(poll_slice(States)), wait_ready(States);
+        Indices -> Indices
+    end.
+
+poll_slice(States) ->
     case earliest_deadline(States) of
-        none     -> [];
-        Deadline -> sleep_until(Deadline), ready_indices(States)
+        none     -> ?POLL_SLICE_MS;
+        Deadline -> max(1, min(?POLL_SLICE_MS,
+                               (Deadline - monotonic_now() + 999999) div 1000000))
     end.
 
 earliest_deadline(States) ->

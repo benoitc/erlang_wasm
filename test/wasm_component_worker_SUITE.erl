@@ -19,7 +19,9 @@ all() ->
     [a_real_command_runs_through_the_worker,
      it_matches_wasmtime_through_the_worker,
      a_file_is_processed_over_a_mount,
-     a_typed_service_export_is_called_per_request].
+     a_typed_service_export_is_called_per_request,
+     the_multi_core_linker_runs_through_the_worker,
+     each_request_gets_a_fresh_component_instance].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -96,6 +98,33 @@ a_typed_service_export_is_called_per_request(_Config) ->
         %% The echo service refuses empty input: the typed error arm crosses back
         %% as the adapter's error.
         ?assertMatch({error, _}, wasm_script_worker:run(W, #{input => <<>>}))
+    after
+        wasm_script_worker:stop(W)
+    end.
+
+%% The worker runs `twocore`, whose entry core imports a function from a second
+%% core. Only the graph linker can wire that, so a result of 42 proves the linker
+%% ran inside the worker's per-request runner, not only in an inline test.
+the_multi_core_linker_runs_through_the_worker(_Config) ->
+    {ok, W} = wasm_script_worker:start_link(
+                fake_component_multicore_adapter, #{root => scratch}),
+    try
+        ?assertEqual({ok, #{value => 42}}, wasm_script_worker:run(W, #{})),
+        ?assertEqual({ok, #{value => 42}}, wasm_script_worker:run(W, #{}))
+    after
+        wasm_script_worker:stop(W)
+    end.
+
+%% Each request gets a fresh instance, so instance state never bleeds between
+%% requests. `statecore` increments a mutable global and returns it: a fresh
+%% instance returns 1 every time, a reused one would return 2 on the second call.
+each_request_gets_a_fresh_component_instance(_Config) ->
+    {ok, W} = wasm_script_worker:start_link(
+                fake_component_stateful_adapter, #{root => scratch}),
+    try
+        ?assertEqual({ok, #{value => 1}}, wasm_script_worker:run(W, #{})),
+        ?assertEqual({ok, #{value => 1}}, wasm_script_worker:run(W, #{})),
+        ?assertEqual({ok, #{value => 1}}, wasm_script_worker:run(W, #{}))
     after
         wasm_script_worker:stop(W)
     end.

@@ -124,6 +124,9 @@ later step.
                                          u16, u16, u16, u16]}}]}).
 -define(RESOLVE_RESULT, {result, {option, ?IP_ADDRESS}, ?SOCK_ERROR}).
 -define(SOCK_TIMEOUT, 5000).
+%% The datagrams a single send may carry: check-send reports it, and sending more
+%% than the last check-send permitted is a trap (the wasi:sockets contract).
+-define(DGRAM_PERMIT, 16).
 -define(ADDR_FAMILY, {enum, [<<"ipv4">>, <<"ipv6">>]}).
 -define(IPV4_SOCKADDR,
         {record, [{<<"port">>, u16}, {<<"address">>, {tuple, [u8, u8, u8, u8]}}]}).
@@ -291,9 +294,11 @@ stream_ready(Handle) ->
                 {error, _} -> false
             end;
         {ok, {udp_in, {Sock, Peer, Queue}}} ->
-            Q = udp_pump(Sock, Peer, Queue, false),
-            _ = wasm_component:host_update(Handle, {Sock, Peer, Q}),
-            Q =/= [];
+            case udp_pump(Sock, Peer, Queue, false) of
+                {ok, Q}    -> _ = wasm_component:host_update(Handle, {Sock, Peer, Q}),
+                              Q =/= [];
+                {error, _} -> true  %% a pending socket error is deliverable now
+            end;
         error -> true;
         _     -> true
     end.
@@ -312,8 +317,10 @@ block_stream(Handle) ->
                 _          -> ok
             end;
         {ok, {udp_in, {Sock, Peer, Queue}}} ->
-            Q = udp_pump(Sock, Peer, Queue, true),
-            wasm_component:host_update(Handle, {Sock, Peer, Q});
+            case udp_pump(Sock, Peer, Queue, true) of
+                {ok, Q}    -> wasm_component:host_update(Handle, {Sock, Peer, Q});
+                {error, _} -> ok  %% wake so the receive can return the error
+            end;
         _ ->
             ok
     end.
@@ -877,7 +884,8 @@ close_resource({output_stream, {file, own, Fh, _}})     -> _ = wasi_fs:close(Fh)
 close_resource({output_stream, {file_append, own, Fh}}) -> _ = wasi_fs:close(Fh), ok;
 close_resource({input_stream, {file, Handle, _}})       -> _ = wasi_fs:close(Handle), ok;
 close_resource({tcp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;
-close_resource({udp_socket, {_State, Handle}})          -> _ = wasi_sock:close(Handle), ok;
+close_resource({udp_socket, {udp_bound, Sock, _Conn}})  -> _ = wasi_sock2:close(Sock), ok;
+close_resource({udp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;
 close_resource(_)                                       -> ok.
 
 %% Non-blocking read: return whatever is available, up to Len bytes, without
@@ -1926,12 +1934,10 @@ sockets(Opts) ->
             {[handle, {option, ?IP_SOCKADDR}], ?UDP_STREAM_RESULT},
             fun([Self, Remote]) -> udp_stream(Self, Remote, Grant) end),
       {<<"wasi:sockets/udp">>, <<"[method]outgoing-datagram-stream.send">>} =>
-          wasm_component:import_fun(
-            {[handle, {list, ?OUTGOING_DATAGRAM}], ?SEND_RESULT},
-            fun([Out, Datagrams]) -> udp_send(Out, Datagrams) end),
+          udp_send_import(),
       {<<"wasi:sockets/udp">>, <<"[method]outgoing-datagram-stream.check-send">>} =>
           wasm_component:import_fun(
-            {[handle], ?SEND_RESULT}, fun([_Out]) -> {ok, ?WRITE_BUDGET} end),
+            {[handle], ?SEND_RESULT}, fun([_Out]) -> {ok, ?DGRAM_PERMIT} end),
       {<<"wasi:sockets/udp">>, <<"[method]incoming-datagram-stream.receive">>} =>
           wasm_component:import_fun(
             {[handle, u64], ?RECEIVE_RESULT},
@@ -2301,9 +2307,26 @@ create_udp_socket(Family, Grant) ->
                 false ->
                     {error, <<"new-socket-limit">>};
                 true ->
-                    {ok, Handle} = wasi_sock:open(family_inet(Family), dgram),
-                    {ok, wasm_component:host_new(udp_socket, {udp_unbound, Handle})}
+                    case wasi_sock2:open_udp(family_inet(Family)) of
+                        {ok, Handle}   -> {ok, wasm_component:host_new(
+                                                 udp_socket, {udp_unbound, Handle})};
+                        {error, Errno} -> {error, sock2_errno(Errno)}
+                    end
             end
+    end.
+
+%% Sending more datagrams than the last check-send permitted traps, which the plain
+%% import_fun wrapper cannot express; the datagram list's length is the third flat
+%% argument, checked before the value is lifted.
+udp_send_import() ->
+    Inner = wasm_component:import_fun(
+              {[handle, {list, ?OUTGOING_DATAGRAM}], ?SEND_RESULT},
+              fun([Out, Datagrams]) -> udp_send(Out, Datagrams) end),
+    fun(Ctx, Flats) ->
+        case lists:nth(3, Flats) > ?DGRAM_PERMIT of
+            true  -> {trap, udp_send_over_permit};
+            false -> Inner(Ctx, Flats)
+        end
     end.
 
 %% Bind to the local address. Binding the guest's own source address is not a
@@ -2312,27 +2335,23 @@ create_udp_socket(Family, Grant) ->
 %% network handle must be a real network resource, as the contract requires.
 udp_start_bind(Self, Net, Addr) ->
     case {wasm_component:host_get(Self), wasm_component:host_get(Net)} of
-        {{ok, {udp_socket, {udp_unbound, Pending}}}, {ok, {net_network, _Grant}}} ->
-            case wasi_sock:family(Pending) =:= sockaddr_family(Addr) of
+        {{ok, {udp_socket, {udp_unbound, Handle}}}, {ok, {net_network, _Grant}}} ->
+            {udp, Ip, Port} = endpoint_udp(Addr),
+            case bind_addr_ok(wasi_sock2:family(Handle), Ip) of
                 false ->
                     {error, <<"invalid-argument">>};
                 true ->
-                    case wasi_sock:bind(Pending, endpoint_udp(Addr)) of
-                        {ok, Bound}    ->
-                            _ = wasm_component:host_update(Self, {udp_binding, Bound}),
+                    case wasi_sock2:bind(Handle, {Ip, Port}) of
+                        ok ->
+                            _ = wasm_component:host_update(Self, {udp_binding, Handle}),
                             {ok, undefined};
                         {error, Errno} ->
-                            {error, sock_errno(Errno)}
+                            {error, sock2_errno(Errno)}
                     end
             end;
         _ ->
             {error, <<"invalid-state">>}
     end.
-
-%% The address family a socket address carries, to check it against the socket's
-%% own family: binding or connecting across families is invalid-argument.
-sockaddr_family({<<"ipv4">>, _}) -> inet;
-sockaddr_family({<<"ipv6">>, _}) -> inet6.
 
 %% Finishing a bind moves the socket to bound with no connected remote yet; the
 %% third field records the address a later stream(some(_)) connects to, which is
@@ -2349,44 +2368,53 @@ udp_finish_bind(Self) ->
 %% stream splits the socket into an incoming and outgoing datagram stream. A
 %% connected stream (a remote address) checks the peer against the grant and is
 %% remembered on the socket so remote-address can report it.
+%% stream splits the socket into an incoming and outgoing datagram stream. Only a
+%% bound socket may stream (else invalid-state). `stream(some(addr))` connects the
+%% socket to that peer (so a peer that is gone surfaces on receive as an ICMP error)
+%% and remembers it for remote-address; `stream(none)` leaves it unconnected.
 udp_stream(Self, Remote, Grant) ->
     case wasm_component:host_get(Self) of
         {ok, {udp_socket, {udp_bound, Sock, _Was}}} ->
-            case remote_family_ok(Sock, Remote) of
-                false -> {error, <<"invalid-argument">>};
-                true  -> udp_stream_connect(Self, Sock, Remote, Grant)
+            case udp_connect(Sock, Remote, Grant) of
+                {ok, Peer} ->
+                    _ = wasm_component:host_update(Self, {udp_bound, Sock, Peer}),
+                    In = wasm_component:host_new(udp_in, {Sock, Peer, []}),
+                    Out = wasm_component:host_new(udp_out, {Sock, Peer, Grant}),
+                    {ok, {In, Out}};
+                {error, _} = E ->
+                    E
             end;
         _ ->
             {error, <<"invalid-state">>}
     end.
 
-remote_family_ok(_Sock, none)          -> true;
-remote_family_ok(Sock, {some, Addr})   ->
-    wasi_sock:family(Sock) =:= sockaddr_family(Addr).
-
-udp_stream_connect(Self, Sock, Remote, Grant) ->
-    case wasm_component:host_get(Self) of
-        {ok, {udp_socket, {udp_bound, Sock, _Was}}} ->
-            case udp_remote(Remote, Grant) of
-                {error, _} = E ->
-                    E;
-                {ok, Peer} ->
-                    Conn = case Remote of {some, Addr} -> Addr; none -> none end,
-                    _ = wasm_component:host_update(Self, {udp_bound, Sock, Conn}),
-                    In = wasm_component:host_new(udp_in, {Sock, Peer, []}),
-                    Out = wasm_component:host_new(udp_out, {Sock, Peer, Grant}),
-                    {ok, {In, Out}}
-            end;
-        _ ->
-            {error, <<"invalid-state">>}
+%% Validate and, for a real peer, OS-connect the socket; the peer is `none` (an
+%% unconnected stream) or `{udp, Ip, Port}` (the connected remote).
+udp_connect(_Sock, none, _Grant) ->
+    {ok, none};
+udp_connect(Sock, {some, Addr}, Grant) ->
+    {udp, Ip, Port} = Endpoint = endpoint_udp(Addr),
+    case connect_addr_ok(wasi_sock2:family(Sock), Ip, Port) of
+        false ->
+            {error, <<"invalid-argument">>};
+        true ->
+            case wasi_net:allows(connect, Endpoint, Grant) of
+                false ->
+                    {error, <<"access-denied">>};
+                true ->
+                    case wasi_sock2:connect(Sock, {Ip, Port}, ?SOCK_TIMEOUT) of
+                        ok             -> {ok, {udp, Ip, Port}};
+                        {error, Errno} -> {error, sock2_errno(Errno)}
+                    end
+            end
     end.
 
 udp_local(Self) ->
     case wasm_component:host_get(Self) of
         {ok, {udp_socket, {udp_bound, Sock, _Conn}}} ->
-            case wasi_sock:local(Sock) of
+            case wasi_sock2:sockname(Sock) of
                 {ok, {Addr, Port}} -> {ok, ip_sockaddr(Addr, Port)};
-                {error, Errno}     -> {error, sock_errno(Errno)}
+                {error, Errno}     -> {error, sock2_errno(Errno)}
             end;
         _ ->
             {error, <<"invalid-state">>}
@@ -2395,15 +2423,15 @@ udp_local(Self) ->
 %% Remote address is defined only once a stream connected the socket to a peer.
 udp_remote_addr(Self) ->
     case wasm_component:host_get(Self) of
-        {ok, {udp_socket, {udp_bound, _Sock, Conn}}} when Conn =/= none ->
-            {ok, Conn};
+        {ok, {udp_socket, {udp_bound, _Sock, {udp, Ip, Port}}}} ->
+            {ok, ip_sockaddr(Ip, Port)};
         _ ->
             {error, <<"invalid-state">>}
     end.
 
 udp_family(Self) ->
     case udp_handle(Self) of
-        {ok, Handle} -> family_enum(wasi_sock:family(Handle));
+        {ok, Handle} -> family_enum(wasi_sock2:family(Handle));
         error        -> <<"ipv4">>
     end.
 
@@ -2413,27 +2441,6 @@ udp_handle(Self) ->
         {ok, {udp_socket, {_State, Handle}}}         -> {ok, Handle};
         _                                            -> error
     end.
-
-udp_remote(none, _Grant) ->
-    {ok, none};
-udp_remote({some, Addr}, Grant) ->
-    {udp, Ip, Port} = Endpoint = endpoint_udp(Addr),
-    case connectable(Ip, Port) of
-        false ->
-            {error, <<"invalid-argument">>};
-        true ->
-            case wasi_net:allows(connect, Endpoint, Grant) of
-                true  -> {ok, Endpoint};
-                false -> {error, <<"access-denied">>}
-            end
-    end.
-
-%% A connect target must be a concrete address and port: an unspecified address
-%% or port zero is invalid-argument, as the sockets contract requires.
-connectable({0, 0, 0, 0}, _Port)                -> false;
-connectable({0, 0, 0, 0, 0, 0, 0, 0}, _Port)    -> false;
-connectable(_Ip, 0)                             -> false;
-connectable(_Ip, _Port)                         -> true.
 
 udp_send(Out, Datagrams) ->
     case wasm_component:host_get(Out) of
@@ -2460,18 +2467,16 @@ datagram_allowed(#{<<"remote-address">> := {some, Addr}}, _Peer, Grant) ->
 datagram_allowed(#{<<"remote-address">> := none}, Peer, _Grant) ->
     Peer =/= none.
 
-send_datagram(Sock, Peer, #{<<"data">> := Data, <<"remote-address">> := Remote}) ->
-    Dest = case Remote of
-               {some, Addr} -> endpoint_udp(Addr);
-               none         -> Peer
-           end,
-    case Dest of
-        none -> 0;
-        _    -> case wasi_sock:send_to(Sock, Data, Dest) of
-                    {ok, _}     -> 1;
-                    {error, _}  -> 0
-                end
-    end.
+%% A connected stream sends to its peer (the OS refuses a different destination, so
+%% the datagram's own remote is not consulted); an unconnected stream sends to the
+%% datagram's explicit remote. A datagram with neither is dropped.
+send_datagram(Sock, {udp, _, _}, #{<<"data">> := Data}) ->
+    case wasi_sock2:send(Sock, Data) of ok -> 1; {error, _} -> 0 end;
+send_datagram(Sock, none, #{<<"data">> := Data, <<"remote-address">> := {some, Addr}}) ->
+    {udp, Ip, Port} = endpoint_udp(Addr),
+    case wasi_sock2:sendto(Sock, Data, {Ip, Port}) of ok -> 1; {error, _} -> 0 end;
+send_datagram(_Sock, none, _Datagram) ->
+    0.
 
 %% Drain the datagrams waiting on the stream, up to Max, and return them at once.
 %% A guest that first waits on the stream's pollable (subscribe) finds them already
@@ -2480,23 +2485,28 @@ send_datagram(Sock, Peer, #{<<"data">> := Data, <<"remote-address">> := Remote})
 udp_receive(In, Max) ->
     case wasm_component:host_get(In) of
         {ok, {udp_in, {Sock, Peer, Queue0}}} when Max > 0 ->
-            Queue = udp_pump(Sock, Peer, Queue0, true),
-            {Take, Rest} = take_up_to(Max, Queue),
-            _ = wasm_component:host_update(In, {Sock, Peer, Rest}),
-            {ok, [#{<<"data">> => D, <<"remote-address">> => A} || {D, A} <- Take]};
+            case udp_pump(Sock, Peer, Queue0, true) of
+                {ok, Queue} ->
+                    {Take, Rest} = take_up_to(Max, Queue),
+                    _ = wasm_component:host_update(In, {Sock, Peer, Rest}),
+                    {ok, [#{<<"data">> => D, <<"remote-address">> => A} || {D, A} <- Take]};
+                {error, Errno} ->
+                    {error, sock2_errno(Errno)}
+            end;
         {ok, {udp_in, _}} ->
             {ok, []};
         _ ->
             {error, <<"invalid-state">>}
     end.
 
-%% Pull the datagrams currently waiting into the stream's queue, peer-filtered. A
-%% blocking pump waits up to the socket timeout for the first datagram when the
-%% queue is empty; both then drain what is immediately available and stop.
+%% Pull the datagrams currently waiting into the stream's queue, peer-filtered, and
+%% report a socket error (an ICMP port-unreachable on a connected socket becomes
+%% connection-refused). A blocking pump waits up to the socket timeout for the first
+%% datagram when the queue is empty; both then drain what is immediately available.
 udp_pump(Sock, Peer, Queue, Blocking) ->
     Timeout = case {Queue, Blocking} of {[], true} -> ?SOCK_TIMEOUT; _ -> 0 end,
-    case wasi_sock:recv_from(Sock, 0, Timeout) of
-        {ok, Data, {Addr, Port}} ->
+    case wasi_sock2:recvfrom(Sock, Timeout) of
+        {ok, {Addr, Port}, Data} ->
             %% A connected stream (a chosen peer) hears only that peer; a datagram
             %% from anyone else is dropped, not handed over.
             Q1 = case peer_matches(Peer, Addr, Port) of
@@ -2504,8 +2514,14 @@ udp_pump(Sock, Peer, Queue, Blocking) ->
                      false -> Queue
                  end,
             udp_pump(Sock, Peer, Q1, false);
-        {error, _} ->
-            Queue
+        {error, Reason} when Reason =:= timeout; Reason =:= etimedout;
+                             Reason =:= eagain; Reason =:= ewouldblock ->
+            {ok, Queue};
+        {error, Reason} when Queue =/= [] ->
+            %% Hand over what already arrived; the error surfaces on the next receive.
+            _ = Reason, {ok, Queue};
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 take_up_to(Max, List) when length(List) =< Max -> {List, []};
@@ -2517,26 +2533,12 @@ peer_matches({udp, _, _}, _Addr, _Port)          -> false.
 
 udp_drop(H) ->
     case wasm_component:host_get(H) of
-        {ok, {udp_socket, {udp_bound, Sock, _Conn}}} -> _ = wasi_sock:close(Sock);
-        {ok, {udp_socket, {_State, Handle}}}         -> _ = wasi_sock:close(Handle);
+        {ok, {udp_socket, {udp_bound, Sock, _Conn}}} -> _ = wasi_sock2:close(Sock);
+        {ok, {udp_socket, {_State, Handle}}}         -> _ = wasi_sock2:close(Handle);
         _                                            -> ok
     end,
     _ = erase({?SOCKOPT, H}),
     wasm_component:host_drop(H).
-
-%% A Preview 1 errno to a wasi:sockets error-code name.
-sock_errno(?ECONNREFUSED)  -> <<"connection-refused">>;
-sock_errno(?ECONNRESET)    -> <<"connection-reset">>;
-sock_errno(?ECONNABORTED)  -> <<"connection-aborted">>;
-sock_errno(?ETIMEDOUT)     -> <<"timeout">>;
-sock_errno(?EHOSTUNREACH)  -> <<"remote-unreachable">>;
-sock_errno(?ENETUNREACH)   -> <<"remote-unreachable">>;
-sock_errno(?EADDRINUSE)    -> <<"address-in-use">>;
-sock_errno(?EADDRNOTAVAIL) -> <<"address-not-bindable">>;
-sock_errno(?EAFNOSUPPORT)  -> <<"not-supported">>;
-sock_errno(?EINVAL)        -> <<"invalid-argument">>;
-sock_errno(?EACCES)        -> <<"access-denied">>;
-sock_errno(_Other)         -> <<"unknown">>.
 
 %% A POSIX reason atom (from wasi_sock2 / the `socket` module) to an error-code name.
 sock2_errno(eaddrinuse)    -> <<"address-in-use">>;

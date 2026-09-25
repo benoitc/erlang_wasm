@@ -19,13 +19,13 @@ connected) is tracked by the caller, not here. Errors are POSIX atoms the caller
 to WASI `error-code`s.
 """.
 
--export([open/1, bind/2, connect/3, listen/2, accept/2]).
--export([recv/3, send/2, shutdown/2, close/1]).
+-export([open/1, open_udp/1, bind/2, connect/3, listen/2, accept/2]).
+-export([recv/3, send/2, recvfrom/2, sendto/3, shutdown/2, close/1]).
 -export([sockname/1, peername/1, family/1, setopt/3, getopt/2]).
 
 -export_type([handle/0]).
 
--type handle() :: {tcp, inet | inet6, socket:socket()}.
+-type handle() :: {tcp | udp, inet | inet6, socket:socket()}.
 -type endpoint() :: {inet:ip_address(), inet:port_number()}.
 -type reason() :: atom().
 
@@ -46,18 +46,29 @@ open(Family) ->
             {error, flatten(Reason)}
     end.
 
+-doc """
+Open a UDP socket. No SO_REUSEADDR: two sockets binding the same address should
+conflict (address-in-use), which is what the WASI bind tests assert.
+""".
+-spec open_udp(inet | inet6) -> {ok, handle()} | {error, reason()}.
+open_udp(Family) ->
+    case socket:open(Family, dgram, udp) of
+        {ok, S}         -> {ok, {udp, Family, S}};
+        {error, Reason} -> {error, flatten(Reason)}
+    end.
+
 %%% ------------------------------------------------------------------ bind ---
 
 -doc "Bind the socket to a local address. Reports the OS error (e.g. eaddrinuse).".
 -spec bind(handle(), endpoint()) -> ok | {error, reason()}.
-bind({tcp, Family, S}, {Addr, Port}) ->
+bind({_Proto, Family, S}, {Addr, Port}) ->
     map(socket:bind(S, sockaddr(Family, Addr, Port))).
 
 %%% --------------------------------------------------------------- connect ---
 
 -doc "Connect to a remote address, from an unconnected or a bound socket.".
 -spec connect(handle(), endpoint(), timeout()) -> ok | {error, reason()}.
-connect({tcp, Family, S}, {Addr, Port}, Timeout) ->
+connect({_Proto, Family, S}, {Addr, Port}, Timeout) ->
     map(socket:connect(S, sockaddr(Family, Addr, Port), Timeout)).
 
 %%% ---------------------------------------------------------------- listen ---
@@ -83,7 +94,7 @@ Receive up to what has arrived (a stream read). `eof` is an orderly peer close;
 """.
 -spec recv(handle(), non_neg_integer(), timeout()) ->
           {ok, binary()} | eof | {error, reason()}.
-recv({tcp, _Family, S}, _Want, Timeout) ->
+recv({_Proto, _Family, S}, _Want, Timeout) ->
     %% Length 0 asks for whatever is available, the up-to-N stream semantics the
     %% caller wants (it buffers any excess itself).
     case socket:recv(S, 0, [], Timeout) of
@@ -94,13 +105,34 @@ recv({tcp, _Family, S}, _Want, Timeout) ->
         {error, Reason}     -> {error, flatten(Reason)}
     end.
 
--doc "Send a whole buffer.".
+-doc "Send a whole buffer (on a connected socket).".
 -spec send(handle(), binary()) -> ok | {error, reason()}.
-send({tcp, _Family, S}, Data) ->
+send({_Proto, _Family, S}, Data) ->
     case socket:send(S, Data) of
         ok               -> ok;
         {ok, _Rest}      -> ok;
         {error, Reason}  -> {error, flatten(Reason)}
+    end.
+
+-doc """
+Receive one datagram with its source address. On a connected UDP socket a peer that
+is gone surfaces as an error (an ICMP port-unreachable becomes econnrefused).
+""".
+-spec recvfrom(handle(), timeout()) ->
+          {ok, endpoint(), binary()} | {error, reason()}.
+recvfrom({_Proto, _Family, S}, Timeout) ->
+    case socket:recvfrom(S, 0, [], Timeout) of
+        {ok, {#{addr := Addr, port := Port}, Data}} -> {ok, {Addr, Port}, Data};
+        {error, Reason}                             -> {error, flatten(Reason)}
+    end.
+
+-doc "Send one datagram to an explicit destination.".
+-spec sendto(handle(), binary(), endpoint()) -> ok | {error, reason()}.
+sendto({_Proto, Family, S}, Data, {Addr, Port}) ->
+    case socket:sendto(S, Data, sockaddr(Family, Addr, Port)) of
+        ok              -> ok;
+        {ok, _Rest}     -> ok;
+        {error, Reason} -> {error, flatten(Reason)}
     end.
 
 -doc "Shut down one or both directions.".
@@ -111,7 +143,7 @@ shutdown({tcp, _Family, S}, write) -> map(socket:shutdown(S, write)).
 
 -doc "Close the socket.".
 -spec close(handle()) -> ok.
-close({tcp, _Family, S}) ->
+close({_Proto, _Family, S}) ->
     _ = socket:close(S),
     ok.
 
@@ -119,23 +151,23 @@ close({tcp, _Family, S}) ->
 
 -doc "The local address (real getsockname; works once bound).".
 -spec sockname(handle()) -> {ok, endpoint()} | {error, reason()}.
-sockname({tcp, _Family, S}) ->
+sockname({_Proto, _Family, S}) ->
     address(socket:sockname(S)).
 
 -doc "The peer address (real getpeername; only once connected).".
 -spec peername(handle()) -> {ok, endpoint()} | {error, reason()}.
-peername({tcp, _Family, S}) ->
+peername({_Proto, _Family, S}) ->
     address(socket:peername(S)).
 
 -doc "The socket's address family.".
 -spec family(handle()) -> inet | inet6.
-family({tcp, Family, _S}) -> Family.
+family({_Proto, Family, _S}) -> Family.
 
 %%% --------------------------------------------------------------- sockopts ---
 
 -doc "Set a socket option that the WASI keep-alive / buffer-size methods expose.".
 -spec setopt(handle(), atom(), term()) -> ok | {error, reason()}.
-setopt({tcp, _F, S}, Name, Value) ->
+setopt({_Proto, _F, S}, Name, Value) ->
     case optname(Name) of
         undefined -> {error, enoprotoopt};
         Opt       -> map(socket:setopt(S, Opt, Value))
@@ -143,7 +175,7 @@ setopt({tcp, _F, S}, Name, Value) ->
 
 -doc "Read a socket option.".
 -spec getopt(handle(), atom()) -> {ok, term()} | {error, reason()}.
-getopt({tcp, _F, S}, Name) ->
+getopt({_Proto, _F, S}, Name) ->
     case optname(Name) of
         undefined -> {error, enoprotoopt};
         Opt       -> map_get(socket:getopt(S, Opt))

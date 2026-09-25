@@ -276,6 +276,8 @@ expect("p2_cli_http_headers")   -> trap;
 %% that. (p2_stream_pollable_traps also traps, but only once dropping a stream with
 %% a live pollable does, which waits on the real resource destructor.)
 expect("p2_pollable_traps")     -> trap;
+%% Sending more datagrams than check-send permitted must trap.
+expect("p2_udp_send_too_much")  -> trap;
 expect(_)                       -> zero.
 
 %%% --------------------------------------------------------------- grouping ---

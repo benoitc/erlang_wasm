@@ -139,17 +139,27 @@ http(Opts) ->
       {T, <<"[constructor]request-options">>} =>
           wasm_component:import_fun(
             {[], handle}, fun([]) -> wasm_component:host_new(http_req_opts, #{}) end),
+      {T, <<"[method]request-options.connect-timeout">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, u64}}, fun([O]) -> get_opt(O, connect_timeout) end),
       {T, <<"[method]request-options.set-connect-timeout">>} =>
           wasm_component:import_fun(
             {[handle, {option, u64}], {result, none, none}},
             fun([O, Ns]) -> set_opt(O, connect_timeout, Ns) end),
+      {T, <<"[method]request-options.first-byte-timeout">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, u64}}, fun([O]) -> get_opt(O, first_byte_timeout) end),
       {T, <<"[method]request-options.set-first-byte-timeout">>} =>
           wasm_component:import_fun(
             {[handle, {option, u64}], {result, none, none}},
             fun([O, Ns]) -> set_opt(O, first_byte_timeout, Ns) end),
+      {T, <<"[method]request-options.between-bytes-timeout">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, u64}}, fun([O]) -> get_opt(O, between_bytes_timeout) end),
       {T, <<"[method]request-options.set-between-bytes-timeout">>} =>
           wasm_component:import_fun(
-            {[handle, {option, u64}], {result, none, none}}, fun(_) -> {ok, undefined} end),
+            {[handle, {option, u64}], {result, none, none}},
+            fun([O, Ns]) -> set_opt(O, between_bytes_timeout, Ns) end),
       {T, <<"[resource-drop]request-options">>} => drop(),
       %% outgoing-request
       {T, <<"[constructor]outgoing-request">>} =>
@@ -171,6 +181,18 @@ http(Opts) ->
           wasm_component:import_fun(
             {[handle, {option, string}], {result, none, none}},
             fun([R, A]) -> set_authority(R, opt(A)) end),
+      {T, <<"[method]outgoing-request.method">>} =>
+          wasm_component:import_fun(
+            {[handle], ?METHOD}, fun([R]) -> out_req_method(R) end),
+      {T, <<"[method]outgoing-request.path-with-query">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, string}}, fun([R]) -> out_req_opt(R, path) end),
+      {T, <<"[method]outgoing-request.scheme">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, ?SCHEME}}, fun([R]) -> out_req_scheme(R) end),
+      {T, <<"[method]outgoing-request.authority">>} =>
+          wasm_component:import_fun(
+            {[handle], {option, string}}, fun([R]) -> out_req_opt(R, authority) end),
       {T, <<"[method]outgoing-request.headers">>} =>
           wasm_component:import_fun(
             {[handle], handle}, fun([R]) -> out_req_headers(R) end),
@@ -213,7 +235,22 @@ http(Opts) ->
       {T, <<"[method]incoming-body.stream">>} =>
           wasm_component:import_fun(
             {[handle], {result, handle, none}}, fun([B]) -> body_stream(B) end),
+      {T, <<"[static]incoming-body.finish">>} =>
+          wasm_component:import_fun(
+            {[handle], handle}, fun([_B]) -> wasm_component:host_new(http_trailers, ready) end),
       {T, <<"[resource-drop]incoming-body">>} => drop(),
+      %% future-trailers: this host delivers no trailers, so it resolves at once to
+      %% an ok with no trailers (none).
+      {T, <<"[method]future-trailers.subscribe">>} =>
+          wasm_component:import_fun(
+            {[handle], handle},
+            fun([_F]) -> wasm_component:host_new(pollable, ready) end),
+      {T, <<"[method]future-trailers.get">>} =>
+          wasm_component:import_fun(
+            {[handle],
+             {option, {result, {result, {option, handle}, ?ERROR_CODE}, none}}},
+            fun([F]) -> trailers_get(F) end),
+      {T, <<"[resource-drop]future-trailers">>} => drop(),
       %% incoming-request (the reactor's request, synthesized by the host)
       {T, <<"[method]incoming-request.method">>} =>
           wasm_component:import_fun(
@@ -281,10 +318,18 @@ set_opt(O, Key, Value) ->
             {error, undefined}
     end.
 
-%% A request-option timeout in milliseconds, or `undefined` when unset. The guest
-%% passes nanoseconds; the wire libraries take milliseconds.
+%% A request-option timeout is stored as the guest gave it (nanoseconds), so a getter
+%% reads back exactly what a setter wrote; the wire libraries take milliseconds, so
+%% the conversion happens where a request is performed (`ms/1`).
 opt_ns(none)       -> undefined;
-opt_ns({some, Ns}) -> max(1, Ns div 1_000_000).
+opt_ns({some, Ns}) -> Ns.
+
+%% A request-option getter: the nanosecond value the guest set, or none.
+get_opt(O, Key) ->
+    case wasm_component:host_get(O) of
+        {ok, {http_req_opts, #{Key := Ns}}} when is_integer(Ns) -> {some, Ns};
+        _                                                       -> none
+    end.
 
 %% The timeouts the guest set on its request-options, defaulting to unset.
 req_timeouts(none) ->
@@ -297,6 +342,10 @@ req_timeouts({some, O}) ->
         _ ->
             req_timeouts(none)
     end.
+
+%% A stored nanosecond timeout as the milliseconds the wire libraries take.
+ms(undefined) -> undefined;
+ms(Ns)        -> max(1, Ns div 1_000_000).
 
 %%% -------------------------------------------------------------- fields ---
 
@@ -511,6 +560,48 @@ out_req_headers(R) ->
         _                                     -> ro_fields([])
     end.
 
+%% The getters for a request's method, path, scheme and authority: what a setter
+%% stored, in the variant/option shape the ABI returns.
+out_req_method(R) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_out_req, #{method := M}}} -> method_variant(M);
+        _                                    -> {<<"get">>, none}
+    end.
+
+out_req_opt(R, Key) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_out_req, Map}} ->
+            case maps:get(Key, Map, undefined) of
+                undefined -> none;
+                <<>>      -> none;
+                Value     -> {some, Value}
+            end;
+        _ ->
+            none
+    end.
+
+out_req_scheme(R) ->
+    case wasm_component:host_get(R) of
+        {ok, {http_out_req, #{scheme := S}}} -> {some, scheme_variant(S)};
+        _                                    -> none
+    end.
+
+%% A stored scheme binary as the scheme variant the ABI returns.
+scheme_variant(<<"http">>)  -> {<<"HTTP">>, none};
+scheme_variant(<<"https">>) -> {<<"HTTPS">>, none};
+scheme_variant(Other)       -> {<<"other">>, Other}.
+
+%% future-trailers.get: this host produces no trailers, so it resolves once to
+%% ok(no-trailers); a second get is none (already taken), as the ABI requires.
+trailers_get(F) ->
+    case wasm_component:host_get(F) of
+        {ok, {http_trailers, ready}} ->
+            _ = wasm_component:host_update(F, taken),
+            {some, {ok, {ok, none}}};
+        _ ->
+            none
+    end.
+
 %% The immutable fields an accessor returns: a mutation on it is `immutable`.
 ro_fields(List) -> wasm_component:host_new(http_fields_ro, List).
 
@@ -638,7 +729,7 @@ perform(#{authority := Authority} = R, Grant, Transport) ->
                       #{host => Host, port => Port,
                         method => maps:get(method, R), path => maps:get(path, R),
                         headers => maps:get(headers, R), body => maps:get(body, R),
-                        connect_timeout => CT, first_byte_timeout => FBT},
+                        connect_timeout => ms(CT), first_byte_timeout => ms(FBT)},
                       ?HTTP_TIMEOUT)
             end
     end.

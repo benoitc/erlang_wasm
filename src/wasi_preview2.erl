@@ -658,14 +658,19 @@ cli_stderr(Sink) ->
           wasm_component:import_fun(
             {[], handle}, fun([]) -> wasm_component:host_new(output_stream, Sink) end)}.
 
-%% Not a terminal: get-terminal-* report none, so a guest writes plainly.
+%% Not a terminal: get-terminal-* report none, so a guest writes plainly. No
+%% terminal handle is ever minted, so the resource-drops are unreachable, but a
+%% command component imports the terminal-input/terminal-output resources and needs
+%% their drop intrinsic to resolve at link time (there are no stubs).
 cli_terminals() ->
     #{{<<"wasi:cli/terminal-stdin">>, <<"get-terminal-stdin">>} =>
           wasm_component:import_fun({[], {option, handle}}, fun([]) -> none end),
       {<<"wasi:cli/terminal-stdout">>, <<"get-terminal-stdout">>} =>
           wasm_component:import_fun({[], {option, handle}}, fun([]) -> none end),
       {<<"wasi:cli/terminal-stderr">>, <<"get-terminal-stderr">>} =>
-          wasm_component:import_fun({[], {option, handle}}, fun([]) -> none end)}.
+          wasm_component:import_fun({[], {option, handle}}, fun([]) -> none end),
+      {<<"wasi:cli/terminal-input">>, <<"[resource-drop]terminal-input">>} => drop_fun(),
+      {<<"wasi:cli/terminal-output">>, <<"[resource-drop]terminal-output">>} => drop_fun()}.
 
 -doc """
 The stream side of `wasi:io` with default endpoints: `get-stdout` over a sink

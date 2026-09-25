@@ -226,11 +226,22 @@ program_config(_) ->
 %% p2_cli_no_ip_name_lookup is offered the sockets interface but no resolve
 %% capability, so it asserts the lookup is a permanent resolver failure. no_tcp and
 %% no_udp are offered the interface with that one transport withheld, so creating a
-%% socket of it is access-denied. Everything else gets a loopback grant.
+%% socket of it is access-denied. The state-machine programs bind and connect
+%% reserved/broadcast/wrong-family addresses on purpose and assert the OS-level or
+%% argument error, so they get a permissive grant (as wasmtime runs them with full
+%% network access); the address grant is not what they test.
 socket_grant("p2_cli_no_ip_name_lookup") -> none;
-socket_grant("p2_cli_no_tcp") -> (loopback())#{tcp => false};
-socket_grant("p2_cli_no_udp") -> (loopback())#{udp => false};
-socket_grant(_)                          -> loopback().
+socket_grant("p2_cli_no_tcp") -> (unrestricted())#{tcp => false};
+socket_grant("p2_cli_no_udp") -> (unrestricted())#{udp => false};
+socket_grant(_)                          -> unrestricted().
+
+%% Any address, any port, for TCP and UDP; resolution allowed.
+unrestricted() ->
+    #{connect => [{tcp, <<"0.0.0.0/0">>, {0, 65535}}, {udp, <<"0.0.0.0/0">>, {0, 65535}},
+                  {tcp, <<"::/0">>, {0, 65535}}, {udp, <<"::/0">>, {0, 65535}}],
+      listen  => [{tcp, <<"0.0.0.0/0">>, {0, 65535}}, {udp, <<"0.0.0.0/0">>, {0, 65535}},
+                  {tcp, <<"::/0">>, {0, 65535}}, {udp, <<"::/0">>, {0, 65535}}],
+      resolve => allow}.
 
 %% The outbound-http programs reach the loopback echo server; the timeout program
 %% deliberately connects to a TEST-NET-3 address (203.0.113.0/24, reserved and

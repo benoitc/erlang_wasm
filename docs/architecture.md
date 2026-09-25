@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the eighty-one modules are, which
+This page is the map of the runtime: what the eighty-two modules are, which
 ones depend on which, and where to start reading. You need it before you change
 anything, because every module explains itself and none of them explains the
 shape of the whole.
@@ -64,8 +64,8 @@ L1  wasm_code_cache  wasm_engine  wasm_leb128  wasm_num_float
     wasm_worker_reaper  wasm_script_v1  wasm_cleanup_steward_sup
 L0  wasm_error  wasm_num  wasm_limits  wasm_code_slots  wasm_file_cache
     wasm_snapshot_file  wasm_subsup  wasm_validate_simd  wasm_validate_atomic
-    wasi_path  wasi_net  wasi_file_nif  wasm_worker_error  wasm_worker_adapter
-    wasm_recipe
+    wasi_path  wasi_net  wasi_sock2  wasi_file_nif  wasm_worker_error
+    wasm_worker_adapter  wasm_recipe
 ```
 
 `test/wasm_architecture_SUITE.erl` asserts that this block names every module

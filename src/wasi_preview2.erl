@@ -284,7 +284,7 @@ pollable_ready({stream, Handle})  -> stream_ready(Handle).
 stream_ready(Handle) ->
     case wasm_component:host_get(Handle) of
         {ok, {input_stream, {socket, Sock, <<>>}}} ->
-            case wasi_sock:recv(Sock, 0, 0) of
+            case wasi_sock2:recv(Sock, 0, 0) of
                 {ok, Data} -> _ = wasm_component:host_update(Handle, {socket, Sock, Data}),
                               Data =/= <<>>;
                 eof        -> true;
@@ -307,7 +307,7 @@ block_pollable({stream, Handle})  -> block_stream(Handle), undefined.
 block_stream(Handle) ->
     case wasm_component:host_get(Handle) of
         {ok, {input_stream, {socket, Sock, <<>>}}} ->
-            case wasi_sock:recv(Sock, 0, ?SOCK_TIMEOUT) of
+            case wasi_sock2:recv(Sock, 0, ?SOCK_TIMEOUT) of
                 {ok, Data} -> wasm_component:host_update(Handle, {socket, Sock, Data});
                 _          -> ok
             end;
@@ -792,9 +792,9 @@ write_stream(Handle, Bytes) ->
             end;
         {ok, {output_stream, {socket, Conn}}} ->
             %% A socket-backed stream: a failed send is a real error, not silent.
-            case wasi_sock:send(Conn, Bytes) of
+            case wasi_sock2:send(Conn, Bytes) of
                 ok             -> ok;
-                {error, Errno} -> {error, sock_errno(Errno)}
+                {error, Errno} -> {error, sock2_errno(Errno)}
             end;
         {ok, {output_stream, {http_body, Req}}} ->
             %% An outgoing HTTP request body: append to the request the body
@@ -875,7 +875,7 @@ close_resource({fs_dir, {Root, _}})                          -> _ = wasi_fs:forg
 close_resource({output_stream, {file, own, Fh, _}})     -> _ = wasi_fs:close(Fh), ok;
 close_resource({output_stream, {file_append, own, Fh}}) -> _ = wasi_fs:close(Fh), ok;
 close_resource({input_stream, {file, Handle, _}})       -> _ = wasi_fs:close(Handle), ok;
-close_resource({tcp_socket, {_State, Handle}})          -> _ = wasi_sock:close(Handle), ok;
+close_resource({tcp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;
 close_resource({udp_socket, {_State, Handle}})          -> _ = wasi_sock:close(Handle), ok;
 close_resource(_)                                       -> ok.
 
@@ -913,7 +913,7 @@ read_stream(Handle, Len, Timeout) ->
     end.
 
 socket_read(Handle, Sock, <<>>, Len, Timeout) ->
-    case wasi_sock:recv(Sock, 0, Timeout) of
+    case wasi_sock2:recv(Sock, 0, Timeout) of
         {ok, Data}  -> socket_deliver(Handle, Sock, Data, Len);
         eof         -> {error, {<<"closed">>, undefined}};
         %% A non-blocking read with nothing waiting is not an error: zero bytes,
@@ -1954,19 +1954,22 @@ sockets(Opts) ->
 %% bind and listen is checked against the grant), which the connect/listen-needs-a-
 %% grant tests rely on. A grant that explicitly withholds the TCP transport is
 %% different: creation itself is access-denied, which is what p2_cli_no_tcp asserts.
+%% TCP sockets use wasi_sock2 (the OTP `socket` module) so the WASI state machine
+%% works: a real bind-only that reports its ephemeral port and detects a double bind,
+%% and a client that binds before it connects.
 create_tcp_socket(Family, Grant) ->
     case wasi_net:tcp_allowed(Grant) of
         false -> {error, <<"access-denied">>};
-        true  -> new_socket(tcp_socket, stream, Family, Grant)
-    end.
-
-new_socket(Tag, Type, Family, Grant) ->
-    case socket_room(Grant) of
-        false ->
-            {error, <<"new-socket-limit">>};
-        true ->
-            {ok, Handle} = wasi_sock:open(family_inet(Family), Type),
-            {ok, wasm_component:host_new(Tag, {unconnected, Handle})}
+        true  ->
+            case socket_room(Grant) of
+                false -> {error, <<"new-socket-limit">>};
+                true  ->
+                    case wasi_sock2:open(family_inet(Family)) of
+                        {ok, Handle}   -> {ok, wasm_component:host_new(
+                                                 tcp_socket, {unconnected, Handle})};
+                        {error, Errno} -> {error, sock2_errno(Errno)}
+                    end
+            end
     end.
 
 %% Cap the sockets an instance holds at once at the grant's `max_sockets`. A
@@ -1993,23 +1996,38 @@ family_inet(_Ipv4)      -> inet.
 %% checks the grant and connects, finish-connect hands back the streams. The
 %% address decision is wasi_net, so a socket reaches only a granted endpoint.
 tcp_start_connect(Self, Net, Addr) ->
-    case {wasm_component:host_get(Self), wasm_component:host_get(Net)} of
-        {{ok, {tcp_socket, {unconnected, Pending}}}, {ok, {net_network, Grant}}} ->
-            Endpoint = endpoint(Addr),
-            case wasi_net:allows(connect, Endpoint, Grant) of
+    case {tcp_connectable(Self), wasm_component:host_get(Net)} of
+        {{ok, Handle}, {ok, {net_network, Grant}}} ->
+            {tcp, Ip, Port} = Endpoint = endpoint(Addr),
+            case connect_addr_ok(wasi_sock2:family(Handle), Ip, Port) of
                 false ->
-                    {error, <<"access-denied">>};
+                    {error, <<"invalid-argument">>};
                 true ->
-                    case wasi_sock:connect(Pending, Endpoint, ?SOCK_TIMEOUT) of
-                        {ok, Conn} ->
-                            _ = wasm_component:host_update(Self, {connecting, Conn}),
-                            {ok, undefined};
-                        {error, Errno} ->
-                            {error, sock_errno(Errno)}
+                    case wasi_net:allows(connect, Endpoint, Grant) of
+                        false ->
+                            {error, <<"access-denied">>};
+                        true ->
+                            case wasi_sock2:connect(Handle, {Ip, Port}, ?SOCK_TIMEOUT) of
+                                ok             -> _ = wasm_component:host_update(
+                                                        Self, {connecting, Handle}),
+                                                  {ok, undefined};
+                                {error, Errno} -> {error, sock2_errno(Errno)}
+                            end
                     end
             end;
+        {{error, State}, _} ->
+            {error, State};
         _ ->
             {error, <<"invalid-state">>}
+    end.
+
+%% A client may connect from an unconnected or an already-bound socket (an explicit
+%% local bind before connect); every other state is invalid.
+tcp_connectable(Self) ->
+    case wasm_component:host_get(Self) of
+        {ok, {tcp_socket, {unconnected, Handle}}} -> {ok, Handle};
+        {ok, {tcp_socket, {bound, Handle}}}        -> {ok, Handle};
+        _                                          -> {error, <<"invalid-state">>}
     end.
 
 %% finish-connect completes a start-connect exactly once: the socket must be in the
@@ -2019,10 +2037,7 @@ tcp_finish_connect(Self) ->
     case wasm_component:host_get(Self) of
         {ok, {tcp_socket, {connecting, Conn}}} ->
             _ = wasm_component:host_update(Self, {connected, Conn}),
-            In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
-            Out = wasm_component:host_new(
-                    output_stream, {socket, Conn}),
-            {ok, {In, Out}};
+            {ok, tcp_streams(Conn)};
         _ ->
             %% No connect in progress is not-in-progress, not invalid-state,
             %% the same contract finish/4 gives bind and listen.
@@ -2033,23 +2048,28 @@ tcp_finish_connect(Self) ->
 %% start-listen listens, accept blocks for a connection and returns its streams.
 tcp_start_bind(Self, Net, Addr) ->
     case {wasm_component:host_get(Self), wasm_component:host_get(Net)} of
-        {{ok, {tcp_socket, {unconnected, Pending}}}, {ok, {net_network, Grant}}} ->
-            Endpoint = endpoint(Addr),
-            case wasi_net:allows(listen, Endpoint, Grant) of
+        {{ok, {tcp_socket, {unconnected, Handle}}}, {ok, {net_network, Grant}}} ->
+            {tcp, Ip, Port} = Endpoint = endpoint(Addr),
+            case bind_addr_ok(wasi_sock2:family(Handle), Ip) of
                 false ->
-                    {error, <<"access-denied">>};
+                    {error, <<"invalid-argument">>};
                 true ->
-                    case wasi_sock:bind(Pending, Endpoint) of
-                        {ok, Bound}     -> bind_ok(Self, Bound);
-                        {error, Errno}  -> {error, sock_errno(Errno)}
+                    case wasi_net:allows(listen, Endpoint, Grant) of
+                        false ->
+                            {error, <<"access-denied">>};
+                        true ->
+                            case wasi_sock2:bind(Handle, {Ip, Port}) of
+                                ok             -> bind_ok(Self, Handle);
+                                {error, Errno} -> {error, sock2_errno(Errno)}
+                            end
                     end
             end;
         _ ->
             {error, <<"invalid-state">>}
     end.
 
-bind_ok(Self, Bound) ->
-    _ = wasm_component:host_update(Self, {binding, Bound}),
+bind_ok(Self, Handle) ->
+    _ = wasm_component:host_update(Self, {binding, Handle}),
     {ok, undefined}.
 
 %% Complete a start operation exactly once. The socket must be in the intermediate
@@ -2066,14 +2086,22 @@ finish(Self, Tag, From, To) ->
 
 tcp_start_listen(Self) ->
     case wasm_component:host_get(Self) of
-        {ok, {tcp_socket, {bound, Bound}}} ->
-            case wasi_sock:listen(Bound, ?SOCK_BACKLOG) of
-                {ok, Listen}   -> _ = wasm_component:host_update(Self, {listen_pending, Listen}),
+        {ok, {tcp_socket, {bound, Handle}}} ->
+            case wasi_sock2:listen(Handle, listen_backlog(Self)) of
+                ok             -> _ = wasm_component:host_update(
+                                        Self, {listen_pending, Handle}),
                                   {ok, undefined};
-                {error, Errno} -> {error, sock_errno(Errno)}
+                {error, Errno} -> {error, sock2_errno(Errno)}
             end;
         _ ->
             {error, <<"invalid-state">>}
+    end.
+
+%% The backlog the guest set via set-listen-backlog-size, or the default.
+listen_backlog(Self) ->
+    case get({?SOCKOPT, Self}) of
+        #{listen_backlog := N} -> N;
+        _                      -> ?SOCK_BACKLOG
     end.
 
 tcp_accept(Self, Grant) ->
@@ -2090,17 +2118,23 @@ tcp_accept(Self, Grant) ->
     end.
 
 accept_connection(Listener, Listen) ->
-    case wasi_sock:accept(Listen, ?SOCK_TIMEOUT) of
+    case wasi_sock2:accept(Listen, ?SOCK_TIMEOUT) of
         {ok, Conn} ->
             Sock = wasm_component:host_new(tcp_socket, {connected, Conn}),
             %% An accepted connection inherits the listener's socket options.
             _ = inherit_sockopts(Listener, Sock),
-            In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
-            Out = wasm_component:host_new(output_stream, {socket, Conn}),
+            {In, Out} = tcp_streams(Conn),
             {ok, {Sock, In, Out}};
         {error, Errno} ->
-            {error, sock_errno(Errno)}
+            {error, sock2_errno(Errno)}
     end.
+
+%% The input/output stream pair over a connected TCP socket (a wasi_sock2 handle).
+%% The `socket` stream tag is TCP-only, so its read/write path uses wasi_sock2.
+tcp_streams(Conn) ->
+    In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
+    Out = wasm_component:host_new(output_stream, {socket, Conn}),
+    {In, Out}.
 
 inherit_sockopts(From, To) ->
     case get({?SOCKOPT, From}) of
@@ -2112,9 +2146,9 @@ tcp_local(Self) ->
     case wasm_component:host_get(Self) of
         {ok, {tcp_socket, {State, Handle}}}
           when State =:= bound; State =:= listening; State =:= connected ->
-            case wasi_sock:local(Handle) of
+            case wasi_sock2:sockname(Handle) of
                 {ok, {Addr, Port}} -> {ok, ip_sockaddr(Addr, Port)};
-                {error, Errno}     -> {error, sock_errno(Errno)}
+                {error, Errno}     -> {error, sock2_errno(Errno)}
             end;
         _ ->
             {error, <<"invalid-state">>}
@@ -2125,9 +2159,9 @@ tcp_local(Self) ->
 tcp_remote(Self) ->
     case wasm_component:host_get(Self) of
         {ok, {tcp_socket, {connected, Conn}}} ->
-            case wasi_sock:peer(Conn) of
+            case wasi_sock2:peername(Conn) of
                 {ok, {Addr, Port}} -> {ok, ip_sockaddr(Addr, Port)};
-                {error, Errno}     -> {error, sock_errno(Errno)}
+                {error, Errno}     -> {error, sock2_errno(Errno)}
             end;
         _ ->
             {error, <<"invalid-state">>}
@@ -2142,7 +2176,7 @@ tcp_is_listening(Self) ->
 %% The family is fixed at create and readable from the live handle in any state.
 tcp_family(Self) ->
     case tcp_handle(Self) of
-        {ok, Handle} -> family_enum(wasi_sock:family(Handle));
+        {ok, Handle} -> family_enum(wasi_sock2:family(Handle));
         error        -> <<"ipv4">>
     end.
 
@@ -2180,12 +2214,13 @@ opt_set_nonzero(Self, Which, Value) ->
         true                  -> put_socket_opt(Self, Which, Value), {ok, undefined}
     end.
 
-%% set-listen-backlog-size is not read back, so it only validates and is dropped.
+%% set-listen-backlog-size stores the hint so a later listen uses it.
 tcp_set_nonzero(Self, Value) ->
     case live_socket(Self) of
         false                 -> {error, <<"invalid-state">>};
         true when Value =:= 0 -> {error, <<"invalid-argument">>};
-        true                  -> {ok, undefined}
+        true                  -> put_socket_opt(Self, listen_backlog, Value),
+                                 {ok, undefined}
     end.
 
 live_socket(Self) ->
@@ -2221,21 +2256,21 @@ ip_sockaddr({A, B, C, D, E, F, G, H}, Port) ->
 tcp_shutdown(Self, How) ->
     case wasm_component:host_get(Self) of
         {ok, {tcp_socket, {connected, Conn}}} ->
-            case wasi_sock:shutdown(Conn, shutdown_flags(How)) of
+            case wasi_sock2:shutdown(Conn, shutdown_dir(How)) of
                 ok             -> {ok, undefined};
-                {error, Errno} -> {error, sock_errno(Errno)}
+                {error, Errno} -> {error, sock2_errno(Errno)}
             end;
         _ ->
             {error, <<"invalid-state">>}
     end.
 
-shutdown_flags(<<"receive">>) -> ?SDFLAGS_RD;
-shutdown_flags(<<"send">>)    -> ?SDFLAGS_WR;
-shutdown_flags(<<"both">>)    -> ?SDFLAGS_RD bor ?SDFLAGS_WR.
+shutdown_dir(<<"receive">>) -> read;
+shutdown_dir(<<"send">>)    -> write;
+shutdown_dir(<<"both">>)    -> both.
 
 tcp_drop(H) ->
     case wasm_component:host_get(H) of
-        {ok, {tcp_socket, {_State, Handle}}} -> _ = wasi_sock:close(Handle);
+        {ok, {tcp_socket, {_State, Handle}}} -> _ = wasi_sock2:close(Handle);
         _                                    -> ok
     end,
     _ = erase({?SOCKOPT, H}),
@@ -2501,6 +2536,57 @@ sock_errno(?EAFNOSUPPORT)  -> <<"not-supported">>;
 sock_errno(?EINVAL)        -> <<"invalid-argument">>;
 sock_errno(?EACCES)        -> <<"access-denied">>;
 sock_errno(_Other)         -> <<"unknown">>.
+
+%% A POSIX reason atom (from wasi_sock2 / the `socket` module) to an error-code name.
+sock2_errno(eaddrinuse)    -> <<"address-in-use">>;
+sock2_errno(eaddrnotavail) -> <<"address-not-bindable">>;
+sock2_errno(econnrefused)  -> <<"connection-refused">>;
+sock2_errno(econnreset)    -> <<"connection-reset">>;
+sock2_errno(econnaborted)  -> <<"connection-aborted">>;
+sock2_errno(etimedout)     -> <<"timeout">>;
+sock2_errno(timeout)       -> <<"timeout">>;
+sock2_errno(ehostunreach)  -> <<"remote-unreachable">>;
+sock2_errno(enetunreach)   -> <<"remote-unreachable">>;
+sock2_errno(eafnosupport)  -> <<"invalid-argument">>;
+sock2_errno(eacces)        -> <<"access-denied">>;
+sock2_errno(eperm)         -> <<"access-denied">>;
+sock2_errno(emsgsize)      -> <<"datagram-too-large">>;
+sock2_errno(eagain)        -> <<"would-block">>;
+sock2_errno(ewouldblock)   -> <<"would-block">>;
+sock2_errno(einval)        -> <<"invalid-argument">>;
+sock2_errno(_Other)        -> <<"unknown">>.
+
+%%% ------------------------------------------------------- address checks ---
+
+%% An address is bindable for a socket's family when its family matches, it is not
+%% an IPv4-mapped IPv6 address (these sockets are not dual-stack), and it is a
+%% unicast address. The unspecified address (bind-to-any) and port 0 (ephemeral) are
+%% both allowed for a bind.
+bind_addr_ok(Family, Ip) ->
+    ip_family(Ip) =:= Family andalso not mapped_v4(Ip) andalso unicast(Ip).
+
+%% A connect/stream target additionally may not be the unspecified address or port 0.
+connect_addr_ok(Family, Ip, Port) ->
+    bind_addr_ok(Family, Ip) andalso not unspecified(Ip) andalso Port =/= 0.
+
+ip_family({_, _, _, _})             -> inet;
+ip_family({_, _, _, _, _, _, _, _}) -> inet6;
+ip_family(_)                        -> undefined.
+
+unspecified({0, 0, 0, 0})             -> true;
+unspecified({0, 0, 0, 0, 0, 0, 0, 0}) -> true;
+unspecified(_)                        -> false.
+
+%% ::ffff:a.b.c.d
+mapped_v4({0, 0, 0, 0, 0, 16#ffff, _, _}) -> true;
+mapped_v4(_)                              -> false.
+
+%% Reject broadcast and multicast: IPv4 255.255.255.255, IPv4 224.0.0.0/4, and IPv6
+%% ff00::/8.
+unicast({255, 255, 255, 255})       -> false;
+unicast({A, _, _, _}) when A >= 224, A =< 239 -> false;
+unicast({G, _, _, _, _, _, _, _}) when (G band 16#ff00) =:= 16#ff00 -> false;
+unicast(_)                          -> true.
 
 %% Resolve only if the grant behind the network permits it: no grant, no network.
 resolve_addresses(NetH, Name) ->

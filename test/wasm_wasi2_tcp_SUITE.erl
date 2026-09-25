@@ -91,18 +91,23 @@ listen_needs_a_grant(Config) ->
 %% return an empty set) and wakes once data arrives. Fail-first: poll returned [] at
 %% once for a non-empty set of not-ready sockets and never woke on data.
 poll_blocks_then_wakes_on_socket_data(_Config) ->
-    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}]),
-    {ok, Port} = inet:port(Listen),
-    {ok, Client} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}]),
-    {ok, Server} = gen_tcp:accept(Listen),
-    In = wasm_component:host_new(input_stream, {socket, {stream, Server}, <<>>}),
+    %% A socket-backed input stream carries a wasi_sock2 handle (the TCP backend),
+    %% so the connection is set up through it.
+    {ok, Listen} = wasi_sock2:open(inet),
+    ok = wasi_sock2:bind(Listen, {{127, 0, 0, 1}, 0}),
+    {ok, {_, Port}} = wasi_sock2:sockname(Listen),
+    ok = wasi_sock2:listen(Listen, 32),
+    {ok, Client} = wasi_sock2:open(inet),
+    ok = wasi_sock2:connect(Client, {{127, 0, 0, 1}, Port}, 2000),
+    {ok, Server} = wasi_sock2:accept(Listen, 2000),
+    In = wasm_component:host_new(input_stream, {socket, Server, <<>>}),
     P = wasm_component:host_new(pollable, {stream, In}),
-    _ = spawn(fun() -> timer:sleep(150), gen_tcp:send(Client, <<"hi">>) end),
+    _ = spawn(fun() -> timer:sleep(150), wasi_sock2:send(Client, <<"hi">>) end),
     T0 = erlang:monotonic_time(millisecond),
     ?assertEqual([0], wasi_preview2:poll([P])),
     ?assert(erlang:monotonic_time(millisecond) - T0 >= 100),
     wasm_component:host_drop(P), wasm_component:host_drop(In),
-    gen_tcp:close(Server), gen_tcp:close(Client), gen_tcp:close(Listen).
+    wasi_sock2:close(Server), wasi_sock2:close(Client), wasi_sock2:close(Listen).
 
 %%% -------------------------------------------------------------- helpers ---
 

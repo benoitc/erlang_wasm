@@ -954,7 +954,7 @@ no_live_pollable(Handle) ->
 -spec close_resource({atom(), term()}) -> ok.
 %% A socket-backed stream only borrows its socket's connection, which the
 %% tcp_socket resource owns and closes, so it is not closed here.
-close_resource({fs_file, {Handle, _Flags}})             -> _ = wasi_fs:close(Handle), ok;
+close_resource({fs_file, {Handle, _Flags, _}})             -> _ = wasi_fs:close(Handle), ok;
 close_resource({fs_dir, {Root, _}})                          -> _ = wasi_fs:forget(Root), ok;
 close_resource({output_stream, {file, own, Fh, _}})     -> _ = wasi_fs:close(Fh), ok;
 close_resource({output_stream, {file_append, own, Fh}}) -> _ = wasi_fs:close(Fh), ok;
@@ -1318,13 +1318,13 @@ open_named(Root, W, PathFlags, Path0, OpenFlags, DescFlags, WantsWrite) ->
         {ok, _} when WantDir ->
             {error, <<"not-directory">>};
         {ok, _} ->
-            open_file(Root, Path, OpenFlags, DescFlags, WantsWrite, Follow);
+            open_file(Root, W, Path, OpenFlags, DescFlags, WantsWrite, Follow);
         {error, Errno} when WantDir ->
             {error, errno_name(Errno)};
         {error, _} ->
             %% Absent (a create) or a symlink stat could not follow: let the open
             %% produce the errno, as Preview 1 hands the name to wasi_fs.
-            open_file(Root, Path, OpenFlags, DescFlags, WantsWrite, Follow)
+            open_file(Root, W, Path, OpenFlags, DescFlags, WantsWrite, Follow)
     end.
 
 strip_trailing_slashes(Path) ->
@@ -1339,13 +1339,16 @@ open_dir(Root, W, Path) ->
         {error, Errno} -> {error, errno_name(Errno)}
     end.
 
-open_file(Root, Path, OpenFlags, DescFlags, WantsWrite, Follow) ->
+open_file(Root, W, Path, OpenFlags, DescFlags, WantsWrite, Follow) ->
     Modes = open_modes(OpenFlags, DescFlags, WantsWrite)
         ++ [follow || Follow =:= follow],
     case wasi_fs:open(Root, Path, Modes) of
         {ok, Handle} ->
             Flags = eff_flags(DescFlags, WantsWrite),
-            {ok, wasm_component:host_new(fs_file, {Handle, Flags})};
+            %% The descriptor carries its mount's writability, so a write stream on a
+            %% file in a read-only mount is not-permitted (the mount boundary) while a
+            %% read-only descriptor in a writable mount is bad-descriptor (Preview 1).
+            {ok, wasm_component:host_new(fs_file, {Handle, Flags, W})};
         {error, Errno} ->
             {error, errno_name(Errno)}
     end.
@@ -1419,15 +1422,19 @@ output_file(Handle, Mode) ->
 %% write stream, which is how a write to a read-opened file is refused.
 writable_file(File) ->
     case wasm_component:host_get(File) of
-        {ok, {fs_file, {Handle, Flags}}} ->
-            case lists:member(<<"write">>, Flags) of
-                true  -> {ok, Handle};
-                %% Opened without write rights: the preview1 fd_write contract
-                %% wants a bad descriptor here (the p1->p2 adapter's
-                %% path_open_read_write asserts EBADF/ENOTCAPABLE/EACCES), so a
-                %% read-only file's write stream is bad-descriptor, not
-                %% not-permitted.
-                false -> {error, <<"bad-descriptor">>}
+        {ok, {fs_file, {Handle, Flags, MountW}}} ->
+            case {lists:member(<<"write">>, Flags), MountW} of
+                {true, _} ->
+                    {ok, Handle};
+                %% A read-only mount denies the write itself: not-permitted, the mount
+                %% boundary (p2_file_stream_not_permitted).
+                {false, false} ->
+                    {error, <<"not-permitted">>};
+                %% A read-only descriptor in a writable mount is the preview1 fd_write
+                %% contract: bad-descriptor (the p1->p2 adapter's path_open_read_write
+                %% asserts EBADF/ENOTCAPABLE/EACCES).
+                {false, true} ->
+                    {error, <<"bad-descriptor">>}
             end;
         _ ->
             {error, <<"bad-descriptor">>}
@@ -1435,7 +1442,7 @@ writable_file(File) ->
 
 write_at(File, Data, Off) ->
     case wasm_component:host_get(File) of
-        {ok, {fs_file, {Handle, _}}} ->
+        {ok, {fs_file, {Handle, _, _}}} ->
             case wasi_fs:pwrite(Handle, Off, Data) of
                 {ok, Count}    -> {ok, Count};
                 {error, Errno} -> {error, errno_name(Errno)}
@@ -1612,7 +1619,7 @@ follow_of(PathFlags) ->
 
 sync_fd(H) ->
     case wasm_component:host_get(H) of
-        {ok, {fs_file, {Handle, _}}} -> fs_unit(wasi_fs:sync(Handle));
+        {ok, {fs_file, {Handle, _, _}}} -> fs_unit(wasi_fs:sync(Handle));
         {ok, {fs_dir, {_Root, _}}}   -> {ok, undefined};
         error                   -> {error, <<"bad-descriptor">>}
     end.
@@ -1626,7 +1633,7 @@ is_same_object(A, B) ->
 
 ino(H) ->
     case wasm_component:host_get(H) of
-        {ok, {fs_file, {Handle, _}}} -> ino_of(wasi_fs:stat_fd(Handle));
+        {ok, {fs_file, {Handle, _, _}}} -> ino_of(wasi_fs:stat_fd(Handle));
         {ok, {fs_dir, {Root, _}}}    -> ino_of(wasi_fs:stat(Root, <<".">>));
         error                   -> error
     end.
@@ -1644,7 +1651,7 @@ metadata_hash_at(Dir, PathFlags, Path) ->
 
 read_at(File, Len, Off) ->
     case wasm_component:host_get(File) of
-        {ok, {fs_file, {Handle, _}}} ->
+        {ok, {fs_file, {Handle, _, _}}} ->
             case wasi_fs:pread(Handle, Off, Len) of
                 {ok, Bin} -> {ok, {Bin, at_eof(Handle, Off, byte_size(Bin), Len)}};
                 eof -> {ok, {<<>>, true}};
@@ -1664,7 +1671,7 @@ type_of(H) ->
     case wasm_component:host_get(H) of
         {ok, {fs_dir, {_Root, _}}} ->
             {ok, <<"directory">>};
-        {ok, {fs_file, {Handle, _}}} ->
+        {ok, {fs_file, {Handle, _, _}}} ->
             case wasi_fs:stat_fd(Handle) of
                 {ok, #{type := Type}} -> {ok, fs_type_name(Type)};
                 {error, Errno} -> {error, errno_name(Errno)}
@@ -1684,7 +1691,7 @@ descriptor_flags(false) -> [<<"read">>].
 %% A file reports the flags it was opened with; a directory reports the mount's.
 get_flags(H) ->
     case wasm_component:host_get(H) of
-        {ok, {fs_file, {_Handle, Flags}}} -> {ok, Flags};
+        {ok, {fs_file, {_Handle, Flags, _}}} -> {ok, Flags};
         {ok, {fs_dir, {_Root, W}}}        -> {ok, descriptor_flags(W)};
         _                                 -> {error, <<"bad-descriptor">>}
     end.
@@ -1693,7 +1700,7 @@ get_flags(H) ->
 %% two descriptors apart, which is what metadata-hash is for.
 metadata_hash(H) ->
     case wasm_component:host_get(H) of
-        {ok, {fs_file, {Handle, _}}} -> from_hash(wasi_fs:stat_fd(Handle));
+        {ok, {fs_file, {Handle, _, _}}} -> from_hash(wasi_fs:stat_fd(Handle));
         {ok, {fs_dir, {Root, _}}}    -> from_hash(wasi_fs:stat(Root, <<".">>));
         error                   -> {error, <<"bad-descriptor">>}
     end.
@@ -1705,7 +1712,7 @@ from_hash({error, Errno}) ->
 
 stat(H) ->
     case wasm_component:host_get(H) of
-        {ok, {fs_file, {Handle, _}}} -> from_stat(wasi_fs:stat_fd(Handle));
+        {ok, {fs_file, {Handle, _, _}}} -> from_stat(wasi_fs:stat_fd(Handle));
         {ok, {fs_dir, {Root, _}}}    -> from_stat(wasi_fs:stat(Root, <<".">>));
         error                   -> {error, <<"bad-descriptor">>}
     end.
@@ -1789,7 +1796,7 @@ read_all(Handle, Off, Acc) ->
 
 readable_file(File) ->
     case wasm_component:host_get(File) of
-        {ok, {fs_file, {Handle, Flags}}} ->
+        {ok, {fs_file, {Handle, Flags, _MountW}}} ->
             case lists:member(<<"read">>, Flags) of
                 true  -> {ok, Handle};
                 false -> {error, <<"bad-descriptor">>}
@@ -2797,7 +2804,7 @@ ip_address({A, B, C, D, E, F, G, H}) ->
 %% free the host handle. A double drop or unknown handle is a no-op.
 fs_drop(H) ->
     case wasm_component:host_get(H) of
-        {ok, {fs_file, {Handle, _}}} -> _ = wasi_fs:close(Handle);
+        {ok, {fs_file, {Handle, _, _}}} -> _ = wasi_fs:close(Handle);
         {ok, {fs_dir, {Root, _}}}    -> _ = wasi_fs:forget(Root);
         error                   -> ok
     end,

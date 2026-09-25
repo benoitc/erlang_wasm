@@ -4,7 +4,7 @@
     %% `wasm' on hex.pm is not ours. Depend on it as
     %% {deps, [{wasm, {pkg, erlang_wasm}}]}.
     {pkg_name, erlang_wasm},
-    {vsn, "0.4.3"},
+    {vsn, "0.5.0"},
     {registered, [wasm_sup, wasm_engine, wasm_module_cache, wasm_worker_reaper]},
     {mod, {wasm_app, []}},
     %% `common_test' is optional: only `wasm_adapter_conformance', the kit an

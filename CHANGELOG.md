@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 (unreleased)
+## 0.5.0
 
 Requests on a pool of script workers no longer wait on one another in
 node-wide processes. Nothing in your code changes. One new worker option.

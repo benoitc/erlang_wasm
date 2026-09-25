@@ -39,7 +39,7 @@ baseline() ->
       ~"io"         => 1,
       ~"http"       => 0,
       ~"random"     => 0,
-      ~"sockets"    => 1}.
+      ~"sockets"    => 0}.
 
 init_per_suite(Config) ->
     case wasi_p2_runner:have_fixtures() of

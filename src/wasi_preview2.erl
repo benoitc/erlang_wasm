@@ -127,6 +127,8 @@ later step.
 %% The datagrams a single send may carry: check-send reports it, and sending more
 %% than the last check-send permitted is a trap (the wasi:sockets contract).
 -define(DGRAM_PERMIT, 16).
+%% Process-dict key marking a connection whose receive side the guest shut down.
+-define(SHUT_RECV, {?MODULE, shut_recv}).
 -define(ADDR_FAMILY, {enum, [<<"ipv4">>, <<"ipv6">>]}).
 -define(IPV4_SOCKADDR,
         {record, [{<<"port">>, u16}, {<<"address">>, {tuple, [u8, u8, u8, u8]}}]}).
@@ -951,23 +953,32 @@ read_stream(Handle, Len, Timeout) ->
     end.
 
 socket_read(Handle, Sock, Buf, Len, Timeout) ->
-    %% Always probe the socket, so a peer close or a local shutdown-for-receive reads
-    %% as closed even when bytes are already buffered: WASI signals closed at once
-    %% rather than draining the buffer first. A probe with a buffer present is
-    %% non-blocking (the buffer is what a timeout would have returned).
-    Probe = case Buf of <<>> -> Timeout; _ -> 0 end,
-    case wasi_sock2:recv(Sock, 0, Probe) of
-        {ok, Data} ->
-            socket_deliver(Handle, Sock, <<Buf/binary, Data/binary>>, Len);
-        eof ->
+    case get({?SHUT_RECV, Sock}) of
+        true ->
+            %% A socket shut for receiving reads as closed at once, discarding any
+            %% buffered bytes (WASI does not drain first after a local shutdown).
             {error, {<<"closed">>, undefined}};
-        {error, _} when Buf =/= <<>> ->
-            socket_deliver(Handle, Sock, Buf, Len);
-        %% A non-blocking read with nothing waiting is not an error: zero bytes,
-        %% so the guest can poll and read again. A blocking read that timed out
-        %% reports the stream drained.
-        {error, _} when Timeout =:= 0 -> {ok, <<>>};
-        {error, _}  -> {error, {<<"closed">>, undefined}}
+        _ ->
+            %% Probe the socket so a peer close is seen, but deliver buffered bytes
+            %% before reporting it: a graceful remote close hands over what already
+            %% arrived, then closes on the next read. A probe with a buffer present is
+            %% non-blocking (the buffer is what a timeout would have returned).
+            Probe = case Buf of <<>> -> Timeout; _ -> 0 end,
+            case wasi_sock2:recv(Sock, 0, Probe) of
+                {ok, Data} ->
+                    socket_deliver(Handle, Sock, <<Buf/binary, Data/binary>>, Len);
+                eof when Buf =/= <<>> ->
+                    socket_deliver(Handle, Sock, Buf, Len);
+                eof ->
+                    {error, {<<"closed">>, undefined}};
+                {error, _} when Buf =/= <<>> ->
+                    socket_deliver(Handle, Sock, Buf, Len);
+                %% A non-blocking read with nothing waiting is not an error: zero
+                %% bytes, so the guest can poll and read again. A blocking read that
+                %% timed out reports the stream drained.
+                {error, _} when Timeout =:= 0 -> {ok, <<>>};
+                {error, _}  -> {error, {<<"closed">>, undefined}}
+            end
     end.
 
 socket_deliver(Handle, Sock, Data, Len) ->
@@ -2300,8 +2311,16 @@ tcp_shutdown(Self, How) ->
     case wasm_component:host_get(Self) of
         {ok, {tcp_socket, {connected, Conn}}} ->
             case wasi_sock2:shutdown(Conn, shutdown_dir(How)) of
-                ok             -> {ok, undefined};
-                {error, Errno} -> {error, sock2_errno(Errno)}
+                ok ->
+                    %% Remember a local receive shutdown so a later read reports
+                    %% closed rather than draining buffered bytes.
+                    case How of
+                        <<"send">> -> ok;
+                        _          -> put({?SHUT_RECV, Conn}, true)
+                    end,
+                    {ok, undefined};
+                {error, Errno} ->
+                    {error, sock2_errno(Errno)}
             end;
         _ ->
             {error, <<"invalid-state">>}

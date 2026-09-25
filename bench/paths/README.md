@@ -834,3 +834,31 @@ Three rules this mode adds to the protocol above:
 `calibrate` injects a known sleep into one named callback and requires it to
 appear in that interval and nowhere else. Run all five: injecting into one
 proves that boundary and leaves a swap among the other four invisible.
+
+### Many callers on a pool, and what they queue behind
+
+`reqbench` drives a pool of script workers with many callers, the shape a host
+like hornbeam serves in, and samples every 10 ms the message queue of each
+node-wide process a request can wait on: `file_server_2`, the reaper, the
+cleanup manager, the steward supervisor, the keeper and the code slots.
+
+```sh
+erlc -o bench/paths -pa _build/test/lib/wasm/ebin bench/paths/reqbench.erl
+REQBENCH_WARM=240 erl -noshell -pa _build/test/lib/wasm/ebin -pa bench/paths \
+    -run reqbench main py 14 64 10 ""
+```
+
+The arguments are the guest (`py`, `qjs`, `lua`), the worker count, the caller
+count, the seconds per arm and extra worker options as a term, for example
+`"#{restore_ahead => true}"`. Images and generated code are kept under
+`_build/reqbench`, so warm it once with a long `REQBENCH_WARM` (CPython's tier
+takes minutes the first time) and later runs load it in seconds.
+`REQBENCH_POOL=fifo` rotates idle workers instead of reusing the last one,
+which is the case `restore_ahead` helps; `REQBENCH_MSACC=1` prints microstate
+accounting for the loaded arm.
+
+A queue whose maximum stays at 0 or 1 is not a serialisation point; one that
+grows is. Like `throughput`, the requests per second are the box's as much as
+the code's: compare two builds only interleaved, in the same minutes, each with
+its own code cache (a cache under a symbolic link or a world-writable directory
+such as `/tmp` is refused, and that arm silently interprets).

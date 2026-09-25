@@ -520,7 +520,8 @@ run_command(Bin, Stdin, Extra) ->
              stderr => fun(B) -> Self ! {ErrRef, B}, ok end},
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
     InstOpts = #{loader => Loader, stub => maps:get(stub, Extra, false),
-                 resource_closer => fun close_resource/1},
+                 resource_closer => fun close_resource/1,
+                 resource_predrop => fun stream_predrop/1},
     case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
         {ok, Instance} ->
             %% Destroy on every path: a run mints stream, pollable and directory
@@ -582,7 +583,8 @@ run_serve(Bin, Request, Extra) ->
     _ = erase(?EXIT_STATUS),
     _ = erase(?INSECURE_SEED),
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
-    InstOpts = #{loader => Loader, resource_closer => fun close_resource/1},
+    InstOpts = #{loader => Loader, resource_closer => fun close_resource/1,
+                 resource_predrop => fun stream_predrop/1},
     Opts = maps:without([compile], Extra),
     case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
         {ok, Instance} ->
@@ -906,6 +908,30 @@ socket_open_or_closed(Conn) ->
 %% Close the OS resource a host handle owns, called from teardown for every live
 %% handle. Only file descriptors and sockets hold OS state; a clock pollable, a
 %% preopen dir root and an error carry none.
+%% Vetoes dropping a stream that a pollable still borrows: a `subscribe` mints a
+%% pollable holding `{stream, StreamHandle}`, and the Canonical ABI traps rather than
+%% leave that pollable pointing at a freed stream. Any other handle drops normally.
+-spec stream_predrop(pos_integer()) -> ok | {trap, term()}.
+stream_predrop(Handle) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {input_stream, _}}  -> no_live_pollable(Handle);
+        {ok, {output_stream, _}} -> no_live_pollable(Handle);
+        _                        -> ok
+    end.
+
+no_live_pollable(Handle) ->
+    Borrowed = lists:any(
+                 fun(H) ->
+                     case wasm_component:host_get(H) of
+                         {ok, {pollable, {stream, Handle}}} -> true;
+                         _                                  -> false
+                     end
+                 end, wasm_component:host_live()),
+    case Borrowed of
+        true  -> {trap, stream_dropped_with_live_pollable};
+        false -> ok
+    end.
+
 -spec close_resource({atom(), term()}) -> ok.
 %% A socket-backed stream only borrows its socket's connection, which the
 %% tcp_socket resource owns and closes, so it is not closed here.

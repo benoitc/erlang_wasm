@@ -186,7 +186,7 @@ instantiate(Bin, Imports, Opts) ->
     %% avoid `load_rate_exceeded`. `stub => true` lets the linker fill a
     %% preview1-adapter's unused preview2 imports with trap-if-called stubs.
     %% Everything else in Opts is instance limits.
-    Limits = maps:without([loader, stub, resource_closer], Opts),
+    Limits = maps:without([loader, stub, resource_closer, resource_predrop], Opts),
     %% Decode and the graph parsers match bytes strictly and signal by throwing;
     %% capture turns a malformed component into a value here, the same boundary the
     %% core decoder uses, while letting an in-flight guest exception pass through.
@@ -254,17 +254,25 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts)
             E
     end.
 
-%% The drop function `canon resource.drop` runs. A caller that owns OS resources
-%% supplies `resource_closer` (the same closer `destroy/2` uses); a dropped host
-%% resource is closed and its handle forgotten at once, so it does not leak until
-%% destroy. A handle that is not a host resource (a guest identity handle) is left
-%% alone. With no closer, drop stays a no-op.
+%% The drop function `canon resource.drop` runs, returning `ok` or `{trap, Reason}`.
+%% A caller that owns OS resources supplies `resource_closer` (the same closer
+%% `destroy/2` uses); a dropped host resource is closed and its handle forgotten at
+%% once, so it does not leak until destroy. `resource_predrop` may veto a drop with a
+%% trap (a resource that still has a live borrow may not be dropped). A handle that is
+%% not a host resource (a guest identity handle) is left alone; with no closer, drop
+%% stays a no-op.
 drop_fun(Opts) ->
     Closer = maps:get(resource_closer, Opts, fun(_R) -> ok end),
+    PreDrop = maps:get(resource_predrop, Opts, fun(_H) -> ok end),
     fun(Handle) ->
-        case host_get(Handle) of
-            {ok, Resource} -> _ = Closer(Resource), _ = host_drop(Handle), ok;
-            error          -> ok
+        case PreDrop(Handle) of
+            {trap, _} = Trap ->
+                Trap;
+            _ ->
+                case host_get(Handle) of
+                    {ok, Resource} -> _ = Closer(Resource), _ = host_drop(Handle), ok;
+                    error          -> ok
+                end
         end
     end.
 

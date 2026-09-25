@@ -285,7 +285,12 @@ step({canon_resource, drop, _Rt}, S) ->
     %% frees it at once instead of leaking until the instance is destroyed. With no
     %% drop function it stays a no-op (the destroy-time sweep still frees everything).
     Drop = maps:get(drop_fun, maps:get(opts, S), fun(_H) -> ok end),
-    Fun = fun(_Ctx, [H]) -> _ = Drop(H), {ok, []} end,
+    Fun = fun(_Ctx, [H]) ->
+              case Drop(H) of
+                  {trap, _} = Trap -> Trap;
+                  _                -> {ok, []}
+              end
+          end,
     {ok, bump(S, n_cf, core_funcs, Fun)};
 step({canon_resource, Kind, _Rt}, S) ->
     {ok, bump(S, n_cf, core_funcs, resource_fun(Kind))};

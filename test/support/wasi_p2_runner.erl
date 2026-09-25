@@ -272,10 +272,10 @@ expect("p2_cli_exit_panic")     -> trap;
 %% section is too large (the header-error variant has no case for it, so it is a
 %% trap, not a value), and the guest falls through to an unreachable.
 expect("p2_cli_http_headers")   -> trap;
-%% Poll of an empty list must trap, which this program asserts by doing exactly
-%% that. (p2_stream_pollable_traps also traps, but only once dropping a stream with
-%% a live pollable does, which waits on the real resource destructor.)
-expect("p2_pollable_traps")     -> trap;
+%% Poll of an empty list must trap, and dropping a stream while a pollable still
+%% borrows it must trap; both programs pass by trapping.
+expect("p2_pollable_traps")        -> trap;
+expect("p2_stream_pollable_traps") -> trap;
 %% Sending more datagrams than check-send permitted must trap.
 expect("p2_udp_send_too_much")  -> trap;
 expect(_)                       -> zero.

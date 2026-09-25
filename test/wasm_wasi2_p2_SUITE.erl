@@ -36,7 +36,7 @@ baseline() ->
     #{~"cli"        => 5,
       ~"clocks"     => 0,
       ~"filesystem" => 1,
-      ~"io"         => 1,
+      ~"io"         => 0,
       ~"http"       => 0,
       ~"random"     => 0,
       ~"sockets"    => 0}.

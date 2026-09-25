@@ -514,9 +514,20 @@ run_command(Bin, Stdin, Extra) ->
     OutRef = make_ref(),
     ErrRef = make_ref(),
     Self = self(),
-    Opts = (maps:without([compile, stub], Extra))#{
+    %% An optional stdout byte limit models a reader that closes the pipe: once the
+    %% limit is passed the sink reports closed, which a guest reads as EPIPE.
+    Written = counters:new(1, []),
+    Limit = maps:get(stdout_limit, Extra, infinity),
+    Stdout = fun(B) ->
+                 Self ! {OutRef, B},
+                 case Limit =/= infinity andalso counters:get(Written, 1) >= Limit of
+                     true  -> closed;
+                     false -> counters:add(Written, 1, byte_size(B)), ok
+                 end
+             end,
+    Opts = (maps:without([compile, stub, stdout_limit], Extra))#{
              stdin => Stdin,
-             stdout => fun(B) -> Self ! {OutRef, B}, ok end,
+             stdout => Stdout,
              stderr => fun(B) -> Self ! {ErrRef, B}, ok end},
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
     InstOpts = #{loader => Loader, stub => maps:get(stub, Extra, false),
@@ -817,7 +828,12 @@ write_stream(Handle, Bytes) ->
             %% belongs to, so outgoing-handler sends what the guest wrote.
             wasi_http:append_body(Req, Bytes);
         {ok, {output_stream, Sink}} when is_function(Sink) ->
-            _ = Sink(Bytes), ok;
+            %% A sink may signal that its reader is gone (a closed pipe), which the
+            %% guest sees as the closed stream-error.
+            case Sink(Bytes) of
+                closed -> {error, closed};
+                _      -> ok
+            end;
         _ ->
             ok
     end.

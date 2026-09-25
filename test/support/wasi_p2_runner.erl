@@ -224,6 +224,10 @@ program_config("p2_cli_much_stdout") ->
 %% it runs out; give it a cap it exceeds (a real program peaks in the low tens).
 program_config("p2_cli_many_resources") ->
     {<<>>, #{resource_limit => 512}};
+%% Writes to stdout until the reader closes the pipe; give it a byte limit after
+%% which the sink reports closed, which the guest expects as EPIPE.
+program_config("p2_cli_stdout_epipe") ->
+    {<<>>, #{stdout_limit => 65536}};
 program_config(_) ->
     default.
 

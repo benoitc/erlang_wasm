@@ -187,10 +187,9 @@ instantiate(Bin, Imports, Opts) ->
     %% `loader => compile` builds an inline module with `wasm:compile` instead of
     %% `wasm:load`, whose node cache is rate-limited to 50/s; a runner that
     %% instantiates many single-use components (the wasi-testsuite) needs it to
-    %% avoid `load_rate_exceeded`. `stub => true` lets the linker fill a
-    %% preview1-adapter's unused preview2 imports with trap-if-called stubs.
-    %% Everything else in Opts is instance limits.
-    Limits = maps:without([loader, stub, resource_closer, resource_predrop,
+    %% avoid `load_rate_exceeded`. An unresolved import is a link-time error, never a
+    %% trap-if-called placeholder. Everything else in Opts is instance limits.
+    Limits = maps:without([loader, resource_closer, resource_predrop,
                            resource_limit], Opts),
     %% Cap the live host resources for this run, if the caller set one.
     put(?HOST_LIMIT, maps:get(resource_limit, Opts, infinity)),

@@ -374,16 +374,12 @@ realloc_callable(Idx, S) ->
         _                          -> undefined
     end.
 
-%% An import the host set does not cover. The preview1 adapter lowers the whole
-%% preview2 surface, so a program that uses one interface still names them all; a
-%% caller running such a component (`stub => true`) fills the unused ones with a
-%% function that traps only if actually called, rather than failing to link.
-%% Otherwise it is a named error, so a real missing import is visible.
-missing(Key, S) ->
-    case maps:get(stub, maps:get(opts, S), false) of
-        true  -> {ok, fun(_Ctx, _Args) -> {trap, {unimplemented_import, Key}} end};
-        false -> {error, {unresolved_import, Key}}
-    end.
+%% An import the host set does not cover is a link-time error naming the interface
+%% and function, so an unresolved import is a clean value at link time rather than a
+%% trap when the guest first calls it. The whole WASI 0.2 surface is implemented, so
+%% a real program links without any placeholder imports.
+missing(Key, _S) ->
+    {error, {unresolved_import, Key}}.
 
 %% Identity handle intrinsics for `canon resource.{new,drop,rep}`; the host owns
 %% real resource state elsewhere, so these just pass the handle through.
@@ -432,7 +428,7 @@ instantiate_core(ModIdx, Args, S) ->
         {ok, ImportMap} ->
             Opts = maps:get(opts, S),
             Loader = maps:get(loader, Opts, load),
-            Limits = link_to(maps:get(anchor, S), maps:without([loader, stub], Opts)),
+            Limits = link_to(maps:get(anchor, S), maps:without([loader], Opts)),
             case load_core(Loader, Bytes) of
                 {ok, Mod} ->
                     case wasm:instantiate(Mod, ImportMap, Limits) of

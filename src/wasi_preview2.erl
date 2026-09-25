@@ -505,7 +505,7 @@ give the command a directory to read (a mount), or `network => Grant` to grant t
                     preopens => [{binary(), file:filename_all(), boolean()}],
                     initial_cwd => binary(),
                     network => term(),
-                    compile => boolean(), stub => boolean()}) ->
+                    compile => boolean()}) ->
           {ok, #{stdout := binary(), stderr := binary(),
                  exit_code := integer()}} | {error, term()}.
 run_command(Bin, Stdin, Extra) ->
@@ -527,12 +527,12 @@ run_command(Bin, Stdin, Extra) ->
              end,
     %% Stdin redirected from a directory reads as an operation failure, not bytes.
     Source = case maps:get(stdin_dir, Extra, false) of true -> eisdir; false -> Stdin end,
-    Opts = (maps:without([compile, stub, stdout_limit, stdin_dir], Extra))#{
+    Opts = (maps:without([compile, stdout_limit, stdin_dir], Extra))#{
              stdin => Source,
              stdout => Stdout,
              stderr => fun(B) -> Self ! {ErrRef, B}, ok end},
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
-    InstOpts = #{loader => Loader, stub => maps:get(stub, Extra, false),
+    InstOpts = #{loader => Loader,
                  resource_closer => fun close_resource/1,
                  resource_predrop => fun stream_predrop/1,
                  resource_limit => maps:get(resource_limit, Extra, infinity)},

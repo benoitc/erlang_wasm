@@ -74,17 +74,22 @@ a_failed_link_frees_the_cores_it_built(_Config) ->
 %% mints a host resource holding a live socket, destroys with the WASI closer, and
 %% asserts the port is gone and the tables are empty.
 destroy_closes_host_resources_and_clears_the_tables(_Config) ->
-    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}]),
-    {ok, Port} = inet:port(Listen),
-    {ok, Sock} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}]),
-    _ = wasm_component:host_new(tcp_socket, {connected, {stream, Sock}}),
+    %% A connected TCP socket is a wasi_sock2 handle (the socket-module backend); a
+    %% closed one has no sockname.
+    {ok, Listen} = wasi_sock2:open(inet),
+    ok = wasi_sock2:bind(Listen, {{127, 0, 0, 1}, 0}),
+    {ok, {_, Port}} = wasi_sock2:sockname(Listen),
+    ok = wasi_sock2:listen(Listen, 8),
+    {ok, Sock} = wasi_sock2:open(inet),
+    ok = wasi_sock2:connect(Sock, {{127, 0, 0, 1}, Port}, 2000),
+    _ = wasm_component:host_new(tcp_socket, {connected, Sock}),
     _ = wasm_component:host_new(pollable, {clock, 0}),
     ?assertNotEqual([], wasm_component:host_live()),
     ok = wasm_component:destroy(#{cores => []},
                                 fun wasi_preview2:close_resource/1),
     ?assertEqual([], wasm_component:host_live()),
-    ?assertEqual(undefined, erlang:port_info(Sock)),
-    gen_tcp:close(Listen).
+    ?assertMatch({error, _}, wasi_sock2:sockname(Sock)),
+    wasi_sock2:close(Listen).
 
 %% A graph item that makes the linker raise after it has built a core must still
 %% free that core. The two-core graph is parsed and a component-function alias to a

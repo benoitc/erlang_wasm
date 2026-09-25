@@ -40,14 +40,20 @@ an atom.
       | {core_instance, {exports, [{binary(), core_sort(), non_neg_integer()}]}}
       | {core_alias, core_sort(), non_neg_integer(), binary()}
       | {comp_func_alias, non_neg_integer(), binary()}
-      | {canon_lower, non_neg_integer(), non_neg_integer() | none}
-      | {canon_lift, non_neg_integer()}
+      | {canon_lower, non_neg_integer(), non_neg_integer() | none,
+         string_encoding()}
+      | {canon_lift, non_neg_integer(), string_encoding()}
       | {canon_resource, new | drop | rep, non_neg_integer()}
       | {comp_import_instance, binary()}
       | {comp_import_func, binary()}
       | {comp_export, binary(), byte(), non_neg_integer()}.
 
 -type core_sort() :: func | table | memory | global.
+
+%% The `string-encoding` canon option. This runtime marshals strings as UTF-8, the
+%% encoding every WASI toolchain emits; a canon def declaring another is refused at
+%% link time rather than silently mis-decoded.
+-type string_encoding() :: utf8 | utf16 | latin1_utf16.
 
 -type graph() :: [item()].
 
@@ -162,9 +168,9 @@ index_step({comp_import_func, _}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => import}, CoreN, PF + 1, CF};
 index_step({comp_func_alias, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => alias}, CoreN, PF + 1, CF};
-index_step({canon_lift, CFI}, {CompF, CoreN, PF, CF}) ->
+index_step({canon_lift, CFI, _Enc}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => {lift, CFI}}, CoreN, PF + 1, CF};
-index_step({canon_lower, _, _}, {CompF, CoreN, PF, CF}) ->
+index_step({canon_lower, _, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF, CoreN, PF, CF + 1};
 index_step({canon_resource, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF, CoreN, PF, CF + 1};
@@ -269,15 +275,23 @@ step({comp_import_func, Name}, S) ->
 step({comp_func_alias, InstIdx, Field}, S) ->
     Iface = maps:get(InstIdx, maps:get(comp_insts, S)),
     {ok, bump(S, n_pf, comp_funcs, {host, Iface, Field})};
-step({canon_lift, CoreFuncIdx}, S) ->
-    {ok, bump(S, n_pf, comp_funcs, {lift, CoreFuncIdx})};
-step({canon_lower, CompFuncIdx, ReallocIdx}, S) ->
-    case host_fun(maps:get(CompFuncIdx, maps:get(comp_funcs, S)), S) of
-        {ok, Fun} ->
-            Realloc = realloc_callable(ReallocIdx, S),
-            {ok, bump(S, n_cf, core_funcs, lowered(Fun, Realloc, S))};
+step({canon_lift, CoreFuncIdx, Enc}, S) ->
+    case supported_encoding(Enc) of
+        ok             -> {ok, bump(S, n_pf, comp_funcs, {lift, CoreFuncIdx})};
+        {error, _} = E -> E
+    end;
+step({canon_lower, CompFuncIdx, ReallocIdx, Enc}, S) ->
+    case supported_encoding(Enc) of
         {error, _} = E ->
-            E
+            E;
+        ok ->
+            case host_fun(maps:get(CompFuncIdx, maps:get(comp_funcs, S)), S) of
+                {ok, Fun} ->
+                    Realloc = realloc_callable(ReallocIdx, S),
+                    {ok, bump(S, n_cf, core_funcs, lowered(Fun, Realloc, S))};
+                {error, _} = E ->
+                    E
+            end
     end;
 step({canon_resource, drop, _Rt}, S) ->
     %% `canon resource.drop` runs the drop function the caller supplied (which closes
@@ -561,17 +575,20 @@ alias_entry(<<_Sort, 16#02, Rest0/binary>>) ->
 
 %% `0x00 0x00 f opts ft` lift (a component func over core func `f`);
 %% `0x01 0x00 f opts` lower (a core func over component func `f`);
-%% `0x02/03/04 rt` resource new/drop/rep (a core func). `opts` is skipped: the
-%% linker binds host functions by name and does not read the ABI options here.
+%% `0x02/03/04 rt` resource new/drop/rep (a core func). Of the ABI options the
+%% linker reads only the two it must act on: a lower's realloc index (a result that
+%% crosses by memory allocates through it) and the string encoding (a non-UTF-8 one
+%% is refused in `step/2` rather than silently mis-marshalled); the rest are stepped
+%% over, since the linker binds host functions by name.
 canon(<<16#00, 16#00, R0/binary>>) ->
     {F, R1} = wasm_leb128:u32(R0),
-    R2 = canonopts(R1),
+    {Enc, R2} = canonopts(R1),
     {_Ft, R3} = wasm_leb128:u32(R2),
-    {{canon_lift, F}, R3};
+    {{canon_lift, F, Enc}, R3};
 canon(<<16#01, 16#00, R0/binary>>) ->
     {F, R1} = wasm_leb128:u32(R0),
-    {Realloc, R2} = lower_opts(R1),
-    {{canon_lower, F, Realloc}, R2};
+    {Realloc, Enc, R2} = lower_opts(R1),
+    {{canon_lower, F, Realloc, Enc}, R2};
 canon(<<16#02, R0/binary>>) ->
     {Rt, R1} = wasm_leb128:u32(R0),
     {{canon_resource, new, Rt}, R1};
@@ -582,39 +599,57 @@ canon(<<16#04, R0/binary>>) ->
     {Rt, R1} = wasm_leb128:u32(R0),
     {{canon_resource, rep, Rt}, R1}.
 
-%% A vec of canonopt; step over each. `0x00/01/02` are flags (no operand);
-%% `0x03 m`, `0x04 f`, `0x05 f`, `0x07 f` carry an index; `0x06`/`0x08` none.
+%% A vec of canonopt, returning the string encoding (default UTF-8). `0x00/01/02`
+%% are the string-encoding flags (utf8/utf16/latin1+utf16, no operand); `0x03 m`,
+%% `0x04 f`, `0x05 f`, `0x07 f` carry an index; `0x06`/`0x08` none.
 canonopts(Bin) ->
     {Count, Rest} = wasm_leb128:u32(Bin),
-    canonopts(Count, Rest).
+    canonopts(Count, Rest, utf8).
 
-canonopts(0, Rest) ->
-    Rest;
-canonopts(N, <<Op, Rest0/binary>>) when Op =:= 16#03; Op =:= 16#04;
-                                        Op =:= 16#05; Op =:= 16#07 ->
+canonopts(0, Rest, Enc) ->
+    {Enc, Rest};
+canonopts(N, <<16#00, Rest0/binary>>, _Enc) ->
+    canonopts(N - 1, Rest0, utf8);
+canonopts(N, <<16#01, Rest0/binary>>, _Enc) ->
+    canonopts(N - 1, Rest0, utf16);
+canonopts(N, <<16#02, Rest0/binary>>, _Enc) ->
+    canonopts(N - 1, Rest0, latin1_utf16);
+canonopts(N, <<Op, Rest0/binary>>, Enc) when Op =:= 16#03; Op =:= 16#04;
+                                             Op =:= 16#05; Op =:= 16#07 ->
     {_Idx, Rest1} = wasm_leb128:u32(Rest0),
-    canonopts(N - 1, Rest1);
-canonopts(N, <<_Op, Rest0/binary>>) ->
-    canonopts(N - 1, Rest0).
+    canonopts(N - 1, Rest1, Enc);
+canonopts(N, <<_Op, Rest0/binary>>, Enc) ->
+    canonopts(N - 1, Rest0, Enc).
 
-%% A lower's options, keeping the realloc function index (`0x04 f`); a result that
-%% crosses by memory (a string or list) allocates through it, and the adapter
-%% names its own realloc, not one reachable on the instance calling the import.
+%% Only UTF-8 is marshalled; another declared encoding is a link-time refusal.
+supported_encoding(utf8) -> ok;
+supported_encoding(Enc)  -> {error, {unsupported_string_encoding, Enc}}.
+
+%% A lower's options, keeping the realloc function index (`0x04 f`) and the string
+%% encoding. A result that crosses by memory (a string or list) allocates through
+%% realloc, and the adapter names its own, not one reachable on the instance calling
+%% the import; the encoding is checked in `step/2` (only UTF-8 is marshalled).
 lower_opts(Bin) ->
     {Count, Rest} = wasm_leb128:u32(Bin),
-    lower_opts(Count, Rest, none).
+    lower_opts(Count, Rest, none, utf8).
 
-lower_opts(0, Rest, Realloc) ->
-    {Realloc, Rest};
-lower_opts(N, <<16#04, Rest0/binary>>, _Realloc) ->
+lower_opts(0, Rest, Realloc, Enc) ->
+    {Realloc, Enc, Rest};
+lower_opts(N, <<16#00, Rest0/binary>>, Realloc, _Enc) ->
+    lower_opts(N - 1, Rest0, Realloc, utf8);
+lower_opts(N, <<16#01, Rest0/binary>>, Realloc, _Enc) ->
+    lower_opts(N - 1, Rest0, Realloc, utf16);
+lower_opts(N, <<16#02, Rest0/binary>>, Realloc, _Enc) ->
+    lower_opts(N - 1, Rest0, Realloc, latin1_utf16);
+lower_opts(N, <<16#04, Rest0/binary>>, _Realloc, Enc) ->
     {Idx, Rest1} = wasm_leb128:u32(Rest0),
-    lower_opts(N - 1, Rest1, Idx);
-lower_opts(N, <<Op, Rest0/binary>>, Realloc) when Op =:= 16#03; Op =:= 16#05;
-                                                  Op =:= 16#07 ->
+    lower_opts(N - 1, Rest1, Idx, Enc);
+lower_opts(N, <<Op, Rest0/binary>>, Realloc, Enc) when Op =:= 16#03; Op =:= 16#05;
+                                                       Op =:= 16#07 ->
     {_Idx, Rest1} = wasm_leb128:u32(Rest0),
-    lower_opts(N - 1, Rest1, Realloc);
-lower_opts(N, <<_Op, Rest0/binary>>, Realloc) ->
-    lower_opts(N - 1, Rest0, Realloc).
+    lower_opts(N - 1, Rest1, Realloc, Enc);
+lower_opts(N, <<_Op, Rest0/binary>>, Realloc, Enc) ->
+    lower_opts(N - 1, Rest0, Realloc, Enc).
 
 %%% ---------------------------------------------------------- component import ---
 

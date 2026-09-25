@@ -228,6 +228,15 @@ program_config("p2_cli_many_resources") ->
 %% which the sink reports closed, which the guest expects as EPIPE.
 program_config("p2_cli_stdout_epipe") ->
     {<<>>, #{stdout_limit => 65536}};
+%% Checks the host does not allocate on a guest's requested size. Run its `read`
+%% sub-test: a preopen holding the `1mb` file it reads (with huge and u64::MAX
+%% lengths the host must cap), plus a network grant so its sockets import links.
+program_config("p2_cli_hostcall_fuel") ->
+    Dir = fresh_dir(),
+    ok = file:write_file(filename:join(Dir, "1mb"), binary:copy(<<0>>, 1 bsl 20)),
+    {<<>>, #{args => [<<"p2_cli_hostcall_fuel">>, <<"read">>],
+             network => unrestricted(),
+             preopen => Dir, writable => true}};
 program_config(_) ->
     default.
 

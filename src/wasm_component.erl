@@ -51,6 +51,10 @@ lower/lift, and the async Canonical ABI.
 -define(HANDLES, {?MODULE, handles}).
 -define(HOST, {?MODULE, host_resources}).
 -define(HOST_NEXT, {?MODULE, host_next}).
+%% An optional cap on how many host resources may be live at once, so a guest that
+%% creates and never drops (forgets) them cannot exhaust host memory. `infinity`
+%% (the default) is no cap; a caller sets it through `instantiate` opts.
+-define(HOST_LIMIT, {?MODULE, host_limit}).
 
 -doc """
 Decode a component binary into its embedded core module and export names.
@@ -186,7 +190,10 @@ instantiate(Bin, Imports, Opts) ->
     %% avoid `load_rate_exceeded`. `stub => true` lets the linker fill a
     %% preview1-adapter's unused preview2 imports with trap-if-called stubs.
     %% Everything else in Opts is instance limits.
-    Limits = maps:without([loader, stub, resource_closer, resource_predrop], Opts),
+    Limits = maps:without([loader, stub, resource_closer, resource_predrop,
+                           resource_limit], Opts),
+    %% Cap the live host resources for this run, if the caller set one.
+    put(?HOST_LIMIT, maps:get(resource_limit, Opts, infinity)),
     %% Decode and the graph parsers match bytes strictly and signal by throwing;
     %% capture turns a malformed component into a value here, the same boundary the
     %% core decoder uses, while letting an in-flight guest exception pass through.
@@ -525,10 +532,19 @@ sweeps all of it, so the contract is one live instance per process (see `destroy
 """.
 -spec host_new(atom(), term()) -> pos_integer().
 host_new(Tag, State) ->
-    Handle = case get(?HOST_NEXT) of undefined -> 1; N -> N end,
-    put(?HOST_NEXT, Handle + 1),
-    put(?HOST, maps:put(Handle, {Tag, State}, host_table())),
-    Handle.
+    Table = host_table(),
+    case get(?HOST_LIMIT) of
+        Limit when is_integer(Limit), map_size(Table) >= Limit ->
+            %% Over the cap: refuse rather than grow without bound. It surfaces as a
+            %% resource-limit trap (a guest cannot recover host memory it exhausted),
+            %% the same boundary wasmtime enforces.
+            wasm_error:trap(resource_limit_reached, #{limit => Limit});
+        _ ->
+            Handle = case get(?HOST_NEXT) of undefined -> 1; N -> N end,
+            put(?HOST_NEXT, Handle + 1),
+            put(?HOST, maps:put(Handle, {Tag, State}, Table)),
+            Handle
+    end.
 
 -doc "The tag and state behind a host handle, or `error` if it is not live.".
 -spec host_get(pos_integer()) -> {ok, {atom(), term()}} | error.

@@ -220,6 +220,10 @@ program_config("p2_cli_http_headers") ->
 %% chunk and a repeat count.
 program_config("p2_cli_much_stdout") ->
     {<<>>, #{args => [<<"p2_cli_much_stdout">>, <<"the quick brown fox\n">>, <<"1000">>]}};
+%% Creates resources in a loop and never drops them, expecting the host to trap once
+%% it runs out; give it a cap it exceeds (a real program peaks in the low tens).
+program_config("p2_cli_many_resources") ->
+    {<<>>, #{resource_limit => 512}};
 program_config(_) ->
     default.
 
@@ -278,6 +282,8 @@ expect("p2_pollable_traps")        -> trap;
 expect("p2_stream_pollable_traps") -> trap;
 %% Sending more datagrams than check-send permitted must trap.
 expect("p2_udp_send_too_much")  -> trap;
+%% Creating resources past the configured cap must trap.
+expect("p2_cli_many_resources") -> trap;
 expect(_)                       -> zero.
 
 %%% --------------------------------------------------------------- grouping ---

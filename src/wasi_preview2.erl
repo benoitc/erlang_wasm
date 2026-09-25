@@ -521,7 +521,8 @@ run_command(Bin, Stdin, Extra) ->
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
     InstOpts = #{loader => Loader, stub => maps:get(stub, Extra, false),
                  resource_closer => fun close_resource/1,
-                 resource_predrop => fun stream_predrop/1},
+                 resource_predrop => fun stream_predrop/1,
+                 resource_limit => maps:get(resource_limit, Extra, infinity)},
     case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
         {ok, Instance} ->
             %% Destroy on every path: a run mints stream, pollable and directory

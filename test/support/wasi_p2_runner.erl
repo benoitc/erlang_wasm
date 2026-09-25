@@ -211,6 +211,10 @@ program_config("p2_cli_env") ->
     {<<>>, #{env => [{<<"frabjous">>, <<"day">>}, {<<"callooh">>, <<"callay">>}]}};
 program_config("p2_cli_stdin") ->
     {<<"So rested he by the Tumtum tree">>, #{}};
+%% Reads stdin expecting an IsADirectory operation failure, as if stdin were
+%% redirected from a directory.
+program_config("p2_cli_stdin_eisdir") ->
+    {<<>>, #{stdin_dir => true}};
 %% Selects one of its p2 sub-tests: appends header fields in a loop until the host
 %% refuses, then traps on the unreachable it falls through to. Given argv[0], the
 %% guest reads the sub-test from argv[1].

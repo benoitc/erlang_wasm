@@ -525,8 +525,10 @@ run_command(Bin, Stdin, Extra) ->
                      false -> counters:add(Written, 1, byte_size(B)), ok
                  end
              end,
-    Opts = (maps:without([compile, stub, stdout_limit], Extra))#{
-             stdin => Stdin,
+    %% Stdin redirected from a directory reads as an operation failure, not bytes.
+    Source = case maps:get(stdin_dir, Extra, false) of true -> eisdir; false -> Stdin end,
+    Opts = (maps:without([compile, stub, stdout_limit, stdin_dir], Extra))#{
+             stdin => Source,
              stdout => Stdout,
              stderr => fun(B) -> Self ! {ErrRef, B}, ok end},
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
@@ -984,6 +986,11 @@ read_stream(Handle, Len, Timeout) ->
             socket_read(Handle, Sock, Buf, Len, Timeout);
         {ok, {input_stream, {file, Fh, Off}}} ->
             file_read(Handle, Fh, Off, Len);
+        {ok, {input_stream, eisdir}} ->
+            %% Stdin redirected from a directory: a read is a recoverable operation
+            %% failure carrying the errno, which filesystem-error-code reads back as
+            %% is-directory (not a plain closed stream).
+            {error, {<<"last-operation-failed">>, wasm_component:host_new(error, ?EISDIR)}};
         {ok, {input_stream, <<>>}} ->
             {error, {<<"closed">>, undefined}};
         {ok, {input_stream, Remaining}} when is_binary(Remaining) ->

@@ -32,6 +32,7 @@ suite() -> [{timetrap, {seconds, 90}}].
 all() ->
     [every_setting_is_documented,
      a_runner_heap_floor_is_resolved_and_reported,
+     stopping_the_reaper_stops_its_journal_writers,
      {group, typed}, {group, command}, {group, script_v1},
      {group, script_v1_channel}, {group, reactor}, {group, reactor_ahead},
      {group, wrappers}].
@@ -118,7 +119,12 @@ init_per_testcase(every_setting_is_documented, Config) ->
     Config;
 init_per_testcase(a_runner_heap_floor_is_resolved_and_reported, Config) ->
     Config;
+init_per_testcase(stopping_the_reaper_stops_its_journal_writers = TC, Config) ->
+    start_case(TC, [{adapter, fake_typed_adapter} | Config]);
 init_per_testcase(TC, Config) ->
+    start_case(TC, Config).
+
+start_case(TC, Config) ->
     process_flag(trap_exit, true),
     Root = filename:join([?config(priv_dir, Config), atom_to_list(TC), "root"]),
     ok = filelib:ensure_path(Root),
@@ -148,6 +154,25 @@ ctx(Config) ->
       worker => ?config(worker, Config),
       root => Root,
       start => fun(Opts) -> start(Config, Root, Opts) end}.
+
+%% The writers are linked to the reaper, and a link does not carry the `normal'
+%% exit `wasm_worker_reaper:stop/0' ends it with, so without an explicit stop
+%% every reaper that was stopped left its writers running.
+stopping_the_reaper_stops_its_journal_writers(Config) ->
+    Reaper = ?config(reaper, Config),
+    {ok, _} = wasm_script_worker:run(?config(worker, Config),
+                                     ?KIT:fixture(fake_typed_adapter, echo)),
+    {links, Links} = process_info(Reaper, links),
+    Writers = [P || P <- Links, is_pid(P),
+                    {current_function, {wasm_worker_reaper, writer, 1}}
+                        =:= process_info(P, current_function)],
+    ?assert(Writers =/= []),
+    Mons = [erlang:monitor(process, P) || P <- Writers],
+    ok = wasm_script_worker:stop(?config(worker, Config)),
+    ok = wasm_worker_reaper:stop(),
+    [receive {'DOWN', M, process, _, _} -> ok
+     after 5_000 -> ct:fail(a_journal_writer_outlived_its_reaper)
+     end || M <- Mons].
 
 %%% ---------------------------------------------------- restore ahead cases ---
 

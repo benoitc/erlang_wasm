@@ -703,8 +703,15 @@ do_handle_info(_, St) ->
 terminate(shutdown, #st{generated = [_ | _] = Gen} = St) ->
     ok = flush_journal(St),
     _ = [remove_if_idle(Id, St) || Id <- Gen],
-    ok;
-terminate(_Why, _St) ->
+    stop_writers(St);
+terminate(_Why, St) ->
+    ok = flush_journal(St),
+    stop_writers(St).
+
+%% They are linked, but a link does not carry a `normal' exit, which is how
+%% `stop/0' ends this process.
+stop_writers(#st{writers = Ws}) ->
+    _ = [exit(W, kill) || W <- tuple_to_list(Ws)],
     ok.
 
 remove_if_idle(Id, #st{roots = Roots} = St) ->
@@ -1333,7 +1340,7 @@ journal(#st{writers = Ws}, Id, Op) ->
 %% shutdown looks at a journal with nothing still on its way to it.
 flush_journal(#st{writers = Ws}) ->
     Refs = [begin R = make_ref(), W ! {flush, self(), R}, R end
-            || W <- tuple_to_list(Ws)],
+            || W <- tuple_to_list(Ws), is_process_alive(W)],
     _ = [receive {R, flushed} -> ok after 5_000 -> ok end || R <- Refs],
     ok.
 

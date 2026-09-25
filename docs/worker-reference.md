@@ -36,6 +36,7 @@ get it by passing the key.
 | `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2`. CPython needs about 90 s and so must raise it |
 | `runner_min_heap_words` | none | a heap floor for each request's runner; see [Hosting scripting languages](scripting.md) |
 | `capture_min_heap_words` | none | the same, for the process that captures the snapshot |
+| `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and function-only imports, and holds one instance's memory per idle worker |
 
 `start_link/2,3` refuses a `root` the reaper does not have, with
 `{error, {unknown_root, Root, Known}}`.

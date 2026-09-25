@@ -279,6 +279,14 @@ step({canon_lower, CompFuncIdx, ReallocIdx}, S) ->
         {error, _} = E ->
             E
     end;
+step({canon_resource, drop, _Rt}, S) ->
+    %% `canon resource.drop` runs the drop function the caller supplied (which closes
+    %% a host resource and forgets its handle), so a guest that drops a socket or file
+    %% frees it at once instead of leaking until the instance is destroyed. With no
+    %% drop function it stays a no-op (the destroy-time sweep still frees everything).
+    Drop = maps:get(drop_fun, maps:get(opts, S), fun(_H) -> ok end),
+    Fun = fun(_Ctx, [H]) -> _ = Drop(H), {ok, []} end,
+    {ok, bump(S, n_cf, core_funcs, Fun)};
 step({canon_resource, Kind, _Rt}, S) ->
     {ok, bump(S, n_cf, core_funcs, resource_fun(Kind))};
 step({core_alias, func, InstIdx, Name}, S) ->

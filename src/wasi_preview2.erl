@@ -510,7 +510,8 @@ run_command(Bin, Stdin, Extra) ->
              stdout => fun(B) -> Self ! {OutRef, B}, ok end,
              stderr => fun(B) -> Self ! {ErrRef, B}, ok end},
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
-    InstOpts = #{loader => Loader, stub => maps:get(stub, Extra, false)},
+    InstOpts = #{loader => Loader, stub => maps:get(stub, Extra, false),
+                 resource_closer => fun close_resource/1},
     case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
         {ok, Instance} ->
             %% Destroy on every path: a run mints stream, pollable and directory
@@ -572,7 +573,7 @@ run_serve(Bin, Request, Extra) ->
     _ = erase(?EXIT_STATUS),
     _ = erase(?INSECURE_SEED),
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
-    InstOpts = #{loader => Loader},
+    InstOpts = #{loader => Loader, resource_closer => fun close_resource/1},
     Opts = maps:without([compile], Extra),
     case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
         {ok, Instance} ->

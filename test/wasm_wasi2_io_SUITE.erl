@@ -77,10 +77,13 @@ a_failed_file_write_is_reported(Config) ->
 %% The socket is not connected, so the send fails. Fail-first: the socket sink
 %% used to return `ok` unconditionally, losing the write silently.
 a_failed_socket_write_is_reported(_Config) ->
-    {ok, Pending} = wasi_sock:open(inet, stream),
-    H = wasm_component:host_new(output_stream, {socket, Pending}),
+    %% A socket-backed output stream carries a wasi_sock2 handle (the TCP backend);
+    %% a write to an unconnected socket is reported as an error, not swallowed.
+    {ok, Sock} = wasi_sock2:open(inet),
+    H = wasm_component:host_new(output_stream, {socket, Sock}),
     ?assertMatch({error, _}, wasi_preview2:write_stream(H, <<"x">>)),
-    wasm_component:host_drop(H).
+    wasm_component:host_drop(H),
+    wasi_sock2:close(Sock).
 
 %% Two append streams on the same file both append rather than overwriting. Each
 %% write goes to the current end. Fail-first: the append offset was captured once

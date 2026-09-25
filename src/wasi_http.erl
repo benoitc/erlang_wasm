@@ -84,6 +84,13 @@ slice uses, so a component reaches only a granted authority.
 
 -define(HTTP_TIMEOUT, 30000).
 
+%% The largest header section a guest may build. Exceeding it is a trap, not a
+%% header-error: the WIT `header-error` variant has no case for an oversized
+%% section, so the only way to report it is the way wasmtime does, by trapping.
+%% Each field is charged its name and value plus a fixed per-field overhead.
+-define(MAX_HEADER_SECTION, 64 * 1024).
+-define(HEADER_FIELD_OVERHEAD, 32).
+
 %%% ------------------------------------------------------------------ api ---
 
 -doc """
@@ -120,10 +127,7 @@ http(Opts) ->
           wasm_component:import_fun(
             {[handle, string], {result, none, ?HEADER_ERROR}},
             fun([F, N]) -> fields_delete(F, N) end),
-      {T, <<"[method]fields.append">>} =>
-          wasm_component:import_fun(
-            {[handle, string, {list, u8}], {result, none, ?HEADER_ERROR}},
-            fun([F, N, V]) -> fields_append(F, N, V) end),
+      {T, <<"[method]fields.append">>} => append_import(),
       {T, <<"[method]fields.entries">>} =>
           wasm_component:import_fun(
             {[handle], {list, ?FIELD_ENTRY}}, fun([F]) -> fields_entries(F) end),
@@ -141,7 +145,8 @@ http(Opts) ->
             fun([O, Ns]) -> set_opt(O, connect_timeout, Ns) end),
       {T, <<"[method]request-options.set-first-byte-timeout">>} =>
           wasm_component:import_fun(
-            {[handle, {option, u64}], {result, none, none}}, fun(_) -> {ok, undefined} end),
+            {[handle, {option, u64}], {result, none, none}},
+            fun([O, Ns]) -> set_opt(O, first_byte_timeout, Ns) end),
       {T, <<"[method]request-options.set-between-bytes-timeout">>} =>
           wasm_component:import_fun(
             {[handle, {option, u64}], {result, none, none}}, fun(_) -> {ok, undefined} end),
@@ -281,13 +286,16 @@ set_opt(O, Key, Value) ->
 opt_ns(none)       -> undefined;
 opt_ns({some, Ns}) -> max(1, Ns div 1_000_000).
 
-%% The connect timeout the guest set on its request-options, if any.
-connect_timeout(none) ->
-    undefined;
-connect_timeout({some, O}) ->
+%% The timeouts the guest set on its request-options, defaulting to unset.
+req_timeouts(none) ->
+    #{connect_timeout => undefined, first_byte_timeout => undefined};
+req_timeouts({some, O}) ->
     case wasm_component:host_get(O) of
-        {ok, {http_req_opts, #{connect_timeout := T}}} -> T;
-        _                                              -> undefined
+        {ok, {http_req_opts, Map}} ->
+            #{connect_timeout => maps:get(connect_timeout, Map, undefined),
+              first_byte_timeout => maps:get(first_byte_timeout, Map, undefined)};
+        _ ->
+            req_timeouts(none)
     end.
 
 %%% -------------------------------------------------------------- fields ---
@@ -348,6 +356,28 @@ fields_delete(F, Name) ->
                   F, [{N, V} || {N, V} <- fields_list(F), not eqi(N, Name)]),
             {ok, undefined}
     end.
+
+%% append refuses an oversized header section by trapping (see ?MAX_HEADER_SECTION),
+%% which the plain import_fun wrapper cannot express, so it is wrapped raw: the
+%% first flat argument is the fields handle, and a full section traps before the
+%% value is even lifted.
+append_import() ->
+    Inner = wasm_component:import_fun(
+              {[handle, string, {list, u8}], {result, none, ?HEADER_ERROR}},
+              fun([F, N, V]) -> fields_append(F, N, V) end),
+    fun(Ctx, Flats) ->
+        case section_full(hd(Flats)) of
+            true  -> {trap, http_header_section_too_large};
+            false -> Inner(Ctx, Flats)
+        end
+    end.
+
+%% Whether a fields already holds a full header section, so one more field would
+%% overflow it.
+section_full(F) ->
+    Size = lists:sum([byte_size(N) + byte_size(V) + ?HEADER_FIELD_OVERHEAD
+                      || {N, V} <- fields_list(F)]),
+    Size >= ?MAX_HEADER_SECTION.
 
 fields_append(F, Name, Value) ->
     with_mutation(F, Name, Value, fun() ->
@@ -572,7 +602,7 @@ append_body(B, Bytes) ->
 handle(Req, Opts, Grant, Transport) ->
     case wasm_component:host_get(Req) of
         {ok, {http_out_req, Map0}} ->
-            Map = Map0#{conn_timeout => connect_timeout(Opts)},
+            Map = Map0#{timeouts => req_timeouts(Opts)},
             case request_error(Map) of
                 none  -> {ok, wasm_component:host_new(http_future,
                                                       {pending, Map, Grant, Transport})};
@@ -602,11 +632,13 @@ perform(#{authority := Authority} = R, Grant, Transport) ->
                 false ->
                     {error, {<<"HTTP-request-denied">>, none}};
                 true ->
+                    #{connect_timeout := CT, first_byte_timeout := FBT} =
+                        maps:get(timeouts, R, req_timeouts(none)),
                     Transport:request(
                       #{host => Host, port => Port,
                         method => maps:get(method, R), path => maps:get(path, R),
                         headers => maps:get(headers, R), body => maps:get(body, R),
-                        connect_timeout => maps:get(conn_timeout, R, undefined)},
+                        connect_timeout => CT, first_byte_timeout => FBT},
                       ?HTTP_TIMEOUT)
             end
     end.

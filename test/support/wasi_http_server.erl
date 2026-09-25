@@ -41,6 +41,11 @@ stop({Transport, Ref}) ->
     _ = Transport:stop_server(Ref),
     ok.
 
+%% A CONNECT never gets a response: like a real server, it waits for the tunnel
+%% data the client is meant to send and answers nothing, so the client's first-byte
+%% timeout fires (what p2_http_outbound_request_invalid_version asserts).
+handle(_Transport, _Conn, _Id, <<"CONNECT">>, _Path, _Headers) ->
+    receive after 10000 -> ok end;
 %% Echo the method and URI as headers, and the request body as the response body.
 %% A request with a body (content-length) is read to completion first.
 handle(Transport, Conn, Id, Method, Path, Headers) ->

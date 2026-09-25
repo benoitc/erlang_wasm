@@ -115,8 +115,11 @@ classify({ok, #{exit_code := Code}}, Name, Acc, Wasm) ->
         {nonzero, C} when C =/= 0  -> bump(pass, Acc, Wasm, ok);
         {_, C}                     -> bump(fail, Acc, Wasm, {exit, C})
     end;
-classify({error, E}, _Name, Acc, Wasm) ->
-    bump(fail, Acc, Wasm, {trapped, first_line(reason(E))});
+classify({error, E}, Name, Acc, Wasm) ->
+    case expect(Name) of
+        trap -> bump(pass, Acc, Wasm, ok);
+        _    -> bump(fail, Acc, Wasm, {trapped, first_line(reason(E))})
+    end;
 classify({caught, Class, Reason}, _Name, Acc, Wasm) ->
     bump(fail, Acc, Wasm, {crash, Class, Reason}).
 
@@ -208,6 +211,11 @@ program_config("p2_cli_env") ->
     {<<>>, #{env => [{<<"frabjous">>, <<"day">>}, {<<"callooh">>, <<"callay">>}]}};
 program_config("p2_cli_stdin") ->
     {<<"So rested he by the Tumtum tree">>, #{}};
+%% Selects one of its p2 sub-tests: appends header fields in a loop until the host
+%% refuses, then traps on the unreachable it falls through to. Given argv[0], the
+%% guest reads the sub-test from argv[1].
+program_config("p2_cli_http_headers") ->
+    {<<>>, #{args => [<<"p2_cli_http_headers">>, <<"p2-append">>]}};
 program_config(_) ->
     default.
 
@@ -241,6 +249,10 @@ loopback() ->
 expect("p2_cli_exit_failure")   -> nonzero;
 expect("p2_cli_exit_panic")     -> nonzero;
 expect("p2_cli_exit_with_code") -> nonzero;
+%% The p2 header sub-test is meant to trap: fields.append refuses once the header
+%% section is too large (the header-error variant has no case for it, so it is a
+%% trap, not a value), and the guest falls through to an unreachable.
+expect("p2_cli_http_headers")   -> trap;
 expect(_)                       -> zero.
 
 %%% --------------------------------------------------------------- grouping ---

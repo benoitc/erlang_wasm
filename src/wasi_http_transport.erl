@@ -13,7 +13,8 @@ without the interface changing. The request and response are the abstract form t
 -type request() :: #{host := binary(), port := inet:port_number(),
                      method := binary(), path := binary(),
                      headers := [{binary(), binary()}], body := binary(),
-                     connect_timeout => timeout() | undefined}.
+                     connect_timeout => timeout() | undefined,
+                     first_byte_timeout => timeout() | undefined}.
 -type response() :: {ok, StatusCode :: 0..65535,
                      Headers :: [{binary(), binary()}], Body :: binary()}
                   | {error, ErrorCode :: term()}.

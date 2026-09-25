@@ -22,9 +22,14 @@ request(#{host := Host, port := Port, method := Method, path := Path,
             %% The h1 client connects asynchronously; wait for the socket so a
             %% connect timeout surfaces as connection-timeout, distinct from the
             %% response timeout `collect` reports, and from an outright refusal.
+            %% Wait for the response line no longer than the first-byte timeout, so
+            %% a peer that accepts the connection but never answers (a server stuck
+            %% on a CONNECT it will not tunnel) is reported as connection-read-timeout
+            %% rather than stalling on the overall deadline.
+            FirstByte = first_byte(maps:get(first_byte_timeout, Req, undefined), Timeout),
             Result =
                 case h1:wait_connected(Conn, wait_timeout(ConnectTimeout)) of
-                    ok             -> send(Conn, Method, Path, Headers, Body, Timeout);
+                    ok             -> send(Conn, Method, Path, Headers, Body, FirstByte, Timeout);
                     {error, Reason} -> {error, connect_error(Reason)}
                 end,
             _ = h1:close(Conn),
@@ -33,11 +38,14 @@ request(#{host := Host, port := Port, method := Method, path := Path,
             {error, connect_error(Reason)}
     end.
 
-send(Conn, Method, Path, Headers, Body, Timeout) ->
+send(Conn, Method, Path, Headers, Body, FirstByte, Timeout) ->
     case h1:request(Conn, Method, Path, Headers, Body) of
-        {ok, Sid}  -> collect(Conn, Sid, Timeout);
+        {ok, Sid}  -> collect(Conn, Sid, FirstByte, Timeout);
         {error, _} -> {error, {<<"HTTP-protocol-error">>, none}}
     end.
+
+first_byte(undefined, Default) -> Default;
+first_byte(Timeout, _Default)  -> Timeout.
 
 connect_opts(undefined) -> #{};
 connect_opts(Timeout)   -> #{connect_timeout => Timeout}.
@@ -52,14 +60,17 @@ connect_error(timeout) -> {<<"connection-timeout">>, none};
 connect_error(etimedout) -> {<<"connection-timeout">>, none};
 connect_error(_Other)  -> {<<"connection-refused">>, none}.
 
-collect(Conn, Sid, Timeout) ->
+%% Wait for the response line within the first-byte timeout, then read the body
+%% within the overall deadline. A first-byte timeout is connection-read-timeout;
+%% a stall mid-body stays HTTP-response-timeout.
+collect(Conn, Sid, FirstByte, Timeout) ->
     receive
         {h1, Conn, {response, Sid, Status, Headers}} ->
             collect_body(Conn, Sid, Status, Headers, <<>>, Timeout);
         {h1, Conn, {closed, _}} ->
             {error, {<<"HTTP-response-incomplete">>, none}}
-    after Timeout ->
-        {error, {<<"HTTP-response-timeout">>, none}}
+    after FirstByte ->
+        {error, {<<"connection-read-timeout">>, none}}
     end.
 
 collect_body(Conn, Sid, Status, Headers, Acc, Timeout) ->

@@ -377,7 +377,7 @@ run_local_cleanup(#{id := Id, dir := Dir, adapter_state := AState,
             {Mod, AState0} -> bounded(fun() -> Mod:cleanup(AState0) end, Timeout)
         end,
     lists:foreach(fun(A) -> bounded(A, Timeout) end, Actions),
-    _ = file:del_dir_r(Dir),
+    _ = wasm_worker_fs:del_dir_r(Dir),
     wasm_worker_reaper:finish(Id).
 
 callback_timeout() ->

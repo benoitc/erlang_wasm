@@ -157,7 +157,7 @@ truncate_if_asked(IoDev, Modes) ->
     end.
 
 is_symlink(Path) ->
-    case file:read_link_info(Path) of
+    case file:read_link_info(Path, [raw]) of
         {ok, #file_info{type = symlink}} -> true;
         _ -> false
     end.
@@ -248,7 +248,7 @@ symlink({native, D}, Guest, Target) -> op(D, Guest, ?OP_SYMLINK, Target);
 symlink({fallback, R}, Guest, Target) ->
     fb(R, Guest, false,
        fun(Full) ->
-           file:make_symlink(unicode:characters_to_list(Target), Full)
+           prim_file:make_symlink(unicode:characters_to_list(Target), Full)
        end).
 
 -spec readlink(root(), binary()) -> {ok, binary()} | {error, non_neg_integer()}.
@@ -256,7 +256,7 @@ readlink({native, D}, Guest) -> op(D, Guest, ?OP_READLINK, <<>>);
 readlink({fallback, R}, Guest) ->
     fb(R, Guest, true,
        fun(Full) ->
-           case file:read_link(Full) of
+           case prim_file:read_link(Full) of
                {ok, T} -> {ok, unicode:characters_to_binary(T)};
                Err -> Err
            end
@@ -283,8 +283,8 @@ stat({native, D}, Guest, follow) -> op(D, Guest, ?OP_STAT_FOLLOW, <<>>);
 stat({native, D}, Guest, nofollow) -> op(D, Guest, ?OP_STAT, <<>>);
 stat({fallback, R}, Guest, Mode) ->
     Read = case Mode of
-               follow -> fun(F) -> file:read_file_info(F, [{time, posix}]) end;
-               nofollow -> fun(F) -> file:read_link_info(F, [{time, posix}]) end
+               follow -> fun(F) -> file:read_file_info(F, [raw, {time, posix}]) end;
+               nofollow -> fun(F) -> file:read_link_info(F, [raw, {time, posix}]) end
            end,
     fb(R, Guest, true,
        fun(Full) ->
@@ -331,7 +331,7 @@ set_times({fallback, R}, Guest, Atime, Mtime, Mode) ->
     fb(R, Guest, true,
        fun(Full) ->
            %% No `utimensat', so anything left out has to be read back first.
-           case file:read_link_info(Full, [{time, posix}]) of
+           case file:read_link_info(Full, [raw, {time, posix}]) of
                {error, _} = E -> E;
                {ok, Info} ->
                    A = keep(Atime, Info#file_info.atime),
@@ -342,7 +342,7 @@ set_times({fallback, R}, Guest, Atime, Mtime, Mode) ->
                    %% this backend cannot reach, and the NIF is what reaches it.
                    file:write_file_info(Full, Info#file_info{atime = A,
                                                             mtime = M},
-                                        [{time, posix}])
+                                        [raw, {time, posix}])
            end
        end, Mode).
 
@@ -373,14 +373,14 @@ set_times_fd({native, H}, Atime, Mtime) ->
         {error, E} -> {error, map_posix(E)}
     end;
 set_times_fd({fallback, _D, Path}, Atime, Mtime) ->
-    case file:read_link_info(Path, [{time, posix}]) of
+    case file:read_link_info(Path, [raw, {time, posix}]) of
         {error, R} -> {error, map_posix(R)};
         {ok, Info} ->
             A = keep(Atime, Info#file_info.atime),
             M = keep(Mtime, Info#file_info.mtime),
             to_error(file:write_file_info(Path, Info#file_info{atime = A,
                                                               mtime = M},
-                                          [{time, posix}]))
+                                          [raw, {time, posix}]))
     end.
 
 -spec rename(root(), binary(), root(), binary()) ->
@@ -521,7 +521,7 @@ stat_fd({native, H}) ->
         {error, E} -> {error, map_posix(E)}
     end;
 stat_fd({fallback, _D, Path}) ->
-    case file:read_link_info(Path, [{time, posix}]) of
+    case file:read_link_info(Path, [raw, {time, posix}]) of
         {ok, Info} -> {ok, info_map(Info)};
         {error, R} -> {error, map_posix(R)}
     end.
@@ -561,7 +561,7 @@ list({native, H}) ->
             {error, map_posix(E)}
     end;
 list({fallback, Path}) ->
-    case file:list_dir(Path) of
+    case prim_file:list_dir(Path) of
         {ok, Names} -> {ok, [unicode:characters_to_binary(N) || N <- Names]};
         {error, R} -> {error, map_posix(R)}
     end.
@@ -583,7 +583,7 @@ list_dir(Root, Guest) ->
             case wasi_path:resolve(Root, Guest, true) of
                 {error, E} -> {error, E};
                 {ok, Full} ->
-                    case file:list_dir(Full) of
+                    case prim_file:list_dir(Full) of
                         {ok, Names} ->
                             {ok, [unicode:characters_to_binary(N) || N <- Names]}; {error, R} -> {error, map_posix(R)}
                     end

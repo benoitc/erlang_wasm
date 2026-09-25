@@ -31,7 +31,7 @@ and each is the smallest honest option rather than the strongest-sounding one:
 
 | | what it is | what it is not |
 | --- | --- | --- |
-| durability | BEAM-crash: the record is written and renamed **before** the reservation is acknowledged | host-crash durability, which would need the journal directory synced after every change |
+| durability | BEAM-crash: the record is written and renamed **before** the reservation is acknowledged | host-crash durability: the record is not synced, and a start removes every request directory no record names |
 | what is durable | ownership and recovery intent | the cleanup lifecycle, which would put a filesystem write on every state transition |
 | identity | a minted binary request id | an Erlang `reference()` written down |
 
@@ -50,6 +50,15 @@ is a node-wide unreclaimable leak, and the file sits exactly where an attacker
 who got that far would plant one. Every field here is a number, a hex string, a
 pid literal or a verb from a fixed table, so decoding yields an atom that
 already existed or fails.
+
+## Nothing slow happens in this process
+
+Every request on the node goes through here, so the reaper does no file I/O of
+its own. Records are written, renamed and removed by a few journal writers,
+chosen by request id so one request's writes stay in order; the writer answers
+the reservation once its record is in place. A cleanup job reports in its exit
+reason whether everything it named is gone. A `DOWN` is one lookup, and the
+operator view is rebuilt at most every 50 ms rather than on every message.
 
 ## Recovery asks before it acts
 
@@ -118,6 +127,14 @@ supervised reaper will almost always perform.
 -define(MAX_CLEANUP_OPERATIONS, 256).
 -define(HANDSHAKE_TIMEOUT, 1_000).
 -define(HANDSHAKE_RETRIES, 3).
+%% How long a change to the operator view may wait before it is pushed. The view
+%% is every reservation, so building it on each message made every message cost
+%% as much as the number of requests in flight.
+-define(VIEW_INTERVAL, 50).
+%% Journal writers. A record's writes all go to one of them, chosen by request
+%% id, so they happen in the order the reaper issued them; different requests
+%% write in parallel, and none of it holds the reaper.
+-define(WRITERS, 4).
 
 %% Defined in `wasm_worker_adapter`, beside the callbacks that name them.
 -type root_id() :: wasm_worker_adapter:root_id().
@@ -176,7 +193,11 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
 
 -record(st, {roots      :: #{root_id() => file:filename_all()},
              reqs  = #{} :: #{request_id() => #req{}},
-             queue = []  :: [request_id()],
+             %% Every monitor this process holds, and what it watches, so a
+             %% `DOWN' is one lookup rather than a scan of every request.
+             mons  = #{} :: #{reference() => {guardian | steward, request_id()}
+                                           | {job, pid()}},
+             queue = queue:new() :: queue:queue(request_id()),
              jobs  = #{} :: #{pid() => {request_id(), reference()}},
              quarantined = 0 :: non_neg_integer(),
              gen        :: pos_integer(),
@@ -187,7 +208,9 @@ drop_monitor(Mon) when is_reference(Mon) -> _ = erlang:demonitor(Mon, [flush]), 
              generated = [] :: [root_id()],
              %% The last operator view pushed to the manager, so a message that
              %% did not change it pushes nothing.
-             last_view = undefined :: undefined | map()}).
+             last_view = undefined :: undefined | map(),
+             view_timer = undefined :: undefined | reference(),
+             writers = {} :: tuple()}).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -446,7 +469,8 @@ init({Roots, Opts, Generated}) ->
     Settings = maps:from_list([{K, setting(Opts, K)} || K <- setting_keys()]),
     St = #st{roots = Roots, gen = Gen, incarnation = Incarnation,
              opts = Settings,
-             generated = [G || G <- Generated, maps:is_key(G, Roots)]},
+             generated = [G || G <- Generated, maps:is_key(G, Roots)],
+             writers = start_writers()},
     St1 = sweep(St),
     ok = announce_generation(St1),
     {ok, push_view(St1)}.
@@ -470,16 +494,39 @@ announce_generation(#st{gen = Gen} = St) ->
 %% pid, never a module call, so no cycle is formed.
 handle_call(Msg, From, St0) ->
     case do_handle_call(Msg, From, St0) of
-        {reply, Reply, St1} -> {reply, Reply, push_view(St1)}
+        {reply, Reply, St1} -> {reply, Reply, view_due(St1)};
+        {noreply, St1}      -> {noreply, view_due(St1)}
     end.
 
 handle_cast(Msg, St0) ->
     {noreply, St1} = do_handle_cast(Msg, St0),
-    {noreply, push_view(St1)}.
+    {noreply, view_due(St1)}.
 
+handle_info(push_view, St) ->
+    {noreply, push_view(St#st{view_timer = undefined})};
+handle_info({journal_failed, Id, E, From}, St) ->
+    gen_server:reply(From, {error, E}),
+    {noreply, view_due(reservation_failed(Id, St))};
+handle_info({'EXIT', Pid, Why} = Msg, St) ->
+    %% A writer is linked and runs nothing but raw file calls, so one dying is
+    %% a fault in this process's own machinery: restart with it rather than
+    %% carry on with records nobody writes.
+    case lists:member(Pid, tuple_to_list(St#st.writers)) of
+        true  -> {stop, {journal_writer, Why}, St};
+        false -> {noreply, St1} = do_handle_info(Msg, St),
+                 {noreply, view_due(St1)}
+    end;
 handle_info(Msg, St0) ->
     {noreply, St1} = do_handle_info(Msg, St0),
-    {noreply, push_view(St1)}.
+    {noreply, view_due(St1)}.
+
+%% Coalesced: the first change arms a timer and every change before it fires
+%% rides on the one push. Diagnostics lag by at most `?VIEW_INTERVAL', and the
+%% cost of the view no longer grows with the request rate.
+view_due(#st{view_timer = undefined} = St) ->
+    St#st{view_timer = erlang:send_after(?VIEW_INTERVAL, self(), push_view)};
+view_due(St) ->
+    St.
 
 %% Push the current view if it differs from the last one pushed. The view is
 %% free of closures, so comparing and sending it is cheap and safe.
@@ -534,16 +581,16 @@ do_handle_call({reserve, Id, Guardian, Root, RelPath}, From, St) ->
                                root = Root, relpath = RelPath,
                                ops = [{remove_tree, Root, RelPath}],
                                gen = St#st.gen},
-                    case write_record(St, Req) of
-                        ok ->
-                            Dir = filename:join(maps:get(Root, St#st.roots),
-                                                RelPath),
-                            {reply, {ok, Dir}, put_req(Req, St)};
-                        {error, E} ->
-                            erlang:demonitor(Req#req.mon, [flush]),
-                            erlang:demonitor(Req#req.smon, [flush]),
-                            {reply, {error, E}, St}
-                    end
+                    %% The writer answers the caller once the record is renamed
+                    %% into place, so the reservation is still acknowledged
+                    %% only after the record is visible, and this process goes
+                    %% straight back to its mailbox. A write that fails comes
+                    %% back as `journal_failed'.
+                    Dir = filename:join(maps:get(Root, St#st.roots), RelPath),
+                    ok = journal(St, Id, {reserve, Id, record_path(St, Req),
+                                          encode_record(St, Req), From,
+                                          {ok, Dir}}),
+                    {noreply, put_req(Req, St)}
             end
     end;
 
@@ -595,6 +642,19 @@ do_handle_call(stats, _From, St) ->
 do_handle_call(_Msg, _From, St) ->
     {reply, {error, wasm_worker_error:worker(crashed, ~"bad call", #{})}, St}.
 
+%% The record never reached the journal, so nothing is on disk and the steward
+%% will make no directory. The request is dropped unless an owner's death has
+%% already moved it to cleanup, which finishes on its own and removes nothing.
+reservation_failed(Id, St) ->
+    case maps:find(Id, St#st.reqs) of
+        {ok, #req{state = live} = Req} ->
+            ok = drop_monitor(Req#req.mon),
+            ok = drop_monitor(Req#req.smon),
+            drop_req(Id, St);
+        _ ->
+            St
+    end.
+
 do_handle_cast({finish, Id}, St) ->
     %% The guardian cleaned up itself and says so. Drop the record last, after
     %% everything it named is gone.
@@ -604,13 +664,13 @@ do_handle_cast({finish, Id}, St) ->
             ok = drop_monitor(Req#req.mon),
             ok = drop_monitor(Req#req.smon),
             ok = remove_record(St, Req),
-            {noreply, St#st{reqs = maps:remove(Id, St#st.reqs)}}
+            {noreply, drop_req(Id, St)}
     end;
 do_handle_cast(_, St) ->
     {noreply, St}.
 
-do_handle_info({'DOWN', Mon, process, _Pid, _Why}, St) ->
-    {noreply, owner_down(Mon, St)};
+do_handle_info({'DOWN', Mon, process, _Pid, Why}, St) ->
+    {noreply, owner_down(Mon, Why, St)};
 
 do_handle_info({adopt_reply, Id, Ledger, NextSeq, Actions, AdapterState}, St) ->
     {noreply, adopt_reply(Id, Ledger, NextSeq, Actions, AdapterState, St)};
@@ -641,9 +701,17 @@ do_handle_info(_, St) ->
 %% journal with no record and nothing quarantined. Otherwise the directory and
 %% its journal stay, for whoever looks next. A crash removes nothing.
 terminate(shutdown, #st{generated = [_ | _] = Gen} = St) ->
+    ok = flush_journal(St),
     _ = [remove_if_idle(Id, St) || Id <- Gen],
-    ok;
-terminate(_Why, _St) ->
+    stop_writers(St);
+terminate(_Why, St) ->
+    ok = flush_journal(St),
+    stop_writers(St).
+
+%% They are linked, but a link does not carry a `normal' exit, which is how
+%% `stop/0' ends this process.
+stop_writers(#st{writers = Ws}) ->
+    _ = [exit(W, kill) || W <- tuple_to_list(Ws)],
     ok.
 
 remove_if_idle(Id, #st{roots = Roots} = St) ->
@@ -658,7 +726,7 @@ remove_if_idle(Id, #st{roots = Roots} = St) ->
     end.
 
 idle(#st{reqs = Reqs, queue = Queue, jobs = Jobs}) ->
-    map_size(Reqs) =:= 0 andalso Queue =:= [] andalso map_size(Jobs) =:= 0.
+    map_size(Reqs) =:= 0 andalso queue:is_empty(Queue) andalso map_size(Jobs) =:= 0.
 
 journal_empty(Dir) ->
     Journal = journal_dir(Dir),
@@ -699,15 +767,12 @@ op_finish(Id, St) ->
 %% A monitored process died. The reaper watches both the guardian and the
 %% steward, and cleans up only when neither can: while one owner is alive the
 %% other's death leaves the request passive.
-owner_down(Mon, St) ->
-    Reqs = maps:values(St#st.reqs),
-    case lists:keyfind(Mon, #req.mon, Reqs) of
-        #req{} = Req -> guardian_down(Req, St);
-        false ->
-            case lists:keyfind(Mon, #req.smon, Reqs) of
-                #req{} = Req -> steward_down(Req, St);
-                false        -> job_down(Mon, St)
-            end
+owner_down(Mon, Why, St) ->
+    case maps:find(Mon, St#st.mons) of
+        {ok, {guardian, Id}} -> guardian_down(maps:get(Id, St#st.reqs), St);
+        {ok, {steward, Id}}  -> steward_down(maps:get(Id, St#st.reqs), St);
+        {ok, {job, Pid}}     -> job_down(Mon, Pid, Why, St);
+        error                -> St
     end.
 
 %% Guardian gone. With the steward alive the reaper stays passive and tells the
@@ -725,7 +790,7 @@ guardian_down(#req{steward = Steward} = Req, St) ->
 %% from its replica.
 steward_down(#req{finished = true, state = complete, id = Id} = Req, St) ->
     ok = remove_record(St, Req),
-    St#st{reqs = maps:remove(Id, St#st.reqs)};
+    drop_req(Id, St);
 steward_down(#req{finished = true} = Req, St) ->
     put_req(Req#req{smon = undefined}, St);
 steward_down(#req{mon = undefined} = Req, St) ->
@@ -925,8 +990,33 @@ ops_of(#req{root = Root, relpath = Rel, actions = As}) ->
     [{remove_tree, Root, Rel} |
      [A || {_, A, _} <- lists:reverse(As), is_durable(A)]].
 
-put_req(#req{id = Id} = Req, St) ->
-    St#st{reqs = maps:put(Id, Req, St#st.reqs)}.
+%% Every write of a request goes through here, so the monitor index follows the
+%% request's own `mon' and `smon' without any caller having to keep it in step.
+put_req(#req{id = Id, mon = Mon, smon = SMon} = Req, St) ->
+    St1 = case maps:find(Id, St#st.reqs) of
+              {ok, #req{mon = Mon, smon = SMon}} -> St;
+              {ok, #req{mon = OldMon, smon = OldSMon}} ->
+                  index(Mon, {guardian, Id},
+                        index(SMon, {steward, Id},
+                              unindex(OldMon, unindex(OldSMon, St))));
+              error ->
+                  index(Mon, {guardian, Id}, index(SMon, {steward, Id}, St))
+          end,
+    St1#st{reqs = maps:put(Id, Req, St1#st.reqs)}.
+
+drop_req(Id, St) ->
+    case maps:take(Id, St#st.reqs) of
+        {#req{mon = Mon, smon = SMon}, Reqs} ->
+            unindex(Mon, unindex(SMon, St#st{reqs = Reqs}));
+        error ->
+            St
+    end.
+
+index(undefined, _What, St) -> St;
+index(Mon, What, St) -> St#st{mons = maps:put(Mon, What, St#st.mons)}.
+
+unindex(undefined, St) -> St;
+unindex(Mon, St) -> St#st{mons = maps:remove(Mon, St#st.mons)}.
 
 %%% ------------------------------------------------------------- capacity ---
 
@@ -942,14 +1032,19 @@ has_capacity(St) ->
 
 schedule(#req{id = Id} = Req, St) ->
     St1 = put_req(Req, St),
-    pump(St1#st{queue = St1#st.queue ++ [Id]}).
+    pump(St1#st{queue = queue:in(Id, St1#st.queue)}).
 
 %% Queued work is never discarded: having been admitted it has capacity by
 %% construction, since the queue length is what admission counted against.
-pump(#st{queue = []} = St) -> St;
 pump(#st{jobs = Jobs} = St)
   when map_size(Jobs) >= map_get(max_cleanup_jobs, St#st.opts) -> St;
-pump(#st{queue = [Id | Rest]} = St) ->
+pump(St) ->
+    case queue:out(St#st.queue) of
+        {empty, _}           -> St;
+        {{value, Id}, Rest} -> pump_one(Id, Rest, St)
+    end.
+
+pump_one(Id, Rest, St) ->
     case maps:find(Id, St#st.reqs) of
         error ->
             %% Finished and dropped while it sat in the queue. A request only
@@ -959,10 +1054,11 @@ pump(#st{queue = [Id | Rest]} = St) ->
             pump(St#st{queue = Rest});
         {ok, Req} ->
             {Pid, Mon} = start_job(Req, St),
-            pump(St#st{queue = Rest,
-                       jobs = maps:put(Pid, {Id, Mon}, St#st.jobs),
-                       reqs = maps:put(Id, Req#req{state = running},
-                                       St#st.reqs)})
+            St1 = index(Mon, {job, Pid}, St),
+            pump(St1#st{queue = Rest,
+                        jobs = maps:put(Pid, {Id, Mon}, St1#st.jobs),
+                        reqs = maps:put(Id, Req#req{state = running},
+                                        St1#st.reqs)})
     end.
 
 start_job(Req, St) ->
@@ -971,25 +1067,20 @@ start_job(Req, St) ->
     Opts = St#st.opts,
     spawn_opt(fun() -> job(Req, Roots, Gen, Opts) end, [link, monitor]).
 
-job_down(Mon, St) ->
-    case [P || {P, {_, M}} <- maps:to_list(St#st.jobs), M =:= Mon] of
-        [] -> St;
-        [Pid] ->
-            {Id, _} = maps:get(Pid, St#st.jobs),
-            St1 = St#st{jobs = maps:remove(Pid, St#st.jobs)},
-            pump(job_finished(Id, St1))
-    end.
+job_down(Mon, Pid, Why, St) ->
+    {{Id, Mon}, Jobs} = maps:take(Pid, St#st.jobs),
+    pump(job_finished(Id, Why, unindex(Mon, St#st{jobs = Jobs}))).
 
 %% A job reports by exiting. It has already done what it could; what is left is
 %% deciding whether to retry, quarantine, or drop the record.
-job_finished(Id, St) ->
+job_finished(Id, Why, St) ->
     case maps:find(Id, St#st.reqs) of
         error -> St;
         {ok, #req{attempts = N} = Req}
           when N >= map_get(cleanup_retries, St#st.opts) ->
             quarantine(Req, St);
         {ok, #req{attempts = N} = Req} ->
-            case job_succeeded(Req, St) of
+            case job_succeeded(Why, Req, St) of
                 true ->
                     cleanup_done(Req, St);
                 false ->
@@ -1010,13 +1101,20 @@ cleanup_done(#req{finished = true, smon = SMon, steward = Steward, id = Id} = Re
     put_req(Req#req{state = complete}, St);
 cleanup_done(#req{id = Id} = Req, St) ->
     ok = remove_record(St, Req),
-    St#st{reqs = maps:remove(Id, St#st.reqs)}.
+    drop_req(Id, St).
 
 %% What a job leaves behind is the evidence. Every op is idempotent, so
 %% "succeeded" is "nothing it named is still there" rather than a message the
-%% job had to survive long enough to send.
-job_succeeded(#req{ops = Ops}, St) ->
-    lists:all(fun(Op) -> not exists(Op, St#st.roots) end, Ops).
+%% job had to survive long enough to send. A job that ran to its end looked
+%% already and says so in its exit reason, which keeps the filesystem out of
+%% this process; any other exit is checked here.
+job_succeeded({cleaned, Gone}, _Req, _St) when is_boolean(Gone) ->
+    Gone;
+job_succeeded(_Why, #req{ops = Ops}, St) ->
+    all_gone(Ops, St#st.roots).
+
+all_gone(Ops, Roots) ->
+    lists:all(fun(Op) -> not exists(Op, Roots) end, Ops).
 
 %% Quarantine has exactly one cause: the retries are spent against a callback
 %% that will not finish. An unresolved handshake is `held', not this.
@@ -1024,8 +1122,8 @@ quarantine(#req{id = Id} = Req, St) ->
     ?LOG_ERROR("wasm_worker_reaper: quarantining ~ts after ~p attempts",
                [Id, Req#req.attempts]),
     _ = quarantine_record(St, Req),
-    St#st{reqs = maps:remove(Id, St#st.reqs),
-          quarantined = St#st.quarantined + 1}.
+    St1 = drop_req(Id, St),
+    St1#st{quarantined = St1#st.quarantined + 1}.
 
 %%% ------------------------------------------------------------------ job ---
 
@@ -1045,7 +1143,7 @@ job(#req{id = Id} = Req, Roots, Gen, Opts) ->
             Failed = run_cleanup(Req, Deadline, Opts),
             run_actions(Req, Failed, Deadline, Opts),
             remove_dirs(Req, Roots),
-            ok
+            exit({cleaned, all_gone(Req#req.ops, Roots)})
     end.
 
 %% `cleanup/1' first, then actions, then directories. That is the reverse of
@@ -1198,48 +1296,89 @@ record_path(St, #req{root = Root, id = Id}) ->
     filename:join(journal_dir(maps:get(Root, St#st.roots)),
                   binary_to_list(Id) ++ ".rec").
 
-%% Write to a temp name, sync, rename over the real one. A half-written record
-%% is never observable: a rename within a directory is atomic and a partial
-%% temp file is simply not the record.
+%% Write to a temp name and rename over the real one. A half-written record is
+%% never observable: a rename within a directory is atomic and a partial temp
+%% file is simply not the record.
 %%
-%% This buys BEAM-crash durability and not host-crash durability. For a reaper
-%% crash, a supervisor restart or a node restart the page cache is still alive,
-%% so what makes the record visible to a replacement is completing the write
-%% and the rename *before* acknowledging. Ordering is the whole mechanism; the
-%% sync is conservative flushing on top.
-write_record(St, Req) ->
-    Path = record_path(St, Req),
-    Tmp = Path ++ ".part",
-    Data = encode_record(St, Req),
-    case file:open(Tmp, [write, raw, binary]) of
-        {error, E} ->
-            {error, io_error(E, Tmp)};
-        {ok, Fd} ->
-            R = file:write(Fd, Data),
-            _ = file:sync(Fd),
-            ok = file:close(Fd),
-            case R of
-                ok ->
-                    case file:rename(Tmp, Path) of
-                        ok -> ok;
-                        {error, E} -> {error, io_error(E, Path)}
-                    end;
-                {error, E} ->
-                    _ = file:delete(Tmp),
-                    {error, io_error(E, Tmp)}
-            end
-    end.
+%% This buys BEAM-crash durability and not host-crash durability, and it is not
+%% synced. For a reaper crash, a supervisor restart or a node restart the page
+%% cache is still alive, so what makes the record visible to a replacement is
+%% completing the write and the rename *before* acknowledging: ordering is the
+%% whole mechanism. A sync here held the reaper, and so every request on the
+%% node, for the length of a flush on each reservation.
+%%
+%% A host crash can lose a record the page cache had not written. What that
+%% leaves is a request directory nothing names, and the sweep at start removes
+%% every request directory no record covers (`sweep_unrecorded/3').
+%%
+%% Raw, because a `file' call is a round trip through `file_server_2', and the
+%% reaper waiting on that queue made two queues out of one.
+%%
+%% A rewrite for a durable operation waits for its writer, because its answer
+%% is recorded in the ledger. It is rare, and the reservation that must precede
+%% it went through the same writer, so the two cannot land out of order.
+write_record(#st{} = St, #req{id = Id} = Req) ->
+    Ref = make_ref(),
+    ok = journal(St, Id, {write, record_path(St, Req), encode_record(St, Req),
+                          self(), Ref}),
+    receive {Ref, Result} -> Result end.
 
-remove_record(St, Req) ->
-    _ = file:delete(record_path(St, Req)),
-    ok.
+remove_record(St, #req{id = Id} = Req) ->
+    journal(St, Id, {delete, record_path(St, Req)}).
 
 quarantine_record(St, #req{root = Root, id = Id} = Req) ->
     Dir = filename:join(journal_dir(maps:get(Root, St#st.roots)),
                         ?QUARANTINE_DIR),
-    _ = file:rename(record_path(St, Req),
-                    filename:join(Dir, binary_to_list(Id) ++ ".rec")),
+    journal(St, Id, {rename, record_path(St, Req),
+                     filename:join(Dir, binary_to_list(Id) ++ ".rec")}).
+
+journal(#st{writers = Ws}, Id, Op) ->
+    element(1 + erlang:phash2(Id, tuple_size(Ws)), Ws) ! Op,
     ok.
+
+%% Every writer has done what it was sent before this returns, so a clean
+%% shutdown looks at a journal with nothing still on its way to it.
+flush_journal(#st{writers = Ws}) ->
+    Refs = [begin R = make_ref(), W ! {flush, self(), R}, R end
+            || W <- tuple_to_list(Ws), is_process_alive(W)],
+    _ = [receive {R, flushed} -> ok after 5_000 -> ok end || R <- Refs],
+    ok.
+
+start_writers() ->
+    Reaper = self(),
+    list_to_tuple([spawn_link(fun() -> writer(Reaper) end)
+                   || _ <- lists:seq(1, ?WRITERS)]).
+
+writer(Reaper) ->
+    receive
+        {reserve, Id, Path, Data, From, Reply} ->
+            case put_record(Path, Data) of
+                ok         -> gen_server:reply(From, Reply);
+                {error, E} -> Reaper ! {journal_failed, Id, E, From}
+            end;
+        {write, Path, Data, ReplyTo, Ref} ->
+            ReplyTo ! {Ref, put_record(Path, Data)};
+        {delete, Path} ->
+            _ = wasm_worker_fs:delete(Path);
+        {rename, From, To} ->
+            _ = wasm_worker_fs:rename(From, To);
+        {flush, ReplyTo, Ref} ->
+            ReplyTo ! {Ref, flushed}
+    end,
+    writer(Reaper).
+
+put_record(Path, Data) ->
+    Tmp = Path ++ ".part",
+    case wasm_worker_fs:write_file(Tmp, Data) of
+        ok ->
+            case wasm_worker_fs:rename(Tmp, Path) of
+                ok -> ok;
+                {error, E} -> {error, io_error(E, Path)}
+            end;
+        {error, E} ->
+            _ = wasm_worker_fs:delete(Tmp),
+            {error, io_error(E, Tmp)}
+    end.
 
 io_error(E, Path) ->
     wasm_worker_error:worker(crashed, ~"journal write failed",
@@ -1306,11 +1445,45 @@ sweep(St) ->
 
 sweep_root(RootId, Dir, St) ->
     Journal = journal_dir(Dir),
-    case file:list_dir(Journal) of
-        {error, _} -> St;
+    St1 = case file:list_dir(Journal) of
+              {error, _} -> St;
+              {ok, Names} ->
+                  lists:foldl(fun(N, Acc) -> sweep_one(RootId, Journal, N, Acc) end,
+                              St, [N || N <- Names, lists:suffix(".rec", N)])
+          end,
+    ok = sweep_unrecorded(RootId, Dir, St1),
+    St1.
+
+%% A request directory no record names. The journal is not synced, so a host
+%% crash can lose the record of a request whose directory the page cache did
+%% write, and nothing else would ever find it. Only the kernel's own `req-'
+%% names are considered, and a quarantined record still covers its directory:
+%% quarantine is kept for somebody to look at.
+%%
+%% Safe against a live request because every reservation writes its record
+%% before its directory exists, and this runs in `init/1', before this reaper
+%% can accept a reservation.
+sweep_unrecorded(RootId, Dir, St) ->
+    Covered = [Rel || #req{root = R, relpath = Rel} <- maps:values(St#st.reqs),
+                      R =:= RootId]
+        ++ quarantined_paths(Dir),
+    case file:list_dir(Dir) of
+        {error, _} -> ok;
         {ok, Names} ->
-            lists:foldl(fun(N, Acc) -> sweep_one(RootId, Journal, N, Acc) end,
-                        St, [N || N <- Names, lists:suffix(".rec", N)])
+            _ = [begin
+                     ?LOG_WARNING("wasm_worker_reaper: removing ~ts, which no "
+                                  "record names", [N]),
+                     wasm_worker_fs:del_dir_r(filename:join(Dir, N))
+                 end || N <- Names, lists:prefix("req-", N),
+                        not lists:member(unicode:characters_to_binary(N), Covered)],
+            ok
+    end.
+
+quarantined_paths(Dir) ->
+    case file:list_dir(filename:join(journal_dir(Dir), ?QUARANTINE_DIR)) of
+        {ok, Names} -> [iolist_to_binary(["req-", filename:rootname(N)])
+                        || N <- Names, lists:suffix(".rec", N)];
+        {error, _}  -> []
     end.
 
 sweep_one(RootId, Journal, Name, St) ->
@@ -1488,16 +1661,16 @@ to_pid(B) ->
 exists({_Verb, Root, Rel}, Roots) ->
     case maps:find(Root, Roots) of
         error -> false;
-        {ok, Dir} -> filelib:is_file(filename:join(Dir, Rel))
+        {ok, Dir} -> wasm_worker_fs:exists(filename:join(Dir, Rel))
     end.
 
 apply_op({remove_tree, Root, Rel}, Roots) ->
     case maps:find(Root, Roots) of
         error -> ok;
-        {ok, Dir} -> _ = file:del_dir_r(filename:join(Dir, Rel)), ok
+        {ok, Dir} -> _ = wasm_worker_fs:del_dir_r(filename:join(Dir, Rel)), ok
     end;
 apply_op({delete_file, Root, Rel}, Roots) ->
     case maps:find(Root, Roots) of
         error -> ok;
-        {ok, Dir} -> _ = file:delete(filename:join(Dir, Rel)), ok
+        {ok, Dir} -> _ = wasm_worker_fs:delete(filename:join(Dir, Rel)), ok
     end.

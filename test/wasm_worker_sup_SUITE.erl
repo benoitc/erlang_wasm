@@ -21,6 +21,7 @@ all() ->
      configured_roots_start_the_reaper_at_boot,
      a_default_root_that_is_not_configured_is_refused_at_start,
      suspend_and_resume_keep_configured_roots,
+     a_request_whose_record_was_lost_is_removed_at_start,
      a_killed_reaper_comes_back_on_the_same_root,
      reaper_options_reach_the_reaper,
      an_unknown_reaper_option_refuses_the_start,
@@ -99,6 +100,25 @@ suspend_and_resume_keep_configured_roots(Config) ->
         %% (`wasm_worker_reaper:handle_cast({finish, _}, _)'), so the
         %% directory disappearing does not mean the journal is clear yet.
         ok = until(fun() -> records(Dir) =:= [] end)
+    end).
+
+%% The journal is not synced, so a host that crashes can lose a record the page
+%% cache had not written while the request's directory survives. Nothing names
+%% that directory, and the next start removes it; a directory the kernel did
+%% not make is not its to remove.
+a_request_whose_record_was_lost_is_removed_at_start(Config) ->
+    Dir = dir(Config, "lost"),
+    #{id := Id} = Orphan = orphaned_request(Config),
+    ok = plant(Orphan, Dir),
+    ok = file:delete(filename:join([Dir, ".journal",
+                                    binary_to_list(Id) ++ ".rec"])),
+    Mine = filename:join(Dir, "not-a-request"),
+    ok = filelib:ensure_path(Mine),
+    true = filelib:is_dir(request_dir(Orphan, Dir)),
+    with_peer(#{scratch_roots => #{scratch => Dir}}, fun(H) ->
+        {ok, _} = on(H, fun reaper_child/0),
+        ok = until(fun() -> not filelib:is_dir(request_dir(Orphan, Dir)) end),
+        true = filelib:is_dir(Mine)
     end).
 
 a_killed_reaper_comes_back_on_the_same_root(_Config) ->

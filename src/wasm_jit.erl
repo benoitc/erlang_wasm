@@ -58,7 +58,7 @@ moved, because even with all three a refusal still interprets.
 -export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
 -export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
 -export([compile_limits/0, max_heap_words/0, compile_budget_heap_words/0]).
--export([reentered/0]).
+-export([reentered/0, ensure_counts/0]).
 -export([compiler_loop/0]).
 -export([dump/1, dump/2]).
 
@@ -121,9 +121,16 @@ moved, because even with all three a refusal still interprets.
 -define(ASK, wasm_jit_ask).
 
 -define(PT_COUNTS, {?MODULE, counts}).
+%% `entered' and `reentered', apart from the rest. They are bumped on the call
+%% path, from every scheduler at once, so they are a `counters' array with
+%% `write_concurrency': one shared `atomics' word had every scheduler
+%% contending for one cache line on every compiled call.
+-define(PT_HOT, {?MODULE, hot}).
+-define(HOT_ENTERED, 1).
+-define(HOT_REENTERED, 2).
 -define(IX_COMPILED, 1).      % functions compiled
--define(IX_ENTERED, 2).       % invocations that entered generated code
--define(IX_REENTERED, 3).     % calls the interpreter made into generated code
+%% 2 and 3 were `entered' and `reentered', which are `?PT_HOT' now. The slots
+%% stay so `?IX_SEQ' keeps its index across an upgrade.
 -define(IX_CACHED, 4).        % compilations answered from the on-disk cache
 -define(IX_REFUSED, 5).       % compiles this runtime declined to attempt
 -define(IX_FAILED, 6).        % compiles the OTP compiler rejected
@@ -292,16 +299,21 @@ release of a memory harmless.
 release(Inst) ->
     ok = wasm_code_slots:release(key(Inst), {instance, Inst#inst.id}),
     each_shard(Inst, 2, fun(Key) ->
-                            wasm_code_slots:release(Key, {instance, Inst#inst.id})
+                            case wasm_code_slots:lookup(Key) of
+                                {ok, _} -> wasm_code_slots:release(
+                                             Key, {instance, Inst#inst.id});
+                                error   -> stop
+                            end
                         end).
 
 -doc "How much has been compiled, and how often generated code was entered.".
 -spec counts() -> #{atom() => non_neg_integer()}.
 counts() ->
     R = counters(),
+    H = hot(),
     #{compiled => atomics:get(R, ?IX_COMPILED),
-      entered => atomics:get(R, ?IX_ENTERED),
-      reentered => atomics:get(R, ?IX_REENTERED),
+      entered => counters:get(H, ?HOT_ENTERED),
+      reentered => counters:get(H, ?HOT_REENTERED),
       cached => atomics:get(R, ?IX_CACHED),
       refused => atomics:get(R, ?IX_REFUSED),
       failed => atomics:get(R, ?IX_FAILED),
@@ -329,8 +341,8 @@ diagnostics() -> wasm_code_slots:diagnostics().
 reset_counts() ->
     R = counters(),
     atomics:put(R, ?IX_COMPILED, 0),
-    atomics:put(R, ?IX_ENTERED, 0),
-    atomics:put(R, ?IX_REENTERED, 0),
+    counters:put(hot(), ?HOT_ENTERED, 0),
+    counters:put(hot(), ?HOT_REENTERED, 0),
     atomics:put(R, ?IX_CACHED, 0),
     atomics:put(R, ?IX_REFUSED, 0),
     atomics:put(R, ?IX_FAILED, 0),
@@ -356,12 +368,14 @@ reset_counts() ->
 compiled(Inst, Slot, Entry) ->
     Mod = wasm_code_slots:slot_module(Slot),
     {Ref, SIdx} = wasm_code_slots:lease_ref(Mod),
+    %% Resolved here, once per entry, and carried by the closure.
+    Hot = hot(),
     case wasm_instance:identity(Inst) of
-        {sha256, Hash} -> hashed_entry(Mod, Ref, SIdx, Hash, Entry);
-        _ -> generational_entry(Inst, Mod, Entry)
+        {sha256, Hash} -> hashed_entry(Mod, Ref, SIdx, Hash, Entry, Hot);
+        _ -> generational_entry(Inst, Mod, Entry, Hot)
     end.
 
-hashed_entry(Mod, Ref, SIdx, Stamp, Entry) ->
+hashed_entry(Mod, Ref, SIdx, Stamp, Entry, Hot) ->
     fun(I, Mut, Idx, Args, L) ->
         case wasm_code_slots:lease_at(Ref, SIdx) of
             stale -> Entry(I, Mut, Idx, Args, L);
@@ -370,10 +384,10 @@ hashed_entry(Mod, Ref, SIdx, Stamp, Entry) ->
                     {error, not_compiled} ->
                         Entry(I, Mut, Idx, Args, L#{code_module => {Mod, Stamp}});
                     {error, stale} -> Entry(I, Mut, Idx, Args, L);
-                    Result -> bump(?IX_ENTERED, 1), Result
+                    Result -> counters:add(Hot, ?HOT_ENTERED, 1), Result
                 catch
                     Class:Reason:St ->
-                        bump(?IX_ENTERED, 1),
+                        counters:add(Hot, ?HOT_ENTERED, 1),
                         erlang:raise(Class, Reason, St)
                 after
                     wasm_code_slots:release_at(Ref, SIdx)
@@ -381,7 +395,7 @@ hashed_entry(Mod, Ref, SIdx, Stamp, Entry) ->
         end
     end.
 
-generational_entry(Inst, Mod, Entry) ->
+generational_entry(Inst, Mod, Entry, Hot) ->
     Key = key(Inst),
     fun(I, Mut, Idx, Args, L) ->
         case wasm_code_slots:lease_call(Mod, Key) of
@@ -403,7 +417,7 @@ generational_entry(Inst, Mod, Entry) ->
                     %% The slot was refilled between reading it and calling.
                     %% Rare, and interpreting is the answer.
                     {error, stale} -> Entry(I, Mut, Idx, Args, L);
-                    Result -> bump(?IX_ENTERED, 1), Result
+                    Result -> counters:add(Hot, ?HOT_ENTERED, 1), Result
                 catch
                     %% A trap is an entry. The generated function ran and did
                     %% what the specification says it should, and it leaves by
@@ -412,7 +426,7 @@ generational_entry(Inst, Mod, Entry) ->
                     %% that traps every time. That is the one workload a
                     %% differential test most wants to be sure ran compiled.
                     Class:Reason:St ->
-                        bump(?IX_ENTERED, 1),
+                        counters:add(Hot, ?HOT_ENTERED, 1),
                         erlang:raise(Class, Reason, St)
                 after
                     wasm_code_slots:release_call(Mod)
@@ -1150,8 +1164,20 @@ shard_key(Inst, N) -> {wasm_instance:identity(Inst), ?ABI, N}.
 
 %% Take an instance lease on shards two and up, stopping at the first gap: the
 %% chain is contiguous by construction, so a gap means there is nothing further.
+%%
+%% Each shard is looked for before it is claimed. A module compiled as one unit
+%% has no shard two, and claiming a key only to give it straight back was two
+%% manager round trips on every instance of it, with the matching releases for
+%% every possible shard at destroy. A shard absent at the read and present just
+%% after is a shard still being published, which the claim would have answered
+%% `loading' for and not leased either.
 lease_rest(Inst, N) ->
-    each_shard(Inst, N, fun(Key) -> lease_one(Inst, Key) end).
+    each_shard(Inst, N, fun(Key) ->
+                            case wasm_code_slots:lookup(Key) of
+                                {ok, _} -> lease_one(Inst, Key);
+                                error   -> stop
+                            end
+                        end).
 
 lease_one(Inst, Key) ->
     case wasm_code_slots:claim_loading(Key, {instance, Inst#inst.id}, self()) of
@@ -1387,7 +1413,27 @@ green run says nothing: re-entry that silently never happens looks exactly like
 re-entry that happens and does not pay.
 """.
 -spec reentered() -> ok.
-reentered() -> _ = bump(?IX_REENTERED, 1), ok.
+reentered() -> counters:add(hot(), ?HOT_REENTERED, 1).
+
+-doc """
+Make the call-path counters now, at application start, rather than on the first
+compiled call. Two processes making them at once would each keep an array and
+one of them would count into the one `counts/0` does not read.
+""".
+-spec ensure_counts() -> ok.
+ensure_counts() -> _ = hot(), ok.
+
+%% Created once per node and never replaced, so a closure holding it counts
+%% into the same array `counts/0' reads.
+hot() ->
+    case persistent_term:get(?PT_HOT, undefined) of
+        undefined ->
+            H = counters:new(2, [write_concurrency]),
+            persistent_term:put(?PT_HOT, H),
+            H;
+        H ->
+            H
+    end.
 
 %% Rebuilt when what is there is too small, which is what a node that was hot
 %% upgraded from a version with fewer counters has. Reading past the end of an

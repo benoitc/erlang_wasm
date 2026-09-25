@@ -817,14 +817,15 @@ do_destroy(Inst) ->
               #mut{mems = Mems, tables = Tables, globals = Globals} =
                   wasm_instance:mut(Inst),
               Token = {instance, Inst#inst.id},
-              _ = [wasm_memory:release(Mem, Token)
-                   || Mem <- tuple_to_list(Mems)],
-              _ = [wasm_table:release(T, Token) || T <- tuple_to_list(Tables)],
-              %% Only the mutable ones are cells. An immutable global is a
-              %% value in the tuple, with no lifetime to release.
-              _ = [wasm_global:release(G, Token) || G <- tuple_to_list(Globals),
-                                                    wasm_global:is_global(G)],
-              ok
+              %% One keeper call for all of them rather than one each: a
+              %% worker destroys an instance per request.
+              Ids = [wasm_memory:resource(Mem) || Mem <- tuple_to_list(Mems)]
+                  ++ [wasm_table:forget_local(T) || T <- tuple_to_list(Tables)]
+                  %% Only the mutable ones are cells. An immutable global is a
+                  %% value in the tuple, with no lifetime to release.
+                  ++ [wasm_global:resource(G) || G <- tuple_to_list(Globals),
+                                                 wasm_global:is_global(G)],
+              wasm_keeper:release_all([{Id, Token} || Id <- Ids])
           end),
     %% The compiled code this instance may have claimed. Same argument as the
     %% memories above: the lease names the instance, so it goes when the

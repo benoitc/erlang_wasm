@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the seventy-one modules are, which
+This page is the map of the runtime: what the seventy-two modules are, which
 ones depend on which, and where to start reading. You need it before you change
 anything, because every module explains itself and none of them explains the
 shape of the whole.
@@ -64,6 +64,7 @@ L1  wasm_code_cache  wasm_engine  wasm_leb128  wasm_num_float
 L0  wasm_error  wasm_num  wasm_limits  wasm_code_slots  wasm_file_cache
     wasm_snapshot_file  wasm_subsup  wasm_validate_simd  wasm_validate_atomic
     wasi_path  wasi_net  wasi_file_nif  wasm_worker_error  wasm_worker_adapter
+    wasm_worker_fs
 ```
 
 `test/wasm_architecture_SUITE.erl` asserts that this block names every module
@@ -112,7 +113,7 @@ capture copies and what a restore lays over -- and stays out of it.
 Cycles are not forbidden here. What is forbidden is a fourth one appearing
 because nobody noticed. A cycle is the one structural property you cannot
 discover by reading a module: everything else about `wasm_memory` is answered
-inside `wasm_memory`, and this is answered only by reading all seventy-one.
+inside `wasm_memory`, and this is answered only by reading all seventy-two.
 
 The margin is thinner than it looks. Adding one call from `wasm_error`, at
 level 0, up into `wasm` collapses fourteen modules into a single component, and

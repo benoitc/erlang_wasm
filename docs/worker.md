@@ -117,6 +117,51 @@ once; the worker traps exits, so this runs on a supervisor shutdown. A killed
 worker runs no `terminate/2`, and that is safe too: the runtime releases an
 instance's pages when its owner exits, kill included.
 
+## Restore a script worker's next instance ahead
+
+This part is about `wasm_script_worker`, the kernel behind the JavaScript, Python
+and Lua adapters. Use `restore_ahead` when the guest restores from a captured
+image and your workers have idle time between requests: the next instance is
+restored while the worker waits, so a request starts at the guest's own work.
+
+<!-- check: modules my_adapter -->
+```erlang
+{ok, W} = wasm_script_worker:start_link(my_adapter, #{root => scratch,
+                                                      restore_ahead => true}).
+```
+
+What it changes:
+
+- One long-lived runner per worker restores the instance and runs the request.
+  The request's imports (preopens, output sinks, host calls) are the ones its
+  adapter's `prepare/3` built for it, installed before the guest runs.
+- Every request still gets an instance restored from the image and used once.
+  Globals, linear memory and the files of an earlier request never reach a
+  later one; `wasm_worker_lang_SUITE` checks each of these for every shipped
+  reactor.
+- An idle worker holds one restored instance: for CPython that is about 42 MB
+  of linear memory per worker.
+- It needs a snapshot capability and imports that are all functions. Without
+  either, the worker logs a warning and restores per request as before.
+
+It shortens a request only when the worker was idle long enough to finish the
+restore. A pool that always hands the next request to the worker that just
+answered (last in, first out) gives it no time; rotate idle workers instead.
+Under full load it adds no throughput, because the restore still has to run.
+
+## Know what a crash leaves
+
+| what dies | what is left | who cleans it |
+| --- | --- | --- |
+| the runner, at a deadline or a crash | nothing of the instance; the request's directory until its cleanup runs | the reaper, as for any request; the worker starts a new runner before its next request |
+| the worker | its runner, which exits when it sees the worker go | nothing else to clean |
+| the node, mid-request | the request's directory and its journal record | the reaper at the next start, **if** `scratch_roots` names the same directory |
+| the host, mid-request | as above, possibly without the record, which is not synced | the next start removes every `req-` directory no record names |
+
+With `scratch_roots` unset, each node uses a directory of its own that a later
+start never looks at, so set it wherever a crash must be cleaned up at the next
+start.
+
 ## What the process does not buy you
 
 A process is a fault and lifecycle boundary, not a security boundary. The

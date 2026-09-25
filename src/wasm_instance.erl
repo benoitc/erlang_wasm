@@ -94,7 +94,7 @@ new(M, Imports, Opts) ->
     %% build. It moves to the instance with everything else when the build
     %% succeeds. Registered before anything is acquired, so the very first
     %% memory is already bounded.
-    ok = wasm_keeper:set_limit(
+    ok = wasm_keeper:build_limit(
            Build, maps:get(max_memory_pages,
                            maps:merge(?DEFAULT_LIMITS, Opts), infinity)),
     %% After the ceiling and under the build token, so the heap is bounded by

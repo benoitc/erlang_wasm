@@ -61,8 +61,9 @@ now rather than the size the handle was made at.
 -behaviour(gen_server).
 
 -export([start_link/0, ensure_table/0]).
--export([reserve/4, acquire/3, release/2, transfer/3, discard/1]).
--export([set_limit/2, total_of/1]).
+-export([reserve/4, acquire/3, release/2, release_all/1, transfer/3,
+         discard/1]).
+-export([set_limit/2, build_limit/2, total_of/1]).
 -export([grow_begin/3, grow_commit/4, grow_abort/2]).
 -export([reconcile/2, reconcile/3]).
 -export([charge_of/1, holders_of/1, resources/0]).
@@ -134,7 +135,7 @@ names it by.
           {ok, resource()}
         | {error, limit | instance_limit | keeper_unavailable}.
 reserve(Pages, Meta, Token, Owner) ->
-    call({reserve, Pages, Meta, Token, Owner}).
+    call({reserve, Pages, Meta, Token, Owner, pending_limit(Token)}).
 
 -doc """
 Add a holder to a resource that already exists.
@@ -144,7 +145,8 @@ importer has to treat as a link failure rather than as a memory it may use.
 """.
 -spec acquire(resource(), token(), pid() | none) ->
           ok | {error, gone | instance_limit | keeper_unavailable}.
-acquire(Resource, Token, Owner) -> call({acquire, Resource, Token, Owner}).
+acquire(Resource, Token, Owner) ->
+    call({acquire, Resource, Token, Owner, pending_limit(Token)}).
 
 -doc """
 Remove a holder. The resource goes when the set empties.
@@ -160,6 +162,21 @@ release(Resource, Token) ->
     end.
 
 -doc """
+Remove several holders in one step, as `release/2` does each of them.
+
+What `wasm:destroy/1` uses: an instance holds a memory, its tables and its
+mutable globals, and releasing them one call at a time put that many round
+trips through this process on every request a worker served.
+""".
+-spec release_all([{resource(), token()}]) -> ok.
+release_all([]) -> ok;
+release_all(Pairs) ->
+    case call({release_all, Pairs}) of
+        ok -> ok;
+        {error, keeper_unavailable} -> ok
+    end.
+
+-doc """
 Move every token `From` holds onto `To`, atomically.
 
 Used when a build succeeds: the entries a builder accumulated become the
@@ -167,6 +184,7 @@ instance's, without a window in which they belong to neither.
 """.
 -spec transfer(token(), token(), pid() | none) -> ok.
 transfer(From, To, Owner) ->
+    _ = erase({?MODULE, limit, From}),
     case call({transfer, From, To, Owner}) of
         ok -> ok;
         {error, keeper_unavailable} -> ok
@@ -195,6 +213,23 @@ set_limit(Token, Max) ->
         {error, keeper_unavailable} -> ok
     end.
 
+-doc """
+`set_limit/2` for a build token, without a round trip of its own.
+
+Kept in the calling process and carried by the next `reserve/4` or `acquire/3`
+under the same token, which is every way a build takes its first page, so the
+ceiling is in place before anything it bounds. `transfer/3` and `discard/1`
+forget it. Only the process that builds may use it: the ceiling travels with
+that process's own calls.
+""".
+-spec build_limit(token(), non_neg_integer() | infinity) -> ok.
+build_limit(_Token, infinity) -> ok;
+build_limit(Token, Max) ->
+    _ = put({?MODULE, limit, Token}, Max),
+    ok.
+
+pending_limit(Token) -> get({?MODULE, limit, Token}).
+
 -doc "Pages a holder holds across every memory it can reach. Diagnostics.".
 -spec total_of(token()) -> non_neg_integer().
 total_of(Token) ->
@@ -213,6 +248,7 @@ there is something left to roll back.
 """.
 -spec discard(token()) -> ok.
 discard(Token) ->
+    _ = erase({?MODULE, limit, Token}),
     case call({discard, Token}) of
         ok -> ok;
         {error, keeper_unavailable} -> ok
@@ -517,7 +553,8 @@ handle_call({set_limit, Token, Max}, _From, #{caps := Caps} = State) ->
 handle_call({total_of, Token}, _From, #{totals := Totals} = State) ->
     {reply, {ok, maps:get(Token, Totals, 0)}, State};
 
-handle_call({reserve, Pages, Meta, Token, Owner}, _From, State) ->
+handle_call({reserve, Pages, Meta, Token, Owner, Limit}, _From, State0) ->
+    State = pending_cap(Token, Limit, State0),
     case within(Token, Pages, State) of
         false ->
             {reply, {error, instance_limit}, State};
@@ -533,7 +570,8 @@ handle_call({reserve, Pages, Meta, Token, Owner}, _From, State) ->
             end
     end;
 
-handle_call({acquire, Res, Token, Owner}, _From, State) ->
+handle_call({acquire, Res, Token, Owner, Limit}, _From, State0) ->
+    State = pending_cap(Token, Limit, State0),
     case ets:lookup(?TAB, Res) of
         [] ->
             {reply, {error, gone}, State};
@@ -560,6 +598,10 @@ handle_call({acquire, Res, Token, Owner}, _From, State) ->
 
 handle_call({release, Res, Token}, _From, State) ->
     {reply, ok, drop(Res, Token, State)};
+
+handle_call({release_all, Pairs}, _From, State) ->
+    {reply, ok, lists:foldl(fun({Res, Token}, S) -> drop(Res, Token, S) end,
+                            State, Pairs)};
 
 handle_call({discard, Token}, {Pid, _}, #{held := Held} = State) ->
     Mine = [Res || {Res, Tok} <- maps:keys(maps:get(Pid, Held, #{})),
@@ -695,6 +737,17 @@ move_cap(From, To, #{caps := Caps} = State) ->
             State#{caps := Rest#{To => Max}};
         error ->
             State
+    end.
+
+%% A ceiling carried by a build's own reservation. Only the first one sets it:
+%% the build names one ceiling and every later call carries the same.
+pending_cap(_Token, undefined, State) ->
+    State;
+pending_cap(Token, Max, #{caps := Caps} = State) ->
+    case maps:is_key(Token, Caps) of
+        true  -> State;
+        false -> true = ets:insert(?TAB, {{cap, Token}, Max}),
+                 State#{caps := Caps#{Token => Max}}
     end.
 
 forget_cap(Token, #{caps := Caps} = State) ->

@@ -69,6 +69,7 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
+    ok = wasm_jit:ensure_counts(),
     Flags = #{strategy => simple_one_for_one, intensity => 0, period => 1},
     Child = #{id => compiler,
               start => {?MODULE, start_compiler, []},

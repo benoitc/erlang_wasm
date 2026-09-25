@@ -34,7 +34,8 @@ suite() -> [{timetrap, {minutes, 10}}].
 %% *plus* a compile measured at 567 s, which is hours, and Phase 5 is where
 %% that measurement belongs.
 all() -> [{group, qjs_metered}, {group, qjs_compiled}, {group, qjs_reactor},
-          {group, lua_reactor}].
+          {group, lua_reactor}, {group, qjs_reactor_ahead},
+          {group, lua_reactor_ahead}].
 
 groups() ->
     [{qjs_metered, [], cases() ++ [asking_for_both_silently_gets_the_interpreter]},
@@ -54,7 +55,13 @@ groups() ->
      %% around: it was written after the kernel, the profile and snapshots, and
      %% none of them changed to admit it. It starts in milliseconds, so unlike
      %% the Python groups it belongs in `all/0`.
-     {lua_reactor, [], lua_cases()}].
+     {lua_reactor, [], lua_cases()},
+     %% Each reactor again with `restore_ahead': the whole kit, unchanged, and
+     %% then what only a waiting instance could get wrong. CPython's is not in
+     %% `all/0` for the reason its other groups are not.
+     {qjs_reactor_ahead, [], reactor_cases() ++ ahead_cases()},
+     {lua_reactor_ahead, [], lua_cases() ++ ahead_cases()},
+     {python_reactor_ahead, [], python_reactor_cases() ++ ahead_cases()}].
 
 %% `groups/0' runs before `init_per_suite', and listing an adapter's capability
 %% cases means building its artifact, which for a real engine means loading a
@@ -154,6 +161,12 @@ init_per_group(python_reactor, Config) ->
                   %% other CPython ceiling.
                   {worker_opts, #{capture_timeout => 180_000}},
                   {limits, python_reactor_limits()} | Config]);
+init_per_group(qjs_reactor_ahead, Config) ->
+    ahead(init_per_group(qjs_reactor, Config));
+init_per_group(lua_reactor_ahead, Config) ->
+    ahead(init_per_group(lua_reactor, Config));
+init_per_group(python_reactor_ahead, Config) ->
+    ahead(init_per_group(python_reactor, Config));
 init_per_group(python_metered, Config) ->
     skip_without(python(), [{adapter, wasm_python_command}, {config, metered},
                             {engine, python()}, {opts, python_opts()},
@@ -162,6 +175,13 @@ init_per_group(python_compiled, Config) ->
     skip_without(python(), [{adapter, wasm_python_command}, {config, compiled},
                             {engine, python()}, {opts, python_opts()},
                             {limits, python_compiled()} | Config]).
+
+ahead({skip, _} = Skip) ->
+    Skip;
+ahead(Config) ->
+    Opts = proplists:get_value(worker_opts, Config, #{}),
+    [{worker_opts, Opts#{restore_ahead => true}}
+     | proplists:delete(worker_opts, Config)].
 
 skip_without(Path, Config) ->
     skip_without(Path, "no CPython build: run scripts/fetch-python-fixture.sh",
@@ -258,6 +278,78 @@ ctx(Config) ->
       root => Root,
       artifact_opts => proplists:get_value(opts, Config, artifact_opts()),
       start => fun(Opts) -> start(Config, Opts) end}.
+
+%%% ---------------------------------------------------------- restore ahead ---
+
+ahead_cases() ->
+    [each_request_reads_its_own_files,
+     guest_memory_does_not_reach_the_waiting_instance].
+
+%% The waiting instance was restored before this request's directory existed,
+%% so the files it reads can only be this request's if its imports were bound
+%% when the request started. A preopen fixed at restore would read the
+%% capture's empty directory, or the previous request's, which is removed.
+each_request_reads_its_own_files(Config) ->
+    W = ?config(worker, Config),
+    Echo = ?KIT:fixture(?config(adapter, Config), echo,
+                        proplists:get_value(opts, Config, #{})),
+    [?assertMatch({ok, #{result := #{~"answer" := Want}}},
+                  wasm_script_worker:run(W, Echo#{context => #{~"value" => V}}))
+     || {V, Want} <- [{1, 2}, {41, 42}, {99, 100}]].
+
+%% A marker the guest keeps in a global, looked for in the instance restored
+%% for the next request. The same guest string, read from the same memory,
+%% would be found if the next request were handed the instance this one used.
+guest_memory_does_not_reach_the_waiting_instance(Config) ->
+    W = ?config(worker, Config),
+    Tag = binary:encode_hex(crypto:strong_rand_bytes(8), lowercase),
+    Marker = <<"MARK-", Tag/binary>>,
+    {ok, _} = wasm_script_worker:run(
+                W, #{source => marker_source(?config(adapter, Config)),
+                     context => #{~"tag" => Tag}}),
+    Mem = waiting_memory(W),
+    %% The read is real: a string every image of this engine holds is there.
+    ?assertNotEqual(nomatch, binary:match(Mem, image_string(?config(adapter, Config)))),
+    ?assertEqual(nomatch, binary:match(Mem, Marker)).
+
+marker_source(wasm_javascript) ->
+    ~"export function main(c) { globalThis.keep = 'MARK-' + c.tag; return {}; }";
+marker_source(wasm_lua) ->
+    ~"function main(c) keep = 'MARK-' .. c.tag return {} end";
+marker_source(wasm_python) ->
+    ~"def main(c):\n    global keep\n    keep = 'MARK-' + c['tag']\n    return {}\n".
+
+image_string(wasm_javascript) -> ~"Array";
+image_string(wasm_lua) -> ~"tostring";
+image_string(wasm_python) -> ~"__name__".
+
+%% The memory of the instance the worker's runner restored for the next
+%% request, once it has one. Between requests the worker monitors exactly one
+%% process, its runner.
+waiting_memory(W) -> waiting_memory(W, 500).
+
+waiting_memory(W, 0) -> ct:fail({no_instance_waiting, W});
+waiting_memory(W, N) ->
+    Waiting = case process_info(W, monitors) of
+                  {monitors, [{process, R}]} ->
+                      case process_info(R, dictionary) of
+                          {dictionary, D} ->
+                              proplists:get_value(wasm_worker_ahead, D);
+                          undefined ->
+                              undefined
+                      end;
+                  _ ->
+                      undefined
+              end,
+    case Waiting of
+        {Inst, _Keys, _Opts} ->
+            {ok, Pages} = wasm:memory_size(Inst),
+            {ok, Mem} = wasm:read_memory(Inst, 0, Pages * 65536),
+            Mem;
+        undefined ->
+            timer:sleep(20),
+            waiting_memory(W, N - 1)
+    end.
 
 %%% --------------------------------------------------- the two configurations ---
 

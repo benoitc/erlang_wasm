@@ -15,19 +15,42 @@ implements the same behaviour.
 -spec request(wasi_http_transport:request(), timeout()) ->
           wasi_http_transport:response().
 request(#{host := Host, port := Port, method := Method, path := Path,
-          headers := Headers, body := Body}, Timeout) ->
-    case h1:connect(Host, Port, #{}) of
+          headers := Headers, body := Body} = Req, Timeout) ->
+    ConnectTimeout = maps:get(connect_timeout, Req, undefined),
+    case h1:connect(Host, Port, connect_opts(ConnectTimeout)) of
         {ok, Conn} ->
+            %% The h1 client connects asynchronously; wait for the socket so a
+            %% connect timeout surfaces as connection-timeout, distinct from the
+            %% response timeout `collect` reports, and from an outright refusal.
             Result =
-                case h1:request(Conn, Method, Path, Headers, Body) of
-                    {ok, Sid}  -> collect(Conn, Sid, Timeout);
-                    {error, _} -> {error, {<<"HTTP-protocol-error">>, none}}
+                case h1:wait_connected(Conn, wait_timeout(ConnectTimeout)) of
+                    ok             -> send(Conn, Method, Path, Headers, Body, Timeout);
+                    {error, Reason} -> {error, connect_error(Reason)}
                 end,
             _ = h1:close(Conn),
             Result;
-        {error, _} ->
-            {error, {<<"connection-refused">>, none}}
+        {error, Reason} ->
+            {error, connect_error(Reason)}
     end.
+
+send(Conn, Method, Path, Headers, Body, Timeout) ->
+    case h1:request(Conn, Method, Path, Headers, Body) of
+        {ok, Sid}  -> collect(Conn, Sid, Timeout);
+        {error, _} -> {error, {<<"HTTP-protocol-error">>, none}}
+    end.
+
+connect_opts(undefined) -> #{};
+connect_opts(Timeout)   -> #{connect_timeout => Timeout}.
+
+wait_timeout(undefined) -> 30000;
+wait_timeout(Timeout)   -> Timeout.
+
+%% Map a connect failure to its wasi:http error-code: a timed-out connect is
+%% connection-timeout, everything else (refused, unreachable, closed) is reported
+%% as connection-refused.
+connect_error(timeout) -> {<<"connection-timeout">>, none};
+connect_error(etimedout) -> {<<"connection-timeout">>, none};
+connect_error(_Other)  -> {<<"connection-refused">>, none}.
 
 collect(Conn, Sid, Timeout) ->
     receive

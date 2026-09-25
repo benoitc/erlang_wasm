@@ -133,7 +133,7 @@ config(Name, Ctx) ->
             case group_name(Name) of
                 ~"sockets"    -> {<<>>, #{network => socket_grant(Name)}};
                 ~"filesystem" -> fs_config(Name, maps:get(preopen, Ctx));
-                ~"http"       -> {<<>>, #{network => loopback(),
+                ~"http"       -> {<<>>, #{network => http_grant(Name),
                                           env => [{<<"HTTP_SERVER">>,
                                                    maps:get(http, Ctx)}]}};
                 _             -> {<<>>, #{}}
@@ -216,6 +216,15 @@ program_config(_) ->
 %% else gets a loopback grant.
 socket_grant("p2_cli_no_ip_name_lookup") -> none;
 socket_grant(_)                          -> loopback().
+
+%% The outbound-http programs reach the loopback echo server; the timeout program
+%% deliberately connects to a TEST-NET-3 address (203.0.113.0/24, reserved and
+%% unroutable) and asserts the connect times out, so it is granted that address.
+http_grant("p2_http_outbound_request_timeout") ->
+    G = loopback(),
+    G#{connect => [{tcp, <<"203.0.113.12">>, {0, 65535}} | maps:get(connect, G)]};
+http_grant(_) ->
+    loopback().
 
 loopback() ->
     #{connect => [{tcp, <<"127.0.0.1">>, {0, 65535}},

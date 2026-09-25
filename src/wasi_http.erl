@@ -137,7 +137,8 @@ http(Opts) ->
             {[], handle}, fun([]) -> wasm_component:host_new(http_req_opts, #{}) end),
       {T, <<"[method]request-options.set-connect-timeout">>} =>
           wasm_component:import_fun(
-            {[handle, {option, u64}], {result, none, none}}, fun(_) -> {ok, undefined} end),
+            {[handle, {option, u64}], {result, none, none}},
+            fun([O, Ns]) -> set_opt(O, connect_timeout, Ns) end),
       {T, <<"[method]request-options.set-first-byte-timeout">>} =>
           wasm_component:import_fun(
             {[handle, {option, u64}], {result, none, none}}, fun(_) -> {ok, undefined} end),
@@ -263,7 +264,31 @@ http(Opts) ->
           wasm_component:import_fun(
             {[handle, {option, handle}],
              {result, handle, ?ERROR_CODE}},
-            fun([Req, _Opts]) -> handle(Req, Grant, Transport) end)}.
+            fun([Req, ReqOpts]) -> handle(Req, ReqOpts, Grant, Transport) end)}.
+
+%% Store a request-option (a timeout, in nanoseconds) on the options resource.
+set_opt(O, Key, Value) ->
+    case wasm_component:host_get(O) of
+        {ok, {http_req_opts, Map}} ->
+            _ = wasm_component:host_update(O, Map#{Key => opt_ns(Value)}),
+            {ok, undefined};
+        _ ->
+            {error, undefined}
+    end.
+
+%% A request-option timeout in milliseconds, or `undefined` when unset. The guest
+%% passes nanoseconds; the wire libraries take milliseconds.
+opt_ns(none)       -> undefined;
+opt_ns({some, Ns}) -> max(1, Ns div 1_000_000).
+
+%% The connect timeout the guest set on its request-options, if any.
+connect_timeout(none) ->
+    undefined;
+connect_timeout({some, O}) ->
+    case wasm_component:host_get(O) of
+        {ok, {http_req_opts, #{connect_timeout := T}}} -> T;
+        _                                              -> undefined
+    end.
 
 %%% -------------------------------------------------------------- fields ---
 
@@ -544,9 +569,10 @@ append_body(B, Bytes) ->
 %% be sent, so `handle` refuses it at once rather than handing back a future that
 %% would only fail on `get`; a well-formed request is deferred, and any connection
 %% failure surfaces when the guest polls the future.
-handle(Req, Grant, Transport) ->
+handle(Req, Opts, Grant, Transport) ->
     case wasm_component:host_get(Req) of
-        {ok, {http_out_req, Map}} ->
+        {ok, {http_out_req, Map0}} ->
+            Map = Map0#{conn_timeout => connect_timeout(Opts)},
             case request_error(Map) of
                 none  -> {ok, wasm_component:host_new(http_future,
                                                       {pending, Map, Grant, Transport})};
@@ -579,7 +605,8 @@ perform(#{authority := Authority} = R, Grant, Transport) ->
                     Transport:request(
                       #{host => Host, port => Port,
                         method => maps:get(method, R), path => maps:get(path, R),
-                        headers => maps:get(headers, R), body => maps:get(body, R)},
+                        headers => maps:get(headers, R), body => maps:get(body, R),
+                        connect_timeout => maps:get(conn_timeout, R, undefined)},
                       ?HTTP_TIMEOUT)
             end
     end.

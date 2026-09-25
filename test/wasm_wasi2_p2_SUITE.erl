@@ -32,17 +32,16 @@ all() -> [p2_cases, groups_present].
 %% lowers a number, a regression raises the actual above it and fails, and a
 %% number left too high (the `stale_baseline` guard) also fails.
 %%
-%% The http residue is three programs the host cannot satisfy in this harness:
-%% `p2_http_outbound_request_timeout` and `_invalid_version` assert a wire-level
-%% connect timeout / protocol error that only a real remote peer produces, and
-%% `p2_cli_http_headers` is a multi-run program driven by arguments this single
-%% invocation does not pass.
+%% The http residue is two programs the host cannot satisfy in this harness:
+%% `p2_http_outbound_request_invalid_version` asserts a wire-level protocol error
+%% that only a real remote peer produces, and `p2_cli_http_headers` is a multi-run
+%% program driven by arguments this single invocation does not pass.
 baseline() ->
     #{~"cli"        => 7,
       ~"clocks"     => 0,
       ~"filesystem" => 1,
       ~"io"         => 2,
-      ~"http"       => 3,
+      ~"http"       => 2,
       ~"random"     => 0,
       ~"sockets"    => 12}.
 

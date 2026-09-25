@@ -6403,3 +6403,101 @@ the request path. Against the pre-steward baseline (before the whole PR) the min
 floor is about 420 us, so the per-request steward the PR introduces costs roughly
 30 us; that lands in the accept phase, which the measurement border allows to
 grow, not in the guest execution envelope.
+
+## Requests on a pool, and what they queued behind
+
+hornbeam serves a CPython reactor per request from 14 `wasm_script_worker`s
+and measured 140 to 170 requests a second at 16 to 64 clients, where 14
+workers at 47 ms a request would give about 290. `bench/paths/reqbench.erl`
+reproduces the shape here: `wasm_python` over `py_reactor.wasm`, hornbeam's
+worker options (`runner_min_heap_words => 1_000_000`, the tier on with
+`compile_after => 1`), a pool that hands out the most recently freed worker,
+and every queue a request can wait on sampled every 10 ms. The machine is a
+14-core Mac, 10 performance and 4 efficiency cores.
+
+**Messages per request**, one worker, counted by tracing the servers' receives
+over 20 warm requests:
+
+| server | main | this branch |
+| --- | ---: | ---: |
+| `file_server_2` | 34 | 0 |
+| `wasm_worker_reaper` | 10 | 7.6 |
+| `wasm_keeper` | 6 | 4 |
+| `wasm_code_slots` | 7 | 2 |
+| `wasm_cleanup_manager` | 5 | 0.6 |
+| `wasm_cleanup_steward_sup` | 3 | 3 |
+
+The file server's 34 were WASI path resolution (`read_link_info`,
+`read_file_info`, and `filelib:safe_relative_path/2`'s `read_link`), the
+request directory and mounts, staging, and cleanup. Call-time tracing of the
+reaper, after the file calls were made raw but while it still wrote its own
+journal, put `open`, `rename` and `delete` at about 110 us each under load and
+about 430 us of file I/O per request inside the one process; with the journal
+on writer processes its own time per request is a few microseconds.
+
+**Main against this branch**, interleaved, both orderings, 64 callers, 10 s per
+arm. The load average in this session never came below 77 while the three
+rounds ran (macOS background indexing), so read it as the two builds meeting
+the same contended machine:
+
+| round, load | main | branch | branch, `restore_ahead` |
+| --- | ---: | ---: | ---: |
+| 1, 78 to 147 | 179.1 req/s | 190.3 | 183.8 |
+| 2, 163 to 203 | 108.3 | 170.5 | 173.9 |
+| 3, 178 to 208 | 119.8 | 167.7 | 170.6 |
+
+Queues at 64 callers, the worst arm of each build across the three rounds:
+
+| queue, max / mean | main | branch |
+| --- | ---: | ---: |
+| `file_server_2` | 18 / 7.07 | 0 / 0 |
+| `wasm_worker_reaper` | 31 / 10.67 | 5 / 0.09 |
+| `wasm_keeper` | 1 / 0.02 | 2 / 0.06 |
+| `wasm_code_slots` | 2 / 0.02 | 2 / 0.03 |
+
+Two more rounds once the indexing eased, same protocol:
+
+| round, load | main | branch | branch, `restore_ahead` |
+| --- | ---: | ---: | ---: |
+| 4, 19 to 43 | 98.7 req/s | 198.1 | 201.6 |
+| 5, 43 to 66 | 127.6 | 187.8 | 211.3 |
+
+`main`'s schedulers were 30 and 38% busy in those, the branch's 67 to 83%.
+
+Under contention `main` does worst: its schedulers were 33 to 37% busy in
+rounds 2 and 3 against 70 to 81% for the branch, because every request waited
+on the reaper, which waited on the file server. Earlier the same day, with
+the load average between 10 and 30 and the arms not interleaved, `main` gave
+173 req/s and the branch 202 to 218.
+
+**What is left is CPU.** Microstate accounting over a loaded branch arm: normal
+schedulers 74% emulator, 16% other (spinning for work), 7% sleep, under 1%
+collection. With 78% of 14 schedulers busy at 210 req/s a request costs about
+52 ms of scheduler time against 45 ms of latency alone. A CPython restore is
+12 ms alone and 22 ms with 14 at once; eprof puts it almost entirely in
+`wasm_memory:scatter_run/3` writing 924k image words and in allocating 43
+fresh 1 MiB chunks, which alone and touched costs 4.0 ms, 11.1 ms with 14 at
+once, and 2.4 and 5.2 ms with `+MMmcs 30 +MMamcbf 1000000`. That flag is worth
+about 3% end to end (210.6 against 217.8 req/s, one pair). Why the chunks are
+not reused is in `ATTEMPTS.md`.
+
+**`restore_ahead`**, measured with `bench/paths/phasing_adapter.erl` over the
+same guest, one request at a time with 150 ms between them, 60 each, the two
+workers alternating in one emulator (load 48 to 75):
+
+| interval, median | per request | `restore_ahead` |
+| --- | ---: | ---: |
+| mounts and environment | 143 us | 129 us |
+| stage | 632 us | 538 us |
+| deliver and restore | 14,832 us | 38 us |
+| invocation envelope | 28,276 us | 28,250 us |
+| first to last callback | 46,351 us | 29,965 us |
+
+The invocation envelope is the same, so forwarding the imports and keeping the
+runner costs the guest nothing measurable. An earlier run of 30 each at load
+175 had it 4 ms apart in the other direction; that did not reproduce.
+
+It needs idle time between a worker's requests. With `REQBENCH_POOL=fifo`,
+which rotates idle workers, and 4 callers: p50 44 ms and 90.6 req/s without
+it, 30 ms and 123.4 req/s with it. With the last-in pool and 64 callers there
+is no idle time and it adds nothing (the rounds above).

@@ -246,10 +246,81 @@ Run your own with the `throughput` mode, and read the caveat in
 by interleaving the way a latency sweep can, so it needs a quiet machine and
 there is no trick that substitutes for one.
 
+## Serve many callers from a pool
+
+Use this when a pool of workers answers fewer requests a second than its
+worker count and a single request's time predict. Measure with
+`bench/paths/reqbench.erl`, which drives a pool with many callers and samples
+the queues of the node-wide processes a request can wait on:
+
+```sh
+REQBENCH_WARM=240 erl -noshell -pa _build/test/lib/wasm/ebin -pa bench/paths \
+    -run reqbench main py 14 64 10 ""
+```
+
+CPython reactor, 14 workers, 64 callers, the compiled tier warm, on a 14-core
+machine at a load average of 10 to 30:
+
+| | requests a second | `file_server_2` queue, max / mean | reaper queue, max / mean |
+| --- | ---: | ---: | ---: |
+| 0.4.3 | 173 | 12 / 4.4 | 22 / 2.6 |
+| 0.5.0 | 202 to 218 | 0 / 0 | 3 to 7 / under 0.1 |
+
+The keeper and code-slot queues stay at 2 or below in both. Interleaved on the
+same machine while other work loaded it, 0.4.3 gave 99 to 179 requests a second
+and 0.5.0 gave 167 to 211, and the busier the disk the wider the gap: a request
+no longer waits for another request's file system calls. `test/audit/PERF.md`
+has every run.
+
+With those queues at 0 to 2, what is left is CPU: a restore writes the image
+into memory one word at a time and allocates about 42 MB of pages, and the
+guest runs. On this machine 10 of the 14 cores are performance cores, so 14
+workers do not get 14 times one request's rate.
+
+### Restore the next instance ahead
+
+<!-- check: modules my_adapter -->
+```erlang
+wasm_script_worker:start_link(my_adapter, #{root => scratch,
+                                            restore_ahead => true}).
+```
+
+The worker restores the next instance while it waits, so a request that finds
+one ready skips the restore. CPython, one request at a time, a pause between
+requests, median of 60 in one emulator:
+
+| phase | per request | `restore_ahead` |
+| --- | ---: | ---: |
+| deliver and restore | 14.8 ms | 0.04 ms |
+| the guest's own call | 28.3 ms | 28.3 ms |
+| whole request, first to last callback | 46.4 ms | 30.0 ms |
+
+It needs idle time between a worker's requests. A pool that hands the next
+request to the worker that just answered gives it none, so rotate idle workers
+(first in, first out). At full load it adds no throughput: the restore still
+runs, only earlier. Each idle worker holds one restored instance.
+
+### Keep freed memory segments
+
+A restore allocates its linear memory fresh, and with many workers restoring
+at once the operating system's page mapping becomes a cost of its own. Letting
+the emulator cache more freed segments halves it:
+
+```sh
+erl +MMmcs 30 +MMamcbf 1000000 ...
+```
+
+| 43 chunks of 1 MiB, allocated and touched | alone | 14 at once |
+| --- | ---: | ---: |
+| default | 4.0 ms | 11.1 ms |
+| `+MMmcs 30 +MMamcbf 1000000` | 2.4 ms | 5.2 ms |
+
+End to end on the pool above that was worth about 3%.
+
 ## What this project has not measured
 
 Said plainly rather than filled with general advice, because a claim here cites
-`test/audit/PERF.md` and there is nothing to cite: allocator flags (`+M*`),
-scheduler binding (`+sbt`), scheduler counts and dirty schedulers have no
-measurement in this tree. If you measure any of them, that file is where the
-numbers go.
+`test/audit/PERF.md` and there is nothing to cite: allocator flags other than
+the segment cache above, scheduler binding (`+sbt`), scheduler counts and dirty
+schedulers have no measurement in this tree. If you measure any of them, that
+file is where the numbers go.

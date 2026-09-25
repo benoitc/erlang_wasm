@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+
+Requests on a pool of script workers no longer wait on one another in
+node-wide processes. Nothing in your code changes. One new worker option.
+
+- **New worker option `restore_ahead`.** With a captured image, the worker
+  restores the next request's instance while it waits, so a request starts at
+  the guest's own work: a CPython request's deliver and restore goes from
+  15 ms to 38 us when an instance is waiting. Every request still gets a
+  fresh instance. It holds one instance's memory per idle worker, needs
+  imports that are all functions, and helps only when workers have idle time
+  between requests; see `docs/tuning.md`.
+- **File operations on the request path are raw.** Staging, mounts, request
+  directories, cleanup and WASI path resolution no longer go through
+  `file_server_2`, which a request called about 34 times.
+- **The reaper does no file I/O of its own.** Journal records are written by
+  writer processes and are no longer synced; a start removes every request
+  directory no record names, which covers a record lost to a host crash.
+  `DOWN` handling is O(1) and the operator view (`cleanup_stats/0`,
+  `cleanup_requests/0`) is refreshed at most every 50 ms.
+- **Fewer keeper and code-slot calls per instance**: four keeper calls where
+  there were six, and two code-slot calls where there were seven for a module
+  compiled as one unit.
+- **`wasm_jit:counts/0`'s `entered` and `reentered`** are counted per
+  scheduler, without a shared word on the call path.
+
 ## 0.4.3
 
 Packaging and clock fixes. Nothing in your code changes, and there is nothing

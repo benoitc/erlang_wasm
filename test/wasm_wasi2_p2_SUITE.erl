@@ -33,10 +33,10 @@ all() -> [p2_cases, groups_present].
 %% number left too high (the `stale_baseline` guard) also fails.
 %%
 baseline() ->
-    #{~"cli"        => 7,
+    #{~"cli"        => 5,
       ~"clocks"     => 0,
       ~"filesystem" => 1,
-      ~"io"         => 2,
+      ~"io"         => 1,
       ~"http"       => 0,
       ~"random"     => 0,
       ~"sockets"    => 12}.

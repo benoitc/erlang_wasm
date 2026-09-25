@@ -216,6 +216,10 @@ program_config("p2_cli_stdin") ->
 %% guest reads the sub-test from argv[1].
 program_config("p2_cli_http_headers") ->
     {<<>>, #{args => [<<"p2_cli_http_headers">>, <<"p2-append">>]}};
+%% Writes argv[1] to stdout argv[2] times; the point is the volume, so give it a
+%% chunk and a repeat count.
+program_config("p2_cli_much_stdout") ->
+    {<<>>, #{args => [<<"p2_cli_much_stdout">>, <<"the quick brown fox\n">>, <<"1000">>]}};
 program_config(_) ->
     default.
 
@@ -247,12 +251,17 @@ loopback() ->
 
 %% Programs that pass by exiting non-zero rather than 0.
 expect("p2_cli_exit_failure")   -> nonzero;
-expect("p2_cli_exit_panic")     -> nonzero;
 expect("p2_cli_exit_with_code") -> nonzero;
+%% A Rust panic aborts the guest, which is a trap here (not a clean non-zero exit).
+expect("p2_cli_exit_panic")     -> trap;
 %% The p2 header sub-test is meant to trap: fields.append refuses once the header
 %% section is too large (the header-error variant has no case for it, so it is a
 %% trap, not a value), and the guest falls through to an unreachable.
 expect("p2_cli_http_headers")   -> trap;
+%% Poll of an empty list must trap, which this program asserts by doing exactly
+%% that. (p2_stream_pollable_traps also traps, but only once dropping a stream with
+%% a live pollable does, which waits on the real resource destructor.)
+expect("p2_pollable_traps")     -> trap;
 expect(_)                       -> zero.
 
 %%% --------------------------------------------------------------- grouping ---

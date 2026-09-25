@@ -686,7 +686,7 @@ io(Opts) ->
             {[], handle}, fun([]) -> wasm_component:host_new(output_stream, Sink) end),
       {Streams, <<"[method]output-stream.check-write">>} =>
           wasm_component:import_fun(
-            {[handle], ?COUNT_RESULT}, fun([_H]) -> {ok, ?WRITE_BUDGET} end),
+            {[handle], ?COUNT_RESULT}, fun([H]) -> check_write(H) end),
       {Streams, <<"[method]output-stream.write">>} =>
           wasm_component:import_fun({[handle, {list, u8}], ?WRITE_RESULT}, Write),
       {Streams, <<"[method]output-stream.blocking-write-and-flush">>} =>
@@ -799,10 +799,13 @@ write_stream(Handle, Bytes) ->
                 {error, _} = Err -> Err
             end;
         {ok, {output_stream, {socket, Conn}}} ->
-            %% A socket-backed stream: a failed send is a real error, not silent.
+            %% A socket-backed stream: a send to a closed or shut-down peer is the
+            %% `closed` stream-error; any other failure is reported as itself.
             case wasi_sock2:send(Conn, Bytes) of
-                ok             -> ok;
-                {error, Errno} -> {error, sock2_errno(Errno)}
+                ok                              -> ok;
+                {error, E} when E =:= epipe; E =:= closed; E =:= econnreset;
+                                E =:= enotconn; E =:= eshutdown -> {error, closed};
+                {error, Errno}                  -> {error, sock2_errno(Errno)}
             end;
         {ok, {output_stream, {http_body, Req}}} ->
             %% An outgoing HTTP request body: append to the request the body
@@ -860,6 +863,10 @@ splice_with(Read, Dst, Src, Len) ->
 %% read_stream reports `closed`.
 write_result(ok) ->
     {ok, undefined};
+%% A write to a closed or shut-down connection is the `closed` stream-error, not a
+%% recoverable failure.
+write_result({error, closed}) ->
+    {error, {<<"closed">>, undefined}};
 write_result({error, Reason}) ->
     {error, {<<"last-operation-failed">>, wasm_component:host_new(error, Reason)}}.
 
@@ -869,7 +876,29 @@ flush_stream(Handle) ->
     case wasm_component:host_get(Handle) of
         {ok, {output_stream, {file, _Own, Fh, _Off}}}  -> wasi_fs:sync(Fh);
         {ok, {output_stream, {file_append, _Own, Fh}}} -> wasi_fs:sync(Fh);
+        {ok, {output_stream, {socket, Conn}}}          -> socket_open_or_closed(Conn);
         _                                              -> ok
+    end.
+
+%% check-write and flush on a socket report `closed` once the send side is shut: a
+%% zero-byte probe send fails on a shut or closed connection.
+check_write(Handle) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {output_stream, {socket, Conn}}} ->
+            case socket_open_or_closed(Conn) of
+                ok             -> {ok, ?WRITE_BUDGET};
+                {error, closed} -> {error, {<<"closed">>, undefined}}
+            end;
+        _ ->
+            {ok, ?WRITE_BUDGET}
+    end.
+
+socket_open_or_closed(Conn) ->
+    case wasi_sock2:send(Conn, <<>>) of
+        ok                              -> ok;
+        {error, E} when E =:= epipe; E =:= closed; E =:= econnreset;
+                        E =:= enotconn; E =:= eshutdown -> {error, closed};
+        {error, _}                      -> ok
     end.
 
 %% Close the OS resource a host handle owns, called from teardown for every live
@@ -921,18 +950,25 @@ read_stream(Handle, Len, Timeout) ->
             {error, {<<"closed">>, undefined}}
     end.
 
-socket_read(Handle, Sock, <<>>, Len, Timeout) ->
-    case wasi_sock2:recv(Sock, 0, Timeout) of
-        {ok, Data}  -> socket_deliver(Handle, Sock, Data, Len);
-        eof         -> {error, {<<"closed">>, undefined}};
+socket_read(Handle, Sock, Buf, Len, Timeout) ->
+    %% Always probe the socket, so a peer close or a local shutdown-for-receive reads
+    %% as closed even when bytes are already buffered: WASI signals closed at once
+    %% rather than draining the buffer first. A probe with a buffer present is
+    %% non-blocking (the buffer is what a timeout would have returned).
+    Probe = case Buf of <<>> -> Timeout; _ -> 0 end,
+    case wasi_sock2:recv(Sock, 0, Probe) of
+        {ok, Data} ->
+            socket_deliver(Handle, Sock, <<Buf/binary, Data/binary>>, Len);
+        eof ->
+            {error, {<<"closed">>, undefined}};
+        {error, _} when Buf =/= <<>> ->
+            socket_deliver(Handle, Sock, Buf, Len);
         %% A non-blocking read with nothing waiting is not an error: zero bytes,
         %% so the guest can poll and read again. A blocking read that timed out
         %% reports the stream drained.
         {error, _} when Timeout =:= 0 -> {ok, <<>>};
         {error, _}  -> {error, {<<"closed">>, undefined}}
-    end;
-socket_read(Handle, Sock, Buf, Len, _Timeout) ->
-    socket_deliver(Handle, Sock, Buf, Len).
+    end.
 
 socket_deliver(Handle, Sock, Data, Len) ->
     N = min(Len, byte_size(Data)),
@@ -2595,15 +2631,70 @@ unicast(_)                          -> true.
 resolve_addresses(NetH, Name) ->
     case wasm_component:host_get(NetH) of
         {ok, {net_network, Grant}} ->
-            case wasi_net:resolves(Grant) of
-                %% No resolve capability is a permanent resolver failure, the code
-                %% a resolver-less host reports (a grant-less guest maps any error
-                %% to no addresses either way).
-                false -> {error, <<"permanent-resolver-failure">>};
-                true  -> {ok, wasm_component:host_new(net_addrs, resolve_names(Name))}
+            case classify_name(Name) of
+                invalid ->
+                    {error, <<"invalid-argument">>};
+                {literal, Addr} ->
+                    %% An IP literal is not a DNS lookup, so it needs no resolve
+                    %% capability; the literal is its own single result.
+                    {ok, wasm_component:host_new(net_addrs, [Addr])};
+                hostname ->
+                    case wasi_net:resolves(Grant) of
+                        %% No resolve capability is a permanent resolver failure, the
+                        %% code a resolver-less host reports (a grant-less guest maps
+                        %% any error to no addresses either way).
+                        false -> {error, <<"permanent-resolver-failure">>};
+                        true  -> {ok, wasm_component:host_new(
+                                        net_addrs, resolve_names(Name))}
+                    end
             end;
         _ ->
             {error, <<"invalid-argument">>}
+    end.
+
+%% A name is an IP literal, a resolvable hostname, or invalid. Reject up front what
+%% is neither an address nor a bare host: whitespace, a scheme, a port (`host:port`
+%% or `[v6]:port`), or an illegal character. A bracketed IPv6 (`[::]`) is a literal;
+%% `[::]:80` carries a port and is invalid.
+classify_name(<<>>) ->
+    invalid;
+classify_name(Name) ->
+    S = binary_to_list(Name),
+    case bad_name(S) of
+        true ->
+            invalid;
+        false ->
+            case strip_brackets(S) of
+                invalid ->
+                    invalid;
+                {bracketed, Inner} ->
+                    case inet:parse_ipv6_address(Inner) of
+                        {ok, Addr} -> {literal, wasi_net:normalise(Addr)};
+                        _          -> invalid
+                    end;
+                {plain, Plain} ->
+                    case inet:parse_address(Plain) of
+                        {ok, Addr}  -> {literal, wasi_net:normalise(Addr)};
+                        {error, _}  -> hostname
+                    end
+            end
+    end.
+
+%% Whitespace, a URL scheme, or a character no hostname or address carries.
+bad_name(S) ->
+    lists:any(fun(C) -> C =< $\s orelse lists:member(C, "<>&#?/\\@%") end, S)
+        orelse string:find(S, "://") =/= nomatch.
+
+strip_brackets([$[ | Rest]) ->
+    case lists:splitwith(fun(C) -> C =/= $] end, Rest) of
+        {Inner, "]"} -> {bracketed, Inner};
+        _            -> invalid
+    end;
+strip_brackets(S) ->
+    %% A colon in an unbracketed name that is not an IPv6 literal is a port.
+    case {lists:member($:, S), inet:parse_address(S)} of
+        {true, {error, _}} -> invalid;
+        _                  -> {plain, S}
     end.
 
 resolve_names(Name) ->

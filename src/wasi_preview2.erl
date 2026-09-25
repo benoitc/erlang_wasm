@@ -1950,17 +1950,23 @@ sockets(Opts) ->
       {<<"wasi:sockets/udp">>, <<"[resource-drop]udp-socket">>} =>
           fun(_Ctx, [H]) -> _ = udp_drop(H), {ok, []} end}.
 
-%% A socket with no grant is created but reaches nowhere (every connect, bind and
-%% listen is checked against the grant): p2_cli_no_tcp wants creation itself denied
-%% without a capability, but that is indistinguishable from the grant-less socket
-%% the connect/listen-needs-a-grant tests rely on, so creation stays permitted.
+%% A grant-less socket (`none`) is still created but reaches nowhere (every connect,
+%% bind and listen is checked against the grant), which the connect/listen-needs-a-
+%% grant tests rely on. A grant that explicitly withholds the TCP transport is
+%% different: creation itself is access-denied, which is what p2_cli_no_tcp asserts.
 create_tcp_socket(Family, Grant) ->
+    case wasi_net:tcp_allowed(Grant) of
+        false -> {error, <<"access-denied">>};
+        true  -> new_socket(tcp_socket, stream, Family, Grant)
+    end.
+
+new_socket(Tag, Type, Family, Grant) ->
     case socket_room(Grant) of
         false ->
             {error, <<"new-socket-limit">>};
         true ->
-            {ok, Handle} = wasi_sock:open(family_inet(Family), stream),
-            {ok, wasm_component:host_new(tcp_socket, {unconnected, Handle})}
+            {ok, Handle} = wasi_sock:open(family_inet(Family), Type),
+            {ok, wasm_component:host_new(Tag, {unconnected, Handle})}
     end.
 
 %% Cap the sockets an instance holds at once at the grant's `max_sockets`. A
@@ -2251,12 +2257,17 @@ sockaddr({<<"ipv6">>, #{<<"port">> := Port, <<"address">> := V6}}) ->
 %%% ----------------------------------------------------------------- udp ---
 
 create_udp_socket(Family, Grant) ->
-    case socket_room(Grant) of
+    case wasi_net:udp_allowed(Grant) of
         false ->
-            {error, <<"new-socket-limit">>};
+            {error, <<"access-denied">>};
         true ->
-            {ok, Handle} = wasi_sock:open(family_inet(Family), dgram),
-            {ok, wasm_component:host_new(udp_socket, {udp_unbound, Handle})}
+            case socket_room(Grant) of
+                false ->
+                    {error, <<"new-socket-limit">>};
+                true ->
+                    {ok, Handle} = wasi_sock:open(family_inet(Family), dgram),
+                    {ok, wasm_component:host_new(udp_socket, {udp_unbound, Handle})}
+            end
     end.
 
 %% Bind to the local address. Binding the guest's own source address is not a

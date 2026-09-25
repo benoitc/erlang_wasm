@@ -224,9 +224,12 @@ program_config(_) ->
     default.
 
 %% p2_cli_no_ip_name_lookup is offered the sockets interface but no resolve
-%% capability, so it asserts the lookup is a permanent resolver failure; everything
-%% else gets a loopback grant.
+%% capability, so it asserts the lookup is a permanent resolver failure. no_tcp and
+%% no_udp are offered the interface with that one transport withheld, so creating a
+%% socket of it is access-denied. Everything else gets a loopback grant.
 socket_grant("p2_cli_no_ip_name_lookup") -> none;
+socket_grant("p2_cli_no_tcp") -> (loopback())#{tcp => false};
+socket_grant("p2_cli_no_udp") -> (loopback())#{udp => false};
 socket_grant(_)                          -> loopback().
 
 %% The outbound-http programs reach the loopback echo server; the timeout program

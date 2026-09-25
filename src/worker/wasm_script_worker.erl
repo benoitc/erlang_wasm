@@ -972,7 +972,7 @@ guardian(#{worker := Worker, ref := Ref, id := Id} = Args) ->
             Worker ! {guardian_ready, Ref, {error, E}},
             ok;
         {ok, Dir} ->
-            case filelib:ensure_path(Dir) of
+            case wasm_worker_fs:ensure_path(Dir) of
                 {error, Why} ->
                     wasm_cleanup_steward:stop(Steward),
                     Worker ! {guardian_ready, Ref,
@@ -1243,7 +1243,7 @@ create_mounts(G, _Declared, [], Acc) ->
 create_mounts(G, Declared, [Name | Rest], Acc) ->
     #{guest_path := GuestPath, mode := Mode} = maps:get(Name, Declared),
     Dir = filename:join(G#g.dir, atom_to_list(Name)),
-    case filelib:ensure_path(Dir) of
+    case wasm_worker_fs:ensure_path(Dir) of
         ok ->
             M = #{guest_path => GuestPath, host_dir => Dir, mode => Mode},
             create_mounts(G, Declared, Rest, Acc#{Name => M});
@@ -1303,7 +1303,7 @@ stage_write(G, Mount, Path, Target, Data) ->
                     %% A partial write is removed and its bytes refunded before
                     %% the error returns: the accounting matches what is on
                     %% disk either way.
-                    _ = file:delete(Tmp),
+                    _ = wasm_worker_fs:delete(Tmp),
                     {{error, wasm_worker_error:worker(
                                crashed, ~"staging failed",
                                #{path => Path, reason => Why})}, G}
@@ -1311,12 +1311,12 @@ stage_write(G, Mount, Path, Target, Data) ->
     end.
 
 write_then_rename(Tmp, Target, Bin) ->
-    case filelib:ensure_dir(Target) of
+    case wasm_worker_fs:ensure_dir(Target) of
         {error, Why} -> {error, Why};
         ok ->
-            case file:write_file(Tmp, Bin) of
+            case wasm_worker_fs:write_file(Tmp, Bin) of
                 {error, Why} -> {error, Why};
-                ok           -> file:rename(Tmp, Target)
+                ok           -> wasm_worker_fs:rename(Tmp, Target)
             end
     end.
 

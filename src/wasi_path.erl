@@ -115,13 +115,13 @@ resolve_last_1(HostRoot, Path, _Path0, MustExist) ->
     end.
 
 names_something(Path) ->
-    case file:read_link_info(Path) of
+    case file:read_link_info(Path, [raw]) of
         {ok, _} -> true;
         _ -> false
     end.
 
 resolve_checked(HostRoot, Path, MustExist) ->
-    case filelib:safe_relative_path(Path, HostRoot) of
+    case safe_relative_path(Path, HostRoot) of
         unsafe ->
             %% Deliberately `ENOTCAPABLE', not `ENOENT' or `EACCES'. The module
             %% asked for something outside its capability; saying so is both
@@ -136,8 +136,46 @@ resolve_checked(HostRoot, Path, MustExist) ->
             end
     end.
 
+%% `filelib:safe_relative_path/2', step for step, with one difference: the
+%% links are read with `prim_file' rather than `file'. The `file' calls go
+%% through `file_server_2', one process for the node, and this runs for every
+%% path a guest names, so every guest on the node queued behind one another to
+%% resolve a file name.
+safe_relative_path(Path, "") -> safe_relative_path(Path, ".");
+safe_relative_path(Path, Cwd) -> srp(filename:split(Path), Cwd, sets:new(), []).
+
+srp([], _Cwd, _Seen, []) -> "";
+srp([], _Cwd, _Seen, Acc) -> filename:join(Acc);
+srp([Dot | Segs], Cwd, Seen, Acc) when Dot =:= "."; Dot =:= <<".">> ->
+    srp(Segs, Cwd, Seen, Acc);
+srp([Up | _], _Cwd, _Seen, []) when Up =:= ".."; Up =:= <<"..">> ->
+    unsafe;
+srp([Up | Segs], Cwd, Seen, Acc) when Up =:= ".."; Up =:= <<"..">> ->
+    srp(Segs, Cwd, Seen, lists:droplast(Acc));
+srp([clear | Segs], Cwd, _Seen, Acc) ->
+    srp(Segs, Cwd, sets:new(), Acc);
+srp([Seg | Segs], Cwd, Seen, Acc) ->
+    case filename:pathtype(Seg) of
+        relative -> srp_segment(Seg, Segs, Cwd, Seen, Acc);
+        _        -> unsafe
+    end.
+
+srp_segment(Seg, Segs, Cwd, Seen, Acc) ->
+    Dir = filename:join([Cwd | Acc]),
+    case prim_file:read_link(filename:join(Dir, Seg)) of
+        {ok, Link} ->
+            Full = filename:join(Dir, Link),
+            case sets:is_element(Full, Seen) of
+                true  -> unsafe;
+                false -> srp(filename:split(Link) ++ [clear | Segs], Cwd,
+                             sets:add_element(Full, Seen), Acc)
+            end;
+        {error, _} ->
+            srp(Segs, Cwd, Seen, Acc ++ [Seg])
+    end.
+
 exists(Path) ->
-    case file:read_link_info(Path) of
+    case file:read_link_info(Path, [raw]) of
         {ok, _} -> true;
         _ -> false
     end.
@@ -161,7 +199,7 @@ verify_within(HostRoot, Path) ->
 %% Canonicalise, resolving every symlink. Compared with a trailing separator so
 %% that "/srv/appdata" is not treated as being inside "/srv/app".
 real(Path) ->
-    case file:read_link_all(Path) of
+    case prim_file:read_link_all(Path) of
         {ok, _} -> canonical(Path);
         {error, einval} -> canonical(Path);      % not a symlink
         {error, _} -> canonical(Path)
@@ -169,7 +207,7 @@ real(Path) ->
 
 canonical(Path) ->
     Abs = filename:absname(Path),
-    case file:read_file_info(Abs) of
+    case file:read_file_info(Abs, [raw]) of
         {ok, _} -> {ok, ensure_trailing(filename:join(split_resolved(Abs)))};
         {error, _} -> {ok, ensure_trailing(Abs)}
     end.

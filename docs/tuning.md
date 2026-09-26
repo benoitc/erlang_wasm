@@ -317,6 +317,28 @@ erl +MMmcs 30 +MMamcbf 1000000 ...
 
 End to end on the pool above that was worth about 3%.
 
+## Stop compiling the same Python on every request
+
+Use this when a CPython worker always runs the same code and only the context
+changes. Sent as a `source`, that code is compiled and imported again on every
+request; given to the worker as `entry`, it runs once, at the capture, and a
+request calls a function that is already in the image.
+[Python](python.md) shows how.
+
+The same agent request, a dispatch to a trivial `init`, the compiled tier on,
+the three workers alternating in one emulator, 40 requests each:
+
+| path | the guest's call, median | minimum | whole request, median |
+| --- | ---: | ---: | ---: |
+| `handle()`, the 0.5.0 reactor | 59.1 ms | 46.8 ms | 88.4 ms |
+| `handle()`, this reactor | 40.4 ms | 30.9 ms | 70.0 ms |
+| `call()`, an `entry` | 2.1 ms | 1.8 ms | 19.9 ms |
+
+The rest of a request, about 18 ms, is the restore and the kernel around it,
+which `restore_ahead` above takes off the request's path. These were taken
+while another job loaded the machine (load average 250 to 275), so read the
+gaps rather than the absolute times; `test/audit/PERF.md` has the runs.
+
 ## What this project has not measured
 
 Said plainly rather than filled with general advice, because a claim here cites

@@ -156,6 +156,52 @@ Notes:
 - The numbers, their null experiment and where the time goes are in
   `test/audit/PERF.md`.
 
+## Call a fixed entry instead of sending a source
+
+Use this when the code is the same on every request and only the context
+changes: a host that runs one application per worker, for example. The worker
+runs the code once, while it captures, and each request calls a function that
+is already in the image, so nothing is compiled or imported per request.
+
+<!-- check: run -->
+<!-- check: fresh -->
+<!-- check: needs python_reactor -->
+```erlang
+{ok, W} = wasm_script_worker:start_link(
+            wasm_python,
+            #{path => "test/fixtures/lang/py_reactor.wasm",
+              lib  => "test/fixtures/lang/py_reactor_lib",
+              entry => <<"import worker\n"
+                         "def answer(c):\n"
+                         "    return {'answer': c['value'] + 1}\n"
+                         "worker.set_entry(answer)\n">>,
+              capture_timeout => 300_000,
+              limits => wasm_python:limits()}),
+{ok, #{result := #{~"answer" := 42}}} =
+    wasm_script_worker:run(W, #{context => #{~"value" => 41}}).
+```
+
+What to know:
+
+- **`worker.set_entry(callable)` takes one callable, once.** The capture runs
+  `entry` as `/main.py`, so a `main` it defines is called once with `None`. A
+  worker whose `entry` never calls `set_entry` does not start, and a request
+  that calls it again gets an `exception` error saying the entry is already
+  set.
+- **A request with no `source` calls the entry** with its context; one with a
+  `source` runs that source, as on any reactor worker.
+- **The entry's globals start fresh on every request.** Each request restores
+  the image, so what one request's call changed is gone for the next.
+- **The context arrives through an import**, `worker.context`, rather than as
+  a staged file, so its size is bounded by `max_request_bytes` alone.
+- **Changing the code means restarting the worker.** The entry is part of the
+  image and of the image's version, so two workers with different entries
+  never share a filed image.
+
+The same request through `handle()` and through an entry, the compiled tier on,
+alternating in one emulator on a loaded machine: the guest's call took 40.4 ms
+and 2.1 ms. [Tuning a worker host](tuning.md) has the table.
+
 ## Give both processes a heap floor
 
 CPython gains more from this than either other guest here, and it gains on both

@@ -1546,6 +1546,7 @@ address(Base, Offset) ->
 access(Dir, Mut, M, N, Kind, Addr, Val) ->
     Mem = cerl:c_var('Mem'), A = cerl:c_var('A'), Sh = cerl:c_var('Sh'),
     Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
+    Ci = cerl:c_var('Ci'),
     Slow = case Dir of
                load -> call_op(load_at, [Mut, cerl:abstract(M), cerl:abstract(N),
                                          cerl:c_atom(Kind), A]);
@@ -1565,9 +1566,33 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
                                     cerl:abstract(8)]),
           ordinary(Mem, A, N, Bit,
                    cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
-                     cerl:c_let([Ck], chunk_of(Mem, A, Sh),
-                       cerl:c_let([Ix], word_index(A, Sh), Fast))),
+                     cerl:c_let([Ci], bif('bsr', [A, Sh]),
+                       cerl:c_let([Ck], chunk_at(Mem, Ci),
+                         cerl:c_let([Ix], word_index(A, Sh),
+                                    marked(Dir, Mem, Ci, Fast))))),
                    Slow)))).
+
+%% A store sets its chunk's slot in the memory's `dirty' array first, when the
+%% memory has one: `wasm_memory:wchunk/2' is the same rule for every write the
+%% interpreter makes. A memory that does not track costs a field read and a
+%% compare.
+marked(load, _Mem, _Ci, Fast) ->
+    Fast;
+marked(store, Mem, Ci, Fast) ->
+    D = cerl:c_var('Dy'), Slot = cerl:c_var('Sl'),
+    cerl:c_seq(
+      cerl:c_case(field(Mem, ?MEM_DIRTY),
+                  [cerl:c_clause([cerl:abstract(undefined)], cerl:abstract(ok)),
+                   cerl:c_clause(
+                     [D],
+                     cerl:c_let([Slot], bif('+', [Ci, cerl:abstract(1)]),
+                       cerl:c_case(atomic(get, [D, Slot]),
+                                   [cerl:c_clause([cerl:abstract(0)],
+                                                  atomic(put, [D, Slot,
+                                                               cerl:abstract(1)])),
+                                    cerl:c_clause([cerl:c_var('_Set')],
+                                                  cerl:abstract(ok))])))]),
+      Fast).
 
 mem_at(Mut, M) ->
     bif(element, [cerl:abstract(M + 1),
@@ -1619,9 +1644,8 @@ all([Test | Rest], Fast, Slow) ->
     cerl:c_case(Test, [cerl:c_clause([cerl:abstract(true)], all(Rest, Fast, Slow)),
                        cerl:c_clause([cerl:c_var('_No')], Slow)]).
 
-chunk_of(Mem, A, Sh) ->
-    bif(element, [bif('+', [bif('bsr', [A, Sh]), cerl:abstract(1)]),
-                  field(Mem, ?MEM_CHUNKS)]).
+chunk_at(Mem, Ci) ->
+    bif(element, [bif('+', [Ci, cerl:abstract(1)]), field(Mem, ?MEM_CHUNKS)]).
 
 word_index(A, Sh) ->
     bif('+', [bif('bsr', [bif('band', [A, bif('-', [bif('bsl', [cerl:abstract(1), Sh]),

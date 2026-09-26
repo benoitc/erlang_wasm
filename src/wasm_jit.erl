@@ -72,7 +72,11 @@ moved, because even with all three a refusal still interprets.
 %% caller's. An artifact built by 3 checks one level too shallow, which is
 %% exactly the divergence `every_tier_bounds_recursion_at_the_same_depth`
 %% exists to catch -- and a cached one would reintroduce it silently.
--define(ABI, 4).
+%%
+%% 5: an inlined store marks its chunk in the memory's `dirty' slots. An
+%% artifact built by 4 writes without marking, and a memory recycled for the
+%% next restore would keep one request's bytes for the next.
+-define(ABI, 5).
 
 -define(DEFAULT_AFTER, 32).
 

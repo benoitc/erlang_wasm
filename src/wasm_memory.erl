@@ -50,6 +50,7 @@ who holds the memory and releases it when they are all gone.
 -export([field_indices/0, mask/1]).
 -export([grow/2, fill/4, copy/4, copy/5, init/5]).
 -export([to_binary/1]).
+-export([track/2, dirty_chunks/1, recyclable/1, chunk_bytes/1, fresh_chunk/1]).
 
 %% 1 MiB per chunk: 16 pages, 131072 atomic words.
 -define(CHUNK_BITS, 20).
@@ -107,7 +108,12 @@ who holds the memory and releases it when they are all gone.
     %% removes. A standalone *thread-shared* memory holds a `manual' token,
     %% which nothing but `free/1' removes: it exists to be used by agents other
     %% than the one that made it, so its creator exiting must not take it away.
-    token     :: wasm_keeper:token() | none
+    token     :: wasm_keeper:token() | none,
+    %% One slot per chunk, set by any write into that chunk. `undefined' unless
+    %% the memory was restored from an image and asked to track, which is the
+    %% only case that reads it: the next restore of the same image rewrites
+    %% only the chunks set here and keeps the rest.
+    dirty = undefined :: undefined | atomics:atomics_ref()
 }).
 
 -opaque mem() :: #mem{}.
@@ -155,10 +161,16 @@ its size and chunk tuple are published rather than kept in the handle. `holder`
 is a `{Token, Owner}` pair naming the registry entry to create and the process
 whose death removes it; leave it out and the memory belongs to the calling
 process, or to nobody at all if it is thread-shared.
+
+Three more are for a restore that recycles (`wasm_snapshot`): `pages` creates
+the memory at that size rather than its declared minimum, `chunk_bytes` sets
+the chunk size, and `chunks` supplies the chunk tuple instead of allocating one.
+A supplied tuple must be exactly the size `pages` and `chunk_bytes` call for.
 """.
 -spec create(#limits{}, map()) -> {ok, mem()} | {error, term()}.
-create(#limits{min = Pages, max = Max, index_type = IdxType, shared = Shared},
+create(#limits{min = Min, max = Max, index_type = IdxType, shared = Shared},
        Opts) ->
+    Pages = max(Min, maps:get(pages, Opts, Min)),
     {Token, Owner} = maps:get(holder, Opts, default_holder(Shared)),
     %% A caller that named the holder holds it. The handle then carries no
     %% removable token, so `free/1' on a handle taken out with `wasm:extern/2'
@@ -177,10 +189,18 @@ create(#limits{min = Pages, max = Max, index_type = IdxType, shared = Shared},
             {error, page_error(Why)};
         {ok, Res} ->
             try
-                Shift = chunk_shift(Pages),
+                Shift = case maps:find(chunk_bytes, Opts) of
+                            {ok, Bytes} -> round_up_shift(?PAGE_SIZE_SHIFT, Bytes);
+                            error       -> chunk_shift(Pages)
+                        end,
                 NChunks = chunks_for(Pages, Shift),
-                Chunks = list_to_tuple([new_chunk(Shift)
-                                        || _ <- lists:seq(1, NChunks)]),
+                Chunks = case maps:find(chunks, Opts) of
+                             {ok, Given} when tuple_size(Given) =:= NChunks ->
+                                 Given;
+                             _ ->
+                                 list_to_tuple([new_chunk(Shift)
+                                                || _ <- lists:seq(1, NChunks)])
+                         end,
                 PagesRef =:= undefined orelse atomics:put(PagesRef, 1, Pages),
                 CRef =:= undefined orelse wasm_engine:cell_put(CRef, Chunks),
                 {ok, #mem{id = Res, chunks = Chunks, pages = Pages, max = Max,
@@ -488,7 +508,7 @@ cas_loop(M, Base, Shift, Mask, Nbytes, Fun) ->
     end.
 
 cas_word(#mem{shift = Shift} = M, Addr, Expected, Desired) ->
-    Chunk = chunk(M, Addr bsr Shift),
+    Chunk = wchunk(M, Addr bsr Shift),
     Ix = ((Addr band ((1 bsl Shift) - 1)) bsr 3) + 1,
     atomics:compare_exchange(Chunk, Ix, Expected,
                              Desired band 16#FFFFFFFFFFFFFFFF).
@@ -593,7 +613,7 @@ word(#mem{shift = Shift} = M, Addr) ->
     atomics:get(Chunk, ((Addr band ((1 bsl Shift) - 1)) bsr 3) + 1).
 
 put_word(#mem{shift = Shift} = M, Addr, Value) ->
-    Chunk = chunk(M, Addr bsr Shift),
+    Chunk = wchunk(M, Addr bsr Shift),
     atomics:put(Chunk, ((Addr band ((1 bsl Shift) - 1)) bsr 3) + 1,
                 Value band 16#FFFFFFFFFFFFFFFF).
 
@@ -605,6 +625,15 @@ chunk(#mem{chunks = Chunks}, Idx) when Idx < tuple_size(Chunks) ->
     element(Idx + 1, Chunks);
 chunk(#mem{chunks_ref = Ref}, Idx) when Ref =/= undefined ->
     element(Idx + 1, wasm_engine:cell_get(Ref)).
+
+%% The chunk a write is about to change, marked dirty first. Every write in
+%% this module resolves its chunk here, and `wasm_core''s inlined store sets
+%% the same slot, so a chunk nothing marked is a chunk nothing wrote.
+wchunk(#mem{dirty = undefined} = M, Idx) ->
+    chunk(M, Idx);
+wchunk(#mem{dirty = D} = M, Idx) ->
+    ok = atomics:put(D, Idx + 1, 1),
+    chunk(M, Idx).
 
 -doc """
 The all-ones mask for an access of `N` bytes.
@@ -673,7 +702,7 @@ scatter(M, Addr, Bin) when byte_size(Bin) >= 8, Addr band 7 =:= 0 ->
         0 ->
             scatter_byte(M, Addr, Bin);
         N ->
-            {C, I} = word_at(M, Addr),
+            {C, I} = wword_at(M, Addr),
             %% Split once for the run, and let `scatter_run/3` consume its
             %% binary to exhaustion without ever *returning* a tail. Returning
             %% one costs a sub-binary per word: the first version of this did,
@@ -696,6 +725,49 @@ scatter_run(_C, _I, <<>>) -> ok;
 scatter_run(C, I, <<W:64/little, Rest/binary>>) ->
     atomics:put(C, I, W),
     scatter_run(C, I + 1, Rest).
+
+-doc """
+Start recording which chunks are written, for a memory whose next life reuses
+the ones that were not.
+
+`Pages` is the most this memory can grow to; the record has a slot per chunk up
+to it and is never resized, because a handle copied before a resize would mark
+the old one. Answers the new handle, which replaces the old one wherever the
+instance keeps it. Anything written before this is not recorded, which is what
+a restore wants: its own writes are the image.
+""".
+-spec track(mem(), pos_integer()) -> mem().
+track(#mem{shift = Shift} = M, Pages) ->
+    Slots = max(1, chunks_for(max(Pages, size_pages(M)), Shift)),
+    M#mem{dirty = atomics:new(Slots, [{signed, false}])}.
+
+-doc "The zero-based indices of the chunks written since `track/2`.".
+-spec dirty_chunks(mem()) -> [non_neg_integer()].
+dirty_chunks(#mem{dirty = undefined}) ->
+    [];
+dirty_chunks(#mem{dirty = D}) ->
+    [I - 1 || I <- lists:seq(1, maps:get(size, atomics:info(D))),
+              atomics:get(D, I) =/= 0].
+
+-doc """
+What a recycling restore can take from this memory: its chunk size, its size in
+pages, its chunks and which of them were written. `undefined` for a memory that
+does not track or is shared with other agents.
+""".
+-spec recyclable(mem()) ->
+          undefined | {pos_integer(), non_neg_integer(), tuple(),
+                       [non_neg_integer()]}.
+recyclable(#mem{dirty = undefined}) -> undefined;
+recyclable(#mem{shared = true}) -> undefined;
+recyclable(#mem{shift = Shift} = M) ->
+    {1 bsl Shift, size_pages(M), current_chunks(M), dirty_chunks(M)}.
+
+-spec chunk_bytes(mem()) -> pos_integer().
+chunk_bytes(#mem{shift = Shift}) -> 1 bsl Shift.
+
+-doc "A zeroed chunk of `Bytes`, the size a recycling restore replaces one with.".
+-spec fresh_chunk(pos_integer()) -> atomics:atomics_ref().
+fresh_chunk(Bytes) -> new_chunk(round_up_shift(?PAGE_SIZE_SHIFT, Bytes)).
 
 -doc """
 Whole-memory snapshot. Diagnostics and tests only: it materialises the
@@ -726,7 +798,7 @@ fill_loop(_M, _Addr, _W, _B, 0) -> ok;
 fill_loop(M, Addr, W, B, Len) when Len >= 8, Addr band 7 =:= 0 ->
     %% As `copy_run/5': one chunk resolution per run rather than per word.
     N = run_words(M, Len, [Addr]),
-    {C, I} = word_at(M, Addr),
+    {C, I} = wword_at(M, Addr),
     ok = fill_run(C, I, W, N),
     fill_loop(M, Addr + N * 8, W, B, Len - N * 8);
 fill_loop(M, Addr, W, B, Len) ->
@@ -788,7 +860,7 @@ copy_across(DstMem, Dst, SrcMem, Src, Len) ->
 copy_fwd(_M, _D, _S, 0) -> ok;
 copy_fwd(M, D, S, Len) when Len >= 8, D band 7 =:= 0, S band 7 =:= 0 ->
     N = run_words(M, Len, [D, S]),
-    {DC, DI} = word_at(M, D),
+    {DC, DI} = wword_at(M, D),
     {SC, SI} = word_at(M, S),
     ok = copy_run(DC, DI, SC, SI, N),
     copy_fwd(M, D + N * 8, S + N * 8, Len - N * 8);
@@ -816,6 +888,12 @@ copy_run(DC, DI, SC, SI, N) ->
 %% The chunk holding `Addr' and the index of its word inside that chunk.
 word_at(#mem{shift = Shift} = M, Addr) ->
     {chunk(M, Addr bsr Shift),
+     ((Addr band ((1 bsl Shift) - 1)) bsr 3) + 1}.
+
+%% The same, for a run about to be written. A run never leaves its chunk
+%% (`run_words/3'), so marking the chunk it starts in covers all of it.
+wword_at(#mem{shift = Shift} = M, Addr) ->
+    {wchunk(M, Addr bsr Shift),
      ((Addr band ((1 bsl Shift) - 1)) bsr 3) + 1}.
 
 %% How many aligned words can be moved before any of `Addrs' leaves its chunk,
@@ -856,4 +934,4 @@ answer equals `include/wasm_memory.hrl`, so adding a field breaks a test.
 field_indices() ->
     #{chunks => #mem.chunks, pages => #mem.pages, pages_ref => #mem.pages_ref,
       chunks_ref => #mem.chunks_ref, shift => #mem.shift,
-      size => record_info(size, mem)}.
+      dirty => #mem.dirty, size => record_info(size, mem)}.

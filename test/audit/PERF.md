@@ -6528,3 +6528,42 @@ processes for the whole night this was taken in, so the absolute times are
 inflated and the gaps are the result. An earlier pair of the new reactor alone,
 load 100 to 200, gave `handle()` 36,796 us and `call()` 1,981 us. The saving is
 more than the prompt's 10 ms by a wide margin at every load measured.
+
+## Recycling a restore's memory
+
+A CPython `call()` request, restored and then compared byte by byte with the
+memory the restore laid down, changes 29 of the image's 640 pages of 64 KiB,
+17 of 160 at 256 KiB and 7 of 40 at 1 MiB. Counted by write rather than by
+change, it marks 44 chunks of 64 KiB. A restore that rewrites only those, from
+the last instance's memory, in a process with the runner's 1M-word heap floor,
+median of 16 after one warm-up, alternating fresh and recycled:
+
+| restore | median | minimum |
+| --- | ---: | ---: |
+| fresh | 11,979 us | 11,110 us |
+| recycled, 64 KiB chunks | 3,907 us | 3,303 us |
+| recycled, 256 KiB chunks | 6,092 us | 5,366 us |
+| recycled, 1 MiB chunks | 7,450 us | 6,544 us |
+
+What is left of a recycled restore, split with timers around each phase:
+instance build 0.2 ms, tables 0.6 ms, the plan 0.2 ms, and the memory: the
+44 fresh chunks and the image's runs clipped to them, about 2.8 ms at one
+`atomics:put/3` a word.
+
+The mark every store makes, `bench/paths/storebench.erl`, interleaved three
+times, minimum of nine: 12.3 ns a store before, 12.6 in a memory that does not
+track, 16.7 in one that does with a read before the write, 17.3 with an
+unconditional write. On the CPython request with `restore_ahead`, the guest's
+call: `handle()` 26.3 ms before and 30.4 after; `call()` 2.34 and 2.49.
+
+Throughput, CPython, 14 workers, 64 callers, `restore_ahead` on, 420 s of warm-up
+so each build loads or compiles its tier, three builds interleaved twice:
+
+| round, load | 0.5.0 | main (lean reactor) | recycling |
+| --- | ---: | ---: | ---: |
+| 1, 57 to 98 | 156.0 | 275.0 | 465.8 |
+| 2, 73 to 80 | 127.7 | 200.7 | 368.3 |
+
+The loads were uneven and high, and a first run of the same comparison without
+the lean arm gave 0.5.0 128.7 and 165.5 against 333.9 and 290.8. Every round
+puts recycling at 1.7x to 1.8x the lean reactor and over 2x 0.5.0.

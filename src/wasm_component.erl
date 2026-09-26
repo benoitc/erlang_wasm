@@ -33,7 +33,7 @@ lower/lift, and the async Canonical ABI.
 """.
 
 -export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
-         destroy/1, destroy/2, drop_resource/3]).
+         call_async/4, destroy/1, destroy/2, drop_resource/3]).
 -export([import_fun/2, exports/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
@@ -373,6 +373,70 @@ call(#{} = I, Export, {Params, Result}, Args) ->
         {error, _} = E ->
             E
     end.
+
+-doc """
+Call an async-lifted export, lowering `Args` and lifting the result by `Sig`.
+
+The async counterpart of `call/4`, for an export lifted with the async Canonical
+ABI (`async func`). It calls the `[async-lift]<export>` core function, reads the
+returned status, and on synchronous completion (the callee ran to `task.return`
+then returned EXIT) lifts the value the guest handed back through `task.return`.
+A callee that instead suspends (WAIT/YIELD) is milestone 2+; here it is a named
+error rather than a wrong value.
+""".
+-spec call_async(instance(), binary(),
+                 {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
+          {ok, term()} | {error, term()}.
+call_async(#{} = I, Export, {Params, _Result}, Args) ->
+    case async_lift_name(I, Export) of
+        {ok, LiftName} ->
+            Inst = core_with_export(I, LiftName),
+            ok = wasm_async:begin_task(Inst),
+            try
+                CoreArgs = wasm_canon:lower_params(Inst, Params, Args),
+                case wasm:call(Inst, LiftName, CoreArgs) of
+                    {ok, [Status]} -> async_result(Status band 16#F);
+                    {ok, _}        -> {error, {async_bad_status, LiftName}};
+                    {error, _} = E -> E
+                end
+            after
+                wasm_async:end_task()
+            end;
+        error ->
+            {error, {no_async_export, Export}}
+    end.
+
+%% The callee status low nibble: EXIT (0) means the task returned; the result was
+%% captured by `task.return`. WAIT (2) / YIELD (1) mean it suspended, which the
+%% synchronous milestone does not drive.
+async_result(0) ->
+    case wasm_async:take_return() of
+        {ok, Value} -> {ok, Value};
+        undefined   -> {ok, undefined}
+    end;
+async_result(Cc) ->
+    {error, {async_suspended, Cc}}.
+
+%% The `[async-lift]<iface>#<fn>` (or `[async-lift]<fn>`) core function a component's
+%% async export lifts from, found across the built cores (the lift often lives on a
+%% core other than the entry). The component export names the interface or function;
+%% the lift core export prefixes it with `[async-lift]`.
+async_lift_name(I, Export) ->
+    Prefix = <<"[async-lift]", Export/binary>>,
+    Names = lists:append([maps:keys(wasm:exports(C)) || C <- cores_of(I)]),
+    case [N || N <- Names, is_async_lift(N, Prefix)] of
+        [Name | _] -> {ok, Name};
+        []         -> error
+    end.
+
+%% A core export is this export's async lift when it is exactly `[async-lift]Export`
+%% or `[async-lift]Export#<fn>` (an interface export names the function after `#`).
+is_async_lift(Name, Prefix) ->
+    Name =:= Prefix orelse
+        case Name of
+            <<Prefix:(byte_size(Prefix))/binary, $#, _/binary>> -> true;
+            _                                                   -> false
+        end.
 
 %% The core instance that exports `CoreName`: the entry core when it carries it
 %% (the common single-core path), else the first other core that does, falling back

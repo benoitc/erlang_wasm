@@ -41,8 +41,9 @@ an atom.
       | {core_alias, core_sort(), non_neg_integer(), binary()}
       | {comp_func_alias, non_neg_integer(), binary()}
       | {canon_lower, non_neg_integer(), non_neg_integer() | none,
-         string_encoding()}
-      | {canon_lift, non_neg_integer(), string_encoding()}
+         string_encoding(), async_mark()}
+      | {canon_lift, non_neg_integer(), string_encoding(), async_mark()}
+      | {canon_async, atom(), map()}
       | {canon_resource, new | drop | rep, non_neg_integer()}
       | {comp_import_instance, binary()}
       | {comp_import_func, binary()}
@@ -54,6 +55,10 @@ an atom.
 %% encoding every WASI toolchain emits; a canon def declaring another is refused at
 %% link time rather than silently mis-decoded.
 -type string_encoding() :: utf8 | utf16 | latin1_utf16.
+
+%% A lift/lower is `sync`, or `{async, Callback}` where Callback is the callback core
+%% function index (or `none` for the stackful async lift with no callback).
+-type async_mark() :: sync | {async, non_neg_integer() | none}.
 
 -type graph() :: [item()].
 
@@ -168,9 +173,11 @@ index_step({comp_import_func, _}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => import}, CoreN, PF + 1, CF};
 index_step({comp_func_alias, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => alias}, CoreN, PF + 1, CF};
-index_step({canon_lift, CFI, _Enc}, {CompF, CoreN, PF, CF}) ->
+index_step({canon_lift, CFI, _Enc, _Async}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => {lift, CFI}}, CoreN, PF + 1, CF};
-index_step({canon_lower, _, _, _}, {CompF, CoreN, PF, CF}) ->
+index_step({canon_lower, _, _, _, _}, {CompF, CoreN, PF, CF}) ->
+    {CompF, CoreN, PF, CF + 1};
+index_step({canon_async, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF, CoreN, PF, CF + 1};
 index_step({canon_resource, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF, CoreN, PF, CF + 1};
@@ -275,12 +282,12 @@ step({comp_import_func, Name}, S) ->
 step({comp_func_alias, InstIdx, Field}, S) ->
     Iface = maps:get(InstIdx, maps:get(comp_insts, S)),
     {ok, bump(S, n_pf, comp_funcs, {host, Iface, Field})};
-step({canon_lift, CoreFuncIdx, Enc}, S) ->
+step({canon_lift, CoreFuncIdx, Enc, _Async}, S) ->
     case supported_encoding(Enc) of
         ok             -> {ok, bump(S, n_pf, comp_funcs, {lift, CoreFuncIdx})};
         {error, _} = E -> E
     end;
-step({canon_lower, CompFuncIdx, ReallocIdx, Enc}, S) ->
+step({canon_lower, CompFuncIdx, ReallocIdx, Enc, _Async}, S) ->
     case supported_encoding(Enc) of
         {error, _} = E ->
             E;
@@ -293,6 +300,10 @@ step({canon_lower, CompFuncIdx, ReallocIdx, Enc}, S) ->
                     E
             end
     end;
+step({canon_async, Which, Meta}, S) ->
+    %% Each async built-in is a core function the guest imports; bind it to the
+    %% `wasm_async` runtime (a task is a BEAM process, a wait a selective receive).
+    {ok, bump(S, n_cf, core_funcs, wasm_async:builtin(Which, Meta))};
 step({canon_resource, drop, _Rt}, S) ->
     %% `canon resource.drop` runs the drop function the caller supplied (which closes
     %% a host resource and forgets its handle), so a guest that drops a socket or file
@@ -582,13 +593,13 @@ alias_entry(<<_Sort, 16#02, Rest0/binary>>) ->
 %% over, since the linker binds host functions by name.
 canon(<<16#00, 16#00, R0/binary>>) ->
     {F, R1} = wasm_leb128:u32(R0),
-    {Enc, R2} = canonopts(R1),
+    {Enc, Async, R2} = canonopts(R1),
     {_Ft, R3} = wasm_leb128:u32(R2),
-    {{canon_lift, F, Enc}, R3};
+    {{canon_lift, F, Enc, Async}, R3};
 canon(<<16#01, 16#00, R0/binary>>) ->
     {F, R1} = wasm_leb128:u32(R0),
-    {Realloc, Enc, R2} = lower_opts(R1),
-    {{canon_lower, F, Realloc, Enc}, R2};
+    {Realloc, Enc, Async, R2} = lower_opts(R1),
+    {{canon_lower, F, Realloc, Enc, Async}, R2};
 canon(<<16#02, R0/binary>>) ->
     {Rt, R1} = wasm_leb128:u32(R0),
     {{canon_resource, new, Rt}, R1};
@@ -597,29 +608,141 @@ canon(<<16#03, R0/binary>>) ->
     {{canon_resource, drop, Rt}, R1};
 canon(<<16#04, R0/binary>>) ->
     {Rt, R1} = wasm_leb128:u32(R0),
-    {{canon_resource, rep, Rt}, R1}.
+    {{canon_resource, rep, Rt}, R1};
+%% The async Canonical ABI built-ins. Each is a core function the guest imports; the
+%% linker binds it to a `wasm_async` builtin in `step/2`. Operands are parsed so the
+%% section is consumed exactly; the type/slot/encoding a built-in needs is carried in
+%% its item. Opcodes 0x26+ (the threads proposal) are refused rather than crashed.
+canon(<<16#05, R0/binary>>) -> {{canon_async, task_cancel, #{}}, R0};
+canon(<<16#06, _Async, R1/binary>>) ->
+    {{canon_async, subtask_cancel, #{}}, R1};
+canon(<<16#09, R0/binary>>) ->
+    {Result, R1} = result_list(R0),
+    {Enc, _Async, R2} = canonopts(R1),
+    {{canon_async, task_return, #{result => Result, enc => Enc}}, R2};
+canon(<<16#0A, R0/binary>>) ->
+    {Vt, R1} = val_type(R0),
+    {Slot, R2} = wasm_leb128:u32(R1),
+    {{canon_async, context_get, #{type => Vt, slot => Slot}}, R2};
+canon(<<16#0B, R0/binary>>) ->
+    {Vt, R1} = val_type(R0),
+    {Slot, R2} = wasm_leb128:u32(R1),
+    {{canon_async, context_set, #{type => Vt, slot => Slot}}, R2};
+canon(<<16#0C, _Cancellable, R1/binary>>) ->
+    {{canon_async, yield, #{}}, R1};
+canon(<<16#0D, R0/binary>>) -> {{canon_async, subtask_drop, #{}}, R0};
+canon(<<16#0E, R0/binary>>) -> async_ty(stream_new, R0);
+canon(<<16#0F, R0/binary>>) -> async_ty_opts(stream_read, R0);
+canon(<<16#10, R0/binary>>) -> async_ty_opts(stream_write, R0);
+canon(<<16#11, R0/binary>>) -> async_ty_flag(stream_cancel_read, R0);
+canon(<<16#12, R0/binary>>) -> async_ty_flag(stream_cancel_write, R0);
+canon(<<16#13, R0/binary>>) -> async_ty(stream_drop_readable, R0);
+canon(<<16#14, R0/binary>>) -> async_ty(stream_drop_writable, R0);
+canon(<<16#15, R0/binary>>) -> async_ty(future_new, R0);
+canon(<<16#16, R0/binary>>) -> async_ty_opts(future_read, R0);
+canon(<<16#17, R0/binary>>) -> async_ty_opts(future_write, R0);
+canon(<<16#18, R0/binary>>) -> async_ty_flag(future_cancel_read, R0);
+canon(<<16#19, R0/binary>>) -> async_ty_flag(future_cancel_write, R0);
+canon(<<16#1A, R0/binary>>) -> async_ty(future_drop_readable, R0);
+canon(<<16#1B, R0/binary>>) -> async_ty(future_drop_writable, R0);
+canon(<<16#1C, R0/binary>>) ->
+    {_Enc, _Async, R1} = canonopts(R0),
+    {{canon_async, error_context_new, #{}}, R1};
+canon(<<16#1D, R0/binary>>) ->
+    {_Enc, _Async, R1} = canonopts(R0),
+    {{canon_async, error_context_debug_message, #{}}, R1};
+canon(<<16#1E, R0/binary>>) -> {{canon_async, error_context_drop, #{}}, R0};
+canon(<<16#1F, R0/binary>>) -> {{canon_async, waitable_set_new, #{}}, R0};
+canon(<<16#20, _Cancellable, R1/binary>>) ->
+    {_Mem, R2} = wasm_leb128:u32(R1),
+    {{canon_async, waitable_set_wait, #{}}, R2};
+canon(<<16#21, _Cancellable, R1/binary>>) ->
+    {_Mem, R2} = wasm_leb128:u32(R1),
+    {{canon_async, waitable_set_poll, #{}}, R2};
+canon(<<16#22, R0/binary>>) -> {{canon_async, waitable_set_drop, #{}}, R0};
+canon(<<16#23, R0/binary>>) -> {{canon_async, waitable_join, #{}}, R0};
+canon(<<16#24, R0/binary>>) -> {{canon_async, backpressure_inc, #{}}, R0};
+canon(<<16#25, R0/binary>>) -> {{canon_async, backpressure_dec, #{}}, R0};
+canon(<<Op, _/binary>>) -> error({unsupported_canon_opcode, Op}).
 
-%% A vec of canonopt, returning the string encoding (default UTF-8). `0x00/01/02`
-%% are the string-encoding flags (utf8/utf16/latin1+utf16, no operand); `0x03 m`,
-%% `0x04 f`, `0x05 f`, `0x07 f` carry an index; `0x06`/`0x08` none.
+%% Async built-in operand shapes: a bare type index; a type index plus a canonopts
+%% vec (memory/encoding/async, stepped over); a type index plus an async bool flag.
+async_ty(Which, R0) ->
+    {Ty, R1} = wasm_leb128:u32(R0),
+    {{canon_async, Which, #{type => Ty}}, R1}.
+
+async_ty_opts(Which, R0) ->
+    {Ty, R1} = wasm_leb128:u32(R0),
+    {_Enc, _Async, R2} = canonopts(R1),
+    {{canon_async, Which, #{type => Ty}}, R2}.
+
+async_ty_flag(Which, R0) ->
+    {Ty, R1} = wasm_leb128:u32(R0),
+    <<_Flag, R2/binary>> = R1,
+    {{canon_async, Which, #{type => Ty}}, R2}.
+
+%% A canon `task.return` result list: `0x00 valtype` (one result) or `0x01 0x00`
+%% (none). The result type is kept so the built-in lifts the returned value.
+result_list(<<16#00, R0/binary>>) ->
+    {Vt, R1} = val_type(R0),
+    {Vt, R1};
+result_list(<<16#01, 16#00, R0/binary>>) ->
+    {none, R0}.
+
+%% A component `valtype`: a primitive (one byte 0x73..0x7f) mapped to its value
+%% descriptor, else a type index kept as `{type, Idx}` (resolved when a built-in
+%% that reads a compound type is implemented).
+val_type(<<B, R/binary>>) when B >= 16#73, B =< 16#7f ->
+    {primitive_desc(B), R};
+val_type(R0) ->
+    {Idx, R1} = wasm_leb128:u32(R0),
+    {{type, Idx}, R1}.
+
+primitive_desc(16#7F) -> bool;
+primitive_desc(16#7E) -> s8;
+primitive_desc(16#7D) -> u8;
+primitive_desc(16#7C) -> s16;
+primitive_desc(16#7B) -> u16;
+primitive_desc(16#7A) -> s32;
+primitive_desc(16#79) -> u32;
+primitive_desc(16#78) -> s64;
+primitive_desc(16#77) -> u64;
+primitive_desc(16#76) -> f32;
+primitive_desc(16#75) -> f64;
+primitive_desc(16#74) -> char;
+primitive_desc(16#73) -> string.
+
+%% A vec of canonopt, returning the string encoding (default UTF-8) and the async
+%% marking (`sync`, or `{async, Callback|none}` for an async lift/lower). Codes:
+%% `0x00/01/02` string-encoding (bare), `0x06` async (bare), `0x03 m`/`0x04 f`/
+%% `0x05 f`/`0x07 f`/`0x08 t` carry an index (memory, realloc, post-return,
+%% callback, core-type). The callback index is kept; the rest are stepped over,
+%% since the linker binds host functions by name.
 canonopts(Bin) ->
     {Count, Rest} = wasm_leb128:u32(Bin),
-    canonopts(Count, Rest, utf8).
+    canonopts(Count, Rest, utf8, sync).
 
-canonopts(0, Rest, Enc) ->
-    {Enc, Rest};
-canonopts(N, <<16#00, Rest0/binary>>, _Enc) ->
-    canonopts(N - 1, Rest0, utf8);
-canonopts(N, <<16#01, Rest0/binary>>, _Enc) ->
-    canonopts(N - 1, Rest0, utf16);
-canonopts(N, <<16#02, Rest0/binary>>, _Enc) ->
-    canonopts(N - 1, Rest0, latin1_utf16);
-canonopts(N, <<Op, Rest0/binary>>, Enc) when Op =:= 16#03; Op =:= 16#04;
-                                             Op =:= 16#05; Op =:= 16#07 ->
+canonopts(0, Rest, Enc, Async) ->
+    {Enc, Async, Rest};
+canonopts(N, <<16#00, Rest0/binary>>, _Enc, Async) ->
+    canonopts(N - 1, Rest0, utf8, Async);
+canonopts(N, <<16#01, Rest0/binary>>, _Enc, Async) ->
+    canonopts(N - 1, Rest0, utf16, Async);
+canonopts(N, <<16#02, Rest0/binary>>, _Enc, Async) ->
+    canonopts(N - 1, Rest0, latin1_utf16, Async);
+canonopts(N, <<16#06, Rest0/binary>>, Enc, sync) ->
+    canonopts(N - 1, Rest0, Enc, {async, none});
+canonopts(N, <<16#06, Rest0/binary>>, Enc, Async) ->
+    canonopts(N - 1, Rest0, Enc, Async);
+canonopts(N, <<16#07, Rest0/binary>>, Enc, _Async) ->
+    {Cb, Rest1} = wasm_leb128:u32(Rest0),
+    canonopts(N - 1, Rest1, Enc, {async, Cb});
+canonopts(N, <<Op, Rest0/binary>>, Enc, Async) when Op =:= 16#03; Op =:= 16#04;
+                                                    Op =:= 16#05; Op =:= 16#08 ->
     {_Idx, Rest1} = wasm_leb128:u32(Rest0),
-    canonopts(N - 1, Rest1, Enc);
-canonopts(N, <<_Op, Rest0/binary>>, Enc) ->
-    canonopts(N - 1, Rest0, Enc).
+    canonopts(N - 1, Rest1, Enc, Async);
+canonopts(N, <<_Op, Rest0/binary>>, Enc, Async) ->
+    canonopts(N - 1, Rest0, Enc, Async).
 
 %% Only UTF-8 is marshalled; another declared encoding is a link-time refusal.
 supported_encoding(utf8) -> ok;
@@ -631,25 +754,31 @@ supported_encoding(Enc)  -> {error, {unsupported_string_encoding, Enc}}.
 %% the import; the encoding is checked in `step/2` (only UTF-8 is marshalled).
 lower_opts(Bin) ->
     {Count, Rest} = wasm_leb128:u32(Bin),
-    lower_opts(Count, Rest, none, utf8).
+    lower_opts(Count, Rest, none, utf8, sync).
 
-lower_opts(0, Rest, Realloc, Enc) ->
-    {Realloc, Enc, Rest};
-lower_opts(N, <<16#00, Rest0/binary>>, Realloc, _Enc) ->
-    lower_opts(N - 1, Rest0, Realloc, utf8);
-lower_opts(N, <<16#01, Rest0/binary>>, Realloc, _Enc) ->
-    lower_opts(N - 1, Rest0, Realloc, utf16);
-lower_opts(N, <<16#02, Rest0/binary>>, Realloc, _Enc) ->
-    lower_opts(N - 1, Rest0, Realloc, latin1_utf16);
-lower_opts(N, <<16#04, Rest0/binary>>, _Realloc, Enc) ->
+lower_opts(0, Rest, Realloc, Enc, Async) ->
+    {Realloc, Enc, Async, Rest};
+lower_opts(N, <<16#00, Rest0/binary>>, Realloc, _Enc, Async) ->
+    lower_opts(N - 1, Rest0, Realloc, utf8, Async);
+lower_opts(N, <<16#01, Rest0/binary>>, Realloc, _Enc, Async) ->
+    lower_opts(N - 1, Rest0, Realloc, utf16, Async);
+lower_opts(N, <<16#02, Rest0/binary>>, Realloc, _Enc, Async) ->
+    lower_opts(N - 1, Rest0, Realloc, latin1_utf16, Async);
+lower_opts(N, <<16#06, Rest0/binary>>, Realloc, Enc, sync) ->
+    lower_opts(N - 1, Rest0, Realloc, Enc, {async, none});
+lower_opts(N, <<16#06, Rest0/binary>>, Realloc, Enc, Async) ->
+    lower_opts(N - 1, Rest0, Realloc, Enc, Async);
+lower_opts(N, <<16#04, Rest0/binary>>, _Realloc, Enc, Async) ->
     {Idx, Rest1} = wasm_leb128:u32(Rest0),
-    lower_opts(N - 1, Rest1, Idx, Enc);
-lower_opts(N, <<Op, Rest0/binary>>, Realloc, Enc) when Op =:= 16#03; Op =:= 16#05;
-                                                       Op =:= 16#07 ->
+    lower_opts(N - 1, Rest1, Idx, Enc, Async);
+lower_opts(N, <<Op, Rest0/binary>>, Realloc, Enc, Async) when Op =:= 16#03;
+                                                              Op =:= 16#05;
+                                                              Op =:= 16#07;
+                                                              Op =:= 16#08 ->
     {_Idx, Rest1} = wasm_leb128:u32(Rest0),
-    lower_opts(N - 1, Rest1, Realloc, Enc);
-lower_opts(N, <<_Op, Rest0/binary>>, Realloc, Enc) ->
-    lower_opts(N - 1, Rest0, Realloc, Enc).
+    lower_opts(N - 1, Rest1, Realloc, Enc, Async);
+lower_opts(N, <<_Op, Rest0/binary>>, Realloc, Enc, Async) ->
+    lower_opts(N - 1, Rest0, Realloc, Enc, Async).
 
 %%% ---------------------------------------------------------- component import ---
 

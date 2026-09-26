@@ -58,6 +58,7 @@ single most important sentence here.
 
 -export([capture/3, restore/4, info/1, bytes/1, module_of/1]).
 -export([owner/1, with_owner/2, recycle/2]).
+-export([take_recycled/1, give_recycled/2, kept_pages/1]).
 -export([to_parts/1, from_parts/3, logical_bytes/1]).
 
 -include("wasm.hrl").
@@ -676,10 +677,13 @@ plan(I, Pages, {?RECYCLE_CHUNK, Had, Chunks, Dirty}, Opts, Plans)
     N = chunks_for(Pages),
     Written = [D || D <- Dirty, D < N],
     Set = maps:from_keys(Written, true),
+    %% A written chunk was already dropped at the destroy (`recycle/2'), so
+    %% its entry is `undefined' and it is replaced either way.
     Reused = list_to_tuple(
-               [case is_map_key(C, Set) of
-                    true  -> wasm_memory:fresh_chunk(?RECYCLE_CHUNK);
-                    false -> element(C + 1, Chunks)
+               [case is_map_key(C, Set) orelse element(C + 1, Chunks) of
+                    true      -> wasm_memory:fresh_chunk(?RECYCLE_CHUNK);
+                    undefined -> wasm_memory:fresh_chunk(?RECYCLE_CHUNK);
+                    Clean     -> Clean
                 end || C <- lists:seq(0, N - 1)]),
     {Opts#{I => #{pages => Pages, chunk_bytes => ?RECYCLE_CHUNK,
                   chunks => Reused}},
@@ -736,10 +740,51 @@ image in this process. Called by `wasm:destroy/1` for an instance restored with
 -spec recycle(reference(), tuple()) -> ok.
 recycle(Id, Mems) ->
     Kept = maps:from_list(
-             [{I, R} || {I, M} <- lists:enumerate(0, tuple_to_list(Mems)),
-                        R <- [wasm_memory:recyclable(M)], R =/= undefined]),
+             [{I, clean_only(R)}
+              || {I, M} <- lists:enumerate(0, tuple_to_list(Mems)),
+                 R <- [wasm_memory:recyclable(M)], R =/= undefined]),
     _ = map_size(Kept) > 0 andalso put({?MODULE, recycle, Id}, Kept),
     ok.
+
+%% Only the chunks nothing wrote are kept. A written one is replaced by the next
+%% restore anyway, and dropping it here frees its array now rather than when
+%% whoever holds the kept memory next lets go of it.
+clean_only({Bytes, Pages, Chunks, Dirty}) ->
+    Written = maps:from_keys(Dirty, true),
+    {Bytes, Pages,
+     list_to_tuple([case is_map_key(C, Written) of
+                        true  -> undefined;
+                        false -> Chunk
+                    end || {C, Chunk} <- lists:enumerate(0, tuple_to_list(Chunks))]),
+     Dirty}.
+
+-doc """
+Take what this process kept for the next restore of `Image`, removing it here.
+
+For a worker whose runner lives for one request: the runner takes it after the
+destroy and passes it on, and the next runner hands it back with
+`give_recycled/2` just before it restores. `undefined` when nothing is kept.
+""".
+-spec take_recycled(snapshot()) -> undefined | map().
+take_recycled(#snapshot{id = Id}) -> erase({?MODULE, recycle, Id}).
+
+-doc """
+Install memory kept by `take_recycled/1` in another process, for the next
+recycling restore of the same image here. Keyed by the image's own identity, so
+it can only ever be laid under the image it came from.
+""".
+-spec give_recycled(snapshot(), undefined | map()) -> ok.
+give_recycled(_Image, undefined) -> ok;
+give_recycled(#snapshot{id = Id}, Kept) when is_map(Kept) ->
+    _ = put({?MODULE, recycle, Id}, Kept),
+    ok.
+
+-doc "The pages the chunks in `Kept` hold, which is what holding it costs.".
+-spec kept_pages(map()) -> non_neg_integer().
+kept_pages(Kept) ->
+    lists:sum([length([C || C <- tuple_to_list(Chunks), C =/= undefined])
+               * Bytes div 65536
+               || {Bytes, _Pages, Chunks, _Dirty} <- maps:values(Kept)]).
 
 %% A `funcref' names the instance it came from, and a restored one has a new
 %% identity, so every self-reference is rewritten. **In globals as well as

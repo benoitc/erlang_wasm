@@ -405,7 +405,7 @@ call_async(I, Export, Sig, Args) ->
 -spec call_async(instance(), binary(),
                  {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()], map()) ->
           {ok, term()} | {error, term()}.
-call_async(#{} = I, Export, {Params, _Result}, Args, Opts) ->
+call_async(#{} = I, Export, {Params, Result}, Args, Opts) ->
     case async_lift_name(I, Export) of
         {ok, LiftName} ->
             Inst = core_with_export(I, LiftName),
@@ -415,7 +415,8 @@ call_async(#{} = I, Export, {Params, _Result}, Args, Opts) ->
                 {Descs, Lowered} = prepare_async_params(Params, Args),
                 CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
                 case wasm:call(Inst, LiftName, CoreArgs) of
-                    {ok, [Status]} -> drive(Callback, Status, ?ASYNC_BUDGET);
+                    {ok, [Status]} -> finish_async(Result,
+                                                    drive(Callback, Status, ?ASYNC_BUDGET));
                     {ok, _}        -> {error, {async_bad_status, LiftName}};
                     {error, _} = E -> E
                 end
@@ -424,6 +425,19 @@ call_async(#{} = I, Export, {Params, _Result}, Args, Opts) ->
             end;
         error ->
             {error, {no_async_export, Export}}
+    end.
+
+%% When the result is itself a `future<T>`/`stream<T>` the guest produced and returned,
+%% `task.return` handed back its readable handle; read the value the guest wrote before
+%% the task frame is torn down. Any other result passes straight through.
+finish_async({future, _}, {ok, Handle}) -> produced(Handle);
+finish_async({stream, _}, {ok, Handle}) -> produced(Handle);
+finish_async(_Result, Res)              -> Res.
+
+produced(Handle) ->
+    case wasm_async:take_produced(Handle) of
+        {ok, Value} -> {ok, Value};
+        error       -> {ok, undefined}
     end.
 
 %% Drive the callback loop from a callee status. The status is an unsigned i32 packing

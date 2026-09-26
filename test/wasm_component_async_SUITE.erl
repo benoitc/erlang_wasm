@@ -28,7 +28,8 @@ all() ->
      sums_an_empty_stream, sums_a_long_stream,
      reads_a_future_ready_before_wait, reads_a_future_from_a_delayed_producer,
      sums_a_streamed_producer, a_producer_crash_is_reported,
-     join_transfers_and_drop_traps].
+     join_transfers_and_drop_traps,
+     makes_a_future, makes_a_stream].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -135,6 +136,29 @@ join_transfers_and_drop_traps(Config) ->
     after
         wasm_async:end_task()
     end.
+
+%%% ------------------------------------------------------- producer direction ---
+
+%% The guest CREATES a future, writes a value, and returns the reader; the host reads
+%% the produced value back. Exercises future.new/future.write and lifting a future
+%% result (an i32 handle), including a value above the signed-byte range.
+makes_a_future(Config) ->
+    ?assertEqual({ok, 42}, make_future(Config, 42)),
+    ?assertEqual({ok, 200}, make_future(Config, 200)).
+
+%% The guest creates a stream, writes `count` copies of a byte, returns the reader; the
+%% host reads the produced bytes. Exercises stream.new/stream.write and a stream result.
+makes_a_stream(Config) ->
+    ?assertEqual({ok, <<7, 7, 7>>}, make_stream(Config, 7, 3)),
+    ?assertEqual({ok, <<>>}, make_stream(Config, 0, 0)).
+
+make_future(Config, X) ->
+    wasm_component:call_async(?config(inst, Config), <<"run#make-future">>,
+                              {[u8], {future, u8}}, [X]).
+
+make_stream(Config, Byte, Count) ->
+    wasm_component:call_async(?config(inst, Config), <<"run#make-stream">>,
+                              {[u8, u32], {stream, u8}}, [Byte, Count]).
 
 %%% --------------------------------------------------------------- helpers ---
 

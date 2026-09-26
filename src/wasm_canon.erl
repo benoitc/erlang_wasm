@@ -54,7 +54,13 @@ current fixtures.
               | {option, desc()}
               | {result, desc() | none, desc() | none}
               | {flags, [name()]}
-              | handle.
+              | handle
+              %% The async value types: a `future<T>`/`stream<T>` readable or writable
+              %% end and an `error-context` are all opaque i32 handles at the ABI level
+              %% (the payload descriptor is metadata for the runtime, not the shape).
+              | {future, desc()}
+              | {stream, desc()}
+              | error_context.
 
 -define(MAX_FLAT_RESULTS, 1).
 %% Past this many flattened parameters the Canonical ABI passes a single pointer to
@@ -91,8 +97,12 @@ lower_flat(_Inst, D, V) when D =:= u8; D =:= u16; D =:= u32;
     [V band 16#FFFFFFFF];
 lower_flat(_Inst, D, V) when D =:= u64; D =:= s64 ->
     [V band 16#FFFFFFFFFFFFFFFF];
-%% A resource handle (own or borrow) is an i32 the runtime treats as opaque.
+%% A resource handle (own or borrow) is an i32 the runtime treats as opaque; a
+%% future/stream end and an error-context lower the same way.
 lower_flat(_Inst, handle, V) -> [V band 16#FFFFFFFF];
+lower_flat(_Inst, {future, _}, V) -> [V band 16#FFFFFFFF];
+lower_flat(_Inst, {stream, _}, V) -> [V band 16#FFFFFFFF];
+lower_flat(_Inst, error_context, V) -> [V band 16#FFFFFFFF];
 lower_flat(_Inst, bool, V) -> [bool_int(V)];
 lower_flat(_Inst, f32, V)  -> [V];
 lower_flat(_Inst, f64, V)  -> [V];
@@ -253,6 +263,11 @@ lift_value(Inst, D, [V | R]) when D =:= u8; D =:= u16; D =:= u32;
                                   D =:= u64; D =:= s64; D =:= char; D =:= bool;
                                   D =:= f32; D =:= f64; D =:= handle ->
     {lift_flat(Inst, D, [V]), R};
+lift_value(_Inst, D, [V | R]) when element(1, D) =:= future;
+                                   element(1, D) =:= stream ->
+    {V band 16#FFFFFFFF, R};
+lift_value(_Inst, error_context, [V | R]) ->
+    {V band 16#FFFFFFFF, R};
 lift_value(Inst, string, [Ptr, Len | R]) ->
     {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
     {valid_utf8(Bin), R};
@@ -332,6 +347,9 @@ load(Inst, u8, Ptr)  -> read_int(Inst, Ptr, 1, unsigned);
 load(Inst, u16, Ptr) -> read_int(Inst, Ptr, 2, unsigned);
 load(Inst, u32, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
 load(Inst, handle, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
+load(Inst, {future, _}, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
+load(Inst, {stream, _}, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
+load(Inst, error_context, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
 load(Inst, u64, Ptr) -> read_int(Inst, Ptr, 8, unsigned);
 load(Inst, s8, Ptr)  -> read_int(Inst, Ptr, 1, signed);
 load(Inst, s16, Ptr) -> read_int(Inst, Ptr, 2, signed);
@@ -411,6 +429,9 @@ size_align(D) when D =:= u8; D =:= s8; D =:= bool -> {1, 1};
 size_align(D) when D =:= u16; D =:= s16           -> {2, 2};
 size_align(D) when D =:= u32; D =:= s32; D =:= f32; D =:= char -> {4, 4};
 size_align(handle) -> {4, 4};
+size_align({future, _}) -> {4, 4};
+size_align({stream, _}) -> {4, 4};
+size_align(error_context) -> {4, 4};
 size_align(D) when D =:= u64; D =:= s64; D =:= f64 -> {8, 8};
 size_align(string)    -> {8, 4};
 size_align({list, _}) -> {8, 4};
@@ -459,6 +480,9 @@ disc_size(_)                 -> 4.
 flat_types(D) when D =:= u8; D =:= u16; D =:= u32;
                    D =:= s8; D =:= s16; D =:= s32; D =:= char; D =:= bool -> [i32];
 flat_types(handle) -> [i32];
+flat_types({future, _}) -> [i32];
+flat_types({stream, _}) -> [i32];
+flat_types(error_context) -> [i32];
 flat_types(D) when D =:= u64; D =:= s64 -> [i64];
 flat_types(f32) -> [f32];
 flat_types(f64) -> [f64];
@@ -512,6 +536,9 @@ store(Inst, bool, Ptr, V) ->
     ok = wasm:write_memory(Inst, Ptr, <<(bool_int(V)):8>>);
 store(Inst, D, Ptr, V) when D =:= u16; D =:= s16 ->
     ok = wasm:write_memory(Inst, Ptr, <<(V band 16#FFFF):16/little>>);
+store(Inst, {future, _}, Ptr, V) -> store(Inst, handle, Ptr, V);
+store(Inst, {stream, _}, Ptr, V) -> store(Inst, handle, Ptr, V);
+store(Inst, error_context, Ptr, V) -> store(Inst, handle, Ptr, V);
 store(Inst, D, Ptr, V) when D =:= u32; D =:= s32; D =:= char; D =:= handle ->
     ok = wasm:write_memory(Inst, Ptr, <<(V band 16#FFFFFFFF):32/little>>);
 store(Inst, D, Ptr, V) when D =:= u64; D =:= s64 ->

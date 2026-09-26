@@ -34,7 +34,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -export([builtin/2, begin_task/2, end_task/0, take_return/0, task_ref/0, waits/0,
          new_future_readable/2, new_stream_readable/2,
          new_future_channel/1, new_stream_channel/1,
-         register_producer/2, deliver_before/2, wait_on_set/1]).
+         register_producer/2, deliver_before/2, wait_on_set/1, take_produced/1]).
 
 %% The callee (export/callback) status low nibble: exited (result ready), yielded, or
 %% waiting on the waitable-set packed in the high bits (`code | (set << 4)`).
@@ -69,6 +69,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -define(WAITABLE(H), {?MODULE, waitable, H}).
 -define(WSET(Set), {?MODULE, wset, Set}).
 -define(WSET_OF(H), {?MODULE, wset_of, H}).
+-define(WRITER(W), {?MODULE, writer, W}).
 -define(NEXT, {?MODULE, next_handle}).
 
 %%% --------------------------------------------------------------- task frame ---
@@ -115,6 +116,7 @@ is_frame_key(?CTX(_))      -> true;
 is_frame_key(?WAITABLE(_)) -> true;
 is_frame_key(?WSET(_))     -> true;
 is_frame_key(?WSET_OF(_))  -> true;
+is_frame_key(?WRITER(_))   -> true;
 is_frame_key(?TASK_REF)    -> true;
 is_frame_key(?WAIT_HOOK)   -> true;
 is_frame_key(?PRODUCERS)   -> true;
@@ -210,13 +212,7 @@ The core function a given async canon built-in binds to. Each returns
 %% task.return: lift the result from the caller's memory and stash it for call_async.
 builtin(task_return, #{result := Result}) ->
     fun(_Ctx, Flats) ->
-        Value = case Result of
-                    none -> undefined;
-                    _    -> {Lifted, _} =
-                                wasm_canon:lift_params(task_instance(), [Result], Flats),
-                            hd(Lifted)
-                end,
-        put(?TASK_RETURN, Value),
+        put(?TASK_RETURN, task_return_value(Result, Flats)),
         {ok, []}
     end;
 %% context.get/set: a task-local i32 slot wit-bindgen uses for its task pointer.
@@ -258,17 +254,25 @@ builtin(future_read, _Meta) ->
 %% channel that is still open, else DROPPED when drained and closed.
 builtin(stream_read, _Meta) ->
     fun(_Ctx, [H, Ptr, Count | _]) -> {ok, [stream_read(H, Ptr, Count)]} end;
-%% drop-readable/writable: validate then erase (a real drop, so waitable-set.drop can
-%% see an empty set). Invalid handle, wrong end, or an outstanding copy trap.
+%% future.write(writer, ptr): a guest producer writes the one value; the host buffers
+%% it on the paired reader channel (so a read completes) and reports COMPLETED.
+builtin(future_write, _Meta) ->
+    fun(_Ctx, [W, Ptr | _]) -> {ok, [future_write(W, Ptr)]} end;
+%% stream.write(writer, ptr, count): buffer `count` bytes on the reader channel,
+%% reporting COMPLETED with the count written.
+builtin(stream_write, _Meta) ->
+    fun(_Ctx, [W, Ptr, Count | _]) -> {ok, [stream_write(W, Ptr, Count)]} end;
+%% drop-readable: validate then erase the readable end. drop-writable: close the paired
+%% reader channel (so its consumer sees end-of-stream) and forget the writer.
 builtin(Which, _Meta) when Which =:= future_drop_readable;
-                           Which =:= future_drop_writable;
-                           Which =:= stream_drop_readable;
-                           Which =:= stream_drop_writable ->
+                           Which =:= stream_drop_readable ->
     fun(_Ctx, [H | _]) -> drop_waitable(Which, H) end;
-builtin(Which, _Meta) when Which =:= stream_write; Which =:= future_write;
-                           Which =:= stream_cancel_read; Which =:= stream_cancel_write;
+builtin(Which, _Meta) when Which =:= future_drop_writable;
+                           Which =:= stream_drop_writable ->
+    fun(_Ctx, [W | _]) -> drop_writer(W) end;
+builtin(Which, _Meta) when Which =:= stream_cancel_read; Which =:= stream_cancel_write;
                            Which =:= future_cancel_read; Which =:= future_cancel_write ->
-    %% The write direction and cancellation are a later milestone.
+    %% Cancellation is a later milestone.
     fun(_Ctx, _Flats) -> {ok, [(0 bsl 4) bor ?COMPLETED]} end;
 builtin(error_context_new, _Meta) ->
     fun(_Ctx, _Flats) -> {ok, [next_handle()]} end;
@@ -276,6 +280,20 @@ builtin(error_context_new, _Meta) ->
 %% debug/drop) has no return value and no effect the read path depends on.
 builtin(_Which, _Meta) ->
     fun(_Ctx, _Flats) -> {ok, []} end.
+
+%% The value the guest returned through `task.return`. A resolved descriptor is lifted
+%% normally; a result that is still an unresolved canon type index (a `future<T>`/
+%% `stream<T>` or resource the guest returns) is an i32 handle, captured directly - the
+%% caller reads the produced value from that handle. A `none` result is `undefined`.
+task_return_value(none, _Flats) ->
+    undefined;
+task_return_value({type, _Idx}, [Handle | _]) ->
+    Handle band 16#FFFFFFFF;
+task_return_value({type, _Idx}, []) ->
+    undefined;
+task_return_value(Result, Flats) ->
+    {Lifted, _} = wasm_canon:lift_params(task_instance(), [Result], Flats),
+    hd(Lifted).
 
 %%% -------------------------------------------------------- read (guest) side ---
 
@@ -334,16 +352,14 @@ drop_waitable(Which, H) ->
             end
     end.
 
-%% A readable-drop accepts a future/stream readable end; a writable-drop the writable
-%% (host-created) end. An outstanding `{reading, ...}` blocks the drop.
+%% A readable-drop accepts a future/stream readable end; an outstanding `{reading,...}`
+%% blocks it (the wrong-end kind is a trap).
 drop_ok(future_drop_readable, {future, _, _, _})       -> ok;
 drop_ok(future_drop_readable, {cfuture, _, _, {reading, _}}) -> reading;
 drop_ok(future_drop_readable, {cfuture, _, _, _})      -> ok;
 drop_ok(stream_drop_readable, {stream, _, _, _})       -> ok;
 drop_ok(stream_drop_readable, {cstream, _, _, _, {reading, _, _}}) -> reading;
 drop_ok(stream_drop_readable, {cstream, _, _, _, _})   -> ok;
-drop_ok(future_drop_writable, _)                       -> ok;
-drop_ok(stream_drop_writable, _)                       -> ok;
 drop_ok(_, _)                                          -> wrong_end.
 
 forget_waitable(H) ->
@@ -351,6 +367,65 @@ forget_waitable(H) ->
     _ = erase(?WSET_OF(H)),
     _ = erase(?WAITABLE(H)),
     ok.
+
+%% Dropping a writer closes its paired reader channel (so the consumer sees the end)
+%% and forgets the writer. An unknown writer traps.
+drop_writer(W) ->
+    case get(?WRITER(W)) of
+        undefined ->
+            {trap, unknown_waitable};
+        R ->
+            case get(?WAITABLE(R)) of
+                {cstream, D, Buf, _Open, RS} -> put(?WAITABLE(R), {cstream, D, Buf, closed, RS});
+                _                            -> ok
+            end,
+            _ = erase(?WRITER(W)),
+            {ok, []}
+    end.
+
+%%% -------------------------------------------------- write (producer) side ---
+
+%% A guest producer writes the one future value at `Ptr`; buffer it on the paired
+%% reader channel so the host's later read sees it. The payload is `u8`.
+future_write(W, Ptr) ->
+    R = get(?WRITER(W)),
+    case get(?WAITABLE(R)) of
+        {cfuture, D, _Data, RS} ->
+            {ok, <<V>>} = wasm:read_memory(task_instance(), Ptr, 1),
+            put(?WAITABLE(R), {cfuture, D, {value, V}, RS}),
+            ?COMPLETED;
+        _ ->
+            ?DROPPED
+    end.
+
+%% A guest producer writes `Count` bytes at `Ptr`; append them to the reader channel's
+%% buffer, reporting COMPLETED with the count written.
+stream_write(W, Ptr, Count) ->
+    case get(?WRITER(W)) of
+        undefined -> (0 bsl 4) bor ?DROPPED;
+        R ->
+            case get(?WAITABLE(R)) of
+                {cstream, D, Buf, Open, RS} ->
+                    {ok, Bytes} = wasm:read_memory(task_instance(), Ptr, Count),
+                    put(?WAITABLE(R), {cstream, D, <<Buf/binary, Bytes/binary>>, Open, RS}),
+                    (Count bsl 4) bor ?COMPLETED;
+                _ ->
+                    (0 bsl 4) bor ?DROPPED
+            end
+    end.
+
+-doc """
+The value a guest producer wrote to a future/stream it returned: the future's value,
+or all the bytes a `stream<u8>` accumulated. `call_async` reads this from the returned
+handle before the task frame is torn down.
+""".
+-spec take_produced(non_neg_integer()) -> {ok, term()} | error.
+take_produced(H) ->
+    case get(?WAITABLE(H)) of
+        {cfuture, _D, {value, V}, _} -> {ok, V};
+        {cstream, _D, Buffer, _, _}  -> {ok, Buffer};
+        _                            -> error
+    end.
 
 %%% ------------------------------------------------------- wait (executor) side ---
 
@@ -543,13 +618,19 @@ flush_stale(Ref) ->
 task_instance() -> get(?TASK_INST).
 
 %% A fresh (readable, writable) pair, reader in the LOW 32 bits, writer in the high.
+%% The writer records which reader channel it feeds (a guest producer writes to the
+%% writer and returns the reader; the host reads the reader). Payloads are `u8`: a
+%% guest-created future/stream via `new()` does not carry its element type here (that
+%% needs canon type-index resolution, a later milestone).
 new_pair(cfuture) ->
     R = next_handle(), W = next_handle(),
     put(?WAITABLE(R), {cfuture, u8, none, idle}),
+    put(?WRITER(W), R),
     (W bsl 32) bor R;
 new_pair(cstream) ->
     R = next_handle(), W = next_handle(),
     put(?WAITABLE(R), {cstream, u8, <<>>, open, idle}),
+    put(?WRITER(W), R),
     (W bsl 32) bor R.
 
 take_bytes(Bin, Count) ->

@@ -1832,7 +1832,11 @@ ahead_loop(WMon, Base) ->
 %% instance waiting and restores its own, and says why if that fails too.
 restore_next(#{image := Image, keys := Keys, opts := Opts}) ->
     Forward = maps:from_list([{K, forward(K)} || K <- Keys]),
-    case wasm:restore(Image, Forward, Opts) of
+    %% `recycle': this runner destroys every instance it restores, so the next
+    %% restore of the image can take the last one's memory and rewrite only
+    %% what the request wrote. Not in `Opts', which a request's own options
+    %% are compared with.
+    case wasm:restore(Image, Forward, Opts#{recycle => true}) of
         {ok, Inst}  -> put(?AHEAD, {Inst, Keys, Opts}), ok;
         {error, _}  -> ok
     end.

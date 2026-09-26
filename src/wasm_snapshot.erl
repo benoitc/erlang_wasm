@@ -57,7 +57,7 @@ single most important sentence here.
 """.
 
 -export([capture/3, restore/4, info/1, bytes/1, module_of/1]).
--export([owner/1, with_owner/2]).
+-export([owner/1, with_owner/2, recycle/2]).
 -export([to_parts/1, from_parts/3, logical_bytes/1]).
 
 -include("wasm.hrl").
@@ -469,12 +469,17 @@ restore(#snapshot{handle = Handle, key = Key} = S, M, Bindings, Opts) ->
             %% 54% of a CPython restore. `wasm_instance` still makes their
             %% bounds decision, so a module that could not be instantiated is
             %% refused here exactly as it was.
+            {MemOpts, Plans} = case maps:get(recycle, Opts, false) of
+                                   true  -> recycle_plan(S, M);
+                                   false -> {#{}, #{}}
+                               end,
             case wasm_instance:new(M, Bindings,
-                                   maps:remove(compatibility_key,
-                                               Opts#{module_handle => Handle,
-                                                     segments => false})) of
+                                   maps:without([compatibility_key, recycle],
+                                                Opts#{module_handle => Handle,
+                                                      segments => false,
+                                                      memory_opts => MemOpts})) of
                 {error, _} = E -> E;
-                {ok, Inst}     -> lay_over(S, Inst)
+                {ok, Inst}     -> lay_over(S, Inst, Plans, Opts)
             end;
         Other ->
             %% Checked before anything is copied, so a mismatch costs nothing.
@@ -483,8 +488,8 @@ restore(#snapshot{handle = Handle, key = Key} = S, M, Bindings, Opts) ->
                    #{expected => Key, got => Other})
     end.
 
-lay_over(#snapshot{} = S, Inst) ->
-    case wasm_error:capture(fun() -> do_lay_over(S, Inst) end) of
+lay_over(#snapshot{} = S, Inst, Plans, Opts) ->
+    case wasm_error:capture(fun() -> do_lay_over(S, Inst, Plans, Opts) end) of
         {ok, ok} ->
             {ok, Inst};
         {error, E} ->
@@ -517,9 +522,12 @@ restore_hooks(#snapshot{hooks = Kept}, Inst) ->
 hook_restored(ok)             -> {ok, ok};
 hook_restored({error, _} = E) -> E.
 
-do_lay_over(#snapshot{source = From} = S, #inst{id = To} = Inst) ->
+do_lay_over(#snapshot{source = From} = S, #inst{id = To} = Inst, Plans, Opts) ->
     #mut{mems = Mems, tables = Tables} = Current = wasm_instance:mut(Inst),
-    Restored = restore_mems(tuple_to_list(Mems), S#snapshot.mems),
+    Restored = restore_mems(lists:enumerate(0, tuple_to_list(Mems)),
+                            S#snapshot.mems, Plans, Opts),
+    map_size(Plans) > 0 andalso
+        wasm_instance:set_extra(Inst, recycle, S#snapshot.id),
     %% Into the **fresh** instance's own tables, element by element. The
     %% handles stay the ones instantiation made; only what they hold comes
     %% from the image.
@@ -576,9 +584,10 @@ fit(T, Have, Want) ->
         {error, Why} -> erlang:error({snapshot_restore_table_grow_failed, Why})
     end.
 
-restore_mems([], []) ->
+restore_mems([], [], _Plans, _Opts) ->
     [];
-restore_mems([Mem | Ms], [#{pages := Pages, runs := Runs} | Cs]) ->
+restore_mems([{I, Mem} | Ms], [#{pages := Pages, runs := Runs} | Cs], Plans,
+             Opts) ->
     Have = wasm_memory:size_pages(Mem),
     %% The fresh instance's memory is at the module's declared minimum, and the
     %% image may have grown past it. A refusal here is the node's page budget
@@ -612,13 +621,125 @@ restore_mems([Mem | Ms], [#{pages := Pages, runs := Runs} | Cs]) ->
     %% dense pays far less for it -- QuickJS's is 53.7% non-zero against
     %% CPython's 17.7% -- which is why it looked small on the guest the restore
     %% path was first measured on.
-    ok = lay_runs(Grown, Runs),
+    Laid = case maps:find(I, Plans) of
+               error ->
+                   ok = lay_runs(Grown, Runs),
+                   Grown;
+               {ok, Plan} ->
+                   ok = lay_runs(Grown, runs_for(Plan, Runs,
+                                                 wasm_memory:chunk_bytes(Grown))),
+                   %% After the image is laid, so what is recorded from here is
+                   %% what this instance writes and nothing of the image.
+                   wasm_memory:track(Grown, ceiling(Grown, Opts))
+           end,
     %% The grown handle goes **back into `#mut.mems`**, not just written
     %% through. An observable memory keeps its size in an atomics cell, so the
     %% old record would still read the new size; an unexported one keeps it in
     %% the record, and the instance would go on believing the pre-grow size and
     %% trap on the first access past it.
-    [Grown | restore_mems(Ms, Cs)].
+    [Laid | restore_mems(Ms, Cs, Plans, Opts)].
+
+%%% ------------------------------------------------------------ recycling ---
+%%
+%% A restore writes the whole image into zeroed memory, and a request then
+%% writes a few percent of it: 29 of 640 pages for a CPython request. So a
+%% restore asked to `recycle' takes the chunks of the last instance of this
+%% image that this process destroyed, replaces only the chunks that instance
+%% wrote with zeroed ones, and lays only the image runs that land in those. A
+%% chunk nothing wrote still holds exactly the image, because every write to a
+%% tracked memory marks its chunk: `wasm_memory:wchunk/2' for the interpreter,
+%% the inlined store in `wasm_core' for generated code.
+%%
+%% With nothing to take, it lays the whole image into fresh chunks of the same
+%% size, so the next restore can recycle them.
+-define(RECYCLE_CHUNK, 65536).
+
+recycle_plan(#snapshot{id = Id, mems = Captured}, M) ->
+    Stash = case erase({?MODULE, recycle, Id}) of
+                undefined -> #{};
+                Kept      -> Kept
+            end,
+    First = imported_mems(M),
+    lists:foldl(
+      fun({I, #{pages := Pages}}, {Opts, Plans}) when I >= First ->
+              case shared_mem(M, I - First) of
+                  true  -> {Opts, Plans};
+                  false -> plan(I, Pages, maps:get(I, Stash, undefined),
+                                Opts, Plans)
+              end;
+         (_Imported, Acc) ->
+              Acc
+      end, {#{}, #{}}, lists:enumerate(0, Captured)).
+
+plan(I, Pages, {?RECYCLE_CHUNK, Had, Chunks, Dirty}, Opts, Plans)
+  when Had >= Pages ->
+    N = chunks_for(Pages),
+    Written = [D || D <- Dirty, D < N],
+    Set = maps:from_keys(Written, true),
+    Reused = list_to_tuple(
+               [case is_map_key(C, Set) of
+                    true  -> wasm_memory:fresh_chunk(?RECYCLE_CHUNK);
+                    false -> element(C + 1, Chunks)
+                end || C <- lists:seq(0, N - 1)]),
+    {Opts#{I => #{pages => Pages, chunk_bytes => ?RECYCLE_CHUNK,
+                  chunks => Reused}},
+     Plans#{I => {written, Set}}};
+plan(I, Pages, _Nothing, Opts, Plans) ->
+    {Opts#{I => #{pages => Pages, chunk_bytes => ?RECYCLE_CHUNK}},
+     Plans#{I => fresh}}.
+
+chunks_for(Pages) -> (Pages * 65536 + ?RECYCLE_CHUNK - 1) div ?RECYCLE_CHUNK.
+
+imported_mems(#module{imports = Imports}) ->
+    length([I || #import{desc = {mem, _}} = I <- Imports]).
+
+shared_mem(#module{mems = Mems}, Own) ->
+    #memtype{limits = #limits{shared = Shared}} = lists:nth(Own + 1, Mems),
+    Shared =:= true.
+
+%% Every run into a fresh memory. Into a recycled one, only the parts of runs
+%% that fall in a chunk it replaced: CPython's image has runs a megabyte and
+%% more long, and writing the whole of one because one of its chunks was dirty
+%% cost more than the rest of the restore together.
+runs_for(fresh, Runs, _Bytes) ->
+    Runs;
+runs_for({written, Set}, Runs, Bytes) ->
+    lists:append([clip(Off, Bin, Set, Bytes) || {Off, Bin} <- Runs]).
+
+clip(Off, Bin, Set, Bytes) ->
+    End = Off + byte_size(Bin),
+    [{From, binary:part(Bin, From - Off, To - From)}
+     || C <- lists:seq(Off div Bytes, max(Off, End - 1) div Bytes),
+        is_map_key(C, Set),
+        From <- [max(Off, C * Bytes)],
+        To <- [min(End, (C + 1) * Bytes)],
+        To > From].
+
+%% The most this memory may grow to, for the size of its dirty record: its own
+%% maximum, the instance's page limit, and the 32-bit address space.
+ceiling(Mem, Opts) ->
+    Declared = case wasm_memory:limits(Mem) of
+                   #limits{max = undefined} -> 65536;
+                   #limits{max = Max}       -> Max
+               end,
+    lists:min([Declared, 65536,
+               case maps:get(max_memory_pages, Opts, infinity) of
+                   infinity -> 65536;
+                   L        -> L
+               end]).
+
+-doc """
+Keep a destroyed instance's memories for the next recycling restore of the same
+image in this process. Called by `wasm:destroy/1` for an instance restored with
+`recycle`; answers `ok` whatever it finds.
+""".
+-spec recycle(reference(), tuple()) -> ok.
+recycle(Id, Mems) ->
+    Kept = maps:from_list(
+             [{I, R} || {I, M} <- lists:enumerate(0, tuple_to_list(Mems)),
+                        R <- [wasm_memory:recyclable(M)], R =/= undefined]),
+    _ = map_size(Kept) > 0 andalso put({?MODULE, recycle, Id}, Kept),
+    ok.
 
 %% A `funcref' names the instance it came from, and a restored one has a new
 %% identity, so every self-reference is rewritten. **In globals as well as

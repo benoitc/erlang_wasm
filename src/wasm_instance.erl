@@ -226,7 +226,9 @@ build(#module{} = M, Imports, Opts, Heap, Build) ->
         supers = Ctx#ctx.supers,
         tags = build_tags(M, Imports, Ctx),
         heap = Heap,
-        limits = maps:merge(?DEFAULT_LIMITS, Opts),
+        %% Without `memory_opts': it can carry a whole chunk tuple, and the
+        %% limits map is copied wherever the instance goes.
+        limits = maps:merge(?DEFAULT_LIMITS, maps:remove(memory_opts, Opts)),
         ctx = Ctx,
         store = holder_new(#mut{globals = {}, tables = {}, mems = {}}),
         identity = M#module.identity,
@@ -243,17 +245,18 @@ build(#module{} = M, Imports, Opts, Heap, Build) ->
     %% Constant expressions read globals as values. Dereferencing once here
     %% keeps `eval_const' unaware that a global may be a shared cell.
     GlobalVals = deref(Globals),
-    Mems = build_mems(M, Imports, Ctx, Holder),
+    Mems = build_mems(M, Imports, Ctx, Holder, maps:get(memory_opts, Opts, #{})),
     Tables = build_tables(M, Imports, GlobalVals, Inst0, Holder),
-    ElemVals = [elem_values(E, GlobalVals, Inst0) || E <- M#module.elems],
+    Segments = maps:get(segments, Opts, true),
+    ElemVals = [elem_values(E, GlobalVals, Inst0, Segments)
+                || E <- M#module.elems],
     Mut0 = #mut{globals = Globals, tables = Tables, mems = Mems},
     Inst = Inst0#inst{elems = list_to_tuple(ElemVals)},
     %% `segments => false' is the restore path saying an image will overwrite
     %% every active segment. Nothing else may pass it: an instance built without
     %% its segments and without an image laid over it is a module whose data is
     %% simply missing.
-    Mut1 = init_segments(M, Inst, Mut0, ElemVals,
-                         maps:get(segments, Opts, true)),
+    Mut1 = init_segments(M, Inst, Mut0, ElemVals, Segments),
     ok = set_mut(Inst, Mut1),
     Inst.
 
@@ -1085,12 +1088,18 @@ is_float_special(_) -> false.
 %%
 %% Importing the same memory through two slots takes one token, not two,
 %% because the token is the same value both times.
+%%
+%% `MemOpts' is what `wasm_snapshot' asks of the memories it is about to lay an
+%% image over, by memory index: created at the image's size, in the chunk size
+%% it recycles, from the chunks of a previous instance. Empty for everything
+%% else, which gets the memory the module declares.
 build_mems(#module{imports = Imports, mems = Mems}, Provided,
-           #ctx{shared_mems = Shared}, Holder) ->
+           #ctx{shared_mems = Shared}, Holder, MemOpts) ->
     Imported = [hold(import_memory(I, Provided), Holder)
                 || #import{desc = {mem, _}} = I <- Imports],
     N = length(Imported),
-    Own = [new_memory(MT, maps:is_key(N + I, Shared), Holder)
+    Own = [new_memory(MT, maps:is_key(N + I, Shared), Holder,
+                      maps:get(N + I, MemOpts, #{}))
            || {I, MT} <- lists:enumerate(0, Mems)],
     list_to_tuple(Imported ++ Own).
 
@@ -1198,9 +1207,9 @@ link_missing(Mod, Name) ->
                           #{module => Mod, name => Name}).
 
 new_memory(#memtype{limits = #limits{min = Min} = Limits}, Observable,
-           {Token, Owner}) ->
-    case wasm_memory:create(Limits, #{observable => Observable,
-                                      holder => {Token, Owner}}) of
+           {Token, Owner}, Extra) ->
+    case wasm_memory:create(Limits, Extra#{observable => Observable,
+                                           holder => {Token, Owner}}) of
         {ok, Mem} -> Mem;
         {error, _Why} ->
             wasm_error:exhaustion(memory_limit, #{requested => Min})
@@ -1276,8 +1285,17 @@ new_table(#tabletype{elemtype = ET, init = Init} = TT, Globals, Inst, Holder) ->
     %% elsewhere must give both instances the same table, not two copies.
     wasm_table:new(TT, Fill, #{holder => Holder}).
 
-elem_values(#elem{init = Inits}, Globals, Inst) ->
-    [eval_const(Expr, Globals, Inst) || Expr <- Inits].
+elem_values(#elem{init = Inits}, Globals, Inst, true) ->
+    [eval_const(Expr, Globals, Inst) || Expr <- Inits];
+%% A restore: an active or declarative segment is dropped once instantiation is
+%% done, so nothing can read its values, and the image supplies the tables they
+%% would have filled. Only the count is needed, for the bounds decision
+%% `init_table/5' still makes. CPython's are six thousand function references,
+%% each resolved and remembered for nothing on every restore.
+elem_values(#elem{mode = passive} = E, Globals, Inst, false) ->
+    elem_values(E, Globals, Inst, true);
+elem_values(#elem{init = Inits}, _Globals, _Inst, false) ->
+    [null || _ <- Inits].
 
 %% Active segments are copied into memory and tables at instantiation. The
 %% specification requires bounds to be checked here, so a module whose data

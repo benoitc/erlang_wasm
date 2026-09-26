@@ -13,7 +13,7 @@ by default, or `h2`), and the two share a server API (`start_server`,
 handler serves either wire protocol.
 """.
 
--export([start/0, start/1, stop/1, address/1]).
+-export([start/0, start/1, start/2, stop/1, address/1]).
 
 -type server() :: {module(), term()}.
 
@@ -23,14 +23,49 @@ start() ->
 
 -spec start(module()) -> {ok, server()}.
 start(Transport) ->
+    start(Transport, #{}).
+
+%% `#{tls => true}` serves over TLS with an ephemeral self-signed cert, for exercising
+%% the https client path; the client trusts it with `{verify, verify_none}`.
+-spec start(module(), #{tls => boolean()}) -> {ok, server()}.
+start(Transport, Opts) ->
     {ok, _} = application:ensure_all_started(Transport),
     Handler = fun(Conn, Id, Method, Path, Headers) ->
                   handle(Transport, Conn, Id, Method, Path, Headers)
               end,
-    %% h2 serves over TLS by default; cleartext (h2c) is what the tests use.
-    Extra = case Transport of h2 -> #{transport => tcp}; _ -> #{} end,
+    Extra = transport_opts(Transport, maps:get(tls, Opts, false)),
     {ok, Ref} = Transport:start_server(0, Extra#{handler => Handler}),
     {ok, {Transport, Ref}}.
+
+%% Cleartext by default (h2 serves TLS by default, so force h2c); a TLS server carries
+%% a self-signed cert/key generated at startup.
+transport_opts(_Transport, true) ->
+    {ok, _} = application:ensure_all_started(ssl),
+    Data = public_key:pkix_test_data(#{root => [{key, {rsa, 2048, 65537}}],
+                                       peer => [{key, {rsa, 2048, 65537}}]}),
+    ServerConfig = case Data of
+                       #{server_config := SC} -> SC;
+                       L when is_list(L)      -> L
+                   end,
+    CertDER = proplists:get_value(cert, ServerConfig),
+    {KeyType, KeyDER} = proplists:get_value(key, ServerConfig),
+    %% The h1/h2 server takes cert/key as PEM file paths (certfile/keyfile), so write
+    %% the ephemeral self-signed material to temp files.
+    CertFile = write_pem([{'Certificate', CertDER, not_encrypted}]),
+    KeyFile = write_pem([{KeyType, KeyDER, not_encrypted}]),
+    %% Do not ask the client for a certificate (this echo server authenticates no one).
+    #{transport => ssl, cert => CertFile, key => KeyFile, verify => verify_none};
+transport_opts(h2, false) ->
+    #{transport => tcp};
+transport_opts(_Transport, false) ->
+    #{}.
+
+write_pem(Entries) ->
+    Dir = case os:getenv("TMPDIR") of false -> "/tmp"; D -> D end,
+    Path = filename:join(Dir, "wasi_https_" ++
+               integer_to_list(erlang:unique_integer([positive])) ++ ".pem"),
+    ok = file:write_file(Path, public_key:pem_encode(Entries)),
+    list_to_binary(Path).
 
 -spec address(server()) -> binary().
 address({Transport, Ref}) ->

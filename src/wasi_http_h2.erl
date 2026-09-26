@@ -15,8 +15,8 @@ to the peer; the guest cannot tell the difference.
 -spec request(wasi_http_transport:request(), timeout()) ->
           wasi_http_transport:response().
 request(#{host := Host, port := Port, method := Method, path := Path,
-          headers := Headers, body := Body}, Timeout) ->
-    case h2:connect(Host, Port, #{transport => tcp}) of
+          headers := Headers, body := Body} = Req, Timeout) ->
+    case h2:connect(Host, Port, h2_connect_opts(Req)) of
         {ok, Conn} ->
             Result =
                 case h2:request(Conn, Method, Path, Headers, Body) of
@@ -27,6 +27,20 @@ request(#{host := Host, port := Port, method := Method, path := Path,
             Result;
         {error, _} ->
             {error, {<<"connection-refused">>, none}}
+    end.
+
+%% `https` negotiates TLS with ALPN `h2` (the h2 client handles ALPN); `http` is h2c
+%% (cleartext). Supplied `tls` options pass through as `ssl_opts` (e.g. verify_none for
+%% a self-signed test server); none means the client's secure defaults.
+h2_connect_opts(Req) ->
+    case maps:get(scheme, Req, <<"http">>) of
+        <<"https">> ->
+            case maps:get(tls, Req, []) of
+                []  -> #{transport => ssl};
+                Tls -> #{transport => ssl, ssl_opts => Tls}
+            end;
+        _ ->
+            #{transport => tcp}
     end.
 
 collect(Conn, Sid, Timeout) ->

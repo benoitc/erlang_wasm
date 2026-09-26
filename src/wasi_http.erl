@@ -97,11 +97,16 @@ slice uses, so a component reaches only a granted authority.
 The `wasi:http/types` + `outgoing-handler` import map. `Opts` carries the
 `grant` (a `wasi_net` grant) the outbound request is checked against.
 """.
--spec http(#{grant => term(), transport => module()}) ->
+-spec http(#{grant => term(), transport => module(),
+             tls => [ssl:tls_client_option()]}) ->
           #{{binary(), binary()} => fun()}.
 http(Opts) ->
     Grant = wasi_net:grant(maps:get(grant, Opts, none)),
     Transport = maps:get(transport, Opts, wasi_http_h1),
+    %% Client TLS options for `https` requests; `[]` means the transport's secure
+    %% defaults (verify the peer against the system CA store, hostname/SNI from the
+    %% authority). An embedder may override, e.g. a custom CA bundle.
+    Tls = maps:get(tls, Opts, []),
     T = <<"wasi:http/types">>,
     H = <<"wasi:http/outgoing-handler">>,
     #{%% fields
@@ -306,7 +311,7 @@ http(Opts) ->
           wasm_component:import_fun(
             {[handle, {option, handle}],
              {result, handle, ?ERROR_CODE}},
-            fun([Req, ReqOpts]) -> handle(Req, ReqOpts, Grant, Transport) end)}.
+            fun([Req, ReqOpts]) -> handle(Req, ReqOpts, Grant, Transport, Tls) end)}.
 
 %% Store a request-option (a timeout, in nanoseconds) on the options resource.
 set_opt(O, Key, Value) ->
@@ -690,13 +695,13 @@ append_body(B, Bytes) ->
 %% be sent, so `handle` refuses it at once rather than handing back a future that
 %% would only fail on `get`; a well-formed request is deferred, and any connection
 %% failure surfaces when the guest polls the future.
-handle(Req, Opts, Grant, Transport) ->
+handle(Req, Opts, Grant, Transport, Tls) ->
     case wasm_component:host_get(Req) of
         {ok, {http_out_req, Map0}} ->
             Map = Map0#{timeouts => req_timeouts(Opts)},
             case request_error(Map) of
                 none  -> {ok, wasm_component:host_new(http_future,
-                                                      {pending, Map, Grant, Transport})};
+                                                      {pending, Map, Grant, Transport, Tls})};
                 Error -> {error, Error}
             end;
         _ ->
@@ -714,8 +719,9 @@ request_error(_) ->
 
 %% Resolve the authority and grant, then hand the abstract request to the pluggable
 %% transport (h1 by default). The wire protocol is the transport's concern.
-perform(#{authority := Authority} = R, Grant, Transport) ->
-    case authority_endpoint(Authority) of
+perform(#{authority := Authority} = R, Grant, Transport, Tls) ->
+    Scheme = maps:get(scheme, R, <<"http">>),
+    case authority_endpoint(Authority, Scheme) of
         {error, _} = E ->
             E;
         {ok, Host, Port} ->
@@ -726,7 +732,7 @@ perform(#{authority := Authority} = R, Grant, Transport) ->
                     #{connect_timeout := CT, first_byte_timeout := FBT} =
                         maps:get(timeouts, R, req_timeouts(none)),
                     Transport:request(
-                      #{host => Host, port => Port,
+                      #{host => Host, port => Port, scheme => Scheme, tls => Tls,
                         method => maps:get(method, R), path => maps:get(path, R),
                         headers => maps:get(headers, R), body => maps:get(body, R),
                         connect_timeout => ms(CT), first_byte_timeout => ms(FBT)},
@@ -742,8 +748,8 @@ future_get(F) ->
     case wasm_component:host_get(F) of
         {ok, {http_future, taken}} ->
             none;
-        {ok, {http_future, {pending, Map, Grant, Transport}}} ->
-            Result = perform(resolve_body(Map), Grant, Transport),
+        {ok, {http_future, {pending, Map, Grant, Transport, Tls}}} ->
+            Result = perform(resolve_body(Map), Grant, Transport, Tls),
             _ = wasm_component:host_update(F, taken),
             {some, {ok, future_result(Result)}};
         _ ->
@@ -961,10 +967,11 @@ scheme_opt({some, {<<"HTTPS">>, _}}) -> <<"https">>;
 scheme_opt({some, {<<"other">>, S}}) -> S;
 scheme_opt({some, {_, _}})           -> <<"http">>.
 
-%% Split "host:port" (or "host") into a host and port, defaulting to 80.
-authority_endpoint(<<>>) ->
+%% Split "host:port" (or "host") into a host and port; a bare host defaults to the
+%% scheme's port (443 for https, 80 for http).
+authority_endpoint(<<>>, _Scheme) ->
     {error, {<<"HTTP-request-URI-invalid">>, none}};
-authority_endpoint(Authority) ->
+authority_endpoint(Authority, Scheme) ->
     case binary:split(Authority, <<":">>) of
         [Host, PortBin] ->
             try binary_to_integer(PortBin) of
@@ -973,8 +980,11 @@ authority_endpoint(Authority) ->
                 _:_ -> {error, {<<"HTTP-request-URI-invalid">>, none}}
             end;
         [Host] ->
-            {ok, Host, 80}
+            {ok, Host, default_port(Scheme)}
     end.
+
+default_port(<<"https">>) -> 443;
+default_port(_)           -> 80.
 
 %% For the grant check: a literal ip, else 127.0.0.1 (the tests use a loopback
 %% authority). A real resolver is the sockets slice's job.

@@ -17,7 +17,9 @@ implements the same behaviour.
 request(#{host := Host, port := Port, method := Method, path := Path,
           headers := Headers, body := Body} = Req, Timeout) ->
     ConnectTimeout = maps:get(connect_timeout, Req, undefined),
-    case h1:connect(Host, Port, connect_opts(ConnectTimeout)) of
+    Scheme = maps:get(scheme, Req, <<"http">>),
+    Tls = maps:get(tls, Req, []),
+    case h1:connect(Host, Port, connect_opts(ConnectTimeout, Scheme, Tls)) of
         {ok, Conn} ->
             %% The h1 client connects asynchronously; wait for the socket so a
             %% connect timeout surfaces as connection-timeout, distinct from the
@@ -47,8 +49,18 @@ send(Conn, Method, Path, Headers, Body, FirstByte, Timeout) ->
 first_byte(undefined, Default) -> Default;
 first_byte(Timeout, _Default)  -> Timeout.
 
-connect_opts(undefined) -> #{};
-connect_opts(Timeout)   -> #{connect_timeout => Timeout}.
+%% Connection options for the h1 client. An `https` scheme selects the TLS transport;
+%% with no caller-supplied `tls` options the client uses its secure defaults (verify the
+%% peer against the system CA store, with hostname/SNI from the authority). Supplied
+%% `tls` options (e.g. `{verify, verify_none}` for a self-signed test server) are passed
+%% through as `ssl_opts`. An `http` scheme stays cleartext.
+connect_opts(Timeout, Scheme, Tls) ->
+    Base = case Timeout of undefined -> #{}; _ -> #{connect_timeout => Timeout} end,
+    case Scheme of
+        <<"https">> when Tls =:= [] -> Base#{transport => ssl};
+        <<"https">>                 -> Base#{transport => ssl, ssl_opts => Tls};
+        _                           -> Base
+    end.
 
 wait_timeout(undefined) -> 30000;
 wait_timeout(Timeout)   -> Timeout.

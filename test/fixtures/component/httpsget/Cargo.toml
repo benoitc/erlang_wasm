@@ -1,0 +1,12 @@
+[package]
+name = "httpsget"
+version = "0.0.0"
+edition = "2021"
+[[bin]]
+name = "httpsget"
+path = "src/main.rs"
+[dependencies]
+wasi = "0.13"
+[profile.release]
+opt-level = "s"
+strip = true

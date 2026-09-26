@@ -437,7 +437,9 @@ Options: `stdin` (a binary, default empty), `stdout` and `stderr`
                 writable => boolean(),
                 preopens => [{binary(), file:filename_all(), boolean()}],
                 initial_cwd => binary(),
-                network => term()}) ->
+                network => term(),
+                http_transport => module(),
+                http_tls => [ssl:tls_client_option()]}) ->
           #{{binary(), binary()} => fun()}.
 command(Opts) ->
     Stdin = maps:get(stdin, Opts, <<>>),
@@ -469,7 +471,8 @@ command(Opts) ->
     %% its types links with no mount; outbound requests are gated by the grant, so
     %% without a network grant the types work but a request reaches nowhere.
     Http = [wasi_http:http(#{grant => maps:get(network, Opts, none),
-                             transport => maps:get(http_transport, Opts, wasi_http_h1)})],
+                             transport => maps:get(http_transport, Opts, wasi_http_h1),
+                             tls => maps:get(http_tls, Opts, [])})],
     lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net ++ Http).
 
 %% The mounts a command exposes: an explicit named list, or the single preopen.

@@ -15,7 +15,14 @@ client trusting the self-signed server via `{verify, verify_none}`. A request th
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
-all() -> [h1_https_round_trips, h2_https_round_trips, verification_is_on_by_default].
+all() -> [h1_https_round_trips, h2_https_round_trips, verification_is_on_by_default,
+          a_guest_gets_over_https].
+
+init_per_suite(Config) ->
+    {ok, _} = application:ensure_all_started(wasm),
+    Config.
+
+end_per_suite(_Config) -> ok.
 
 %% The h1 binding connects over TLS and echoes the method/URI/body back.
 h1_https_round_trips(_) ->
@@ -38,6 +45,31 @@ verification_is_on_by_default(_) ->
     after
         wasi_http_server:stop(Server)
     end.
+
+%% End to end: a real wasm32-wasip2 guest (`httpsget`) makes an outbound https GET
+%% through wasi:http; the runtime performs TLS to the self-signed server and the guest
+%% prints the 200 status. Exercises the full host path (scheme threading, 443 default,
+%% the tls option) under a guest, not just the transport.
+a_guest_gets_over_https(_) ->
+    {ok, Server} = wasi_http_server:start(h1, #{tls => true}),
+    try
+        Addr = wasi_http_server:address(Server),
+        {ok, Bin} = file:read_file(fixture_path("httpsget")),
+        Grant = #{connect => [{tcp, <<"127.0.0.1">>, {0, 65535}}], resolve => allow},
+        {ok, #{exit_code := Code, stdout := Out}} =
+            wasi_preview2:run_command(Bin, <<>>,
+                #{compile => true, network => Grant,
+                  http_tls => [{verify, verify_none}],
+                  env => [{<<"HTTPS_SERVER">>, Addr}]}),
+        ?assertEqual(0, Code),
+        ?assertEqual(<<"status=200\n">>, Out)
+    after
+        wasi_http_server:stop(Server)
+    end.
+
+fixture_path(Name) ->
+    filename:join([code:lib_dir(wasm), "..", "..", "..", "..", "test",
+                   "fixtures", "component", Name ++ ".component.wasm"]).
 
 round_trip(Binding, ServerTransport, ReqBody) ->
     {ok, Server} = wasi_http_server:start(ServerTransport, #{tls => true}),

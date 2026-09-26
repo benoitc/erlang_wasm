@@ -6501,3 +6501,30 @@ It needs idle time between a worker's requests. With `REQBENCH_POOL=fifo`,
 which rotates idle workers, and 4 callers: p50 44 ms and 90.6 req/s without
 it, 30 ms and 123.4 req/s with it. With the last-in pool and 64 callers there
 is no idle time and it adds nothing (the rounds above).
+
+## A CPython request that compiles nothing
+
+hornbeam timed a request's `handle()` from inside Python at about 28 ms, of
+which about 12 ms was the reactor compiling and importing the same text every
+time: the `BOOT` runner through `PyRun_SimpleString`, the `importlib` spec for
+`/main.py`, compiling `main.py` itself, and reading `/context.json`. The agent's
+own work was 0.1 to 0.2 ms.
+
+Measured with `bench/paths/phasing_adapter.erl` over `wasm_python`, the compiled
+tier on and warm, three workers alternating in one emulator, 40 requests each.
+The request is hornbeam's benchmark agent (`hb_bench_layers`'s source plus a
+`dispatch`): sent as `main.py` for `handle()`, set once as the entry for
+`call()`. The 0.5.0 reactor is the same adapter over the previous
+`py_reactor.wasm`, which ignores the new imports.
+
+| arm | T6-T7 median | T6-T7 min | T1-T10 median | T1-T10 min |
+| --- | ---: | ---: | ---: | ---: |
+| `handle()`, 0.5.0 reactor | 59,122 us | 46,825 us | 88,363 us | 67,430 us |
+| `handle()`, this reactor | 40,422 us | 30,949 us | 69,979 us | 54,257 us |
+| `call()` | 2,050 us | 1,816 us | 19,905 us | 16,354 us |
+
+Load average 248 to 274: another session's stress run held 14 to 28 `yes`
+processes for the whole night this was taken in, so the absolute times are
+inflated and the gaps are the result. An earlier pair of the new reactor alone,
+load 100 to 200, gave `handle()` 36,796 us and `call()` 1,981 us. The saving is
+more than the prompt's 10 ms by a wide margin at every load measured.

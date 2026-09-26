@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+A CPython worker can run code set once at capture instead of compiling a source
+on every request. Workers built on `py_reactor.wasm` need the new build.
+
+- **New `wasm_python` option `entry`.** Python source the capture runs once;
+  it hands `worker.set_entry` a callable, and a request with no `source` calls
+  it with the context. Nothing is compiled or imported per request: the
+  guest's call went from 40 ms to 2 ms for the same request. A request with a
+  `source` still runs it. See `docs/python.md`.
+- **The CPython reactor defines its request runner once**, in `init()`, so
+  `handle()` no longer compiles it per request.
+- **The context reaches the CPython reactor through a `worker.context`
+  import.** The reactor imports `worker.context` and `worker.context_size`,
+  so an adapter of your own over `py_reactor.wasm` has to bind both; images
+  of the previous build are not restored (version `py-reactor-2`).
+
 ## 0.5.0
 
 Requests on a pool of script workers no longer wait on one another in

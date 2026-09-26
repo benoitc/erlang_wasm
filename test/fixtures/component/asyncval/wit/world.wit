@@ -1,0 +1,8 @@
+package local:asyncval;
+
+world asyncval {
+  export run: interface {
+    read-future: async func(f: future<u32>) -> u32;
+    sum-stream: async func(s: stream<u8>) -> u32;
+  }
+}

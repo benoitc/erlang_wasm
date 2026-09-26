@@ -393,7 +393,8 @@ call_async(#{} = I, Export, {Params, _Result}, Args) ->
             Inst = core_with_export(I, LiftName),
             ok = wasm_async:begin_task(Inst),
             try
-                CoreArgs = wasm_canon:lower_params(Inst, Params, Args),
+                {Descs, Lowered} = prepare_async_params(Params, Args),
+                CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
                 case wasm:call(Inst, LiftName, CoreArgs) of
                     {ok, [Status]} -> async_result(Status band 16#F);
                     {ok, _}        -> {error, {async_bad_status, LiftName}};
@@ -405,6 +406,20 @@ call_async(#{} = I, Export, {Params, _Result}, Args) ->
         error ->
             {error, {no_async_export, Export}}
     end.
+
+%% Lower an async call's parameters, turning a `future<T>`/`stream<T>` argument into
+%% the readable end of a pre-filled waitable (an i32 handle the guest reads from);
+%% any other parameter lowers by its own descriptor. The Erlang argument for a future
+%% is the value it should hold; for a stream, the elements (a binary for stream<u8>).
+prepare_async_params(Params, Args) ->
+    lists:unzip([prepare_async_param(P, A) || {P, A} <- lists:zip(Params, Args)]).
+
+prepare_async_param({future, Desc}, Value) ->
+    {handle, wasm_async:new_future_readable(Desc, Value)};
+prepare_async_param({stream, Desc}, Elements) ->
+    {handle, wasm_async:new_stream_readable(Desc, Elements)};
+prepare_async_param(Desc, Value) ->
+    {Desc, Value}.
 
 %% The callee status low nibble: EXIT (0) means the task returned; the result was
 %% captured by `task.return`. WAIT (2) / YIELD (1) mean it suspended, which the

@@ -166,7 +166,11 @@ lift_result(Inst, Desc, CoreResults) ->
 %% Only single-flat values are lifted from registers: the primitives and an enum
 %% (just a discriminant). Everything wider came back through memory.
 lift_flat(_Inst, handle, [V]) -> V band 16#FFFFFFFF;
-lift_flat(_Inst, D, [V]) when D =:= u8; D =:= u16; D =:= u32 -> V;
+%% An unsigned value under 64 bits arrives in an i32 flat that may be signed (a
+%% guest that returns u32::MAX hands back -1), so mask to the type width.
+lift_flat(_Inst, u8, [V])  -> V band 16#FF;
+lift_flat(_Inst, u16, [V]) -> V band 16#FFFF;
+lift_flat(_Inst, u32, [V]) -> V band 16#FFFFFFFF;
 %% A signed value under 32 bits is a full sign-extended i32 flat, so interpret the
 %% 32-bit value (it then already sits in the narrower range); `V' may arrive
 %% signed or unsigned, so mask first.

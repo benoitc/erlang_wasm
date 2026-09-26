@@ -35,7 +35,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
          new_future_readable/2, new_stream_readable/2,
          new_future_channel/1, new_stream_channel/1,
          register_producer/2, deliver_before/2, wait_on_set/1, take_produced/1,
-         async_lower/2]).
+         async_lower/2, async_lower/3]).
 
 %% The callee (export/callback) status low nibble: exited (result ready), yielded, or
 %% waiting on the waitable-set packed in the high bits (`code | (set << 4)`).
@@ -51,11 +51,14 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -define(BLOCKED, -1).
 
 %% Caller-side subtask status (low 4 bits of an async-lowered call's return, packed
-%% `state | (subtask << 4)`): the callee has started, or already returned.
+%% `state | (subtask << 4)`): the callee has started (will complete later) or already
+%% returned.
+-define(SUBTASK_STARTED, 1).
 -define(SUBTASK_RETURNED, 2).
 
 %% EventCode delivered through the callback (param 0).
 -define(EV_NONE, 0).
+-define(EV_SUBTASK, 1).
 -define(EV_STREAM_READ, 2).
 -define(EV_FUTURE_READ, 4).
 
@@ -424,8 +427,13 @@ The core function an async-lowered import (`canon lower` with the async option) 
 to. The guest calls it with the lowered arguments plus a return-area pointer, expecting
 a subtask status back. `Sig` is the import's `{Params, Result}`; `Fun` the host
 implementation. This synchronous form runs the host function inline, writes its result
-into the return area, and reports the subtask RETURNED at once (a host import that must
-suspend and complete later is a further milestone).
+into the return area, and reports the subtask RETURNED at once.
+
+The three-argument form is the suspending case: the host function's result is computed
+but delivered later. The lowered call records a pending subtask, spawns a producer
+(`PFun`, given the subtask handle) that signals completion when it chooses, and reports
+the subtask STARTED, so the guest suspends. When the completion arrives the executor
+writes the result into the return area and delivers a SUBTASK event to resume the guest.
 """.
 -spec async_lower({[wasm_canon:desc()], wasm_canon:desc() | none},
                   fun(([term()]) -> term())) -> function().
@@ -434,14 +442,29 @@ async_lower({Params, Result}, Fun) ->
         Inst = task_instance(),
         {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
         Value = Fun(Terms),
-        case {Result, Rest} of
-            {none, _}        -> ok;
-            {_, [RetPtr | _]} -> ok = wasm_canon:store_value(Inst, Result, RetPtr, Value);
-            {_, []}          -> ok
-        end,
+        write_return_area(Inst, Result, Rest, Value),
         Subtask = next_handle(),
         {ok, [(Subtask bsl 4) bor ?SUBTASK_RETURNED]}
     end.
+
+-spec async_lower({[wasm_canon:desc()], wasm_canon:desc() | none},
+                  fun(([term()]) -> term()), fun((map()) -> any())) -> function().
+async_lower({Params, Result}, Fun, PFun) ->
+    fun(_Ctx, Flats) ->
+        Inst = task_instance(),
+        {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
+        Value = Fun(Terms),
+        RetPtr = case Rest of [P | _] -> P; [] -> undefined end,
+        H = next_handle(),
+        put(?WAITABLE(H), {subtask, Result, RetPtr, Value, awaiting}),
+        ok = register_producer(H, PFun),
+        {ok, [(H bsl 4) bor ?SUBTASK_STARTED]}
+    end.
+
+write_return_area(_Inst, none, _Rest, _Value)      -> ok;
+write_return_area(_Inst, _Result, [undefined | _], _V) -> ok;
+write_return_area(Inst, Result, [RetPtr | _], V)   -> wasm_canon:store_value(Inst, Result, RetPtr, V);
+write_return_area(_Inst, _Result, [], _Value)      -> ok.
 
 -doc """
 The value a guest producer wrote to a future/stream it returned: the future's value,
@@ -558,6 +581,13 @@ ingest(H, close) ->
     case get(?WAITABLE(H)) of
         {cstream, D, Buf, _Open, RS} -> put(?WAITABLE(H), {cstream, D, Buf, closed, RS});
         _                            -> ok
+    end;
+ingest(H, subtask_complete) ->
+    case get(?WAITABLE(H)) of
+        {subtask, Result, RetPtr, Value, awaiting} ->
+            put(?WAITABLE(H), {subtask, Result, RetPtr, Value, ready});
+        _ ->
+            ok
     end.
 
 %% Find the first member of `Set` with a pending read its state can satisfy, perform
@@ -586,6 +616,10 @@ try_deliver(H) ->
         {cstream, D, <<>>, closed, {reading, _Ptr, _Count}} ->
             put(?WAITABLE(H), {cstream, D, <<>>, closed, idle}),
             {event, ?EV_STREAM_READ, H, (0 bsl 4) bor ?DROPPED};
+        {subtask, Result, RetPtr, Value, ready} ->
+            write_return_area(task_instance(), Result, [RetPtr], Value),
+            put(?WAITABLE(H), {subtask, Result, RetPtr, Value, returned}),
+            {event, ?EV_SUBTASK, H, ?SUBTASK_RETURNED};
         _ ->
             none
     end.

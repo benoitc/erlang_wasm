@@ -293,6 +293,9 @@ step({canon_lower, CompFuncIdx, ReallocIdx, Enc, Async}, S) ->
             E;
         ok ->
             case host_fun(maps:get(CompFuncIdx, maps:get(comp_funcs, S)), S) of
+                {ok, {async_import, Sig, Fun, {producer, PFun}}} ->
+                    %% A suspending async import: completes later via a subtask event.
+                    {ok, bump(S, n_cf, core_funcs, wasm_async:async_lower(Sig, Fun, PFun))};
                 {ok, {async_import, Sig, Fun}} ->
                     %% An async import: the guest calls it expecting a subtask status.
                     {ok, bump(S, n_cf, core_funcs, wasm_async:async_lower(Sig, Fun))};

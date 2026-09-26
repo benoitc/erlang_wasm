@@ -76,6 +76,7 @@ now rather than the size the handle was made at.
 -type token() :: {instance, reference()}
                | {process, pid()}
                | {build, reference()}
+               | {recycle, reference()}
                | manual.
 
 -doc "A resource's stable identity, minted here so it exists before the

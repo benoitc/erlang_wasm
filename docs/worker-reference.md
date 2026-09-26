@@ -37,6 +37,7 @@ get it by passing the key.
 | `runner_min_heap_words` | none | a heap floor for each request's runner; see [Hosting scripting languages](scripting.md) |
 | `capture_min_heap_words` | none | the same, for the process that captures the snapshot |
 | `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and function-only imports, and holds one instance's memory per idle worker |
+| `recycle_idle` | `30_000` | milliseconds an idle worker keeps the memory its last request's instance left, for the next restore to reuse; counted in the node's page budget while kept. `0` keeps none; see [Tuning a worker host](tuning.md) |
 
 `start_link/2,3` refuses a `root` the reaper does not have, with
 `{error, {unknown_root, Root, Known}}`.

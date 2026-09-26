@@ -39,7 +39,7 @@ These are covered by compatibility and the release notes:
 
 So are the option keys this module takes (`root`, `timeout`, `trusted`,
 `limits`, `capture_timeout`, `runner_min_heap_words`,
-`capture_min_heap_words`, `restore_ahead`, and the `limits` keys
+`capture_min_heap_words`, `restore_ahead`, `recycle_idle`, and the `limits` keys
 `docs/worker-reference.md` lists), the
 `wasm` application settings `scratch_roots` and `reaper_options`, and the
 error shapes: a running worker answers `{error, wasm_worker_error:worker_error()}`,
@@ -238,6 +238,15 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
             %% restored ahead.
             ahead          :: undefined | pid(),
             amon           :: undefined | reference(),
+            %% The memory the last request's instance left, for the next
+            %% restore, with the keeper reservation that counts it while this
+            %% process holds it, and the timer that drops it when idle.
+            recycle_idle = 0 :: non_neg_integer(),
+            kept           :: undefined | {map(), reservation()},
+            kept_timer     :: undefined | reference(),
+            %% The reservation handed to the request in flight, released when
+            %% its outcome arrives unless its runner already did.
+            handed         :: undefined | reservation(),
             %% in flight, at most one
             ref            :: undefined | reference(),
             id             :: undefined | binary(),
@@ -491,7 +500,8 @@ started(Adapter, Artifact, Opts, Limits, Root) ->
     W = #w{adapter = Adapter, artifact = Artifact, opts = Opts,
            limits = Limits, root = Root, runner_heap = Heap,
            timeout = maps:get(timeout, Limits, ?DEFAULT_TIMEOUT),
-           trusted = maps:get(trusted, Opts, false)},
+           trusted = maps:get(trusted, Opts, false),
+           recycle_idle = recycle_idle(Opts)},
     {CapHeap, CapNote} = capture_heap_words(Opts, Limits),
     ok = say_heap(Adapter, capture_min_heap_words, CapNote),
     case capture_image(Adapter, Artifact,
@@ -735,6 +745,21 @@ handle_cast(_, W) -> {noreply, W}.
 handle_info({guardian_done, Ref, Outcome}, #w{ref = Ref} = W) ->
     {noreply, publish(Outcome, W)};
 
+%% What the request's instance left, sent ahead of its outcome by the same
+%% guardian. `Released' says whether the runner already released the
+%% reservation it was given; if it did not, that reservation is released at
+%% the outcome as for any request.
+handle_info({recycled, Ref, Kept, Released}, #w{ref = Ref} = W) ->
+    W1 = case Released of
+             true  -> W#w{handed = undefined};
+             false -> W
+         end,
+    {noreply, keep(Kept, drop_kept(W1))};
+
+%% Idle for `recycle_idle': the memory goes back to the node.
+handle_info({timeout, TRef, drop_kept}, #w{kept_timer = TRef} = W) ->
+    {noreply, drop_kept(W)};
+
 %% The request that had the runner killed it, or saw it die. Sent before that
 %% request's outcome, so the replacement exists before the next `submit' can be
 %% accepted, and that request is never handed a runner that is already gone.
@@ -773,6 +798,7 @@ terminate(Why, #w{image = Image} = W) ->
     %% The runner watches this process and goes when it does; a request that
     %% holds it is stopped with the guardian below.
     _ = W#w.ahead =:= undefined orelse exit(W#w.ahead, shutdown),
+    _ = drop_kept(W),
     stop_guardian(Why, W).
 
 stop_guardian(_Why, #w{guardian = undefined}) -> ok;
@@ -865,7 +891,11 @@ say_heap(Adapter, Key, {no_room, Ceiling}) ->
 
 %%% ------------------------------------------------------------- submitting ---
 
-do_submit(Request, Caller, W) ->
+do_submit(Request, Caller, W0) ->
+    %% The kept memory goes to this request and to nothing else: taken out of
+    %% the worker before the guardian exists, so two requests can never share
+    %% it. Its reservation stays held until the runner restores into it.
+    {Handoff, W} = take_kept(W0),
     Ref = make_ref(),
     Id = binary:encode_hex(crypto:strong_rand_bytes(16), lowercase),
     %% Fixed here, before anything tenant-controlled has been touched, and
@@ -880,7 +910,8 @@ do_submit(Request, Caller, W) ->
              request => Request, limits => W#w.limits, root => W#w.root,
              trusted => W#w.trusted, image => W#w.image,
              snapshot_cap => W#w.snapshot_cap,
-             runner_heap => W#w.runner_heap, ahead => W#w.ahead},
+             runner_heap => W#w.runner_heap, ahead => W#w.ahead,
+             recycled => Handoff},
     {G, GMon} = spawn_monitor(fun() -> guardian(Args) end),
     %% Startup spends out of the request's own deadline: a finite timeout that
     %% expires while the reservation is still in flight ends the request with a
@@ -890,17 +921,21 @@ do_submit(Request, Caller, W) ->
         {guardian_ready, Ref, ok} ->
             SMon = erlang:monitor(process, Caller),
             {reply, {ok, Ref},
-             W#w{ref = Ref, id = Id, guardian = G, gmon = GMon, smon = SMon}};
+             W#w{ref = Ref, id = Id, guardian = G, gmon = GMon, smon = SMon,
+                 handed = reservation_of(Handoff)}};
         {guardian_ready, Ref, {error, E}} ->
             erlang:demonitor(GMon, [flush]),
+            ok = release_reservation(reservation_of(Handoff)),
             {reply, {error, E}, W};
         {'DOWN', GMon, process, G, Reason} ->
+            ok = release_reservation(reservation_of(Handoff)),
             {reply, {error, wasm_worker_error:worker(
                               crashed, ~"the request could not start",
                               #{reason => Reason})}, W}
     after ready_timeout(Deadline) ->
         exit(G, kill),
         erlang:demonitor(GMon, [flush]),
+        ok = release_reservation(reservation_of(Handoff)),
         {reply, {error, startup_timeout(Deadline)}, W}
     end.
 
@@ -941,9 +976,13 @@ publish(Outcome, W) ->
     %% Retained until acknowledged, and the slot frees now: a new `submit' is
     %% accepted while the previous request's cleanup is still running, because
     %% blocking on cleanup would make one slow release stall a tenant.
+    %% The runner releases this reservation when it restores into the kept
+    %% memory. One that never got that far -- refused before its restore,
+    %% killed, crashed -- did not, and releasing again is harmless.
+    ok = release_reservation(W#w.handed),
     W1 = clear_waiter(W),
     W1#w{ref = undefined, id = undefined, guardian = undefined,
-         gmon = undefined, smon = undefined,
+         gmon = undefined, smon = undefined, handed = undefined,
          done_ref = W#w.ref, done_outcome = Outcome}.
 
 clear_waiter(W) ->
@@ -972,6 +1011,10 @@ clear_waiter(W) ->
             %% then the same pid as `runner': it outlives this request unless
             %% the request has to kill it.
             ahead       :: undefined | pid(),
+            %% The previous request's memory and its reservation, for this
+            %% request's restore. The guardian passes it to the runner at spawn
+            %% and keeps no reference to it.
+            recycled    :: undefined | {map(), reservation()},
             %% The per-request steward. Every reaper interaction goes through
             %% it, so the reaper is never called from this process directly.
             steward     :: undefined | pid(),
@@ -1036,7 +1079,8 @@ start_runner(Args, WMon, Dir, Steward) ->
             root = maps:get(root, Args), trusted = maps:get(trusted, Args),
             wmon = WMon, dir = Dir, steward = Steward,
             smon = erlang:monitor(process, Steward),
-            channels = channels(Limits)},
+            channels = channels(Limits),
+            recycled = maps:get(recycled, Args, undefined)},
     case maps:get(ahead, Args, undefined) of
         undefined -> spawn_runner(G0);
         Pid       -> adopt_runner(G0, Pid)
@@ -1049,7 +1093,7 @@ adopt_runner(G0, Pid) ->
     true = link(Pid),
     Mon = erlang:monitor(process, Pid),
     Pid ! {run, self(), G0},
-    loop(G0#g{runner = Pid, rmon = Mon, ahead = Pid}).
+    loop(G0#g{runner = Pid, rmon = Mon, ahead = Pid, recycled = undefined}).
 
 spawn_runner(G0) ->
     Self = self(),
@@ -1066,7 +1110,7 @@ spawn_runner(G0) ->
                     {max_heap_size, #{size => Words, kill => true,
                                       error_logger => true}}
                     | heap_floor(G0#g.runner_heap)]),
-    loop(G0#g{runner = Pid, rmon = Mon}).
+    loop(G0#g{runner = Pid, rmon = Mon, recycled = undefined}).
 
 %% A floor and not a bound, and it has to be given here rather than set from
 %% the runner's first line for the same reason `max_heap_size' does:
@@ -1108,6 +1152,12 @@ loop(G) ->
 
         {steward_reply, CorrRef, Reply} ->
             loop(steward_reply(G, CorrRef, Reply));
+
+        {recycled, Runner, Kept, Released} when Runner =:= G#g.runner ->
+            %% Passed on and not kept: `hand_off/1' can wait a long time, and
+            %% it must not hold the memory while it does.
+            G#g.worker ! {recycled, G#g.ref, Kept, Released},
+            loop(G);
 
         {result, Runner, Outcome} when Runner =:= G#g.runner ->
             finish(G, Outcome, released);
@@ -1203,7 +1253,12 @@ drain(G) ->
             drain(forward(G, {withdraw, Token}, {withdraw, From, Token}));
         {deliver_state, From, Mod, AState} ->
             drain(forward(G, {transfer, Mod, AState},
-                          {deliver_state, From, Mod, AState}))
+                          {deliver_state, From, Mod, AState}));
+        {recycled, Runner, Kept, Released} when Runner =:= G#g.runner ->
+            %% Sent just before a runner was killed: passed on here, or it
+            %% would sit in this mailbox for as long as `hand_off/1' waits.
+            G#g.worker ! {recycled, G#g.ref, Kept, Released},
+            drain(G)
     after 0 ->
         G
     end.
@@ -1549,7 +1604,24 @@ channel_delete({channel, _Which, Tab, _C, _L}) -> ets:delete(Tab), ok.
 %% deadline and the heap flag `spawn_opt' installed at creation. None of them
 %% runs in the guardian, which has to stay responsive.
 runner(Guardian, G) ->
-    Guardian ! {result, self(), request(Guardian, G)},
+    Outcome = request(Guardian, G),
+    ok = recycled(Guardian, G),
+    Guardian ! {result, self(), Outcome},
+    ok.
+
+%% What this request's instance left for the next one, sent ahead of the
+%% result. A runner that never reached the restore hands back the memory it was
+%% given, whose reservation the worker still holds.
+recycled(_Guardian, #g{image = undefined}) ->
+    ok;
+recycled(Guardian, #g{image = Image, recycled = Given}) ->
+    Released = erase({?MODULE, released}) =:= true,
+    Kept = case {wasm_snapshot:take_recycled(Image), Released, Given} of
+               {undefined, false, {GKept, _}} -> GKept;
+               {Taken, _, _}                  -> Taken
+           end,
+    _ = Kept =/= undefined andalso
+        (Guardian ! {recycled, self(), Kept, Released}),
     ok.
 
 request(Guardian, G) ->
@@ -1665,7 +1737,8 @@ start_instance(#g{image = Image} = G, #{imports := ImportSet}) ->
         {ok, Inst} ->
             post_restore(Inst, Image, G);
         none ->
-            case wasm:restore(Image, Bindings, Opts) of
+            ok = use_recycled(Image, G#g.recycled),
+            case wasm:restore(Image, Bindings, Opts#{recycle => true}) of
                 {error, E} -> {error, E};
                 {ok, Inst} -> post_restore(Inst, Image, G)
             end
@@ -1740,6 +1813,80 @@ last({error, E})  -> {trapped, [], undefined, E}.
 
 error_of(#{ctx := #{error := E}}) -> E;
 error_of(_) -> undefined.
+
+%%% ------------------------------------------------------------ kept memory ---
+
+%% A default worker's runner lives for one request, so the memory its instance
+%% leaves has to be carried to the next one: runner, guardian, this process,
+%% the next guardian, the next runner, each dropping its reference once it has
+%% passed it on. While this process holds it, a keeper reservation of its pages
+%% counts it against the node's budget, owned by this process so its death
+%% releases it; `recycle_idle' bounds how long an idle worker holds it.
+%%
+%% Only chunks the last request did not write travel (`wasm_snapshot' drops the
+%% others at the destroy), and the next restore replaces every chunk that was
+%% written, so nothing a request wrote reaches the next one.
+-type reservation() :: {wasm_keeper:resource(), wasm_keeper:token()}.
+
+-define(RECYCLE_IDLE, 30_000).
+
+recycle_idle(Opts) ->
+    case maps:get(recycle_idle, Opts, ?RECYCLE_IDLE) of
+        Ms when is_integer(Ms), Ms >= 0 -> Ms;
+        _ -> ?RECYCLE_IDLE
+    end.
+
+%% Hold `Kept' for the next request, counted. A node at its page budget refuses
+%% the reservation, and then nothing is kept: the next restore starts fresh.
+keep(undefined, W) ->
+    W;
+keep(_Kept, #w{recycle_idle = 0} = W) ->
+    W;
+keep(Kept, W) ->
+    keep(Kept, wasm_snapshot:kept_pages(Kept), W).
+
+%% A request that wrote every chunk left nothing worth a reservation.
+keep(_Kept, 0, W) ->
+    W;
+keep(Kept, Pages, W) ->
+    Token = {recycle, make_ref()},
+    case wasm_keeper:reserve(Pages, {memory, undefined, undefined}, Token,
+                             self()) of
+        {ok, Res} ->
+            TRef = erlang:start_timer(W#w.recycle_idle, self(), drop_kept),
+            W#w{kept = {Kept, {Res, Token}}, kept_timer = TRef};
+        {error, _} ->
+            W
+    end.
+
+drop_kept(#w{kept = undefined} = W) ->
+    W;
+drop_kept(#w{kept = {_Kept, Resv}} = W0) ->
+    {_, W} = take_kept(W0),
+    ok = release_reservation(Resv),
+    W.
+
+%% Out of the worker and into one request. A timeout already sent carries a
+%% reference the worker no longer holds, and then matches nothing.
+take_kept(#w{kept = Kept, kept_timer = TRef} = W) ->
+    _ = TRef =:= undefined orelse
+        erlang:cancel_timer(TRef, [{async, true}, {info, false}]),
+    {Kept, W#w{kept = undefined, kept_timer = undefined}}.
+
+%% At the restore boundary and not before: until here the memory is counted by
+%% the worker's reservation, and from here by the pages the restore reserves.
+use_recycled(_Image, undefined) ->
+    ok;
+use_recycled(Image, {Kept, Resv}) ->
+    ok = release_reservation(Resv),
+    put({?MODULE, released}, true),
+    wasm_snapshot:give_recycled(Image, Kept).
+
+reservation_of(undefined) -> undefined;
+reservation_of({_Kept, Resv}) -> Resv.
+
+release_reservation(undefined) -> ok;
+release_reservation({Res, Token}) -> wasm_keeper:release(Res, Token).
 
 %%% ---------------------------------------------------------- restore ahead ---
 

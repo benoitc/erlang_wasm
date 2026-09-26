@@ -1,0 +1,12 @@
+package local:asyncimp;
+
+interface host {
+  compute: async func(x: u32) -> u32;
+}
+
+world asyncimp {
+  import host;
+  export run: interface {
+    call-compute: async func(x: u32) -> u32;
+  }
+}

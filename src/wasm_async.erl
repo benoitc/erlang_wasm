@@ -34,7 +34,8 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -export([builtin/2, begin_task/2, end_task/0, take_return/0, task_ref/0, waits/0,
          new_future_readable/2, new_stream_readable/2,
          new_future_channel/1, new_stream_channel/1,
-         register_producer/2, deliver_before/2, wait_on_set/1, take_produced/1]).
+         register_producer/2, deliver_before/2, wait_on_set/1, take_produced/1,
+         async_lower/2]).
 
 %% The callee (export/callback) status low nibble: exited (result ready), yielded, or
 %% waiting on the waitable-set packed in the high bits (`code | (set << 4)`).
@@ -48,6 +49,10 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -define(COMPLETED, 0).
 -define(DROPPED, 1).
 -define(BLOCKED, -1).
+
+%% Caller-side subtask status (low 4 bits of an async-lowered call's return, packed
+%% `state | (subtask << 4)`): the callee has started, or already returned.
+-define(SUBTASK_RETURNED, 2).
 
 %% EventCode delivered through the callback (param 0).
 -define(EV_NONE, 0).
@@ -412,6 +417,30 @@ stream_write(W, Ptr, Count) ->
                 _ ->
                     (0 bsl 4) bor ?DROPPED
             end
+    end.
+
+-doc """
+The core function an async-lowered import (`canon lower` with the async option) binds
+to. The guest calls it with the lowered arguments plus a return-area pointer, expecting
+a subtask status back. `Sig` is the import's `{Params, Result}`; `Fun` the host
+implementation. This synchronous form runs the host function inline, writes its result
+into the return area, and reports the subtask RETURNED at once (a host import that must
+suspend and complete later is a further milestone).
+""".
+-spec async_lower({[wasm_canon:desc()], wasm_canon:desc() | none},
+                  fun(([term()]) -> term())) -> function().
+async_lower({Params, Result}, Fun) ->
+    fun(_Ctx, Flats) ->
+        Inst = task_instance(),
+        {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
+        Value = Fun(Terms),
+        case {Result, Rest} of
+            {none, _}        -> ok;
+            {_, [RetPtr | _]} -> ok = wasm_canon:store_value(Inst, Result, RetPtr, Value);
+            {_, []}          -> ok
+        end,
+        Subtask = next_handle(),
+        {ok, [(Subtask bsl 4) bor ?SUBTASK_RETURNED]}
     end.
 
 -doc """

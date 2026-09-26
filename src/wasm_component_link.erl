@@ -287,15 +287,20 @@ step({canon_lift, CoreFuncIdx, Enc, _Async}, S) ->
         ok             -> {ok, bump(S, n_pf, comp_funcs, {lift, CoreFuncIdx})};
         {error, _} = E -> E
     end;
-step({canon_lower, CompFuncIdx, ReallocIdx, Enc, _Async}, S) ->
+step({canon_lower, CompFuncIdx, ReallocIdx, Enc, Async}, S) ->
     case supported_encoding(Enc) of
         {error, _} = E ->
             E;
         ok ->
             case host_fun(maps:get(CompFuncIdx, maps:get(comp_funcs, S)), S) of
-                {ok, Fun} ->
+                {ok, {async_import, Sig, Fun}} ->
+                    %% An async import: the guest calls it expecting a subtask status.
+                    {ok, bump(S, n_cf, core_funcs, wasm_async:async_lower(Sig, Fun))};
+                {ok, Fun} when Async =:= sync ->
                     Realloc = realloc_callable(ReallocIdx, S),
                     {ok, bump(S, n_cf, core_funcs, lowered(Fun, Realloc, S))};
+                {ok, _Fun} ->
+                    {error, {async_import_not_registered, CompFuncIdx}};
                 {error, _} = E ->
                     E
             end

@@ -3,7 +3,8 @@
 ## 0.6.0 (unreleased)
 
 A CPython worker can run code set once at capture instead of compiling a source
-on every request. Workers built on `py_reactor.wasm` need the new build.
+on every request, and a worker restoring ahead rewrites only the memory the last
+request wrote. Workers built on `py_reactor.wasm` need the new build.
 
 - **New `wasm_python` option `entry`.** Python source the capture runs once;
   it hands `worker.set_entry` a callable, and a request with no `source` calls
@@ -12,6 +13,16 @@ on every request. Workers built on `py_reactor.wasm` need the new build.
   `source` still runs it. See `docs/python.md`.
 - **The CPython reactor defines its request runner once**, in `init()`, so
   `handle()` no longer compiles it per request.
+- **A restore can recycle the last instance's memory.** `wasm:restore/3`
+  takes `recycle => true`: the destroyed instance of the same image in the same
+  process gives the next restore its memory, and only the 64 KiB chunks it
+  wrote are rewritten. A CPython restore goes from 12 ms to 3.9 ms, and a
+  `restore_ahead` worker, which recycles on its own, answers about 1.7x the
+  requests it did. A memory restored this way marks each chunk it writes,
+  about 4 ns a store in generated code; everything else pays a field test.
+  Generated code is ABI 5, so the compiled tier's disk cache is rebuilt once.
+- **A restore no longer evaluates the element segments** the image
+  overwrites.
 - **The context reaches the CPython reactor through a `worker.context`
   import.** The reactor imports `worker.context` and `worker.context_size`,
   so an adapter of your own over `py_reactor.wasm` has to bind both; images

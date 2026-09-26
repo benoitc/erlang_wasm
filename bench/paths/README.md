@@ -862,3 +862,19 @@ grows is. Like `throughput`, the requests per second are the box's as much as
 the code's: compare two builds only interleaved, in the same minutes, each with
 its own code cache (a cache under a symbolic link or a world-writable directory
 such as `/tmp` is refused, and that arm silently interprets).
+
+### What a store costs in generated code
+
+`storebench` times a loop of `i32.store` and `i64.store` with the tier forced
+on, in a memory that does or does not track its writes the way a recycling
+restore's does:
+
+```sh
+erlc -o bench/paths -I include -pa _build/default/lib/wasm/ebin \
+    bench/paths/storebench.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run storebench main tracked
+```
+
+Run it before touching the inlined store in `wasm_core`, interleaved against
+the previous build, and compare minimums: the difference is a few nanoseconds.

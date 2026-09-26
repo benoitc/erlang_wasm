@@ -339,6 +339,52 @@ which `restore_ahead` above takes off the request's path. These were taken
 while another job loaded the machine (load average 250 to 275), so read the
 gaps rather than the absolute times; `test/audit/PERF.md` has the runs.
 
+## Rewrite only what a request wrote
+
+A worker with `restore_ahead` restores the same image after every request, and
+a request writes a few percent of it: 44 of the 640 chunks of 64 KiB in a
+CPython request. So the runner restores with `recycle`: the next instance takes
+the last one's memory and only the chunks it wrote are rewritten. Nothing to
+set; `restore_ahead` does it. [Snapshots](snapshots.md) has the option for a
+host that restores by hand.
+
+A CPython restore, median, in a runner-sized process:
+
+| restore | per restore |
+| --- | ---: |
+| into fresh memory | 12.0 ms |
+| recycled, 64 KiB chunks | 3.9 ms |
+| recycled, 256 KiB chunks | 6.1 ms |
+| recycled, 1 MiB chunks | 7.5 ms |
+
+Smaller chunks rewrite less of what a request touched, which is why 64 KiB is
+what a recycling restore uses.
+
+It costs every store a mark, so the chunks it wrote are known. Measured in
+generated code on a loop of stores, and on the guest's own call in the same
+CPython request:
+
+| | before | recycling |
+| --- | ---: | ---: |
+| a store in generated code | 12.3 ns | 16.7 ns |
+| a store, memory not recycled | 12.3 ns | 12.6 ns |
+| `handle()`, the guest's call | 26.3 ms | 30.4 ms |
+| `call()`, the guest's call | 2.3 ms | 2.5 ms |
+
+A request that compiles its source on every call, as `handle()` does, is the
+store-heavy case and pays about 4 ms; the restore saves about 8. With the entry
+`call()` runs, the mark is 0.15 ms.
+
+What it did to throughput, CPython, 14 workers, 64 callers, `restore_ahead` on,
+the three builds interleaved twice on a machine with other load on it (load
+average 57 to 98):
+
+| build | requests a second |
+| --- | ---: |
+| 0.5.0 | 128 to 156 |
+| 0.6.0 without recycling | 201 to 275 |
+| 0.6.0 | 368 to 466 |
+
 ## What this project has not measured
 
 Said plainly rather than filled with general advice, because a claim here cites

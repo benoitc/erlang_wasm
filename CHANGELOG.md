@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.6.0
 
 A CPython worker can run code set once at capture instead of compiling a source
 on every request, and a worker restoring ahead rewrites only the memory the last

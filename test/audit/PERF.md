@@ -6567,3 +6567,20 @@ so each build loads or compiles its tier, three builds interleaved twice:
 The loads were uneven and high, and a first run of the same comparison without
 the lean arm gave 0.5.0 128.7 and 165.5 against 333.9 and 290.8. Every round
 puts recycling at 1.7x to 1.8x the lean reactor and over 2x 0.5.0.
+
+## Recycling in a worker that does not restore ahead
+
+A default script worker's runner lives for one request, so before 0.7.0 the
+memory its instance left died with it and every restore started fresh. The
+worker now carries it to the next restore. `bench/paths/reqbench.erl`, CPython,
+14 workers, no `restore_ahead`, 420 s of warm-up, 30 s per arm, 0.6.0 and the
+branch interleaved in both orders:
+
+| order, load | 0.6.0, 1 caller | branch, 1 caller | 0.6.0, 64 callers | branch, 64 callers |
+| --- | ---: | ---: | ---: | ---: |
+| 0.6.0 first, 23 to 62 | 34.5 | 49.6 | 233.6 | 346.4 |
+| branch first, 38 to 44 | 35.0 | 47.0 | 245.6 | 328.3 |
+
+One caller's p50 went from 28 ms to 19 to 20 ms; 64 callers', from 258 to
+273 ms to 185 to 195 ms. That is about 1.4x in both rounds, with schedulers
+slightly less busy (64 to 65% against 68 to 73%).

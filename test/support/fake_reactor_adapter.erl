@@ -46,6 +46,7 @@ requirements(_Request, _Artifact) ->
 
 prepare(Request, #{module := M}, _Env) ->
     Export = maps:get(call, Request, ~"handle"),
+    ok = hold(Request),
     {ok, #{mode => reactor, module => M, imports => import_set(),
            invoke => [{call, Export, []}]},
      %% The adapter state, which `decode/2' is handed back. A request asking
@@ -53,6 +54,15 @@ prepare(Request, #{module := M}, _Env) ->
      %% every other request gets exactly the shape it always got, because the
      %% kit's cases compare these.
      maps:get(probe, Request, undefined)}.
+
+%% A request carrying `hold => Pid' stops in `prepare/3' until `Pid' lets it
+%% go, so a case can look at the node while a request is between its start and
+%% its restore.
+hold(#{hold := Pid}) ->
+    Pid ! {preparing, self()},
+    receive go -> ok end;
+hold(_Request) ->
+    ok.
 
 %% No imports at all, so `snapshot_hooks` is empty and every module in the
 %% bindings trivially has one. The key still travels with them, because capture
@@ -98,7 +108,7 @@ snapshot_capability(#{module := M, opts := Opts}) ->
       imports => import_set(),
       init => [{call, maps:get(init_call, Opts, ~"init"), []}],
       validate => validator(Opts),
-      post_restore => fun post_restore/2}.
+      post_restore => post_restore(maps:get(on_restore, Opts, undefined))}.
 
 validator(Opts) ->
     case maps:get(validate, Opts, ready) of
@@ -134,7 +144,12 @@ ready(Inst) ->
         {error, E} -> {error, wasm_worker_error:runtime(E)}
     end.
 
-post_restore(_Inst, _Ctx) -> ok.
+%% `on_restore' is a case's look at each restored instance, from inside the
+%% runner, before the request's work runs.
+post_restore(undefined) ->
+    fun(_Inst, _Ctx) -> ok end;
+post_restore(F) ->
+    fun(Inst, _Ctx) -> F(Inst) end.
 
 conformance_fixtures(_Artifact) ->
     #{base => #{echo => #{}, failure => #{call => ~"missing"},

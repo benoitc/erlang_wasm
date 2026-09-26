@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+- **Every script worker recycles its restores**, not only one with
+  `restore_ahead`. A worker keeps the memory its last request's instance left
+  and the next restore rewrites only the chunks that request wrote: a CPython
+  pool without `restore_ahead` answers about 1.4x the requests. The kept
+  memory counts in the node's page budget.
+- **New worker option `recycle_idle`**, milliseconds an idle worker keeps that
+  memory (default `30_000`). `0` keeps none.
+
 ## 0.6.0
 
 A CPython worker can run code set once at capture instead of compiling a source

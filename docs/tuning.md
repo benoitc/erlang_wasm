@@ -341,12 +341,27 @@ gaps rather than the absolute times; `test/audit/PERF.md` has the runs.
 
 ## Rewrite only what a request wrote
 
-A worker with `restore_ahead` restores the same image after every request, and
-a request writes a few percent of it: 44 of the 640 chunks of 64 KiB in a
-CPython request. So the runner restores with `recycle`: the next instance takes
-the last one's memory and only the chunks it wrote are rewritten. Nothing to
-set; `restore_ahead` does it. [Snapshots](snapshots.md) has the option for a
-host that restores by hand.
+A script worker restores the same image for every request, and a request
+writes a few percent of it: 44 of the 640 chunks of 64 KiB in a CPython
+request. So every restore recycles: the next instance takes the last one's
+memory and only the chunks it wrote are rewritten. Nothing to set.
+[Snapshots](snapshots.md) has the option for a host that restores by hand.
+
+Without `restore_ahead` the worker keeps that memory between requests, and
+`recycle_idle` bounds how long an idle worker does. While kept it counts in the
+node's page budget: up to about 40 MB per idle CPython worker, for at most
+`recycle_idle`. A node at its budget keeps nothing. Set it to `0`
+for a worker that should hold nothing between requests:
+
+<!-- check: modules my_adapter -->
+```erlang
+{ok, W} = wasm_script_worker:start_link(my_adapter, #{root => scratch,
+                                                      recycle_idle => 0}).
+```
+
+On CPython, 14 workers without `restore_ahead`, recycling took a pool from
+about 240 to about 340 requests a second at 64 callers, and one caller's median
+from 28 to 20 ms. `test/audit/PERF.md` has the runs.
 
 A CPython restore, median, in a runner-sized process:
 

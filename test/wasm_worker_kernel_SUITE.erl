@@ -22,6 +22,7 @@ the only signal there is.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("wasm/include/wasm_exec.hrl").
 
 -define(KIT, wasm_adapter_conformance).
 
@@ -55,7 +56,8 @@ groups() ->
      %% exists only where a QuickJS or CPython build does, and those are in the
      %% integration job: a capability the required gate cannot exercise is a
      %% capability nobody would notice breaking.
-     {reactor, [], cases(fake_reactor_adapter) ++ snapshot_cases()},
+     {reactor, [],
+      cases(fake_reactor_adapter) ++ snapshot_cases() ++ recycle_cases()},
      %% The same, with the next instance restored before each request arrives.
      %% Every case the kit has must hold unchanged, which is the claim that a
      %% waiting instance is as fresh as one restored on demand.
@@ -628,6 +630,129 @@ a_worker_ignores_an_image_it_cannot_read(Config) ->
         ok = wasm_script_worker:stop(W2)
     end).
 
+%%% ------------------------------------------------------- recycled memory ---
+%%
+%% A default worker carries the memory a request's instance leaves to the next
+%% restore. These are about what travels, and about it being counted while it
+%% does; `a_request_starts_from_the_image' is still the isolation claim.
+
+recycle_cases() ->
+    [the_next_restore_reuses_what_the_last_request_did_not_write,
+     kept_memory_is_counted_until_the_restore,
+     kept_memory_goes_back_when_a_request_fails_early,
+     an_idle_worker_gives_its_memory_back,
+     recycle_idle_zero_keeps_nothing].
+
+%% Reuse and not only delivery: finding the memory in the worker would prove it
+%% got there, and nothing about whether the restore used it, or used it right.
+%% The two-page reactor answers from page 0, which nothing writes; the hook
+%% writes page 1 on every restore, which must therefore never come back.
+the_next_restore_reuses_what_the_last_request_did_not_write(Config) ->
+    W = recycling_worker(Config, #{}),
+    First = wasm_script_worker:run(W, #{}),
+    {C0, Seen0} = restored(),
+    ?assertEqual(First, wasm_script_worker:run(W, #{})),
+    {C1, Seen1} = restored(),
+    %% What the hook writes is never seen by the next request.
+    ?assertEqual({0, 0}, {Seen0, Seen1}),
+    ?assert(element(1, C0) =:= element(1, C1)),
+    ?assert(element(2, C0) =/= element(2, C1)),
+    ok = wasm_script_worker:stop(W).
+
+%% From the moment the worker holds it to the moment the next restore reserves
+%% pages of its own, the memory is in the page budget. `prepare/3' is where a
+%% request waits longest before its restore, so the case stops it there.
+kept_memory_is_counted_until_the_restore(Config) ->
+    W = recycling_worker(Config, #{}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    [T0] = recycle_holds(),
+    Self = self(),
+    Caller = spawn_link(fun() -> Self ! {done, wasm_script_worker:run(
+                                                  W, #{hold => Self})} end),
+    Runner = receive {preparing, R} -> R after 5_000 -> ct:fail(no_prepare) end,
+    ?assertEqual([T0], recycle_holds()),
+    Runner ! go,
+    receive {done, Got} -> ?assertMatch({ok, _}, Got)
+    after 5_000 -> ct:fail({no_answer, Caller})
+    end,
+    %% The runner released it at its restore, and the worker holds what this
+    %% request's instance left, under a reservation of its own.
+    [T1] = recycle_holds(),
+    ?assertNotEqual(T0, T1),
+    ok = wasm_script_worker:stop(W),
+    ?assertEqual([], recycle_holds()).
+
+%% A request that never reaches its restore still gives the reservation back:
+%% refused before it starts, or its runner killed in `prepare/3'.
+kept_memory_goes_back_when_a_request_fails_early(Config) ->
+    W = recycling_worker(Config, #{}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    [T0] = recycle_holds(),
+    ?assertMatch({error, _}, wasm_script_worker:run(W, not_a_map)),
+    %% The memory was handed back unused and is kept again, counted once.
+    [T1] = recycle_holds(),
+    ?assertNotEqual(T0, T1),
+    Self = self(),
+    _ = spawn_link(fun() -> Self ! {done, wasm_script_worker:run(
+                                             W, #{hold => Self})} end),
+    Runner = receive {preparing, R} -> R after 5_000 -> ct:fail(no_prepare) end,
+    exit(Runner, kill),
+    receive {done, Got} -> ?assertMatch({error, #{kind := crashed}}, Got)
+    after 5_000 -> ct:fail(no_answer)
+    end,
+    ?assertEqual([], recycle_holds()),
+    ok = wasm_script_worker:stop(W).
+
+an_idle_worker_gives_its_memory_back(Config) ->
+    W = recycling_worker(Config, #{recycle_idle => 100}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    ?assertMatch([_], recycle_holds()),
+    timer:sleep(400),
+    ?assertEqual([], recycle_holds()),
+    %% And the next request restores from fresh memory, the same answer.
+    ?assertMatch({ok, _}, wasm_script_worker:run(W, #{})),
+    ok = wasm_script_worker:stop(W).
+
+recycle_idle_zero_keeps_nothing(Config) ->
+    W = recycling_worker(Config, #{recycle_idle => 0}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    ?assertEqual([], recycle_holds()),
+    ok = wasm_script_worker:stop(W).
+
+%% The reactor with two pages instead of one, so one chunk can be written and
+%% one left alone. Patched rather than committed: it is the same module with a
+%% different minimum.
+recycling_worker(Config, Opts) ->
+    {ok, Bytes} = file:read_file(
+                    filename:join([wasm_spec_runner:fixtures_dir(),
+                                   "snapshot", "reactor.wasm"])),
+    [A, B] = binary:split(Bytes, <<5, 3, 1, 0, 1>>),
+    Path = filename:join(?config(priv_dir, Config), "reactor2.wasm"),
+    ok = file:write_file(Path, <<A/binary, 5, 3, 1, 0, 2, B/binary>>),
+    Self = self(),
+    Hook = fun(Inst) ->
+               #mut{mems = {Mem}} = wasm_instance:mut(Inst),
+               {_, _, Chunks, _} = wasm_memory:recyclable(Mem),
+               {ok, <<Seen>>} = wasm:read_memory(Inst, 65536, 1),
+               ok = wasm:write_memory(Inst, 65536, <<7>>),
+               Self ! {restored, Chunks, Seen},
+               ok
+           end,
+    {ok, W} = start(Config, ?config(root, Config),
+                    Opts#{path => Path, on_restore => Hook}),
+    W.
+
+restored() ->
+    receive {restored, Chunks, Seen} -> {Chunks, Seen}
+    after 5_000 -> ct:fail(no_restore)
+    end.
+
+%% The keeper's holders that are kept memory, whichever worker holds them.
+recycle_holds() ->
+    lists:sort([T || {_, _, _, H} <- ets:tab2list(wasm_holders),
+                     {recycle, _} = T <- maps:keys(H)]).
+
 %%% ------------------------------------------------- the runner heap floor ---
 %%
 %% `runner_min_heap_words' is a floor on the request runner's heap, and the
@@ -764,7 +889,7 @@ settings() ->
     Worker = maps:keys(wasm_script_worker:default_limits()),
     Worker ++ wasm_worker_reaper:setting_keys() ++
         [trusted, capture_timeout, runner_min_heap_words,
-         capture_min_heap_words, restore_ahead,
+         capture_min_heap_words, restore_ahead, recycle_idle,
          root,
          %% Node-wide, and each one turns something substantial on or off.
          max_snapshot_bytes, max_snapshot_dir_bytes, snapshot_dir,

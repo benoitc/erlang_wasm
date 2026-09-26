@@ -33,7 +33,7 @@ lower/lift, and the async Canonical ABI.
 """.
 
 -export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
-         call_async/4, destroy/1, destroy/2, drop_resource/3]).
+         call_async/4, call_async/5, destroy/1, destroy/2, drop_resource/3]).
 -export([import_fun/2, exports/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
@@ -55,6 +55,10 @@ lower/lift, and the async Canonical ABI.
 %% creates and never drops (forgets) them cannot exhaust host memory. `infinity`
 %% (the default) is no cap; a caller sets it through `instantiate` opts.
 -define(HOST_LIMIT, {?MODULE, host_limit}).
+
+%% Max total callback turns `call_async` drives before giving up (a runaway guard, not
+%% a progress check): a legitimate stream takes one turn per read round.
+-define(ASYNC_BUDGET, 1000000).
 
 -doc """
 Decode a component binary into its embedded core module and export names.
@@ -377,26 +381,41 @@ call(#{} = I, Export, {Params, Result}, Args) ->
 -doc """
 Call an async-lifted export, lowering `Args` and lifting the result by `Sig`.
 
-The async counterpart of `call/4`, for an export lifted with the async Canonical
-ABI (`async func`). It calls the `[async-lift]<export>` core function, reads the
-returned status, and on synchronous completion (the callee ran to `task.return`
-then returned EXIT) lifts the value the guest handed back through `task.return`.
-A callee that instead suspends (WAIT/YIELD) is milestone 2+; here it is a named
-error rather than a wrong value.
+The async counterpart of `call/4`, for an export lifted with the async Canonical ABI
+(`async func`). It calls the `[async-lift]<export>` core function and then drives the
+Component Model callback loop: on EXIT it lifts the value the guest handed back through
+`task.return`; on WAIT it waits on the named waitable-set (`wasm_async:wait_on_set/1`)
+for a completion from a producer and re-enters the guest through its callback with the
+`(event, waitable, code)` triple; on YIELD it re-enters with a NONE event. It loops
+until EXIT (or an execution budget is exhausted).
+
+A `future<T>`/`stream<T>` parameter's argument selects how the readable end is fed: a
+bare value/binary is EAGER (read completes at once); `{ready_before, V}` queues the
+completion before the guest runs (found at WAIT without blocking); `{producer, PFun}`
+spawns a monitored producer that supplies the value/bytes later. `Opts` may carry
+`wait_hook => Pid`, notified each time the task blocks in `wait_on_set` (for tests to
+release a producer only after the owner is provably waiting).
 """.
 -spec call_async(instance(), binary(),
                  {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
           {ok, term()} | {error, term()}.
-call_async(#{} = I, Export, {Params, _Result}, Args) ->
+call_async(I, Export, Sig, Args) ->
+    call_async(I, Export, Sig, Args, #{}).
+
+-spec call_async(instance(), binary(),
+                 {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()], map()) ->
+          {ok, term()} | {error, term()}.
+call_async(#{} = I, Export, {Params, _Result}, Args, Opts) ->
     case async_lift_name(I, Export) of
         {ok, LiftName} ->
             Inst = core_with_export(I, LiftName),
-            ok = wasm_async:begin_task(Inst),
+            Callback = async_callback(I, LiftName),
+            ok = wasm_async:begin_task(Inst, Opts),
             try
                 {Descs, Lowered} = prepare_async_params(Params, Args),
                 CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
                 case wasm:call(Inst, LiftName, CoreArgs) of
-                    {ok, [Status]} -> async_result(Status band 16#F);
+                    {ok, [Status]} -> drive(Callback, Status, ?ASYNC_BUDGET);
                     {ok, _}        -> {error, {async_bad_status, LiftName}};
                     {error, _} = E -> E
                 end
@@ -407,30 +426,80 @@ call_async(#{} = I, Export, {Params, _Result}, Args) ->
             {error, {no_async_export, Export}}
     end.
 
-%% Lower an async call's parameters, turning a `future<T>`/`stream<T>` argument into
-%% the readable end of a pre-filled waitable (an i32 handle the guest reads from);
-%% any other parameter lowers by its own descriptor. The Erlang argument for a future
-%% is the value it should hold; for a stream, the elements (a binary for stream<u8>).
+%% Drive the callback loop from a callee status. The status is an unsigned i32 packing
+%% `code | (waitable_set << 4)`; mask before extracting so a set index with the top bit
+%% set does not read as negative. The budget bounds total turns (a runaway guard, not a
+%% progress check - a stream legitimately takes many turns).
+drive(_Callback, _Status, 0) ->
+    {error, async_budget_exhausted};
+drive(Callback, Status, Budget) ->
+    Bits = Status band 16#FFFFFFFF,
+    case {Bits band 16#F, Bits bsr 4} of
+        {0, _} ->
+            case wasm_async:take_return() of
+                {ok, Value} -> {ok, Value};
+                undefined   -> {ok, undefined}
+            end;
+        {1, _} ->
+            resume(Callback, [0, 0, 0], Budget);
+        {2, Set} ->
+            case wasm_async:wait_on_set(Set) of
+                {event, EC, W, P} -> resume(Callback, [EC, W, P], Budget);
+                {error, _} = Err  -> Err
+            end;
+        {Other, _} ->
+            {error, {async_bad_status, Other}}
+    end.
+
+%% Re-enter the guest through its callback with an event triple; a lift with no
+%% callback export is the stackful form, which this milestone does not drive.
+resume(none, _Args, _Budget) ->
+    {error, async_stackful_unsupported};
+resume({CbInst, CbName}, Args, Budget) ->
+    case wasm:call(CbInst, CbName, Args) of
+        {ok, [Status]} -> drive({CbInst, CbName}, Status, Budget - 1);
+        {ok, _}        -> {error, async_bad_result};
+        {error, _} = E -> E
+    end.
+
+%% Lower an async call's parameters: a `future<T>`/`stream<T>` argument becomes the
+%% readable end of a waitable (an i32 handle the guest reads from), fed eagerly, queued
+%% before-WAIT, or by a spawned producer; any other parameter lowers by its descriptor.
 prepare_async_params(Params, Args) ->
     lists:unzip([prepare_async_param(P, A) || {P, A} <- lists:zip(Params, Args)]).
 
+prepare_async_param({future, Desc}, {producer, PFun}) ->
+    H = wasm_async:new_future_channel(Desc),
+    ok = wasm_async:register_producer(H, PFun),
+    {handle, H};
+prepare_async_param({future, Desc}, {ready_before, Value}) ->
+    H = wasm_async:new_future_channel(Desc),
+    ok = wasm_async:deliver_before(H, {value, Value}),
+    {handle, H};
 prepare_async_param({future, Desc}, Value) ->
     {handle, wasm_async:new_future_readable(Desc, Value)};
+prepare_async_param({stream, Desc}, {producer, PFun}) ->
+    H = wasm_async:new_stream_channel(Desc),
+    ok = wasm_async:register_producer(H, PFun),
+    {handle, H};
+prepare_async_param({stream, Desc}, {ready_before, Bin}) ->
+    H = wasm_async:new_stream_channel(Desc),
+    ok = wasm_async:deliver_before(H, {data, Bin}),
+    ok = wasm_async:deliver_before(H, close),
+    {handle, H};
 prepare_async_param({stream, Desc}, Elements) ->
     {handle, wasm_async:new_stream_readable(Desc, Elements)};
 prepare_async_param(Desc, Value) ->
     {Desc, Value}.
 
-%% The callee status low nibble: EXIT (0) means the task returned; the result was
-%% captured by `task.return`. WAIT (2) / YIELD (1) mean it suspended, which the
-%% synchronous milestone does not drive.
-async_result(0) ->
-    case wasm_async:take_return() of
-        {ok, Value} -> {ok, Value};
-        undefined   -> {ok, undefined}
-    end;
-async_result(Cc) ->
-    {error, {async_suspended, Cc}}.
+%% The `[callback]<lift>` core function that resumes the async task, on whichever core
+%% carries it; `none` when the lift has no callback (the stackful form).
+async_callback(I, LiftName) ->
+    CbName = <<"[callback]", LiftName/binary>>,
+    case [C || C <- cores_of(I), maps:is_key(CbName, wasm:exports(C))] of
+        [CbInst | _] -> {CbInst, CbName};
+        []           -> none
+    end.
 
 %% The `[async-lift]<iface>#<fn>` (or `[async-lift]<fn>`) core function a component's
 %% async export lifts from, found across the built cores (the lift often lives on a

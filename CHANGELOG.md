@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.7.0 (unreleased)
+## 0.7.0
+
+A script worker recycles its restores whether or not it restores ahead, with
+the memory it keeps between requests counted and bounded.
 
 - **Every script worker recycles its restores**, not only one with
   `restore_ahead`. A worker keeps the memory its last request's instance left

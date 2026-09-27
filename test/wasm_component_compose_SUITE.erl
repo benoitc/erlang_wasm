@@ -81,7 +81,10 @@ an_aggregate_interface_signature_is_decoded(_Config) ->
 %% lowering on its own memory). It imports WASI, supplied by the command bundle.
 a_wac_composed_component_passes_a_string(_Config) ->
     {ok, Bin} = file:read_file(fixture_path("composed_greet")),
-    {ok, Inst} = wasm_component:instantiate(Bin, wasi_preview2:command(#{})),
+    %% `loader => compile` builds the many cores inline rather than through the node
+    %% cache, whose 50/s load limit a heavy WASI-importing component trips under load.
+    {ok, Inst} = wasm_component:instantiate(Bin, wasi_preview2:command(#{}),
+                                            #{loader => compile}),
     try
         ?assertEqual({ok, <<"hello, wasm">>},
                      wasm_component:call(Inst, <<"run">>, {[], string}, []))
@@ -98,7 +101,9 @@ a_wac_composed_component_passes_a_string(_Config) ->
 %% `(borrow<counter>) -> u32`) are decoded from the resource type in the type section.
 a_wac_composed_component_passes_a_resource(_Config) ->
     {ok, Bin} = file:read_file(fixture_path("composed_counter")),
-    {ok, Inst} = wasm_component:instantiate(Bin, wasi_preview2:command(#{})),
+    %% `loader => compile` (see the string case) keeps this off the rate-limited cache.
+    {ok, Inst} = wasm_component:instantiate(Bin, wasi_preview2:command(#{}),
+                                            #{loader => compile}),
     try
         ?assertEqual({ok, 42}, wasm_component:call(Inst, <<"run">>, {[], u32}, []))
     after

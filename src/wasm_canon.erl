@@ -292,7 +292,7 @@ lift_value(Inst, {tuple, Ds}, Flats) ->
                      end, {[], Flats}, Ds),
     {list_to_tuple(lists:reverse(Vals)), Rest};
 lift_value(_Inst, {enum, Names}, [Disc | R]) ->
-    {lists:nth(Disc + 1, Names), R};
+    {nth_case(Disc, Names), R};
 lift_value(_Inst, {flags, Names}, Flats) ->
     {Words, R} = lists:split((length(Names) + 31) div 32, Flats),
     Bits = lists:foldl(fun(W, {Acc, Shift}) -> {Acc bor (W bsl Shift), Shift + 32} end,
@@ -310,7 +310,7 @@ lift_value(Inst, {result, OkD, ErrD}, Flats) ->
     end;
 lift_value(Inst, {variant, Cases}, Flats) ->
     {Disc, V, R} = lift_variant(Inst, Cases, Flats),
-    {Name, _} = lists:nth(Disc + 1, Cases),
+    {Name, _} = nth_case(Disc, Cases),
     {{Name, V}, R}.
 
 %% A discriminant, then the payload read out of the joined slots and un-coerced
@@ -319,7 +319,7 @@ lift_value(Inst, {variant, Cases}, Flats) ->
 lift_variant(Inst, Cases, [Disc | Rest0]) ->
     Joined = join_cases(Cases),
     {SlotVals, Rest1} = lists:split(length(Joined), Rest0),
-    {_, CaseD} = lists:nth(Disc + 1, Cases),
+    {_, CaseD} = nth_case(Disc, Cases),
     V = case CaseD of
             none -> undefined;
             _ ->
@@ -390,7 +390,7 @@ load(Inst, {tuple, Ds}, Ptr) ->
                   end, {[], 0}, Ds),
     list_to_tuple(lists:reverse(Vals));
 load(Inst, {enum, Names}, Ptr) ->
-    lists:nth(read_int(Inst, Ptr, disc_size(length(Names)), unsigned) + 1, Names);
+    nth_case(read_int(Inst, Ptr, disc_size(length(Names)), unsigned), Names);
 load(Inst, {flags, Names}, Ptr) ->
     {Size, _} = size_align({flags, Names}),
     bits_flags(Names, read_int(Inst, Ptr, Size, unsigned));
@@ -406,14 +406,14 @@ load(Inst, {result, OkD, ErrD}, Ptr) ->
     end;
 load(Inst, {variant, Cases}, Ptr) ->
     {Idx, V} = load_variant(Inst, Cases, Ptr),
-    {Name, _} = lists:nth(Idx + 1, Cases),
+    {Name, _} = nth_case(Idx, Cases),
     {Name, V}.
 
 load_variant(Inst, Cases, Ptr) ->
     Disc = read_int(Inst, Ptr, disc_size(length(Cases)), unsigned),
     {_, PayAlign} = payload_size_align(Cases),
     Off = align_up(disc_size(length(Cases)), PayAlign),
-    {_Name, CaseD} = lists:nth(Disc + 1, Cases),
+    {_Name, CaseD} = nth_case(Disc, Cases),
     V = case CaseD of
             none -> undefined;
             _    -> load(Inst, CaseD, Ptr + Off)
@@ -624,11 +624,31 @@ opt_to_variant({some, V}) -> {<<"some">>, V}.
 result_to_variant({ok, V})    -> {ok, V};
 result_to_variant({error, V}) -> {error, V}.
 
+%% `lists:nth(Disc + 1, Cases)` guarded: a discriminant the guest wrote that is
+%% negative or past the last case is malformed data. It traps with a named reason
+%% rather than raising a `function_clause` out of `lists:nth`.
+nth_case(Disc, Cases) ->
+    case Disc >= 0 andalso Disc < length(Cases) of
+        true  -> lists:nth(Disc + 1, Cases);
+        false -> wasm_error:trap(invalid_discriminant,
+                                 #{disc => Disc, count => length(Cases)})
+    end.
+
 index_of(X, L) -> index_of(X, L, 0).
 index_of(X, [X | _], I) -> I;
-index_of(X, [_ | T], I) -> index_of(X, T, I + 1).
+index_of(X, [_ | T], I) -> index_of(X, T, I + 1);
+%% A variant/enum/flags name the caller lowered that is not one of the type's cases
+%% is malformed input; it traps rather than running off the end into a function_clause.
+index_of(X, [], _I)     -> wasm_error:trap(unknown_case, #{name => X}).
 
 flags_bits(Names, Set) ->
+    %% A supplied flag that is not one of the type's declared names is malformed
+    %% input. The fold iterates the declared names, so an unknown one would be
+    %% silently dropped; reject it instead.
+    case Set -- Names of
+        []        -> ok;
+        [Bad | _] -> wasm_error:trap(unknown_case, #{name => Bad})
+    end,
     lists:foldl(fun(N, Acc) ->
                     case lists:member(N, Set) of
                         true  -> Acc bor (1 bsl index_of(N, Names));

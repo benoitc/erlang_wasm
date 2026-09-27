@@ -23,7 +23,9 @@ all() ->
      variants, enums, options, results, flags,
      wide_parameter_lists_spill_to_memory,
      an_invalid_char_is_rejected,
-     a_bad_argument_is_an_error_not_a_crash].
+     a_bad_argument_is_an_error_not_a_crash,
+     an_invalid_discriminant_is_rejected,
+     an_unknown_case_name_is_rejected].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -134,6 +136,41 @@ a_bad_argument_is_an_error_not_a_crash(Config) ->
     Inst = ?config(inst, Config),
     ?assertMatch({error, _},
                  wasm_component:call(Inst, <<"echo-u8">>, {[u8], u8}, [not_a_number])).
+
+%% A variant/enum discriminant the guest wrote past its last case is malformed and
+%% traps with a named reason, captured as an `{error, _}` value. Fail-first: the lift
+%% used `lists:nth(Disc + 1, Cases)`, so an out-of-range discriminant raised a
+%% `function_clause` that `capture` could only report as a generic `internal` error.
+an_invalid_discriminant_is_rejected(Config) ->
+    #{core := Core} = ?config(inst, Config),
+    Lift = fun(Desc, Disc) ->
+               wasm_error:capture(
+                 fun() -> wasm_canon:lift_params(Core, [Desc], [Disc]) end)
+           end,
+    ?assertMatch({error, #{kind := invalid_discriminant}},
+                 Lift({enum, [<<"a">>, <<"b">>, <<"c">>]}, 7)),
+    ?assertMatch({error, #{kind := invalid_discriminant}},
+                 Lift({enum, [<<"a">>, <<"b">>, <<"c">>]}, -1)),
+    %% A variant carries a payload; an out-of-range tag traps before reading it.
+    ?assertMatch({error, #{kind := invalid_discriminant}},
+                 wasm_error:capture(
+                   fun() -> wasm_canon:lift_params(
+                              Core, [{variant, [{<<"x">>, u32}, {<<"y">>, u32}]}],
+                              [4, 0]) end)).
+
+%% Lowering a variant/enum/flags name that is not one of the type's cases is
+%% malformed input and traps, captured as `{error, _}`. Fail-first: `index_of` ran
+%% off the end of the case list into a `function_clause`.
+an_unknown_case_name_is_rejected(Config) ->
+    #{core := Core} = ?config(inst, Config),
+    Lower = fun(Desc, Val) ->
+                wasm_error:capture(
+                  fun() -> wasm_canon:lower_params(Core, [Desc], [Val]) end)
+            end,
+    ?assertMatch({error, #{kind := unknown_case}},
+                 Lower({enum, [<<"a">>, <<"b">>]}, <<"z">>)),
+    ?assertMatch({error, #{kind := unknown_case}},
+                 Lower({flags, [<<"read">>, <<"write">>]}, [<<"execute">>])).
 
 %%% -------------------------------------------------------------- helpers ---
 

@@ -17,7 +17,10 @@ independent, and the destructor runs on drop.
 
 all() ->
     [a_resource_is_constructed_and_its_methods_called,
-     two_resources_are_independent].
+     two_resources_are_independent,
+     dropping_twice_is_graceful,
+     a_method_after_drop_is_a_value,
+     a_method_on_a_bogus_handle_is_a_value].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -54,6 +57,34 @@ two_resources_are_independent(Config) ->
     ?assertEqual({ok, 105}, get(Inst, B)),
     ok = drop(Inst, A),
     ok = drop(Inst, B).
+
+%% Resource misuse must be graceful: it returns a value and never destabilises the
+%% caller. Detection of misuse as a trap (a double drop, a use-after-drop) is a tracked
+%% refinement that belongs with per-component handle tables; today the contract these
+%% cases pin is only that the runtime does not crash.
+
+%% Dropping a handle twice does not crash (the second drop is a no-op).
+dropping_twice_is_graceful(Config) ->
+    Inst = ?config(inst, Config),
+    {ok, H} = make(Inst, 1),
+    ok = drop(Inst, H),
+    ok = drop(Inst, H).
+
+%% Calling a method after the resource was dropped is a value, not a crash.
+a_method_after_drop_is_a_value(Config) ->
+    Inst = ?config(inst, Config),
+    {ok, H} = make(Inst, 1),
+    ok = drop(Inst, H),
+    assert_value(increment(Inst, H, 1)).
+
+%% A method on a handle that was never minted is a value, not a crash.
+a_method_on_a_bogus_handle_is_a_value(Config) ->
+    Inst = ?config(inst, Config),
+    assert_value(increment(Inst, 16#7FFFFFFF, 1)).
+
+assert_value({ok, _})    -> ok;
+assert_value({error, _}) -> ok;
+assert_value(Other)      -> ct:fail({not_a_value, Other}).
 
 %%% -------------------------------------------------------------- helpers ---
 

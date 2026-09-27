@@ -64,6 +64,8 @@ an atom.
 
 -define(SEC_CORE_MODULE, 1).
 -define(SEC_CORE_INSTANCE, 2).
+-define(SEC_COMPONENT, 4).
+-define(SEC_COMP_INSTANCE, 5).
 -define(SEC_ALIAS, 6).
 -define(SEC_CANON, 8).
 -define(SEC_COMP_IMPORT, 10).
@@ -103,6 +105,13 @@ section(?SEC_CORE_MODULE, Content) ->
     {ok, [{core_module, Content}]};
 section(?SEC_CORE_INSTANCE, Content) ->
     vec(Content, fun core_instance/1, fun(E) -> {core_instance, E} end);
+%% A nested component definition: the content is itself a full component binary
+%% (its own `\0asm` preamble and sections), so composition can instantiate it
+%% recursively. Component composition (`wac`) produces these.
+section(?SEC_COMPONENT, Content) ->
+    {ok, [{component_def, Content}]};
+section(?SEC_COMP_INSTANCE, Content) ->
+    vec(Content, fun comp_instance/1, fun(E) -> E end);
 section(?SEC_ALIAS, Content) ->
     vec(Content, fun alias_entry/1, fun(E) -> E end);
 section(?SEC_CANON, Content) ->
@@ -270,6 +279,18 @@ fold([Item | Rest], S) ->
     end.
 
 step({core_module, _}, S) ->
+    {ok, S};
+%% Composition items (a nested component definition, its instantiation, a synthetic
+%% instance) are handled by `wasm_component:instantiate_composed`, not the core linker.
+%% A core-linked component that reaches `link/4` carries them only incidentally and they
+%% wire nothing here; skipping them without indexing keeps this exactly as it was when
+%% these sections were dropped before parsing recognised them (the component-instance
+%% index space the aliases here reference is the imported instances, declared first).
+step({component_def, _}, S) ->
+    {ok, S};
+step({comp_instantiate, _CompIdx, _Args}, S) ->
+    {ok, S};
+step({comp_inst_exports, _Exports}, S) ->
     {ok, S};
 step({comp_export, _Name, _Sort, _Idx}, S) ->
     %% Export entries name what the component offers; they do not wire anything, so
@@ -538,6 +559,46 @@ core_instance(<<16#01, Rest0/binary>>) ->
 core_instance(<<Tag, _/binary>>) ->
     wasm_error:link_error(unsupported_core_instance,
                           <<"unsupported core instance form">>, #{tag => Tag}).
+
+%% A component instance is either the instantiation of a component (`0x00 compidx args`)
+%% or a synthetic instance collecting named exports (`0x01 exports`). Each `arg` is a
+%% `name` and a sort-indexed reference (its bytes are consumed so parsing reaches the
+%% next); argument wiring beyond consuming them is composition's job.
+comp_instance(<<16#00, Rest0/binary>>) ->
+    {CompIdx, Rest1} = wasm_leb128:u32(Rest0),
+    {Args, Rest2} = comp_inst_args(Rest1),
+    {{comp_instantiate, CompIdx, Args}, Rest2};
+comp_instance(<<16#01, Rest0/binary>>) ->
+    {Exports, Rest1} = comp_inline_exports(Rest0),
+    {{comp_inst_exports, Exports}, Rest1};
+comp_instance(<<Tag, _/binary>>) ->
+    wasm_error:link_error(unsupported_component_instance,
+                          <<"unsupported component instance form">>, #{tag => Tag}).
+
+comp_inst_args(Bin) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    comp_inst_args(Count, Rest, []).
+
+comp_inst_args(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+comp_inst_args(N, Bin, Acc) ->
+    {Name, Rest0} = name(Bin),
+    %% `sort:byte idx:u32` reference; keep the name and the (sort, idx) pair.
+    <<Sort, Rest1/binary>> = Rest0,
+    {Idx, Rest2} = wasm_leb128:u32(Rest1),
+    comp_inst_args(N - 1, Rest2, [{Name, Sort, Idx} | Acc]).
+
+comp_inline_exports(Bin) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    comp_inline_exports(Count, Rest, []).
+
+comp_inline_exports(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+comp_inline_exports(N, Bin, Acc) ->
+    {Name, Rest0} = name(Bin),
+    <<Sort, Rest1/binary>> = Rest0,
+    {Idx, Rest2} = wasm_leb128:u32(Rest1),
+    comp_inline_exports(N - 1, Rest2, [{Name, Sort, Idx} | Acc]).
 
 args(Bin) ->
     {Count, Rest} = wasm_leb128:u32(Bin),

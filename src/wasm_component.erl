@@ -41,12 +41,18 @@ lower/lift, and the async Canonical ABI.
 
 -opaque component() :: #{core := binary(), cores := [binary()],
                          sec := binary(), entry_idx := non_neg_integer(),
-                         exports := [binary()]}.
+                         exports := [binary()]}
+                      | #{composed := true, sec := binary(),
+                          exports := [binary()]}.
 -opaque instance() :: #{core := wasm:instance(), exports := [binary()],
                         cores := [wasm:instance()],
-                        export_map => #{binary() => binary()}}.
+                        export_map => #{binary() => binary()}}
+                     | #{composed := true, exports := [binary()],
+                         subs := [instance()], cores := [wasm:instance()],
+                         dispatch := #{binary() => {non_neg_integer(), binary()}}}.
 
 -define(CORE_MODULE_SEC, 1).
+-define(NESTED_COMPONENT_SEC, 4).
 -define(EXPORT_SEC, 11).
 -define(HANDLES, {?MODULE, handles}).
 -define(HOST, {?MODULE, host_resources}).
@@ -67,7 +73,13 @@ Decode a component binary into its embedded core module and export names.
 """.
 -spec decode(binary()) -> {ok, component()} | {error, term()}.
 decode(<<16#00, 16#61, 16#73, 16#6d, 16#0d, 16#00, 16#01, 16#00, Rest/binary>>) ->
-    case sections(Rest, #{exports => [], cores => []}) of
+    case sections(Rest, #{exports => [], cores => [], nested => false}) of
+        {ok, #{cores := [], nested := true, exports := Exports}} ->
+            %% No top-level core module, but the component defines nested components
+            %% (a composed component, e.g. from `wac`): its cores live inside those.
+            %% Composition instantiates the nested components and wires their exports
+            %% (`instantiate_composed`); the section stream carries the whole graph.
+            {ok, #{composed => true, sec => Rest, exports => Exports}};
         {ok, #{cores := []}} ->
             {error, no_core_module};
         {ok, #{cores := RevCores, exports := Exports}} ->
@@ -123,6 +135,8 @@ section(?EXPORT_SEC, Content, #{exports := Es} = Acc) ->
     %% replace: overwriting kept only the last section and dropped, for a proxy
     %% component, `wasi:http/incoming-handler` in favour of `wasi:cli/run`.
     Acc#{exports => Es ++ export_names(Content)};
+section(?NESTED_COMPONENT_SEC, _Content, Acc) ->
+    Acc#{nested => true};
 section(_Other, _Content, Acc) ->
     Acc.
 
@@ -210,6 +224,8 @@ instantiate(Bin, Imports, Opts) ->
           end
       end).
 
+instantiate_decoded(#{composed := true} = Decoded, Imports, Opts, _Limits) ->
+    instantiate_composed(Decoded, Imports, Opts);
 instantiate_decoded(#{core := Core, exports := Exports, sec := Sec} = Decoded,
                     Imports, Opts, Limits) ->
     Loader = maps:get(loader, Opts, load),
@@ -263,6 +279,56 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts)
         {error, _} = E ->
             E
     end.
+
+%% A composed component (nested component definitions instantiated and their exports
+%% wired together, as `wac` produces) has no top-level core. Instantiate each nested
+%% component recursively and build an instance whose exports dispatch to the
+%% sub-instance that provides them. Wiring one sub-instance's export into another's
+%% import (`comp_instantiate` args) is the next composition step; this handles a nested
+%% component instantiated with no arguments whose export is aliased out and re-exported.
+instantiate_composed(#{sec := Sec, exports := Exports}, Imports, Opts) ->
+    case wasm_component_link:parse(Sec) of
+        {ok, Graph} ->
+            S0 = #{comps => #{}, n_comp => 0, insts => #{}, n_inst => 0,
+                   funcs => #{}, n_func => 0, dispatch => #{},
+                   imports => Imports, opts => Opts},
+            #{n_inst := NInst, insts := Insts, dispatch := Dispatch} =
+                lists:foldl(fun compose_step/2, S0, Graph),
+            Subs = [maps:get(I, Insts) || I <- lists:seq(0, NInst - 1)],
+            Cores = lists:append([maps:get(cores, Sub, cores_of(Sub)) || Sub <- Subs]),
+            {ok, #{composed => true, exports => Exports, subs => Subs,
+                   dispatch => Dispatch, cores => Cores}};
+        {error, _} = E ->
+            E
+    end.
+
+%% Fold one graph item into the composition state, maintaining the component,
+%% component-instance and component-func index spaces the way the linker does for cores.
+compose_step({component_def, Bytes}, #{comps := Comps, n_comp := N} = S) ->
+    S#{comps => Comps#{N => Bytes}, n_comp => N + 1};
+compose_step({comp_instantiate, CompIdx, _Args},
+             #{comps := Comps, insts := Insts, n_inst := N,
+               imports := Imports, opts := Opts} = S) ->
+    Bytes = maps:get(CompIdx, Comps),
+    case instantiate(Bytes, Imports, Opts) of
+        {ok, Sub} ->
+            S#{insts => Insts#{N => Sub}, n_inst => N + 1};
+        {error, E} ->
+            wasm_error:link_error(nested_component_failed,
+                                  <<"a nested component did not instantiate">>,
+                                  #{component => CompIdx, error => E})
+    end;
+compose_step({comp_func_alias, InstIdx, Name}, #{funcs := Funcs, n_func := N} = S) ->
+    S#{funcs => Funcs#{N => {InstIdx, Name}}, n_func => N + 1};
+%% A func export (component sort 1) names a component func; map the export name to the
+%% sub-instance export that func resolves to.
+compose_step({comp_export, Name, 1, Idx}, #{funcs := Funcs, dispatch := D} = S) ->
+    case maps:find(Idx, Funcs) of
+        {ok, Target} -> S#{dispatch => D#{Name => Target}};
+        error        -> S
+    end;
+compose_step(_Other, S) ->
+    S.
 
 %% The drop function `canon resource.drop` runs, returning `ok` or `{trap, Reason}`.
 %% A caller that owns OS resources supplies `resource_closer` (the same closer
@@ -360,6 +426,15 @@ The post-return `cabi_post_<Export>` is run after the result is lifted.
 -spec call(instance(), binary(),
            {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
           {ok, term()} | {error, term()}.
+call(#{composed := true, dispatch := Dispatch, subs := Subs}, Export, Sig, Args) ->
+    %% A composed component has no core of its own: an export is provided by one of the
+    %% instantiated nested components, so dispatch the call to that sub-instance's export.
+    case maps:find(Export, Dispatch) of
+        {ok, {InstIdx, SubExport}} ->
+            call(lists:nth(InstIdx + 1, Subs), SubExport, Sig, Args);
+        error ->
+            {error, {unknown_export, Export}}
+    end;
 call(#{} = I, Export, {Params, Result}, Args) ->
     %% Lifting the result and lowering the arguments cross the Canonical ABI, where
     %% malformed guest output (a bad char, invalid UTF-8, an out-of-range discriminant)

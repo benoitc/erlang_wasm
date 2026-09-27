@@ -16,7 +16,8 @@ component and dispatches the outer export to that sub-instance.
 
 all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           a_cross_component_call_bridges_to_the_provider,
-          an_interface_import_signature_is_decoded].
+          an_interface_import_signature_is_decoded,
+          an_aggregate_interface_signature_is_decoded].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -58,6 +59,18 @@ an_interface_import_signature_is_decoded(_Config) ->
     <<_:8/binary, CSec/binary>> = Consumer,
     ?assertEqual({ok, #{<<"host:math/ops">> => #{<<"add">> => {[u32, u32], u32}}}},
                  wasm_component_types:import_interfaces(CSec)).
+
+%% Rich value types decode too: an interface with aggregate parameters/results resolves
+%% to nested descriptors, including type references into the type space. `wasi:cli/
+%% environment`'s `get-environment` returns `list<tuple<string, string>>`. Fail-first:
+%% only the primitives were decoded, so an aggregate was `{error, unsupported_valtype}`.
+an_aggregate_interface_signature_is_decoded(_Config) ->
+    {ok, <<_:8/binary, Sec/binary>>} = file:read_file(fixture_path("wasienv")),
+    {ok, Ifaces} = wasm_component_types:import_interfaces(Sec),
+    Env = maps:get(<<"wasi:cli/environment">>, Ifaces),
+    ?assertEqual({[], {list, {tuple, [string, string]}}},
+                 maps:get(<<"get-environment">>, Env)),
+    ?assertEqual({[], {option, string}}, maps:get(<<"initial-cwd">>, Env)).
 
 %% The raw bytes of each nested component (section id 4) in a component's section stream.
 nested_components(<<Id, Rest0/binary>>) ->

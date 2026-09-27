@@ -149,8 +149,11 @@ instance_decls(N, <<16#01, Rest0/binary>>, Idx, Local, Exports) ->
 instance_decls(N, <<16#04, Rest0/binary>>, Idx, Local, Exports) ->
     {Name, Rest1} = label(Rest0),
     {Extern, Rest2} = externdesc(Rest1),
+    %% An interface function's type lives in the instance's own (local) type space, and
+    %% its parameter/result types reference other local types, so resolve it here against
+    %% `Local`; the exported entry then carries a fully concrete signature.
     Export = case Extern of
-                 {func, TypeIdx} -> [{Name, resolve_local(TypeIdx, Local)}];
+                 {func, TypeIdx} -> [{Name, resolve_func(TypeIdx, Local)}];
                  _               -> []
              end,
     instance_decls(N - 1, Rest2, Idx, Local, Export ++ Exports);
@@ -160,10 +163,13 @@ instance_decls(N, Bin, Idx, Local, Exports) ->
     {_, Rest} = instance_decl_skip(Bin),
     instance_decls(N - 1, Rest, Idx, Local, Exports).
 
-resolve_local(TypeIdx, Local) ->
+%% Resolve a local func type to a concrete signature `{func, Params, Result}`.
+resolve_func(TypeIdx, Local) ->
     case maps:get(TypeIdx, Local, undefined) of
-        {func, Params, Result} -> {func, Params, Result};
-        _                      -> {func_ref, TypeIdx}
+        {func, Params, Result} ->
+            {func, [resolve(P, Local) || P <- Params], resolve(Result, Local)};
+        _ ->
+            {func, [], none}
     end.
 
 instance_decl_skip(<<_Tag, Rest/binary>>) -> {skip, Rest}.
@@ -180,8 +186,11 @@ externdesc(<<Sort, Rest0/binary>>) ->
     {Idx, Rest1} = wasm_leb128:u32(Rest0),
     {{Sort, Idx}, Rest1}.
 
-%% A component-model value type: a Canonical ABI primitive (encoded 0x73..0x7f) or a
-%% reference to a defined type by index. Aggregates are not decoded yet.
+%% A component-model value type: a Canonical ABI primitive (0x73..0x7f), an inline
+%% type constructor (0x68..0x72), or a reference to a defined type by index (any other
+%% leading byte, read as a u32). A reference is kept as `{typeref, Idx}` and resolved to a
+%% concrete descriptor once the whole type table is built (`resolve/2`), since a type may
+%% be referenced before this decoder has recorded it.
 valtype(<<16#7f, R/binary>>) -> {bool, R};
 valtype(<<16#7e, R/binary>>) -> {s8, R};
 valtype(<<16#7d, R/binary>>) -> {u8, R};
@@ -195,10 +204,105 @@ valtype(<<16#76, R/binary>>) -> {f32, R};
 valtype(<<16#75, R/binary>>) -> {f64, R};
 valtype(<<16#74, R/binary>>) -> {char, R};
 valtype(<<16#73, R/binary>>) -> {string, R};
-valtype(<<Byte, _/binary>>) ->
-    wasm_error:link_error(unsupported_valtype,
-                          <<"a component value type is not yet decoded">>,
-                          #{byte => Byte}).
+%% list<T>
+valtype(<<16#70, R0/binary>>) ->
+    {Elem, R1} = valtype(R0),
+    {{list, Elem}, R1};
+%% record { field: type, ... }
+valtype(<<16#72, R0/binary>>) ->
+    {Fields, R1} = named_types(R0),
+    {{record, Fields}, R1};
+%% tuple<T, ...>
+valtype(<<16#6f, R0/binary>>) ->
+    {Elems, R1} = valtype_vec(R0),
+    {{tuple, Elems}, R1};
+%% variant { case(name, type?), ... }
+valtype(<<16#71, R0/binary>>) ->
+    {Cases, R1} = variant_cases(R0),
+    {{variant, Cases}, R1};
+%% enum (names only)
+valtype(<<16#6d, R0/binary>>) ->
+    {Names, R1} = label_vec(R0),
+    {{enum, Names}, R1};
+%% flags (names only)
+valtype(<<16#6e, R0/binary>>) ->
+    {Names, R1} = label_vec(R0),
+    {{flags, Names}, R1};
+%% option<T>
+valtype(<<16#6b, R0/binary>>) ->
+    {Elem, R1} = valtype(R0),
+    {{option, Elem}, R1};
+%% result<ok?, err?>
+valtype(<<16#6a, R0/binary>>) ->
+    {Ok, R1} = opt_valtype(R0),
+    {Err, R2} = opt_valtype(R1),
+    {{result, Ok, Err}, R2};
+%% own<rt> / borrow<rt>: a resource handle, opaque to the ABI as an i32.
+valtype(<<16#69, R0/binary>>) ->
+    {_Rt, R1} = wasm_leb128:u32(R0),
+    {handle, R1};
+valtype(<<16#68, R0/binary>>) ->
+    {_Rt, R1} = wasm_leb128:u32(R0),
+    {handle, R1};
+valtype(Bin) ->
+    {Idx, R} = wasm_leb128:u32(Bin),
+    {{typeref, Idx}, R}.
+
+%% A vector of value types.
+valtype_vec(Bin) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    valtype_vec(Count, Rest, []).
+
+valtype_vec(0, Rest, Acc) -> {lists:reverse(Acc), Rest};
+valtype_vec(N, Bin, Acc) ->
+    {D, Rest} = valtype(Bin),
+    valtype_vec(N - 1, Rest, [D | Acc]).
+
+%% A vector of (label, valtype), for record fields.
+named_types(Bin) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    named_types(Count, Rest, []).
+
+named_types(0, Rest, Acc) -> {lists:reverse(Acc), Rest};
+named_types(N, Bin, Acc) ->
+    {Name, R0} = plain_name(Bin),
+    {D, R1} = valtype(R0),
+    named_types(N - 1, R1, [{Name, D} | Acc]).
+
+%% A vector of labels, for enum and flags.
+label_vec(Bin) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    label_vec(Count, Rest, []).
+
+label_vec(0, Rest, Acc) -> {lists:reverse(Acc), Rest};
+label_vec(N, Bin, Acc) ->
+    {Name, Rest} = plain_name(Bin),
+    label_vec(N - 1, Rest, [Name | Acc]).
+
+%% Variant cases: each is a label, an optional payload type, and an optional refinement
+%% index (which this decoder does not need and steps over).
+variant_cases(Bin) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    variant_cases(Count, Rest, []).
+
+variant_cases(0, Rest, Acc) -> {lists:reverse(Acc), Rest};
+variant_cases(N, Bin, Acc) ->
+    {Name, R0} = plain_name(Bin),
+    {Payload, R1} = opt_valtype(R0),
+    R2 = skip_refinement(R1),
+    variant_cases(N - 1, R2, [{Name, Payload} | Acc]).
+
+skip_refinement(<<16#00, R/binary>>) -> R;
+skip_refinement(<<16#01, R0/binary>>) ->
+    {_Idx, R1} = wasm_leb128:u32(R0),
+    R1.
+
+%% An optional value type: `0x00` none, `0x01 valtype` some. `none` for an absent type
+%% (an empty variant case payload, or a missing ok/err in a result).
+opt_valtype(<<16#00, R/binary>>) ->
+    {none, R};
+opt_valtype(<<16#01, R0/binary>>) ->
+    valtype(R0).
 
 %% An import/export/instance-export name: a leading kind byte, a u32 length, the bytes.
 label(<<_Kind, Rest0/binary>>) ->
@@ -229,22 +333,43 @@ resolve_imports(N, Bin, Types, Acc) ->
                {instance, TypeIdx} ->
                    Acc#{Name => interface_sigs(maps:get(TypeIdx, Types, other), Types)};
                {func, TypeIdx} ->
-                   Acc#{Name => #{Name => sig_of(maps:get(TypeIdx, Types, other))}};
+                   Acc#{Name => #{Name => global_sig(maps:get(TypeIdx, Types, other), Types)}};
                _ ->
                    Acc
            end,
     resolve_imports(N - 1, Rest1, Types, Acc1).
 
-%% For an instance type, the signature of each function it exports.
-interface_sigs({instance, Exports}, Types) ->
-    maps:from_list(
-      [{Name, sig_of(func_def(Ref, Types))} || {Name, Ref} <- Exports]);
+%% For an instance type, the signature of each function it exports. The exports already
+%% carry concrete signatures (resolved against the instance's local types).
+interface_sigs({instance, Exports}, _Types) ->
+    maps:from_list([{Name, sig_of(F)} || {Name, F} <- Exports]);
 interface_sigs(_Other, _Types) ->
     #{}.
 
-func_def({func, _, _} = F, _Types) -> F;
-func_def({func_ref, Idx}, Types)   -> maps:get(Idx, Types, other);
-func_def(_Other, _Types)           -> other.
-
 sig_of({func, Params, Result}) -> {Params, Result};
 sig_of(_Other)                 -> {[], none}.
+
+%% A bare (non-interface) func import references a type in the component's global type
+%% space; resolve it there.
+global_sig({func, Params, Result}, Types) ->
+    {[resolve(P, Types) || P <- Params], resolve(Result, Types)};
+global_sig(_Other, _Types) ->
+    {[], none}.
+
+%% Replace every `{typeref, Idx}` in a descriptor with the concrete descriptor the type
+%% table holds at that index, recursively through aggregates. Component type indices
+%% reference earlier definitions, so this terminates; a reference the table does not hold
+%% is left as the typeref (an unresolved type is better surfaced than silently dropped).
+resolve({typeref, Idx}, Types) ->
+    case maps:get(Idx, Types, undefined) of
+        {value, Desc} -> resolve(Desc, Types);
+        {func, _, _}  -> {typeref, Idx};
+        _             -> {typeref, Idx}
+    end;
+resolve({list, D}, Types)      -> {list, resolve(D, Types)};
+resolve({option, D}, Types)    -> {option, resolve(D, Types)};
+resolve({tuple, Ds}, Types)    -> {tuple, [resolve(D, Types) || D <- Ds]};
+resolve({record, Fs}, Types)   -> {record, [{N, resolve(D, Types)} || {N, D} <- Fs]};
+resolve({variant, Cs}, Types)  -> {variant, [{N, resolve(D, Types)} || {N, D} <- Cs]};
+resolve({result, Ok, Err}, Types) -> {result, resolve(Ok, Types), resolve(Err, Types)};
+resolve(Desc, _Types)          -> Desc.

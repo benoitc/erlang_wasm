@@ -24,6 +24,7 @@ all() ->
      a_failed_link_frees_the_cores_it_built,
      a_malformed_component_link_leaks_no_cores,
      an_unsupported_alias_is_a_named_error,
+     an_instance_sort_alias_is_parsed,
      a_non_utf8_string_encoding_is_refused,
      destroy_closes_host_resources_and_clears_the_tables].
 
@@ -119,6 +120,18 @@ an_unsupported_alias_is_a_named_error(_Config) ->
     ?assertMatch({error, #{kind := unsupported_alias}},
                  wasm_error:capture(
                    fun() -> wasm_component_link:parse(AliasSection) end)).
+
+%% A composed component aliases one instance's interface export to wire it into another
+%% instance's import. The instance-sort alias (0x05) parses to a `comp_instance_alias`
+%% item. Fail-first: `alias_entry` had no clause for sort 0x05, so it was reported as an
+%% unsupported alias. Section 6 (alias), one entry `05 00 inst=0 name="host:math/ops"`.
+an_instance_sort_alias_is_parsed(_Config) ->
+    Name = <<"host:math/ops">>,
+    Entry = <<16#05, 16#00, 0, (byte_size(Name)), Name/binary>>,
+    Content = <<1, Entry/binary>>,
+    AliasSection = <<6, (byte_size(Content)), Content/binary>>,
+    ?assertEqual({ok, [{comp_instance_alias, 0, Name}]},
+                 wasm_component_link:parse(AliasSection)).
 
 %% A canon def declaring a non-UTF-8 string encoding is refused at link time. This
 %% runtime marshals strings as UTF-8, the encoding every WASI toolchain emits, so a

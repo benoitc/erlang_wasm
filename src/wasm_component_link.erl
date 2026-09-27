@@ -292,6 +292,8 @@ step({comp_instantiate, _CompIdx, _Args}, S) ->
     {ok, S};
 step({comp_inst_exports, _Exports}, S) ->
     {ok, S};
+step({comp_instance_alias, _InstIdx, _Name}, S) ->
+    {ok, S};
 step({comp_export, _Name, _Sort, _Idx}, S) ->
     %% Export entries name what the component offers; they do not wire anything, so
     %% linking skips them (`export_map/1` reads them instead).
@@ -638,6 +640,13 @@ alias_entry(<<16#01, 16#00, Rest0/binary>>) ->
     {InstIdx, Rest1} = wasm_leb128:u32(Rest0),
     {Name, Rest2} = name(Rest1),
     {{comp_func_alias, InstIdx, Name}, Rest2};
+%% Instance export from a component instance: `0x05 0x00 inst name`. A composed
+%% component aliases one instance's interface export (e.g. the provider's
+%% `host:math/ops`) to feed another instance's import; composition reads these.
+alias_entry(<<16#05, 16#00, Rest0/binary>>) ->
+    {InstIdx, Rest1} = wasm_leb128:u32(Rest0),
+    {Name, Rest2} = name(Rest1),
+    {{comp_instance_alias, InstIdx, Name}, Rest2};
 alias_entry(<<16#03, 16#00, Rest0/binary>>) ->
     %% Type alias from a component instance export: skip inst + name.
     {_InstIdx, Rest1} = wasm_leb128:u32(Rest0),

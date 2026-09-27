@@ -22,6 +22,7 @@ the only signal there is.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("wasm/include/wasm_exec.hrl").
 
 -define(KIT, wasm_adapter_conformance).
 
@@ -32,8 +33,10 @@ suite() -> [{timetrap, {seconds, 90}}].
 all() ->
     [every_setting_is_documented,
      a_runner_heap_floor_is_resolved_and_reported,
+     stopping_the_reaper_stops_its_journal_writers,
      {group, typed}, {group, command}, {group, script_v1},
-     {group, script_v1_channel}, {group, reactor}, {group, wrappers}].
+     {group, script_v1_channel}, {group, reactor}, {group, reactor_ahead},
+     {group, wrappers}].
 
 groups() ->
     [{typed, [], cases(fake_typed_adapter)},
@@ -53,7 +56,13 @@ groups() ->
      %% exists only where a QuickJS or CPython build does, and those are in the
      %% integration job: a capability the required gate cannot exercise is a
      %% capability nobody would notice breaking.
-     {reactor, [], cases(fake_reactor_adapter) ++ snapshot_cases()},
+     {reactor, [],
+      cases(fake_reactor_adapter) ++ snapshot_cases() ++ recycle_cases()},
+     %% The same, with the next instance restored before each request arrives.
+     %% Every case the kit has must hold unchanged, which is the claim that a
+     %% waiting instance is as fresh as one restored on demand.
+     {reactor_ahead, [],
+      cases(fake_reactor_adapter) ++ snapshot_cases() ++ ahead_cases()},
      %% `run/3' and `submit/3', through an adapter that records the request
      %% it is handed, since the kernel never looks inside one.
      {wrappers, [], [run_3_hands_the_adapter_source_and_context,
@@ -86,7 +95,10 @@ init_per_group(command, Config)   -> [{adapter, fake_command_adapter} | Config];
 init_per_group(script_v1, Config) -> [{adapter, fake_script_v1_adapter} | Config];
 init_per_group(script_v1_channel, Config) ->
     [{adapter, fake_script_v1_channel_adapter} | Config];
-init_per_group(reactor, Config) -> [{adapter, fake_reactor_adapter} | Config].
+init_per_group(reactor, Config) -> [{adapter, fake_reactor_adapter} | Config];
+init_per_group(reactor_ahead, Config) ->
+    [{adapter, fake_reactor_adapter},
+     {worker_opts, #{restore_ahead => true}} | Config].
 
 %% Three things the kernel does only on this path, each of which would
 %% otherwise be exercised by nothing in the required gate.
@@ -109,7 +121,12 @@ init_per_testcase(every_setting_is_documented, Config) ->
     Config;
 init_per_testcase(a_runner_heap_floor_is_resolved_and_reported, Config) ->
     Config;
+init_per_testcase(stopping_the_reaper_stops_its_journal_writers = TC, Config) ->
+    start_case(TC, [{adapter, fake_typed_adapter} | Config]);
 init_per_testcase(TC, Config) ->
+    start_case(TC, Config).
+
+start_case(TC, Config) ->
     process_flag(trap_exit, true),
     Root = filename:join([?config(priv_dir, Config), atom_to_list(TC), "root"]),
     ok = filelib:ensure_path(Root),
@@ -127,8 +144,9 @@ end_per_testcase(_TC, Config) ->
     ok.
 
 start(Config, _Root, Opts) ->
+    Group = proplists:get_value(worker_opts, Config, #{}),
     wasm_script_worker:start_link(?config(adapter, Config),
-                             maps:merge(#{root => scratch}, Opts)).
+                                  maps:merge(Group#{root => scratch}, Opts)).
 
 %% What every case is handed. The kit reads nothing else, so a suite for a
 %% language adapter is this function and the delegations below.
@@ -138,6 +156,121 @@ ctx(Config) ->
       worker => ?config(worker, Config),
       root => Root,
       start => fun(Opts) -> start(Config, Root, Opts) end}.
+
+%% The writers are linked to the reaper, and a link does not carry the `normal'
+%% exit `wasm_worker_reaper:stop/0' ends it with, so without an explicit stop
+%% every reaper that was stopped left its writers running.
+stopping_the_reaper_stops_its_journal_writers(Config) ->
+    Reaper = ?config(reaper, Config),
+    {ok, _} = wasm_script_worker:run(?config(worker, Config),
+                                     ?KIT:fixture(fake_typed_adapter, echo)),
+    {links, Links} = process_info(Reaper, links),
+    Writers = [P || P <- Links, is_pid(P),
+                    {current_function, {wasm_worker_reaper, writer, 1}}
+                        =:= process_info(P, current_function)],
+    ?assert(Writers =/= []),
+    Mons = [erlang:monitor(process, P) || P <- Writers],
+    ok = wasm_script_worker:stop(?config(worker, Config)),
+    ok = wasm_worker_reaper:stop(),
+    [receive {'DOWN', M, process, _, _} -> ok
+     after 5_000 -> ct:fail(a_journal_writer_outlived_its_reaper)
+     end || M <- Mons].
+
+%%% ---------------------------------------------------- restore ahead cases ---
+
+ahead_cases() ->
+    [an_instance_is_waiting_before_the_request,
+     a_runner_killed_at_the_deadline_is_replaced,
+     a_runner_that_dies_between_requests_is_replaced,
+     a_request_handed_a_dead_runner_still_runs,
+     stopping_the_worker_stops_its_runner].
+
+an_instance_is_waiting_before_the_request(Config) ->
+    W = ?config(worker, Config),
+    Runner = waiting(W),
+    {ok, First} = wasm_script_worker:run(W, #{}),
+    %% `handle' bumps a counter `init' left in memory. The same answer twice is
+    %% two fresh instances; a rising one is the first request's memory reaching
+    %% the second.
+    ?assertEqual({ok, First}, wasm_script_worker:run(W, #{})),
+    %% And it was the same runner both times: nothing was killed, and the
+    %% instance the second request used was restored while the worker waited.
+    ?assertEqual(Runner, waiting(W)).
+
+a_runner_killed_at_the_deadline_is_replaced(Config) ->
+    {ok, W} = start(Config, ?config(root, Config),
+                    #{limits => #{timeout => 300, fuel => infinity}}),
+    Runner = waiting(W),
+    ?assertMatch({error, #{kind := timeout}},
+                 wasm_script_worker:run(W, #{call => ~"spin"})),
+    ?assertNot(is_process_alive(Runner)),
+    %% The replacement is there before the next request is accepted, and that
+    %% request answers as if nothing had happened.
+    ?assertMatch({ok, #{values := _}}, wasm_script_worker:run(W, #{})),
+    ?assertNotEqual(Runner, waiting(W)),
+    ok = wasm_script_worker:stop(W).
+
+a_runner_that_dies_between_requests_is_replaced(Config) ->
+    W = ?config(worker, Config),
+    Runner = waiting(W),
+    Mon = erlang:monitor(process, Runner),
+    exit(Runner, kill),
+    receive {'DOWN', Mon, process, Runner, _} -> ok end,
+    ?assertMatch({ok, #{values := _}}, wasm_script_worker:run(W, #{})),
+    ?assertNotEqual(Runner, waiting(W)).
+
+%% The worker learns of a runner's death by message, and a request can arrive
+%% first. The guardian then finds a runner that is not there, and the request
+%% runs the way it would without `restore_ahead' rather than failing. The dead
+%% pid is planted directly because the ordinary race cannot be scheduled.
+a_request_handed_a_dead_runner_still_runs(Config) ->
+    W = ?config(worker, Config),
+    Runner = waiting(W),
+    {Dead, DMon} = spawn_monitor(fun() -> ok end),
+    receive {'DOWN', DMon, process, Dead, _} -> ok end,
+    sys:replace_state(W, fun(S) -> swap(S, Runner, Dead) end),
+    ?assertMatch({ok, #{values := _}}, wasm_script_worker:run(W, #{})),
+    %% Told, the worker started a runner of its own rather than keep the dead
+    %% one. The one it had is still alive and nobody's, which only this case
+    %% can arrange, so it goes here.
+    New = waiting(W),
+    ?assertNotEqual(Dead, New),
+    exit(Runner, kill).
+
+stopping_the_worker_stops_its_runner(Config) ->
+    {ok, W} = start(Config, ?config(root, Config), #{}),
+    Runner = waiting(W),
+    Mon = erlang:monitor(process, Runner),
+    ok = wasm_script_worker:stop(W),
+    receive {'DOWN', Mon, process, Runner, _} -> ok
+    after 5_000 -> ct:fail(runner_outlived_its_worker)
+    end.
+
+%% The worker's runner, once it has an instance waiting. Between requests the
+%% worker monitors exactly one process, and that is it.
+waiting(W) -> waiting(W, 200).
+
+waiting(W, 0) -> ct:fail({no_instance_waiting, W});
+waiting(W, N) ->
+    case process_info(W, monitors) of
+        {monitors, [{process, Runner}]} ->
+            case process_info(Runner, dictionary) of
+                {dictionary, D} ->
+                    case lists:keymember(wasm_worker_ahead, 1, D) of
+                        true  -> Runner;
+                        false -> timer:sleep(10), waiting(W, N - 1)
+                    end;
+                undefined ->
+                    timer:sleep(10), waiting(W, N - 1)
+            end;
+        _ ->
+            timer:sleep(10), waiting(W, N - 1)
+    end.
+
+swap(Term, From, To) when Term =:= From -> To;
+swap(T, From, To) when is_tuple(T) ->
+    list_to_tuple([swap(E, From, To) || E <- tuple_to_list(T)]);
+swap(Term, _From, _To) -> Term.
 
 %%% -------------------------------------------------------- wrapper cases ---
 
@@ -456,7 +589,11 @@ a_validate_that_refuses_fails_the_start(Config) ->
 %% and not on the read. Without that this case passes with the lookup deleted,
 %% which is how a test that cannot fail arrives.
 a_worker_starts_from_a_filed_image(Config) ->
-    Dir = filename:join(?config(priv_dir, Config), "images"),
+    %% Its own directory per run: two groups run this case, and the second
+    %% would otherwise read the image the first one filed.
+    Dir = filename:join(?config(priv_dir, Config),
+                        "images-" ++ integer_to_list(
+                                       erlang:unique_integer([positive]))),
     with_store(Dir, fun() ->
         Start = maps:get(start, ctx(Config)),
         ok = fake_reactor_adapter:reset_captures(),
@@ -492,6 +629,129 @@ a_worker_ignores_an_image_it_cannot_read(Config) ->
         ?assertEqual(Before + 1, fake_reactor_adapter:captures()),
         ok = wasm_script_worker:stop(W2)
     end).
+
+%%% ------------------------------------------------------- recycled memory ---
+%%
+%% A default worker carries the memory a request's instance leaves to the next
+%% restore. These are about what travels, and about it being counted while it
+%% does; `a_request_starts_from_the_image' is still the isolation claim.
+
+recycle_cases() ->
+    [the_next_restore_reuses_what_the_last_request_did_not_write,
+     kept_memory_is_counted_until_the_restore,
+     kept_memory_goes_back_when_a_request_fails_early,
+     an_idle_worker_gives_its_memory_back,
+     recycle_idle_zero_keeps_nothing].
+
+%% Reuse and not only delivery: finding the memory in the worker would prove it
+%% got there, and nothing about whether the restore used it, or used it right.
+%% The two-page reactor answers from page 0, which nothing writes; the hook
+%% writes page 1 on every restore, which must therefore never come back.
+the_next_restore_reuses_what_the_last_request_did_not_write(Config) ->
+    W = recycling_worker(Config, #{}),
+    First = wasm_script_worker:run(W, #{}),
+    {C0, Seen0} = restored(),
+    ?assertEqual(First, wasm_script_worker:run(W, #{})),
+    {C1, Seen1} = restored(),
+    %% What the hook writes is never seen by the next request.
+    ?assertEqual({0, 0}, {Seen0, Seen1}),
+    ?assert(element(1, C0) =:= element(1, C1)),
+    ?assert(element(2, C0) =/= element(2, C1)),
+    ok = wasm_script_worker:stop(W).
+
+%% From the moment the worker holds it to the moment the next restore reserves
+%% pages of its own, the memory is in the page budget. `prepare/3' is where a
+%% request waits longest before its restore, so the case stops it there.
+kept_memory_is_counted_until_the_restore(Config) ->
+    W = recycling_worker(Config, #{}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    [T0] = recycle_holds(),
+    Self = self(),
+    Caller = spawn_link(fun() -> Self ! {done, wasm_script_worker:run(
+                                                  W, #{hold => Self})} end),
+    Runner = receive {preparing, R} -> R after 5_000 -> ct:fail(no_prepare) end,
+    ?assertEqual([T0], recycle_holds()),
+    Runner ! go,
+    receive {done, Got} -> ?assertMatch({ok, _}, Got)
+    after 5_000 -> ct:fail({no_answer, Caller})
+    end,
+    %% The runner released it at its restore, and the worker holds what this
+    %% request's instance left, under a reservation of its own.
+    [T1] = recycle_holds(),
+    ?assertNotEqual(T0, T1),
+    ok = wasm_script_worker:stop(W),
+    ?assertEqual([], recycle_holds()).
+
+%% A request that never reaches its restore still gives the reservation back:
+%% refused before it starts, or its runner killed in `prepare/3'.
+kept_memory_goes_back_when_a_request_fails_early(Config) ->
+    W = recycling_worker(Config, #{}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    [T0] = recycle_holds(),
+    ?assertMatch({error, _}, wasm_script_worker:run(W, not_a_map)),
+    %% The memory was handed back unused and is kept again, counted once.
+    [T1] = recycle_holds(),
+    ?assertNotEqual(T0, T1),
+    Self = self(),
+    _ = spawn_link(fun() -> Self ! {done, wasm_script_worker:run(
+                                             W, #{hold => Self})} end),
+    Runner = receive {preparing, R} -> R after 5_000 -> ct:fail(no_prepare) end,
+    exit(Runner, kill),
+    receive {done, Got} -> ?assertMatch({error, #{kind := crashed}}, Got)
+    after 5_000 -> ct:fail(no_answer)
+    end,
+    ?assertEqual([], recycle_holds()),
+    ok = wasm_script_worker:stop(W).
+
+an_idle_worker_gives_its_memory_back(Config) ->
+    W = recycling_worker(Config, #{recycle_idle => 100}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    ?assertMatch([_], recycle_holds()),
+    timer:sleep(400),
+    ?assertEqual([], recycle_holds()),
+    %% And the next request restores from fresh memory, the same answer.
+    ?assertMatch({ok, _}, wasm_script_worker:run(W, #{})),
+    ok = wasm_script_worker:stop(W).
+
+recycle_idle_zero_keeps_nothing(Config) ->
+    W = recycling_worker(Config, #{recycle_idle => 0}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    {ok, _} = wasm_script_worker:run(W, #{}),
+    ?assertEqual([], recycle_holds()),
+    ok = wasm_script_worker:stop(W).
+
+%% The reactor with two pages instead of one, so one chunk can be written and
+%% one left alone. Patched rather than committed: it is the same module with a
+%% different minimum.
+recycling_worker(Config, Opts) ->
+    {ok, Bytes} = file:read_file(
+                    filename:join([wasm_spec_runner:fixtures_dir(),
+                                   "snapshot", "reactor.wasm"])),
+    [A, B] = binary:split(Bytes, <<5, 3, 1, 0, 1>>),
+    Path = filename:join(?config(priv_dir, Config), "reactor2.wasm"),
+    ok = file:write_file(Path, <<A/binary, 5, 3, 1, 0, 2, B/binary>>),
+    Self = self(),
+    Hook = fun(Inst) ->
+               #mut{mems = {Mem}} = wasm_instance:mut(Inst),
+               {_, _, Chunks, _} = wasm_memory:recyclable(Mem),
+               {ok, <<Seen>>} = wasm:read_memory(Inst, 65536, 1),
+               ok = wasm:write_memory(Inst, 65536, <<7>>),
+               Self ! {restored, Chunks, Seen},
+               ok
+           end,
+    {ok, W} = start(Config, ?config(root, Config),
+                    Opts#{path => Path, on_restore => Hook}),
+    W.
+
+restored() ->
+    receive {restored, Chunks, Seen} -> {Chunks, Seen}
+    after 5_000 -> ct:fail(no_restore)
+    end.
+
+%% The keeper's holders that are kept memory, whichever worker holds them.
+recycle_holds() ->
+    lists:sort([T || {_, _, _, H} <- ets:tab2list(wasm_holders),
+                     {recycle, _} = T <- maps:keys(H)]).
 
 %%% ------------------------------------------------- the runner heap floor ---
 %%
@@ -629,7 +889,7 @@ settings() ->
     Worker = maps:keys(wasm_script_worker:default_limits()),
     Worker ++ wasm_worker_reaper:setting_keys() ++
         [trusted, capture_timeout, runner_min_heap_words,
-         capture_min_heap_words,
+         capture_min_heap_words, restore_ahead, recycle_idle,
          root,
          %% Node-wide, and each one turns something substantial on or off.
          max_snapshot_bytes, max_snapshot_dir_bytes, snapshot_dir,

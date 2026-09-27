@@ -50,6 +50,8 @@ all() ->
      a_restore_hook_that_fails_leaves_no_instance,
      a_grown_unexported_memory_restores,
      an_exported_global_is_not_shared_between_restores,
+     a_recycled_restore_is_the_image,
+     a_recycled_restore_is_the_image_in_generated_code,
      a_grown_table_restores,
      a_data_segment_the_guest_zeroed_stays_zero,
      a_zeroed_gap_between_runs_stays_zero,
@@ -1085,3 +1087,90 @@ every_atom_an_image_holds_exists_once_the_decoder_is_loaded(_Config) ->
     after
         peer:stop(Peer)
     end.
+
+%%% -------------------------------------------------------------- recycling ---
+%%
+%% A recycling restore keeps every chunk the last instance did not write, so
+%% the claim is only as good as the marking. Each cycle below writes through
+%% every path a guest or a host has -- a plain store, a wide store, fill, copy,
+%% init, an atomic read-modify-write, a vector store, growth and a host write --
+%% at addresses spread over the whole memory, and the next restore must hand
+%% back exactly the bytes of a restore that recycled nothing.
+
+a_recycled_restore_is_the_image(_Config) ->
+    recycled_cycles(#{}, 30).
+
+%% The same through generated code, whose stores are inlined and mark the chunk
+%% themselves rather than through `wasm_memory`. `store` compiles; the other
+%% writes are in a function the generator refuses and stay interpreted.
+a_recycled_restore_is_the_image_in_generated_code(_Config) ->
+    ct:timetrap({minutes, 3}),
+    Before = maps:get(entered, wasm_jit:counts()),
+    recycled_cycles(#{compile => true, compile_after => 1, compile_force => true},
+                    60),
+    ?assert(maps:get(entered, wasm_jit:counts()) > Before).
+
+recycled_cycles(Tier, Cycles) ->
+    rand:seed(exsss, {7, 11, 13}),
+    {ok, H} = wasm:load(scribbler()),
+    Run = Tier#{fuel => infinity},
+    {ok, I0} = wasm:instantiate(H, #{}, Run#{snapshotable => true}),
+    %% Something worth keeping in the image, in some chunks and not others.
+    [ok = scribble(I0, Run) || _ <- lists:seq(1, 40)],
+    {ok, Image} = wasm:snapshot(I0, #{version => ~"recycle"}),
+    ok = wasm:destroy(I0),
+    {ok, Ref} = wasm:restore(Image, #{}, Run),
+    Pristine = memory_of(Ref),
+    ok = wasm:destroy(Ref),
+    lists:foreach(
+      fun(N) ->
+          {ok, I} = wasm:restore(Image, #{}, Run#{recycle => true}),
+          ?assertEqual({cycle, N, true}, {cycle, N, memory_of(I) =:= Pristine}),
+          [ok = scribble(I, Run) || _ <- lists:seq(1, 8)],
+          ok = wasm:destroy(I)
+      end, lists:seq(1, Cycles)),
+    ok = wasm:release(Image).
+
+%% Every write path, each at an address of its own: two writes landing in one
+%% chunk would let one path's mark cover another's missing one.
+scribble(I, Run) ->
+    V = rand:uniform(16#7FFFFFFF),
+    [{ok, []} = wasm:call(I, F, [addr(), V], Run)
+     || F <- [~"store", ~"wide", ~"fill", ~"copy", ~"init", ~"atomic", ~"vec"]],
+    {ok, [_]} = wasm:call(I, ~"grow", [], Run),
+    ok = wasm:write_memory(I, addr(), <<V:32, V:32>>).
+
+%% Aligned to 256 and short of the end by the widest write's reach.
+addr() -> rand:uniform(64 * 65536 div 256 - 64) * 256.
+
+memory_of(I) ->
+    {ok, Pages} = wasm:memory_size(I),
+    {ok, Bytes} = wasm:read_memory(I, 0, min(Pages, 64) * 65536),
+    Bytes.
+
+%% One function per write path, each `(a, v)': i32.store, i64.store,
+%% memory.fill, memory.copy (from a far address to `a'), memory.init from a
+%% passive segment, an atomic add, a v128 store; and `grow', a page.
+scribbler() ->
+    A = [16#20, 0], V = [16#20, 1], End = [16#0B],
+    Bodies =
+        [A ++ V ++ [16#36, 2, 0] ++ End,
+         A ++ V ++ [16#AD, 16#37, 3, 0] ++ End,
+         A ++ V ++ [16#41, 48, 16#FC, 11, 0] ++ End,
+         A ++ [16#41, 0, 16#41, 16#C0, 0, 16#FC, 10, 0, 0] ++ End,
+         A ++ [16#41, 0, 16#41, 8, 16#FC, 8, 0, 0] ++ End,
+         A ++ V ++ [16#FE, 16#1E, 2, 0, 16#1A] ++ End,
+         A ++ [16#FD, 16#0C] ++ lists:duplicate(16, 16#AB) ++ [16#FD, 16#0B, 4, 0]
+             ++ End,
+         [16#41, 1, 16#40, 0] ++ End],
+    Names = [~"store", ~"wide", ~"fill", ~"copy", ~"init", ~"atomic", ~"vec",
+             ~"grow"],
+    wasm_asm:module([wasm_asm:type_section([{[16#7F, 16#7F], []}, {[], [16#7F]}]),
+                     wasm_asm:func_section([0, 0, 0, 0, 0, 0, 0, 1]),
+                     wasm_asm:memory_section(1, 64, 96),
+                     wasm_asm:export_section(
+                       [{N, 0, Ix} || {Ix, N} <- lists:enumerate(0, Names)]
+                       ++ [{~"memory", 2, 0}]),
+                     wasm_asm:data_count_section(1),
+                     wasm_asm:code_section([list_to_binary(B) || B <- Bodies]),
+                     wasm_asm:data_section([~"PASSIVE!"])]).

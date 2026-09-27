@@ -6465,3 +6465,184 @@ the one they had. This is not on `wasm_exec:run/3`/`branch/3`/`do_call/4` -- the
 core-execution path the realbench guard covers -- so it needs no realbench run;
 `wasm_canon` is the component ABI, entered only on a component call. The component
 suites (vectors, import, resource) that exercise the lowering path stay green.
+
+## Requests on a pool, and what they queued behind
+
+hornbeam serves a CPython reactor per request from 14 `wasm_script_worker`s
+and measured 140 to 170 requests a second at 16 to 64 clients, where 14
+workers at 47 ms a request would give about 290. `bench/paths/reqbench.erl`
+reproduces the shape here: `wasm_python` over `py_reactor.wasm`, hornbeam's
+worker options (`runner_min_heap_words => 1_000_000`, the tier on with
+`compile_after => 1`), a pool that hands out the most recently freed worker,
+and every queue a request can wait on sampled every 10 ms. The machine is a
+14-core Mac, 10 performance and 4 efficiency cores.
+
+**Messages per request**, one worker, counted by tracing the servers' receives
+over 20 warm requests:
+
+| server | main | this branch |
+| --- | ---: | ---: |
+| `file_server_2` | 34 | 0 |
+| `wasm_worker_reaper` | 10 | 7.6 |
+| `wasm_keeper` | 6 | 4 |
+| `wasm_code_slots` | 7 | 2 |
+| `wasm_cleanup_manager` | 5 | 0.6 |
+| `wasm_cleanup_steward_sup` | 3 | 3 |
+
+The file server's 34 were WASI path resolution (`read_link_info`,
+`read_file_info`, and `filelib:safe_relative_path/2`'s `read_link`), the
+request directory and mounts, staging, and cleanup. Call-time tracing of the
+reaper, after the file calls were made raw but while it still wrote its own
+journal, put `open`, `rename` and `delete` at about 110 us each under load and
+about 430 us of file I/O per request inside the one process; with the journal
+on writer processes its own time per request is a few microseconds.
+
+**Main against this branch**, interleaved, both orderings, 64 callers, 10 s per
+arm. The load average in this session never came below 77 while the three
+rounds ran (macOS background indexing), so read it as the two builds meeting
+the same contended machine:
+
+| round, load | main | branch | branch, `restore_ahead` |
+| --- | ---: | ---: | ---: |
+| 1, 78 to 147 | 179.1 req/s | 190.3 | 183.8 |
+| 2, 163 to 203 | 108.3 | 170.5 | 173.9 |
+| 3, 178 to 208 | 119.8 | 167.7 | 170.6 |
+
+Queues at 64 callers, the worst arm of each build across the three rounds:
+
+| queue, max / mean | main | branch |
+| --- | ---: | ---: |
+| `file_server_2` | 18 / 7.07 | 0 / 0 |
+| `wasm_worker_reaper` | 31 / 10.67 | 5 / 0.09 |
+| `wasm_keeper` | 1 / 0.02 | 2 / 0.06 |
+| `wasm_code_slots` | 2 / 0.02 | 2 / 0.03 |
+
+Two more rounds once the indexing eased, same protocol:
+
+| round, load | main | branch | branch, `restore_ahead` |
+| --- | ---: | ---: | ---: |
+| 4, 19 to 43 | 98.7 req/s | 198.1 | 201.6 |
+| 5, 43 to 66 | 127.6 | 187.8 | 211.3 |
+
+`main`'s schedulers were 30 and 38% busy in those, the branch's 67 to 83%.
+
+Under contention `main` does worst: its schedulers were 33 to 37% busy in
+rounds 2 and 3 against 70 to 81% for the branch, because every request waited
+on the reaper, which waited on the file server. Earlier the same day, with
+the load average between 10 and 30 and the arms not interleaved, `main` gave
+173 req/s and the branch 202 to 218.
+
+**What is left is CPU.** Microstate accounting over a loaded branch arm: normal
+schedulers 74% emulator, 16% other (spinning for work), 7% sleep, under 1%
+collection. With 78% of 14 schedulers busy at 210 req/s a request costs about
+52 ms of scheduler time against 45 ms of latency alone. A CPython restore is
+12 ms alone and 22 ms with 14 at once; eprof puts it almost entirely in
+`wasm_memory:scatter_run/3` writing 924k image words and in allocating 43
+fresh 1 MiB chunks, which alone and touched costs 4.0 ms, 11.1 ms with 14 at
+once, and 2.4 and 5.2 ms with `+MMmcs 30 +MMamcbf 1000000`. That flag is worth
+about 3% end to end (210.6 against 217.8 req/s, one pair). Why the chunks are
+not reused is in `ATTEMPTS.md`.
+
+**`restore_ahead`**, measured with `bench/paths/phasing_adapter.erl` over the
+same guest, one request at a time with 150 ms between them, 60 each, the two
+workers alternating in one emulator (load 48 to 75):
+
+| interval, median | per request | `restore_ahead` |
+| --- | ---: | ---: |
+| mounts and environment | 143 us | 129 us |
+| stage | 632 us | 538 us |
+| deliver and restore | 14,832 us | 38 us |
+| invocation envelope | 28,276 us | 28,250 us |
+| first to last callback | 46,351 us | 29,965 us |
+
+The invocation envelope is the same, so forwarding the imports and keeping the
+runner costs the guest nothing measurable. An earlier run of 30 each at load
+175 had it 4 ms apart in the other direction; that did not reproduce.
+
+It needs idle time between a worker's requests. With `REQBENCH_POOL=fifo`,
+which rotates idle workers, and 4 callers: p50 44 ms and 90.6 req/s without
+it, 30 ms and 123.4 req/s with it. With the last-in pool and 64 callers there
+is no idle time and it adds nothing (the rounds above).
+
+## A CPython request that compiles nothing
+
+hornbeam timed a request's `handle()` from inside Python at about 28 ms, of
+which about 12 ms was the reactor compiling and importing the same text every
+time: the `BOOT` runner through `PyRun_SimpleString`, the `importlib` spec for
+`/main.py`, compiling `main.py` itself, and reading `/context.json`. The agent's
+own work was 0.1 to 0.2 ms.
+
+Measured with `bench/paths/phasing_adapter.erl` over `wasm_python`, the compiled
+tier on and warm, three workers alternating in one emulator, 40 requests each.
+The request is hornbeam's benchmark agent (`hb_bench_layers`'s source plus a
+`dispatch`): sent as `main.py` for `handle()`, set once as the entry for
+`call()`. The 0.5.0 reactor is the same adapter over the previous
+`py_reactor.wasm`, which ignores the new imports.
+
+| arm | T6-T7 median | T6-T7 min | T1-T10 median | T1-T10 min |
+| --- | ---: | ---: | ---: | ---: |
+| `handle()`, 0.5.0 reactor | 59,122 us | 46,825 us | 88,363 us | 67,430 us |
+| `handle()`, this reactor | 40,422 us | 30,949 us | 69,979 us | 54,257 us |
+| `call()` | 2,050 us | 1,816 us | 19,905 us | 16,354 us |
+
+Load average 248 to 274: another session's stress run held 14 to 28 `yes`
+processes for the whole night this was taken in, so the absolute times are
+inflated and the gaps are the result. An earlier pair of the new reactor alone,
+load 100 to 200, gave `handle()` 36,796 us and `call()` 1,981 us. The saving is
+more than the prompt's 10 ms by a wide margin at every load measured.
+
+## Recycling a restore's memory
+
+A CPython `call()` request, restored and then compared byte by byte with the
+memory the restore laid down, changes 29 of the image's 640 pages of 64 KiB,
+17 of 160 at 256 KiB and 7 of 40 at 1 MiB. Counted by write rather than by
+change, it marks 44 chunks of 64 KiB. A restore that rewrites only those, from
+the last instance's memory, in a process with the runner's 1M-word heap floor,
+median of 16 after one warm-up, alternating fresh and recycled:
+
+| restore | median | minimum |
+| --- | ---: | ---: |
+| fresh | 11,979 us | 11,110 us |
+| recycled, 64 KiB chunks | 3,907 us | 3,303 us |
+| recycled, 256 KiB chunks | 6,092 us | 5,366 us |
+| recycled, 1 MiB chunks | 7,450 us | 6,544 us |
+
+What is left of a recycled restore, split with timers around each phase:
+instance build 0.2 ms, tables 0.6 ms, the plan 0.2 ms, and the memory: the
+44 fresh chunks and the image's runs clipped to them, about 2.8 ms at one
+`atomics:put/3` a word.
+
+The mark every store makes, `bench/paths/storebench.erl`, interleaved three
+times, minimum of nine: 12.3 ns a store before, 12.6 in a memory that does not
+track, 16.7 in one that does with a read before the write, 17.3 with an
+unconditional write. On the CPython request with `restore_ahead`, the guest's
+call: `handle()` 26.3 ms before and 30.4 after; `call()` 2.34 and 2.49.
+
+Throughput, CPython, 14 workers, 64 callers, `restore_ahead` on, 420 s of warm-up
+so each build loads or compiles its tier, three builds interleaved twice:
+
+| round, load | 0.5.0 | main (lean reactor) | recycling |
+| --- | ---: | ---: | ---: |
+| 1, 57 to 98 | 156.0 | 275.0 | 465.8 |
+| 2, 73 to 80 | 127.7 | 200.7 | 368.3 |
+
+The loads were uneven and high, and a first run of the same comparison without
+the lean arm gave 0.5.0 128.7 and 165.5 against 333.9 and 290.8. Every round
+puts recycling at 1.7x to 1.8x the lean reactor and over 2x 0.5.0.
+
+## Recycling in a worker that does not restore ahead
+
+A default script worker's runner lives for one request, so before 0.7.0 the
+memory its instance left died with it and every restore started fresh. The
+worker now carries it to the next restore. `bench/paths/reqbench.erl`, CPython,
+14 workers, no `restore_ahead`, 420 s of warm-up, 30 s per arm, 0.6.0 and the
+branch interleaved in both orders:
+
+| order, load | 0.6.0, 1 caller | branch, 1 caller | 0.6.0, 64 callers | branch, 64 callers |
+| --- | ---: | ---: | ---: | ---: |
+| 0.6.0 first, 23 to 62 | 34.5 | 49.6 | 233.6 | 346.4 |
+| branch first, 38 to 44 | 35.0 | 47.0 | 245.6 | 328.3 |
+
+One caller's p50 went from 28 ms to 19 to 20 ms; 64 callers', from 258 to
+273 ms to 185 to 195 ms. That is about 1.4x in both rounds, with schedulers
+slightly less busy (64 to 65% against 68 to 73%).

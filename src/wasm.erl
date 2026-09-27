@@ -816,15 +816,23 @@ do_destroy(Inst) ->
           fun() ->
               #mut{mems = Mems, tables = Tables, globals = Globals} =
                   wasm_instance:mut(Inst),
+              %% Kept for the next restore of the same image, before the
+              %% claims go: an instance restored with `recycle' leaves its
+              %% chunks and the record of which it wrote.
+              case wasm_instance:get_extra(Inst, recycle) of
+                  {ok, Id} -> ok = wasm_snapshot:recycle(Id, Mems);
+                  error    -> ok
+              end,
               Token = {instance, Inst#inst.id},
-              _ = [wasm_memory:release(Mem, Token)
-                   || Mem <- tuple_to_list(Mems)],
-              _ = [wasm_table:release(T, Token) || T <- tuple_to_list(Tables)],
-              %% Only the mutable ones are cells. An immutable global is a
-              %% value in the tuple, with no lifetime to release.
-              _ = [wasm_global:release(G, Token) || G <- tuple_to_list(Globals),
-                                                    wasm_global:is_global(G)],
-              ok
+              %% One keeper call for all of them rather than one each: a
+              %% worker destroys an instance per request.
+              Ids = [wasm_memory:resource(Mem) || Mem <- tuple_to_list(Mems)]
+                  ++ [wasm_table:forget_local(T) || T <- tuple_to_list(Tables)]
+                  %% Only the mutable ones are cells. An immutable global is a
+                  %% value in the tuple, with no lifetime to release.
+                  ++ [wasm_global:resource(G) || G <- tuple_to_list(Globals),
+                                                 wasm_global:is_global(G)],
+              wasm_keeper:release_all([{Id, Token} || Id <- Ids])
           end),
     %% The compiled code this instance may have claimed. Same argument as the
     %% memories above: the lease names the instance, so it goes when the
@@ -912,6 +920,12 @@ state.
 It does **not** run the module's start function. Ordinary instantiation always
 does, and repeating arbitrary guest code against fresh imports would redo work
 the image already contains.
+
+`recycle => true` in `Opts` is for a process that restores the same image over
+and over, destroying each instance before the next: the next restore takes the
+destroyed instance's memory and rewrites only the chunks it wrote. The result
+is the same fresh instance. Nothing else may still write through a handle on
+the destroyed instance's memory, since that memory now belongs to the next one.
 """.
 -spec restore(snapshot(), map(), map()) ->
           {ok, instance()} | {error, wasm_error:error()}.

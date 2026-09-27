@@ -31,7 +31,7 @@ src/worker/  wasm_instance_worker, wasm_script_worker (the kernel),
         wasm_worker_adapter (the behaviour), wasm_worker_error, the adapters
         wasm_javascript(_command), wasm_python(_command), wasm_lua, the kit
         wasm_adapter_conformance; internal: wasm_worker_reaper,
-        wasm_worker_sup, wasm_script_v1
+        wasm_worker_sup, wasm_script_v1, wasm_worker_fs
 include/    Shared records: wasm.hrl, wasm_exec.hrl, wasi.hrl
 c_src/      The optional file NIF, built by scripts/build-nif.sh
 test/       Common Test only. test/audit/ is the measurement record.

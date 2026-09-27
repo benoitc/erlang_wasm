@@ -34,7 +34,8 @@ suite() -> [{timetrap, {minutes, 10}}].
 %% *plus* a compile measured at 567 s, which is hours, and Phase 5 is where
 %% that measurement belongs.
 all() -> [{group, qjs_metered}, {group, qjs_compiled}, {group, qjs_reactor},
-          {group, lua_reactor}].
+          {group, lua_reactor}, {group, qjs_reactor_ahead},
+          {group, lua_reactor_ahead}].
 
 groups() ->
     [{qjs_metered, [], cases() ++ [asking_for_both_silently_gets_the_interpreter]},
@@ -54,7 +55,16 @@ groups() ->
      %% around: it was written after the kernel, the profile and snapshots, and
      %% none of them changed to admit it. It starts in milliseconds, so unlike
      %% the Python groups it belongs in `all/0`.
-     {lua_reactor, [], lua_cases()}].
+     {lua_reactor, [], lua_cases()},
+     %% Each reactor again with `restore_ahead': the whole kit, unchanged, and
+     %% then what only a waiting instance could get wrong. CPython's is not in
+     %% `all/0` for the reason its other groups are not.
+     {qjs_reactor_ahead, [], reactor_cases() ++ ahead_cases()},
+     {lua_reactor_ahead, [], lua_cases() ++ ahead_cases()},
+     {python_reactor_ahead, [], python_reactor_cases() ++ ahead_cases()},
+     %% An entry set at capture and called with no source. Not in `all/0`, for
+     %% the reason the other CPython groups are not.
+     {python_entry, [], entry_cases()}].
 
 %% `groups/0' runs before `init_per_suite', and listing an adapter's capability
 %% cases means building its artifact, which for a real engine means loading a
@@ -154,6 +164,24 @@ init_per_group(python_reactor, Config) ->
                   %% other CPython ceiling.
                   {worker_opts, #{capture_timeout => 180_000}},
                   {limits, python_reactor_limits()} | Config]);
+init_per_group(qjs_reactor_ahead, Config) ->
+    ahead(init_per_group(qjs_reactor, Config));
+init_per_group(lua_reactor_ahead, Config) ->
+    ahead(init_per_group(lua_reactor, Config));
+init_per_group(python_reactor_ahead, Config) ->
+    ahead(init_per_group(python_reactor, Config));
+init_per_group(python_entry, Config) ->
+    case init_per_group(python_reactor, Config) of
+        {skip, _} = Skip ->
+            Skip;
+        C ->
+            Opts = proplists:get_value(worker_opts, C, #{}),
+            Limits = ?config(limits, C),
+            [{worker_opts, Opts#{entry => entry_source()}},
+             %% Room for the case that sends a context over a megabyte.
+             {limits, Limits#{max_request_bytes => 4 * 1024 * 1024}}
+             | proplists:delete(limits, proplists:delete(worker_opts, C))]
+    end;
 init_per_group(python_metered, Config) ->
     skip_without(python(), [{adapter, wasm_python_command}, {config, metered},
                             {engine, python()}, {opts, python_opts()},
@@ -162,6 +190,13 @@ init_per_group(python_compiled, Config) ->
     skip_without(python(), [{adapter, wasm_python_command}, {config, compiled},
                             {engine, python()}, {opts, python_opts()},
                             {limits, python_compiled()} | Config]).
+
+ahead({skip, _} = Skip) ->
+    Skip;
+ahead(Config) ->
+    Opts = proplists:get_value(worker_opts, Config, #{}),
+    [{worker_opts, Opts#{restore_ahead => true}}
+     | proplists:delete(worker_opts, Config)].
 
 skip_without(Path, Config) ->
     skip_without(Path, "no CPython build: run scripts/fetch-python-fixture.sh",
@@ -258,6 +293,178 @@ ctx(Config) ->
       root => Root,
       artifact_opts => proplists:get_value(opts, Config, artifact_opts()),
       start => fun(Opts) -> start(Config, Opts) end}.
+
+%%% ---------------------------------------------------------- restore ahead ---
+
+ahead_cases() ->
+    [each_request_reads_its_own_files,
+     guest_memory_does_not_reach_the_waiting_instance].
+
+%% The waiting instance was restored before this request's directory existed,
+%% so the files it reads can only be this request's if its imports were bound
+%% when the request started. A preopen fixed at restore would read the
+%% capture's empty directory, or the previous request's, which is removed.
+each_request_reads_its_own_files(Config) ->
+    W = ?config(worker, Config),
+    Echo = ?KIT:fixture(?config(adapter, Config), echo,
+                        proplists:get_value(opts, Config, #{})),
+    [?assertMatch({ok, #{result := #{~"answer" := Want}}},
+                  wasm_script_worker:run(W, Echo#{context => #{~"value" => V}}))
+     || {V, Want} <- [{1, 2}, {41, 42}, {99, 100}]].
+
+%% A marker the guest keeps in a global, looked for in the instance restored
+%% for the next request. The same guest string, read from the same memory,
+%% would be found if the next request were handed the instance this one used.
+guest_memory_does_not_reach_the_waiting_instance(Config) ->
+    W = ?config(worker, Config),
+    Tag = binary:encode_hex(crypto:strong_rand_bytes(8), lowercase),
+    Marker = <<"MARK-", Tag/binary>>,
+    {ok, _} = wasm_script_worker:run(
+                W, #{source => marker_source(?config(adapter, Config)),
+                     context => #{~"tag" => Tag}}),
+    Mem = waiting_memory(W),
+    %% The read is real: a string every image of this engine holds is there.
+    ?assertNotEqual(nomatch, binary:match(Mem, image_string(?config(adapter, Config)))),
+    ?assertEqual(nomatch, binary:match(Mem, Marker)).
+
+marker_source(wasm_javascript) ->
+    ~"export function main(c) { globalThis.keep = 'MARK-' + c.tag; return {}; }";
+marker_source(wasm_lua) ->
+    ~"function main(c) keep = 'MARK-' .. c.tag return {} end";
+marker_source(wasm_python) ->
+    ~"def main(c):\n    global keep\n    keep = 'MARK-' + c['tag']\n    return {}\n".
+
+image_string(wasm_javascript) -> ~"Array";
+image_string(wasm_lua) -> ~"tostring";
+image_string(wasm_python) -> ~"__name__".
+
+%% The memory of the instance the worker's runner restored for the next
+%% request, once it has one. Between requests the worker monitors exactly one
+%% process, its runner.
+waiting_memory(W) -> waiting_memory(W, 500).
+
+waiting_memory(W, 0) -> ct:fail({no_instance_waiting, W});
+waiting_memory(W, N) ->
+    Waiting = case process_info(W, monitors) of
+                  {monitors, [{process, R}]} ->
+                      case process_info(R, dictionary) of
+                          {dictionary, D} ->
+                              proplists:get_value(wasm_worker_ahead, D);
+                          undefined ->
+                              undefined
+                      end;
+                  _ ->
+                      undefined
+              end,
+    case Waiting of
+        {Inst, _Keys, _Opts} ->
+            {ok, Pages} = wasm:memory_size(Inst),
+            {ok, Mem} = wasm:read_memory(Inst, 0, Pages * 65536),
+            Mem;
+        undefined ->
+            timer:sleep(20),
+            waiting_memory(W, N - 1)
+    end.
+
+%%% ---------------------------------------------------------------- entry ---
+
+entry_cases() ->
+    [an_entry_answers_without_a_source,
+     an_entry_sees_its_globals_fresh,
+     an_entry_that_raises_is_an_exception,
+     a_context_over_a_megabyte_reaches_the_entry,
+     set_entry_a_second_time_is_refused,
+     a_source_still_runs_on_an_entry_worker,
+     an_entry_that_sets_nothing_does_not_start,
+     call_without_an_entry_is_no_entry_point].
+
+%% A global it bumps, a way to raise, and the size of what it was sent: every
+%% case below reads one of the three.
+entry_source() ->
+    <<"import worker\n"
+      "n = 0\n"
+      "def entry(c):\n"
+      "    global n\n"
+      "    n += 1\n"
+      "    if c.get('raise'):\n"
+      "        raise ValueError('asked to')\n"
+      "    return {'n': n, 'size': len(c.get('blob', '')),\n"
+      "            'answer': c.get('value', 0) + 1}\n"
+      "worker.set_entry(entry)\n">>.
+
+an_entry_answers_without_a_source(Config) ->
+    ?assertMatch({ok, #{result := #{~"answer" := 42}}},
+                 wasm_script_worker:run(?config(worker, Config),
+                                        #{context => #{~"value" => 41}})).
+
+%% The global the entry bumps is in the image at zero, and every request
+%% restores the image: one would read 2 on the second request if anything of the
+%% first reached it.
+an_entry_sees_its_globals_fresh(Config) ->
+    W = ?config(worker, Config),
+    [?assertMatch({ok, #{result := #{~"n" := 1}}},
+                  wasm_script_worker:run(W, #{context => #{}}))
+     || _ <- [1, 2, 3]].
+
+an_entry_that_raises_is_an_exception(Config) ->
+    {error, #{ctx := #{code := Code}, msg := Msg}} =
+        wasm_script_worker:run(?config(worker, Config),
+                               #{context => #{~"raise" => true}}),
+    ?assertEqual({~"exception", ~"asked to"}, {Code, Msg}).
+
+a_context_over_a_megabyte_reaches_the_entry(Config) ->
+    Blob = binary:copy(~"x", 2 * 1024 * 1024),
+    ?assertMatch({ok, #{result := #{~"size" := 2097152}}},
+                 wasm_script_worker:run(?config(worker, Config),
+                                        #{context => #{~"blob" => Blob}})).
+
+%% The capture set it, so a request's own attempt is refused, and the request
+%% that tried answers with the refusal rather than replacing the entry.
+set_entry_a_second_time_is_refused(Config) ->
+    W = ?config(worker, Config),
+    Source = <<"import worker\n"
+               "def main(c):\n"
+               "    worker.set_entry(lambda c: {'answer': -1})\n">>,
+    {error, #{ctx := #{code := Code}, msg := Msg}} =
+        wasm_script_worker:run(W, #{source => Source, context => #{}}),
+    ?assertEqual({~"exception", ~"the entry is already set"}, {Code, Msg}),
+    ?assertMatch({ok, #{result := #{~"answer" := 42}}},
+                 wasm_script_worker:run(W, #{context => #{~"value" => 41}})).
+
+a_source_still_runs_on_an_entry_worker(Config) ->
+    Echo = ?KIT:fixture(?config(adapter, Config), echo,
+                        proplists:get_value(opts, Config, #{})),
+    ?assertMatch({ok, #{result := #{~"answer" := 42}}},
+                 wasm_script_worker:run(?config(worker, Config), Echo)).
+
+an_entry_that_sets_nothing_does_not_start(Config) ->
+    process_flag(trap_exit, true),
+    ?assertMatch({error, #{msg := ~"the entry did not call worker.set_entry"}},
+                 start(Config, #{entry => ~"x = 1\n"})).
+
+%% Straight through the module, because a worker refuses to start without an
+%% entry: `call()' on an interpreter nobody gave one answers with the error the
+%% reactor frames rather than trapping or answering nothing.
+call_without_an_entry_is_no_entry_point(_Config) ->
+    {ok, A} = wasm_python:artifact(python_reactor_opts()),
+    #{module := M, imports := #{bindings := B}} =
+        wasm_python:snapshot_capability(A),
+    Self = self(),
+    Result = fun(Ctx, [Ptr, Len]) ->
+                 {ok, Bytes} = wasm:read_memory(Ctx, Ptr, Len),
+                 Self ! {result, Bytes},
+                 {ok, []}
+             end,
+    Limits = (wasm_python:limits())#{timeout => infinity},
+    {ok, I} = wasm:instantiate(M, B#{{~"worker", ~"result"} => Result}, Limits),
+    {ok, _} = wasm:call(I, ~"_initialize", [], Limits),
+    {ok, [0]} = wasm:call(I, ~"init", [], Limits),
+    ?assertEqual({ok, [0]}, wasm:call(I, ~"has_entry", [], Limits)),
+    {ok, [0]} = wasm:call(I, ~"call", [], Limits),
+    Framed = receive {result, R} -> R after 0 -> ct:fail(no_result) end,
+    ?assertMatch(#{~"error" := #{~"code" := ~"no_entry_point"}},
+                 json:decode(Framed)),
+    ok = wasm:destroy(I).
 
 %%% --------------------------------------------------- the two configurations ---
 

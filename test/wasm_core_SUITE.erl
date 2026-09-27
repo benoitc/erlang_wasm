@@ -551,7 +551,7 @@ the_memory_field_indices_match_the_record(_) ->
     %% quietly. Adding a field to `#mem{}` fails here instead.
     ?assertEqual(#{chunks => ?MEM_CHUNKS, pages => ?MEM_PAGES,
                    pages_ref => ?MEM_PAGES_REF, chunks_ref => ?MEM_CHUNKS_REF,
-                   shift => ?MEM_SHIFT, size => ?MEM_SIZE},
+                   shift => ?MEM_SHIFT, dirty => ?MEM_DIRTY, size => ?MEM_SIZE},
                  wasm_memory:field_indices()).
 
 every_memory_access_agrees_with_the_interpreter(_) ->

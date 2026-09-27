@@ -1683,13 +1683,13 @@ dirents_fill(Dir, [{Index, Name} | Rest], BufLen, Acc) ->
 dirent_info(Dir, ".") -> {?FILETYPE_DIRECTORY, inode_of(Dir)};
 dirent_info(Dir, "..") -> {?FILETYPE_DIRECTORY, inode_of(filename:join(Dir, ".."))};
 dirent_info(Dir, Name) ->
-    case file:read_link_info(filename:join(Dir, Name)) of
+    case file:read_link_info(filename:join(Dir, Name), [raw]) of
         {ok, #file_info{type = T, inode = I}} -> {filetype_of(T), I};
         _ -> {?FILETYPE_UNKNOWN, 0}
     end.
 
 inode_of(Path) ->
-    case file:read_link_info(Path) of
+    case file:read_link_info(Path, [raw]) of
         {ok, #file_info{inode = I}} -> I;
         _ -> 0
     end.
@@ -1909,7 +1909,7 @@ peek(H, Fd, St, Timeout) ->
     end.
 
 classify(Path) ->
-    case file:read_file_info(Path) of
+    case file:read_file_info(Path, [raw]) of
         {ok, #file_info{type = directory}} -> directory;
         {ok, _} -> regular;
         {error, _} -> absent

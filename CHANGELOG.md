@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.7.0
+
+A script worker recycles its restores whether or not it restores ahead, with
+the memory it keeps between requests counted and bounded.
+
+- **Every script worker recycles its restores**, not only one with
+  `restore_ahead`. A worker keeps the memory its last request's instance left
+  and the next restore rewrites only the chunks that request wrote: a CPython
+  pool without `restore_ahead` answers about 1.4x the requests. The kept
+  memory counts in the node's page budget.
+- **New worker option `recycle_idle`**, milliseconds an idle worker keeps that
+  memory (default `30_000`). `0` keeps none.
+
+## 0.6.0
+
+A CPython worker can run code set once at capture instead of compiling a source
+on every request, and a worker restoring ahead rewrites only the memory the last
+request wrote. Workers built on `py_reactor.wasm` need the new build.
+
+- **New `wasm_python` option `entry`.** Python source the capture runs once;
+  it hands `worker.set_entry` a callable, and a request with no `source` calls
+  it with the context. Nothing is compiled or imported per request: the
+  guest's call went from 40 ms to 2 ms for the same request. A request with a
+  `source` still runs it. See `docs/python.md`.
+- **The CPython reactor defines its request runner once**, in `init()`, so
+  `handle()` no longer compiles it per request.
+- **A restore can recycle the last instance's memory.** `wasm:restore/3`
+  takes `recycle => true`: the destroyed instance of the same image in the same
+  process gives the next restore its memory, and only the 64 KiB chunks it
+  wrote are rewritten. A CPython restore goes from 12 ms to 3.9 ms, and a
+  `restore_ahead` worker, which recycles on its own, answers about 1.7x the
+  requests it did. A memory restored this way marks each chunk it writes,
+  about 4 ns a store in generated code; everything else pays a field test.
+  Generated code is ABI 5, so the compiled tier's disk cache is rebuilt once.
+- **A restore no longer evaluates the element segments** the image
+  overwrites.
+- **The context reaches the CPython reactor through a `worker.context`
+  import.** The reactor imports `worker.context` and `worker.context_size`,
+  so an adapter of your own over `py_reactor.wasm` has to bind both; images
+  of the previous build are not restored (version `py-reactor-2`).
+
+## 0.5.0
+
+Requests on a pool of script workers no longer wait on one another in
+node-wide processes. Nothing in your code changes. One new worker option.
+
+- **New worker option `restore_ahead`.** With a captured image, the worker
+  restores the next request's instance while it waits, so a request starts at
+  the guest's own work: a CPython request's deliver and restore goes from
+  15 ms to 38 us when an instance is waiting. Every request still gets a
+  fresh instance. It holds one instance's memory per idle worker, needs
+  imports that are all functions, and helps only when workers have idle time
+  between requests; see `docs/tuning.md`.
+- **File operations on the request path are raw.** Staging, mounts, request
+  directories, cleanup and WASI path resolution no longer go through
+  `file_server_2`, which a request called about 34 times.
+- **The reaper does no file I/O of its own.** Journal records are written by
+  writer processes and are no longer synced; a start removes every request
+  directory no record names, which covers a record lost to a host crash.
+  `DOWN` handling is O(1) and the operator view (`cleanup_stats/0`,
+  `cleanup_requests/0`) is refreshed at most every 50 ms.
+- **Fewer keeper and code-slot calls per instance**: four keeper calls where
+  there were six, and two code-slot calls where there were seven for a module
+  compiled as one unit.
+- **`wasm_jit:counts/0`'s `entered` and `reentered`** are counted per
+  scheduler, without a shared word on the call path.
+
 ## 0.4.3
 
 Packaging and clock fixes. Nothing in your code changes, and there is nothing

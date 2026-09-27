@@ -139,6 +139,37 @@ The share follows how *dense* an image is rather than how large: CPython's
 covers 17.7% of its address space and QuickJS's 53.7%, so CPython gains more
 from writing only the runs.
 
+## Restore the same image again and again
+
+When one process restores the same image for every request and destroys each
+instance before restoring the next, as a worker's runner does with
+`restore_ahead`, pass `recycle => true`:
+
+```erlang
+{ok, Fresh} = wasm:restore(Image, FreshBindings, #{recycle => true}),
+{ok, _Result} = wasm:call(Fresh, ~"handle", []),
+ok = wasm:destroy(Fresh).
+```
+
+The destroy keeps the instance's memory, and the next recycling restore of the
+same image in the same process takes it and rewrites only what the request
+wrote. The instance you get is the one a plain restore would give you, byte for
+byte; `wasm_snapshot_SUITE` checks that after writes through every path a guest
+or a host has.
+
+What to know:
+
+- **It records every write.** A memory restored this way marks the chunk each
+  store lands in, which costs about 4 ns a store in generated code.
+  [Tuning a worker host](tuning.md) has the numbers.
+- **Its chunks are 64 KiB**, so what a request writes is rewritten in small
+  pieces. A CPython request writes 44 of 640.
+- **Nothing may keep writing** through a handle on a destroyed instance's
+  memory, such as one taken with `wasm:extern/2`: that memory is the next
+  instance's now.
+- **Same process only.** What is kept lives in the destroying process, so a
+  restore in a different process starts from zeroed memory as before.
+
 ## Hold an image past its creator
 
 A holder is a process. `wasm:snapshot/1` gives the capturing process the first

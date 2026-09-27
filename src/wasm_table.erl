@@ -40,7 +40,7 @@ exited, and `call_indirect` through it found nothing.
 
 -export([new/2, new/3, size/1, limits/1, elemtype/1, is_table/1, get/2, set/3,
          grow/3, fill/4, copy/5, init/3, to_list/1]).
--export([acquire/3, release/2, resource/1]).
+-export([acquire/3, release/2, resource/1, forget_local/1]).
 
 -doc """
 An opaque, shareable table handle.
@@ -114,10 +114,18 @@ well. A worker calling into instances somebody else destroys never runs this
 line and would otherwise keep one array per table it ever touched.
 """.
 -spec release(table(), wasm_keeper:token()) -> ok.
-release({wasm_table, Id, _V, _TT}, Token) ->
+release(T, Token) ->
+    wasm_keeper:release(forget_local(T), Token).
+
+-doc """
+Drop this process's caches of the table and answer its registry identity, for
+a caller releasing it together with others through `wasm_keeper:release_all/1`.
+""".
+-spec forget_local(table()) -> wasm_keeper:resource().
+forget_local({wasm_table, Id, _V, _TT}) ->
     _ = erase({wasm_table_cache, Id}),
     ok = forget(Id),
-    wasm_keeper:release(Id, Token).
+    Id.
 
 -doc "This table's registry identity.".
 -spec resource(table()) -> wasm_keeper:resource().

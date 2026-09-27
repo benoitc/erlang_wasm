@@ -704,3 +704,75 @@ A fuse that sees 0.34 GB of a 6 GB compile is not a fuse, and 75% of compile
 time is too much to buy one. Neither shipped. What is left open is bounding
 compile memory at all, and the obstacle is not the number: it is that the memory
 is spent in a process only the OTP compiler can configure.
+
+## Reusing a destroyed instance's memory for the next restore
+
+**Handing the next restore the page chunks the last request's instance used,
+zeroing only what that request wrote.** Not built, because the second half has
+no cheap implementation. Measured on a CPython restore (42 MB of linear memory,
+43 chunks of 1 MiB):
+
+| | alone | 14 at once |
+| --- | ---: | ---: |
+| whole restore | 12 ms | 22 ms |
+| allocating and first touching 43 fresh chunks | 4.0 to 4.4 ms | 11.1 ms |
+| the same with `+MMmcs 30 +MMamcbf 1000000` | 2.4 ms | 5.2 ms |
+
+eprof puts nearly all of the rest in `wasm_memory:scatter_run/3`, one
+`atomics:put/3` per 64-bit word of the image's non-zero runs, 924k of them.
+That part a reused chunk still has to do.
+
+What a reused chunk also needs is every word the request wrote outside those
+runs set back to zero, and nothing records which those are. Without a record
+the only safe reset is all of it: 5.2M `atomics:put/3` calls, about 60 ms, five
+times the allocation it would replace. A record means a write barrier, one
+more operation on every guest store, on the path where three smaller changes
+have cost about 70% on QuickJS. Guessing is not an option either way: a word a
+reset misses is one tenant's data in the next tenant's memory.
+
+What was done instead: `restore_ahead` takes the restore off the request's
+path when the worker has idle time (14.8 ms of deliver and restore becomes
+38 us), and `docs/tuning.md` gives the allocator setting that halves the
+allocation under concurrency. A write barrier would be worth revisiting only
+with a design that costs the store path nothing measurable on QuickJS.
+
+**Reading the request's context from a host call instead of a staged file.**
+Not built. With staging raw, the stage phase of a CPython request is 0.67 ms of
+52, and a host call would change each adapter's guest side for that.
+
+## Copy-on-write memory for restored images
+
+**An instance whose memory is references to an image's immutable chunks, each
+copied on its first write.** Not built. Built instead: the fallback the same
+plan named, reusing the destroyed instance's chunks and rewriting only the ones
+it wrote. Two things decided it.
+
+The first is where a store finds its chunk. Generated code reads the memory
+handle out of `#mut{}` on every access and never rebinds `#mut{}` on a store
+(`wasm_core:access/7`). Copying a chunk on first write changes the chunk tuple,
+so every store would have to be able to answer a new `#mut{}` and the code
+after it would have to use that one: a structural change to the generator on
+the path where three smaller changes have cost about 70% on QuickJS. The
+interpreter, the bulk operations and host writes through a call's context
+would all need the same.
+
+The second is that it would not save what it promises. A CPython request writes
+44 of the image's 640 chunks of 64 KiB. Copy-on-write copies those 44 during
+the request, at one `atomics:get` and one `atomics:put` a word, about 3.5 ms;
+the fallback rewrites the same 44 at the next restore, which `restore_ahead`
+takes off the request's path. Both need a check on every store. So the cheap
+restore copy-on-write offers is paid back, with interest, inside the request.
+
+What the fallback costs is a mark per store, measured on a loop of `i32.store`
+and `i64.store` in generated code (`bench/paths/storebench.erl`), interleaved,
+minimum of nine:
+
+| | ns per store |
+| --- | ---: |
+| before | 12.3 |
+| a memory that does not track | 12.6 |
+| a memory that tracks, `atomics:put` every store | 17.3 |
+| a memory that tracks, `atomics:get` first | 16.7 |
+
+The read-first version is what shipped. A memory only tracks when a restore
+asked to recycle, so everything else pays the field test alone.

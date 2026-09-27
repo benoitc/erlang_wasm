@@ -16,6 +16,7 @@
 -define(MEM_PAGES_REF, 5).
 -define(MEM_CHUNKS_REF, 6).
 -define(MEM_SHIFT, 10).
--define(MEM_SIZE, 11).
+-define(MEM_DIRTY, 12).
+-define(MEM_SIZE, 12).
 
 -endif.

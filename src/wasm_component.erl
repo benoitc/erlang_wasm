@@ -48,7 +48,10 @@ lower/lift, and the async Canonical ABI.
                         cores := [wasm:instance()],
                         export_map => #{binary() => binary()}}
                      | #{composed := true, exports := [binary()],
-                         subs := [instance()], cores := [wasm:instance()],
+                         insts := #{non_neg_integer() =>
+                                        {instance, instance()} |
+                                        {iface_ref, non_neg_integer(), binary()}},
+                         cores := [wasm:instance()],
                          dispatch := #{binary() => {non_neg_integer(), binary()}}}.
 
 -define(CORE_MODULE_SEC, 1).
@@ -292,27 +295,35 @@ instantiate_composed(#{sec := Sec, exports := Exports}, Imports, Opts) ->
             S0 = #{comps => #{}, n_comp => 0, insts => #{}, n_inst => 0,
                    funcs => #{}, n_func => 0, dispatch => #{},
                    imports => Imports, opts => Opts},
-            #{n_inst := NInst, insts := Insts, dispatch := Dispatch} =
+            #{insts := Insts, dispatch := Dispatch} =
                 lists:foldl(fun compose_step/2, S0, Graph),
-            Subs = [maps:get(I, Insts) || I <- lists:seq(0, NInst - 1)],
-            Cores = lists:append([maps:get(cores, Sub, cores_of(Sub)) || Sub <- Subs]),
-            {ok, #{composed => true, exports => Exports, subs => Subs,
+            Cores = lists:append([cores_of(Sub)
+                                  || {instance, Sub} <- maps:values(Insts)]),
+            {ok, #{composed => true, exports => Exports, insts => Insts,
                    dispatch => Dispatch, cores => Cores}};
         {error, _} = E ->
             E
     end.
 
-%% Fold one graph item into the composition state, maintaining the component,
-%% component-instance and component-func index spaces the way the linker does for cores.
+%% Fold one graph item into the composition state. The component-instance index space
+%% (`insts`) holds either a real instantiated sub-instance (`{instance, Sub}`) or a
+%% reference to another instance's interface export (`{iface_ref, Src, Name}`, from an
+%% instance-sort alias), the way the linker maintains the core index spaces.
 compose_step({component_def, Bytes}, #{comps := Comps, n_comp := N} = S) ->
     S#{comps => Comps#{N => Bytes}, n_comp => N + 1};
-compose_step({comp_instantiate, CompIdx, _Args},
+compose_step({comp_instance_alias, SrcInst, Name},
+             #{insts := Insts, n_inst := N} = S) ->
+    S#{insts => Insts#{N => {iface_ref, SrcInst, Name}}, n_inst => N + 1};
+compose_step({comp_instantiate, CompIdx, Args},
              #{comps := Comps, insts := Insts, n_inst := N,
                imports := Imports, opts := Opts} = S) ->
     Bytes = maps:get(CompIdx, Comps),
-    case instantiate(Bytes, Imports, Opts) of
+    %% Wire the arguments (a sibling instance's interface feeding this one's import) as
+    %% host bridges, over any host imports the composition itself was given.
+    Bridged = maps:merge(Imports, bridge_imports(Args, Bytes, Insts)),
+    case instantiate(Bytes, Bridged, Opts) of
         {ok, Sub} ->
-            S#{insts => Insts#{N => Sub}, n_inst => N + 1};
+            S#{insts => Insts#{N => {instance, Sub}}, n_inst => N + 1};
         {error, E} ->
             wasm_error:link_error(nested_component_failed,
                                   <<"a nested component did not instantiate">>,
@@ -321,7 +332,7 @@ compose_step({comp_instantiate, CompIdx, _Args},
 compose_step({comp_func_alias, InstIdx, Name}, #{funcs := Funcs, n_func := N} = S) ->
     S#{funcs => Funcs#{N => {InstIdx, Name}}, n_func => N + 1};
 %% A func export (component sort 1) names a component func; map the export name to the
-%% sub-instance export that func resolves to.
+%% instance export that func resolves to.
 compose_step({comp_export, Name, 1, Idx}, #{funcs := Funcs, dispatch := D} = S) ->
     case maps:find(Idx, Funcs) of
         {ok, Target} -> S#{dispatch => D#{Name => Target}};
@@ -329,6 +340,44 @@ compose_step({comp_export, Name, 1, Idx}, #{funcs := Funcs, dispatch := D} = S) 
     end;
 compose_step(_Other, S) ->
     S.
+
+%% The host imports a nested component needs from its instantiate arguments. For each
+%% argument that binds one of the component's imported interfaces to another instance's
+%% interface export, build a bridge for every function that interface declares: a host
+%% function that lifts the caller's arguments to terms, calls the providing sub-instance's
+%% export, and lowers the result. Values cross as Erlang terms and each side uses its own
+%% memory, so a cross-component call is two ordinary component calls back to back. The
+%% function signatures come from the component's own type section (`wasm_component_types`).
+bridge_imports(Args, Bytes, Insts) ->
+    <<_:8/binary, Sec/binary>> = Bytes,
+    Ifaces = case wasm_component_types:import_interfaces(Sec) of
+                 {ok, Map}  -> Map;
+                 {error, _} -> #{}
+             end,
+    lists:foldl(
+      fun({ArgName, _Sort, Idx}, Acc) ->
+          case maps:get(Idx, Insts, undefined) of
+              {iface_ref, SrcInst, _Export} ->
+                  {instance, Provider} = maps:get(SrcInst, Insts),
+                  Funcs = maps:get(ArgName, Ifaces, #{}),
+                  maps:fold(
+                    fun(FuncName, Sig, A) ->
+                        A#{{ArgName, FuncName} => bridge(Provider, FuncName, Sig)}
+                    end, Acc, Funcs);
+              _ ->
+                  Acc
+          end
+      end, #{}, Args).
+
+%% One cross-component call, as a host function the consumer's core imports.
+bridge(Provider, FuncName, Sig) ->
+    import_fun(Sig,
+               fun(Terms) ->
+                   case call(Provider, FuncName, Sig, Terms) of
+                       {ok, Value}    -> Value;
+                       {error, _} = E -> throw({wasm_bridge_failed, FuncName, E})
+                   end
+               end).
 
 %% The drop function `canon resource.drop` runs, returning `ok` or `{trap, Reason}`.
 %% A caller that owns OS resources supplies `resource_closer` (the same closer
@@ -426,12 +475,13 @@ The post-return `cabi_post_<Export>` is run after the result is lifted.
 -spec call(instance(), binary(),
            {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
           {ok, term()} | {error, term()}.
-call(#{composed := true, dispatch := Dispatch, subs := Subs}, Export, Sig, Args) ->
+call(#{composed := true, dispatch := Dispatch, insts := Insts}, Export, Sig, Args) ->
     %% A composed component has no core of its own: an export is provided by one of the
     %% instantiated nested components, so dispatch the call to that sub-instance's export.
     case maps:find(Export, Dispatch) of
         {ok, {InstIdx, SubExport}} ->
-            call(lists:nth(InstIdx + 1, Subs), SubExport, Sig, Args);
+            {instance, Sub} = maps:get(InstIdx, Insts),
+            call(Sub, SubExport, Sig, Args);
         error ->
             {error, {unknown_export, Export}}
     end;

@@ -77,7 +77,7 @@ done
 # `composed` is a composed component (the shape `wac` produces): it defines a nested
 # component, instantiates it, and re-exports the instance's `run`, so the runtime must
 # instantiate the nested component and dispatch the outer export to it.
-for name in twocore twocore_trap statecore renamedexport composed; do
+for name in twocore twocore_trap statecore renamedexport composed composedcall; do
   wat="$here/test/fixtures/component/$name/$name.wat"
   out="$here/test/fixtures/component/$name.component.wasm"
   wasm-tools parse "$wat" -o "$out"

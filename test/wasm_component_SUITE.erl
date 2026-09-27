@@ -21,7 +21,8 @@ all() ->
      a_component_round_trips_bytes_in_and_out,
      a_result_error_lifts_as_the_error_string,
      a_truncated_component_is_an_error_not_a_crash,
-     a_renamed_export_is_called_through_its_wiring].
+     a_renamed_export_is_called_through_its_wiring,
+     a_core_less_component_instantiates].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -91,6 +92,14 @@ a_renamed_export_is_called_through_its_wiring(_Config) ->
 
 fixture_path() ->
     component_fixture("echo.component.wasm").
+
+%% A component need not embed a core module: `(component)` is valid and instantiates
+%% with no exports. Was rejected as `no_core_module`.
+a_core_less_component_instantiates(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("audit/empty.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertEqual([], wasm_component:exports(I)),
+    ok = wasm_component:destroy(I).
 
 component_fixture(Name) ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",

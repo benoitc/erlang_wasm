@@ -79,14 +79,12 @@ Decode a component binary into its embedded core module and export names.
 -spec decode(binary()) -> {ok, component()} | {error, term()}.
 decode(<<16#00, 16#61, 16#73, 16#6d, 16#0d, 16#00, 16#01, 16#00, Rest/binary>>) ->
     case sections(Rest, #{exports => [], cores => [], nested => false}) of
-        {ok, #{cores := [], nested := true, exports := Exports}} ->
-            %% No top-level core module, but the component defines nested components
-            %% (a composed component, e.g. from `wac`): its cores live inside those.
-            %% Composition instantiates the nested components and wires their exports
-            %% (`instantiate_composed`); the section stream carries the whole graph.
+        {ok, #{cores := [], exports := Exports}} ->
+            %% No top-level core module: a composed component whose cores live inside
+            %% nested components (e.g. from `wac`), or an import-only / re-export / empty
+            %% component, which is legal. Composition resolves the whole graph
+            %% (`instantiate_composed`); an empty graph yields an instance with no exports.
             {ok, #{composed => true, sec => Rest, exports => Exports}};
-        {ok, #{cores := []}} ->
-            {error, no_core_module};
         {ok, #{cores := RevCores, exports := Exports}} ->
             %% The entry core is the guest: the largest module (a resource or
             %% WASI component embeds smaller shim/adapter cores beside it). Its
@@ -496,8 +494,13 @@ call(#{composed := true, dispatch := Dispatch, insts := Insts}, Export, Sig, Arg
     %% instantiated nested components, so dispatch the call to that sub-instance's export.
     case maps:find(Export, Dispatch) of
         {ok, {InstIdx, SubExport}} ->
-            {instance, Sub} = maps:get(InstIdx, Insts),
-            call(Sub, SubExport, Sig, Args);
+            %% The export must resolve to an instantiated sub-component. An export backed
+            %% only by an imported interface (a re-export) or an unresolved index is a
+            %% value, not a crash; full import-re-export wiring is a composition follow-up.
+            case maps:get(InstIdx, Insts, undefined) of
+                {instance, Sub} -> call(Sub, SubExport, Sig, Args);
+                _               -> {error, {unresolved_export, Export}}
+            end;
         error ->
             {error, {unknown_export, Export}}
     end;

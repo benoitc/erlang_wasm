@@ -179,7 +179,11 @@ lift_result(Inst, Desc, CoreResults) ->
         %% aggregate such as `result<_, _>` (just a discriminant), which lift_flat
         %% alone does not.
         true  -> {Value, _Rest} = lift_value(Inst, Desc, CoreResults), Value;
-        false -> [Ptr] = CoreResults, load(Inst, Desc, Ptr)
+        false ->
+            [Ptr] = CoreResults,
+            {_Size, Align} = size_align(Desc),
+            ok = check_aligned(Ptr, Align),
+            load(Inst, Desc, Ptr)
     end.
 
 %% Only single-flat values are lifted from registers: the primitives and an enum
@@ -226,6 +230,8 @@ lift_params(Inst, Descs, Flats) ->
             %% The parameters were spilled to memory: one pointer, then any
             %% remaining flats (a by-memory result's return-area pointer).
             [Ptr | Rest] = Flats,
+            {_Size, Align} = size_align({tuple, Descs}),
+            ok = check_aligned(Ptr, Align),
             Tuple = load(Inst, {tuple, Descs}, Ptr),
             {tuple_to_list(Tuple), Rest}
     end.
@@ -412,7 +418,8 @@ load(Inst, {list, u8}, Ptr) ->
     Bin;
 load(Inst, {list, ElemD}, Ptr) ->
     {P, Len} = read_ptr_len(Inst, Ptr),
-    {ESize, _} = size_align(ElemD),
+    {ESize, EAlign} = size_align(ElemD),
+    ok = check_aligned(P, EAlign),
     ok = ensure_list_fits(Inst, P, Len, ESize),
     [load(Inst, ElemD, P + I * ESize) || I <- lists:seq(0, Len - 1)];
 load(Inst, {record, Fields}, Ptr) ->
@@ -591,6 +598,7 @@ read_string(Inst, Ptr, Len) ->
             {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
             valid_utf8(Bin);
         utf16 ->
+            ok = check_aligned(Ptr, 2),
             {ok, Bin} = wasm:read_memory(Inst, Ptr, Len * 2),
             from_utf16le(Bin);
         latin1_utf16 ->
@@ -599,6 +607,7 @@ read_string(Inst, Ptr, Len) ->
                     {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
                     from_latin1(Bin);
                 _ ->
+                    ok = check_aligned(Ptr, 2),
                     Units = Len band 16#7FFFFFFF,
                     {ok, Bin} = wasm:read_memory(Inst, Ptr, Units * 2),
                     from_utf16le(Bin)
@@ -788,6 +797,15 @@ ensure_list_fits(Inst, Ptr, Len, ESize) ->
     end.
 
 align_up(N, A) -> ((N + A - 1) div A) * A.
+
+%% A pointer into linear memory must be aligned to its type; the Canonical ABI traps a
+%% by-memory value (result, spilled parameters, list data, a UTF-16 string) whose pointer
+%% is not, rather than reading a misaligned value. `Align` is a power of two, so a bitmask
+%% tests it; byte alignment (1) is always satisfied.
+check_aligned(_Ptr, 1) -> ok;
+check_aligned(Ptr, Align) when Ptr band (Align - 1) =:= 0 -> ok;
+check_aligned(Ptr, Align) ->
+    wasm_error:trap(unaligned, #{ptr => Ptr, alignment => Align}).
 
 %% Allocate `Size` bytes aligned to `Align` in the guest and return the pointer.
 %% A component whose realloc is not a `cabi_realloc` export reachable on this

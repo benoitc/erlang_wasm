@@ -27,7 +27,8 @@ all() ->
      an_invalid_discriminant_is_rejected,
      an_unknown_case_name_is_rejected,
      nan_and_infinity_floats_round_trip,
-     an_oversized_list_traps_on_bounds].
+     an_oversized_list_traps_on_bounds,
+     an_unaligned_by_memory_result_traps].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -232,6 +233,20 @@ shape() -> {variant, [{<<"circle">>, f64}, {<<"rect">>, point()},
 color() -> {enum, [<<"red">>, <<"green">>, <<"blue">>]}.
 perms() -> {flags, [<<"read">>, <<"write">>, <<"exec">>]}.
 
+%% A tuple<u32,u32> returned through a pointer that is not aligned to the tuple traps,
+%% rather than reading a misaligned value. The `unaligned` fixture returns the tuple at
+%% address 1. Was returning `{1, 2}`.
+an_unaligned_by_memory_result_traps(_Config) ->
+    {ok, Bin} = file:read_file(audit_fixture("unaligned")),
+    {ok, Inst} = wasm_component:instantiate(Bin),
+    ?assertMatch({error, #{kind := unaligned}},
+                 wasm_component:call(Inst, <<"run">>,
+                                     {[], {tuple, [u32, u32]}}, [])).
+
 fixture_path() ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
                    "test", "fixtures", "component", "vectors.component.wasm"]).
+
+audit_fixture(Name) ->
+    filename:join([code:lib_dir(wasm), "..", "..", "..", "..", "test",
+                   "fixtures", "component", "audit", Name ++ ".wasm"]).

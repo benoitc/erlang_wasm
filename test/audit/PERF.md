@@ -6584,3 +6584,99 @@ branch interleaved in both orders:
 One caller's p50 went from 28 ms to 19 to 20 ms; 64 callers', from 258 to
 273 ms to 185 to 195 ms. That is about 1.4x in both rounds, with schedulers
 slightly less busy (64 to 65% against 68 to 73%).
+
+## Compiled wasm against the same work written in Erlang
+
+`bench/paths/gap.erl` runs each kernel as hand-written Erlang, interpreted and
+compiled. 0.7.0, OTP 29, one kernel and arm per VM, five interleaved rounds
+alternating the order, minimum of five runs per VM, load 11 to 20. The same
+Erlang under two arm names differed by 0.6%.
+
+| kernel, per | Erlang | interpreted | compiled | compiled / Erlang | words: Erlang, interpreted, compiled |
+| --- | ---: | ---: | ---: | ---: | --- |
+| i32 loop, iteration | 1.55 ns | 71.5 | 2.92 | 1.9x | 0, 45, 0 |
+| `br_table`, iteration | 1.38 | 123 | 2.96 | 2.1x | 0, 108, 0 |
+| FNV-1a 64, iteration | 25.8 | 156 | 50.4 | 1.95x | 6.9, 108, 10.6 |
+| xorshift64, iteration | 68.7 | 305 | 150 | 2.2x | 15.7, 87, 27.1 |
+| sieve, i8, element | 20.4 | 496 | 62.4 | 3.1x | 0, 209, 0 |
+| mandelbrot f64, inner iteration | 21.2 | 290 | 87.4 | 4.1x | 10.3, 427, 20.7 |
+| fib(27), call | 1.11 | 84.8 | 7.10 | 6.4x | 0, 109, 5 |
+| byte read-modify-write, byte | 10.5 | 201 | 76.5 | 7.3x | 0, 122, 9.5 |
+| `call_indirect`, call | 2.49 | 181 | 75.0 | 30x | 0, 129, 20 |
+
+The Erlang memory arms keep one byte per `atomics` slot. The layouts an Erlang
+programmer would use lose to the compiled kernel: `array` runs the sieve at
+210 ns an element, and a binary rebuilt per lap runs the byte kernel at 3.49 ns
+a byte but copies 64 KiB a lap.
+
+The BEAM assembly of each compiled kernel, read against `erlc -S` of the Erlang
+arm, names what compiled code pays on top:
+
+- **Signed values.** An unsigned compare is two `band`s before the test, an
+  `i32.add` a range test and a correction, a multiply or a shift three more
+  operations. The i32 loop body is 14 arithmetic instructions and 4 tests
+  against 6 and 1. i64 code does the same on bignum literals.
+- **Calls.** Each one calls `wasm_exec:check_depth/2`, which reads
+  `max_depth` from a map, passes three extra arguments and answers
+  `{[R], Mut}`: exactly 5.00 words per `fib` call and a 6-slot frame against 1.
+- **`call_indirect`** leaves generated code on every call: `indirect_out/9`, a
+  type check with `lists:member/2`, and `Mod:invoke/6` with an argument list.
+- **Floats** are not inlined: all 17 float operations of the mandelbrot loop
+  are remote calls to `wasm_exec:op2/3`, and it contains no `fadd` or `fmul`.
+- **Packed words.** A byte access reads the whole 64-bit word, and a word at or
+  past 2^59 is a heap bignum: 9.6 to 10.4 ns and 0 words for a read-modify-write
+  of `0x0102...`, 29.6 to 30.0 ns and 4 words for `0xFF02...`.
+
+## Where a compiled QuickJS run and a CPython request spend their time
+
+`bench/paths/guestprof.erl`, compiled code loaded from the cache, a fresh VM
+per run. QuickJS runs a 30,000-iteration loop as a command, 78 to 80 ms at load
+5 to 14. Shares from macOS `sample` at 1 ms over 60 runs in each of three VMs;
+counts exact and identical to within 8 calls in 6.03M.
+
+| QuickJS | share | calls per run |
+| --- | ---: | ---: |
+| bignum helpers (`erts_band`, `erts_shift`, `big_*`, `small_to_big`) | 21 to 23% | inlined, not countable |
+| `atomics` | 11 to 12% | 2.13M `get`, 0.72M `put` |
+| collection | 11 to 16% | |
+| generated code, estimated | about 42% | |
+| floats, `check_depth`, `call_indirect`, interpreter | under 1% each | 1.3k, 23k, 5k, 0 `run/3` |
+
+Half of the run's 4.0M allocated words are bignums answered by `atomics:get/2`,
+and 30.4% of the words it answers are at or past 2^59: 648k per run. Counted
+per access on the interpreter, which makes the same accesses: 93% come from
+one-byte loads of a packed word; 0.45% are i64 values that are bignums as
+values, whatever the layout.
+
+A CPython request, `reqbench`'s guest, 35 to 39 ms at load 2 to 12: the call is
+77%, the restore 16%, bignum helpers 1.4 to 2.0%, collection about 1%.
+`check_depth` and `call_indirect` are about 1% each, floats under 0.1%, the
+interpreter 0. 5.8% of words read are bignums.
+
+Accesses by width, interpreted, one run of each:
+
+| width | QuickJS | CPython request |
+| ---: | ---: | ---: |
+| 1 byte | 24.1% | 7.0% |
+| 2 bytes | 1.3% | 1.5% |
+| 4 bytes | 30.4% | 89.6% |
+| 8 bytes | 44.2% | 1.9% |
+
+Every 8-byte QuickJS access is an integer; neither guest loads an f64. So for
+these two guests the float, call and `call_indirect` gaps above are worth
+under 1% each, and the packed word is what costs.
+
+## Signed words, priced
+
+A byte read-modify-write on one word, `unsigned` against `signed` `atomics`,
+two runs in fresh VMs at load 10:
+
+| word | unsigned | signed |
+| --- | ---: | ---: |
+| small bytes | 10.5 ns, 0 words | 10.1 ns, 0 words |
+| all ones, or a negative i32 in the high half | 38.4 ns, 2 words | 10.4 ns, 0 words |
+| ASCII text | 38.3 ns, 2 words | 37.3 ns, 2 words |
+
+Signed storage makes a word whose top five bits are equal small; it does
+nothing for arbitrary bytes. Of QuickJS's 648k bignum words, 0.3% would become
+small; of CPython's, 23% (1.3% of its words). Not built.

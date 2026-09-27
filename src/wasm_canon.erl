@@ -147,12 +147,15 @@ coerce_join([], [], [_Slot | Slots]) -> [0 | coerce_join([], [], Slots)];
 coerce_join([V | Vs], [T | Ts], [Slot | Slots]) ->
     [coerce(V, T, Slot) | coerce_join(Vs, Ts, Slots)].
 
+%% A float is reinterpreted to its integer bits through `wasm_num`, which handles
+%% infinities and NaN (the runtime carries them as `infinity`/`neg_infinity`/`{nan, _, _}`,
+%% not as Erlang floats, so an `<<V:32/float>>` match would crash on them).
 coerce(V, T, T)     -> V;
-coerce(V, f32, i32) -> <<I:32>> = <<V:32/float>>, I;
-coerce(V, f64, i64) -> <<I:64>> = <<V:64/float>>, I;
-coerce(V, f32, i64) -> <<I:32>> = <<V:32/float>>, I;
+coerce(V, f32, i32) -> wasm_num:f32_to_bits(V);
+coerce(V, f64, i64) -> wasm_num:f64_to_bits(V);
+coerce(V, f32, i64) -> wasm_num:f32_to_bits(V);
 coerce(V, i32, i64) -> V band 16#FFFFFFFF;
-coerce(V, f64, _)   -> <<I:64>> = <<V:64/float>>, I;
+coerce(V, f64, _)   -> wasm_num:f64_to_bits(V);
 coerce(V, _T, _S)   -> V.
 
 %%% ------------------------------------------------------------- results ---
@@ -276,6 +279,7 @@ lift_value(Inst, {list, u8}, [Ptr, Len | R]) ->
     {Bin, R};
 lift_value(Inst, {list, ElemD}, [Ptr, Len | R]) ->
     {ESize, _} = size_align(ElemD),
+    ok = ensure_list_fits(Inst, Ptr, Len, ESize),
     {[load(Inst, ElemD, Ptr + I * ESize) || I <- lists:seq(0, Len - 1)], R};
 lift_value(Inst, {record, Fields}, Flats) ->
     {Map, Rest} = lists:foldl(
@@ -333,10 +337,12 @@ uncoerce([], _Joined, _Slots) -> [];
 uncoerce([T | Ts], [S | Ss], [V | Vs]) ->
     [uncoerce_one(V, S, T) | uncoerce(Ts, Ss, Vs)].
 
+%% The inverse of `coerce`, through `wasm_num` so a NaN/infinity bit pattern lifts to
+%% the runtime's representation rather than failing an `<<F:32/float>>` match.
 uncoerce_one(V, T, T)     -> V;
-uncoerce_one(V, i32, f32) -> <<F:32/float>> = <<V:32>>, F;
-uncoerce_one(V, i64, f64) -> <<F:64/float>> = <<V:64>>, F;
-uncoerce_one(V, i64, f32) -> <<F:32/float>> = <<(V band 16#FFFFFFFF):32>>, F;
+uncoerce_one(V, i32, f32) -> wasm_num:f32_from_bits(V band 16#FFFFFFFF);
+uncoerce_one(V, i64, f64) -> wasm_num:f64_from_bits(V band 16#FFFFFFFFFFFFFFFF);
+uncoerce_one(V, i64, f32) -> wasm_num:f32_from_bits(V band 16#FFFFFFFF);
 uncoerce_one(V, i64, i32) -> V band 16#FFFFFFFF;
 uncoerce_one(V, _S, _T)   -> V.
 
@@ -358,9 +364,11 @@ load(Inst, s64, Ptr) -> read_int(Inst, Ptr, 8, signed);
 load(Inst, char, Ptr) -> valid_char(read_int(Inst, Ptr, 4, unsigned));
 load(Inst, bool, Ptr) -> read_int(Inst, Ptr, 1, unsigned) =/= 0;
 load(Inst, f32, Ptr) ->
-    {ok, <<V:32/float-little>>} = wasm:read_memory(Inst, Ptr, 4), V;
+    {ok, <<Bits:32/little>>} = wasm:read_memory(Inst, Ptr, 4),
+    wasm_num:f32_from_bits(Bits);
 load(Inst, f64, Ptr) ->
-    {ok, <<V:64/float-little>>} = wasm:read_memory(Inst, Ptr, 8), V;
+    {ok, <<Bits:64/little>>} = wasm:read_memory(Inst, Ptr, 8),
+    wasm_num:f64_from_bits(Bits);
 load(Inst, string, Ptr) ->
     {P, Len} = read_ptr_len(Inst, Ptr),
     {ok, Bin} = wasm:read_memory(Inst, P, Len),
@@ -372,6 +380,7 @@ load(Inst, {list, u8}, Ptr) ->
 load(Inst, {list, ElemD}, Ptr) ->
     {P, Len} = read_ptr_len(Inst, Ptr),
     {ESize, _} = size_align(ElemD),
+    ok = ensure_list_fits(Inst, P, Len, ESize),
     [load(Inst, ElemD, P + I * ESize) || I <- lists:seq(0, Len - 1)];
 load(Inst, {record, Fields}, Ptr) ->
     {Map, _} = lists:foldl(
@@ -543,8 +552,10 @@ store(Inst, D, Ptr, V) when D =:= u32; D =:= s32; D =:= char; D =:= handle ->
     ok = wasm:write_memory(Inst, Ptr, <<(V band 16#FFFFFFFF):32/little>>);
 store(Inst, D, Ptr, V) when D =:= u64; D =:= s64 ->
     ok = wasm:write_memory(Inst, Ptr, <<(V band 16#FFFFFFFFFFFFFFFF):64/little>>);
-store(Inst, f32, Ptr, V) -> ok = wasm:write_memory(Inst, Ptr, <<V:32/float-little>>);
-store(Inst, f64, Ptr, V) -> ok = wasm:write_memory(Inst, Ptr, <<V:64/float-little>>);
+store(Inst, f32, Ptr, V) ->
+    ok = wasm:write_memory(Inst, Ptr, <<(wasm_num:f32_to_bits(V)):32/little>>);
+store(Inst, f64, Ptr, V) ->
+    ok = wasm:write_memory(Inst, Ptr, <<(wasm_num:f64_to_bits(V)):64/little>>);
 store(Inst, D, Ptr, Bin) when D =:= string; D =:= {list, u8} ->
     {P, Len} = place_bytes(Inst, Bin),
     write_ptr_len(Inst, Ptr, P, Len);
@@ -658,6 +669,22 @@ flags_bits(Names, Set) ->
 
 bits_flags(Names, Bits) ->
     [N || N <- Names, ((Bits bsr index_of(N, Names)) band 1) =:= 1].
+
+%% A list of `Len` elements of `ESize` bytes occupies `[Ptr, Ptr + Len * ESize)`. Bound
+%% that span against linear memory before building the element index list, so a hostile
+%% `(ptr, len)` a guest wrote cannot drive an unbounded allocation ahead of the
+%% per-element reads that would otherwise be what finally fails. One wasm page is 64 KiB.
+ensure_list_fits(Inst, Ptr, Len, ESize) ->
+    Fits = Len >= 0 andalso Ptr >= 0 andalso
+           case wasm:memory_size(Inst) of
+               {ok, Pages} -> Ptr + Len * ESize =< Pages * 65536;
+               {error, _}  -> false
+           end,
+    case Fits of
+        true  -> ok;
+        false -> wasm_error:trap(out_of_bounds_memory_access,
+                                 #{ptr => Ptr, len => Len, elem_size => ESize})
+    end.
 
 align_up(N, A) -> ((N + A - 1) div A) * A.
 

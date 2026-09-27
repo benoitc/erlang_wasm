@@ -25,7 +25,9 @@ all() ->
      an_invalid_char_is_rejected,
      a_bad_argument_is_an_error_not_a_crash,
      an_invalid_discriminant_is_rejected,
-     an_unknown_case_name_is_rejected].
+     an_unknown_case_name_is_rejected,
+     nan_and_infinity_floats_round_trip,
+     an_oversized_list_traps_on_bounds].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -171,6 +173,47 @@ an_unknown_case_name_is_rejected(Config) ->
                  Lower({enum, [<<"a">>, <<"b">>]}, <<"z">>)),
     ?assertMatch({error, #{kind := unknown_case}},
                  Lower({flags, [<<"read">>, <<"write">>]}, [<<"execute">>])).
+
+%% Infinities and NaN cross the Canonical ABI: the runtime carries a non-finite float
+%% as `infinity`/`neg_infinity`/`{nan, _, _}`, not an Erlang float. Fail-first: the
+%% float sites packed with `<<V:32/float>>`, which raises `badarg` on those terms.
+%% `shape`'s `circle` case carries an `f64`, so `echo-shape` exercises the variant
+%% coerce on lower and the by-memory `load` on the lifted result; a direct
+%% lower/lift round-trip covers the flat `uncoerce` and a NaN (a guest may canonicalise
+%% a NaN, so it is not asserted through the guest).
+nan_and_infinity_floats_round_trip(Config) ->
+    Inst = ?config(inst, Config),
+    #{core := Core} = Inst,
+    Shape = shape(),
+    lists:foreach(
+      fun(F) ->
+          ?assertEqual({ok, {<<"circle">>, F}},
+                       wasm_component:call(Inst, <<"echo-shape">>,
+                                           {[Shape], Shape}, [{<<"circle">>, F}]))
+      end, [infinity, neg_infinity]),
+    %% Flat coerce/uncoerce, no guest: lower to flats then lift straight back.
+    RT = fun(V) ->
+             Flats = wasm_canon:lower_params(Core, [Shape], [V]),
+             {[Out], []} = wasm_canon:lift_params(Core, [Shape], Flats),
+             Out
+         end,
+    ?assertEqual({<<"circle">>, infinity}, RT({<<"circle">>, infinity})),
+    ?assertEqual({<<"circle">>, neg_infinity}, RT({<<"circle">>, neg_infinity})),
+    ?assertEqual({<<"circle">>, {nan, 0, 16#8000000000000}},
+                 RT({<<"circle">>, {nan, 0, 16#8000000000000}})).
+
+%% A `(ptr, len)` a guest wrote whose element span runs past linear memory traps on
+%% bounds before the element list is built, rather than driving an unbounded allocation.
+%% Fail-first: lifting used `lists:seq(0, Len - 1)` with no ceiling, so an out-of-range
+%% length allocated first and only a later per-element read failed (a generic error).
+an_oversized_list_traps_on_bounds(Config) ->
+    #{core := Core} = ?config(inst, Config),
+    {ok, Pages} = wasm:memory_size(Core),
+    %% One u32 element past the end of memory.
+    Len = Pages * (65536 div 4) + 1,
+    ?assertMatch({error, #{kind := out_of_bounds_memory_access}},
+                 wasm_error:capture(
+                   fun() -> wasm_canon:lift_params(Core, [{list, u32}], [0, Len]) end)).
 
 %%% -------------------------------------------------------------- helpers ---
 

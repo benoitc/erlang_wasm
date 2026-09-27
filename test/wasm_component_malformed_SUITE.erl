@@ -63,9 +63,11 @@ an_oversized_section_is_a_value(_Config) ->
             16#01, 16#FF, 16#FF, 16#FF, 16#FF, 16#0F>>,
     assert_value(Bin).
 
-%% The result is `{ok, _}` or `{error, _}` and nothing was raised.
+%% The result is `{ok, _}` or `{error, _}` and nothing was raised. `loader => compile`
+%% builds any core inline rather than through the rate-limited node cache, so sweeping
+%% hundreds of inputs does not trip the load rate.
 assert_value(Bin) ->
-    Result = try wasm_component:instantiate(Bin)
+    Result = try wasm_component:instantiate(Bin, #{}, #{loader => compile})
              catch Class:Reason -> {raised, Class, Reason}
              end,
     case Result of

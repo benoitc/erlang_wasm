@@ -29,9 +29,12 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) -> ok.
 
-%% The instance and its handle table are scoped to the test case's process.
+%% The instance and its handle table are scoped to the test case's process. Build the
+%% cores inline (`loader => compile`) rather than through the node cache, whose 50/s load
+%% limit a full test run trips when many cases instantiate.
 init_per_testcase(_Case, Config) ->
-    {ok, Inst} = wasm_component:instantiate(?config(component, Config)),
+    {ok, Inst} = wasm_component:instantiate(?config(component, Config), #{},
+                                            #{loader => compile}),
     [{inst, Inst} | Config].
 
 end_per_testcase(_Case, _Config) -> ok.

@@ -22,7 +22,8 @@ all() ->
      strings_and_byte_lists, typed_lists, records_and_tuples,
      variants, enums, options, results, flags,
      wide_parameter_lists_spill_to_memory,
-     an_invalid_char_is_rejected].
+     an_invalid_char_is_rejected,
+     a_bad_argument_is_an_error_not_a_crash].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -115,9 +116,24 @@ wide_parameter_lists_spill_to_memory(Config) ->
 %% point is rejected on lift. Fail-first: char used to lift any i32 unchecked.
 an_invalid_char_is_rejected(Config) ->
     #{core := Core} = ?config(inst, Config),
-    ?assertError({invalid_char, _}, wasm_canon:lift_params(Core, [char], [16#D800])),
-    ?assertError({invalid_char, _}, wasm_canon:lift_params(Core, [char], [16#110000])),
+    %% A surrogate or out-of-range code point signals a structured trap that the
+    %% call boundary captures as an `{error, _}` value; it does not raise. Fail-first:
+    %% `valid_char` used to `error({invalid_char, _})`, which `capture` reported as a
+    %% generic `internal` error, not `kind => invalid_char`.
+    Lift = fun(V) ->
+               wasm_error:capture(fun() -> wasm_canon:lift_params(Core, [char], [V]) end)
+           end,
+    ?assertMatch({error, #{kind := invalid_char}}, Lift(16#D800)),
+    ?assertMatch({error, #{kind := invalid_char}}, Lift(16#110000)),
     ?assertEqual({[16#20AC], []}, wasm_canon:lift_params(Core, [char], [16#20AC])).
+
+%% A malformed argument (here a non-number where a `u8` is lowered) is an `{error, _}`
+%% value from the call boundary, not a raw crash. Fail-first: `call/4` lowered outside
+%% any capture, so the `band` on an atom raised `badarith` straight to the caller.
+a_bad_argument_is_an_error_not_a_crash(Config) ->
+    Inst = ?config(inst, Config),
+    ?assertMatch({error, _},
+                 wasm_component:call(Inst, <<"echo-u8">>, {[u8], u8}, [not_a_number])).
 
 %%% -------------------------------------------------------------- helpers ---
 

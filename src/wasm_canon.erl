@@ -606,14 +606,14 @@ from_signed(V, Bits) ->
 %% out-of-range or surrogate code point is a guest error, which traps.
 valid_char(V) when V >= 0, V =< 16#D7FF -> V;
 valid_char(V) when V >= 16#E000, V =< 16#10FFFF -> V;
-valid_char(V) -> error({invalid_char, V}).
+valid_char(V) -> wasm_error:trap(invalid_char, #{value => V}).
 
 %% A lifted string must be valid UTF-8; invalid bytes are a guest error, which
 %% traps. `characters_to_binary` returns the binary unchanged when it is valid.
 valid_utf8(Bin) ->
     case unicode:characters_to_binary(Bin, utf8, utf8) of
         Out when is_binary(Out) -> Out;
-        _                       -> error(invalid_utf8)
+        _                       -> wasm_error:trap(invalid_utf8, #{})
     end.
 
 opt_cases(D) -> [{<<"none">>, none}, {<<"some">>, D}].

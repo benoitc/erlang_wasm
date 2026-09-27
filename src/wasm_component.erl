@@ -361,6 +361,14 @@ The post-return `cabi_post_<Export>` is run after the result is lifted.
            {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
           {ok, term()} | {error, term()}.
 call(#{} = I, Export, {Params, Result}, Args) ->
+    %% Lifting the result and lowering the arguments cross the Canonical ABI, where
+    %% malformed guest output (a bad char, invalid UTF-8, an out-of-range discriminant)
+    %% or a malformed argument would otherwise raise. `capture/1` turns any such throw
+    %% or raw crash into an `{error, _}` value, so nothing raises to the caller (a guest
+    %% exception in flight still passes through, to unwind to an outer handler).
+    wasm_error:capture(fun() -> do_call(I, Export, {Params, Result}, Args) end).
+
+do_call(I, Export, {Params, Result}, Args) ->
     CoreName = resolve_export(I, Export),
     %% A multi-core component lifts different exports from different cores (a proxy
     %% component lifts `wasi:cli/run#run` from a command shim and
@@ -406,6 +414,12 @@ call_async(I, Export, Sig, Args) ->
                  {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()], map()) ->
           {ok, term()} | {error, term()}.
 call_async(#{} = I, Export, {Params, Result}, Args, Opts) ->
+    %% Same boundary as `call/4`: the async lift/lower is captured so a malformed
+    %% value returns `{error, _}` rather than raising (see `call/4`).
+    wasm_error:capture(
+      fun() -> do_call_async(I, Export, {Params, Result}, Args, Opts) end).
+
+do_call_async(I, Export, {Params, Result}, Args, Opts) ->
     case async_lift_name(I, Export) of
         {ok, LiftName} ->
             Inst = core_with_export(I, LiftName),

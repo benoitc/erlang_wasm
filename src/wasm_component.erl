@@ -50,7 +50,8 @@ lower/lift, and the async Canonical ABI.
                      | #{composed := true, exports := [binary()],
                          insts := #{non_neg_integer() =>
                                         {instance, instance()} |
-                                        {iface_ref, non_neg_integer(), binary()}},
+                                        {iface_ref, non_neg_integer(), binary()} |
+                                        {import_iface, binary()}},
                          cores := [wasm:instance()],
                          dispatch := #{binary() => {non_neg_integer(), binary()}}}.
 
@@ -311,6 +312,12 @@ instantiate_composed(#{sec := Sec, exports := Exports}, Imports, Opts) ->
 %% instance-sort alias), the way the linker maintains the core index spaces.
 compose_step({component_def, Bytes}, #{comps := Comps, n_comp := N} = S) ->
     S#{comps => Comps#{N => Bytes}, n_comp => N + 1};
+%% An imported instance (an interface the composed component itself imports, e.g. WASI)
+%% occupies a slot in the component-instance index space, so the indices that
+%% instantiate/alias arguments reference stay aligned. It is host-provided, not a sibling
+%% to bridge, so it is recorded as an import reference and otherwise left alone.
+compose_step({comp_import_instance, Name}, #{insts := Insts, n_inst := N} = S) ->
+    S#{insts => Insts#{N => {import_iface, Name}}, n_inst => N + 1};
 compose_step({comp_instance_alias, SrcInst, Name},
              #{insts := Insts, n_inst := N} = S) ->
     S#{insts => Insts#{N => {iface_ref, SrcInst, Name}}, n_inst => N + 1};
@@ -357,12 +364,15 @@ bridge_imports(Args, Bytes, Insts) ->
     lists:foldl(
       fun({ArgName, _Sort, Idx}, Acc) ->
           case maps:get(Idx, Insts, undefined) of
-              {iface_ref, SrcInst, _Export} ->
+              {iface_ref, SrcInst, ProvExport} ->
                   {instance, Provider} = maps:get(SrcInst, Insts),
                   Funcs = maps:get(ArgName, Ifaces, #{}),
                   maps:fold(
                     fun(FuncName, Sig, A) ->
-                        A#{{ArgName, FuncName} => bridge(Provider, FuncName, Sig)}
+                        %% The provider exposes an interface function under the
+                        %% interface-qualified core export name `<interface>#<func>`.
+                        Target = <<ProvExport/binary, "#", FuncName/binary>>,
+                        A#{{ArgName, FuncName} => bridge(Provider, Target, Sig)}
                     end, Acc, Funcs);
               _ ->
                   Acc

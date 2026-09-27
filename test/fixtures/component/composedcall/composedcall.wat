@@ -6,11 +6,11 @@
 (component
   (component $provider
     (core module $pm
-      (func (export "add") (param i32 i32) (result i32)
+      (func (export "host:math/ops#add") (param i32 i32) (result i32)
         local.get 0 local.get 1 i32.add))
     (core instance $pmi (instantiate $pm))
     (func $addf (param "a" u32) (param "b" u32) (result u32)
-      (canon lift (core func $pmi "add")))
+      (canon lift (core func $pmi "host:math/ops#add")))
     (instance $ops (export "add" (func $addf)))
     (export "host:math/ops" (instance $ops)))
   (component $consumer

@@ -17,7 +17,8 @@ component and dispatches the outer export to that sub-instance.
 all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           a_cross_component_call_bridges_to_the_provider,
           an_interface_import_signature_is_decoded,
-          an_aggregate_interface_signature_is_decoded].
+          an_aggregate_interface_signature_is_decoded,
+          a_wac_composed_component_passes_a_string].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -71,6 +72,21 @@ an_aggregate_interface_signature_is_decoded(_Config) ->
     ?assertEqual({[], {list, {tuple, [string, string]}}},
                  maps:get(<<"get-environment">>, Env)),
     ?assertEqual({[], {option, string}}, maps:get(<<"initial-cwd">>, Env)).
+
+%% A real composed component from the toolchain (cargo component + wac plug), not a
+%% hand-authored one: `greeter` exports greet(string) -> string, `greetuser` imports it
+%% and its `run` calls greet("wasm"). Composed, calling `run` returns "hello, wasm" only
+%% if the cross-component call passes a string across the bridge (each side lifting and
+%% lowering on its own memory). It imports WASI, supplied by the command bundle.
+a_wac_composed_component_passes_a_string(_Config) ->
+    {ok, Bin} = file:read_file(fixture_path("composed_greet")),
+    {ok, Inst} = wasm_component:instantiate(Bin, wasi_preview2:command(#{})),
+    try
+        ?assertEqual({ok, <<"hello, wasm">>},
+                     wasm_component:call(Inst, <<"run">>, {[], string}, []))
+    after
+        wasm_component:destroy(Inst, fun(_) -> ok end)
+    end.
 
 %% The raw bytes of each nested component (section id 4) in a component's section stream.
 nested_components(<<Id, Rest0/binary>>) ->

@@ -1,0 +1,9 @@
+package test:greet;
+
+interface greeter {
+    greet: func(name: string) -> string;
+}
+
+world provider {
+    export greeter;
+}

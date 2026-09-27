@@ -85,6 +85,26 @@ for name in twocore twocore_trap statecore renamedexport composed composedcall; 
   echo "built $out"
 done
 
+# A real composed component, the shape `wac` produces from `cargo component` output: a
+# `greeter` provider exporting `test:greet/greeter` (greet: func(string) -> string) and a
+# `greetuser` consumer importing it whose `run` calls greet. `wac plug` wires the
+# provider's export into the consumer's import. Committed at composed_greet.component.wasm;
+# built only when the component toolchain is present (like the wasm32-wasip2 fixtures).
+if command -v cargo-component >/dev/null 2>&1 && command -v wac >/dev/null 2>&1; then
+  cg="$here/test/fixtures/component/composed_greet"
+  ( cd "$cg/greeter" && cargo component build --release )
+  ( cd "$cg/greetuser" && cargo component build --release )
+  wac plug \
+    --plug "$cg/greeter/target/wasm32-wasip1/release/greeter.wasm" \
+    "$cg/greetuser/target/wasm32-wasip1/release/greetuser.wasm" \
+    -o "$here/test/fixtures/component/composed_greet.component.wasm"
+  wasm-tools validate --features component-model \
+    "$here/test/fixtures/component/composed_greet.component.wasm"
+  echo "built composed_greet.component.wasm"
+else
+  echo "skip composed_greet: cargo-component or wac not installed"
+fi
+
 # A bare core module (not a component) whose start function traps, the baseline
 # for the linker leak test: one failed instantiate leaves one instance behind.
 trapwat="$here/test/fixtures/component/trapcore/trapcore.wat"

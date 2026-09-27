@@ -23,6 +23,7 @@ all() ->
      an_unbound_host_import_is_named,
      a_failed_link_frees_the_cores_it_built,
      a_malformed_component_link_leaks_no_cores,
+     an_unsupported_alias_is_a_named_error,
      a_non_utf8_string_encoding_is_refused,
      destroy_closes_host_resources_and_clears_the_tables].
 
@@ -106,6 +107,18 @@ a_malformed_component_link_leaks_no_cores(_Config) ->
     Result = wasm_component_link:link(BadGraph, EntryIdx, fun(_) -> #{} end, #{}),
     ?assertMatch({error, _}, Result),
     ?assertEqual(Before, live_instance_tables()).
+
+%% An alias whose sort/target the linker does not recognise is a named link error, not
+%% a raw crash the caller sees only as a generic internal failure. The alias parsers are
+%% total. Fail-first: `alias_entry` ran off the end of its strict matches into a
+%% function_clause, which `capture` could report only as `kind => internal`.
+%% Section 6 (alias), a vec of one entry whose leading byte (0x07) matches no alias form.
+an_unsupported_alias_is_a_named_error(_Config) ->
+    Content = <<1, 16#07, 16#09>>,
+    AliasSection = <<6, (byte_size(Content)), Content/binary>>,
+    ?assertMatch({error, #{kind := unsupported_alias}},
+                 wasm_error:capture(
+                   fun() -> wasm_component_link:parse(AliasSection) end)).
 
 %% A canon def declaring a non-UTF-8 string encoding is refused at link time. This
 %% runtime marshals strings as UTF-8, the encoding every WASI toolchain emits, so a

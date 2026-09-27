@@ -534,7 +534,10 @@ core_instance(<<16#00, Rest0/binary>>) ->
     {{instantiate, ModIdx, Args}, Rest2};
 core_instance(<<16#01, Rest0/binary>>) ->
     {Exports, Rest1} = inline_exports(Rest0),
-    {{exports, Exports}, Rest1}.
+    {{exports, Exports}, Rest1};
+core_instance(<<Tag, _/binary>>) ->
+    wasm_error:link_error(unsupported_core_instance,
+                          <<"unsupported core instance form">>, #{tag => Tag}).
 
 args(Bin) ->
     {Count, Rest} = wasm_leb128:u32(Bin),
@@ -588,7 +591,13 @@ alias_entry(<<_Sort, 16#02, Rest0/binary>>) ->
     %% Outer alias: `sort 0x02 ct:u32 idx:u32` (nested components only). Skip.
     {_Ct, Rest1} = wasm_leb128:u32(Rest0),
     {_Idx, Rest2} = wasm_leb128:u32(Rest1),
-    {skip, Rest2}.
+    {skip, Rest2};
+alias_entry(Bin) ->
+    %% An alias whose sort/target this linker does not recognise: rather than run off
+    %% the end of the strict matches (a function_clause the fold would only report as a
+    %% generic crash), name it so a malformed or unsupported component links to a value.
+    wasm_error:link_error(unsupported_alias, <<"unsupported component alias">>,
+                          #{bytes => binary:part(Bin, 0, min(4, byte_size(Bin)))}).
 
 %%% --------------------------------------------------------------------- canon ---
 
@@ -795,14 +804,22 @@ lower_opts(N, <<_Op, Rest0/binary>>, Realloc, Enc, Async) ->
 %% or field its index later binds to a host function.
 comp_import(<<16#00, R0/binary>>) ->
     {Name, R1} = name(R0),
-    externdesc(Name, R1).
+    externdesc(Name, R1);
+comp_import(<<Tag, _/binary>>) ->
+    wasm_error:link_error(unsupported_component_import,
+                          <<"unsupported component import form">>, #{tag => Tag}).
 
 externdesc(Name, <<16#05, R0/binary>>) ->
     {_TypeIdx, R1} = wasm_leb128:u32(R0),
     {{comp_import_instance, Name}, R1};
 externdesc(Name, <<16#01, R0/binary>>) ->
     {_TypeIdx, R1} = wasm_leb128:u32(R0),
-    {{comp_import_func, Name}, R1}.
+    {{comp_import_func, Name}, R1};
+externdesc(_Name, <<Tag, _/binary>>) ->
+    %% Value, type, component or core-module import extern: not something this linker
+    %% resolves, so name it rather than running off the strict matches.
+    wasm_error:link_error(unsupported_externdesc,
+                          <<"unsupported import extern">>, #{tag => Tag}).
 
 %%% -------------------------------------------------------------- core imports ---
 

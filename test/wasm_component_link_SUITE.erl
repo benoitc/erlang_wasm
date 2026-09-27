@@ -25,7 +25,7 @@ all() ->
      a_malformed_component_link_leaks_no_cores,
      an_unsupported_alias_is_a_named_error,
      an_instance_sort_alias_is_parsed,
-     a_non_utf8_string_encoding_is_refused,
+     a_non_utf8_string_encoding_is_accepted,
      destroy_closes_host_resources_and_clears_the_tables].
 
 init_per_suite(Config) ->
@@ -138,21 +138,21 @@ an_instance_sort_alias_is_parsed(_Config) ->
 %% utf16 or latin1+utf16 lift/lower is a named error, not silent mis-decoding. The
 %% encoding is read from the binary (parse) and acted on (link). Fail-first: before
 %% the guard the flag was skipped, so the utf16 lift linked as UTF-8 and this failed.
-a_non_utf8_string_encoding_is_refused(_Config) ->
+a_non_utf8_string_encoding_is_accepted(_Config) ->
     %% A canon section (id 8) with a single lift whose opts set string-encoding=utf16:
     %% count 1, lift `00 00`, core func 0, opts vec {count 1, flag 01=utf16}, ft 0.
     Utf16Lift = <<8, 7, 1, 16#00, 16#00, 0, 1, 16#01, 0>>,
     ?assertEqual({ok, [{canon_lift, 0, utf16, sync}]},
                  wasm_component_link:parse(Utf16Lift)),
-    ?assertEqual({error, {unsupported_string_encoding, utf16}},
+    %% utf16 and latin1+utf16 are no longer refused: the link fails only for the unrelated
+    %% reason that this bare graph has no entry core, exactly as the UTF-8 default does.
+    %% (Fail-first: the encodings used to return {unsupported_string_encoding, _}.)
+    ?assertEqual({error, no_entry_core},
                  wasm_component_link:link([{canon_lift, 0, utf16, sync}], 0,
                                           fun(_) -> #{} end, #{})),
-    %% A lower is refused the same way, before it resolves its component function.
-    ?assertEqual({error, {unsupported_string_encoding, latin1_utf16}},
-                 wasm_component_link:link([{canon_lower, 0, none, latin1_utf16, sync}],
-                                          0, fun(_) -> #{} end, #{})),
-    %% The UTF-8 default is not refused: the guard passes and the link fails only for
-    %% the unrelated reason that this bare graph has no entry core.
+    ?assertEqual({error, no_entry_core},
+                 wasm_component_link:link([{canon_lift, 0, latin1_utf16, sync}], 0,
+                                          fun(_) -> #{} end, #{})),
     ?assertEqual({error, no_entry_core},
                  wasm_component_link:link([{canon_lift, 0, utf8, sync}], 0,
                                           fun(_) -> #{} end, #{})).

@@ -74,10 +74,13 @@ done
 # `statecore` has one core with a mutable global exported as `bump`, so a per-request
 # cold instance returns 1 every call and a reused one would climb: it proves the
 # worker gives each request a fresh component instance.
+# `strutf16` and `strlatin1` are string-echo components whose canon lift uses
+# string-encoding=utf16 and latin1+utf16, exercising the non-UTF-8 string codecs.
 # `composed` is a composed component (the shape `wac` produces): it defines a nested
 # component, instantiates it, and re-exports the instance's `run`, so the runtime must
 # instantiate the nested component and dispatch the outer export to it.
-for name in twocore twocore_trap statecore renamedexport composed composedcall; do
+for name in twocore twocore_trap statecore renamedexport composed composedcall \
+            strutf16 strlatin1; do
   wat="$here/test/fixtures/component/$name/$name.wat"
   out="$here/test/fixtures/component/$name.component.wasm"
   wasm-tools parse "$wat" -o "$out"

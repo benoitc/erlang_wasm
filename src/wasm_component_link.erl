@@ -27,7 +27,7 @@ error value carrying a kind and context, and no name a component supplies become
 an atom.
 """.
 
--export([parse/1, link/4, core_imports/1, export_map/1]).
+-export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1]).
 
 -export_type([graph/0, item/0]).
 
@@ -129,15 +129,24 @@ section(?SEC_EXPORT, Content) ->
 section(_Other, _Content) ->
     {ok, []}.
 
-%% A component export: a name, a sort byte and an index into that sort's space.
-%% Only func exports (sort 1) are resolved to a core function; the rest are carried
-%% so linking can skip them without misreading the section.
+%% A component export: a name, a sort byte, an index into that sort's space, and an
+%% optional type ascription (`0x00` absent, the toolchain-common case). Consuming the
+%% ascription is what keeps a section with more than one export aligned; without it the
+%% first export parses and the next reads from the wrong offset.
+%% Only func exports (sort 1) are resolved to a core function; the rest are carried so
+%% linking can skip them without misreading the section.
 comp_export(<<_Kind, R0/binary>>) ->
     {Len, R1} = wasm_leb128:u32(R0),
     <<Name:Len/binary, R2/binary>> = R1,
     <<Sort, R3/binary>> = R2,
     {Idx, R4} = wasm_leb128:u32(R3),
-    {{comp_export, Name, Sort, Idx}, R4}.
+    {{comp_export, Name, Sort, Idx}, skip_export_desc(R4)}.
+
+%% The optional type ascription after an export's sortidx: `0x00` absent (all the standard
+%% toolchain emits, and what a hand-authored component uses). A present one (`0x01 ...`)
+%% is left for the next entry rather than misparsed; that shape has not been observed.
+skip_export_desc(<<16#00, Rest/binary>>) -> Rest;
+skip_export_desc(Rest)                   -> Rest.
 
 -doc """
 Map each component func export name to the core function that implements it.
@@ -169,6 +178,42 @@ export_map(Sec) ->
     catch
         _:_ -> #{}
     end.
+
+-doc """
+Each exported function's string encoding, when it is not the default UTF-8.
+
+A component's `canon lift` carries a `string-encoding` option; `call/4` marshals that
+export's strings with it. Returns `#{ExportName => utf16 | latin1_utf16}`, omitting UTF-8
+exports (the default), so the common component adds nothing.
+""".
+-spec export_encodings(binary()) -> #{binary() => string_encoding()}.
+export_encodings(Sec) ->
+    try
+        case parse(Sec) of
+            {ok, Graph} ->
+                Encs = comp_func_encodings(Graph),
+                maps:from_list(
+                  [{Name, Enc}
+                   || {comp_export, Name, 1, Idx} <- Graph,
+                      Enc <- [maps:get(Idx, Encs, utf8)],
+                      Enc =/= utf8]);
+            {error, _} ->
+                #{}
+        end
+    catch
+        _:_ -> #{}
+    end.
+
+%% The component-func index space mapped to each lift's string encoding, in the order
+%% `step/2` assigns func indices (import-func, func-alias and lift each take one).
+comp_func_encodings(Graph) ->
+    {_PF, Encs} = lists:foldl(fun cfe_step/2, {0, #{}}, Graph),
+    Encs.
+
+cfe_step({comp_import_func, _}, {PF, E})        -> {PF + 1, E};
+cfe_step({comp_func_alias, _, _}, {PF, E})      -> {PF + 1, E};
+cfe_step({canon_lift, _CFI, Enc, _Async}, {PF, E}) -> {PF + 1, E#{PF => Enc}};
+cfe_step(_Other, Acc)                           -> Acc.
 
 %% Fold the graph into the component-func index space (index -> what implements it)
 %% and the core-func index space (index -> the core export name it aliases), in the
@@ -324,7 +369,7 @@ step({canon_lower, CompFuncIdx, ReallocIdx, Enc, Async}, S) ->
                     {ok, bump(S, n_cf, core_funcs, wasm_async:async_lower(Sig, Fun))};
                 {ok, Fun} when Async =:= sync ->
                     Realloc = realloc_callable(ReallocIdx, S),
-                    {ok, bump(S, n_cf, core_funcs, lowered(Fun, Realloc, S))};
+                    {ok, bump(S, n_cf, core_funcs, lowered(Fun, Realloc, Enc, S))};
                 {ok, _Fun} ->
                     {error, {async_import_not_registered, CompFuncIdx}};
                 {error, _} = E ->
@@ -411,9 +456,21 @@ host_fun({lift, _CoreFuncIdx}, _S) ->
 %% options name (the adapter's own, reached indirectly through the shim table, not
 %% by name on any single instance). Before any core is built (a single-core
 %% component) there is no guest to bind, so the function keeps its own context.
-lowered(Fun, _Realloc, #{entry_by_mod := undefined}) ->
+lowered(Fun, Realloc, Enc, S) ->
+    Bound = bind_realloc(Fun, Realloc, S),
+    %% Strings this import lifts and lowers use the lower's string encoding; utf8 installs
+    %% no context, so the common case is exactly the realloc-bound function above.
+    case Enc of
+        utf8 -> Bound;
+        _    -> fun(Ctx, Flats) ->
+                    wasm_canon:with_string_encoding(
+                      Enc, fun() -> Bound(Ctx, Flats) end)
+                end
+    end.
+
+bind_realloc(Fun, _Realloc, #{entry_by_mod := undefined}) ->
     Fun;
-lowered(Fun, Realloc, #{entry_by_mod := Guest}) ->
+bind_realloc(Fun, Realloc, #{entry_by_mod := Guest}) ->
     fun(Ctx, Flats) ->
         wasm_canon:with_realloc(Realloc,
                                 fun() -> Fun(Ctx#{instance => Guest}, Flats) end)
@@ -832,8 +889,10 @@ canonopts(N, <<_Op, Rest0/binary>>, Enc, Async) ->
     canonopts(N - 1, Rest0, Enc, Async).
 
 %% Only UTF-8 is marshalled; another declared encoding is a link-time refusal.
-supported_encoding(utf8) -> ok;
-supported_encoding(Enc)  -> {error, {unsupported_string_encoding, Enc}}.
+supported_encoding(utf8)         -> ok;
+supported_encoding(utf16)        -> ok;
+supported_encoding(latin1_utf16) -> ok;
+supported_encoding(Enc)          -> {error, {unsupported_string_encoding, Enc}}.
 
 %% A lower's options, keeping the realloc function index (`0x04 f`) and the string
 %% encoding. A result that crosses by memory (a string or list) allocates through

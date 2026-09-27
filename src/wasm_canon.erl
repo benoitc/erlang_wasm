@@ -35,13 +35,16 @@ current fixtures.
 
 -export([lower_params/3, lift_result/3, size_align/1, flat_types/1]).
 -export([lift_params/3, lower_value/3, store_value/4, result_via_memory/1]).
--export([with_realloc/2]).
+-export([with_realloc/2, with_string_encoding/2]).
 
 -export_type([desc/0]).
 
 %% The realloc override for the current host-import call (a multi-core component
 %% names its own realloc), installed by `with_realloc/2` for the call's duration.
 -define(REALLOC, {?MODULE, realloc}).
+%% The active string encoding for the canon lift/lower in progress, set by
+%% `with_string_encoding/2` from a component's canon options. `undefined` is UTF-8.
+-define(STRENC, {?MODULE, strenc}).
 
 -type name() :: binary().
 -type desc() :: u8 | u16 | u32 | u64 | s8 | s16 | s32 | s64
@@ -106,7 +109,10 @@ lower_flat(_Inst, error_context, V) -> [V band 16#FFFFFFFF];
 lower_flat(_Inst, bool, V) -> [bool_int(V)];
 lower_flat(_Inst, f32, V)  -> [V];
 lower_flat(_Inst, f64, V)  -> [V];
-lower_flat(Inst, D, Bin) when D =:= string; D =:= {list, u8} ->
+lower_flat(Inst, string, Bin) ->
+    {Ptr, Len} = place_string(Inst, Bin),
+    [Ptr, Len];
+lower_flat(Inst, {list, u8}, Bin) ->
     {Ptr, Len} = place_bytes(Inst, Bin),
     [Ptr, Len];
 lower_flat(Inst, {list, ElemD}, List) ->
@@ -256,6 +262,35 @@ with_realloc(Realloc, Body) ->
         end
     end.
 
+-doc """
+Run `Body` with a string encoding in effect for the strings it lifts and lowers.
+
+The Canonical ABI lets a component choose how it stores strings: `utf8` (the default),
+`utf16`, or `latin1+utf16` (latin1 when every code point fits, otherwise utf16, with the
+high bit of the length disambiguating). The encoding is a canon option, so the caller sets
+it around the lift/lower for the component whose option it is. `utf8` installs no context,
+so the common path is unchanged.
+""".
+-spec with_string_encoding(utf8 | utf16 | latin1_utf16, fun(() -> T)) -> T.
+with_string_encoding(utf8, Body) ->
+    Body();
+with_string_encoding(Enc, Body) ->
+    Prev = get(?STRENC),
+    put(?STRENC, Enc),
+    try Body()
+    after
+        case Prev of
+            undefined -> erase(?STRENC);
+            _         -> put(?STRENC, Prev)
+        end
+    end.
+
+string_encoding() ->
+    case get(?STRENC) of
+        undefined -> utf8;
+        Enc       -> Enc
+    end.
+
 -doc "Whether a result is returned through memory rather than flat.".
 -spec result_via_memory(desc()) -> boolean().
 result_via_memory(Desc) -> length(flat_types(Desc)) > ?MAX_FLAT_RESULTS.
@@ -272,8 +307,7 @@ lift_value(_Inst, D, [V | R]) when element(1, D) =:= future;
 lift_value(_Inst, error_context, [V | R]) ->
     {V band 16#FFFFFFFF, R};
 lift_value(Inst, string, [Ptr, Len | R]) ->
-    {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
-    {valid_utf8(Bin), R};
+    {read_string(Inst, Ptr, Len), R};
 lift_value(Inst, {list, u8}, [Ptr, Len | R]) ->
     {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
     {Bin, R};
@@ -371,8 +405,7 @@ load(Inst, f64, Ptr) ->
     wasm_num:f64_from_bits(Bits);
 load(Inst, string, Ptr) ->
     {P, Len} = read_ptr_len(Inst, Ptr),
-    {ok, Bin} = wasm:read_memory(Inst, P, Len),
-    valid_utf8(Bin);
+    read_string(Inst, P, Len);
 load(Inst, {list, u8}, Ptr) ->
     {P, Len} = read_ptr_len(Inst, Ptr),
     {ok, Bin} = wasm:read_memory(Inst, P, Len),
@@ -530,6 +563,71 @@ place_bytes(Inst, Bin) ->
     ok = wasm:write_memory(Inst, Ptr, Bin),
     {Ptr, Len}.
 
+%% Encode a string (a UTF-8 Erlang binary) into guest memory per the active encoding, and
+%% return `(ptr, len)` where `len` is in the encoding's units: bytes for utf8/latin1,
+%% 16-bit code units for utf16. For latin1+utf16 the high bit of `len` marks utf16.
+place_string(Inst, Bin) ->
+    case string_encoding() of
+        utf8 ->
+            place_bytes(Inst, Bin);
+        utf16 ->
+            {Ptr, Bytes} = place_bytes(Inst, to_utf16le(Bin)),
+            {Ptr, Bytes div 2};
+        latin1_utf16 ->
+            case to_latin1(Bin) of
+                {ok, Latin1} ->
+                    place_bytes(Inst, Latin1);
+                error ->
+                    {Ptr, Bytes} = place_bytes(Inst, to_utf16le(Bin)),
+                    {Ptr, (Bytes div 2) bor 16#80000000}
+            end
+    end.
+
+%% Read a string of `Len` units at `Ptr` per the active encoding and return it as a UTF-8
+%% Erlang binary. Invalid bytes for the encoding are a guest error, which traps.
+read_string(Inst, Ptr, Len) ->
+    case string_encoding() of
+        utf8 ->
+            {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
+            valid_utf8(Bin);
+        utf16 ->
+            {ok, Bin} = wasm:read_memory(Inst, Ptr, Len * 2),
+            from_utf16le(Bin);
+        latin1_utf16 ->
+            case Len band 16#80000000 of
+                0 ->
+                    {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
+                    from_latin1(Bin);
+                _ ->
+                    Units = Len band 16#7FFFFFFF,
+                    {ok, Bin} = wasm:read_memory(Inst, Ptr, Units * 2),
+                    from_utf16le(Bin)
+            end
+    end.
+
+to_utf16le(Bin) ->
+    case unicode:characters_to_binary(Bin, utf8, {utf16, little}) of
+        Out when is_binary(Out) -> Out;
+        _                       -> wasm_error:trap(invalid_utf8, #{})
+    end.
+
+from_utf16le(Bin) ->
+    case unicode:characters_to_binary(Bin, {utf16, little}, utf8) of
+        Out when is_binary(Out) -> Out;
+        _                       -> wasm_error:trap(invalid_utf16, #{})
+    end.
+
+%% latin1 holds only code points below 256; `error` when the string needs utf16.
+to_latin1(Bin) ->
+    case unicode:characters_to_binary(Bin, utf8, latin1) of
+        Out when is_binary(Out) -> {ok, Out};
+        _                       -> error
+    end.
+
+from_latin1(Bin) ->
+    %% Every byte is a code point 0..255, always valid; widen to UTF-8.
+    unicode:characters_to_binary(Bin, latin1, utf8).
+
 place_list(Inst, ElemD, List) ->
     Len = length(List),
     {ESize, EAlign} = size_align(ElemD),
@@ -556,7 +654,10 @@ store(Inst, f32, Ptr, V) ->
     ok = wasm:write_memory(Inst, Ptr, <<(wasm_num:f32_to_bits(V)):32/little>>);
 store(Inst, f64, Ptr, V) ->
     ok = wasm:write_memory(Inst, Ptr, <<(wasm_num:f64_to_bits(V)):64/little>>);
-store(Inst, D, Ptr, Bin) when D =:= string; D =:= {list, u8} ->
+store(Inst, string, Ptr, Bin) ->
+    {P, Len} = place_string(Inst, Bin),
+    write_ptr_len(Inst, Ptr, P, Len);
+store(Inst, {list, u8}, Ptr, Bin) ->
     {P, Len} = place_bytes(Inst, Bin),
     write_ptr_len(Inst, Ptr, P, Len);
 store(Inst, {list, ElemD}, Ptr, List) ->

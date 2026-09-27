@@ -46,7 +46,8 @@ lower/lift, and the async Canonical ABI.
                           exports := [binary()]}.
 -opaque instance() :: #{core := wasm:instance(), exports := [binary()],
                         cores := [wasm:instance()],
-                        export_map => #{binary() => binary()}}
+                        export_map => #{binary() => binary()},
+                        str_enc => #{binary() => utf16 | latin1_utf16}}
                      | #{composed := true, exports := [binary()],
                          insts := #{non_neg_integer() =>
                                         {instance, instance()} |
@@ -248,10 +249,15 @@ instantiate_decoded(#{core := Core, exports := Exports, sec := Sec} = Decoded,
                  _Leftovers ->
                      link_in(Decoded, Imports, Opts)
              end,
-    with_export_map(Result, ExportMap).
+    %% Each export's string encoding (only the non-UTF-8 ones are recorded), so `call/4`
+    %% marshals its strings the way the component's canon lift asks.
+    StrEnc = wasm_component_link:export_encodings(Sec),
+    with_export_map(Result, ExportMap, StrEnc).
 
-with_export_map({ok, Inst}, ExportMap) -> {ok, Inst#{export_map => ExportMap}};
-with_export_map(Other, _ExportMap)     -> Other.
+with_export_map({ok, Inst}, ExportMap, StrEnc) ->
+    {ok, Inst#{export_map => ExportMap, str_enc => StrEnc}};
+with_export_map(Other, _ExportMap, _StrEnc) ->
+    Other.
 
 %% The core function that implements a component export. A core export of the same
 %% name is used directly, so a working component is never affected; only when the
@@ -501,7 +507,12 @@ call(#{} = I, Export, {Params, Result}, Args) ->
     %% or a malformed argument would otherwise raise. `capture/1` turns any such throw
     %% or raw crash into an `{error, _}` value, so nothing raises to the caller (a guest
     %% exception in flight still passes through, to unwind to an outer handler).
-    wasm_error:capture(fun() -> do_call(I, Export, {Params, Result}, Args) end).
+    Enc = maps:get(Export, maps:get(str_enc, I, #{}), utf8),
+    wasm_error:capture(
+      fun() ->
+          wasm_canon:with_string_encoding(
+            Enc, fun() -> do_call(I, Export, {Params, Result}, Args) end)
+      end).
 
 do_call(I, Export, {Params, Result}, Args) ->
     CoreName = resolve_export(I, Export),

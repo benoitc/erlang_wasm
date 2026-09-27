@@ -147,16 +147,23 @@ instance_decls(N, <<16#01, Rest0/binary>>, Idx, Local, Exports) ->
     {Def, Rest1} = deftype(Rest0),
     instance_decls(N - 1, Rest1, Idx + 1, Local#{Idx => Def}, Exports);
 instance_decls(N, <<16#04, Rest0/binary>>, Idx, Local, Exports) ->
-    {Name, Rest1} = label(Rest0),
+    {_Name0, Rest1} = label(Rest0),
     {Extern, Rest2} = externdesc(Rest1),
-    %% An interface function's type lives in the instance's own (local) type space, and
-    %% its parameter/result types reference other local types, so resolve it here against
-    %% `Local`; the exported entry then carries a fully concrete signature.
-    Export = case Extern of
-                 {func, TypeIdx} -> [{Name, resolve_func(TypeIdx, Local)}];
-                 _               -> []
-             end,
-    instance_decls(N - 1, Rest2, Idx, Local, Export ++ Exports);
+    case Extern of
+        {func, TypeIdx} ->
+            %% A function export: its type lives in the instance's own (local) type
+            %% space and its parameter/result types reference other local types, so
+            %% resolve it against `Local`; a func export does not add a type index.
+            Sig = resolve_func(TypeIdx, Local),
+            instance_decls(N - 1, Rest2, Idx, Local, [{_Name0, Sig} | Exports]);
+        {type, _Bound} ->
+            %% A type export (e.g. a resource) introduces a type into the instance's type
+            %% index space, so later `own`/`borrow` and function types line up; its shape
+            %% is opaque to a signature (own/borrow lower to an i32 handle).
+            instance_decls(N - 1, Rest2, Idx + 1, Local#{Idx => resource}, Exports);
+        _ ->
+            instance_decls(N - 1, Rest2, Idx, Local, Exports)
+    end;
 instance_decls(N, Bin, Idx, Local, Exports) ->
     %% Other instance declarations (alias, core type) are not needed to resolve the
     %% interface's functions; step over the one that is there.
@@ -182,6 +189,14 @@ externdesc(<<16#01, Rest0/binary>>) ->
 externdesc(<<16#05, Rest0/binary>>) ->
     {Idx, Rest1} = wasm_leb128:u32(Rest0),
     {{instance, Idx}, Rest1};
+%% A type extern (`0x03`) carries a type bound, not a plain index: `0x00 <typeidx>` (eq
+%% that type) or `0x01` (a subtype of resource). Consuming it exactly keeps the following
+%% declarations aligned - getting this wrong is what shifted the resource type index.
+externdesc(<<16#03, 16#00, Rest0/binary>>) ->
+    {Idx, Rest1} = wasm_leb128:u32(Rest0),
+    {{type, {eq, Idx}}, Rest1};
+externdesc(<<16#03, 16#01, Rest/binary>>) ->
+    {{type, sub_resource}, Rest};
 externdesc(<<Sort, Rest0/binary>>) ->
     {Idx, Rest1} = wasm_leb128:u32(Rest0),
     {{Sort, Idx}, Rest1}.

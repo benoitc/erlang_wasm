@@ -1,0 +1,6 @@
+package test:capp;
+
+world consumer {
+    import test:counter/ops;
+    export run: func() -> u32;
+}

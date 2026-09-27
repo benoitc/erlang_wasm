@@ -101,8 +101,22 @@ if command -v cargo-component >/dev/null 2>&1 && command -v wac >/dev/null 2>&1;
   wasm-tools validate --features component-model \
     "$here/test/fixtures/component/composed_greet.component.wasm"
   echo "built composed_greet.component.wasm"
+
+  # A composed component that passes a RESOURCE across the boundary: `counter` exports a
+  # counter resource (constructor + increment), `countuser` imports it and its `run`
+  # creates a counter(41) and increments it. The resource handle crosses the bridge.
+  cc="$here/test/fixtures/component/composed_counter"
+  ( cd "$cc/counter" && cargo component build --release )
+  ( cd "$cc/countuser" && cargo component build --release )
+  wac plug \
+    --plug "$cc/counter/target/wasm32-wasip1/release/counter.wasm" \
+    "$cc/countuser/target/wasm32-wasip1/release/countuser.wasm" \
+    -o "$here/test/fixtures/component/composed_counter.component.wasm"
+  wasm-tools validate --features component-model \
+    "$here/test/fixtures/component/composed_counter.component.wasm"
+  echo "built composed_counter.component.wasm"
 else
-  echo "skip composed_greet: cargo-component or wac not installed"
+  echo "skip composed_greet/composed_counter: cargo-component or wac not installed"
 fi
 
 # A bare core module (not a component) whose start function traps, the baseline

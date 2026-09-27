@@ -18,7 +18,8 @@ all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           a_cross_component_call_bridges_to_the_provider,
           an_interface_import_signature_is_decoded,
           an_aggregate_interface_signature_is_decoded,
-          a_wac_composed_component_passes_a_string].
+          a_wac_composed_component_passes_a_string,
+          a_wac_composed_component_passes_a_resource].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -84,6 +85,22 @@ a_wac_composed_component_passes_a_string(_Config) ->
     try
         ?assertEqual({ok, <<"hello, wasm">>},
                      wasm_component:call(Inst, <<"run">>, {[], string}, []))
+    after
+        wasm_component:destroy(Inst, fun(_) -> ok end)
+    end.
+
+%% A resource crosses the component boundary: `counter` exports a counter resource
+%% (constructor + increment), `countuser` imports it and its `run` creates a counter(41)
+%% and increments it. Composed, `run` returns 42 only if the constructor call bridged to
+%% the provider (minting a handle), the handle crossed back to the consumer, and the
+%% consumer's increment call bridged that handle back to the provider. The interface
+%% function signatures (constructor `(u32) -> own<counter>`, increment
+%% `(borrow<counter>) -> u32`) are decoded from the resource type in the type section.
+a_wac_composed_component_passes_a_resource(_Config) ->
+    {ok, Bin} = file:read_file(fixture_path("composed_counter")),
+    {ok, Inst} = wasm_component:instantiate(Bin, wasi_preview2:command(#{})),
+    try
+        ?assertEqual({ok, 42}, wasm_component:call(Inst, <<"run">>, {[], u32}, []))
     after
         wasm_component:destroy(Inst, fun(_) -> ok end)
     end.

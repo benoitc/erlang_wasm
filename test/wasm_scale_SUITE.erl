@@ -22,7 +22,8 @@ all() ->
      table_size_does_not_drive_memory,
      a_large_module_defers_its_lowering,
      a_deferred_body_runs_the_same,
-     a_caller_that_never_instantiates_is_still_swept].
+     a_caller_that_never_instantiates_is_still_swept,
+     fuse_is_part_of_the_function_cache].
 
 %%% --------------------------------------------------------------- fixtures ---
 
@@ -159,3 +160,32 @@ a_deferred_body_runs_the_same(_Config) ->
          ?assertMatch({error, _}, wasm:call(I, ~"ind", [8])),
          ok = wasm:destroy(I)
      end || Mod <- [Deferred, Eager]].
+
+%% A module this small is lowered at instantiation and its function table is
+%% cached per process, and the cache was keyed on the module alone. So an
+%% instance built with `fuse => false' handed its unfused bodies to the next
+%% one built with fusion on, and the other way round.
+fuse_is_part_of_the_function_cache(_Config) ->
+    {ok, P} = wasm_wat:module(~"(module (func (export \"f\") (param i32)
+                                  (result i32)
+                                  local.get 0 i32.const 5 i32.add))"),
+    {ok, Mod} = wasm_validate:module(P),
+    Body = fun(Opts) ->
+                   {ok, I} = wasm:instantiate(Mod, #{}, Opts),
+                   #fn{body = B} = element(1, I#inst.funcs),
+                   ok = wasm:destroy(I),
+                   B
+           end,
+    Fresh = fun(F) ->
+                    Self = self(),
+                    spawn(fun() -> Self ! {body, F()} end),
+                    receive {body, B} -> B after 30000 -> ct:fail(slow) end
+            end,
+    Fused = Fresh(fun() -> Body(#{}) end),
+    Unfused = Fresh(fun() -> Body(#{fuse => false}) end),
+    ?assertNotEqual(Fused, Unfused),
+    %% Both orders in one process, each against what a clean process builds.
+    ?assertEqual({Unfused, Fused},
+                 Fresh(fun() -> {Body(#{fuse => false}), Body(#{})} end)),
+    ?assertEqual({Fused, Unfused},
+                 Fresh(fun() -> {Body(#{}), Body(#{fuse => false})} end)).

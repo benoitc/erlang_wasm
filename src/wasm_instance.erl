@@ -62,7 +62,7 @@ restore twice. The bounds are still checked, because they trap.
          begin_capture/1, end_capture/1, begin_destroy/1]).
 -export([publish/2, unpublish/2, published/1]).
 -export([get_extra/2, set_extra/3, on_destroy/2, run_cleanups/1]).
--export([note_entry/2]).
+-export([note_entry/2, prep/1, shared_prep/1, unshared_ir/1]).
 
 -define(DEFAULT_LIMITS, #{fuel => infinity, max_depth => 1024}).
 
@@ -197,7 +197,8 @@ build(#module{} = M, Imports, Opts, Heap, Build) ->
     %% is how the superinstruction set was measured and how a suspected fusion
     %% bug would be isolated. Bodies lowered later read it from the instance
     %% instead; see `lower/2'.
-    case maps:get(fuse, Opts, true) of
+    Fuse = maps:get(fuse, Opts, true),
+    case Fuse of
         false -> put(wasm_no_fuse, true);
         true -> erase(wasm_no_fuse)
     end,
@@ -205,8 +206,19 @@ build(#module{} = M, Imports, Opts, Heap, Build) ->
     %% recursive group, which is an ETS lookup each. Modules are immutable and
     %% cached, so the result is cached with them rather than recomputed: it cost
     %% a third of instantiation time on a module with thirty type groups.
-    Ctx = wasm_validate:cached_context(M),
-    Funcs = build_funcs(M, Ctx, Imports),
+    %%
+    %% A module the cache holds carries both already, built once when it was
+    %% loaded, so a request in a fresh process builds neither. Anything else
+    %% keeps the per-process caches.
+    {Ctx, SharedOwn, SharedIR} =
+        case shared_prep(M) of
+            {ok, {C, Own}, Hash} ->
+                %% `Fuse' is what `lower/2' reads back off the limits.
+                {C, Own, {wasm_ir_shared, Hash, Fuse}};
+            error ->
+                {wasm_validate:cached_context(M), undefined, undefined}
+        end,
+    Funcs = build_funcs(M, Ctx, Imports, Fuse, SharedOwn),
     %% The store and version are created before anything is evaluated, because
     %% `ref.func' produces a reference that carries its defining instance, and
     %% that reference has to remain usable after it is written into a table
@@ -237,7 +249,8 @@ build(#module{} = M, Imports, Opts, Heap, Build) ->
                      true  -> atomics:new(3, []);
                      false -> undefined
                  end,
-        version = atomics:new(3, [])
+        version = atomics:new(3, []),
+        shared_ir = SharedIR
     },
     Shared = Ctx#ctx.shared_globals,
     Holder = {Build, self()},
@@ -263,10 +276,15 @@ build(#module{} = M, Imports, Opts, Heap, Build) ->
 %%% ----------------------------------------------------------------- funcs ---
 
 %% Imported functions occupy the low indices, matching the validator's context.
-build_funcs(#module{imports = Imports, funcs = Funcs} = M, Ctx, Provided) ->
+build_funcs(#module{imports = Imports, funcs = Funcs} = M, Ctx, Provided,
+            Fuse, Shared) ->
     Host = [resolve_import(I, Ctx, Provided)
             || #import{desc = {func, _}} = I <- Imports],
-    list_to_tuple(Host ++ cached_own(M, Ctx, Funcs, length(Host))).
+    Own = case Shared of
+              undefined -> cached_own(M, Ctx, Funcs, length(Host), Fuse);
+              _ -> Shared
+          end,
+    list_to_tuple(Host ++ Own).
 
 %% The module's own functions, built once per module rather than per instance.
 %%
@@ -285,15 +303,59 @@ build_funcs(#module{imports = Imports, funcs = Funcs} = M, Ctx, Provided) ->
 %%
 %% The imported half stays per instance. A `#hostfn{}' closes over the function
 %% the embedder provided, and two embedders may provide different ones.
-cached_own(M, Ctx, Funcs, NHost) ->
+%%
+%% Keyed on `fuse' as well. A module small enough to be lowered here holds
+%% fused or unfused bodies, and without it an instance built with
+%% `fuse => false' handed its bodies to the next one built with fusion on.
+cached_own(M, Ctx, Funcs, NHost, Fuse) ->
     case get(wasm_funcs_cache) of
-        {M, NHost, Own} -> Own;
+        {M, NHost, Fuse, Own} -> Own;
         _ ->
-            Lazy = worth_deferring(Funcs),
-            Own = [compile_fn(F, Ctx, Idx, Lazy)
-                   || {Idx, F} <- lists:enumerate(NHost, Funcs)],
-            put(wasm_funcs_cache, {M, NHost, Own}),
+            Own = own_funcs(Funcs, Ctx, NHost, worth_deferring(Funcs)),
+            put(wasm_funcs_cache, {M, NHost, Fuse, Own}),
             Own
+    end.
+
+-doc """
+What the module cache derived from this module when it loaded it, if it is the
+module the cache holds: `{ok, {Ctx, Own}, Hash}`, else `error`.
+
+**The module itself is compared, not its name.** `identity` is something a
+caller can set, so a module compiled with another's hash must not be handed
+that one's context or bodies. The comparison costs nothing in the case it
+exists for: a module read from the cache is the very term published, and
+`=:=` answers on the pointer before walking anything.
+""".
+-spec shared_prep(#module{}) ->
+          {ok, {term(), undefined | [#fn{}]}, binary()} | error.
+shared_prep(#module{identity = {sha256, Hash}} = M) ->
+    case persistent_term:get(?CACHED_MODULE_KEY(Hash), undefined) of
+        {M, {_, _} = Prep} -> {ok, Prep, Hash};
+        _ -> error
+    end;
+shared_prep(#module{}) ->
+    error.
+
+own_funcs(Funcs, Ctx, NHost, Lazy) ->
+    [compile_fn(F, Ctx, Idx, Lazy)
+     || {Idx, F} <- lists:enumerate(NHost, Funcs)].
+
+-doc """
+What instantiating a module derives from it alone, for the module cache to
+publish with it: `{Ctx, Own}`, the validation context and the module's own
+functions, or `Own = undefined` below the deferral threshold.
+
+Only a deferred table is shared. It holds raw bodies, which are the same under
+either `fuse` setting, where a small module's table holds lowered ones that
+are not; those stay in the per-process cache, which is keyed on `fuse`.
+""".
+-spec prep(#module{}) -> {term(), undefined | [#fn{}]}.
+prep(#module{imports = Imports, funcs = Funcs} = M) ->
+    Ctx = wasm_validate:context(M),
+    NHost = length([1 || #import{desc = {func, _}} <- Imports]),
+    case worth_deferring(Funcs) of
+        true -> {Ctx, own_funcs(Funcs, Ctx, NHost, true)};
+        false -> {Ctx, undefined}
     end.
 
 %% Deferring costs a dictionary read on every call, and saves lowering code
@@ -626,7 +688,7 @@ body_of(#fn{body = {lazy, Raw}, idx = Idx}, #inst{id = Id} = Inst) ->
     Key = {wasm_ir, Id, Idx},
     case get(Key) of
         undefined ->
-            IR = lower(Raw, Inst),
+            IR = shared_or_lower(Raw, Idx, Inst),
             put(Key, IR),
             %% Remembering which indices were lowered, so releasing an instance
             %% erases exactly those. Scanning the whole dictionary instead cost
@@ -642,6 +704,18 @@ body_of(#fn{body = {lazy, Raw}, idx = Idx}, #inst{id = Id} = Inst) ->
     end;
 body_of(#fn{body = IR}, _Inst) ->
     IR.
+
+%% The first call of a function in this instance. A body some earlier instance
+%% of the module lowered and published is a `persistent_term' literal, so taking
+%% it and putting it in the dictionary copies nothing; everything after is as
+%% if it had been lowered here, including the record `executed/1' reads.
+shared_or_lower(Raw, _Idx, #inst{shared_ir = undefined} = Inst) ->
+    lower(Raw, Inst);
+shared_or_lower(Raw, Idx, #inst{shared_ir = Key} = Inst) ->
+    case persistent_term:get(Key, undefined) of
+        #{Idx := IR} -> IR;
+        _ -> lower(Raw, Inst)
+    end.
 
 %% Lowering reads the fusion decision from the process dictionary, and nested
 %% blocks lower recursively, so the flag is set around the whole call rather
@@ -1753,6 +1827,39 @@ forget(Id) ->
         Key -> erase(Key)
     end,
     forget_ir(Id).
+
+-doc """
+What this instance lowered, for `wasm:destroy/1` to publish before the release
+erases it: `{Key, #{Idx => IR}}`, or `none`.
+
+Once per module, fuse setting and node: a key already there means somebody
+%% published, and replacing it would start the global scan a new key does not.
+So what a later instance reaches beyond the first set is lowered per
+instance, as it always was. The first set is the one a request reaches, and
+it is stable from one request to the next.
+
+Not from an instance built to be captured. That one ran initialisation, not a
+request, and publishing what it lowered would take the slot the request's set
+belongs in: a worker destroys its capture instance before its first request.
+""".
+-spec unshared_ir(#inst{}) ->
+          none | {{wasm_ir_shared, binary(), term()}, map()}.
+unshared_ir(#inst{shared_ir = undefined}) ->
+    none;
+unshared_ir(#inst{leases = L}) when L =/= undefined ->
+    none;
+unshared_ir(#inst{shared_ir = Key, id = Id}) ->
+    case ir_keys(Id) of
+        [] -> none;
+        Idxs ->
+            case persistent_term:get(Key, undefined) of
+                undefined ->
+                    {Key, maps:from_list([{I, get({wasm_ir, Id, I})}
+                                          || I <- Idxs])};
+                _Published ->
+                    none
+            end
+    end.
 
 forget_ir(Id) ->
     _ = [erase({wasm_ir, Id, Idx}) || Idx <- ir_keys(Id)],

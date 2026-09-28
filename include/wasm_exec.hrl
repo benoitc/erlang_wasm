@@ -192,7 +192,13 @@
     %% body can be turned into IR when it is first called rather than at
     %% instantiation. It is cached per module and shared by every instance of
     %% it, so carrying it is a pointer and not a copy.
-    ctx       :: term()
+    ctx       :: term(),
+    %% Where this module's lowered bodies are published node-wide, or
+    %% `undefined'. Set only for an instance of the very module the cache
+    %% holds, because the key names a hash and `identity' can be given any
+    %% hash at all. Read on a body's first call and at destroy, never on the
+    %% call path. Last, so no field before it moves.
+    shared_ir = undefined :: undefined | {wasm_ir_shared, binary(), term()}
 }).
 
 %% Interpreter state.

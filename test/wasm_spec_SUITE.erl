@@ -25,7 +25,7 @@
 
 all() ->
     [decode_phase, validate_phase, execute_phase, compiled_phase,
-     core_suites_present].
+     unfused_phase, unfused_compiled_phase, core_suites_present].
 
 %% What the execute phase must reach, measured on this tree.
 %%
@@ -133,7 +133,24 @@ compiled_phase(_Config) ->
     ?assert(Funs >= ?COMPILED_FUNS_FLOOR),
     ?assert(Entries >= ?COMPILED_ENTRIES_FLOOR).
 
-end_per_testcase(compiled_phase, _Config) ->
+%% Both again with `fuse => false'. Fusion is a choice made per instance and
+%% lowered bodies are cached per process and per module, so every cache that
+%% holds a body has to keep the two apart, and the answers must not depend on
+%% which one ran.
+unfused_phase(_Config) ->
+    Results = check_phase([decode, validate, execute], baseline(), strict,
+                          #{fuse => false}),
+    no_skips(Results),
+    pass_floor(Results, ?EXECUTE_PASS_FLOOR).
+
+unfused_compiled_phase(_Config) ->
+    Results = check_phase([decode, validate, execute], baseline(), strict,
+                          (opts())#{fuse => false}),
+    no_skips(Results),
+    pass_floor(Results, ?EXECUTE_PASS_FLOOR).
+
+end_per_testcase(Phase, _Config) when Phase =:= compiled_phase;
+                                      Phase =:= unfused_compiled_phase ->
     %% The phase leaves sixteen slots full of generated code and their call
     %% counters raised. Anything after it in the same node would inherit that.
     wasm_test_slots:reset();

@@ -171,7 +171,7 @@ init_per_group(python_reactor, Config) ->
 init_per_group(lua_compiled, Config) ->
     case init_per_group(lua_reactor, Config) of
         {skip, _} = Skip -> Skip;
-        C -> [{worker_opts, #{compiled => true}} | C]
+        C -> [{worker_opts, #{compiled => true, preload => wait}} | C]
     end;
 init_per_group(qjs_reactor_ahead, Config) ->
     ahead(init_per_group(qjs_reactor, Config));

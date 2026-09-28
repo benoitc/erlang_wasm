@@ -116,9 +116,9 @@ And what a *different* script gets from that warm cache: nothing. A second
 script against a cache filled by the first paid the full cold cost again and
 wrote a second entry, because it executed a different set of functions.
 
-**The readiness limitation.** With a warm cache, `compiled => true` removes
-it: the worker is ready when `start_link/2` returns. On a cold cache it still
-holds. `wasm_jit:await/2` takes an instance, and a
+**The readiness limitation.** With a warm cache, `compiled => true` and
+`preload => wait` remove it: the worker is ready when `start_link/2` returns.
+On a cold cache it still holds. `wasm_jit:await/2` takes an instance, and a
 worker destroys its instance after every request, so a worker host has nothing
 supported to wait on. Waiting for the compile rather than serving through it is
 worth a great deal -- on Lua it is 32 interpreted requests instead of 3,835,
@@ -127,14 +127,17 @@ left unsaid. `test/audit/PERF.md` has the measurements.
 
 ## Start compiled from the first request
 
-A worker started with `compiled => true` loads cached code before it answers
-anything, so with a warm cache its first request already runs compiled. You
+A worker started with `compiled => true` loads cached code as it starts. You
 need `code_cache_dir` set and a module loaded with `wasm:load/1`; nothing else.
+By default the load runs in the background and the start does not wait for it.
+If you start workers ahead of traffic, ask for `preload => wait` and request 1
+is compiled:
 
 <!-- check: modules my_adapter -->
 ```erlang
 application:set_env(wasm, code_cache_dir, "/var/lib/my_release/wasm"),
-{ok, W} = wasm_script_worker:start_link(my_adapter, #{compiled => true}).
+{ok, W} = wasm_script_worker:start_link(my_adapter, #{compiled => true,
+                                                      preload => wait}).
 ```
 
 It works because storing an artifact also stores a small **manifest** beside
@@ -145,15 +148,19 @@ checks as any other cache read. It does not compile. A missing or damaged
 manifest, an evicted artifact or a sharded build is a miss, and the worker
 compiles as before, from the requests it serves.
 
-The load happens inside `start_link/2`, once per node: loading an artifact is
-the emulator translating it to native code, and a later worker finds the
-module resident. The first worker's start grows by that much:
+Loading an artifact is the emulator translating it to native code, once per
+node, and **every process on the node pauses while it runs**. The tier has
+always paid this, when a compiler loaded what it built or read; preloading
+only chooses when. `async` leaves the start as it was, and a request that
+arrives during the load waits for it, then runs compiled. `wait` moves the load
+into the start of the first worker on a node, before any traffic. Later
+workers find the module resident and start as before:
 
-| guest | start without a preload | with one | first compiled request |
+| guest | start, `async` | start, `wait` | first compiled request, `wait` |
 | --- | ---: | ---: | --- |
-| Lua | 58 ms | 252 ms | 1st, was 9th to 10th |
-| QuickJS | 215 ms | 1.22 s | 1st, was 13th to 23rd |
-| CPython | 1.04 s | 3.78 s | 1st, was 61st to 62nd |
+| Lua | 58 ms | 252 ms | 1st, 9th to 10th in 0.7.0 |
+| QuickJS | 215 ms | 1.22 s | 1st, 13th to 23rd in 0.7.0 |
+| CPython | 1.04 s | 3.78 s | 1st, 61st to 62nd in 0.7.0 |
 
 Outside a worker, call it yourself before the first instance:
 

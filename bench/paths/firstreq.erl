@@ -17,8 +17,11 @@ has made the module resident.
 
 Arguments: `warm` or `measure`, the guest (`lua`, `qjs`, `py`), a directory
 under your home directory holding `code/` and `images/`, and how to ask for
-the tier: `compiled` for `compiled => true`, `limits` for the four keys it
-sets, spelled out, which is the only way a build without the option can ask.
+the tier: `compiled` for `compiled => true`, which preloads in the
+background, `wait` for that with `preload => wait`, and `limits` for the four
+keys it sets, spelled out, which is the only way a build without the option can
+ask. Requests are sent back to back, so under `compiled` the first compiled
+request is the first one issued after the background load lands.
 
 Every measured line prints `cached => N` from `wasm_jit:counts/0`; a line with
 0 did not read the cache and measures a compile. **Read `uptime` first.**
@@ -40,6 +43,15 @@ run(Mode, Guest, Dir, How) ->
     ok = application:set_env(wasm, snapshot_dir, filename:join(Dir, "images")),
     ok = application:set_env(wasm, code_cache_dir, filename:join(Dir, "code")),
     {ok, _} = application:ensure_all_started(wasm),
+    %% `FIRSTREQ_LOADALL=1' loads every module of the application first, as
+    %% an embedded-mode release does at boot. Without it the first request
+    %% loads what it touches through the code server, and waits behind a
+    %% preload that is loading an artifact there.
+    os:getenv("FIRSTREQ_LOADALL") =:= "1" andalso
+        begin
+            {ok, Mods} = application:get_key(wasm, modules),
+            ok = code:ensure_modules_loaded(Mods)
+        end,
     {Adapter, Opts, Request} = guest(Guest, How),
     T0 = erlang:monotonic_time(microsecond),
     {ok, W} = wasm_script_worker:start_link(Adapter, Opts),
@@ -113,6 +125,7 @@ check({ok, #{result := _}} = R) -> R;
 check(Other) -> error({bad_request, Other}).
 
 tier(compiled) -> {#{compiled => true}, #{}};
+tier(wait) -> {#{compiled => true, preload => wait}, #{}};
 tier(limits) ->
     {#{}, #{fuel => infinity, compile => true, compile_after => 1,
             compile_quality => baseline}}.

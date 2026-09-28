@@ -39,8 +39,8 @@ These are covered by compatibility and the release notes:
 
 So are the option keys this module takes (`root`, `timeout`, `trusted`,
 `limits`, `capture_timeout`, `runner_min_heap_words`,
-`capture_min_heap_words`, `restore_ahead`, `recycle_idle`, `compiled`, and the
-`limits` keys `docs/worker-reference.md` lists), the
+`capture_min_heap_words`, `restore_ahead`, `recycle_idle`, `compiled`,
+`preload`, and the `limits` keys `docs/worker-reference.md` lists), the
 `wasm` application settings `scratch_roots` and `reaper_options`, and the
 error shapes: a running worker answers `{error, wasm_worker_error:worker_error()}`,
 and `start_link/2,3` fails with a `gen_server` start reason, one of
@@ -495,7 +495,7 @@ init({Adapter, Opts}) ->
                 {error, E} ->
                     {stop, E};
                 {ok, Artifact} ->
-                    case compiled(Opts) of
+                    case options(Opts) of
                         {error, E} ->
                             {stop, E};
                         {ok, Compiled} ->
@@ -518,6 +518,12 @@ init({Adapter, Opts}) ->
 %% The one combination that cannot mean what it says is refused rather than
 %% resolved: a finite `fuel' is a metering the caller asked for, and the tier
 %% gives it up by construction.
+options(Opts) ->
+    case maps:get(preload, Opts, async) of
+        P when P =:= async; P =:= wait -> compiled(Opts);
+        Other -> {error, {bad_option, preload, Other}}
+    end.
+
 compiled(Opts) ->
     Limits = maps:get(limits, Opts, #{}),
     case maps:get(compiled, Opts, false) of
@@ -555,24 +561,40 @@ started(Adapter, Artifact, Opts, Limits, Root) ->
                          floor => CapHeap}) of
         {error, E}          -> {stop, E};
         {ok, undefined, _}  ->
-            ok = preload(module_of(Artifact), Limits),
+            ok = preload(module_of(Artifact), Limits, Opts),
             {ok, W};
         {ok, Image, Cap}    ->
-            ok = preload(maps:get(module, Cap), Limits),
+            ok = preload(maps:get(module, Cap), Limits, Opts),
             {ok, start_ahead(W#w{image = Image, snapshot_cap = Cap})}
     end.
 
-%% Compiled code from the disk cache, loaded before the first request, so that
-%% request enters it rather than interpreting while a compiler reads the same
-%% file back. Only a worker that compiles asks, and a miss is the start every
+%% Compiled code from the disk cache, loaded without waiting for a request to
+%% ask for it. Only a worker that compiles asks, and a miss is the start every
 %% release had until this: the tier compiles as it always did.
+%%
+%% `async', the default, returns at once. Loading an artifact is the emulator
+%% translating it to native code, 0.2 s for Lua and 2.9 s for CPython, and a
+%% start that waited for it failed the start-time gate `test/audit/PERF.md'
+%% records. It does not make the load free: `erlang:prepare_loading/2' stalls
+%% every process on the node while it runs, so a request that arrives during
+%% the load waits for it, whichever mode asked. `wait' is for a host that
+%% starts workers ahead of traffic and wants request 1 compiled.
+%%
+%% The background preload is its own process, neither linked nor monitored.
+%% It holds nothing of the worker's: its slot reservation and lease are
+%% monitored by `wasm_code_slots' and go when it exits, and `wasm_jit' bounds
+%% it. Tying it to the worker would only throw away a load that the next
+%% worker of the same module would use.
 %%
 %% After the capture and not before: the capture runs guest code under no
 %% compile limits, and nothing it does should wait on or race this.
-preload(Module, #{compile := true} = Limits) when Module =/= undefined ->
-    _ = wasm_jit:preload(Module, Limits),
+preload(Module, #{compile := true} = Limits, Opts) when Module =/= undefined ->
+    case maps:get(preload, Opts, async) of
+        wait  -> _ = wasm_jit:preload(Module, Limits);
+        async -> _ = spawn(fun() -> wasm_jit:preload(Module, Limits) end)
+    end,
     ok;
-preload(_Module, _Limits) ->
+preload(_Module, _Limits, _Opts) ->
     ok.
 
 %% The module an adapter serves, where its artifact says. Every shipped adapter

@@ -18,6 +18,7 @@ testing the artifact rather than the mechanism.
 -include_lib("stdlib/include/assert.hrl").
 -include("wasm.hrl").
 -include("wasm_snapshot_budget.hrl").
+-include("wasm_exec.hrl").
 
 suite() -> [{timetrap, {seconds, 60}}].
 
@@ -25,6 +26,7 @@ all() ->
     [every_atom_an_image_holds_exists_once_the_decoder_is_loaded,
      a_restored_instance_matches_one_that_ran_init,
      restore_does_not_run_the_start_function,
+     a_restore_expands_a_profile,
      a_restored_instance_is_isolated_from_the_image,
      self_referencing_funcrefs_are_relocated,
      an_inline_module_cannot_be_captured,
@@ -131,6 +133,26 @@ a_restored_instance_matches_one_that_ran_init(_Config) ->
     ?assertEqual(wasm:call(Init, ~"handle", []), wasm:call(Fresh, ~"handle", [])),
     ok = wasm:destroy(Init),
     ok = wasm:destroy(Fresh).
+
+%% `profile' is a set of options, and a restore takes the same options an
+%% instantiation does. It was ignored here, so a worker restoring one instance
+%% per request under `profile => script' kept the default threshold of 32 and
+%% never compiled anything. What you set yourself still wins, and an unknown
+%% profile is a value rather than a crash, as it is for `instantiate/3'.
+a_restore_expands_a_profile(_Config) ->
+    Handle = fixture(reactor),
+    Init = init(Handle, #{}),
+    {ok, Image} = wasm:snapshot(Init),
+    {ok, Script} = wasm:restore(Image, #{}, #{profile => script}),
+    ?assertMatch(#{compile := true, compile_after := 1,
+                   compile_quality := baseline}, Script#inst.limits),
+    {ok, Mine} = wasm:restore(Image, #{}, #{profile => script,
+                                            compile_after => 7}),
+    ?assertMatch(#{compile_after := 7}, Mine#inst.limits),
+    ?assertMatch({error, #{kind := unknown_profile}},
+                 wasm:restore(Image, #{}, #{profile => nonsense})),
+    [ok = wasm:destroy(I) || I <- [Init, Script, Mine]],
+    ok.
 
 restore_does_not_run_the_start_function(_Config) ->
     Handle = fixture(started),

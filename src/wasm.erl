@@ -843,11 +843,22 @@ do_destroy(Inst) ->
     %% The object store goes when the last instance sharing it goes, not with
     %% the first: linked instances hold references into one store.
     ok = wasm_heap:delete(Inst#inst.heap, Inst#inst.id),
+    ok = share_ir(Inst),
     %% Releasing the state table last makes this idempotent: a second call finds
     %% it gone, `mut/1' reports a dead instance, and `capture/1' turns that into
     %% a value rather than releasing the same pages twice.
     ok = wasm_instance:release(Inst),
     ok.
+
+%% What this instance lowered, published once for every later instance of its
+%% module before the release below erases it. Here and not in `wasm_instance',
+%% because publishing asks the module cache, which `wasm_instance' must not
+%% call.
+share_ir(Inst) ->
+    case wasm_instance:unshared_ir(Inst) of
+        none -> ok;
+        {Key, IRs} -> wasm_module_cache:publish_ir(Key, IRs)
+    end.
 
 -doc """
 Capture an initialised instance, so a later one can start where it left off.

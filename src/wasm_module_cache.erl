@@ -23,6 +23,19 @@ can drive repeated load and unload cycles a denial of service. Hence the rate
 limit and the resident cap below, enforced here rather than left to you to
 remember.
 
+## What is published beside a module
+
+Everything instantiating derives from the module alone: its validation context
+and, for a module large enough to defer lowering, its function table. Both go
+into the same term as the module, in the same `put`, because a term shares
+subterms only within itself: published under a key of their own, the function
+table would carry a second copy of every function body, twice the module.
+
+And the bodies requests actually lower, under `{wasm_ir_shared, Hash, Fuse}`.
+Those are not known at load, so the first instance destroyed publishes them,
+and the key is new, which starts no global scan. They are erased with the
+module.
+
 ## Identity is the content hash
 
 Load the same bytes from two places and you get the same handle and share one
@@ -35,12 +48,14 @@ compiled artefact, with no coordination. It also means either of you can call
 -export([start_link/0]).
 -export([load/1, load/2, unload/1, get/1, resident/0, stats/0]).
 -export([claim_for/2, unclaim_for/2]).
+-export([publish_ir/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -include("wasm.hrl").
 
 -define(SERVER, ?MODULE).
--define(PT_KEY(Hash), {wasm_module, Hash}).
+-define(PT_KEY(Hash), ?CACHED_MODULE_KEY(Hash)).
+-define(IR_KEY(Hash, Fuse), {wasm_ir_shared, Hash, Fuse}).
 
 %% Node-wide ceilings. Both exist to bound the `persistent_term` global scans
 %% that loading and unloading trigger.
@@ -71,7 +86,10 @@ compiled artefact, with no coordination. It also means either of you can call
     window_start = 0 :: integer(),
     window_count = 0 :: non_neg_integer(),
     max_resident :: pos_integer(),
-    max_rate :: pos_integer()
+    max_rate :: pos_integer(),
+    %% {hash, fuse} => {pending, pid()} | stored: who is publishing a module's
+    %% lowered bodies, or that they are published. See `publish_ir/2'.
+    ir = #{} :: map()
 }).
 
 %%% ----------------------------------------------------------------- api ---
@@ -116,16 +134,24 @@ load(Binary, _Opts) when is_binary(Binary) ->
 %% `persistent_term:put' triggers is paid by the loader instead of by everybody
 %% waiting behind it.
 publish(Hash, Module) ->
-    persistent_term:put(?PT_KEY(Hash), Module),
+    Entry = {Module, prep_of(Module)},
+    persistent_term:put(?PT_KEY(Hash), Entry),
     %% `size_shared/1', not `size/1'. They answer the same question, and on a
     %% real 1.8 MB module `size/1' measured 24 s against 34 ms because it walks
     %% shared subterms once per reference.
-    Size = erts_debug:size_shared(Module) * erlang:system_info(wordsize),
+    Size = erts_debug:size_shared(Entry) * erlang:system_info(wordsize),
     case call({stored, Hash, Size}) of
         ok -> {ok, {wasm_module, Hash}};
         {error, _} = Error ->
             persistent_term:erase(?PT_KEY(Hash)),
             Error
+    end.
+
+%% The module has validated, so this does not fail; if it did, the module is
+%% published without it and every instance builds its own, as before.
+prep_of(Module) ->
+    try wasm_instance:prep(Module)
+    catch _:_ -> undefined
     end.
 
 %% Nothing this library exposes may raise, including when the server is
@@ -182,7 +208,34 @@ instantiation.
 get({wasm_module, Hash}) ->
     case persistent_term:get(?PT_KEY(Hash), undefined) of
         undefined -> {error, not_loaded};
-        Module -> {ok, Module}
+        {Module, _Prep} -> {ok, Module}
+    end.
+
+-doc """
+Publish a module's lowered bodies, once.
+
+Called by `wasm:destroy/1`, with the bodies the instance lowered. The
+server only decides who publishes: the first caller for a resident module is
+told to go ahead and everybody after it is told no, so two instances destroyed
+at once publish once. The `put` happens here, in the caller, for the reason
+`publish/2` gives: the term is megabytes, and it stays out of the server's
+mailbox and off everybody waiting behind it.
+
+An eviction can land between the claim and the `put`. The server resolves it
+when told the `put` happened, or when the publisher dies: a key published for
+a module that is no longer resident is erased then.
+""".
+-spec publish_ir({wasm_ir_shared, binary(), term()}, map()) -> ok.
+publish_ir({wasm_ir_shared, Hash, Fuse} = Key, IRs) ->
+    case call({claim_ir, Hash, Fuse}) of
+        ok ->
+            _ = try persistent_term:put(Key, IRs)
+                catch error:_ -> false
+                end,
+            _ = call({ir_stored, Hash, Fuse}),
+            ok;
+        _NotUs ->
+            ok
     end.
 
 -doc """
@@ -241,8 +294,12 @@ init([]) ->
 %% cache is built on.
 purge() ->
     _ = [persistent_term:erase(K)
-         || {{wasm_module, _} = K, _} <- persistent_term:get()],
+         || {K, _} <- persistent_term:get(), ours(K)],
     ok.
+
+ours({wasm_module, _}) -> true;
+ours({wasm_ir_shared, _, _}) -> true;
+ours(_) -> false.
 
 handle_call({acquire, Hash}, {Pid, _} = From, State) ->
     case maps:find(Hash, State#state.resident) of
@@ -316,6 +373,19 @@ handle_call({abandon, Hash, Error}, {Pid, _}, State) ->
 handle_call({release, Hash}, {Pid, _}, State) ->
     {reply, ok, drop_claim(Pid, Hash, State)};
 
+handle_call({claim_ir, Hash, Fuse}, {Pid, _}, State) ->
+    case maps:is_key(Hash, State#state.resident)
+         andalso not maps:is_key({Hash, Fuse}, State#state.ir) of
+        true ->
+            Ir = maps:put({Hash, Fuse}, {pending, Pid}, State#state.ir),
+            {reply, ok, watch(Pid, State#state{ir = Ir})};
+        false ->
+            {reply, taken, State}
+    end;
+
+handle_call({ir_stored, Hash, Fuse}, {Pid, _}, State) ->
+    {reply, ok, unwatch(Pid, ir_settled(Hash, Fuse, Pid, State))};
+
 handle_call(resident, _From, State) ->
     {reply, maps:size(State#state.resident), State};
 handle_call(stats, _From, State) ->
@@ -333,7 +403,7 @@ handle_cast(_Msg, State) -> {noreply, State}.
 %% loaded and then died kept the module resident for the life of the node, and
 %% enough of them filled the resident cap until `load/1' refused everything.
 handle_info({'DOWN', _Ref, process, Pid, _Reason}, State0) ->
-    State1 = fail_compiles(Pid, State0),
+    State1 = fail_ir(Pid, fail_compiles(Pid, State0)),
     Held = maps:get(Pid, State1#state.claims, #{}),
     State2 = State1#state{claims = maps:remove(Pid, State1#state.claims),
                           monitors = maps:remove(Pid, State1#state.monitors)},
@@ -404,13 +474,57 @@ drop_holders(Hash, N, State) ->
     case maps:find(Hash, State#state.resident) of
         {ok, #{holders := H}} when H =< N ->
             persistent_term:erase(?PT_KEY(Hash)),
-            State#state{resident = maps:remove(Hash, State#state.resident)};
+            %% Whether or not anything was published under them: erasing a key
+            %% that is not there is a lookup, and one that is must go now.
+            _ = [persistent_term:erase(?IR_KEY(Hash, F)) || F <- [true, false]],
+            State#state{resident = maps:remove(Hash, State#state.resident),
+                        ir = forget_stored_ir(Hash, State#state.ir)};
         {ok, #{holders := H} = Entry} ->
             State#state{resident = maps:put(Hash, Entry#{holders => H - N},
                                             State#state.resident)};
         error ->
             State
     end.
+
+%%% ------------------------------------------------------ published bodies ---
+
+%% A publish still in flight survives the eviction, so that its end can be
+%% told the module went: the `put' may land after the erase above.
+forget_stored_ir(Hash, Ir) ->
+    maps:filter(fun({H, _}, stored) -> H =/= Hash;
+                   (_, _) -> true
+                end, Ir).
+
+%% The publisher's `put' is done, or the publisher is dead and did whatever it
+%% did. Either way the key is now in its final state, and the only question is
+%% whether the module is still here to own it.
+ir_settled(Hash, Fuse, Pid, State) ->
+    Resident = maps:is_key(Hash, State#state.resident),
+    Ir = State#state.ir,
+    case maps:find({Hash, Fuse}, Ir) of
+        {ok, {pending, Pid}} when Resident ->
+            State#state{ir = maps:put({Hash, Fuse}, stored, Ir)};
+        {ok, {pending, Pid}} ->
+            persistent_term:erase(?IR_KEY(Hash, Fuse)),
+            State#state{ir = maps:remove({Hash, Fuse}, Ir)};
+        _NotThisOne ->
+            State
+    end.
+
+%% A publisher that died. The `put' happened or it did not, and a key that
+%% exists for a resident module is as good as one confirmed. One that does not
+%% exist leaves the slot free, so the next destroy publishes instead.
+fail_ir(Pid, State) ->
+    Mine = [K || {K, {pending, P}} <- maps:to_list(State#state.ir), P =:= Pid],
+    lists:foldl(
+      fun({Hash, Fuse}, S) ->
+              case maps:is_key(Hash, S#state.resident)
+                   andalso persistent_term:get(?IR_KEY(Hash, Fuse),
+                                               undefined) =:= undefined of
+                  true -> S#state{ir = maps:remove({Hash, Fuse}, S#state.ir)};
+                  false -> ir_settled(Hash, Fuse, Pid, S)
+              end
+      end, State, Mine).
 
 %% A compiler that dies leaves everybody waiting on it with nothing to wait
 %% for, so they are told rather than left to time out.
@@ -431,8 +545,10 @@ watch(Pid, #state{monitors = Ms} = State) ->
         false -> State#state{monitors = maps:put(Pid, erlang:monitor(process, Pid), Ms)}
     end.
 
-unwatch(Pid, #state{monitors = Ms, claims = Claims, compiling = Compiling} = State) ->
-    case maps:is_key(Pid, Claims) orelse compiling_for(Pid, Compiling) of
+unwatch(Pid, #state{monitors = Ms, claims = Claims, compiling = Compiling,
+                    ir = Ir} = State) ->
+    case maps:is_key(Pid, Claims) orelse compiling_for(Pid, Compiling)
+         orelse publishing(Pid, Ir) of
         true -> State;
         false ->
             case maps:find(Pid, Ms) of
@@ -445,6 +561,9 @@ unwatch(Pid, #state{monitors = Ms, claims = Claims, compiling = Compiling} = Sta
 
 compiling_for(Pid, Compiling) ->
     lists:any(fun({C, _}) -> C =:= Pid end, maps:values(Compiling)).
+
+publishing(Pid, Ir) ->
+    lists:member({pending, Pid}, maps:values(Ir)).
 
 %%% --------------------------------------------------------------- limits ---
 

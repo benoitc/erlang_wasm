@@ -24,7 +24,11 @@ all() ->
      a_failed_file_write_is_reported,
      a_failed_socket_write_is_reported,
      two_append_streams_both_append,
-     an_output_stream_outlives_its_descriptor].
+     an_output_stream_outlives_its_descriptor,
+     a_write_without_a_permit_traps,
+     a_permit_covers_exactly_one_write,
+     a_write_larger_than_the_permit_traps,
+     a_closed_sink_stays_closed].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -69,7 +73,7 @@ a_failed_file_write_is_reported(Config) ->
     {ok, Root} = wasi_fs:preopen(Dir),
     {ok, Fh} = wasi_fs:open(Root, <<"f">>, [write, create]),
     ok = wasi_fs:close(Fh),
-    H = wasm_component:host_new(output_stream, {file, own, Fh, 0}),
+    H = wasi_preview2:new_output_stream({file, own, Fh, 0}),
     ?assertMatch({error, _}, wasi_preview2:write_stream(H, <<"lost?">>)),
     wasm_component:host_drop(H).
 
@@ -80,7 +84,7 @@ a_failed_socket_write_is_reported(_Config) ->
     %% A socket-backed output stream carries a wasi_sock2 handle (the TCP backend);
     %% a write to an unconnected socket is reported as an error, not swallowed.
     {ok, Sock} = wasi_sock2:open(inet),
-    H = wasm_component:host_new(output_stream, {socket, Sock}),
+    H = wasi_preview2:new_output_stream({socket, Sock}),
     ?assertMatch({error, _}, wasi_preview2:write_stream(H, <<"x">>)),
     wasm_component:host_drop(H),
     wasi_sock2:close(Sock).
@@ -94,8 +98,8 @@ two_append_streams_both_append(Config) ->
     {ok, Root} = wasi_fs:preopen(filename:join(Dir, "append")),
     {ok, Fh} = wasi_fs:open(Root, <<"f">>, [read, write, create]),
     {ok, _} = wasi_fs:pwrite(Fh, 0, <<"abc">>),
-    S1 = wasm_component:host_new(output_stream, {file_append, own, Fh}),
-    S2 = wasm_component:host_new(output_stream, {file_append, own, Fh}),
+    S1 = wasi_preview2:new_output_stream({file_append, own, Fh}),
+    S2 = wasi_preview2:new_output_stream({file_append, own, Fh}),
     ok = wasi_preview2:write_stream(S1, <<"A">>),
     ok = wasi_preview2:write_stream(S2, <<"B">>),
     ?assertEqual({ok, <<"abcAB">>}, wasi_fs:pread(Fh, 0, 5)),
@@ -114,13 +118,54 @@ an_output_stream_outlives_its_descriptor(Config) ->
             {ok, Root} = wasi_fs:preopen(filename:join(Dir, "outlive")),
             {ok, Fh} = wasi_fs:open(Root, <<"f">>, [write, create]),
             {ok, Dup} = wasi_fs:dup(Fh),
-            S = wasm_component:host_new(output_stream, {file, own, Dup, 0}),
+            S = wasi_preview2:new_output_stream({file, own, Dup, 0}),
             ok = wasi_fs:close(Fh),
             ok = wasi_preview2:write_stream(S, <<"kept">>),
             {ok, Rd} = wasi_fs:open(Root, <<"f">>, [read]),
             ?assertEqual({ok, <<"kept">>}, wasi_fs:pread(Rd, 0, 4)),
             wasm_component:host_drop(S)
     end.
+
+%% wasi-io requires a `check-write` permit before an ordinary `write`; a write
+%% with none violates the ABI and traps. Fail-first: the pre-permit write path had
+%% no permit state and let the write through.
+a_write_without_a_permit_traps(_Config) ->
+    H = wasi_preview2:new_output_stream(fun(_) -> ok end),
+    ?assertMatch({error, _},
+                 wasm_error:capture(fun() -> wasi_preview2:permit_write(H, <<"x">>) end)),
+    wasm_component:host_drop(H).
+
+%% A permit granted by check-write covers one write and is then consumed: the
+%% first write goes through, a second without a fresh check-write traps.
+a_permit_covers_exactly_one_write(_Config) ->
+    Self = self(),
+    H = wasi_preview2:new_output_stream(fun(B) -> Self ! {out, B}, ok end),
+    {ok, Permit} = wasi_preview2:check_write(H),
+    ?assert(Permit > 0),
+    ?assertEqual(ok, wasi_preview2:permit_write(H, <<"a">>)),
+    ?assertEqual(<<"a">>, receive {out, B} -> B after 0 -> none end),
+    ?assertMatch({error, _},
+                 wasm_error:capture(fun() -> wasi_preview2:permit_write(H, <<"b">>) end)),
+    wasm_component:host_drop(H).
+
+%% A write larger than the granted permit traps rather than being trusted.
+a_write_larger_than_the_permit_traps(_Config) ->
+    H = wasi_preview2:new_output_stream(fun(_) -> ok end),
+    {ok, Permit} = wasi_preview2:check_write(H),
+    Big = binary:copy(<<0>>, Permit + 1),
+    ?assertMatch({error, _},
+                 wasm_error:capture(fun() -> wasi_preview2:permit_write(H, Big) end)),
+    wasm_component:host_drop(H).
+
+%% A sink whose reader is gone reports `closed`; once closed the stream stays
+%% closed, so check-write reports closed instead of granting a fresh permit and a
+%% later write is refused. Fail-first: check-write always returned ok(budget).
+a_closed_sink_stays_closed(_Config) ->
+    H = wasi_preview2:new_output_stream(fun(_) -> closed end),
+    ?assertEqual({error, closed}, wasi_preview2:write_stream(H, <<"x">>)),
+    ?assertEqual({error, {<<"closed">>, undefined}}, wasi_preview2:check_write(H)),
+    ?assertEqual({error, closed}, wasi_preview2:write_stream(H, <<"y">>)),
+    wasm_component:host_drop(H).
 
 %%% -------------------------------------------------------------- helpers ---
 

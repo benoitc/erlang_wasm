@@ -28,6 +28,8 @@ later step.
 %% Exported so a test can drive the stream write/read and udp grant paths directly.
 -export([write_stream/2, blocking_read_stream/2, datagram_allowed/3,
          peer_matches/3, random_bytes/1]).
+%% Exported so a test can mint an output stream and drive the permit contract.
+-export([new_output_stream/1, permit_write/2, check_write/1]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle), minted when a file-backed write
@@ -660,7 +662,7 @@ exit_of(_) -> 1.
 cli_stderr(Sink) ->
     #{{<<"wasi:cli/stderr">>, <<"get-stderr">>} =>
           wasm_component:import_fun(
-            {[], handle}, fun([]) -> wasm_component:host_new(output_stream, Sink) end)}.
+            {[], handle}, fun([]) -> new_output_stream(Sink) end)}.
 
 %% Not a terminal: get-terminal-* report none, so a guest writes plainly. No
 %% terminal handle is ever minted, so the resource-drops are unreachable, but a
@@ -704,20 +706,25 @@ io(Opts) ->
     Stdout = <<"wasi:cli/stdout">>,
     Stdin = <<"wasi:cli/stdin">>,
     Poll = <<"wasi:io/poll">>,
-    Write = fun([Handle, Bytes]) -> write_result(checked_write(Handle, Bytes)) end,
+    %% A plain `write` requires the guest's prior `check-write` permit; the
+    %% blocking helper acquires its permit internally, so it just writes and flushes.
+    Write = fun([Handle, Bytes]) -> write_result(permit_write(Handle, Bytes)) end,
+    BlockingWrite = fun([Handle, Bytes]) ->
+                        write_result(and_flush(Handle, write_stream(Handle, Bytes)))
+                    end,
     Read = fun([H, Len]) -> read_stream(H, Len) end,
     BlockingRead = fun([H, Len]) -> blocking_read_stream(H, Len) end,
     Subscribe = fun([Stream]) -> wasm_component:host_new(pollable, {stream, Stream}) end,
     #{{Stdout, <<"get-stdout">>} =>
           wasm_component:import_fun(
-            {[], handle}, fun([]) -> wasm_component:host_new(output_stream, Sink) end),
+            {[], handle}, fun([]) -> new_output_stream(Sink) end),
       {Streams, <<"[method]output-stream.check-write">>} =>
           wasm_component:import_fun(
             {[handle], ?COUNT_RESULT}, fun([H]) -> check_write(H) end),
       {Streams, <<"[method]output-stream.write">>} =>
           wasm_component:import_fun({[handle, {list, u8}], ?WRITE_RESULT}, Write),
       {Streams, <<"[method]output-stream.blocking-write-and-flush">>} =>
-          wasm_component:import_fun({[handle, {list, u8}], ?WRITE_RESULT}, Write),
+          wasm_component:import_fun({[handle, {list, u8}], ?WRITE_RESULT}, BlockingWrite),
       {Streams, <<"[method]output-stream.flush">>} =>
           wasm_component:import_fun(
             {[handle], ?WRITE_RESULT}, fun([H]) -> write_result(flush_stream(H)) end),
@@ -727,7 +734,7 @@ io(Opts) ->
       {Streams, <<"[method]output-stream.write-zeroes">>} =>
           wasm_component:import_fun(
             {[handle, u64], ?WRITE_RESULT},
-            fun([H, Len]) -> write_result(write_zeroes(H, Len)) end),
+            fun([H, Len]) -> write_result(permit_write_zeroes(H, Len)) end),
       {Streams, <<"[method]output-stream.blocking-write-zeroes-and-flush">>} =>
           wasm_component:import_fun(
             {[handle, u64], ?WRITE_RESULT},
@@ -800,9 +807,9 @@ input_drop(Handle) ->
 %% owned by the descriptor or socket resource and left alone.
 output_drop(Handle) ->
     case wasm_component:host_get(Handle) of
-        {ok, {output_stream, {file, own, Fh, _}}}     -> _ = wasi_fs:close(Fh);
-        {ok, {output_stream, {file_append, own, Fh}}} -> _ = wasi_fs:close(Fh);
-        _                                             -> ok
+        {ok, {output_stream, {ostream, _P, _C, {file, own, Fh, _}}}}     -> _ = wasi_fs:close(Fh);
+        {ok, {output_stream, {ostream, _P, _C, {file_append, own, Fh}}}} -> _ = wasi_fs:close(Fh);
+        _                                                                -> ok
     end,
     wasm_component:host_drop(Handle).
 
@@ -811,58 +818,92 @@ output_drop(Handle) ->
 %% Returns `ok` or `{error, Reason}`.
 write_stream(Handle, Bytes) ->
     case wasm_component:host_get(Handle) of
-        {ok, {output_stream, {file, Own, Fh, Off}}} ->
-            %% A file-backed write stream: pwrite and advance the offset so the
-            %% next write continues where this ended.
-            case wasi_fs:pwrite(Fh, Off, Bytes) of
-                {ok, N}          -> wasm_component:host_update(Handle, {file, Own, Fh, Off + N});
-                {error, _} = Err -> Err
-            end;
-        {ok, {output_stream, {file_append, _Own, Fh}}} ->
-            %% Append: write at the current end each time.
-            End = case wasi_fs:size(Fh) of {ok, S} -> S; _ -> 0 end,
-            case wasi_fs:pwrite(Fh, End, Bytes) of
-                {ok, _}          -> ok;
-                {error, _} = Err -> Err
-            end;
-        {ok, {output_stream, {socket, Conn}}} ->
-            %% A socket-backed stream: a send to a closed or shut-down peer is the
-            %% `closed` stream-error; any other failure is reported as itself.
-            case wasi_sock2:send(Conn, Bytes) of
-                ok                              -> ok;
-                {error, E} when E =:= epipe; E =:= closed; E =:= econnreset;
-                                E =:= enotconn; E =:= eshutdown -> {error, closed};
-                {error, Errno}                  -> {error, sock2_errno(Errno)}
-            end;
-        {ok, {output_stream, {http_body, Req}}} ->
-            %% An outgoing HTTP request body: append to the request the body
-            %% belongs to, so outgoing-handler sends what the guest wrote.
-            wasi_http:append_body(Req, Bytes);
-        {ok, {output_stream, Sink}} when is_function(Sink) ->
-            %% A sink may signal that its reader is gone (a closed pipe), which the
-            %% guest sees as the closed stream-error.
-            case Sink(Bytes) of
-                closed -> {error, closed};
-                _      -> ok
+        {ok, {output_stream, {ostream, _P, true, _B}}} ->
+            %% A stream that has already reported closed stays closed.
+            {error, closed};
+        {ok, {output_stream, {ostream, P, false, B}}} ->
+            case write_backing(Handle, P, B, Bytes) of
+                {error, closed} = E ->
+                    %% Remember the close so a later check-write reports it too.
+                    _ = wasm_component:host_update(Handle, {ostream, 0, true, B}),
+                    E;
+                Other ->
+                    Other
             end;
         _ ->
             ok
     end.
 
-%% Enforce the permit check-write reports. A write no larger than the budget goes
-%% through; a larger one is refused rather than trusted, which also bounds the host
-%% allocation a guest can drive.
-checked_write(_Handle, Bytes) when byte_size(Bytes) > ?WRITE_BUDGET ->
-    {error, exceeds_write_budget};
-checked_write(Handle, Bytes) ->
-    write_stream(Handle, Bytes).
+%% Write to a stream's backing, preserving the permit envelope. A file offset
+%% advances so the next write continues where this ended. A send to a closed or
+%% shut-down peer, or a sink whose reader is gone, is the `closed` stream-error;
+%% any other failure is reported as itself.
+write_backing(Handle, P, {file, Own, Fh, Off}, Bytes) ->
+    case wasi_fs:pwrite(Fh, Off, Bytes) of
+        {ok, N} ->
+            wasm_component:host_update(Handle, {ostream, P, false, {file, Own, Fh, Off + N}});
+        {error, _} = Err ->
+            Err
+    end;
+write_backing(_Handle, _P, {file_append, _Own, Fh}, Bytes) ->
+    End = case wasi_fs:size(Fh) of {ok, S} -> S; _ -> 0 end,
+    case wasi_fs:pwrite(Fh, End, Bytes) of
+        {ok, _}          -> ok;
+        {error, _} = Err -> Err
+    end;
+write_backing(_Handle, _P, {socket, Conn}, Bytes) ->
+    case wasi_sock2:send(Conn, Bytes) of
+        ok                              -> ok;
+        {error, E} when E =:= epipe; E =:= closed; E =:= econnreset;
+                        E =:= enotconn; E =:= eshutdown -> {error, closed};
+        {error, Errno}                  -> {error, sock2_errno(Errno)}
+    end;
+write_backing(_Handle, _P, {http_body, Req}, Bytes) ->
+    wasi_http:append_body(Req, Bytes);
+write_backing(_Handle, _P, Sink, Bytes) when is_function(Sink) ->
+    case Sink(Bytes) of
+        closed -> {error, closed};
+        _      -> ok
+    end.
 
-%% write-zeroes with the same permit, so the host never materialises more than one
-%% budget's worth of zeroes for a guest-chosen length.
+%% Mint a host output-stream over Backing. wasi-io's `write` requires a permit
+%% from a prior `check-write`, so a fresh stream starts with none and is open.
+-spec new_output_stream(term()) -> pos_integer().
+new_output_stream(Backing) ->
+    wasm_component:host_new(output_stream, {ostream, 0, false, Backing}).
+
+%% wasi-io `output-stream.write`: the guest must hold a `check-write` permit at
+%% least the size of the write, which the write consumes. Writing with no permit,
+%% or beyond it, violates the ABI and traps. A closed stream reports closed.
+permit_write(Handle, Bytes) ->
+    with_permit(Handle, byte_size(Bytes), fun() -> write_stream(Handle, Bytes) end).
+
+%% write-zeroes carries the same permit. The permit never exceeds the budget, so
+%% the materialised run is bounded; `write_zeroes` keeps the ceiling for the gone
+%% and blocking (internal-permit) paths.
+permit_write_zeroes(Handle, Len) ->
+    with_permit(Handle, Len, fun() -> write_zeroes(Handle, Len) end).
+
 write_zeroes(_Handle, Len) when Len > ?WRITE_BUDGET ->
     {error, exceeds_write_budget};
 write_zeroes(Handle, Len) ->
     write_stream(Handle, binary:copy(<<0>>, Len)).
+
+%% Consume the write permit for an N-byte write and run it, or trap when the guest
+%% has no permit (or asks for more than it holds). A closed stream reports closed
+%% without writing; an unknown handle is a no-op, so the write is dropped.
+with_permit(Handle, N, Do) ->
+    case wasm_component:host_get(Handle) of
+        {ok, {output_stream, {ostream, _P, true, _B}}} ->
+            {error, closed};
+        {ok, {output_stream, {ostream, P, false, B}}} when N =< P ->
+            _ = wasm_component:host_update(Handle, {ostream, 0, false, B}),
+            Do();
+        {ok, {output_stream, {ostream, _P, false, _B}}} ->
+            wasm_error:trap(write_without_permit, #{requested => N});
+        _ ->
+            Do()
+    end.
 
 %% Sequence a write with a flush for the blocking-*-and-flush methods: flush only
 %% if the write succeeded.
@@ -872,11 +913,21 @@ and_flush(_Handle, {error, _} = E) -> E.
 %% Move up to `Len` bytes (capped to the permit) from an input stream to an output
 %% stream, returning how many moved. splice reads the source non-blocking;
 %% blocking-splice waits for at least one byte.
+%% Plain splice writes to the output like `write`, so it consumes a check-write
+%% permit and traps without one; a closed destination reports closed in the
+%% result<u64, stream-error> shape. blocking-splice acquires its permit internally.
 splice_stream(Dst, Src, Len) ->
-    splice_with(fun read_stream/2, Dst, Src, Len).
+    permit_count(
+      with_permit(Dst, min(Len, ?WRITE_BUDGET),
+                  fun() -> splice_with(fun read_stream/2, Dst, Src, Len) end)).
 
 blocking_splice_stream(Dst, Src, Len) ->
     splice_with(fun blocking_read_stream/2, Dst, Src, Len).
+
+%% with_permit signals a closed stream as the bare `{error, closed}`; splice
+%% reports it in the same result<u64, stream-error> shape write_result uses.
+permit_count({error, closed}) -> {error, {<<"closed">>, undefined}};
+permit_count(Other)           -> Other.
 
 splice_with(Read, Dst, Src, Len) ->
     N = min(Len, ?WRITE_BUDGET),
@@ -906,24 +957,41 @@ write_result({error, Reason}) ->
 %% function sink has nothing to flush. A gone handle is a no-op.
 flush_stream(Handle) ->
     case wasm_component:host_get(Handle) of
-        {ok, {output_stream, {file, _Own, Fh, _Off}}}  -> wasi_fs:sync(Fh);
-        {ok, {output_stream, {file_append, _Own, Fh}}} -> wasi_fs:sync(Fh);
-        {ok, {output_stream, {socket, Conn}}}          -> socket_open_or_closed(Conn);
-        _                                              -> ok
+        {ok, {output_stream, {ostream, _P, _C, {file, _Own, Fh, _Off}}}}  -> wasi_fs:sync(Fh);
+        {ok, {output_stream, {ostream, _P, _C, {file_append, _Own, Fh}}}} -> wasi_fs:sync(Fh);
+        {ok, {output_stream, {ostream, _P, _C, {socket, Conn}}}}          -> socket_open_or_closed(Conn);
+        _                                                                 -> ok
     end.
 
 %% check-write and flush on a socket report `closed` once the send side is shut: a
 %% zero-byte probe send fails on a shut or closed connection.
 check_write(Handle) ->
     case wasm_component:host_get(Handle) of
-        {ok, {output_stream, {socket, Conn}}} ->
-            case socket_open_or_closed(Conn) of
-                ok             -> {ok, ?WRITE_BUDGET};
-                {error, closed} -> {error, {<<"closed">>, undefined}}
+        {ok, {output_stream, {ostream, _P, true, _B}}} ->
+            %% A stream that reported closed stays closed.
+            {error, {<<"closed">>, undefined}};
+        {ok, {output_stream, {ostream, _P, false, B}}} ->
+            case backing_open(B) of
+                closed ->
+                    _ = wasm_component:host_update(Handle, {ostream, 0, true, B}),
+                    {error, {<<"closed">>, undefined}};
+                open ->
+                    %% Grant a budget's worth of permit for the next write.
+                    _ = wasm_component:host_update(Handle, {ostream, ?WRITE_BUDGET, false, B}),
+                    {ok, ?WRITE_BUDGET}
             end;
         _ ->
             {ok, ?WRITE_BUDGET}
     end.
+
+%% Only a socket-backed stream can be closed before a write is attempted: a shut
+%% or dead send side. Every other backing is ready to accept a permit.
+backing_open({socket, Conn}) ->
+    case socket_open_or_closed(Conn) of
+        ok              -> open;
+        {error, closed} -> closed
+    end;
+backing_open(_) -> open.
 
 socket_open_or_closed(Conn) ->
     case wasi_sock2:send(Conn, <<>>) of
@@ -965,8 +1033,8 @@ no_live_pollable(Handle) ->
 %% tcp_socket resource owns and closes, so it is not closed here.
 close_resource({fs_file, {Handle, _Flags, _}})             -> _ = wasi_fs:close(Handle), ok;
 close_resource({fs_dir, {Root, _}})                          -> _ = wasi_fs:forget(Root), ok;
-close_resource({output_stream, {file, own, Fh, _}})     -> _ = wasi_fs:close(Fh), ok;
-close_resource({output_stream, {file_append, own, Fh}}) -> _ = wasi_fs:close(Fh), ok;
+close_resource({output_stream, {ostream, _P, _C, {file, own, Fh, _}}})     -> _ = wasi_fs:close(Fh), ok;
+close_resource({output_stream, {ostream, _P, _C, {file_append, own, Fh}}}) -> _ = wasi_fs:close(Fh), ok;
 close_resource({input_stream, {file, Handle, _}})       -> _ = wasi_fs:close(Handle), ok;
 close_resource({tcp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;
 close_resource({udp_socket, {udp_bound, Sock, _Conn}})  -> _ = wasi_sock2:close(Sock), ok;
@@ -1421,15 +1489,13 @@ open_modes(OpenFlags, DescFlags, WantsWrite) ->
 %% read-only mount never grants) cannot make a write stream.
 write_via_stream(File, Off) ->
     case writable_file(File) of
-        {ok, Handle}   -> {ok, wasm_component:host_new(output_stream,
-                                                       output_file(Handle, {write, Off}))};
+        {ok, Handle}   -> {ok, new_output_stream(output_file(Handle, {write, Off}))};
         {error, _} = E -> E
     end.
 
 append_via_stream(File) ->
     case writable_file(File) of
-        {ok, Handle}   -> {ok, wasm_component:host_new(output_stream,
-                                                       output_file(Handle, append))};
+        {ok, Handle}   -> {ok, new_output_stream(output_file(Handle, append))};
         {error, _} = E -> E
     end.
 
@@ -2274,7 +2340,7 @@ accept_connection(Listener, Listen) ->
 %% The `socket` stream tag is TCP-only, so its read/write path uses wasi_sock2.
 tcp_streams(Conn) ->
     In = wasm_component:host_new(input_stream, {socket, Conn, <<>>}),
-    Out = wasm_component:host_new(output_stream, {socket, Conn}),
+    Out = new_output_stream({socket, Conn}),
     {In, Out}.
 
 inherit_sockopts(From, To) ->

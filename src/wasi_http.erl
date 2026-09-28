@@ -639,7 +639,10 @@ content_length(Headers) ->
 body_write(B) ->
     case wasm_component:host_get(B) of
         {ok, {http_out_body, #{}}} ->
-            {ok, wasm_component:host_new(output_stream, {http_body, B})};
+            %% The `{ostream, Permit, Closed, Backing}` envelope wasi_preview2's
+            %% stream methods read; inlined (not a call) to keep the module graph
+            %% acyclic, since wasi_preview2 already depends on this module.
+            {ok, wasm_component:host_new(output_stream, {ostream, 0, false, {http_body, B}})};
         _ ->
             {error, undefined}
     end.

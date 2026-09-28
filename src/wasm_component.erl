@@ -229,8 +229,17 @@ instantiate(Bin, Imports, Opts) ->
 
 instantiate_decoded(#{composed := true} = Decoded, Imports, Opts, _Limits) ->
     instantiate_composed(Decoded, Imports, Opts);
-instantiate_decoded(#{core := Core, exports := Exports, sec := Sec} = Decoded,
-                    Imports, Opts, Limits) ->
+instantiate_decoded(#{core := Core, sec := Sec} = Decoded, Imports, Opts, Limits) ->
+    %% Reject a component whose `canon lift` declares a type its core function cannot
+    %% have (the Canonical ABI derives the core signature from the declared component
+    %% type) before any core is built or its start function runs.
+    case wasm_component_link:validate_lifts(Sec, maps:get(cores, Decoded, [Core])) of
+        {error, _} = Invalid -> Invalid;
+        ok -> instantiate_valid(Decoded, Imports, Opts, Limits)
+    end.
+
+instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
+                  Imports, Opts, Limits) ->
     Loader = maps:get(loader, Opts, load),
     EntryImports = wasm_component_link:core_imports(Core),
     Host = resolve_imports(EntryImports, Imports, resource_imports(EntryImports)),

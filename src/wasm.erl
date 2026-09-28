@@ -53,7 +53,7 @@ context to diagnose it.
 
 -export([load/1, load/2, load_file/1, unload/1]).
 -export([compile/1, compile/2, validate/1, instantiate/2, instantiate/3, destroy/1]).
--export([call/3, call/4, get_global/2, exports/1, extern/2]).
+-export([call/3, call/4, get_global/2, exports/1, extern/2, func_type_of/2]).
 -export([pin/2, release/2, release_all/1]).
 -export([snapshot/1, snapshot/2, restore/3, snapshot_info/1]).
 -export([save_snapshot/2, load_snapshot/2]).
@@ -1220,6 +1220,44 @@ extern_1(Inst, Name) ->
             {error, err(link, unknown_export, <<"unknown export">>,
                         #{name => Name})}
     end.
+
+-doc """
+The type of a core function a module exports, read from the module bytes without
+instantiating it.
+
+For a static check that must run before any core start function does, e.g. the
+Component Model verifying a `canon lift`'s core function has the signature the
+Canonical ABI derives from the declared component type. Returns the core
+function's `{Params, Results}` value-type lists, or a named error if the module is
+undecodable, the export is missing, or it is not a function export.
+""".
+-spec func_type_of(binary(), binary()) ->
+          {ok, {[valtype()], [valtype()]}} | {error, term()}.
+func_type_of(Bytes, Name) ->
+    try wasm_decode:module_unchecked(Bytes) of
+        #module{types = Types, imports = Imports, funcs = Funcs, exports = Exports} ->
+            case [Idx || #export{name = N, desc = {func, Idx}} <- Exports, N =:= Name] of
+                [FuncIdx | _] ->
+                    Imported = [T || #import{desc = {func, T}} <- Imports],
+                    Space = list_to_tuple(Imported ++ [T || #func{type = T} <- Funcs]),
+                    case FuncIdx < tuple_size(Space) of
+                        true  -> functype_at(Types, element(FuncIdx + 1, Space));
+                        false -> {error, {func_index_out_of_range, FuncIdx}}
+                    end;
+                [] ->
+                    {error, {not_a_func_export, Name}}
+            end
+    catch
+        _:Reason -> {error, {undecodable_core, Reason}}
+    end.
+
+functype_at(Types, TypeIdx) when is_integer(TypeIdx), TypeIdx < length(Types) ->
+    case lists:nth(TypeIdx + 1, Types) of
+        #subtype{body = #functype{params = P, results = R}} -> {ok, {P, R}};
+        _                                                   -> {error, {not_a_functype, TypeIdx}}
+    end;
+functype_at(_Types, TypeIdx) ->
+    {error, {type_index_out_of_range, TypeIdx}}.
 
 %%% ---------------------------------------------------------- host helpers ---
 

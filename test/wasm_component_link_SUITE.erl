@@ -142,20 +142,21 @@ a_non_utf8_string_encoding_is_accepted(_Config) ->
     %% A canon section (id 8) with a single lift whose opts set string-encoding=utf16:
     %% count 1, lift `00 00`, core func 0, opts vec {count 1, flag 01=utf16}, ft 0.
     Utf16Lift = <<8, 7, 1, 16#00, 16#00, 0, 1, 16#01, 0>>,
-    %% A lift item carries the string encoding plus its (here absent) realloc/post-return.
-    ?assertEqual({ok, [{canon_lift, 0, utf16, sync, none, none}]},
+    %% A lift item carries the string encoding, its (here absent) realloc/post-return, and
+    %% the declared component function-type index (0 here).
+    ?assertEqual({ok, [{canon_lift, 0, utf16, sync, none, none, 0}]},
                  wasm_component_link:parse(Utf16Lift)),
     %% utf16 and latin1+utf16 are no longer refused: the link fails only for the unrelated
     %% reason that this bare graph has no entry core, exactly as the UTF-8 default does.
     %% (Fail-first: the encodings used to return {unsupported_string_encoding, _}.)
     ?assertEqual({error, no_entry_core},
-                 wasm_component_link:link([{canon_lift, 0, utf16, sync, none, none}], 0,
+                 wasm_component_link:link([{canon_lift, 0, utf16, sync, none, none, 0}], 0,
                                           fun(_) -> #{} end, #{})),
     ?assertEqual({error, no_entry_core},
-                 wasm_component_link:link([{canon_lift, 0, latin1_utf16, sync, none, none}],
+                 wasm_component_link:link([{canon_lift, 0, latin1_utf16, sync, none, none, 0}],
                                           0, fun(_) -> #{} end, #{})),
     ?assertEqual({error, no_entry_core},
-                 wasm_component_link:link([{canon_lift, 0, utf8, sync, none, none}], 0,
+                 wasm_component_link:link([{canon_lift, 0, utf8, sync, none, none, 0}], 0,
                                           fun(_) -> #{} end, #{})).
 
 leaked(F) ->

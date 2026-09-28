@@ -35,6 +35,7 @@ current fixtures.
 
 -export([lower_params/3, lift_result/3, size_align/1, flat_types/1]).
 -export([lift_params/3, lower_value/3, store_value/4, result_via_memory/1]).
+-export([params_spill/1]).
 -export([with_realloc/2, with_string_encoding/2]).
 
 -export_type([desc/0]).

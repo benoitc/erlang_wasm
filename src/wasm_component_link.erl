@@ -28,7 +28,7 @@ an atom.
 """.
 
 -export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
-         export_bindings/1, exports_resolve_on_entry/2]).
+         export_bindings/1, exports_resolve_on_entry/2, validate_lifts/2]).
 
 -export_type([graph/0, item/0]).
 
@@ -44,7 +44,7 @@ an atom.
       | {canon_lower, non_neg_integer(), non_neg_integer() | none,
          string_encoding(), async_mark()}
       | {canon_lift, non_neg_integer(), string_encoding(), async_mark(),
-         non_neg_integer() | none, non_neg_integer() | none}
+         non_neg_integer() | none, non_neg_integer() | none, non_neg_integer()}
       | {canon_async, atom(), map()}
       | {canon_resource, new | drop | rep, non_neg_integer()}
       | {comp_import_instance, binary()}
@@ -211,6 +211,101 @@ exports_resolve_on_entry(Sec, EntryModIdx) ->
         _:_ -> true
     end.
 
+-doc """
+Statically check every `canon lift` against its declared component function type.
+
+For each lift the Canonical ABI derives a core signature from the component
+function type it declares (params flatten and, past 16 slots, spill to one
+pointer; a result of more than one core value returns through a pointer). That
+derived signature must equal the core function's own type, read from the module
+bytes without instantiating anything. `{error, {invalid_lift_type, _}}` when a
+lift declares a type its core function cannot have (e.g. lifting a core `f64` as a
+component `u32`), so the component is rejected before any core runs. Tolerant: a
+graph, type or core it cannot read yields `ok`, leaving instantiation to fail (or
+succeed) as before rather than block on an unreadable input.
+
+`CoreMods` is the component's core module bytes in module-index order.
+""".
+-spec validate_lifts(binary(), [binary()]) -> ok | {error, term()}.
+validate_lifts(Sec, CoreMods) ->
+    try
+        case parse(Sec) of
+            {ok, Graph} ->
+                {_CompF, CoreNames} = index_spaces(Graph),
+                {_CompF2, AliasInst} = alias_spaces(Graph),
+                InstMods = inst_modules(Graph),
+                Types = wasm_component_types:parse_types(Sec),
+                Mods = list_to_tuple(CoreMods),
+                check_lifts(Graph, CoreNames, AliasInst, InstMods, Types, Mods);
+            {error, _} ->
+                ok
+        end
+    catch
+        _:_ -> ok
+    end.
+
+check_lifts([], _CoreNames, _AliasInst, _InstMods, _Types, _Mods) ->
+    ok;
+check_lifts([{canon_lift, CFI, _Enc, _Async, _Rl, _P, Ft} | Rest],
+            CoreNames, AliasInst, InstMods, Types, Mods) ->
+    case lift_signatures(CFI, Ft, CoreNames, AliasInst, InstMods, Types, Mods) of
+        skip ->
+            check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Mods);
+        {Expected, Expected} ->
+            check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Mods);
+        {Expected, Actual} ->
+            {error, {invalid_lift_type,
+                     #{core_func => maps:get(CFI, CoreNames, CFI),
+                       expected => Expected, actual => Actual}}}
+    end;
+check_lifts([_Other | Rest], CoreNames, AliasInst, InstMods, Types, Mods) ->
+    check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Mods).
+
+%% The declared (expected) and actual core signatures of one lift, or `skip` when
+%% any piece is missing (a non-alias core func, an unresolvable module, a component
+%% type that is not a function type): the lift is then left unchecked.
+lift_signatures(CFI, Ft, CoreNames, AliasInst, InstMods, Types, Mods) ->
+    case {maps:get(CFI, CoreNames, undefined), maps:get(CFI, AliasInst, undefined),
+          maps:get(Ft, Types, undefined)} of
+        {Name, InstIdx, {func, Params, Result}}
+          when is_binary(Name), is_integer(InstIdx) ->
+            ModIdx = maps:get(InstIdx, InstMods, undefined),
+            case module_bytes(ModIdx, Mods) of
+                {ok, Bytes} ->
+                    case wasm:func_type_of(Bytes, Name) of
+                        {ok, Actual} -> {derive_lift_sig(Params, Result), Actual};
+                        {error, _}   -> skip
+                    end;
+                error ->
+                    skip
+            end;
+        _ ->
+            skip
+    end.
+
+module_bytes(ModIdx, Mods)
+  when is_integer(ModIdx), ModIdx >= 0, ModIdx < tuple_size(Mods) ->
+    {ok, element(ModIdx + 1, Mods)};
+module_bytes(_ModIdx, _Mods) ->
+    error.
+
+%% The core signature the Canonical ABI derives from a lift's component params and
+%% result: params flatten, spilling to one i32 pointer past MAX_FLAT_PARAMS; a
+%% result of more than one core value returns through an i32 pointer.
+derive_lift_sig(Params, Result) ->
+    ExpParams = case wasm_canon:params_spill(Params) of
+                    true  -> [i32];
+                    false -> lists:append([wasm_canon:flat_types(P) || P <- Params])
+                end,
+    ExpResults = case Result of
+                     none -> [];
+                     _    -> case wasm_canon:result_via_memory(Result) of
+                                 true  -> [i32];
+                                 false -> wasm_canon:flat_types(Result)
+                             end
+                 end,
+    {ExpParams, ExpResults}.
+
 export_on_entry(Idx, CompFuncs, AliasInst, InstMods, EntryModIdx) ->
     case maps:get(Idx, CompFuncs, undefined) of
         {lift, CFI} ->
@@ -231,7 +326,7 @@ alias_spaces(Graph) ->
 
 alias_step({comp_import_func, _}, {CF, AI, PF, C}) -> {CF#{PF => import}, AI, PF + 1, C};
 alias_step({comp_func_alias, _, _}, {CF, AI, PF, C}) -> {CF#{PF => alias}, AI, PF + 1, C};
-alias_step({canon_lift, CFI, _, _, _, _}, {CF, AI, PF, C}) -> {CF#{PF => {lift, CFI}}, AI, PF + 1, C};
+alias_step({canon_lift, CFI, _, _, _, _, _}, {CF, AI, PF, C}) -> {CF#{PF => {lift, CFI}}, AI, PF + 1, C};
 alias_step({canon_lower, _, _, _, _}, {CF, AI, PF, C}) -> {CF, AI, PF, C + 1};
 alias_step({canon_async, _, _}, {CF, AI, PF, C}) -> {CF, AI, PF, C + 1};
 alias_step({canon_resource, _, _}, {CF, AI, PF, C}) -> {CF, AI, PF, C + 1};
@@ -285,7 +380,7 @@ comp_func_encodings(Graph) ->
 
 cfe_step({comp_import_func, _}, {PF, E})        -> {PF + 1, E};
 cfe_step({comp_func_alias, _, _}, {PF, E})      -> {PF + 1, E};
-cfe_step({canon_lift, _CFI, Enc, _Async, _Rl, _P}, {PF, E}) -> {PF + 1, E#{PF => Enc}};
+cfe_step({canon_lift, _CFI, Enc, _Async, _Rl, _P, _Ft}, {PF, E}) -> {PF + 1, E#{PF => Enc}};
 cfe_step(_Other, Acc)                           -> Acc.
 
 -doc """
@@ -325,7 +420,7 @@ lift_bindings(Graph) ->
 
 lb_step({comp_import_func, _}, {PF, M})   -> {PF + 1, M};
 lb_step({comp_func_alias, _, _}, {PF, M}) -> {PF + 1, M};
-lb_step({canon_lift, _CFI, _Enc, _Async, Rl, P}, {PF, M}) -> {PF + 1, M#{PF => {Rl, P}}};
+lb_step({canon_lift, _CFI, _Enc, _Async, Rl, P, _Ft}, {PF, M}) -> {PF + 1, M#{PF => {Rl, P}}};
 lb_step(_Other, Acc)                      -> Acc.
 
 binding_of({RlIdx, PIdx}, CoreNames) ->
@@ -346,7 +441,7 @@ index_step({comp_import_func, _}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => import}, CoreN, PF + 1, CF};
 index_step({comp_func_alias, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => alias}, CoreN, PF + 1, CF};
-index_step({canon_lift, CFI, _Enc, _Async, _Rl, _P}, {CompF, CoreN, PF, CF}) ->
+index_step({canon_lift, CFI, _Enc, _Async, _Rl, _P, _Ft}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => {lift, CFI}}, CoreN, PF + 1, CF};
 index_step({canon_lower, _, _, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF, CoreN, PF, CF + 1};
@@ -498,7 +593,7 @@ step({comp_import_func, Name}, S) ->
 step({comp_func_alias, InstIdx, Field}, S) ->
     Iface = maps:get(InstIdx, maps:get(comp_insts, S)),
     {ok, bump(S, n_pf, comp_funcs, {host, Iface, Field})};
-step({canon_lift, CoreFuncIdx, Enc, _Async, _Rl, _P}, S) ->
+step({canon_lift, CoreFuncIdx, Enc, _Async, _Rl, _P, _Ft}, S) ->
     case supported_encoding(Enc) of
         ok             -> {ok, bump(S, n_pf, comp_funcs, {lift, CoreFuncIdx})};
         {error, _} = E -> E
@@ -895,8 +990,10 @@ canon(<<16#00, 16#00, R0/binary>>) ->
     %% encoding): the runtime allocates through the declared realloc and runs the declared
     %% post-return, rather than guessing `cabi_realloc`/`cabi_post_<export>` by name.
     {Realloc, Post, Enc, Async, R2} = lift_opts(R1),
-    {_Ft, R3} = wasm_leb128:u32(R2),
-    {{canon_lift, F, Enc, Async, Realloc, Post}, R3};
+    %% The declared component function-type index, kept so a static pass can check the
+    %% lift's core function has the signature the Canonical ABI derives from this type.
+    {Ft, R3} = wasm_leb128:u32(R2),
+    {{canon_lift, F, Enc, Async, Realloc, Post, Ft}, R3};
 canon(<<16#01, 16#00, R0/binary>>) ->
     {F, R1} = wasm_leb128:u32(R0),
     {Realloc, Enc, Async, R2} = lower_opts(R1),

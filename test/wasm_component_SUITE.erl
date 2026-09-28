@@ -26,7 +26,8 @@ all() ->
      a_declared_realloc_is_used,
      a_declared_post_return_runs,
      a_post_return_trap_fails_the_call,
-     a_lift_selects_its_declared_core].
+     a_lift_selects_its_declared_core,
+     an_ill_typed_lift_is_rejected].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -135,6 +136,15 @@ a_lift_selects_its_declared_core(_Config) ->
     {ok, I} = wasm_component:instantiate(Bin),
     ?assertEqual({ok, 42}, wasm_component:call(I, <<"run">>, {[], u32}, [])),
     ok = wasm_component:destroy(I).
+
+%% A lift declares its result is u32 but its core function returns f64: the core
+%% signature the Canonical ABI derives from the declared type (a single i32) does
+%% not match the core function, so the component is rejected at instantiate, before
+%% any core runs. Was accepted and later crashed with a badarith on the call.
+an_ill_typed_lift_is_rejected(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("audit/invalid_lift.wasm")),
+    ?assertMatch({error, {invalid_lift_type, _}},
+                 wasm_component:instantiate(Bin)).
 
 component_fixture(Name) ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",

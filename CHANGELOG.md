@@ -19,6 +19,22 @@ its guest was measured at, without any option.
 - A floor that does not fit under `max_heap_words` is still refused with a
   warning, which now says when the floor was the adapter's default.
 
+A script worker can run compiled with one option, and with a warm code cache
+its first request is compiled.
+
+- **New worker option `compiled`.** `compiled => true` sets `fuel =>
+  infinity`, `compile => true`, `compile_after => 1` and `compile_quality =>
+  baseline` under your own `limits`. With a finite `fuel` in `limits` the start
+  fails with `{bad_option, compiled, #{fuel => N}}`; that combination used to
+  interpret without a word. Metered stays the default.
+- **A compiled worker loads cached code when it starts.** The code cache keeps
+  a small manifest beside each artifact, and `wasm_jit:preload/2` reads it to
+  load the artifact before any request runs. Needs `code_cache_dir`; a miss
+  changes nothing. Manifests share the directory's size cap.
+- **`wasm:restore/3` expands `profile`** as `wasm:instantiate/3` does. A
+  restored instance under `profile => script` used to keep the default compile
+  threshold of 32.
+
 ## 0.8.2
 
 Component resource handling is completed: ownership moves correctly across a

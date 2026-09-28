@@ -7037,3 +7037,38 @@ module, since it carried its own copy of every raw body.
 A term read from `persistent_term` and put in the process dictionary is not
 copied: a process that put a 2 M-word literal there and collected had the same
 610-word heap before and after.
+
+## A compiled worker's first request, with the code cache warm
+
+`compiled => true` preloads the cached artifact at worker start. The question
+is which request first runs compiled, and what the start pays for it.
+`bench/paths/firstreq.erl`, one worker per fresh VM, `+S 10:10`, code cache and
+snapshot directory under `~/.cache` (`0700`), each filled by a warm VM of the
+same build, every measured VM reporting `cached => 1`. The 0.7.0 arm asks for
+the tier with the four keys spelled out in `limits`, since it has no option.
+Three rounds, order alternating, load 4.9 to 5.3:
+
+| guest | build | start, ms | first compiled request | its latency, ms | steady p50, ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Lua | 0.7.0 | 57.5 to 60.3 | 9 to 10 | 5.8 to 6.6 | 4.81 to 5.38 |
+| Lua | branch | 251.2 to 253.5 | **1** | 17.7 to 21.5 | 4.60 to 5.48 |
+| QuickJS | 0.7.0 | 208.2 to 226.1 | 13 to 23 | 9.4 to 9.5 | 8.31 to 8.94 |
+| QuickJS | branch | 1213.5 to 1227.8 | **1** | 22.0 to 23.5 | 8.05 to 8.83 |
+| CPython | 0.7.0 | 1021.7 to 1100.8 | 61 to 62 | 21.6 to 23.0 | 20.12 to 20.95 |
+| CPython | branch | 3765.0 to 3796.4 | **1** | 50.7 to 54.2 | 20.03 to 20.98 |
+
+The first compiled request is slower than a steady one because it is also the
+VM's first request. Against 0.7.0's first request, which interprets, it is
+faster: a second set of three rounds, at load 59 to 80, gave request 1 at 17.2
+to 30.4 ms against 34.7 to 40.4 on Lua, 21.9 to 22.4 against 69.7 to 72.3 on
+QuickJS, and 49.3 to 52.9 against 78.3 to 92.1 on CPython, with the same
+start times and first-compiled request numbers as above.
+
+**The start gate (at most 10% added) fails for the first worker on a node.**
+All of the difference is `code:load_binary/3` of the artifact, which is the
+emulator translating it to native code, timed alone: 206 ms for Lua's 4.3 MB,
+1107 ms for QuickJS's 12.4 MB, 2872 ms for CPython's 19.3 MB; the read is 1 ms
+and the digest 11 to 17 ms. 0.7.0 pays the same load, in the compiler a request
+starts, while the early requests interpret. A second worker on the same node
+finds the module resident and starts as it did: 0.9 to 1.3 ms on Lua, 1.9 to
+2.7 on QuickJS, 37.1 to 37.9 on CPython, in both builds.

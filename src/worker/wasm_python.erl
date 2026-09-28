@@ -75,7 +75,7 @@ the old secret. Rotation means recapturing, which is one `init()`.
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,
-         snapshot_capability/1]).
+         snapshot_capability/1, defaults/0]).
 -export([limits/0]).
 
 -define(DEFAULT_SOURCE, ~"def main(context):\n    return context\n").
@@ -95,6 +95,27 @@ exactly why an adapter never raises one for you.
 limits() ->
     #{timeout => 120_000, fuel => infinity, max_memory_pages => 8192,
       max_host_calls => 10_000_000, max_heap_words => 16 * 1024 * 1024}.
+
+-doc """
+The heap floor a request runner starts with, unless the caller sets one.
+
+1,000,000 words is the measured knee: a request fell from 367.1 ms and 223
+collections to 117.8 ms and 43, and 2,000,000 bought nothing further
+(`test/audit/PERF.md`, "The 26 ms. Found: it is the runner's own garbage
+collection"). It fits under `limits/0`'s 16,777,216 words, and under the
+untrusted preset's 8,388,608, with the headroom the worker requires.
+
+**No capture floor**, although `capture_min_heap_words => 2_000_000` takes a
+worker start from about 92 s to 17 s ("The same floor on the capture, which is
+worth more"). Under `limits/0`'s own 16,777,216-word ceiling that floor
+kills the capture: three of four fresh starts died on 0.7.0, each after about
+18 s, as `test/audit/ATTEMPTS.md` recorded before. It is only safe beside a
+larger `max_heap_words`, and a default cannot know the caller raised one.
+`docs/python.md` sets the two together, at 33,554,432 words.
+""".
+-spec defaults() -> wasm_worker_adapter:defaults().
+defaults() ->
+    #{runner_min_heap_words => 1_000_000}.
 
 artifact(Opts) ->
     case maps:get(entry, Opts, undefined) of

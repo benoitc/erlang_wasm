@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+A worker built on a shipped adapter gives each request runner the heap floor
+its guest was measured at, without any option.
+
+- **New optional adapter callback `defaults/0`.** It answers
+  `runner_min_heap_words` and `capture_min_heap_words` for a worker whose
+  caller did not set them. An adapter without it behaves as before.
+- **`wasm_lua` and `wasm_javascript` default `runner_min_heap_words` to
+  200,000 words, and `wasm_python` to 1,000,000.** Pass the option to change
+  it, or `0` to turn it off. No adapter sets `capture_min_heap_words`: set it
+  yourself, with a larger `max_heap_words`, as `docs/python.md` shows.
+- A floor that does not fit under `max_heap_words` is still refused with a
+  warning, which now says when the floor was the adapter's default.
+
 ## 0.8.2
 
 Component resource handling is completed: ownership moves correctly across a

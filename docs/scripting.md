@@ -85,22 +85,25 @@ to budget for:
 
 A request runner holds almost nothing on its own heap, so the collector gives
 it the smallest heap and then collects through the request dozens of times; on
-QuickJS that was 61% of the request. A floor fixes it:
+QuickJS that was 61% of the request. A floor fixes it, and the shipped adapters
+set one for you: 200,000 words for Lua and QuickJS, 1,000,000 for CPython. For
+your own adapter, set it per worker, or export `defaults/0` as
+[Writing an adapter](worker-contract.md) shows:
 
 <!-- check: modules my_adapter -->
 ```erlang
 wasm_script_worker:start_link(my_adapter, #{runner_min_heap_words => 200_000}).
 ```
 
-The right value belongs to your guest: Lua and QuickJS plateau at 200,000
-words, CPython at five times that. [Tuning](tuning.md) is how to find yours.
+The right value belongs to your guest. [Tuning](tuning.md) is how to find yours.
 The emulator rounds a floor up to a heap-size class, 200,000 becoming 318,187
 words, 2.4 MiB per concurrent runner; and a floor that does not fit under
 `max_heap_words` is refused with a warning.
 
 `capture_min_heap_words` is the same for the process that captures the
 snapshot when the worker starts, and on a slow-starting guest it matters most:
-a CPython worker start goes from 92 s to 17 s.
+a CPython worker start goes from 92 s to 17 s. No adapter sets it for you,
+because it needs a larger `max_heap_words` beside it.
 
 <!-- check: modules my_adapter -->
 ```erlang

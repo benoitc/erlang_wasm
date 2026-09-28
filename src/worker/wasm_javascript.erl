@@ -43,10 +43,23 @@ the bootstrap is compiled into the artifact rather than written to disk.
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,
-         snapshot_capability/1]).
+         snapshot_capability/1, defaults/0]).
 
 -define(DEFAULT_SOURCE, ~"export function main(context) { return context; }").
 -define(VERSION, ~"qjs-reactor-1").
+
+-doc """
+The heap floor a request runner starts with, unless the caller sets one.
+
+200,000 words is the measured knee: a request fell from 56.0 ms and 98
+collections to 21.1 ms and 34, and 400,000 bought nothing more
+(`test/audit/PERF.md`, "The 26 ms. Found: it is the runner's own garbage
+collection"). It rounds up to 318,187 words, about 2.5 MB, held only while a
+request runs. No capture floor: none was measured to help.
+""".
+-spec defaults() -> wasm_worker_adapter:defaults().
+defaults() ->
+    #{runner_min_heap_words => 200_000}.
 
 artifact(Opts) ->
     case maps:find(path, Opts) of

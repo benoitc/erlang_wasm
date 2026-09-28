@@ -205,7 +205,9 @@ and 2.1 ms. [Tuning a worker host](tuning.md) has the table.
 ## Give both processes a heap floor
 
 CPython gains more from this than either other guest here, and it gains on both
-halves: the start and the request.
+halves: the start and the request. `wasm_python` sets the request runner's
+floor for you, 1,000,000 words. It does **not** set the capture's: add
+`capture_min_heap_words` yourself, with the larger `max_heap_words` below.
 
 <!-- check: run -->
 <!-- check: fresh -->
@@ -218,7 +220,6 @@ Limits = (wasm_python:limits())#{max_heap_words => 32 * 1024 * 1024},
               lib  => "test/fixtures/lang/py_reactor_lib",
               capture_timeout => 300_000,
               limits => Limits,
-              runner_min_heap_words  => 1_000_000,
               capture_min_heap_words => 2_000_000}).
 ```
 
@@ -249,16 +250,19 @@ Three things to know:
   from `snapshot_dir` never captures at all, so it pays for the first and uses
   only the second.
 - **Raise `max_heap_words` when you add the capture floor**, which is why the
-  example above overrides it. `max_heap_words` bounds the peak and a floor
-  raises the baseline that peak is measured from, so a ceiling that was
-  comfortable without one can stop being comfortable with it. CPython at the
-  adapter's own 16 M words is close enough to the edge that a floored capture
-  dies **some** of the time: three runs in four, then a pass. A start that
+  example above overrides it, and why the adapter sets no capture default: a
+  default cannot know you raised the ceiling. `max_heap_words` bounds the peak
+  and a floor raises the baseline that peak is measured from, so a ceiling
+  that was comfortable without one can stop being comfortable with it.
+  CPython at the adapter's own 16 M words is close enough to the edge that a
+  floored capture dies **some** of the time: measured again on 0.7.0, four
+  fresh starts at 2 M words, three captures died and one passed. A start that
   fails that way says `the capture died`, and names `max_heap_words` and the
   floor in its context so it is not a mystery.
-- **CPython's request knee is five times QuickJS's**, which is why neither has
-  a default. [The tuning guide](tuning.md) is how to find one for a different
-  build.
+- **CPython's request knee is five times QuickJS's**, which is why each
+  adapter carries its own default. Pass `runner_min_heap_words` to change it,
+  or `0` to turn it off. [The tuning guide](tuning.md) is how to find one for a
+  different build.
 
 ## Errors
 

@@ -28,7 +28,7 @@ an atom.
 """.
 
 -export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
-         export_bindings/1]).
+         export_bindings/1, exports_resolve_on_entry/2]).
 
 -export_type([graph/0, item/0]).
 
@@ -182,6 +182,77 @@ export_map(Sec) ->
     end.
 
 -doc """
+Whether the largest-core fast path resolves every exported function correctly.
+
+`true` only when every exported lift that names a core-func alias targets a core
+instance of the entry module `EntryModIdx`. When it is `false`, an export's lift
+names a core other than the largest, so the caller must interpret the full graph
+(build every core, dispatch each export to the instance its lift names) rather
+than call the largest core by export name. Tolerant: a graph it cannot read, or a
+lift it cannot pin to an alias, yields `true` (the fast path, unchanged).
+""".
+-spec exports_resolve_on_entry(binary(), non_neg_integer()) -> boolean().
+exports_resolve_on_entry(Sec, EntryModIdx) ->
+    try
+        case parse(Sec) of
+            {ok, Graph} ->
+                {CompFuncs, AliasInst} = alias_spaces(Graph),
+                InstMods = inst_modules(Graph),
+                lists:all(
+                  fun({comp_export, _Name, 1, Idx}) ->
+                          export_on_entry(Idx, CompFuncs, AliasInst, InstMods, EntryModIdx);
+                     (_Other) ->
+                          true
+                  end, Graph);
+            {error, _} ->
+                true
+        end
+    catch
+        _:_ -> true
+    end.
+
+export_on_entry(Idx, CompFuncs, AliasInst, InstMods, EntryModIdx) ->
+    case maps:get(Idx, CompFuncs, undefined) of
+        {lift, CFI} ->
+            case maps:get(CFI, AliasInst, undefined) of
+                undefined -> true;  %% not an alias-backed lift; the entry core covers it
+                InstIdx   -> maps:get(InstIdx, InstMods, EntryModIdx) =:= EntryModIdx
+            end;
+        _ ->
+            true
+    end.
+
+%% The component-func index space and, for each core-func alias, the core instance
+%% it aliases, in the same order `index_step`/`step` assign indices.
+alias_spaces(Graph) ->
+    {CompF, AliasInst, _PF, _CF} =
+        lists:foldl(fun alias_step/2, {#{}, #{}, 0, 0}, Graph),
+    {CompF, AliasInst}.
+
+alias_step({comp_import_func, _}, {CF, AI, PF, C}) -> {CF#{PF => import}, AI, PF + 1, C};
+alias_step({comp_func_alias, _, _}, {CF, AI, PF, C}) -> {CF#{PF => alias}, AI, PF + 1, C};
+alias_step({canon_lift, CFI, _, _, _, _}, {CF, AI, PF, C}) -> {CF#{PF => {lift, CFI}}, AI, PF + 1, C};
+alias_step({canon_lower, _, _, _, _}, {CF, AI, PF, C}) -> {CF, AI, PF, C + 1};
+alias_step({canon_async, _, _}, {CF, AI, PF, C}) -> {CF, AI, PF, C + 1};
+alias_step({canon_resource, _, _}, {CF, AI, PF, C}) -> {CF, AI, PF, C + 1};
+alias_step({core_alias, func, InstIdx, _Name}, {CF, AI, PF, C}) -> {CF, AI#{C => InstIdx}, PF, C + 1};
+alias_step(_Other, Acc) -> Acc.
+
+%% Core-instance index -> the module it instantiates, in `step`'s core-instance
+%% order (both `instantiate` and `exports` instances take an index; a synthetic
+%% `exports` instance names no single module and is omitted).
+inst_modules(Graph) ->
+    {_N, Map} = lists:foldl(fun inst_mod_step/2, {0, #{}}, Graph),
+    Map.
+
+inst_mod_step({core_instance, {instantiate, ModIdx, _Args}}, {N, Map}) ->
+    {N + 1, Map#{N => ModIdx}};
+inst_mod_step({core_instance, {exports, _Entries}}, {N, Map}) ->
+    {N + 1, Map};
+inst_mod_step(_Other, Acc) ->
+    Acc.
+
+-doc """
 Each exported function's string encoding, when it is not the default UTF-8.
 
 A component's `canon lift` carries a `string-encoding` option; `call/4` marshals that
@@ -322,7 +393,8 @@ that exports `wasi:cli/run...#run` (a command) or, failing that, the largest cor
 """.
 -spec link(graph(), non_neg_integer(),
            fun(([{binary(), binary()}]) -> map()), map()) ->
-          {ok, #{core := wasm:instance(), cores := [wasm:instance()]}}
+          {ok, #{core := wasm:instance(), cores := [wasm:instance()],
+                 export_targets := #{binary() => {wasm:instance(), binary()}}}}
           | {error, term()}.
 link(Graph, EntryModIdx, HostResolve, Opts) ->
     S0 = #{mods => list_to_tuple([B || {core_module, B} <- Graph]),
@@ -331,18 +403,46 @@ link(Graph, EntryModIdx, HostResolve, Opts) ->
            core_mems => #{}, n_cm => 0, core_tables => #{}, n_ct => 0,
            core_globals => #{}, n_cg => 0, comp_insts => #{}, n_pi => 0,
            comp_funcs => #{}, n_pf => 0, built => [], entry_mod => EntryModIdx,
-           entry_by_mod => undefined, run_inst => undefined},
+           entry_by_mod => undefined, run_inst => undefined,
+           core_func_target => #{}},
     case fold(Graph, S0) of
         {ok, S} ->
             Built = lists:reverse(maps:get(built, S)),
             case entry(S) of
-                {ok, Core}     -> {ok, #{core => Core, cores => Built}};
+                {ok, Core}     -> {ok, #{core => Core, cores => Built,
+                                         export_targets => export_targets(Graph, S)}};
                 {error, _} = E -> destroy_built(S), E
             end;
         {error, Reason, S} ->
             destroy_built(S),
             {error, Reason}
     end.
+
+%% Record which real core instance a core-func alias resolved to, keyed by the
+%% core-func index it takes. A synthetic or as-yet-unbuilt source records nothing;
+%% the export then falls back to name resolution, as before.
+record_func_target(S, CFI, InstIdx, Name) ->
+    case maps:get(InstIdx, maps:get(core_insts, S), undefined) of
+        {real, Inst} ->
+            T = maps:get(core_func_target, S),
+            S#{core_func_target => T#{CFI => {Inst, Name}}};
+        _ ->
+            S
+    end.
+
+%% Resolve each exported function to the `{Inst, CoreName}` its declared lift names,
+%% authoritative over export-name matching (two cores can export the same name). An
+%% export whose lift the linker could not pin to a real instance is omitted, so the
+%% caller keeps its name-based fallback for it.
+export_targets(Graph, S) ->
+    CompFuncs = maps:get(comp_funcs, S),
+    Targets = maps:get(core_func_target, S),
+    maps:from_list(
+      [{Name, Target}
+       || {comp_export, Name, 1, Idx} <- Graph,
+          {lift, CFI} <- [maps:get(Idx, CompFuncs, undefined)],
+          Target <- [maps:get(CFI, Targets, undefined)],
+          Target =/= undefined]).
 
 %% A partial link that failed still built some cores; free them so a mid-graph
 %% error leaks nothing.
@@ -445,8 +545,14 @@ step({canon_resource, Kind, _Rt}, S) ->
     {ok, bump(S, n_cf, core_funcs, resource_fun(Kind))};
 step({core_alias, func, InstIdx, Name}, S) ->
     case export_val(S, InstIdx, Name) of
-        {ok, Val}      -> {ok, note_run(Name, InstIdx, bump(S, n_cf, core_funcs, Val))};
-        {error, _} = E -> E
+        {ok, Val} ->
+            %% Remember which real instance this core-func index resolved to, keyed
+            %% by the core-func index `bump` is about to assign, so an exported lift
+            %% of it dispatches to that exact instance.
+            S1 = record_func_target(S, maps:get(n_cf, S), InstIdx, Name),
+            {ok, note_run(Name, InstIdx, bump(S1, n_cf, core_funcs, Val))};
+        {error, _} = E ->
+            E
     end;
 step({core_alias, memory, InstIdx, Name}, S) ->
     alias_into(S, n_cm, core_mems, InstIdx, Name);

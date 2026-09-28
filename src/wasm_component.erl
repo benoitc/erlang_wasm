@@ -239,13 +239,20 @@ instantiate_decoded(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% fallback in `call/4` covers exports it does not resolve.
     ExportMap = wasm_component_link:export_map(Sec),
     %% Imports the host set does not cover are wired from other cores of this
-    %% component (the linker); a program that asks for WASI directly has none, so
-    %% it stays on the single-core path unchanged.
-    Result = case [K || K <- EntryImports, not maps:is_key(K, Host)] of
-                 [] ->
-                     start(Loader, Core, Host, Limits, Exports, []);
-                 _Leftovers ->
-                     link_in(Decoded, Imports, Opts)
+    %% component (the linker). A multi-core component whose entry is self-sufficient
+    %% still takes the linker when an exported lift names a core other than the
+    %% largest, so every core is built and the export reaches the core its lift names
+    %% rather than the largest by size. A lone core, or one whose exports all resolve
+    %% on the entry, stays on the single-core path unchanged.
+    Cores = maps:get(cores, Decoded, [Core]),
+    EntryIdx = maps:get(entry_idx, Decoded, 0),
+    Leftovers = [K || K <- EntryImports, not maps:is_key(K, Host)],
+    UseSimple = Leftovers =:= []
+        andalso (length(Cores) =:= 1
+                 orelse wasm_component_link:exports_resolve_on_entry(Sec, EntryIdx)),
+    Result = case UseSimple of
+                 true  -> start(Loader, Core, Host, Limits, Exports, []);
+                 false -> link_in(Decoded, Imports, Opts)
              end,
     %% Each export's string encoding (only the non-UTF-8 ones are recorded) and its
     %% declared realloc/post-return, so `call/4` marshals strings and allocates/cleans up
@@ -282,8 +289,9 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts)
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
             case wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts) of
-                {ok, #{core := Inst, cores := Cores}} ->
-                    {ok, #{core => Inst, exports => Exports, cores => Cores}};
+                {ok, #{core := Inst, cores := Cores, export_targets := Targets}} ->
+                    {ok, #{core => Inst, exports => Exports, cores => Cores,
+                           export_targets => Targets}};
                 {error, _} = E ->
                     E
             end;
@@ -521,13 +529,13 @@ call(#{} = I, Export, {Params, Result}, Args) ->
       end).
 
 do_call(I, Export, {Params, Result}, Args) ->
-    CoreName = resolve_export(I, Export),
     %% A multi-core component lifts different exports from different cores (a proxy
     %% component lifts `wasi:cli/run#run` from a command shim and
-    %% `wasi:http/incoming-handler#handle` from the main module). The entry core is
-    %% the run shim, so an export the entry core does not carry is looked up on the
-    %% core that does.
-    Inst = core_with_export(I, CoreName),
+    %% `wasi:http/incoming-handler#handle` from the main module), and two cores can
+    %% export the same name. The linker resolves each export to the instance its
+    %% declared lift names; only when it has no such target does the entry-core
+    %% export map / same-name fallback decide.
+    {Inst, CoreName} = target_for(I, Export),
     Binding = maps:get(Export, maps:get(export_bindings, I, #{}), #{}),
     %% Allocate the arguments through the allocator the lift declares (not `cabi_realloc`
     %% by name); `undefined` keeps the default `cabi_realloc` path for a lift that names
@@ -549,6 +557,18 @@ do_call(I, Export, {Params, Result}, Args) ->
                   E
           end
       end).
+
+%% The instance and core-function name implementing a component export. The linker's
+%% declared-lift target wins when present (authoritative across cores sharing a
+%% name); otherwise the export map / same-name fallback against the entry core.
+target_for(I, Export) ->
+    case maps:get(Export, maps:get(export_targets, I, #{}), undefined) of
+        {Inst, CoreName} ->
+            {Inst, CoreName};
+        undefined ->
+            CoreName = resolve_export(I, Export),
+            {core_with_export(I, CoreName), CoreName}
+    end.
 
 %% A host function that calls the named core allocator, for `wasm_canon:with_realloc`.
 realloc_fun(_Inst, none) ->

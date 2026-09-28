@@ -25,7 +25,8 @@ all() ->
      a_core_less_component_instantiates,
      a_declared_realloc_is_used,
      a_declared_post_return_runs,
-     a_post_return_trap_fails_the_call].
+     a_post_return_trap_fails_the_call,
+     a_lift_selects_its_declared_core].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -124,6 +125,16 @@ a_post_return_trap_fails_the_call(_Config) ->
     {ok, Bin} = file:read_file(component_fixture("audit/post_trap.wasm")),
     {ok, I} = wasm_component:instantiate(Bin),
     ?assertMatch({error, _}, wasm_component:call(I, <<"run">>, {[], u32}, [])).
+
+%% Two cores each export "run": the larger returns 99, the smaller 42, and the
+%% component lifts the smaller. The export must reach the core its declared lift
+%% names, not the largest core by size. Was 99 (largest-core + same-name heuristic,
+%% and the second core was never even built on the single-core path).
+a_lift_selects_its_declared_core(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("audit/wrong_core.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 42}, wasm_component:call(I, <<"run">>, {[], u32}, [])),
+    ok = wasm_component:destroy(I).
 
 component_fixture(Name) ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",

@@ -20,8 +20,10 @@ under your home directory holding `code/` and `images/`, and how to ask for
 the tier: `compiled` for `compiled => true`, which preloads in the
 background, `wait` for that with `preload => wait`, and `limits` for the four
 keys it sets, spelled out, which is the only way a build without the option can
-ask. Requests are sent back to back, so under `compiled` the first compiled
-request is the first one issued after the background load lands.
+ask. Requests are sent back to back; under `compiled` the load starts once
+request 1 has answered, and the first compiled request is the first one
+issued after it lands. `worst_before_ms` is the slowest request up to and
+including the first compiled one.
 
 Every measured line prints `cached => N` from `wasm_jit:counts/0`; a line with
 0 did not read the cache and measures a compile. **Read `uptime` first.**
@@ -43,14 +45,18 @@ run(Mode, Guest, Dir, How) ->
     ok = application:set_env(wasm, snapshot_dir, filename:join(Dir, "images")),
     ok = application:set_env(wasm, code_cache_dir, filename:join(Dir, "code")),
     {ok, _} = application:ensure_all_started(wasm),
-    %% `FIRSTREQ_LOADALL=1' loads every module of the application first, as
-    %% an embedded-mode release does at boot. Without it the first request
-    %% loads what it touches through the code server, and waits behind a
-    %% preload that is loading an artifact there.
+    %% `FIRSTREQ_LOADALL=1' loads every module of `wasm', `stdlib' and
+    %% `kernel' first, as an embedded-mode release does at boot. Without it a
+    %% process loads what it touches through the code server, and while a
+    %% large artifact is being prepared any such load waits for it: this
+    %% harness's own first calls to `timer' or `io_lib_format' included.
     os:getenv("FIRSTREQ_LOADALL") =:= "1" andalso
         begin
-            {ok, Mods} = application:get_key(wasm, modules),
-            ok = code:ensure_modules_loaded(Mods)
+            Mods = lists:append(
+                     [M || A <- [wasm, stdlib, kernel],
+                           {ok, M} <- [application:get_key(A, modules)]]),
+            _ = code:ensure_modules_loaded(Mods),
+            ok
         end,
     {Adapter, Opts, Request} = guest(Guest, How),
     T0 = erlang:monotonic_time(microsecond),
@@ -58,7 +64,7 @@ run(Mode, Guest, Dir, How) ->
     Start = erlang:monotonic_time(microsecond) - T0,
     case Mode of
         warm -> warm(W, Request, Dir);
-        measure -> measure(W, Request, Start, Guest, How, Adapter, Opts)
+        measure -> measure(W, Request, Start, Guest, How, Adapter, Opts, T0)
     end.
 
 %% Requests until an artifact and its manifest (if this build writes one) are
@@ -79,14 +85,16 @@ warm(W, Request, Dir) ->
               [N, length(filelib:wildcard(filename:join(Code, "*"))),
                wasm_jit:counts()]).
 
-measure(W, Request, Start, Guest, How, Adapter, Opts) ->
+measure(W, Request, Start, Guest, How, Adapter, Opts, T0) ->
     T1 = erlang:monotonic_time(microsecond),
     {ok, _} = check(wasm_script_worker:run(W, Request)),
-    Req1 = erlang:monotonic_time(microsecond) - T1,
-    {First, FirstUs} = case maps:get(entered, wasm_jit:counts()) > 0 of
-                           true -> {1, Req1};
-                           false -> first_compiled(W, Request, 2)
-                       end,
+    End1 = erlang:monotonic_time(microsecond),
+    Req1 = End1 - T1,
+    {First, FirstUs, WorstUs, Gap, Ready} =
+        case entered() > 0 of
+            true -> {1, Req1, Req1, 0, End1 - T0};
+            false -> first_compiled(W, Request, 2, Req1, End1, 0, T0)
+        end,
     Steady = [begin
                   T = erlang:monotonic_time(microsecond),
                   {ok, _} = check(wasm_script_worker:run(W, Request)),
@@ -99,27 +107,41 @@ measure(W, Request, Start, Guest, How, Adapter, Opts) ->
     Start2 = erlang:monotonic_time(microsecond) - T2,
     ok = wasm_script_worker:stop(W2),
     io:format("RESULT guest=~p how=~p start_ms=~.1f start2_ms=~.1f "
-              "req1_ms=~.1f first=~p first_ms=~.1f "
+              "req1_ms=~.1f first=~p first_ms=~.1f worst_before_ms=~.1f "
+              "caller_gap_ms=~.1f ready_ms=~.1f "
               "steady_min_ms=~.2f steady_p50_ms=~.2f steady_p99_ms=~.2f "
               "cached=~p~n",
               [Guest, How, Start / 1000, Start2 / 1000, Req1 / 1000,
-               First, FirstUs / 1000,
+               First, FirstUs / 1000, WorstUs / 1000, Gap / 1000,
+               Ready / 1000,
                hd(S) / 1000, lists:nth(?STEADY div 2, S) / 1000,
                lists:nth(?STEADY * 99 div 100, S) / 1000,
                maps:get(cached, wasm_jit:counts())]).
 
-%% The request number that first entered generated code, and what it took.
-first_compiled(_W, _Request, N) when N > ?MAX_REQUESTS ->
-    {never, 0};
-first_compiled(W, Request, N) ->
-    Before = maps:get(entered, wasm_jit:counts()),
+%% The request number that first entered generated code, what it took, the
+%% slowest request up to it, the longest time the caller spent between one
+%% answer and its next request (it sends at once, so anything here is the
+%% caller itself held up), and when the first compiled request answered,
+%% counted from the start of `start_link/2'.
+first_compiled(_W, _Request, N, Worst, _Prev, Gap, _T0)
+  when N > ?MAX_REQUESTS ->
+    {never, 0, Worst, Gap, 0};
+first_compiled(W, Request, N, Worst, Prev, Gap, T0) ->
+    Before = entered(),
     T = erlang:monotonic_time(microsecond),
     {ok, _} = check(wasm_script_worker:run(W, Request)),
-    Us = erlang:monotonic_time(microsecond) - T,
-    case maps:get(entered, wasm_jit:counts()) > Before of
-        true -> {N, Us};
-        false -> first_compiled(W, Request, N + 1)
+    End = erlang:monotonic_time(microsecond),
+    Us = End - T,
+    Gap1 = max(Gap, T - Prev),
+    case entered() > Before of
+        true -> {N, Us, max(Worst, Us), Gap1, End - T0};
+        false -> first_compiled(W, Request, N + 1, max(Worst, Us), End, Gap1,
+                                T0)
     end.
+
+%% `entered' from the counter `wasm_jit:counts/0' reads, without the rest of
+%% what it builds, so the probe between two requests is two reads.
+entered() -> counters:get(persistent_term:get({wasm_jit, hot}), 1).
 
 check({ok, #{result := _}} = R) -> R;
 check(Other) -> error({bad_request, Other}).

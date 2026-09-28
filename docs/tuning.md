@@ -51,6 +51,21 @@ on at all.
 
 ## Give the request runner a heap floor
 
+The shipped adapters already set the floor they were measured at, through
+their `defaults/0`: 200,000 words for `wasm_lua` and `wasm_javascript`,
+1,000,000 for `wasm_python`. You need this section to change or disable one,
+or to find the number for your own adapter.
+
+Override a default by passing the option, or disable it with `0`:
+
+<!-- check: modules my_adapter -->
+```erlang
+wasm_script_worker:start_link(my_adapter, #{root => scratch,
+                                       runner_min_heap_words => 0}).
+```
+
+Set one for an adapter that has none:
+
 <!-- check: modules my_adapter -->
 ```erlang
 wasm_script_worker:start_link(my_adapter, #{root => scratch,
@@ -118,6 +133,13 @@ Two things to know before you set it:
 
 `wasm_script_worker:runner_heap_words/2` answers what a given pair of options and
 limits resolves to, so you can check a configuration without starting a worker.
+It reads only the options you pass it; merge the adapter's `defaults/0` under
+them first to see what a worker would get.
+
+A default that does not fit is refused the same way, and the warning says
+`(the adapter's default)`, so you can tell it from a value you set. A Lua or
+QuickJS default lacks room only under 400,000 words, and CPython's under
+2,000,000.
 
 ## Give the capture a floor as well
 
@@ -142,6 +164,11 @@ small for the same reason, and it is larger because the work is longer. It only
 applies where a capture happens: a worker reading its image from `snapshot_dir`
 pays none of this, and neither does an adapter that declares no snapshot
 capability.
+
+No shipped adapter sets a capture floor by default. CPython's 2,000,000 words
+under the 16 M words of `wasm_python:limits/0` killed the capture in three
+starts of four on 0.7.0, so set it only together with a larger
+`max_heap_words`, as [Python](python.md) does.
 
 ## Do not reach for `+hms` first
 

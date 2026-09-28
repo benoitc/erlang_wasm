@@ -6680,3 +6680,85 @@ two runs in fresh VMs at load 10:
 Signed storage makes a word whose top five bits are equal small; it does
 nothing for arbitrary bytes. Of QuickJS's 648k bignum words, 0.3% would become
 small; of CPython's, 23% (1.3% of its words). Not built.
+
+## Default heap floors for runners
+
+The floors measured in "~~The 26 ms~~. Found: it is the runner's own garbage
+collection" are now each adapter's `defaults/0`: 200,000 words for Lua and
+QuickJS, 1,000,000 for CPython. So a worker started with no floor option gets
+them. The gates were fixed before the run: interpreted Lua and QuickJS at
+least 30% faster with a default worker, and the compiled tier not worse.
+
+Each arm is a fresh VM with `+S 10:10` and one worker. The options are only
+the path, `root` and the guest's limits: `wasm_lua:limits()`,
+QuickJS's documented 16 M-word limits, and `wasm_python:limits()`. Compiled
+adds `fuel => infinity, compile => true, compile_after => 1` and warms until
+`wasm_jit:counts()` shows `entered`; every compiled VM printed `cached => 1`,
+from a 0700 cache under `$HOME`. The snapshot store and the code cache were
+filled in an earlier pass that is not in the tables. Each arm then answered
+20 warm-up requests and 200 timed ones (CPython: 100). Baseline is
+`git archive origin/main` (0.7.0), with the same fixtures. There were three
+rounds, and the order alternated between them. Load was 18.0 at the start of
+round 1, 8.3 at round 2, 5.7 at round 3 and 5.6 at the end. Values are in ms
+as min / p50 / p99, one row per round:
+
+| guest, tier | 0.7.0 | default floors |
+| --- | ---: | ---: |
+| Lua, interpreted | 24.3 / 26.9 / 115.8 | 10.0 / 10.5 / 16.8 |
+| | 23.8 / 25.7 / 28.1 | 9.2 / 10.3 / 11.7 |
+| | 24.5 / 25.9 / 28.4 | 10.1 / 10.6 / 11.4 |
+| QuickJS, interpreted | 46.6 / 55.9 / 67.2 | 19.3 / 19.9 / 20.6 |
+| | 45.4 / 53.6 / 61.1 | 19.5 / 20.3 / 26.6 |
+| | 46.4 / 55.6 / 67.9 | 19.4 / 20.0 / 21.2 |
+| CPython, interpreted | 128.5 / 140.5 / 149.1 | 42.8 / 43.9 / 45.2 |
+| | 127.3 / 138.8 / 148.1 | 42.6 / 43.7 / 44.8 |
+| | 128.3 / 142.2 / 150.6 | 42.6 / 43.8 / 47.8 |
+| Lua, compiled | 3.5 / 4.1 / 4.9 | 2.8 / 3.2 / 3.9 |
+| | 3.7 / 4.2 / 4.7 | 2.7 / 3.1 / 3.9 |
+| | 3.6 / 4.0 / 4.6 | 2.8 / 3.2 / 4.1 |
+| QuickJS, compiled | 6.4 / 7.0 / 7.5 | 5.2 / 5.9 / 6.4 |
+| | 6.3 / 7.0 / 7.9 | 5.3 / 5.9 / 6.5 |
+| | 6.7 / 7.3 / 8.0 | 5.4 / 6.0 / 6.6 |
+| CPython, compiled | 19.7 / 20.3 / 21.2 | 15.5 / 17.2 / 17.8 |
+| | 18.9 / 20.1 / 21.2 | 16.1 / 17.1 / 18.2 |
+| | 19.7 / 21.0 / 22.2 | 16.3 / 17.5 / 18.5 |
+
+By median p50, interpreted Lua is 59% faster (25.9 to 10.5 ms), QuickJS 64%
+(55.6 to 20.0 ms) and CPython 69% (140.5 to 43.8 ms). Both gates pass. Compiled
+is also faster, not merely not worse: Lua is 4.1 to 3.2 ms, QuickJS 7.0 to 5.9
+ms and CPython 20.3 to 17.2 ms. In every row, the floored arm's worst p99 is
+under the 0.7.0 arm's best min, apart from Lua and QuickJS compiled, where the
+two overlap by under a millisecond.
+
+**What it costs.** Collections per request and the largest heap block any
+process under the worker reached, read from `garbage_collection` trace events
+over ten further requests. The worker's own events are excluded, so this is
+the runner. The figures were identical in every round:
+
+| guest, tier | collections, 0.7.0 | floors | peak heap, 0.7.0 | floors |
+| --- | ---: | ---: | ---: | ---: |
+| Lua, interpreted | 78 to 80 | 17 | 954,562 words | 1,151,213 |
+| QuickJS, interpreted | 83 to 85 | 28 | 1,396,207 | 1,151,213 |
+| CPython, interpreted | 77 to 78 | 15 | 2,805,586 | 3,166,829 |
+| Lua, compiled | 30 | 5 | 139,267 | 318,187 |
+| QuickJS, compiled | 22 | 5 | 225,340 | 318,187 |
+| CPython, compiled | 18 | 5 | 1,396,207 | 2,878,936 |
+
+Interpreted, the peak moves by one heap-size class, up for Lua and CPython
+and down for QuickJS: the floor is small beside what an interpreted request
+grows to anyway. Compiled, where a request allocates little, the floor is the peak for
+Lua and QuickJS. That is 318,187 words, 2.5 MB, against 1.1 and 1.8 MB. For
+CPython it roughly doubles the peak, to 23 MB from 11 MB. That memory is held
+only while a request runs, because the runner dies at the end of each request.
+
+**No default capture floor for CPython.** The capture floor measured at 5x on a
+worker start, 2,000,000 words, is not a default. On this branch, four fresh
+starts at `wasm_python:limits()`, whose ceiling is 16,777,216 words, with
+`capture_min_heap_words => 2_000_000` and no `snapshot_dir`: three died with
+`the capture died` and one started, each after 17 to 19 s, at load 4.6 to 8.4.
+That is the `ATTEMPTS.md` result again: the floor raises the baseline under an
+unchanged ceiling. A default cannot know the caller raised `max_heap_words`,
+so the capture floor stays an option, set beside 32 M words as
+`docs/python.md` shows. Lua's capture also rules out a no-room Lua test: a
+Lua worker does not start under 1,000,000 words (its capture dies) and does at
+2,000,000, while the 200,000 default lacks room only under 400,000.

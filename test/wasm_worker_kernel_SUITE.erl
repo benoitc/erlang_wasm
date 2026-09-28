@@ -111,7 +111,11 @@ snapshot_cases() ->
      a_runner_gets_the_heap_floor_it_was_given,
      an_unset_floor_leaves_the_runner_the_system_default,
      a_floor_with_no_room_under_the_ceiling_still_answers,
-     a_capture_floor_does_not_stop_a_worker_starting].
+     a_capture_floor_does_not_stop_a_worker_starting,
+     an_adapter_default_floor_reaches_the_runner,
+     an_explicit_floor_wins_over_the_adapter_default,
+     a_zero_floor_turns_the_adapter_default_off,
+     an_adapter_default_with_no_room_is_said_and_skipped].
 
 end_per_group(_G, _Config) -> ok.
 
@@ -862,6 +866,79 @@ a_capture_floor_does_not_stop_a_worker_starting(Config) ->
     {ok, W} = Start(#{capture_min_heap_words => 200_000}),
     ?assertMatch({ok, _}, wasm_script_worker:run(W, #{})),
     ok = wasm_script_worker:stop(W).
+
+%%% ------------------------------------------- the adapter's default floor ---
+%%
+%% An adapter may answer `defaults/0', and the worker takes its floors from
+%% there when the caller set none. `fake_floor_adapter' is the reactor with
+%% that callback added and nothing else, so every difference below is the
+%% callback's. `an_unset_floor_leaves_the_runner_the_system_default' above is
+%% the control: an adapter without it is the worker it always was.
+%%
+%% Each case asserts the default first, so none of them can pass on a worker
+%% that ignores `defaults/0'.
+
+start_floored(Config, Opts) ->
+    Group = proplists:get_value(worker_opts, Config, #{}),
+    wasm_script_worker:start_link(fake_floor_adapter,
+                                  maps:merge(Group#{root => scratch}, Opts)).
+
+runner_heap(W) ->
+    {ok, #{runner_heap := Words}} = wasm_script_worker:run(W, #{probe => heap}),
+    ok = wasm_script_worker:stop(W),
+    Words.
+
+an_adapter_default_floor_reaches_the_runner(Config) ->
+    {ok, W} = start_floored(Config, #{}),
+    ?assert(runner_heap(W) >= 200_000).
+
+%% The two floors round to different heap-size classes, 200,000 to 318,187
+%% and 100,000 to 121,536, so the explicit one is told apart from the default
+%% by the class it landed in.
+an_explicit_floor_wins_over_the_adapter_default(Config) ->
+    {ok, W0} = start_floored(Config, #{}),
+    ?assert(runner_heap(W0) >= 200_000),
+    {ok, W} = start_floored(Config, #{runner_min_heap_words => 100_000}),
+    Words = runner_heap(W),
+    ?assert(Words >= 100_000 andalso Words < 200_000).
+
+a_zero_floor_turns_the_adapter_default_off(Config) ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    {ok, W0} = start_floored(Config, #{}),
+    ?assert(runner_heap(W0) >= 200_000),
+    {ok, W} = start_floored(Config, #{runner_min_heap_words => 0}),
+    ?assertEqual(Min, runner_heap(W)).
+
+%% A default goes through the checks a set value does. Under a ceiling with
+%% no room for it the runner gets none and still answers, and the warning
+%% says the floor was the adapter's, because the operator never wrote it.
+an_adapter_default_with_no_room_is_said_and_skipped(Config) ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{to => self()}}),
+    try
+        {ok, W} = start_floored(Config,
+                                #{limits => #{max_heap_words => 300_000}}),
+        ?assertEqual(Min, runner_heap(W))
+    after
+        logger:remove_handler(?MODULE)
+    end,
+    ?assert(said(<<"runner_min_heap_words (the adapter's default) does not "
+                   "fit">>)).
+
+%% A logger handler, so a case can read what the worker said.
+log(#{msg := {Format, Args}}, #{config := #{to := Pid}})
+  when is_list(Format), is_list(Args) ->
+    Pid ! {said, iolist_to_binary(io_lib:format(Format, Args))};
+log(_Event, _Handler) ->
+    ok.
+
+said(What) ->
+    receive
+        {said, Line} ->
+            binary:match(Line, What) =/= nomatch orelse said(What)
+    after 0 ->
+        false
+    end.
 
 with_store(Dir, F) ->
     ok = filelib:ensure_path(Dir),

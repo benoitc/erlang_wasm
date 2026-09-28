@@ -177,6 +177,10 @@ adapter that ignores snapshots writes neither.
                                 runaway := request(), state_change := request()},
                       by_capability := #{atom() => request()}}.
 
+-doc "What `defaults/0` answers. Each value is a number of words.".
+-type defaults() :: #{runner_min_heap_words => non_neg_integer(),
+                      capture_min_heap_words => non_neg_integer()}.
+
 -type restore_ctx() :: #{module := wasm:module_(), version := binary()}.
 
 -doc """
@@ -256,7 +260,22 @@ exist. Declaring one is a promise the worker holds it to: a capture that fails
 """.
 -callback snapshot_capability(artifact()) -> unsupported | snapshot_cap().
 
--optional_callbacks([snapshot_capability/1]).
+-doc """
+Worker options this adapter's guest wants when the caller has not set them.
+
+Only `runner_min_heap_words` and `capture_min_heap_words` are read, and any
+other key is ignored. The right heap floor is a property of the guest, not of
+the runtime, so the adapter that knows its guest is where the number lives. A
+value the caller passes wins, `0` included, and a default goes through the
+same checks as a value the caller passed: one that does not fit under the
+worker's `max_heap_words` is logged and not applied.
+
+An absent callback reads as `#{}`, which is every worker before this callback
+existed: no floor unless the caller sets one.
+""".
+-callback defaults() -> defaults().
+
+-optional_callbacks([snapshot_capability/1, defaults/0]).
 
 -doc "Names a configured scratch root. A closed set, supplied at start.".
 -type root_id() :: atom().
@@ -287,4 +306,5 @@ and survives it. They are different promises and the caller chooses which.
               import_value/0, import_set/0, hook/0, portable/0, capture/0,
               compatibility_key/0, execution_spec/0, execution_result/0, invocation_result/0, stop_class/0,
               requirements/0, capabilities/0, fixtures/0, snapshot_cap/0, restore_ctx/0,
+              defaults/0,
               root_id/0, request_id/0, token/0, recover_op/0, action/0]).

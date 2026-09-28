@@ -7002,7 +7002,10 @@ to 30.4 ms against 34.7 to 40.4 on Lua, 21.9 to 22.4 against 69.7 to 72.3 on
 QuickJS, and 49.3 to 52.9 against 78.3 to 92.1 on CPython, with the same
 start times and first-compiled request numbers as above.
 
-**The start gate (at most 10% added) fails for the first worker on a node.**
+**The start gate (at most 10% added) fails for the first worker on a node**,
+by +0.19 s on Lua, +1.0 s on QuickJS and +2.7 s on CPython. That is why the
+blocking preload became `preload => wait` and the default is `async`; see the
+next section.
 All of the difference is `code:load_binary/3` of the artifact, which is the
 emulator translating it to native code, timed alone: 206 ms for Lua's 4.3 MB,
 1107 ms for QuickJS's 12.4 MB, 2872 ms for CPython's 19.3 MB; the read is 1 ms
@@ -7010,3 +7013,45 @@ and the digest 11 to 17 ms. 0.7.0 pays the same load, in the compiler a request
 starts, while the early requests interpret. A second worker on the same node
 finds the module resident and starts as it did: 0.9 to 1.3 ms on Lua, 1.9 to
 2.7 on QuickJS, 37.1 to 37.9 on CPython, in both builds.
+
+## `preload => async`, and what a code load costs the node
+
+`async` starts the preload in a process of its own and returns. Same harness
+and caches, three arms per guest in fresh VMs, order reversed each round,
+three rounds. `start` is `start_link/2`; `req 1` is the first request, sent
+as soon as the start returns.
+
+Every module of `wasm` loaded before the start, as an embedded release does
+(`FIRSTREQ_LOADALL=1`), load 10.3 to 18.0:
+
+| guest | arm | start, ms | req 1, ms | first compiled request | its latency, ms | steady p50, ms |
+| --- | --- | ---: | ---: | --- | ---: | ---: |
+| Lua | 0.7.0 | 40.3 to 46.0 | 24.4 to 32.2 | 5 to 7 | 5.8 to 6.3 | 4.30 to 4.71 |
+| Lua | async | 40.2 to 43.3 | 189.8 to 198.3 | 1 to 2 | 5.6 to 198.3 | 4.45 to 4.83 |
+| Lua | wait | 233.6 to 238.8 | 8.9 to 9.6 | **1** | 8.9 to 9.6 | 4.30 to 4.82 |
+| QuickJS | 0.7.0 | 207.5 to 229.4 | 64.7 to 75.9 | 4 to 22 | 10.2 to 16.5 | 7.27 to 29.73 |
+| QuickJS | async | 189.5 to 217.8 | 978.9 to 1034.0 | 2 | 9.2 to 10.3 | 7.44 to 9.14 |
+| QuickJS | wait | 1159.9 to 1239.8 | 12.3 to 13.2 | **1** | 12.3 to 13.2 | 7.36 to 8.91 |
+| CPython | 0.7.0 | 918.0 to 1058.9 | 83.7 to 98.5 | 58 to 61 | 21.3 to 24.6 | 18.92 to 21.82 |
+| CPython | async | 873.7 to 1003.3 | 2627.7 to 2789.6 | 2 | 22.4 to 24.3 | 18.81 to 21.37 |
+| CPython | wait | 3498.5 to 3769.9 | 34.8 to 39.8 | **1** | 34.8 to 39.8 | 18.79 to 21.32 |
+
+The same without loading the modules first, load 22 to 32, gave the same shape:
+`async` starts in 55 to 63, 211 to 228 and 1002 to 1100 ms, and its request 1
+takes 202 to 230, 1044 to 1154 and 2662 to 2820 ms.
+
+**`async` meets the start gate and moves the cost to request 1.** A request
+sent during the load does not interpret beside it, as the plan assumed: it
+waits for the whole load. The reason is not in this runtime.
+`erlang:prepare_loading/2` on a large module stalls every process on the node
+while it runs. Measured alone, `+S 10:10`, a ticker process waking every
+millisecond on another scheduler while a separate process loads the QuickJS
+artifact: prepare 995 ms, largest ticker gap 995 ms. The load is the same
+0.2, 1.0 and 2.9 s whichever process makes it, so 0.7.0 pays it too, as a stall
+somewhere in its first requests when its compiler loads the cached artifact,
+and a cold node pays it when a compile publishes.
+
+So the choice is when the node pauses, not whether. `async` keeps a start that
+returns in its old time and pauses the node shortly after; `wait` pauses
+inside the first worker's start, before traffic, and request 1 then runs
+compiled in 9 to 40 ms. Both reach steady compiled latency equal to 0.7.0's.

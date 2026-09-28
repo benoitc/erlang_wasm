@@ -41,8 +41,9 @@ rather than corruption, and over-eviction costs a recompile or a recapture.
 -doc """
 Sweep stale temporaries, then drop oldest entries until the total fits.
 
-`Suffix` selects the entries, `".img"` or `".beam"`. Temporaries are always
-`*.tmp`, are swept by age, and are counted as neither entries nor bytes.
+`Suffix` selects the entries, `".img"` or `".beam"`. It is a wildcard tail, so
+`"{.beam,.set}"` selects two kinds of entry under one cap. Temporaries are
+always `*.tmp`, are swept by age, and are counted as neither entries nor bytes.
 
 `Keep` is a path that must not be dropped whatever its age, which a caller
 passes for the entry it has just written. Without it a store larger than the

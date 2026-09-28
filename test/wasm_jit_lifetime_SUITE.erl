@@ -60,6 +60,13 @@ all() ->
      an_entry_that_is_not_a_regular_file_is_refused,
      a_tampered_entry_is_a_miss,
      a_truncated_entry_is_a_miss,
+     a_manifest_is_kept_under_the_same_checks,
+     a_tampered_manifest_is_a_miss,
+     a_truncated_manifest_is_a_miss,
+     a_manifest_that_is_not_a_set_is_a_miss,
+     a_manifest_is_purged_and_counted_like_an_artifact,
+     a_preloaded_module_is_entered_on_the_first_call,
+     a_preload_without_a_usable_manifest_changes_nothing,
      a_refused_path_does_not_decide_the_next_one,
      a_malformed_cache_directory_is_a_miss,
      a_refused_directory_warns_once_per_path,
@@ -1261,6 +1268,160 @@ a_truncated_entry_is_a_miss(Config) ->
     ?assertEqual(miss, with_cache_dir(Dir, fun() ->
                                                   wasm_code_cache:lookup(~"k")
                                           end)).
+
+%%% ---------------------------------------------------------- the manifest ---
+
+%% The manifest names which artifact to look for, so it is held to what an
+%% artifact is held to: the same directory, the same verdict, the same frame.
+a_manifest_is_kept_under_the_same_checks(Config) ->
+    Dir = fresh_dir(Config, "manifest"),
+    ?assertEqual({ok, [1, 2, 5]},
+                 with_cache_dir(Dir, fun() -> store_then_lookup_set() end)),
+    %% Stored sorted, whatever order it was handed in.
+    {ok, Framed} = file:read_file(set_path(Dir, ~"s")),
+    ?assertMatch(<<"WASMJIT", 0, _/binary>>, Framed),
+    %% A refused directory has no manifests, exactly as it has no artifacts.
+    Bad = fresh_dir(Config, "manifest-refused"),
+    ok = file:change_mode(Bad, 8#777),
+    ?assertEqual(miss,
+                 with_cache_dir(Bad, fun() -> store_then_lookup_set() end)),
+    ok = file:change_mode(Bad, 8#700),
+    ?assertEqual({ok, []}, file:list_dir(Bad)),
+    %% And a module without a content hash has no manifest key to store under.
+    ?assertEqual(undefined, wasm_code_cache:set_key(make_ref(), 1, full)).
+
+a_tampered_manifest_is_a_miss(Config) ->
+    Dir = fresh_dir(Config, "manifest-tampered"),
+    {ok, _} = with_cache_dir(Dir, fun() -> store_then_lookup_set() end),
+    File = set_path(Dir, ~"s"),
+    {ok, Framed} = file:read_file(File),
+    Size = byte_size(Framed),
+    <<Head:(Size - 1)/binary, Last>> = Framed,
+    ok = file:write_file(File, <<Head/binary, (Last bxor 255)>>),
+    ?assertEqual(miss, with_cache_dir(Dir, fun() -> lookup_set() end)).
+
+a_truncated_manifest_is_a_miss(Config) ->
+    Dir = fresh_dir(Config, "manifest-truncated"),
+    {ok, _} = with_cache_dir(Dir, fun() -> store_then_lookup_set() end),
+    File = set_path(Dir, ~"s"),
+    {ok, Framed} = file:read_file(File),
+    Keep = byte_size(Framed) - 3,
+    <<Short:Keep/binary, _/binary>> = Framed,
+    ok = file:write_file(File, Short),
+    ?assertEqual(miss, with_cache_dir(Dir, fun() -> lookup_set() end)).
+
+%% A digest proves the bytes are the ones written, not what they say. A frame
+%% around something other than a list of indices is a miss, and so is one
+%% around bytes that are not a term at all.
+a_manifest_that_is_not_a_set_is_a_miss(Config) ->
+    Dir = fresh_dir(Config, "manifest-shape"),
+    Frame = fun(Payload) ->
+                <<"WASMJIT", 0, 1:16, (byte_size(Payload)):32,
+                  (crypto:hash(sha256, Payload))/binary, Payload/binary>>
+            end,
+    File = set_path(Dir, ~"s"),
+    [begin
+         ok = file:write_file(File, Frame(Payload)),
+         ?assertEqual(miss, with_cache_dir(Dir, fun() -> lookup_set() end))
+     end || Payload <- [term_to_binary([1, -2]), term_to_binary({1, 2}),
+                        term_to_binary([a]), ~"not a term"]],
+    %% The same frame around a real set is read, so the misses above are the
+    %% payload's and not the frame's.
+    ok = file:write_file(File, Frame(term_to_binary([3, 4]))),
+    ?assertEqual({ok, [3, 4]},
+                 with_cache_dir(Dir, fun() -> lookup_set() end)).
+
+%% Nothing else lists the directory, but the size cap and the purge do, by
+%% suffix. A manifest they did not see would outlive every purge and count
+%% against no cap.
+a_manifest_is_purged_and_counted_like_an_artifact(Config) ->
+    Dir = fresh_dir(Config, "manifest-purged"),
+    ok = with_cache_dir(Dir, fun() ->
+                                     ok = wasm_code_cache:store_set(~"s", [1]),
+                                     ok = wasm_code_cache:store(~"k", ~"a"),
+                                     wasm_code_cache:purge()
+                             end),
+    ?assertEqual({ok, []}, file:list_dir(Dir)),
+    ok = with_cache_dir(Dir, fun() -> wasm_code_cache:store_set(~"s", [1]) end),
+    ?assertEqual([set_path(Dir, ~"s")],
+                 wasm_file_cache:entries(Dir, "{.beam,.set}")),
+    %% Evicted under a cap too small for it, which only happens if it is
+    %% counted.
+    ok = wasm_file_cache:sweep_and_evict(Dir, "{.beam,.set}", 0, undefined),
+    ?assertEqual({ok, []}, file:list_dir(Dir)).
+
+%% What the manifest is for. A node that compiled a module once, then
+%% restarted, loads it before anything calls it, and the first call of the
+%% first instance enters it. Without the preload that call interprets: the
+%% compile it asks for runs after it.
+a_preloaded_module_is_entered_on_the_first_call(Config) ->
+    Dir = fresh_dir(Config, "preload"),
+    with_cache_dir(Dir, fun() ->
+        M = fac_module(),
+        ok = warm(M),
+        %% The restart: no code resident, the disk as it was.
+        wasm_test_slots:reset(),
+        ?assertEqual(ok, wasm_jit:preload(M, opts())),
+        ok = wasm_jit:reset_counts(),
+        {ok, I} = wasm:instantiate(M, #{}, opts()),
+        ?assertEqual({ok, [120]}, wasm:call(I, ~"fac-rec", [5])),
+        ?assert(maps:get(entered, wasm_jit:counts()) > 0,
+                "the first call after a preload did not enter generated code"),
+        ok = wasm:destroy(I),
+        %% The preload held its lease in a process that is gone, so nothing
+        %% is pinned once the instance is.
+        ?assertEqual(ok, until(fun() -> instance_leases() =:= 0 end, 5000))
+    end).
+
+%% Missing, damaged, or asked for under limits the tier does not run under:
+%% every one is a `miss', nothing is loaded, and the module answers as it
+%% always did.
+a_preload_without_a_usable_manifest_changes_nothing(Config) ->
+    Dir = fresh_dir(Config, "preload-miss"),
+    with_cache_dir(Dir, fun() ->
+        M = fac_module(),
+        ?assertEqual(miss, wasm_jit:preload(M, opts())),
+        ok = warm(M),
+        wasm_test_slots:reset(),
+        ?assertEqual(miss, wasm_jit:preload(M, (opts())#{fuel => 1000})),
+        ?assertEqual(miss, wasm_jit:preload(M, #{})),
+        [Set] = filelib:wildcard(filename:join(Dir, "*.set")),
+        {ok, Framed} = file:read_file(Set),
+        Size = byte_size(Framed),
+        <<Head:(Size - 1)/binary, Last>> = Framed,
+        ok = file:write_file(Set, <<Head/binary, (Last bxor 255)>>),
+        ?assertEqual(miss, wasm_jit:preload(M, opts())),
+        ok = file:delete(Set),
+        ?assertEqual(miss, wasm_jit:preload(M, opts())),
+        ?assertEqual([], [K || {_, K, _} <- wasm_code_slots:resident()]),
+        ok = wasm_jit:reset_counts(),
+        {ok, I} = wasm:instantiate(M, #{}, opts()),
+        ?assertEqual({ok, [120]}, wasm:call(I, ~"fac-rec", [5])),
+        ?assertEqual(0, maps:get(entered, wasm_jit:counts())),
+        ok = wasm:destroy(I)
+    end).
+
+fac_module() ->
+    Bin = fixture(["seeds", "fac.wasm"]),
+    Id = {sha256, crypto:hash(sha256, Bin)},
+    {ok, M} = wasm:compile(Bin, #{identity => Id}),
+    M.
+
+%% Compile it once, through the cache, and wait for the artifact to be there.
+warm(M) ->
+    {ok, I} = wasm:instantiate(M, #{}, opts()),
+    {ok, [120]} = wasm:call(I, ~"fac-rec", [5]),
+    ok = wasm_jit:await(I, 60000),
+    ok = wasm:destroy(I).
+
+lookup_set() -> wasm_code_cache:lookup_set(~"s").
+
+store_then_lookup_set() ->
+    ok = wasm_code_cache:store_set(~"s", [5, 1, 2]),
+    wasm_code_cache:lookup_set(~"s").
+
+set_path(Dir, Key) ->
+    filename:join(Dir, binary_to_list(binary:encode_hex(Key)) ++ ".set").
 
 %%% ------------------------------------------------------------- the verdict ---
 

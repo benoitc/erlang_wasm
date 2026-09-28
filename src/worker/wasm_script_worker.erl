@@ -221,6 +221,10 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 %% What `compiled => true' sets, under the caller's own `limits'. `baseline'
 %% and a threshold of one because a worker restores a fresh instance for every
 %% request: `docs/compiled-tier.md' has the measurements behind both.
+%% How long a background preload waits for the first request to answer before
+%% it loads anyway, inside the bound `wasm_jit' puts on a whole preload.
+-define(PRELOAD_GATE, 20_000).
+
 -define(COMPILED_LIMITS,
         #{fuel => infinity, compile => true, compile_after => 1,
           compile_quality => baseline}).
@@ -255,6 +259,10 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
             %% The reservation handed to the request in flight, released when
             %% its outcome arrives unless its runner already did.
             handed         :: undefined | reservation(),
+            %% The background preload, waiting for the first request to
+            %% answer before it loads, and whether one has.
+            preload        :: undefined | pid(),
+            answered = false :: boolean(),
             %% in flight, at most one
             ref            :: undefined | reference(),
             id             :: undefined | binary(),
@@ -557,41 +565,75 @@ started(Adapter, Artifact, Opts, Limits, Root) ->
                          floor => CapHeap}) of
         {error, E}          -> {stop, E};
         {ok, undefined, _}  ->
-            ok = preload(module_of(Artifact), Limits, Opts),
-            {ok, W};
+            {ok, preload(module_of(Artifact), Limits, Opts, W)};
         {ok, Image, Cap}    ->
-            ok = preload(maps:get(module, Cap), Limits, Opts),
-            {ok, start_ahead(W#w{image = Image, snapshot_cap = Cap})}
+            W1 = preload(maps:get(module, Cap), Limits, Opts, W),
+            {ok, start_ahead(W1#w{image = Image, snapshot_cap = Cap})}
     end.
 
-%% Compiled code from the disk cache, loaded without waiting for a request to
-%% ask for it. Only a worker that compiles asks, and a miss is the start every
+%% Compiled code from the disk cache, loaded without waiting for a compile to be
+%% asked for. Only a worker that compiles asks, and a miss is the start every
 %% release had until this: the tier compiles as it always did.
 %%
-%% `async', the default, returns at once. Loading an artifact is the emulator
-%% translating it to native code, 0.2 s for Lua and 2.9 s for CPython, and a
-%% start that waited for it failed the start-time gate `test/audit/PERF.md'
-%% records. It does not make the load free: `erlang:prepare_loading/2' stalls
-%% every process on the node while it runs, so a request that arrives during
-%% the load waits for it, whichever mode asked. `wait' is for a host that
-%% starts workers ahead of traffic and wants request 1 compiled.
+%% Loading a large artifact holds up two things besides the process loading
+%% it: 0.2 s for Lua, 0.9 s for QuickJS, 2.9 s for CPython. Every other module
+%% load on the node waits for it, because the code server's
+%% `erlang:finish_loading/1' does not complete while another process is in
+%% `erlang:prepare_loading/2', and so does `persistent_term:put/2'. And
+%% `prepare_loading' does not yield, so a process queued on the same scheduler
+%% waits until another scheduler takes it. Processes elsewhere carry on.
+%% `test/audit/PERF.md' has the traces.
 %%
-%% The background preload is its own process, neither linked nor monitored.
-%% It holds nothing of the worker's: its slot reservation and lease are
-%% monitored by `wasm_code_slots' and go when it exits, and `wasm_jit' bounds
-%% it. Tying it to the worker would only throw away a load that the next
-%% worker of the same module would use.
+%% So `wait' loads here, inside `start_link/2', before any traffic, and request
+%% 1 is compiled. `async', the default, reads, checks and claims now, and loads
+%% once the first request has answered: in a node that loads modules on first
+%% use, that request is the one that loads what a request needs (`json',
+%% `sets' and the rest), and loading them during the preload made it wait for
+%% the whole of it. Holding the claim meanwhile is what keeps the compile that
+%% request asks for from starting a second, uncached one: it finds the slot
+%% `loading' and interprets.
 %%
 %% After the capture and not before: the capture runs guest code under no
 %% compile limits, and nothing it does should wait on or race this.
-preload(Module, #{compile := true} = Limits, Opts) when Module =/= undefined ->
+preload(Module, #{compile := true} = Limits, Opts, W)
+  when Module =/= undefined ->
     case maps:get(preload, Opts, async) of
-        wait  -> _ = wasm_jit:preload(Module, Limits);
-        async -> _ = spawn(fun() -> wasm_jit:preload(Module, Limits) end)
-    end,
-    ok;
-preload(_Module, _Limits, _Opts) ->
+        wait  -> _ = wasm_jit:preload(Module, Limits), W;
+        async -> preload_async(Module, Limits), W
+    end;
+preload(_Module, _Limits, _Opts, W) ->
+    W.
+
+%% The background preload is its own process, neither linked nor monitored.
+%% It holds nothing of the worker's: its slot reservation and lease are
+%% monitored by `wasm_code_slots' and go when it exits, and `wasm_jit' bounds
+%% the whole preload. Tying it to the worker would only throw away a load that
+%% the next worker of the same module would use. It does monitor the worker,
+%% so a worker that stops before its first request lets it load at once rather
+%% than at the end of its wait.
+preload_async(Module, Limits) ->
+    Worker = self(),
+    Before = fun() ->
+                 Mon = erlang:monitor(process, Worker),
+                 Worker ! {preload_ready, self()},
+                 receive
+                     {preload_go, Worker} -> ok;
+                     {'DOWN', Mon, process, Worker, _} -> ok
+                 after ?PRELOAD_GATE -> ok
+                 end,
+                 erlang:demonitor(Mon, [flush])
+             end,
+    _ = spawn(fun() -> wasm_jit:preload(Module, Limits, Before) end),
     ok.
+
+%% Once per worker: let a waiting preload load, or remember that it may.
+preload_go(#w{answered = true} = W) ->
+    W;
+preload_go(#w{preload = Pid} = W) when is_pid(Pid) ->
+    Pid ! {preload_go, self()},
+    W#w{preload = undefined, answered = true};
+preload_go(W) ->
+    W#w{answered = true}.
 
 %% The module an adapter serves, where its artifact says. Every shipped adapter
 %% puts it under `module'; one that does not simply gets no preload.
@@ -825,6 +867,12 @@ handle_call(_Msg, _F, W) ->
 
 handle_cast(_, W) -> {noreply, W}.
 
+%% A background preload has read and claimed, and asks whether it may load.
+handle_info({preload_ready, Pid}, #w{answered = true} = W) ->
+    Pid ! {preload_go, self()},
+    {noreply, W};
+handle_info({preload_ready, Pid}, W) ->
+    {noreply, W#w{preload = Pid}};
 handle_info({guardian_done, Ref, Outcome}, #w{ref = Ref} = W) ->
     {noreply, publish(Outcome, W)};
 
@@ -1063,7 +1111,7 @@ publish(Outcome, W) ->
     %% memory. One that never got that far -- refused before its restore,
     %% killed, crashed -- did not, and releasing again is harmless.
     ok = release_reservation(W#w.handed),
-    W1 = clear_waiter(W),
+    W1 = preload_go(clear_waiter(W)),
     W1#w{ref = undefined, id = undefined, guardian = undefined,
          gmon = undefined, smon = undefined, handed = undefined,
          done_ref = W#w.ref, done_outcome = Outcome}.

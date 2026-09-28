@@ -14,12 +14,12 @@ its first request is compiled.
   a small manifest beside each artifact, and `wasm_jit:preload/2` reads it to
   load the artifact without a request asking. Needs `code_cache_dir`; a miss
   changes nothing. Manifests share the directory's size cap.
-- **New worker option `preload`**, `async` (default) or `wait`. `async` loads
-  in the background and leaves the start as it was. `wait` makes request 1
-  compiled and moves the native load into the start of the first worker on a
-  node: about 0.2 s for Lua, 1.1 s for QuickJS, 2.9 s for CPython. The load
-  pauses the node while it runs in either mode, as it always has when the
-  tier loaded code.
+- **New worker option `preload`**, `async` (default) or `wait`. `async`
+  leaves the start as it was: it claims the cached code and loads it once the
+  first request has answered, since any module loaded on the node meanwhile
+  waits for that load. `wait` makes request 1 compiled and moves the load into
+  the start of the first worker on a node: about 0.2 s for Lua, 1.1 s for
+  QuickJS, 2.9 s for CPython.
 - **`wasm:restore/3` expands `profile`** as `wasm:instantiate/3` does. A
   restored instance under `profile => script` used to keep the default compile
   threshold of 32.

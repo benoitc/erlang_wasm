@@ -129,9 +129,10 @@ left unsaid. `test/audit/PERF.md` has the measurements.
 
 A worker started with `compiled => true` loads cached code as it starts. You
 need `code_cache_dir` set and a module loaded with `wasm:load/1`; nothing else.
-By default the load runs in the background and the start does not wait for it.
-If you start workers ahead of traffic, ask for `preload => wait` and request 1
-is compiled:
+By default the start does not wait for the load: the worker claims the cached
+code as it starts and loads it once the first request has answered, and the
+requests after that interpret until it lands. If you start workers ahead of
+traffic, ask for `preload => wait` and request 1 is compiled:
 
 <!-- check: modules my_adapter -->
 ```erlang
@@ -142,25 +143,29 @@ application:set_env(wasm, code_cache_dir, "/var/lib/my_release/wasm"),
 
 It works because storing an artifact also stores a small **manifest** beside
 it: the set of functions the artifact holds, which is the part of the key a
-new node cannot know. At start the worker calls `wasm_jit:preload/2`, which
-reads the manifest, builds the full key, and loads the artifact under the same
-checks as any other cache read. It does not compile. A missing or damaged
-manifest, an evicted artifact or a sharded build is a miss, and the worker
-compiles as before, from the requests it serves.
+new node cannot know. The worker calls `wasm_jit:preload/2` (or `preload/3`,
+which lets it choose when to load), which reads the manifest, builds the full
+key, and loads the artifact under the same checks as any other cache read. It
+does not compile. A missing or damaged manifest, an evicted artifact or a
+sharded build is a miss, and the worker compiles as before, from the requests
+it serves.
 
 Loading an artifact is the emulator translating it to native code, once per
-node, and **every process on the node pauses while it runs**. The tier has
-always paid this, when a compiler loaded what it built or read; preloading
-only chooses when. `async` leaves the start as it was, and a request that
-arrives during the load waits for it, then runs compiled. `wait` moves the load
-into the start of the first worker on a node, before any traffic. Later
-workers find the module resident and start as before:
+node, and while it runs two things wait for it: **any other module being
+loaded**, and a process queued on the scheduler doing the load. Processes
+elsewhere carry on. The tier has always paid this, when a compiler loaded
+what it built or read; the option chooses when. `async` waits for the first
+request because that request, in a node that loads modules on first use, is
+the one that loads what requests need. A request whose processes happen to
+share the loading scheduler can still wait for it, as one can in 0.7.0 when
+its compiler loads. `wait` loads before any traffic, so no request waits.
+Later workers find the module resident and start as before:
 
 | guest | start, `async` | start, `wait` | first compiled request, `wait` |
 | --- | ---: | ---: | --- |
-| Lua | 58 ms | 252 ms | 1st, 9th to 10th in 0.7.0 |
-| QuickJS | 215 ms | 1.22 s | 1st, 13th to 23rd in 0.7.0 |
-| CPython | 1.04 s | 3.78 s | 1st, 61st to 62nd in 0.7.0 |
+| Lua | 40 ms | 221 ms | 1st, 9th to 10th in 0.7.0 |
+| QuickJS | 194 ms | 1.15 s | 1st, 3rd to 23rd in 0.7.0 |
+| CPython | 0.92 s | 3.47 s | 1st, 61st to 63rd in 0.7.0 |
 
 Outside a worker, call it yourself before the first instance:
 

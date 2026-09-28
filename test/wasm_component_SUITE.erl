@@ -22,7 +22,10 @@ all() ->
      a_result_error_lifts_as_the_error_string,
      a_truncated_component_is_an_error_not_a_crash,
      a_renamed_export_is_called_through_its_wiring,
-     a_core_less_component_instantiates].
+     a_core_less_component_instantiates,
+     a_declared_realloc_is_used,
+     a_declared_post_return_runs,
+     a_post_return_trap_fails_the_call].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -100,6 +103,27 @@ a_core_less_component_instantiates(_Config) ->
     {ok, I} = wasm_component:instantiate(Bin),
     ?assertEqual([], wasm_component:exports(I)),
     ok = wasm_component:destroy(I).
+
+%% The lift declares the allocator `allocate`, not `cabi_realloc`; lowering the string
+%% argument must go through it. `run("abc")` returns 3. Was an unknown_export error.
+a_declared_realloc_is_used(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("audit/realloc_name.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 3}, wasm_component:call(I, <<"run">>, {[string], u32}, [<<"abc">>])).
+
+%% The lift declares the post-return `cleanup`, which sets a global; the second call sees
+%% it. Was 0 then 0 (the declared cleanup was skipped in favour of `cabi_post_run`).
+a_declared_post_return_runs(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("audit/post_return.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 0}, wasm_component:call(I, <<"run">>, {[], u32}, [])),
+    ?assertEqual({ok, 1}, wasm_component:call(I, <<"run">>, {[], u32}, [])).
+
+%% A trap during post-return fails the call rather than being swallowed. Was returning 42.
+a_post_return_trap_fails_the_call(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("audit/post_trap.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertMatch({error, _}, wasm_component:call(I, <<"run">>, {[], u32}, [])).
 
 component_fixture(Name) ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",

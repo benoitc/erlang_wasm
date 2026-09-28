@@ -247,14 +247,17 @@ instantiate_decoded(#{core := Core, exports := Exports, sec := Sec} = Decoded,
                  _Leftovers ->
                      link_in(Decoded, Imports, Opts)
              end,
-    %% Each export's string encoding (only the non-UTF-8 ones are recorded), so `call/4`
-    %% marshals its strings the way the component's canon lift asks.
+    %% Each export's string encoding (only the non-UTF-8 ones are recorded) and its
+    %% declared realloc/post-return, so `call/4` marshals strings and allocates/cleans up
+    %% the way the component's canon lift asks, rather than by name.
     StrEnc = wasm_component_link:export_encodings(Sec),
-    with_export_map(Result, ExportMap, StrEnc).
+    Bindings = wasm_component_link:export_bindings(Sec),
+    with_export_map(Result, ExportMap, StrEnc, Bindings).
 
-with_export_map({ok, Inst}, ExportMap, StrEnc) ->
-    {ok, Inst#{export_map => ExportMap, str_enc => StrEnc}};
-with_export_map(Other, _ExportMap, _StrEnc) ->
+with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings) ->
+    {ok, Inst#{export_map => ExportMap, str_enc => StrEnc,
+               export_bindings => Bindings}};
+with_export_map(Other, _ExportMap, _StrEnc, _Bindings) ->
     Other.
 
 %% The core function that implements a component export. A core export of the same
@@ -525,15 +528,33 @@ do_call(I, Export, {Params, Result}, Args) ->
     %% the run shim, so an export the entry core does not carry is looked up on the
     %% core that does.
     Inst = core_with_export(I, CoreName),
-    CoreArgs = wasm_canon:lower_params(Inst, Params, Args),
-    case wasm:call(Inst, CoreName, CoreArgs) of
-        {ok, CoreResults} ->
-            Value = lift_call_result(Inst, Result, CoreResults),
-            _ = post_return(Inst, CoreName, CoreResults),
-            {ok, Value};
-        {error, _} = E ->
-            E
-    end.
+    Binding = maps:get(Export, maps:get(export_bindings, I, #{}), #{}),
+    %% Allocate the arguments through the allocator the lift declares (not `cabi_realloc`
+    %% by name); `undefined` keeps the default `cabi_realloc` path for a lift that names
+    %% none. The override only affects the by-memory lowering `wasm_canon:realloc` reads.
+    Realloc = realloc_fun(Inst, maps:get(realloc, Binding, none)),
+    wasm_canon:with_realloc(
+      Realloc,
+      fun() ->
+          CoreArgs = wasm_canon:lower_params(Inst, Params, Args),
+          case wasm:call(Inst, CoreName, CoreArgs) of
+              {ok, CoreResults} ->
+                  Value = lift_call_result(Inst, Result, CoreResults),
+                  %% Run the declared post-return; a trap in cleanup fails the call
+                  %% rather than being swallowed.
+                  ok = run_post_return(Inst, maps:get(post_return, Binding, none),
+                                       CoreResults),
+                  {ok, Value};
+              {error, _} = E ->
+                  E
+          end
+      end).
+
+%% A host function that calls the named core allocator, for `wasm_canon:with_realloc`.
+realloc_fun(_Inst, none) ->
+    undefined;
+realloc_fun(Inst, Name) ->
+    fun(_Ctx, Args) -> wasm:call(Inst, Name, Args) end.
 
 -doc """
 Call an async-lifted export, lowering `Args` and lifting the result by `Sig`.
@@ -905,15 +926,14 @@ host_table() ->
 
 %%% --------------------------------------------------------------- helpers ---
 
-%% Post-return frees the guest memory the result was lifted from. It is best
-%% effort: a component without a `cabi_post_<export>`, or one that traps during
-%% cleanup, must not turn an otherwise-successful call into a failure.
-post_return(Inst, Export, [RetPtr]) when is_integer(RetPtr) ->
-    Post = <<"cabi_post_", Export/binary>>,
-    try wasm:call(Inst, Post, [RetPtr]) of
-        _ -> ok
-    catch
-        _:_ -> ok
-    end;
-post_return(_Inst, _Export, _Results) ->
-    ok.
+%% Post-return frees the guest memory the result was lifted from. It runs the function the
+%% lift DECLARED (not `cabi_post_<export>` by name), passing the core result the same way
+%% the lift consumed it; a lift that declares none has no cleanup. A trap during cleanup
+%% is a defined failure of the call, not swallowed (the Canonical ABI traps it).
+run_post_return(_Inst, none, _CoreResults) ->
+    ok;
+run_post_return(Inst, Name, CoreResults) ->
+    case wasm:call(Inst, Name, CoreResults) of
+        {ok, _}    -> ok;
+        {error, E} -> wasm_error:trap({host_error, {post_return_failed, Name, E}}, #{})
+    end.

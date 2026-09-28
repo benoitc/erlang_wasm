@@ -27,7 +27,8 @@ error value carrying a kind and context, and no name a component supplies become
 an atom.
 """.
 
--export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1]).
+-export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
+         export_bindings/1]).
 
 -export_type([graph/0, item/0]).
 
@@ -42,7 +43,8 @@ an atom.
       | {comp_func_alias, non_neg_integer(), binary()}
       | {canon_lower, non_neg_integer(), non_neg_integer() | none,
          string_encoding(), async_mark()}
-      | {canon_lift, non_neg_integer(), string_encoding(), async_mark()}
+      | {canon_lift, non_neg_integer(), string_encoding(), async_mark(),
+         non_neg_integer() | none, non_neg_integer() | none}
       | {canon_async, atom(), map()}
       | {canon_resource, new | drop | rep, non_neg_integer()}
       | {comp_import_instance, binary()}
@@ -212,8 +214,54 @@ comp_func_encodings(Graph) ->
 
 cfe_step({comp_import_func, _}, {PF, E})        -> {PF + 1, E};
 cfe_step({comp_func_alias, _, _}, {PF, E})      -> {PF + 1, E};
-cfe_step({canon_lift, _CFI, Enc, _Async}, {PF, E}) -> {PF + 1, E#{PF => Enc}};
+cfe_step({canon_lift, _CFI, Enc, _Async, _Rl, _P}, {PF, E}) -> {PF + 1, E#{PF => Enc}};
 cfe_step(_Other, Acc)                           -> Acc.
+
+-doc """
+Each exported function's declared realloc and post-return, as core export names.
+
+A `canon lift` names the allocator and cleanup the runtime must use; `call/4` allocates
+through that realloc and runs that post-return rather than guessing `cabi_realloc`/
+`cabi_post_<export>`. Returns `#{ExportName => #{realloc => Name | none, post_return =>
+Name | none}}`, omitting exports whose lift declares neither.
+""".
+-spec export_bindings(binary()) ->
+          #{binary() => #{realloc => binary() | none, post_return => binary() | none}}.
+export_bindings(Sec) ->
+    try
+        case parse(Sec) of
+            {ok, Graph} ->
+                {_CompFuncs, CoreNames} = index_spaces(Graph),
+                Lifts = lift_bindings(Graph),
+                maps:from_list(
+                  [{Name, binding_of(maps:get(Idx, Lifts), CoreNames)}
+                   || {comp_export, Name, 1, Idx} <- Graph,
+                      maps:is_key(Idx, Lifts),
+                      binding_of(maps:get(Idx, Lifts), CoreNames) =/=
+                          #{realloc => none, post_return => none}]);
+            {error, _} ->
+                #{}
+        end
+    catch
+        _:_ -> #{}
+    end.
+
+%% The component-func index space mapped to each lift's {realloc, post-return} core-func
+%% indices, in the same order `step/2` assigns func indices.
+lift_bindings(Graph) ->
+    {_PF, M} = lists:foldl(fun lb_step/2, {0, #{}}, Graph),
+    M.
+
+lb_step({comp_import_func, _}, {PF, M})   -> {PF + 1, M};
+lb_step({comp_func_alias, _, _}, {PF, M}) -> {PF + 1, M};
+lb_step({canon_lift, _CFI, _Enc, _Async, Rl, P}, {PF, M}) -> {PF + 1, M#{PF => {Rl, P}}};
+lb_step(_Other, Acc)                      -> Acc.
+
+binding_of({RlIdx, PIdx}, CoreNames) ->
+    #{realloc => name_of(RlIdx, CoreNames), post_return => name_of(PIdx, CoreNames)}.
+
+name_of(none, _CoreNames) -> none;
+name_of(Idx, CoreNames)   -> maps:get(Idx, CoreNames, none).
 
 %% Fold the graph into the component-func index space (index -> what implements it)
 %% and the core-func index space (index -> the core export name it aliases), in the
@@ -227,7 +275,7 @@ index_step({comp_import_func, _}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => import}, CoreN, PF + 1, CF};
 index_step({comp_func_alias, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => alias}, CoreN, PF + 1, CF};
-index_step({canon_lift, CFI, _Enc, _Async}, {CompF, CoreN, PF, CF}) ->
+index_step({canon_lift, CFI, _Enc, _Async, _Rl, _P}, {CompF, CoreN, PF, CF}) ->
     {CompF#{PF => {lift, CFI}}, CoreN, PF + 1, CF};
 index_step({canon_lower, _, _, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF, CoreN, PF, CF + 1};
@@ -350,7 +398,7 @@ step({comp_import_func, Name}, S) ->
 step({comp_func_alias, InstIdx, Field}, S) ->
     Iface = maps:get(InstIdx, maps:get(comp_insts, S)),
     {ok, bump(S, n_pf, comp_funcs, {host, Iface, Field})};
-step({canon_lift, CoreFuncIdx, Enc, _Async}, S) ->
+step({canon_lift, CoreFuncIdx, Enc, _Async, _Rl, _P}, S) ->
     case supported_encoding(Enc) of
         ok             -> {ok, bump(S, n_pf, comp_funcs, {lift, CoreFuncIdx})};
         {error, _} = E -> E
@@ -737,9 +785,12 @@ alias_entry(Bin) ->
 %% over, since the linker binds host functions by name.
 canon(<<16#00, 16#00, R0/binary>>) ->
     {F, R1} = wasm_leb128:u32(R0),
-    {Enc, Async, R2} = canonopts(R1),
+    %% A lift keeps its realloc and post-return function indices (not just the string
+    %% encoding): the runtime allocates through the declared realloc and runs the declared
+    %% post-return, rather than guessing `cabi_realloc`/`cabi_post_<export>` by name.
+    {Realloc, Post, Enc, Async, R2} = lift_opts(R1),
     {_Ft, R3} = wasm_leb128:u32(R2),
-    {{canon_lift, F, Enc, Async}, R3};
+    {{canon_lift, F, Enc, Async, Realloc, Post}, R3};
 canon(<<16#01, 16#00, R0/binary>>) ->
     {F, R1} = wasm_leb128:u32(R0),
     {Realloc, Enc, Async, R2} = lower_opts(R1),
@@ -898,6 +949,37 @@ supported_encoding(Enc)          -> {error, {unsupported_string_encoding, Enc}}.
 %% encoding. A result that crosses by memory (a string or list) allocates through
 %% realloc, and the adapter names its own, not one reachable on the instance calling
 %% the import; the encoding is checked in `step/2` (only UTF-8 is marshalled).
+%% A lift's options, keeping the realloc (`0x04`) and post-return (`0x05`) function
+%% indices and the string encoding. Memory (`0x03`) and core-type (`0x08`) carry an index
+%% that is consumed but not yet acted on (all fixtures use the default memory).
+lift_opts(Bin) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    lift_opts(Count, Rest, none, none, utf8, sync).
+
+lift_opts(0, Rest, Realloc, Post, Enc, Async) ->
+    {Realloc, Post, Enc, Async, Rest};
+lift_opts(N, <<16#00, R/binary>>, Rl, P, _E, A) -> lift_opts(N - 1, R, Rl, P, utf8, A);
+lift_opts(N, <<16#01, R/binary>>, Rl, P, _E, A) -> lift_opts(N - 1, R, Rl, P, utf16, A);
+lift_opts(N, <<16#02, R/binary>>, Rl, P, _E, A) ->
+    lift_opts(N - 1, R, Rl, P, latin1_utf16, A);
+lift_opts(N, <<16#06, R/binary>>, Rl, P, E, sync) ->
+    lift_opts(N - 1, R, Rl, P, E, {async, none});
+lift_opts(N, <<16#06, R/binary>>, Rl, P, E, A) -> lift_opts(N - 1, R, Rl, P, E, A);
+lift_opts(N, <<16#07, R0/binary>>, Rl, P, E, _A) ->
+    {Cb, R1} = wasm_leb128:u32(R0),
+    lift_opts(N - 1, R1, Rl, P, E, {async, Cb});
+lift_opts(N, <<16#04, R0/binary>>, _Rl, P, E, A) ->
+    {Idx, R1} = wasm_leb128:u32(R0),
+    lift_opts(N - 1, R1, Idx, P, E, A);
+lift_opts(N, <<16#05, R0/binary>>, Rl, _P, E, A) ->
+    {Idx, R1} = wasm_leb128:u32(R0),
+    lift_opts(N - 1, R1, Rl, Idx, E, A);
+lift_opts(N, <<Op, R0/binary>>, Rl, P, E, A) when Op =:= 16#03; Op =:= 16#08 ->
+    {_Idx, R1} = wasm_leb128:u32(R0),
+    lift_opts(N - 1, R1, Rl, P, E, A);
+lift_opts(N, <<_Op, R0/binary>>, Rl, P, E, A) ->
+    lift_opts(N - 1, R0, Rl, P, E, A).
+
 lower_opts(Bin) ->
     {Count, Rest} = wasm_leb128:u32(Bin),
     lower_opts(Count, Rest, none, utf8, sync).

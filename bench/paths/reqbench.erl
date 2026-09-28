@@ -86,6 +86,10 @@ warm_ms(NW) ->
 check({ok, #{result := _}} = R) -> {ok, #{}} = {element(1, R), #{}};
 check(Other) -> error({bad_request, Other}).
 
+%% Each guest runs at infinite fuel, from its adapter's `limits()' where it has
+%% one. A worker's limits are `wasm_limits:untrusted()' under whatever is
+%% passed, and its finite fuel keeps the tier off: `wasm_jit:entry/3' compiles
+%% only at infinite fuel.
 guest(py) ->
     Lang = "test/fixtures/lang/",
     Limits = maps:merge((wasm_python:limits())#{max_heap_words => 32 * 1024 * 1024},
@@ -100,13 +104,14 @@ guest(py) ->
 guest(qjs) ->
     {wasm_javascript,
      #{path => "test/fixtures/lang/qjs_reactor.wasm", root => scratch,
-       limits => #{compile => true, compile_after => 1}},
+       limits => #{fuel => infinity, compile => true, compile_after => 1}},
      #{source => ~"export function main(c) { return {doubled: c.n * 2}; }",
        context => #{~"n" => 21}}};
 guest(lua) ->
     {wasm_lua,
      #{path => "test/fixtures/lang/lua_reactor.wasm", root => scratch,
-       limits => #{compile => true, compile_after => 1}},
+       limits => maps:merge(wasm_lua:limits(),
+                            #{compile => true, compile_after => 1})},
      #{source => ~"function main(c) return {doubled = c.n * 2} end",
        context => #{~"n" => 21}}}.
 

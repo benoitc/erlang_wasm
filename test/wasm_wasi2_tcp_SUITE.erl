@@ -22,7 +22,8 @@ all() ->
      the_socket_and_streams_do_not_leak,
      an_accepted_connection_echoes,
      listen_needs_a_grant,
-     poll_blocks_then_wakes_on_socket_data].
+     poll_blocks_then_wakes_on_socket_data,
+     blocking_read_waits_past_the_timeout_for_late_data].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -107,6 +108,36 @@ poll_blocks_then_wakes_on_socket_data(_Config) ->
     ?assertEqual([0], wasi_preview2:poll([P])),
     ?assert(erlang:monotonic_time(millisecond) - T0 >= 100),
     wasm_component:host_drop(P), wasm_component:host_drop(In),
+    wasi_sock2:close(Server), wasi_sock2:close(Client), wasi_sock2:close(Listen).
+
+%% A blocking read on an idle-but-open socket must wait for data, not invent EOF
+%% when its internal recv timeout elapses. The sender is scheduled to send only
+%% after the old 5 s ?SOCK_TIMEOUT, so a read that mapped a timeout to `closed`
+%% returns early with the closed error. Fail-first: on the pre-fix tree the read
+%% returns {error, {<<"closed">>, undefined}} at ~5 s, firing {read, _} before the
+%% 6 s guard. The reader mints its own input-stream handle because the host table
+%% lives in the process dictionary.
+blocking_read_waits_past_the_timeout_for_late_data(_Config) ->
+    {ok, Listen} = wasi_sock2:open(inet),
+    ok = wasi_sock2:bind(Listen, {{127, 0, 0, 1}, 0}),
+    {ok, {_, Port}} = wasi_sock2:sockname(Listen),
+    ok = wasi_sock2:listen(Listen, 32),
+    {ok, Client} = wasi_sock2:open(inet),
+    ok = wasi_sock2:connect(Client, {{127, 0, 0, 1}, Port}, 2000),
+    {ok, Server} = wasi_sock2:accept(Listen, 2000),
+    Test = self(),
+    Reader = spawn(fun() ->
+                       In = wasm_component:host_new(input_stream, {socket, Server, <<>>}),
+                       Test ! {read, wasi_preview2:blocking_read_stream(In, 64)}
+                   end),
+    %% Past the old false-EOF timeout the read must still be blocked, not closed.
+    receive {read, Early} -> ct:fail({returned_early, Early})
+    after 6000 -> ok end,
+    ?assert(is_process_alive(Reader)),
+    %% The data finally arrives and the still-blocked read delivers it.
+    ok = wasi_sock2:send(Client, <<"late">>),
+    receive {read, R} -> ?assertEqual({ok, <<"late">>}, R)
+    after 5000 -> ct:fail(read_did_not_deliver) end,
     wasi_sock2:close(Server), wasi_sock2:close(Client), wasi_sock2:close(Listen).
 
 %%% -------------------------------------------------------------- helpers ---

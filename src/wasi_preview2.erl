@@ -25,8 +25,9 @@ later step.
 %% clock its deadlines use, exported so a test can drive poll directly (as
 %% host_new/host_get are).
 -export([poll/1, monotonic_now/0, next_sleep_ms/1, close_resource/1]).
-%% Exported so a test can drive the stream write and udp grant paths directly.
--export([write_stream/2, datagram_allowed/3, peer_matches/3, random_bytes/1]).
+%% Exported so a test can drive the stream write/read and udp grant paths directly.
+-export([write_stream/2, blocking_read_stream/2, datagram_allowed/3,
+         peer_matches/3, random_bytes/1]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle), minted when a file-backed write
@@ -1031,13 +1032,34 @@ socket_read(Handle, Sock, Buf, Len, Timeout) ->
                     {error, {<<"closed">>, undefined}};
                 {error, _} when Buf =/= <<>> ->
                     socket_deliver(Handle, Sock, Buf, Len);
-                %% A non-blocking read with nothing waiting is not an error: zero
-                %% bytes, so the guest can poll and read again. A blocking read that
-                %% timed out reports the stream drained.
-                {error, _} when Timeout =:= 0 -> {ok, <<>>};
-                {error, _}  -> {error, {<<"closed">>, undefined}}
+                {error, Reason} ->
+                    socket_read_wait(Handle, Sock, Len, Timeout, Reason)
             end
     end.
+
+%% Nothing was buffered and the recv returned an error. A would-block is not a
+%% closed stream: a non-blocking read hands back zero bytes so the guest can poll
+%% and read again, and a blocking read keeps waiting for data rather than inventing
+%% end-of-stream on its internal timeout (the worker reaper bounds a wedge). Any
+%% other errno is a genuine failure and closes the stream.
+socket_read_wait(_Handle, _Sock, _Len, 0, Reason) ->
+    case would_block(Reason) of
+        true  -> {ok, <<>>};
+        false -> {error, {<<"closed">>, undefined}}
+    end;
+socket_read_wait(Handle, Sock, Len, Timeout, Reason) ->
+    case would_block(Reason) of
+        true  -> socket_read(Handle, Sock, <<>>, Len, Timeout);
+        false -> {error, {<<"closed">>, undefined}}
+    end.
+
+%% A would-block/timeout means the deadline elapsed with nothing arrived, not that
+%% the peer closed. `wasi_sock2:recv` reports a real orderly close as `eof`.
+would_block(timeout)     -> true;
+would_block(etimedout)   -> true;
+would_block(eagain)      -> true;
+would_block(ewouldblock) -> true;
+would_block(_)           -> false.
 
 socket_deliver(Handle, Sock, Data, Len) ->
     N = min(Len, byte_size(Data)),

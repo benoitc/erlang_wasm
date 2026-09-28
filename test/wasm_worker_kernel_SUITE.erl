@@ -815,22 +815,21 @@ a_compiled_worker_enters_generated_code_on_its_first_request(Config) ->
         ok = wasm_script_worker:stop(W)
     end).
 
-%% The default does not wait for the load. The slot manager is suspended
-%% across the start, so a preload that held the start could not finish before
-%% it returned; the worker is up with nothing resident, and once the manager
-%% is back the load completes on its own and a request enters it.
+%% The default does not load at start. While a large artifact loads, no other
+%% module on the node can, so a first request that loads the modules it needs
+%% would wait for all of it: the preload claims at start, loads once that
+%% request has answered, and a later request enters the code it brings.
 a_default_preload_does_not_hold_the_start(Config) ->
     with_home_cache(fun() ->
         ok = warm_the_cache(Config),
         wasm_test_slots:reset(),
-        ok = sys:suspend(wasm_code_slots),
-        Started = try start(Config, ?config(root, Config), #{compiled => true})
-                  after ok = sys:resume(wasm_code_slots)
-                  end,
-        {ok, W} = Started,
+        {ok, W} = start(Config, ?config(root, Config), #{compiled => true}),
+        ?assertEqual([], wasm_code_slots:resident()),
+        ok = wasm_jit:reset_counts(),
+        ?assertMatch({ok, #{values := [_]}}, wasm_script_worker:run(W, #{})),
+        ?assertEqual(0, maps:get(entered, wasm_jit:counts())),
         ok = until_true(fun() -> wasm_code_slots:resident() =/= [] end,
                         30_000),
-        ok = wasm_jit:reset_counts(),
         ?assertMatch({ok, #{values := [_]}}, wasm_script_worker:run(W, #{})),
         ?assert(maps:get(entered, wasm_jit:counts()) > 0,
                 "the background preload was not adopted"),

@@ -30,7 +30,13 @@ all() ->
      a_waiter_that_gave_up_leaves_no_claim,
      a_holder_that_dies_after_the_compile_lands_leaves_no_claim,
      two_loads_of_the_same_bytes_share_an_identity,
-     a_module_without_bytes_still_has_an_identity].
+     a_module_without_bytes_still_has_an_identity,
+     a_second_request_lowers_nothing,
+     the_tier_still_learns_what_ran,
+     eviction_takes_the_shared_bodies_with_it,
+     only_the_cached_module_shares,
+     two_destroys_at_once_publish_once,
+     a_publish_racing_an_eviction_leaves_nothing].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -39,6 +45,9 @@ init_per_suite(Config) ->
     [{small, Small} | Config].
 
 end_per_suite(_) -> ok.
+
+init_per_testcase(_, Config) -> wasm_test_slots:reset(), Config.
+end_per_testcase(_, _) -> wasm_test_slots:reset(), ok.
 
 %% Distinct bytes per case, so cases cannot inherit each other's residency.
 %% A custom section carries the difference: the decoder skips it, so the module
@@ -381,3 +390,241 @@ a_module_without_bytes_still_has_an_identity(_Config) ->
     {ok, B} = wasm_validate:module(P),
     ?assert(is_reference(A#module.identity)),
     ?assertNotEqual(A#module.identity, B#module.identity).
+
+%%% ------------------------------------------------------ shared lowering ---
+%%
+%% A request builds its instance in a fresh process, and lowering lived in the
+%% process dictionary, so every request lowered every function it called again:
+%% a fifth of an interpreted QuickJS or CPython request. The cache now keeps
+%% what the first request lowered beside the module.
+
+%% The first request lowers what it calls and the second, in another fresh
+%% process, lowers nothing and answers the same.
+a_second_request_lowers_nothing(_Config) ->
+    {ok, H} = wasm:load(lazy_bin(0)),
+    {{56, Ran}, First} = lowerings(fun() -> request(H, #{}) end),
+    ?assertEqual(11, First),
+    {{56, Again}, Second} = lowerings(fun() -> request(H, #{}) end),
+    ?assertEqual(0, Second),
+    %% And it still knows what it ran, because a shared body is recorded
+    %% exactly as a lowered one is.
+    ?assertEqual(lists:sort(Ran), lists:sort(Again)),
+    ok = wasm:unload(H).
+
+%% The compiled tier picks what to compile from `wasm_instance:executed/1',
+%% which is filled where a body is first taken. A shared body that skipped that
+%% record would leave the tier nothing to compile and nothing would say so.
+the_tier_still_learns_what_ran(_Config) ->
+    {ok, H} = wasm:load(lazy_bin(0)),
+    {{56, _}, _} = lowerings(fun() -> request(H, #{}) end),
+    Tier = #{compile => true, compile_sync => true, compile_after => 1},
+    {{Ran, C0, C1, C2}, Lowered} =
+        lowerings(fun() ->
+                          {ok, I} = wasm:instantiate(H, #{}, Tier),
+                          C0 = wasm_jit:counts(),
+                          {ok, [56]} = wasm:call(I, ~"go", [1]),
+                          Ran = wasm_instance:executed(I),
+                          C1 = wasm_jit:counts(),
+                          {ok, [56]} = wasm:call(I, ~"go", [1]),
+                          C2 = wasm_jit:counts(),
+                          ok = wasm:destroy(I),
+                          {Ran, C0, C1, C2}
+                  end),
+    ?assertEqual(0, Lowered),
+    ?assertEqual(11, length(Ran)),
+    ?assert(maps:get(compiled, C1) > maps:get(compiled, C0)),
+    ?assert(maps:get(entered, C2) > maps:get(entered, C1)),
+    ok = wasm:unload(H).
+
+%% The bodies are the module's and go with it, under both fuse settings, and a
+%% module loaded again after that publishes again.
+eviction_takes_the_shared_bodies_with_it(_Config) ->
+    Bin = lazy_bin(0),
+    Hash = crypto:hash(sha256, Bin),
+    {ok, H} = wasm:load(Bin),
+    {{56, _}, _} = lowerings(fun() -> request(H, #{}) end),
+    {{56, _}, _} = lowerings(fun() -> request(H, #{fuse => false}) end),
+    ?assertMatch(#{}, shared(Hash, true)),
+    ?assertMatch(#{}, shared(Hash, false)),
+    {ok, M} = wasm_module_cache:get(H),
+    ?assertMatch({ok, {_, [_ | _]}, Hash}, wasm_instance:shared_prep(M)),
+    ok = wasm:unload(H),
+    wait_until(fun() -> holders(Bin) =:= absent end, 5000),
+    ?assertEqual(undefined, shared(Hash, true)),
+    ?assertEqual(undefined, shared(Hash, false)),
+    ?assertEqual(undefined, persistent_term:get({wasm_module, Hash},
+                                                undefined)),
+    {ok, H} = wasm:load(Bin),
+    {{56, _}, 11} = lowerings(fun() -> request(H, #{}) end),
+    ?assertMatch(#{}, shared(Hash, true)),
+    ok = wasm:unload(H),
+    wait_until(fun() -> shared(Hash, true) =:= undefined end, 5000).
+
+%% `identity' is a name anybody can give a module, so it cannot be what decides
+%% sharing. An inline module, one compiled under a resident module's hash with
+%% other code in it, and one under a hash the cache never loaded all run their
+%% own code and publish nothing. The cached one does publish, which is what
+%% makes the rest mean something.
+only_the_cached_module_shares(_Config) ->
+    Bin = lazy_bin(0),
+    Hash = crypto:hash(sha256, Bin),
+    {ok, H} = wasm:load(Bin),
+    Other = lazy_bin(100),
+    {ok, Inline} = wasm:compile(Bin),
+    {ok, Forged} = wasm:compile(Other, #{identity => {sha256, Hash}}),
+    Unloaded = crypto:hash(sha256, Other),
+    {ok, Stray} = wasm:compile(Other, #{identity => {sha256, Unloaded}}),
+    [{{Want, _}, _} = lowerings(fun() -> request(Mod, #{}) end)
+     || {Mod, Want} <- [{Inline, 56}, {Forged, 1056}, {Stray, 1056}]],
+    ?assertEqual(undefined, shared(Hash, true)),
+    ?assertEqual(undefined, shared(Unloaded, true)),
+    {{56, _}, _} = lowerings(fun() -> request(H, #{}) end),
+    ?assertMatch(#{}, shared(Hash, true)),
+    %% With the real one's bodies published, the forged one still lowers and
+    %% runs its own.
+    {{1056, _}, 11} = lowerings(fun() -> request(Forged, #{}) end),
+    ?assertEqual(undefined, shared(Unloaded, true)),
+    ?assertEqual(error, wasm_instance:shared_prep(Inline)),
+    ?assertEqual(error, wasm_instance:shared_prep(Forged)),
+    ?assertEqual(error, wasm_instance:shared_prep(Stray)),
+    ok = wasm:unload(H).
+
+%% Four instances destroyed at the same moment, each holding a lowered set and
+%% each seeing nothing published yet: one of them publishes.
+two_destroys_at_once_publish_once(_Config) ->
+    {ok, H} = wasm:load(lazy_bin(0)),
+    Self = self(),
+    Ps = [spawn(fun() ->
+                        {ok, I} = wasm:instantiate(H, #{}, #{}),
+                        {ok, [56]} = wasm:call(I, ~"go", [1]),
+                        Self ! {ready, self()},
+                        receive destroy -> ok end,
+                        ok = wasm:destroy(I),
+                        Self ! {done, self()}
+                end) || _ <- lists:seq(1, 4)],
+    [receive {ready, P} -> ok after 30000 -> ct:fail(slow) end || P <- Ps],
+    1 = erlang:trace_pattern({persistent_term, put, 2},
+                             [{[{wasm_ir_shared, '_', '_'}, '_'], [], []}],
+                             [global]),
+    [erlang:trace(P, true, [call]) || P <- Ps],
+    [P ! destroy || P <- Ps],
+    [receive {done, P} -> ok after 30000 -> ct:fail(slow) end || P <- Ps],
+    erlang:trace_pattern({persistent_term, put, 2}, false, [global]),
+    Puts = drain([{trace, P, call, {persistent_term, put, '_'}} || P <- Ps],
+                 Ps),
+    ?assertEqual(1, Puts),
+    ok = wasm:unload(H).
+
+%% An eviction between the claim and the `put' must not leave a key behind
+%% for a module nobody holds, whether the publisher reports back or dies
+%% before it can.
+a_publish_racing_an_eviction_leaves_nothing(_Config) ->
+    Bin = lazy_bin(0),
+    Hash = crypto:hash(sha256, Bin),
+    Key = {wasm_ir_shared, Hash, true},
+    [begin
+         {ok, H} = wasm:load(Bin),
+         Self = self(),
+         P = spawn(fun() ->
+                           ok = gen_server:call(wasm_module_cache,
+                                                {claim_ir, Hash, true}),
+                           Self ! claimed,
+                           receive put -> ok end,
+                           ok = persistent_term:put(Key, #{0 => []}),
+                           case Ending of
+                               reports -> ok = gen_server:call(
+                                                 wasm_module_cache,
+                                                 {ir_stored, Hash, true});
+                               dies -> ok
+                           end,
+                           Self ! {ended, self()}
+                   end),
+         receive claimed -> ok after 5000 -> ct:fail(no_claim) end,
+         ok = wasm:unload(H),
+         wait_until(fun() -> holders(Bin) =:= absent end, 5000),
+         Mon = monitor(process, P),
+         P ! put,
+         receive {ended, P} -> ok after 5000 -> ct:fail(slow) end,
+         receive {'DOWN', Mon, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
+         wait_until(fun() -> persistent_term:get(Key, undefined) =:= undefined
+                    end, 5000),
+         %% And the claim is gone with it, so the next load publishes.
+         wait_until(fun() -> not maps:is_key({Hash, true}, ir_claims()) end,
+                    5000)
+     end || Ending <- [reports, dies]].
+
+%%% ------------------------------------------------------ shared helpers ---
+
+%% 300 functions, over the deferral threshold, function N computing
+%% `x + K + N'; `go' calls functions 1 to 10, so `go(1)' is `56 + 10 * K'.
+%% `K' makes two modules of the same shape run different code, and the custom
+%% section makes every call distinct bytes, so no case inherits another's
+%% residency.
+lazy_bin(K) ->
+    Fns = [<<16#20, 0, 16#41, (wasm_asm:sleb(K + N))/binary, 16#6A,
+             16#0B>> || N <- lists:seq(0, 299)],
+    Go = iolist_to_binary([<<16#20, 0>>,
+                           [<<16#10, (wasm_asm:uleb(N))/binary>>
+                            || N <- lists:seq(1, 10)],
+                           <<16#0B>>]),
+    Name = integer_to_binary(erlang:unique_integer([positive])),
+    Payload = <<(byte_size(Name)), Name/binary>>,
+    iolist_to_binary(
+      [wasm_asm:module(
+         [wasm_asm:type_section([{[16#7F], [16#7F]}]),
+          wasm_asm:func_section(lists:duplicate(301, 0)),
+          wasm_asm:export_section([{~"go", 0, 300}]),
+          wasm_asm:code_section(Fns ++ [Go])]),
+       0, byte_size(Payload), Payload]).
+
+%% One request: an instance, a call and a destroy, in the calling process.
+request(Mod, Opts) ->
+    {ok, I} = wasm:instantiate(Mod, #{}, Opts),
+    {ok, [R]} = wasm:call(I, ~"go", [1]),
+    Ran = wasm_instance:executed(I),
+    ok = wasm:destroy(I),
+    {R, Ran}.
+
+%% Runs `F' in a fresh process and counts the bodies it lowered, by tracing
+%% `wasm_instance:lower/2', the one place a body becomes IR.
+lowerings(F) ->
+    Self = self(),
+    P = spawn(fun() -> receive go -> Self ! {self(), F()} end end),
+    _ = erlang:trace_pattern({wasm_instance, lower, 2}, true, [local]),
+    1 = erlang:trace(P, true, [call]),
+    P ! go,
+    R = receive {P, X} -> X after 60000 -> ct:fail(slow) end,
+    _ = erlang:trace_pattern({wasm_instance, lower, 2}, false, [local]),
+    {R, drain([{trace, P, call, {wasm_instance, lower, '_'}}], [P])}.
+
+%% Counts the trace messages matching one of `Patterns', after making sure
+%% everything the traced processes sent has arrived.
+drain(Patterns, Ps) ->
+    [begin
+         Ref = erlang:trace_delivered(P),
+         receive {trace_delivered, P, Ref} -> ok
+         after 5000 -> ct:fail(undelivered)
+         end
+     end || P <- Ps],
+    drain_count(Patterns, 0).
+
+drain_count(Patterns, N) ->
+    receive
+        {trace, _, call, {M, F, _}} = Msg ->
+            case lists:any(fun({trace, P, call, {PM, PF, '_'}}) ->
+                                   element(2, Msg) =:= P andalso PM =:= M
+                                       andalso PF =:= F
+                           end, Patterns) of
+                true -> drain_count(Patterns, N + 1);
+                false -> drain_count(Patterns, N)
+            end
+    after 0 ->
+        N
+    end.
+
+shared(Hash, Fuse) ->
+    persistent_term:get({wasm_ir_shared, Hash, Fuse}, undefined).
+
+ir_claims() ->
+    State = sys:get_state(wasm_module_cache),
+    element(tuple_size(State), State).

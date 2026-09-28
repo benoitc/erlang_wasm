@@ -139,6 +139,12 @@
 -record(data, {init = <<>> :: binary(),
                mode :: passive | {active, memidx(), [instr()]}}).
 
+%% Where the module cache publishes a module, as `{#module{}, Prep}'. Here
+%% rather than in the cache because `wasm_instance' reads it too: the cache
+%% calls `wasm' on a miss and `wasm' calls `wasm_instance', so an instance that
+%% asked the cache would close that loop.
+-define(CACHED_MODULE_KEY(Hash), {wasm_module, Hash}).
+
 %% A decoded module. Sections absent from the binary leave their field empty,
 %% except `start' and `data_count' which distinguish absent from zero.
 -record(module, {

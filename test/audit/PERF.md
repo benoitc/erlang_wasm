@@ -6584,3 +6584,50 @@ branch interleaved in both orders:
 One caller's p50 went from 28 ms to 19 to 20 ms; 64 callers', from 258 to
 273 ms to 185 to 195 ms. That is about 1.4x in both rounds, with schedulers
 slightly less busy (64 to 65% against 68 to 73%).
+
+## Lowering once per module, not once per request
+
+A request builds its instance in a fresh runner, and the validation context,
+the function table and every lowered body lived in that runner's dictionary,
+so every request built them again. The module cache now publishes the first
+two with the module and the bodies the first request lowered beside it, under
+`{wasm_ir_shared, Hash, Fuse}`.
+
+`bench/paths/lowbench.erl`, a default worker, no `restore_ahead`, `+S 10:10`,
+60 timed requests per run after 30 requests and 3 s of warm-up (10 s for the
+compiled arm), 3 interleaved fresh-VM rounds against main with the default
+heap floors (#49). Load averages 2.6 to 9.5.
+
+| guest, tier | #49 median | branch median | change |
+| --- | ---: | ---: | ---: |
+| Lua, interpreted | 9.27 ms | 6.77 ms | -27% |
+| QuickJS, interpreted | 17.85 ms | 11.12 ms | -38% |
+| CPython, interpreted | 39.97 ms | 25.43 ms | -36% |
+| CPython, compiled | 18.33 ms | 16.05 ms | -12% |
+
+`realbench` QuickJS, 5 pairs each tier, both orders, three runs each: median
+1697 ms against 1679 interpreted, 130.9 against 134.3 compiled, minimums 1581
+against 1620 and 125.4 against 125.1. Flat; the call path is not touched.
+
+The first request of a fresh node publishes, in the runner that destroys its
+instance: 1.7 ms for Lua, 4.7 ms for QuickJS, 9.6 to 11.9 ms for CPython. Its
+wall was 23 to 26 ms against 23 to 26 (Lua), 38 to 47 against 32 to 45
+(QuickJS) and 74 to 78 against 77 to 84 (CPython). The table was measured with
+the publish called from `wasm_instance:release/1`; it moved to `wasm:destroy/1`
+unchanged, to keep `wasm_instance` from calling the cache, and one run each
+afterwards gave Lua 7.48 ms with a 1.8 ms publish and QuickJS 11.84 ms with
+5.2 ms, the same bodies to the word.
+
+What stays resident per module: the published bodies are 248,022 words for
+Lua (1.9 MiB), 657,209 for QuickJS (5.0 MiB) and 1,162,237 for CPython
+(8.9 MiB); the context and function table add 0.16, 0.35 and 2.8 MiB to the
+module's own entry.
+
+They share the module's entry rather than a key of their own because a
+`persistent_term` preserves sharing only within one term. Published apart, the
+function table took 30.4 M words for CPython against 15.2 M for the whole
+module, since it carried its own copy of every raw body.
+
+A term read from `persistent_term` and put in the process dictionary is not
+copied: a process that put a 2 M-word literal there and collected had the same
+610-word heap before and after.

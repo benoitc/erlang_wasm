@@ -926,10 +926,12 @@ and over, destroying each instance before the next: the next restore takes the
 destroyed instance's memory and rewrites only the chunks it wrote. The result
 is the same fresh instance. Nothing else may still write through a handle on
 the destroyed instance's memory, since that memory now belongs to the next one.
+
+`profile` in `Opts` expands exactly as it does for `instantiate/3`.
 """.
 -spec restore(snapshot(), map(), map()) ->
           {ok, instance()} | {error, wasm_error:error()}.
-restore(Snapshot, Bindings, Opts) ->
+restore(Snapshot, Bindings, Opts0) ->
     %% An image whose last holder has gone has given its module claim back, so
     %% the module may be evicted and the image is no longer restorable. Said
     %% plainly rather than surfacing as a confusing `module_not_loaded`.
@@ -938,7 +940,14 @@ restore(Snapshot, Bindings, Opts) ->
             {error, err(invalid, snapshot_invalidated,
                         ~"this image has been released", #{})};
         _ ->
-            restore_1(Snapshot, Bindings, Opts)
+            %% Expanded exactly as `instantiate/3' expands it. It was not, so
+            %% a restored instance under `profile => script' kept the default
+            %% threshold of 32 and a worker restoring one per request never
+            %% reached it.
+            case profile(Opts0) of
+                {error, _} = E -> E;
+                {ok, Opts}     -> restore_1(Snapshot, Bindings, Opts)
+            end
     end.
 
 restore_1(Snapshot, Bindings, Opts) ->

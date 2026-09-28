@@ -56,6 +56,7 @@ moved, because even with all three a refusal still interprets.
 """.
 
 -export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
+-export([preload/2]).
 -export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
 -export([compile_limits/0, max_heap_words/0, compile_budget_heap_words/0]).
 -export([reentered/0, ensure_counts/0]).
@@ -79,6 +80,11 @@ moved, because even with all three a refusal still interprets.
 -define(ABI, 5).
 
 -define(DEFAULT_AFTER, 32).
+
+%% How long `preload/2' may take: a file read and a code load, which is tens
+%% of milliseconds for a hot set. The bound is for a disk that has stopped
+%% answering, not for a slow one.
+-define(PRELOAD_TIMEOUT, 30_000).
 
 %% Splitting a compile across units. The unit is what `compile:forms/2` is
 %% handed, and that call is 99.3% of the cost, so several of them run at once
@@ -309,6 +315,121 @@ release(Inst) ->
                                 error   -> stop
                             end
                         end).
+
+-doc """
+Load this module's compiled code from the disk cache, before anything calls it.
+
+For a process that is about to serve a module whose code a previous start
+already compiled: a worker calls it once at start. Without it the first
+requests interpret while a compiler started by one of them reads the same
+artifact back, and a workload of one call per instance reaches compiled code
+only several requests in.
+
+```erlang
+ok = application:set_env(wasm, code_cache_dir, "/var/cache/my_app/wasm"),
+{ok, M} = wasm:load(Bytes),
+Limits = #{fuel => infinity, compile => true, compile_quality => baseline},
+_ = wasm_jit:preload(M, Limits).
+```
+
+It reads the manifest `wasm_code_cache` keeps beside a stored artifact, claims
+a slot, reads the artifact under every check `wasm_code_cache:lookup/1`
+applies, loads it and publishes it. The next instance of the module adopts it
+on its first call. **It compiles nothing and lowers nothing**: anything
+missing, and anything refused, is `miss` and changes nothing. So is a module
+without a content hash, a sharded build (never cached), and limits the tier
+would not run under.
+
+The work happens in a short-lived process, so the slot lease it takes goes
+when it does and the code stays resident with nobody holding it, which is how
+compiled code the tier made itself is left between instances. The caller waits
+for it, up to a bound, and a preload that overruns is killed and is a miss.
+""".
+-spec preload(wasm:module_(), map()) -> ok | miss.
+preload(Module, Limits) ->
+    case maps:get(compile, Limits, false) =:= true andalso
+         maps:get(fuel, Limits, infinity) =:= infinity of
+        false -> miss;
+        true ->
+            case identity_of(Module) of
+                {sha256, _} = Id ->
+                    in_passing(fun() ->
+                                   preload_1(Id, maps:get(compile_quality,
+                                                          Limits, full))
+                               end);
+                _ ->
+                    miss
+            end
+    end.
+
+%% A handle names its module by the hash `wasm_module_cache:load/1' gives the
+%% module as its identity, so the identity is read off the handle. Asking the
+%% cache instead would put this module in the facade's cycle, which
+%% `wasm_architecture_SUITE' holds to three.
+identity_of({wasm_module, Hash}) when is_binary(Hash) ->
+    {sha256, Hash};
+identity_of(#module{identity = Id}) ->
+    Id;
+identity_of(_Other) ->
+    undefined.
+
+%% A process of its own, and not the caller: the reservation is monitored by
+%% the slot manager, so a preload killed at the bound gives its slot back, and
+%% the lease a resident claim adds is dropped when this process exits.
+in_passing(F) ->
+    Parent = self(),
+    Tag = make_ref(),
+    {Pid, Mon} = spawn_monitor(fun() -> Parent ! {Tag, F()} end),
+    receive
+        {'DOWN', Mon, process, Pid, _} ->
+            receive {Tag, ok} -> ok after 0 -> miss end
+    after ?PRELOAD_TIMEOUT ->
+        exit(Pid, kill),
+        receive {'DOWN', Mon, process, Pid, _} -> ok end,
+        receive {Tag, _} -> miss after 0 -> miss end
+    end.
+
+%% Manifest first, so a module that has none costs one file read and no round
+%% trip to the slot manager.
+preload_1({sha256, Hash} = Id, Quality) ->
+    case wasm_code_cache:set_key(Id, ?ABI, Quality) of
+        undefined -> miss;
+        SetKey ->
+            case wasm_code_cache:lookup_set(SetKey) of
+                {ok, Funcs} -> preload_2(Id, Hash, Quality, Funcs);
+                miss        -> miss
+            end
+    end.
+
+preload_2(Id, Hash, Quality, Funcs) ->
+    case wasm_code_slots:claim_loading({Id, ?ABI}, {manual, preload}, self()) of
+        {resident, _Mod} -> ok;
+        {compile, Mod, Token} ->
+            %% The stamp of a hashed module is its hash, as `stamp/2' says.
+            Key = wasm_code_cache:key(Id, ?ABI, Mod, Quality, Funcs, Hash),
+            case wasm_code_cache:lookup(Key) of
+                {ok, Bin} -> load(Mod, Token, Bin, length(Funcs));
+                miss      -> ok = wasm_code_slots:abort(Token), miss
+            end;
+        _Busy ->
+            miss
+    end.
+
+load(Mod, Token, Bin, N) ->
+    case code:load_binary(Mod, "wasm_generated", Bin) of
+        {module, Mod} ->
+            case wasm_code_slots:publish(Token) of
+                ok ->
+                    bump(?IX_CACHED, 1),
+                    bump(?IX_COMPILED, N),
+                    ok;
+                stale ->
+                    miss
+            end;
+        {error, _} ->
+            ok = wasm_code_slots:abort(Token),
+            miss
+    end.
 
 -doc "How much has been compiled, and how often generated code was entered.".
 -spec counts() -> #{atom() => non_neg_integer()}.
@@ -1257,14 +1378,34 @@ artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere, COpts, Cached) ->
     %% file is read once and not twice.
     case Cached of
         {ok, Bin} ->
+            ok = remember_set(Inst, Mode, Unit),
             {ok, Bin};
         {miss, Key} ->
             case wasm_core:module(Mod, Unit, sigs(Inst), tsigs(Inst), Mode,
                                   Stamp, Next, Head, Elsewhere, COpts) of
                 {ok, Bin} = Ok ->
-                    Key =:= undefined orelse wasm_code_cache:store(Key, Bin),
+                    Key =:= undefined orelse
+                        begin
+                            ok = wasm_code_cache:store(Key, Bin),
+                            ok = remember_set(Inst, Mode, Unit)
+                        end,
                     Ok;
                 Error -> Error
+            end
+    end.
+
+%% Which functions this module's artifact holds, for `preload/2' to find it by
+%% at the next start. Written on a hit as well as a store, so an artifact
+%% cached before manifests existed gains one the first time it is used; read
+%% first, so a hit that already has the right one writes nothing.
+remember_set(Inst, Mode, Unit) ->
+    case wasm_code_cache:set_key(wasm_instance:identity(Inst), ?ABI, Mode) of
+        undefined -> ok;
+        Key ->
+            Funcs = lists:sort([Idx || {_P, Idx, _F, _IR} <- Unit]),
+            case wasm_code_cache:lookup_set(Key) of
+                {ok, Funcs} -> ok;
+                _           -> wasm_code_cache:store_set(Key, Funcs)
             end
     end.
 

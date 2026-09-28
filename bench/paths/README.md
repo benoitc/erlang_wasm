@@ -853,6 +853,9 @@ count, the seconds per arm and extra worker options as a term, for example
 `"#{restore_ahead => true}"`. Images and generated code are kept under
 `_build/reqbench`, so warm it once with a long `REQBENCH_WARM` (CPython's tier
 takes minutes the first time) and later runs load it in seconds.
+Each guest runs at infinite fuel: until 2026-09-28 the `qjs`
+and `lua` arms passed only `compile => true`, kept `untrusted()`'s finite fuel,
+and so ran interpreted whatever the output said about the tier.
 `REQBENCH_POOL=fifo` rotates idle workers instead of reusing the last one,
 which is the case `restore_ahead` helps; `REQBENCH_MSACC=1` prints microstate
 accounting for the loaded arm.

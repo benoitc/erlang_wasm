@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.8.0
+
+The synchronous WebAssembly Component Model and WASI 0.2 (preview 2). A component
+binary decodes, instantiates and runs against a preview-2 host, composed
+components wire together, and the Canonical ABI marshals values both ways.
+`wasm_component` and `wasi_preview2` are the entry points; nothing new to
+configure.
+
+- **Run a component.** `wasm_component:instantiate/1,2,3` and
+  `wasm_component:call/4` decode a component, instantiate its core modules and
+  call an export through the Canonical ABI, lifting and lowering `list`,
+  `record`, `tuple`, `variant`, `enum`, `result`, `option`, `flags`, `string`
+  and the numeric, `char` and `bool` types. Strings marshal as utf8, utf16 or
+  latin1+utf16 per the lift's declared encoding.
+- **Composition.** A `wac`-composed component whose nested components import and
+  export each other's interfaces instantiates and runs: values cross the
+  boundary by copy, each side keeping its own memory.
+- **Resources.** `own` and `borrow` handles cross the host boundary, and the
+  guest and host resource tables are torn down on destroy.
+- **WASI 0.2 host (`wasi_preview2`).** cli, clocks, random, filesystem, sockets
+  and http, with the io streams and poll. `wasi_preview2:command/1` runs a
+  command component and `run_serve/3` an incoming-handler component.
+- **Conformance hardening.** A `canon lift` whose core function has the wrong
+  type is rejected at instantiate, and an export resolves to the core its lift
+  names rather than the largest by size. A declared realloc and post-return are
+  honoured and a trapping post-return fails the call; a by-memory value at an
+  unaligned pointer traps; a core-less component instantiates. The wasi-io
+  output stream enforces its write permit and stays closed once closed, and a
+  blocking read waits for data instead of reporting a false end-of-stream.
+
 ## 0.7.0
 
 A script worker recycles its restores whether or not it restores ahead, with

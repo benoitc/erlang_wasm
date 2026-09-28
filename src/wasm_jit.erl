@@ -345,11 +345,11 @@ when it does and the code stays resident with nobody holding it, which is how
 compiled code the tier made itself is left between instances. The caller waits
 for it, up to a bound, and a preload that overruns is killed and is a miss.
 
-**Loading holds up more than the caller.** While `erlang:prepare_loading/2`
-runs, 0.2 s for a Lua artifact and 2.9 s for CPython, no other module on the
-node finishes loading and `persistent_term:put/2` waits, and it does not
-yield, so a process queued on its scheduler waits too. Processes elsewhere
-carry on. So call this before traffic, or use `preload/3`.
+**Loading holds up more than the caller.** While `code:load_binary/3`
+prepares the module, 0.2 s for a Lua artifact and 2.9 s for CPython, no other
+module on the node finishes loading and `persistent_term:put/2` waits, and the
+preparation does not yield, so a process queued on its scheduler waits too.
+Processes elsewhere carry on. So call this before traffic, or use `preload/3`.
 """.
 -spec preload(wasm:module_(), map()) -> ok | miss.
 preload(Module, Limits) ->

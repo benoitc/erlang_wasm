@@ -12,8 +12,14 @@ its first request is compiled.
   interpret without a word. Metered stays the default.
 - **A compiled worker loads cached code when it starts.** The code cache keeps
   a small manifest beside each artifact, and `wasm_jit:preload/2` reads it to
-  load the artifact before any request runs. Needs `code_cache_dir`; a miss
+  load the artifact without a request asking. Needs `code_cache_dir`; a miss
   changes nothing. Manifests share the directory's size cap.
+- **New worker option `preload`**, `async` (default) or `wait`. `async` loads
+  in the background and leaves the start as it was. `wait` makes request 1
+  compiled and moves the native load into the start of the first worker on a
+  node: about 0.2 s for Lua, 1.1 s for QuickJS, 2.9 s for CPython. The load
+  pauses the node while it runs in either mode, as it always has when the
+  tier loaded code.
 - **`wasm:restore/3` expands `profile`** as `wasm:instantiate/3` does. A
   restored instance under `profile => script` used to keep the default compile
   threshold of 32.

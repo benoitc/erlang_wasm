@@ -120,6 +120,7 @@ snapshot_cases() ->
 compiled_cases() ->
     [compiled_with_a_finite_fuel_refuses_to_start,
      a_compiled_worker_enters_generated_code_on_its_first_request,
+     a_default_preload_does_not_hold_the_start,
      a_compiled_worker_with_a_damaged_manifest_still_answers].
 
 end_per_group(_G, _Config) -> ok.
@@ -774,6 +775,8 @@ compiled_with_a_finite_fuel_refuses_to_start(Config) ->
                                        limits => #{fuel => 1_000_000}})),
     ?assertEqual({error, {bad_option, compiled, yes}},
                  start(Config, Root, #{compiled => yes})),
+    ?assertEqual({error, {bad_option, preload, later}},
+                 start(Config, Root, #{compiled => true, preload => later})),
     %% Infinite fuel said twice is not a conflict, and `false' is no option.
     {ok, W} = start(Config, Root, #{compiled => true,
                                     limits => #{fuel => infinity}}),
@@ -781,9 +784,9 @@ compiled_with_a_finite_fuel_refuses_to_start(Config) ->
     {ok, W2} = start(Config, Root, #{compiled => false}),
     ok = wasm_script_worker:stop(W2).
 
-%% The whole point of the option: with the code cache warm, a new worker's
-%% first request runs generated code. Before it, that request interpreted and
-%% asked for a compile that read the same artifact back after it had answered.
+%% With `preload => wait' and the code cache warm, a new worker's first request
+%% runs generated code. Before it, that request interpreted and asked for a
+%% compile that read the same artifact back after it had answered.
 %%
 %% The cache directory is under the home directory because one under the
 %% system temporary directory is refused: its ancestors are writable by others.
@@ -792,12 +795,35 @@ a_compiled_worker_enters_generated_code_on_its_first_request(Config) ->
         ok = warm_the_cache(Config),
         %% The restart: nothing resident, the disk as the first worker left it.
         wasm_test_slots:reset(),
-        {ok, W} = start(Config, ?config(root, Config), #{compiled => true}),
+        {ok, W} = start(Config, ?config(root, Config),
+                        #{compiled => true, preload => wait}),
         ok = wasm_jit:reset_counts(),
         Want = wasm_script_worker:run(W, #{}),
         ?assertMatch({ok, #{values := [_]}}, Want),
         ?assert(maps:get(entered, wasm_jit:counts()) > 0,
                 "the first request of a compiled worker interpreted"),
+        ok = wasm_script_worker:stop(W)
+    end).
+
+%% The default does not wait for the load. The slot manager is suspended
+%% across the start, so a preload that held the start could not finish before
+%% it returned; the worker is up with nothing resident, and once the manager
+%% is back the load completes on its own and a request enters it.
+a_default_preload_does_not_hold_the_start(Config) ->
+    with_home_cache(fun() ->
+        ok = warm_the_cache(Config),
+        wasm_test_slots:reset(),
+        ok = sys:suspend(wasm_code_slots),
+        Started = try start(Config, ?config(root, Config), #{compiled => true})
+                  after ok = sys:resume(wasm_code_slots)
+                  end,
+        {ok, W} = Started,
+        ok = until_true(fun() -> wasm_code_slots:resident() =/= [] end,
+                        30_000),
+        ok = wasm_jit:reset_counts(),
+        ?assertMatch({ok, #{values := [_]}}, wasm_script_worker:run(W, #{})),
+        ?assert(maps:get(entered, wasm_jit:counts()) > 0,
+                "the background preload was not adopted"),
         ok = wasm_script_worker:stop(W)
     end).
 
@@ -823,7 +849,7 @@ a_compiled_worker_with_a_damaged_manifest_still_answers(Config) ->
              wasm_test_slots:reset(),
              ok = Damage(),
              {ok, W} = start(Config, ?config(root, Config),
-                             #{compiled => true}),
+                             #{compiled => true, preload => wait}),
              ok = wasm_jit:reset_counts(),
              ?assertMatch({ok, #{values := [_]}},
                           wasm_script_worker:run(W, #{})),
@@ -1014,7 +1040,7 @@ settings() ->
     Worker ++ wasm_worker_reaper:setting_keys() ++
         [trusted, capture_timeout, runner_min_heap_words,
          capture_min_heap_words, restore_ahead, recycle_idle,
-         root, compiled,
+         root, compiled, preload,
          %% Node-wide, and each one turns something substantial on or off.
          max_snapshot_bytes, max_snapshot_dir_bytes, snapshot_dir,
          code_cache_dir, scratch_roots, reaper_options, worker_timeout].

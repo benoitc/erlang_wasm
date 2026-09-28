@@ -38,11 +38,14 @@ get it by passing the key.
 | `capture_min_heap_words` | none | the same, for the process that captures the snapshot |
 | `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and function-only imports, and holds one instance's memory per idle worker |
 | `compiled` | `false` | `true` runs requests in the compiled tier: it sets `fuel => infinity`, `compile => true`, `compile_after => 1` and `compile_quality => baseline` under your own `limits`, and loads cached code at start. Only the deadline stops a runaway; see [Hosting scripting languages](scripting.md) |
+| `preload` | `async` | how a compiling worker loads cached code at start. `async` loads it in the background and the start does not wait. `wait` loads it before `start_link/2` returns, so request 1 is compiled, and moves the load into the start: about 0.2 s for Lua, 1.1 s for QuickJS and 2.9 s for CPython, for the first worker on a node only. Either way the load pauses every process on the node while it runs, so under `async` a request that arrives during it waits for it |
 | `recycle_idle` | `30_000` | milliseconds an idle worker keeps the memory its last request's instance left, for the next restore to reuse; counted in the node's page budget while kept. `0` keeps none; see [Tuning a worker host](tuning.md) |
 
 `start_link/2,3` refuses a `root` the reaper does not have, with
 `{error, {unknown_root, Root, Known}}`, and `compiled => true` together with a
 finite `fuel` in `limits`, with `{error, {bad_option, compiled, #{fuel => N}}}`.
+A `preload` other than `async` or `wait` is
+`{error, {bad_option, preload, Value}}`.
 
 ## Per node, for the reaper
 

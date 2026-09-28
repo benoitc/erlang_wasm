@@ -116,12 +116,57 @@ And what a *different* script gets from that warm cache: nothing. A second
 script against a cache filled by the first paid the full cold cost again and
 wrote a second entry, because it executed a different set of functions.
 
-**The readiness limitation.** `wasm_jit:await/2` takes an instance, and a
+**The readiness limitation.** With a warm cache, `compiled => true` removes
+it: the worker is ready when `start_link/2` returns. On a cold cache it still
+holds. `wasm_jit:await/2` takes an instance, and a
 worker destroys its instance after every request, so a worker host has nothing
 supported to wait on. Waiting for the compile rather than serving through it is
 worth a great deal -- on Lua it is 32 interpreted requests instead of 3,835,
 for the same wall time -- which is why this is recorded as a gap rather than
 left unsaid. `test/audit/PERF.md` has the measurements.
+
+## Start compiled from the first request
+
+A worker started with `compiled => true` loads cached code before it answers
+anything, so with a warm cache its first request already runs compiled. You
+need `code_cache_dir` set and a module loaded with `wasm:load/1`; nothing else.
+
+<!-- check: modules my_adapter -->
+```erlang
+application:set_env(wasm, code_cache_dir, "/var/lib/my_release/wasm"),
+{ok, W} = wasm_script_worker:start_link(my_adapter, #{compiled => true}).
+```
+
+It works because storing an artifact also stores a small **manifest** beside
+it: the set of functions the artifact holds, which is the part of the key a
+new node cannot know. At start the worker calls `wasm_jit:preload/2`, which
+reads the manifest, builds the full key, and loads the artifact under the same
+checks as any other cache read. It does not compile. A missing or damaged
+manifest, an evicted artifact or a sharded build is a miss, and the worker
+compiles as before, from the requests it serves.
+
+The load happens inside `start_link/2`, once per node: loading an artifact is
+the emulator translating it to native code, and a later worker finds the
+module resident. The first worker's start grows by that much:
+
+| guest | start without a preload | with one | first compiled request |
+| --- | ---: | ---: | --- |
+| Lua | 58 ms | 252 ms | 1st, was 9th to 10th |
+| QuickJS | 215 ms | 1.22 s | 1st, was 13th to 23rd |
+| CPython | 1.04 s | 3.78 s | 1st, was 61st to 62nd |
+
+Outside a worker, call it yourself before the first instance:
+
+```erlang
+Limits = #{fuel => infinity, compile => true, compile_quality => baseline},
+{ok, M} = wasm:load(Bytes),
+_ = wasm_jit:preload(M, Limits),
+{ok, I} = wasm:instantiate(M, #{}, Limits).
+```
+
+The manifest records the set of the **last** artifact stored for that module
+and quality. If different scripts reach different sets, the preload finds the
+one filed most recently.
 
 ## Know what you will get
 

@@ -39,13 +39,14 @@ These are covered by compatibility and the release notes:
 
 So are the option keys this module takes (`root`, `timeout`, `trusted`,
 `limits`, `capture_timeout`, `runner_min_heap_words`,
-`capture_min_heap_words`, `restore_ahead`, `recycle_idle`, and the `limits` keys
-`docs/worker-reference.md` lists), the
+`capture_min_heap_words`, `restore_ahead`, `recycle_idle`, `compiled`, and the
+`limits` keys `docs/worker-reference.md` lists), the
 `wasm` application settings `scratch_roots` and `reaper_options`, and the
 error shapes: a running worker answers `{error, wasm_worker_error:worker_error()}`,
 and `start_link/2,3` fails with a `gen_server` start reason, one of
-`{missing_option, Key}`, `{unknown_root, Root, Known}`,
-`{unknown_reaper_option, Keys}` or the adapter's own `wasm_worker_error()`.
+`{missing_option, Key}`, `{bad_option, Key, Why}`,
+`{unknown_root, Root, Known}`, `{unknown_reaper_option, Keys}` or the adapter's
+own `wasm_worker_error()`.
 
 `wasm_worker_reaper`, `wasm_worker_sup` and `wasm_script_v1` are internal:
 they may change in any release.
@@ -216,6 +217,13 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
           max_request_bytes  => 1_048_576,      % source plus encoded context
           max_staged_bytes   => 8_388_608,
           max_staged_files   => 64}).
+
+%% What `compiled => true' sets, under the caller's own `limits'. `baseline'
+%% and a threshold of one because a worker restores a fresh instance for every
+%% request: `docs/compiled-tier.md' has the measurements behind both.
+-define(COMPILED_LIMITS,
+        #{fuel => infinity, compile => true, compile_after => 1,
+          compile_quality => baseline}).
 
 -record(w, {adapter        :: module(),
             artifact       :: artifact(),
@@ -487,11 +495,43 @@ init({Adapter, Opts}) ->
                 {error, E} ->
                     {stop, E};
                 {ok, Artifact} ->
-                    Limits = maps:merge(
-                               maps:merge(wasm_limits:untrusted(), ?WORKER_LIMITS),
-                               maps:get(limits, Opts, #{})),
-                    started(Adapter, Artifact, Opts, Limits, Root)
+                    case compiled(Opts) of
+                        {error, E} ->
+                            {stop, E};
+                        {ok, Compiled} ->
+                            Limits = maps:merge(
+                                       maps:merge(wasm_limits:untrusted(),
+                                                  ?WORKER_LIMITS),
+                                       maps:merge(Compiled,
+                                                  maps:get(limits, Opts, #{}))),
+                            started(Adapter, Artifact, Opts, Limits, Root)
+                    end
             end
+    end.
+
+%% `compiled => true' is the compiled tier's four keys under one name, beneath
+%% whatever the caller set in `limits'. Four because the tier runs only with
+%% `compile => true' *and* infinite fuel, and a worker's base is
+%% `wasm_limits:untrusted/0', whose fuel is finite: asking for one without the
+%% other has always interpreted without a word.
+%%
+%% The one combination that cannot mean what it says is refused rather than
+%% resolved: a finite `fuel' is a metering the caller asked for, and the tier
+%% gives it up by construction.
+compiled(Opts) ->
+    Limits = maps:get(limits, Opts, #{}),
+    case maps:get(compiled, Opts, false) of
+        false ->
+            {ok, #{}};
+        true ->
+            case maps:get(fuel, Limits, infinity) of
+                infinity ->
+                    {ok, ?COMPILED_LIMITS};
+                Fuel ->
+                    {error, {bad_option, compiled, #{fuel => Fuel}}}
+            end;
+        Other ->
+            {error, {bad_option, compiled, Other}}
     end.
 
 started(Adapter, Artifact, Opts, Limits, Root) ->
@@ -510,10 +550,31 @@ started(Adapter, Artifact, Opts, Limits, Root) ->
                          words => maps:get(max_heap_words, Limits),
                          floor => CapHeap}) of
         {error, E}          -> {stop, E};
-        {ok, undefined, _}  -> {ok, W};
+        {ok, undefined, _}  ->
+            ok = preload(module_of(Artifact), Limits),
+            {ok, W};
         {ok, Image, Cap}    ->
+            ok = preload(maps:get(module, Cap), Limits),
             {ok, start_ahead(W#w{image = Image, snapshot_cap = Cap})}
     end.
+
+%% Compiled code from the disk cache, loaded before the first request, so that
+%% request enters it rather than interpreting while a compiler reads the same
+%% file back. Only a worker that compiles asks, and a miss is the start every
+%% release had until this: the tier compiles as it always did.
+%%
+%% After the capture and not before: the capture runs guest code under no
+%% compile limits, and nothing it does should wait on or race this.
+preload(Module, #{compile := true} = Limits) when Module =/= undefined ->
+    _ = wasm_jit:preload(Module, Limits),
+    ok;
+preload(_Module, _Limits) ->
+    ok.
+
+%% The module an adapter serves, where its artifact says. Every shipped adapter
+%% puts it under `module'; one that does not simply gets no preload.
+module_of(#{module := M}) -> M;
+module_of(_Artifact) -> undefined.
 
 %% The image is taken once, here, from a **trusted** initialisation context and
 %% before any tenant code has run. That is the whole security argument for

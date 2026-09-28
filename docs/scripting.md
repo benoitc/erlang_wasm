@@ -57,25 +57,35 @@ reaper holds, and which process holds each request.
 ## Choose a configuration: metered or compiled
 
 `metered` means a fuel budget stops a runaway script; `compiled` means the
-compiled tier is on and only the deadline stops it. They are **mutually
-exclusive**: generated code cannot count fuel, so asking for both silently
-gets you the interpreter.
+compiled tier is on and only the deadline stops it. Metered is the default.
+Turn compiled on with one option:
+
+<!-- check: modules my_adapter -->
+```erlang
+wasm_script_worker:start_link(my_adapter, #{compiled => true}).
+```
 
 | | metered | compiled |
 | --- | --- | --- |
 | `fuel` | a ceiling, from `wasm_limits:untrusted/0` | `infinity` |
-| `compile` | absent | `true`, with `profile => script` |
+| option | none | `compiled => true` |
 | what stops a runaway | the fuel budget | **only** the deadline |
-| speed | interpreted | compiled, after several thousand requests |
+| speed | interpreted | compiled, from the first request once the code cache is warm |
+
+`compiled => true` sets `fuel => infinity`, `compile => true`,
+`compile_after => 1` and `compile_quality => baseline`. A key you set in
+`limits` wins, except a finite `fuel`: generated code cannot count fuel, so
+the start is refused with `{bad_option, compiled, #{fuel => N}}` rather than
+silently interpreting.
 
 Compiled is worth it once the code is hot: a QuickJS reactor request goes from
 20.4 ms to 6.9, Lua from 11.4 to 4.4 and CPython from 93.1 to 37.6. Two things
 to budget for:
 
-- **Getting there takes a while**, about 150 s and several thousand requests
-  on QuickJS, every one of them interpreted. Set `code_cache_dir` so a restart
-  does not pay it again: a QuickJS worker then gets there in 1.5 s instead of
-  147.
+- **Set `code_cache_dir`.** With it, a compiled worker loads the code an
+  earlier start compiled before it answers anything, and its first request
+  runs compiled. Without it, every node start compiles again, about 150 s and
+  several thousand interpreted requests on QuickJS.
 - **Time is the only bound**, so compiled is the one configuration where an
   untrusted guest is stopped by the deadline alone.
 

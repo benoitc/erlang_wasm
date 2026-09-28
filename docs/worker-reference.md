@@ -37,10 +37,12 @@ get it by passing the key.
 | `runner_min_heap_words` | none | a heap floor for each request's runner; see [Hosting scripting languages](scripting.md) |
 | `capture_min_heap_words` | none | the same, for the process that captures the snapshot |
 | `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and function-only imports, and holds one instance's memory per idle worker |
+| `compiled` | `false` | `true` runs requests in the compiled tier: it sets `fuel => infinity`, `compile => true`, `compile_after => 1` and `compile_quality => baseline` under your own `limits`, and loads cached code at start. Only the deadline stops a runaway; see [Hosting scripting languages](scripting.md) |
 | `recycle_idle` | `30_000` | milliseconds an idle worker keeps the memory its last request's instance left, for the next restore to reuse; counted in the node's page budget while kept. `0` keeps none; see [Tuning a worker host](tuning.md) |
 
 `start_link/2,3` refuses a `root` the reaper does not have, with
-`{error, {unknown_root, Root, Known}}`.
+`{error, {unknown_root, Root, Known}}`, and `compiled => true` together with a
+finite `fuel` in `limits`, with `{error, {bad_option, compiled, #{fuel => N}}}`.
 
 ## Per node, for the reaper
 

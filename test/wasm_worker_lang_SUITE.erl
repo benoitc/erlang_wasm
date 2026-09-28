@@ -35,7 +35,7 @@ suite() -> [{timetrap, {minutes, 10}}].
 %% that measurement belongs.
 all() -> [{group, qjs_metered}, {group, qjs_compiled}, {group, qjs_reactor},
           {group, lua_reactor}, {group, qjs_reactor_ahead},
-          {group, lua_reactor_ahead}].
+          {group, lua_reactor_ahead}, {group, lua_compiled}].
 
 groups() ->
     [{qjs_metered, [], cases() ++ [asking_for_both_silently_gets_the_interpreter]},
@@ -61,6 +61,10 @@ groups() ->
      %% `all/0` for the reason its other groups are not.
      {qjs_reactor_ahead, [], reactor_cases() ++ ahead_cases()},
      {lua_reactor_ahead, [], lua_cases() ++ ahead_cases()},
+     %% `compiled => true' over a warm code cache, on the guest that compiles
+     %% in seconds: what the option promises is the first request, so that is
+     %% what is asserted.
+     {lua_compiled, [], [a_warm_compiled_worker_enters_on_its_first_request]},
      {python_reactor_ahead, [], python_reactor_cases() ++ ahead_cases()},
      %% An entry set at capture and called with no source. Not in `all/0`, for
      %% the reason the other CPython groups are not.
@@ -164,6 +168,11 @@ init_per_group(python_reactor, Config) ->
                   %% other CPython ceiling.
                   {worker_opts, #{capture_timeout => 180_000}},
                   {limits, python_reactor_limits()} | Config]);
+init_per_group(lua_compiled, Config) ->
+    case init_per_group(lua_reactor, Config) of
+        {skip, _} = Skip -> Skip;
+        C -> [{worker_opts, #{compiled => true}} | C]
+    end;
 init_per_group(qjs_reactor_ahead, Config) ->
     ahead(init_per_group(qjs_reactor, Config));
 init_per_group(lua_reactor_ahead, Config) ->
@@ -498,6 +507,52 @@ the_tier_enters_a_compiled_worker(Config) ->
     %% passes. `profile => script' sets `compile_after => 1' because a script
     %% is often a single call and the default threshold of 32 is never reached.
     ?assert(until_entered(W, echo(Config), 800)).
+
+%% A second worker over the cache the first one filled, after a simulated
+%% restart. Before `compiled => true' preloaded, a warm cache still started
+%% interpreted: the artifact was read back by a compiler one request asked
+%% for, and on this box the first compiled request was the fifth to ninth.
+%%
+%% The directory is under the home directory, because one under the system
+%% temporary directory is refused for its ancestors, and removed afterwards.
+a_warm_compiled_worker_enters_on_its_first_request(Config) ->
+    ct:timetrap({minutes, 5}),
+    Dir = filename:join([os:getenv("HOME"), ".cache",
+                         "wasm-ct-" ++ integer_to_list(
+                                         erlang:unique_integer([positive]))]),
+    ok = file:make_dir(Dir),
+    ok = file:change_mode(Dir, 8#700),
+    ok = application:set_env(wasm, code_cache_dir, Dir),
+    try
+        wasm_test_slots:reset(),
+        {ok, First} = start(Config, #{}),
+        ?assert(until_filed(First, echo(Config), Dir, 600)),
+        ok = wasm_script_worker:stop(First),
+        wasm_test_slots:reset(),
+        {ok, W} = start(Config, #{}),
+        ok = wasm_jit:reset_counts(),
+        ?assertMatch({ok, #{result := #{~"answer" := _}}},
+                     wasm_script_worker:run(W, echo(Config))),
+        ?assert(entered() > 0, "the first request interpreted"),
+        ok = wasm_script_worker:stop(W)
+    after
+        ok = application:unset_env(wasm, code_cache_dir),
+        wasm_test_slots:reset(),
+        _ = file:del_dir_r(Dir)
+    end.
+
+%% Requests until the compile they ask for has filed its artifact and manifest
+%% and published, which is when a restart would find them.
+until_filed(_W, _R, _Dir, 0) -> false;
+until_filed(W, R, Dir, N) ->
+    case filelib:wildcard(filename:join(Dir, "*.set")) =/= [] andalso
+         wasm_code_slots:resident() =/= [] of
+        true -> true;
+        false ->
+            _ = wasm_script_worker:run(W, R),
+            timer:sleep(100),
+            until_filed(W, R, Dir, N - 1)
+    end.
 
 entered() -> maps:get(entered, wasm_jit:counts(), 0).
 

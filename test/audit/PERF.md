@@ -6762,8 +6762,8 @@ and a queued request has no runner. So the bound is floor x busy workers,
 about 10 here.
 
 Peak OS RSS went the other way on CPython, 114 to 291 MB lower with the floor,
-and up on Lua and QuickJS, 100 to 258 MB higher. That rise is not accounted
-for by `erlang:memory` and is open.
+and up on Lua and QuickJS, 100 to 258 MB higher. The next section explains
+both, and the CPython half turned out to be the operating system's doing.
 
 **Little's law, as an extrapolation and not a measurement.** Busy workers =
 rate x time per request, and time per request is 10 workers / measured
@@ -6776,3 +6776,59 @@ memory above:
 | QuickJS, compiled | 133 | 120 | 10% | about 155 MB |
 | CPython, compiled, 1,500,000 | 346 | 265 | 23% | 1.4 to 1.5 GB |
 | Lua, interpreted | 393 | 182 | 54% | about 280 MB |
+
+## Why RSS rose more than `erlang:memory` with the floors
+
+**The segment cache holds the freed runner heaps.** A 200,000-word floor
+rounds to a 318,187-word heap, about 2.5 MB, above `eheap_alloc`'s
+single-block threshold (`sbct` 524,288 bytes; `lmbcs` 5 MB, `acul` 45 and
+`as aoffcbf` are the defaults already). So each floored runner heap is a
+single-block carrier. A runner exits after its request and the carrier goes
+to `mseg`, which keeps up to 10 segments per instance (`mcs` 10) across 11
+instances: about 73 cached segments, roughly 185 MB of dirty pages that RSS
+counts and `erlang:memory` does not. Sampled every 100 ms, about 10.5
+single-block heap carriers were live with the floors on (24 MB, one per busy
+runner) against about 11 small ones (4.5 MB) with them off. Standalone, five
+floored processes exiting took single-block bytes to 0, cached segments from
+13 to 18, and left RSS where it was. `footprint` agreed with `ps` (Lua with
+floors: 283 to 314 MB against 218 to 322), and the extra showed as dirty
+untagged regions, so it is not pages freed with `MADV_FREE`.
+
+Ten workers, 64 callers, two interleaved rounds gated on a load under 20, RSS
+max / mean in MB:
+
+| | off | on | on, `+MMmcs 0` | on, `+MMmcs 2` | off, `+MMmcs 0` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Lua compiled | 182 / 150 | 284 / 261 | 185 / 151 | 220 / 194 | 163 / 126 |
+| QuickJS compiled | 336 / 317 | 568 / 496 | 382 / 317 | 404 / 332 | 272 / 260 |
+
+`+MMmcs 0` closes Lua's gap and takes QuickJS's from about 230 MB to about 45.
+Throughput is not settled: the rounds varied by 30 to 60% from load outside
+the lock, and Lua with the floor and `+MMmcs 0` ran at 818 req/s against 760
+without the flag, which is inside that. A quiet machine and five pairs are
+needed before a throughput claim either way.
+
+Tried in a first pass at load 30 to 190, so only their memory counts, RSS
+max / mean in MB with the floors alone at Lua 272 / 229 and QuickJS 568 / 490:
+`+MHsbct 4096` 323 / 295 and 566 / 509 (the heaps move into 5 MB multiblock
+carriers, which are cached the same way); with `+MHlmbcs 20480` as well,
+377 / 333 and 642 / 565; `+MHlmbcs 20480` alone 349 / 330 and 603 / 559;
+`+MHacul 0` 296 / 283 and 572 / 546; `+MHramv true` 320 / 279 and 441 / 404,
+mixed; `+MHmmbcs 32768` 369 / 345 and 586 / 556, and it pins a main carrier
+per instance. A floor small enough to stay under `sbct` would be under 65,536
+words, which gives up the collection it exists to save.
+
+**CPython's lower RSS was the machine.** It did not reproduce: gated, floors
+on read 1,356 / 1,301 against 1,189 / 1,150 off. The machine had about 300 MB
+free, a compressor holding about 44 GB and 8 GB of swap in use, and CPython's
+`footprint` exceeded its `ps` RSS by up to 400 MB: idle pages, cached segments
+among them, were being compressed out of RSS. By footprint, two rounds each:
+off 1,609 and 1,318 MB, on 1,668 and 1,658, on with `+MMmcs 0` 1,309 and
+1,315, off with `+MMmcs 0` 1,447 and 1,458. With the cache off, the floor
+saves about 140 MB: an unfloored runner grows through about 3x as many
+collections and 2.5x the segment calls (56k to 76k against 24k to 27k), each
+new heap size a 10 to 130 MB carrier alongside the one it outgrew.
+
+`docs/tuning.md` gives the flag, and the trade against `+MMmcs 30`, which makes
+concurrent restores cheaper: a larger cache is faster allocation, a smaller one
+is memory returned sooner.

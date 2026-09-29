@@ -6824,3 +6824,113 @@ so the capture floor stays an option, set beside 32 M words as
 `docs/python.md` shows. Lua's capture also rules out a no-room Lua test: a
 Lua worker does not start under 1,000,000 words (its capture dies) and does at
 2,000,000, while the 200,000 default lacks room only under 400,000.
+
+## Compiled CPython's floor, by tier
+
+The section above gives CPython 1,000,000 words on both tiers. On the compiled
+tier that floor still lets the heap grow once mid-request, so the default now
+depends on the tier: `defaults/1` is asked with the worker's limits, and
+`wasm_python` answers 1,500,000 when `compile => true` and `fuel => infinity`,
+1,000,000 otherwise.
+
+One CPython worker per fresh VM, `+S 10:10`, built from c5ae8f9, the
+`reqbench` CPython guest and request, `wasm_python:limits()` with
+`max_heap_words` raised to 32 M words. Compiled adds `fuel => infinity,
+compile => true, compile_after => 1, compile_quality => baseline` and warms
+until `entered`, then 40 more; every compiled VM loaded its code from the
+cache. 100 timed requests per arm, then collections and the peak heap block
+from `garbage_collection` trace events over 20 more. Three rounds over
+0 to 2,000,000, order reversed on the middle one, load 5.2 to 12.3; then four
+rounds over 400,000 to 2,000,000 with the order alternating, load 6.4 to 8.6.
+Collections and peak were the same in every round. p50 in ms:
+
+| floor | class | compiled p50 | collections | peak heap |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 233 | 23.6 / 25.3 / 24.4 | 18 | 1,396,207 |
+| 100,000 | 121,536 | 23.5 / 22.1 / 23.1 | 14 | 1,347,864 |
+| 200,000 | 318,187 | 22.0 / 21.3 / 23.0 | 8.5 | 1,347,864 |
+| 400,000 | 514,838 | 21.5 / 21.9 / 23.0 | 6 | 1,666,052 |
+| 600,000 | 833,026 | 21.5 / 20.7 / 22.2 | 5 | 1,999,262 |
+| 1,000,000 | 1,199,557 | 21.6 / 21.1 / 20.6 | 5 | 2,878,936 |
+| 1,500,000 | 1,727,361 | (rounds 4 to 7 only) | 4 | 1,727,361 |
+| 2,000,000 | 2,072,833 | 20.0 / 19.5 / 20.5 | 4 | 2,072,833 |
+
+At 1,000,000 the peak is 2.88 M words: the heap outgrows its floor and is
+reallocated mid-request. At 1,500,000 and above the floor is the peak. In the
+four paired rounds, p50 at 1,000,000 then 1,500,000: 21.3 / 20.7, 21.9 / 20.8,
+21.8 / 21.0, 21.7 / 20.5. 1,500,000 was faster in every round, by 0.6 to
+1.2 ms (3 to 6%). 2,000,000 was within about a millisecond of 1,500,000 either
+way (20.2, 19.7, 20.5, 21.9) for a floor a fifth larger.
+
+Interpreted, p50 in ms over the three rounds:
+
+| floor | p50 | collections | peak heap |
+| ---: | ---: | ---: | ---: |
+| 0 | 141.2 / 144.5 / 142.4 | 77 to 78 | 2,805,586 |
+| 400,000 | 74.3 / 77.1 / 76.7 | 33 | 3,002,237 |
+| 1,000,000 | 44.0 / 45.0 / 45.8 | 15 | 3,166,829 |
+| 2,000,000 | 42.9 / 43.5 / 44.2 | 10 | 5,057,711 |
+
+2,000,000 buys about a millisecond for 60% more peak heap, so 1,000,000 stays
+the interpreter's default.
+
+Both defaults fit under `wasm_python:limits()`'s 16 M words and under the
+untrusted preset's 8 M with the worker's 2x headroom: 3 M words at most.
+
+## Default floors in a pool
+
+The question a host asks is what the floors cost across a pool. Ten workers
+per fresh VM, `+S 10:10`, built from c5ae8f9, a last-in pool of idle workers,
+64 and then 256 callers each looping on the `reqbench` request, 10 s of
+warm-up (compiled: until `entered`), then 20 s timed. Limits as above, QuickJS
+with no limits beyond the tier's. Each arm is the adapter's default floor
+against `runner_min_heap_words => 0`, plus CPython at 1,500,000. Two rounds,
+the second in reverse order. Load was 18 to 69 in round 1 and 20 to 135 in
+round 2, which is why only ratios within a round are read.
+
+Throughput in req/s, round 1 then 2:
+
+| guest | callers | floor off | floor on | change |
+| --- | ---: | ---: | ---: | ---: |
+| Lua, compiled | 64 | 999.0 / 1066.6 | 1146.4 / 1202.8 | +15%, +13% |
+| | 256 | 1062.9 / 1042.0 | 1226.6 / 1225.2 | +15%, +18% |
+| QuickJS, compiled | 64 | 730.0 / 755.1 | 825.3 / 834.0 | +13%, +10% |
+| | 256 | 738.2 / 775.2 | 831.3 / 836.8 | +13%, +8% |
+| CPython, compiled, 1,000,000 | 64 | 287.4 / 278.1 | 336.0 / 345.6 | +17%, +24% |
+| | 256 | 297.8 / 294.4 | 355.6 / 351.1 | +19%, +19% |
+| CPython, compiled, 1,500,000 | 64 | 287.4 / 278.1 | 370.0 / 373.5 | +29%, +34% |
+| | 256 | 297.8 / 294.4 | 385.1 / 383.6 | +29%, +30% |
+| Lua, interpreted | 64 | 253.8 / 248.8 | 557.5 / 540.4 | 2.2x, 2.2x |
+| | 256 | 259.1 / 256.1 | 548.5 / 549.8 | 2.1x, 2.1x |
+
+With the floors, p99 fell in every arm, for example Lua compiled at 256
+callers 275 to 236 ms and CPython at 1,500,000 934 to 726 ms. The collector's
+share of scheduler time (`msacc`) fell from 8.9 to 9.6% to 0.9% on Lua
+compiled, 7.4 to 7.8% to 1.0% on QuickJS and 4.4 to 4.6% to 1.2 to 1.3% on
+CPython. `mseg_alloc` calls for the heap allocator fell 4.0 to 4.7x on Lua
+compiled, 3.3 to 3.6x on QuickJS, 2.5 to 3.7x on CPython and 2.0 to 2.1x on
+Lua interpreted.
+
+**Memory.** Mean `erlang:memory(total)`, sampled every 10 ms, floor on minus
+floor off: Lua compiled +17.1 to 17.8 MB, QuickJS +12.7 to 13.3 MB, CPython
++51.1 to 54.7 MB at 1,000,000 and +52.6 to 56.1 MB at 1,500,000, Lua
+interpreted +14.4 to 15.7 MB. It did not grow from 64 callers to 256: a floor
+is held by a runner while it executes, a worker runs one request at a time,
+and a queued request has no runner. So the bound is floor x busy workers,
+about 10 here.
+
+Peak OS RSS went the other way on CPython, 114 to 291 MB lower with the floor,
+and up on Lua and QuickJS, 100 to 258 MB higher. That rise is not accounted
+for by `erlang:memory` and is open.
+
+**Little's law, as an extrapolation and not a measurement.** Busy workers =
+rate x time per request, and time per request is 10 workers / measured
+throughput. At 10,000 req/s, using the round means and the per-busy-worker
+memory above:
+
+| guest | busy workers, off | on | fewer | held by floors |
+| --- | ---: | ---: | ---: | ---: |
+| Lua, compiled | 96 | 83 | 13% | about 145 MB |
+| QuickJS, compiled | 133 | 120 | 10% | about 155 MB |
+| CPython, compiled, 1,500,000 | 346 | 265 | 23% | 1.4 to 1.5 GB |
+| Lua, interpreted | 393 | 182 | 54% | about 280 MB |

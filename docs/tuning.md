@@ -52,8 +52,9 @@ on at all.
 ## Give the request runner a heap floor
 
 The shipped adapters already set the floor they were measured at, through
-their `defaults/0`: 200,000 words for `wasm_lua` and `wasm_javascript`,
-1,000,000 for `wasm_python`. You need this section to change or disable one,
+their `defaults/1`: 200,000 words for `wasm_lua` and `wasm_javascript` on
+either tier, and for `wasm_python` 1,500,000 on the compiled tier and
+1,000,000 on the interpreter. You need this section to change or disable one,
 or to find the number for your own adapter.
 
 Override a default by passing the option, or disable it with `0`:
@@ -133,13 +134,13 @@ Two things to know before you set it:
 
 `wasm_script_worker:runner_heap_words/2` answers what a given pair of options and
 limits resolves to, so you can check a configuration without starting a worker.
-It reads only the options you pass it; merge the adapter's `defaults/0` under
-them first to see what a worker would get.
+It reads only the options you pass it; merge the adapter's `defaults/1`, asked
+with the worker's limits, under them first to see what a worker would get.
 
 A default that does not fit is refused the same way, and the warning says
 `(the adapter's default)`, so you can tell it from a value you set. A Lua or
 QuickJS default lacks room only under 400,000 words, and CPython's under
-2,000,000.
+2,000,000 interpreted and 3,000,000 compiled.
 
 ## Give the capture a floor as well
 
@@ -272,6 +273,47 @@ Run your own with the `throughput` mode, and read the caveat in
 `bench/paths/README.md` first: a scaling curve cannot be made self-controlling
 by interleaving the way a latency sweep can, so it needs a quiet machine and
 there is no trick that substitutes for one.
+
+## How much memory the floors hold
+
+Read this before you size a node for many workers. A runner's floor is held
+only while that runner executes a request, and a worker executes at most one
+at a time; queued requests hold nothing, and the runner's heap goes when the
+request ends. So the extra memory is at most the floor times the number of
+**busy workers**, not times requests per second or callers waiting.
+
+Measured with ten workers, compiled tier except where noted, at 64 and 256
+callers, floors on against off, two rounds:
+
+| guest | throughput | extra `erlang:memory(total)`, mean |
+| --- | ---: | ---: |
+| Lua | +13 to 18% | 17 to 18 MB |
+| QuickJS | +8 to 13% | 13 MB |
+| CPython, 1,000,000 | +17 to 24% | 51 to 55 MB |
+| CPython, 1,500,000 | +29 to 34% | 53 to 56 MB |
+| Lua, interpreted | 2.1 to 2.2x | 14 to 16 MB |
+
+The extra memory did not grow from 64 callers to 256. With the floors, the
+collector's share of CPU fell from about 9% to 1% on Lua, p99 fell, and
+allocator segment calls fell 2 to 4x.
+
+To size a node, apply Little's law: busy workers = requests per second x time
+per request. As an extrapolation from the table, not a measurement, at 10,000
+requests per second:
+
+| guest | busy workers, off | on | held by the floors |
+| --- | ---: | ---: | ---: |
+| Lua | 96 | 83 | about 145 MB |
+| QuickJS | 133 | 120 | about 155 MB |
+| CPython, 1,500,000 | 346 | 265 | 1.4 to 1.5 GB |
+| Lua, interpreted | 393 | 182 | about 280 MB |
+
+The floors hold that memory and in return need 10 to 54% fewer workers busy
+for the same rate.
+
+One observation is still open: OS RSS was 100 to 260 MB higher with the
+floors on for Lua and QuickJS (CPython's was lower), which the numbers above do
+not account for.
 
 ## Serve many callers from a pool
 

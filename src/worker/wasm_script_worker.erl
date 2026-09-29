@@ -494,8 +494,11 @@ init({Adapter, Opts}) ->
             end
     end.
 
+%% `Limits' is final here, merged from the preset, the worker's own and the
+%% caller's, and it is what the adapter's `defaults/1' is asked with, so a
+%% default can follow the tier the requests will actually run on.
 started(Adapter, Artifact, Opts, Limits, Root) ->
-    Floors = maps:merge(adapter_defaults(Adapter), Opts),
+    Floors = maps:merge(adapter_defaults(Adapter, Limits), Opts),
     {Heap, Note} = runner_heap_words(Floors, Limits),
     ok = say_heap(Adapter, runner_min_heap_words, Opts, Note),
     W = #w{adapter = Adapter, artifact = Artifact, opts = Opts,
@@ -825,7 +828,7 @@ How much heap a request runner starts with, and what happened to the number.
 give a request, where every key in a limits map says what a guest may not
 exceed. The right value is a property of the guest and there is no number that
 suits all of them, so an unset one comes from the adapter's optional
-`defaults/0`, and is off for an adapter without one. The shipped adapters set
+`defaults/1`, and is off for an adapter without one. The shipped adapters set
 the values `test/audit/PERF.md` measured; `docs/tuning.md` is how to find your
 own. This function reads only `Opts`: the worker merges the adapter's defaults
 under the caller's options before calling it.
@@ -884,12 +887,12 @@ heap_words(Key, Opts, Limits) ->
 %% The two floors an adapter may suggest, and nothing else it answers. An
 %% answer that is not a map is no suggestion rather than a worker that will
 %% not start: a default is the adapter's, and nothing here raises.
-adapter_defaults(Adapter) ->
-    case erlang:function_exported(Adapter, defaults, 0) of
+adapter_defaults(Adapter, Limits) ->
+    case erlang:function_exported(Adapter, defaults, 1) of
         false ->
             #{};
         true ->
-            case Adapter:defaults() of
+            case Adapter:defaults(Limits) of
                 D when is_map(D) ->
                     maps:with([runner_min_heap_words,
                                capture_min_heap_words], D);

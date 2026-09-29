@@ -25,7 +25,7 @@ component-model guests are outside the guarantee.
 > the worker kernel are installed with the application.
 
 Eight callbacks. Two more are optional: `snapshot_capability/1`, where an
-absent one reads as `unsupported`, and `defaults/0`, where an absent one reads
+absent one reads as `unsupported`, and `defaults/1`, where an absent one reads
 as no defaults.
 
 ```erlang
@@ -224,15 +224,24 @@ Notes:
 
 ## Give your guest a heap floor by default
 
-Export `defaults/0` when you have measured the heap floor your guest wants, so
+Export `defaults/1` when you have measured the heap floor your guest wants, so
 a caller who has never read the tuning guide gets it anyway. The worker reads
 `runner_min_heap_words` and `capture_min_heap_words` from it and ignores any
 other key.
 
+The argument is the worker's resolved limits map, so you can answer per tier.
+The compiled tier runs when `compile` is `true` and `fuel` is `infinity`, the
+test `wasm_jit` applies:
+
 ```erlang
-defaults() ->
-    #{runner_min_heap_words => 200_000}.
+defaults(#{compile := true, fuel := infinity}) ->
+    #{runner_min_heap_words => 1_500_000};
+defaults(_Limits) ->
+    #{runner_min_heap_words => 1_000_000}.
 ```
+
+That is `wasm_python`'s rule. `wasm_lua` and `wasm_javascript` ignore the
+argument and answer 200,000 words for both tiers.
 
 Notes:
 

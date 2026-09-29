@@ -5,13 +5,17 @@
 A worker built on a shipped adapter gives each request runner the heap floor
 its guest was measured at, without any option.
 
-- **New optional adapter callback `defaults/0`.** It answers
-  `runner_min_heap_words` and `capture_min_heap_words` for a worker whose
-  caller did not set them. An adapter without it behaves as before.
+- **New optional adapter callback `defaults/1`.** It is given the worker's
+  resolved limits and answers `runner_min_heap_words` and
+  `capture_min_heap_words` for a worker whose caller did not set them, so an
+  adapter can answer per tier. An adapter without it behaves as before.
 - **`wasm_lua` and `wasm_javascript` default `runner_min_heap_words` to
-  200,000 words, and `wasm_python` to 1,000,000.** Pass the option to change
-  it, or `0` to turn it off. No adapter sets `capture_min_heap_words`: set it
-  yourself, with a larger `max_heap_words`, as `docs/python.md` shows.
+  200,000 words. `wasm_python` defaults it to 1,500,000 on the compiled tier
+  (`compile => true`, `fuel => infinity`) and 1,000,000 otherwise.** Pass the
+  option to change it, or `0` to turn it off. The floor is held only while a
+  request executes; `docs/tuning.md` has what it costs a pool. No adapter
+  sets `capture_min_heap_words`: set it yourself, with a larger
+  `max_heap_words`, as `docs/python.md` shows.
 - A floor that does not fit under `max_heap_words` is still refused with a
   warning, which now says when the floor was the adapter's default.
 

@@ -598,7 +598,7 @@ transferred_actions_run_only_when_cleanup_fails(Config) -> ?KIT:transferred_acti
 
 %%% ------------------------------------------------------ Lua's heap floor ---
 %%
-%% `wasm_lua:defaults/0' asks for a 200,000-word runner floor, and a worker
+%% `wasm_lua:defaults/1' asks for a 200,000-word runner floor, and a worker
 %% started with no floor option must hand it to the process that runs the
 %% guest. The kernel suite holds the policy on a fake adapter; this holds it
 %% on the adapter that ships, where the number is the measured one.
@@ -616,7 +616,8 @@ lua_floor_cases() ->
 a_default_lua_runner_has_the_adapter_floor(Config) ->
     W = ?config(worker, Config),
     ?assert(spinning_runner_heap(W) >= 200_000),
-    ?assertEqual(200_000, maps:get(runner_min_heap_words, wasm_lua:defaults())).
+    ?assertEqual(#{runner_min_heap_words => 200_000},
+                 wasm_lua:defaults(#{})).
 
 spinning_runner_heap(W) ->
     {ok, Ref} = wasm_script_worker:submit(

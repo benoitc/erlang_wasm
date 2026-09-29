@@ -43,7 +43,7 @@ the bootstrap is compiled into the artifact rather than written to disk.
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,
-         snapshot_capability/1, defaults/0]).
+         snapshot_capability/1, defaults/1]).
 
 -define(DEFAULT_SOURCE, ~"export function main(context) { return context; }").
 -define(VERSION, ~"qjs-reactor-1").
@@ -56,9 +56,12 @@ collections to 21.1 ms and 34, and 400,000 bought nothing more
 (`test/audit/PERF.md`, "The 26 ms. Found: it is the runner's own garbage
 collection"). It rounds up to 318,187 words, about 2.5 MB, held only while a
 request runs. No capture floor: none was measured to help.
+
+The same number for both tiers. In a pool of ten workers it gave the compiled
+tier 8 to 13% more throughput ("Default floors in a pool").
 """.
--spec defaults() -> wasm_worker_adapter:defaults().
-defaults() ->
+-spec defaults(map()) -> wasm_worker_adapter:defaults().
+defaults(_Limits) ->
     #{runner_min_heap_words => 200_000}.
 
 artifact(Opts) ->

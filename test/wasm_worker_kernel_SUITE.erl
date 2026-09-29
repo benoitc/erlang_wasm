@@ -33,6 +33,7 @@ suite() -> [{timetrap, {seconds, 90}}].
 all() ->
     [every_setting_is_documented,
      a_runner_heap_floor_is_resolved_and_reported,
+     the_shipped_defaults_follow_the_tier,
      stopping_the_reaper_stops_its_journal_writers,
      {group, typed}, {group, command}, {group, script_v1},
      {group, script_v1_channel}, {group, reactor}, {group, reactor_ahead},
@@ -115,6 +116,7 @@ snapshot_cases() ->
      an_adapter_default_floor_reaches_the_runner,
      an_explicit_floor_wins_over_the_adapter_default,
      a_zero_floor_turns_the_adapter_default_off,
+     an_adapter_default_follows_the_tier,
      an_adapter_default_with_no_room_is_said_and_skipped].
 
 end_per_group(_G, _Config) -> ok.
@@ -124,6 +126,8 @@ end_per_group(_G, _Config) -> ok.
 init_per_testcase(every_setting_is_documented, Config) ->
     Config;
 init_per_testcase(a_runner_heap_floor_is_resolved_and_reported, Config) ->
+    Config;
+init_per_testcase(the_shipped_defaults_follow_the_tier, Config) ->
     Config;
 init_per_testcase(stopping_the_reaper_stops_its_journal_writers = TC, Config) ->
     start_case(TC, [{adapter, fake_typed_adapter} | Config]);
@@ -141,6 +145,8 @@ start_case(TC, Config) ->
 end_per_testcase(every_setting_is_documented, _Config) ->
     ok;
 end_per_testcase(a_runner_heap_floor_is_resolved_and_reported, _Config) ->
+    ok;
+end_per_testcase(the_shipped_defaults_follow_the_tier, _Config) ->
     ok;
 end_per_testcase(_TC, Config) ->
     try wasm_script_worker:stop(?config(worker, Config)) catch _:_ -> ok end,
@@ -805,6 +811,35 @@ a_runner_heap_floor_is_resolved_and_reported(_Config) ->
                  wasm_script_worker:runner_heap_words(
                    #{runner_min_heap_words => 200_001}, Small)).
 
+%% What the shipped adapters answer, asked directly: no worker, no guest. The
+%% worker cases below hold that an answer reaches the runner; this holds the
+%% answers. CPython's compiled tier wants more room than its interpreter
+%% (`test/audit/PERF.md', "Compiled CPython's floor, by tier"); Lua and QuickJS
+%% measured one number for both. Every answer fits, with the worker's 2x
+%% headroom, under the ceiling its adapter's `limits/0' sets and under the
+%% untrusted preset, so none is dropped as `no_room' under either. QuickJS
+%% has no `limits/0', so the preset is its only ceiling here.
+the_shipped_defaults_follow_the_tier(_Config) ->
+    Compiled = #{compile => true, fuel => infinity},
+    Fueled = #{compile => true, fuel => 10_000_000},
+    ?assertEqual(#{runner_min_heap_words => 1_500_000},
+                 wasm_python:defaults(Compiled)),
+    ?assertEqual(#{runner_min_heap_words => 1_000_000},
+                 wasm_python:defaults(Fueled)),
+    ?assertEqual(#{runner_min_heap_words => 1_000_000},
+                 wasm_python:defaults(#{fuel => infinity})),
+    [?assertEqual(#{runner_min_heap_words => 200_000}, M:defaults(L))
+     || M <- [wasm_lua, wasm_javascript], L <- [Compiled, Fueled, #{}]],
+    Ceilings = [{wasm_python, wasm_python:limits()},
+                {wasm_python, wasm_limits:untrusted()},
+                {wasm_lua, wasm_lua:limits()},
+                {wasm_lua, wasm_limits:untrusted()},
+                {wasm_javascript, wasm_limits:untrusted()}],
+    [?assertMatch({W, ok} when W > 0,
+                  wasm_script_worker:runner_heap_words(
+                    M:defaults(Tier), maps:merge(Ceiling, Tier)))
+     || {M, Ceiling} <- Ceilings, Tier <- [Compiled, #{}]].
+
 %% That the resolved number reaches the process running the guest, which the
 %% case above cannot say. The adapter reads its own flags in `decode/2', after
 %% the guest has run, so this is the floor holding across the call.
@@ -869,14 +904,14 @@ a_capture_floor_does_not_stop_a_worker_starting(Config) ->
 
 %%% ------------------------------------------- the adapter's default floor ---
 %%
-%% An adapter may answer `defaults/0', and the worker takes its floors from
+%% An adapter may answer `defaults/1', and the worker takes its floors from
 %% there when the caller set none. `fake_floor_adapter' is the reactor with
 %% that callback added and nothing else, so every difference below is the
 %% callback's. `an_unset_floor_leaves_the_runner_the_system_default' above is
 %% the control: an adapter without it is the worker it always was.
 %%
 %% Each case asserts the default first, so none of them can pass on a worker
-%% that ignores `defaults/0'.
+%% that ignores `defaults/1'.
 
 start_floored(Config, Opts) ->
     Group = proplists:get_value(worker_opts, Config, #{}),
@@ -908,6 +943,37 @@ a_zero_floor_turns_the_adapter_default_off(Config) ->
     ?assert(runner_heap(W0) >= 200_000),
     {ok, W} = start_floored(Config, #{runner_min_heap_words => 0}),
     ?assertEqual(Min, runner_heap(W)).
+
+%% The callback is asked with the worker's final limits, so an adapter can
+%% answer per tier. `fake_floor_adapter' gives 400,000 words where generated
+%% code runs and 200,000 elsewhere, the rule `wasm_python' ships; the two land
+%% in different heap-size classes, so each is told apart from the other.
+%% `compile => true' under the preset's finite fuel is the interpreter,
+%% because `wasm_jit:entry/3' runs no generated code under a fuel budget.
+an_adapter_default_follows_the_tier(Config) ->
+    Compiled = #{limits => #{compile => true, fuel => infinity}},
+    {ok, W} = start_floored(Config, Compiled),
+    ?assert(runner_heap(W) >= 400_000),
+    {ok, W1} = start_floored(Config, #{}),
+    Interpreted = runner_heap(W1),
+    ?assert(Interpreted >= 200_000 andalso Interpreted < 400_000),
+    {ok, W2} = start_floored(Config, #{limits => #{compile => true}}),
+    Fueled = runner_heap(W2),
+    ?assert(Fueled >= 200_000 andalso Fueled < 400_000),
+    %% On the compiled tier as on the other, a set value wins and 0 is off.
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    {ok, W3} = start_floored(Config, Compiled#{runner_min_heap_words => 0}),
+    ?assertEqual(Min, runner_heap(W3)),
+    {ok, W4} = start_floored(Config,
+                             Compiled#{runner_min_heap_words => 100_000}),
+    Explicit = runner_heap(W4),
+    ?assert(Explicit >= 100_000 andalso Explicit < 200_000),
+    %% And an adapter without the callback has no floor on either tier.
+    Group = proplists:get_value(worker_opts, Config, #{}),
+    {ok, W5} = wasm_script_worker:start_link(
+                 fake_reactor_adapter,
+                 maps:merge(Group#{root => scratch}, Compiled)),
+    ?assertEqual(Min, runner_heap(W5)).
 
 %% A default goes through the checks a set value does. Under a ceiling with
 %% no room for it the runner gets none and still answers, and the warning

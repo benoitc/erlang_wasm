@@ -177,7 +177,7 @@ adapter that ignores snapshots writes neither.
                                 runaway := request(), state_change := request()},
                       by_capability := #{atom() => request()}}.
 
--doc "What `defaults/0` answers. Each value is a number of words.".
+-doc "What `defaults/1` answers. Each value is a number of words.".
 -type defaults() :: #{runner_min_heap_words => non_neg_integer(),
                       capture_min_heap_words => non_neg_integer()}.
 
@@ -270,12 +270,17 @@ value the caller passes wins, `0` included, and a default goes through the
 same checks as a value the caller passed: one that does not fit under the
 worker's `max_heap_words` is logged and not applied.
 
+The argument is the worker's resolved limits map, the one its requests run
+under, so an adapter can answer per tier: `compile`, `fuel` and
+`max_heap_words` are final by the time it is asked. `wasm_python` uses that to
+give the compiled tier a larger floor than the interpreter.
+
 An absent callback reads as `#{}`, which is every worker before this callback
 existed: no floor unless the caller sets one.
 """.
--callback defaults() -> defaults().
+-callback defaults(Limits :: map()) -> defaults().
 
--optional_callbacks([snapshot_capability/1, defaults/0]).
+-optional_callbacks([snapshot_capability/1, defaults/1]).
 
 -doc "Names a configured scratch root. A closed set, supplied at start.".
 -type root_id() :: atom().

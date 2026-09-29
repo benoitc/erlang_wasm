@@ -86,8 +86,9 @@ to budget for:
 A request runner holds almost nothing on its own heap, so the collector gives
 it the smallest heap and then collects through the request dozens of times; on
 QuickJS that was 61% of the request. A floor fixes it, and the shipped adapters
-set one for you: 200,000 words for Lua and QuickJS, 1,000,000 for CPython. For
-your own adapter, set it per worker, or export `defaults/0` as
+set one for you: 200,000 words for Lua and QuickJS, and for CPython 1,500,000
+on the compiled tier and 1,000,000 on the interpreter. For your own adapter,
+set it per worker, or export `defaults/1` as
 [Writing an adapter](worker-contract.md) shows:
 
 <!-- check: modules my_adapter -->

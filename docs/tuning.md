@@ -311,9 +311,40 @@ requests per second:
 The floors hold that memory and in return need 10 to 54% fewer workers busy
 for the same rate.
 
-One observation is still open: OS RSS was 100 to 260 MB higher with the
-floors on for Lua and QuickJS (CPython's was lower), which the numbers above do
-not account for.
+### Why the operating system sees more than `erlang:memory`
+
+Read this when a node's RSS is higher than `erlang:memory(total)` explains
+after you give runners a floor. A floor of 200,000 words rounds up to a heap
+of 318,187 words, about 2.5 MB, which is above the process heap allocator's
+single-block threshold (`sbct`, 512 KB). So every floored runner heap is a
+carrier of its own. When the runner exits, that carrier goes to the emulator's
+segment cache rather than back to the operating system, and the cache keeps
+up to 10 segments per allocator instance. Those dirty pages count in RSS and
+not in `erlang:memory`.
+
+Ten workers, 64 callers, mean over two rounds:
+
+| guest | floors off | floors on | floors on, `+MMmcs 0` |
+| --- | ---: | ---: | ---: |
+| Lua, RSS | 150 MB | 261 MB | 151 MB |
+| QuickJS, RSS | 317 MB | 496 MB | 317 MB |
+
+`+MMmcs 2` keeps a small cache and recovers most of Lua's gap (194 MB) and
+part of QuickJS's (332 MB). Raising `+MHsbct` does not help: the heaps become
+multiblock carriers, which are cached the same way.
+
+The flag trades against the section below. A larger segment cache makes
+restores faster when many workers allocate at once, and a smaller one returns
+memory sooner. Which way the throughput goes with `+MMmcs 0` under the floors
+is not measured yet: on this machine it moved by less than the 30 to 60% the
+rounds varied by. Choose it when RSS is the limit, and measure your own pool.
+
+CPython's RSS is not a reliable guide here. On a machine under memory
+pressure the operating system compresses idle pages out of it, so read
+`footprint` (macOS) or the process's proportional set size instead. By
+footprint, floors on with `+MMmcs 0` came to about 1,310 MB against about
+1,450 MB for floors off with the same flag: a heap that starts at its working
+size does not leave a trail of outgrown ones.
 
 ## Serve many callers from a pool
 
@@ -384,7 +415,9 @@ erl +MMmcs 30 +MMamcbf 1000000 ...
 | default | 4.0 ms | 11.1 ms |
 | `+MMmcs 30 +MMamcbf 1000000` | 2.4 ms | 5.2 ms |
 
-End to end on the pool above that was worth about 3%.
+End to end on the pool above that was worth about 3%. The same cache holds
+freed runner heaps, so with heap floors it also raises RSS: see "Why the
+operating system sees more than `erlang:memory`" above before you raise it.
 
 ## Stop compiling the same Python on every request
 

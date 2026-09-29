@@ -206,8 +206,22 @@ and 2.1 ms. [Tuning a worker host](tuning.md) has the table.
 
 CPython gains more from this than either other guest here, and it gains on both
 halves: the start and the request. `wasm_python` sets the request runner's
-floor for you, 1,000,000 words. It does **not** set the capture's: add
-`capture_min_heap_words` yourself, with the larger `max_heap_words` below.
+floor for you, and the number depends on the tier your limits select:
+
+| tier | limits | `runner_min_heap_words` |
+| --- | --- | ---: |
+| compiled | `compile => true`, `fuel => infinity` | 1,500,000 |
+| interpreted | anything else | 1,000,000 |
+
+The compiled tier wants more because at 1,000,000 its heap still grew once
+mid-request, to 2.88 M words; at 1,500,000 it never grew, a request was 3 to
+6% faster at p50, and a pool of ten answered 29 to 34% more requests against
+17 to 24%. The interpreter gains nothing past 1,000,000. Both fit
+under `wasm_python:limits/0` and under the untrusted preset with the worker's
+headroom.
+
+It does **not** set the capture's: add `capture_min_heap_words` yourself, with
+the larger `max_heap_words` below.
 
 <!-- check: run -->
 <!-- check: fresh -->

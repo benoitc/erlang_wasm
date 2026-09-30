@@ -585,7 +585,8 @@ started(Adapter, Artifact, Opts, Limits, Root) ->
 %% `erlang:finish_loading/1' does not complete while another process is in
 %% `erlang:prepare_loading/2', and so does `persistent_term:put/2'. And
 %% `prepare_loading' does not yield, so a process queued on the same scheduler
-%% waits until another scheduler takes it. Processes elsewhere carry on.
+%% waits for all of it: the other schedulers, asleep, take nothing off it.
+%% Processes elsewhere carry on.
 %% `test/audit/PERF.md' has the traces.
 %%
 %% So `wait' loads here, inside `start_link/2', before any traffic, and request
@@ -595,7 +596,9 @@ started(Adapter, Artifact, Opts, Limits, Root) ->
 %% `sets' and the rest), and loading them during the preload made it wait for
 %% the whole of it. Holding the claim meanwhile is what keeps the compile that
 %% request asks for from starting a second, uncached one: it finds the slot
-%% `loading' and interprets.
+%% `loading' and interprets. The gate alone did not keep the load out of that
+%% request: the load held whichever scheduler it began on, usually this one,
+%% until `wasm_jit' moved it to the last one (see `aside/1' there).
 %%
 %% After the capture and not before: the capture runs guest code under no
 %% compile limits, and nothing it does should wait on or race this.

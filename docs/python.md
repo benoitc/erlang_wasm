@@ -136,7 +136,7 @@ and out, the same capabilities.
 
 Notes:
 
-- **`start_link/2` takes 91 to 95 seconds**, or 17.4 with the capture floor
+- **`start_link/2` takes about 14 seconds**, or 5 with the capture floor
   below, because that is one interpreter start. It happens once per worker, not
   once per request, and a host should start its workers before it starts taking
   traffic. It is also longer than the 60 s `capture_timeout` default, which is
@@ -150,11 +150,40 @@ Notes:
   available: string hashes are already cached against the old secret, so
   rotation means recapturing. `docs/snapshots.md` covers what else an image
   freezes.
-- **It needs a WASI SDK and about twenty minutes to build**, which the fetched
-  command artifact does not. `test/fixtures/lang/PYTHON.md` has the pins and
-  says why there is no checksum.
+- **It needs a WASI SDK, binaryen's `wasm-opt` and about twenty minutes to
+  build**, which the fetched command artifact does not.
+  `test/fixtures/lang/PYTHON.md` has the pins and says why there is no
+  checksum.
+- **The standard library is precompiled.** Every module in `lib` ships with
+  its `.pyc`, so an import your source makes loads bytecode instead of
+  compiling the module in your request. The files are unchecked hash-based:
+  the import never looks at the `.py`, so an edit to one has no effect until
+  you rerun the build script.
+- **Objects in the image are frozen out of the cyclic collector.** See
+  [below](#the-image-is-frozen-out-of-the-collector).
 - The numbers, their null experiment and where the time goes are in
   `test/audit/PERF.md`.
+
+## The image is frozen out of the collector
+
+The reactor ends its start with `gc.collect()` and `gc.freeze()`, and a
+capture with an `entry` does the same again after the entry has run. Every
+object alive at that point moves to the collector's permanent generation, so a
+request's collections traverse only what the request allocated. Without it,
+a collection due just after the capture was due in every request.
+
+What that means for your code:
+
+- **`gc.get_objects()` does not list objects from the image**, and
+  `gc.get_freeze_count()` counts them. Objects your request creates are listed
+  as usual.
+- **Nothing in the image is collected by the cyclic collector.** Reference
+  counting still frees an image object whose last reference goes, and its
+  weakref callbacks run as usual. One kept alive only by a reference cycle is
+  never freed, and its callbacks never run. It does not leak: the request's
+  copy of the image is thrown away when the request ends.
+- **Do not call `gc.unfreeze()`.** It hands the whole image back to the
+  collector and the next collection pays for all of it, in that request.
 
 ## Call a fixed entry instead of sending a source
 
@@ -246,7 +275,9 @@ Both rows are what the floor sweep measured, and the request row was taken
 before the restore path stopped writing over the image's own zeros. With the
 floors on, an interpreted request is **88 ms** now, and 35 ms once the
 compiled tier has adopted. Read a pair of numbers from one row, never one from
-each: they come from different runs.
+each: they come from different runs. The start row predates the precompiled
+standard library, which brought one capture to 13.6 s without the floor and
+4.5 to 5.0 s with it.
 
 Both processes keep almost nothing on their own Erlang heap, because the
 module is a cache handle and the interpreter's memory is off-heap. The

@@ -7122,3 +7122,52 @@ memory given back when the only process holding the module exits;
 What is held now is the data segments (3.17 MB of the CPython reactor's,
 488 KB of QuickJS's) and the name section. Compile time moves within the run
 to run spread of each arm (464 to 507 ms and 486 to 495 ms on CPython).
+
+## A precompiled CPython standard library
+
+The reactor's standard library shipped as 554 `.py` files and no `.pyc`, so a
+module a request imported that was not in the image was compiled in that
+request. The build now compiles the library with its own host interpreter,
+strips the DWARF from the artifact (30.9 MB to 7.4), and the shim ends its
+start with a throwaway `compile()` and `gc.collect(); gc.freeze()`.
+
+Each of the three parts is needed. A trivial request, interpreted, on the
+precompiled library: 1,430 ms with neither, 237 ms with the `compile()` alone,
+138 ms with both, against 134 ms for the build that compiled its library at
+start. The `compile()` is 1.24 s of the first: the first call after start pays
+a one-time setup, and a start that loads every module from a `.pyc` compiles
+nothing through it. The rest is a cyclic collection due just after the
+capture and so due in every request.
+
+Old fixture against new, `psplit.erl` from the investigation (one fresh VM
+per fixture, tier and variant, fixtures alternating, `+S 10:10`, 1M-word
+runner floor, 2M-word capture floor, 30 requests after warm-up unless noted),
+three rounds, per-round medians of the whole request:
+
+| request | tier | old | new | old / new |
+| --- | --- | ---: | ---: | ---: |
+| trivial `main` | compiled | 23.4 / 23.4 / 26.6 ms | 23.1 / 22.0 / 24.5 ms | 1.01 |
+| trivial `main` | interpreted | 130.5 / 131.2 / 151.0 ms | 130.4 / 131.1 / 134.7 ms | 1.00 |
+| entry, `call()` | compiled | 10.9 / 10.7 / 11.4 ms | 10.0 / 9.4 / 10.3 ms | 1.08 |
+| entry, `call()` | interpreted | 32.9 / 31.2 / 32.6 ms | 32.5 / 29.4 / 30.0 ms | 1.09 |
+| imports `datetime` | compiled | 49.5 / 48.9 / 49.7 ms | 41.3 / 40.2 / 42.3 ms | 1.20 |
+| imports `datetime` | interpreted | 464 / 469 / 467 ms | 394 / 396 / 397 ms | 1.18 |
+| six heavy imports | compiled | 12.9 / 12.5 / 14.6 s | 2.04 / 0.93 / 1.11 s | 11.3 |
+| six heavy imports | interpreted | 207 / 203 / 204 s | 17.0 / 18.0 / 19.6 s | 11.3 |
+
+The heavy imports are `dataclasses, typing, urllib.parse, base64, hashlib,
+decimal`: 5 requests compiled and 3 interpreted for the old fixture, 10 for
+the new. The old one takes over 200 s a request interpreted, past the
+adapter's 120 s default `timeout`, so those runs raise it.
+
+The capture, a fresh image directory each time:
+
+| capture | old | new | old / new |
+| --- | ---: | ---: | ---: |
+| plain, 2M floor | 18.7 / 18.3 / 18.4 s | 4.9 / 4.5 / 5.0 s | 3.8 |
+| entry, 2M floor | 18.6 / 18.4 / 18.3 s | 4.7 / 4.4 / 4.7 s | 3.9 |
+| plain, no floor, once | 104.3 s | 13.6 s | 7.7 |
+
+The image is 2,747,289 bytes old and 2,032,933 new for a plain worker,
+2,746,838 and 2,030,826 with an entry. One-minute load average 5.7 to 43
+across the three rounds; the heavy-import rows' first round ran at 20 to 39.

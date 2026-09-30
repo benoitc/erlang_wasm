@@ -349,7 +349,9 @@ for it, up to a bound, and a preload that overruns is killed and is a miss.
 prepares the module, 0.2 s for a Lua artifact and 2.9 s for CPython, no other
 module on the node finishes loading and `persistent_term:put/2` waits, and the
 preparation does not yield, so a process queued on its scheduler waits too.
-Processes elsewhere carry on. So call this before traffic, or use `preload/3`.
+The load runs on the last online scheduler, which a lightly loaded node keeps
+free, so that is rarely a request's. Module loads and `persistent_term:put/2`
+still wait, so call this before traffic, or use `preload/3`.
 """.
 -spec preload(wasm:module_(), map()) -> ok | miss.
 preload(Module, Limits) ->
@@ -439,7 +441,7 @@ preload_2(Id, Hash, Quality, Funcs, Before) ->
     end.
 
 load(Mod, Token, Bin, N) ->
-    case code:load_binary(Mod, "wasm_generated", Bin) of
+    case aside(fun() -> code:load_binary(Mod, "wasm_generated", Bin) end) of
         {module, Mod} ->
             case wasm_code_slots:publish(Token) of
                 ok ->
@@ -452,6 +454,37 @@ load(Mod, Token, Bin, N) ->
         {error, _} ->
             ok = wasm_code_slots:abort(Token),
             miss
+    end.
+
+%% `F' run on the last online scheduler, which is where a preload loads.
+%%
+%% `code:load_binary/3' runs `erlang:prepare_loading/2' in the calling process,
+%% and that does not yield: for all of its 2.7 s on CPython the scheduler it
+%% runs on runs nothing else, and nothing takes work off it, because the
+%% others are asleep. A lightly loaded node compacts its runnable processes
+%% onto its first schedulers, the preload's among them, so the load mostly
+%% began next to the worker and its caller. Gating it behind the first answer
+%% was not enough: the caller's `consumed' call, which `run/2' makes after the
+%% answer, and every request after it, waited out the load whenever they were
+%% queued there, which was request 1 in 4 fresh starts of 5. Compaction empties
+%% the last scheduler first, so a process bound there keeps the load away from
+%% them. `test/audit/PERF.md' has the timelines.
+%%
+%% `process_flag(scheduler, N)' is not documented, hence `apply/3', and it is
+%% undone before returning. Where it is refused, `F' runs where it is, as it
+%% did before this.
+aside(F) ->
+    case erlang:system_info(schedulers_online) of
+        1 -> F();
+        Last ->
+            Was = bind(Last),
+            erlang:yield(),
+            try F() after bind(Was) end
+    end.
+
+bind(N) ->
+    try erlang:apply(erlang, process_flag, [scheduler, N])
+    catch error:badarg -> 0
     end.
 
 -doc "How much has been compiled, and how often generated code was entered.".

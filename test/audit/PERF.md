@@ -7099,6 +7099,64 @@ this harness, and why is not established: `atomics:info/1` and
 `counters:get/2` alone do not. The harness reads the `entered` counter
 directly.
 
+## The preload loads on the last scheduler
+
+The gate above kept the load out of request 1's module loads but not out of
+its latency. A cold-start run against 0.7.0 still had CPython's request 1 at
+2.75 to 2.99 s in 4 rounds of 5 under `async`.
+
+**Timeline.** Probes (an ETS insert with the scheduler id, no tracer: a
+tracer keeps the other schedulers awake and hid the stall in 4 traced runs of
+4) in the preload, the worker and the caller, CPython, warm cache, `+S 10:10`:
+
+| ms | scheduler | event |
+| ---: | ---: | --- |
+| 942.6 | 1 | `start_link/2` returns, request 1 submitted |
+| 955.5 | 3 | preload has read and claimed, waits at the gate |
+| 991.2 to 1002.4 | 1 | runner's IR `persistent_term:put` |
+| 1002.6 | 1 | worker replies (`publish`), gate opens |
+| 1002.6 | 1 | preload starts `code:load_binary/3` |
+| 3641.3 | 1 | worker receives the caller's `consumed` call |
+| 3660.6 | 1 | caller's `run/2` returns: request 1 is 2,718 ms |
+| 3661.0 | 1 | load ends |
+
+The gate held: the load never began before the answer. But the preload had
+been compacted onto scheduler 1 with the worker and the caller, and
+`prepare_loading` does not yield, so the `consumed` call that `run/2` makes
+after the answer waited out the load. In another run the three were on
+scheduler 2 and request 1 took 64 ms, and request 6 took 2.54 s once they
+came back to scheduler 1.
+
+**Fix.** `wasm_jit` binds the loading process to the last online scheduler
+for the length of `code:load_binary/3` (`process_flag(scheduler, N)`, not
+documented), which compaction empties first. The same probe with the binding:
+0 stalls in 6 starts, the load on scheduler 10 every time. Module loads and
+`persistent_term:put/2` elsewhere still wait for a load, as above.
+
+`combined/cmb.erl` lat mode, five interleaved fresh-VM rounds, `+S 10:10`,
+warm caches, HEAD (`head`) against the fix. One-minute load 3.2 to 12.0.
+Per round, in ms; `worst` is the slowest request before the first compiled
+one, `first` its number:
+
+| guest | preload | build | start | req 1 | worst | first |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPython | async | head | 872 to 908 | 57.5 71.4 **2702 2716** 60.7 | **2611 2676 2702 2716** 60.7 | 3 3 2 2 94 |
+| CPython | async | fix | 895 to 977 | 65.7 62.0 60.2 61.2 60.8 | 65.7 62.0 60.2 75.2 60.8 | 90 93 92 92 90 |
+| CPython | wait | head | 3532 to 3595 | 24.9 to 27.5 | same | 1 |
+| CPython | wait | fix | 3499 to 3609 | 24.8 to 27.5 | same | 1 |
+| QuickJS | async | head | 151 to 166 | 25.1 to 29.7 | 28.5 **936 980** 29.7 25.4 | 84 8 3 84 84 |
+| QuickJS | async | fix | 151 to 166 | 24.6 to 26.9 | 24.6 to 35.8 | 83 to 85 |
+| QuickJS | wait | head | 1146 to 1166 | 8.5 to 9.1 | same | 1 |
+| QuickJS | wait | fix | 1140 to 1188 | 8.5 to 10.8 | same | 1 |
+| Lua | async | head | 37.1 to 42.6 | 12.9 to 15.6 | 13.3 15.6 **166 180** 12.9 | 28 28 7 4 26 |
+| Lua | async | fix | 37.8 to 39.2 | 12.7 to 13.1 | 13.1 to 13.6 | 27 or 28 |
+| Lua | wait | head | 221 to 233 | 5.1 to 5.3 | same | 1 |
+| Lua | wait | fix | 224 to 242 | 5.4 to 7.6 | same | 1 |
+
+A small `first` under head is the stall: requests queued behind the load and
+the next one found it done. Under the fix they interpret through it, about
+90 CPython requests in the 2.7 s, and the load lands at the same time.
+
 ## What a decoded module keeps of its input
 
 The decoder matched custom sections, data segments and names longer than 64

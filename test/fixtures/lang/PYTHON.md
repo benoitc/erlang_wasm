@@ -197,11 +197,12 @@ JavaScript adapters run:
 
     rebar3 ct --suite=test/wasm_worker_lang_SUITE --group=python_reactor
 
-**About 80 minutes**, which is why it is not in `all/0` and not in CI. Every
-case starts its own worker and every worker start is one interpreter start, so
-the group costs roughly one capture per case rather than one per run.
+**About 16 minutes**, down from 80 before the library shipped precompiled,
+and it is still not in `all/0` or in CI. Every case starts its own worker and
+every worker start is one interpreter start, so the group costs roughly one
+capture per case rather than one per run.
 
-`capture_timeout` has to be raised for it: the default is 60 s and a capture
-here takes 83 to 90, so the group passes `180_000`. That is the same knowingly
+`capture_timeout` is raised for it: the default is 60 s and a capture took 83
+to 90 before the library shipped precompiled, so the group passes `180_000`. That is the same knowingly
 raised ceiling as `fuel` and `max_heap_words`, and the adapter does not raise
 it for you.

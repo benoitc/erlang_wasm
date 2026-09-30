@@ -57,23 +57,28 @@ dropped_input_is_released(_Config) ->
     ok.
 
 %% The cache puts the module in `persistent_term', whose literal area would
-%% keep a sub-binary's whole input alive until the entry is erased.
+%% keep a sub-binary's whole input alive until the entry is erased. What is
+%% asked is what the cached entry itself references, and not the node's binary
+%% memory, which every other process moves.
 cached_module_releases_input(_Config) ->
     Parent = self(),
-    Before = binary_memory(),
     Pid = spawn(fun() ->
                         {ok, H} = wasm:load(build(16 * ?MB)),
-                        erlang:garbage_collect(),
-                        Parent ! {loaded, self()},
+                        Parent ! {loaded, self(), H},
                         receive stop -> ok = wasm_module_cache:unload(H) end,
                         Parent ! {unloaded, self()}
                 end),
-    receive {loaded, Pid} -> ok after 60000 -> ct:fail(load_timeout) end,
-    Delta = binary_memory() - Before,
-    ct:log("binary memory held with the cached module: ~p bytes", [Delta]),
+    {wasm_module, Hash} =
+        receive {loaded, Pid, Handle} -> Handle
+        after 60000 -> ct:fail(load_timeout)
+        end,
+    Bins = binaries(persistent_term:get(?CACHED_MODULE_KEY(Hash))),
     Pid ! stop,
     receive {unloaded, Pid} -> ok after 60000 -> ct:fail(unload_timeout) end,
-    ?assert(Delta < 4 * ?MB).
+    ?assert(length(Bins) >= 6),
+    Referenced = lists:sum([binary:referenced_byte_size(B) || B <- Bins]),
+    ct:log("bytes the cached module references: ~p", [Referenced]),
+    ?assert(Referenced < 4 * ?MB).
 
 %% What is kept is kept whole; DWARF is not kept at all.
 kept_custom_sections(_Config) ->

@@ -4,8 +4,9 @@ WebAssembly binary format decoder.
 
 This is the layer that meets your input first, so read it when you are asking
 what a malformed module can do. It walks the input with sub-binary matching
-throughout: no section, name or
-data segment is copied out of the original binary unless it has to be.
+throughout, and copies out only what the decoded module keeps as bytes: names,
+data segments and the custom sections it retains. Those are copied so that the
+module owns them; a sub-binary would pin the whole input for the module's life.
 
 Two invariants matter more than speed here, because this is the layer that
 faces hostile input directly:
@@ -23,7 +24,7 @@ faces hostile input directly:
 | --- | --- |
 | the entry point and the section loop | `module/1`, `%%% api`, `%%% sections` |
 | **section order, and which may repeat** | `section/5` and its ordering check in `%%% sections` |
-| custom sections, which may appear anywhere | the `0` clause of `section/5` |
+| custom sections, and which of them are kept | `custom/3` |
 | types, and the recursive shapes GC adds | `%%% types` |
 | data and element segments | `%%% segments` |
 | the checks that need the whole module | `%%% post-checks` |
@@ -95,10 +96,9 @@ sections(<<Id:8, Rest0/binary>>, Rank, Seen, M) ->
 
 section(?SEC_CUSTOM, Body, Rank, Seen, M) ->
     %% Custom sections may appear anywhere and repeat, so they do not advance
-    %% the ordering rank. Contents are kept as a sub-binary: the name section
-    %% is useful for diagnostics and the component model will want the rest.
+    %% the ordering rank.
     {Name, Payload} = name(Body),
-    {M#module{customs = M#module.customs ++ [{Name, Payload}]}, Rank, Seen};
+    {custom(Name, Payload, M), Rank, Seen};
 section(Id, Body, Rank, Seen, M) ->
     NewRank = order_rank(Id),
     case NewRank > Rank of
@@ -110,6 +110,19 @@ section(Id, Body, Rank, Seen, M) ->
             M1 = decode_section(Id, Body, M),
             {M1, NewRank, Seen#{Id => true}}
     end.
+
+%% Nothing in the runtime reads a custom section today, but the name section,
+%% `producers' and anything unknown are small next to DWARF and are what a
+%% diagnostic or a tool would want, so they are kept. DWARF (`.debug_*') is
+%% dropped: it is most of a debug build (23 MB of the 31 MB CPython reactor),
+%% and the runtime has no debugger to hand it to.
+%%
+%% What is kept is copied. A sub-binary would keep the whole input alive, off
+%% heap, for as long as the module lives, which is the life of the cache entry.
+custom(<<".debug_", _/binary>>, _Payload, M) ->
+    M;
+custom(Name, Payload, M) ->
+    M#module{customs = M#module.customs ++ [{Name, binary:copy(Payload)}]}.
 
 %% The data count section carries id 12 but is placed between the element
 %% section (9) and the code section (10). Ordering therefore has to be checked
@@ -614,8 +627,11 @@ name(Bin0) ->
     {Len, Bin1} = wasm_leb128:u32(Bin0),
     case Bin1 of
         <<Str:Len/binary, Rest/binary>> ->
+            %% Copied for the reason given at `custom/3'. A name of 64 bytes
+            %% or fewer is a heap binary already and needs none of it, but
+            %% a longer one is a sub-binary of the input.
             case unicode:characters_to_binary(Str, utf8, utf8) of
-                Str -> {Str, Rest};
+                Str -> {binary:copy(Str), Rest};
                 _ -> wasm_error:malformed(malformed_utf8,
                                           <<"malformed UTF-8 encoding">>)
             end;
@@ -625,10 +641,13 @@ name(Bin0) ->
                                    remaining => byte_size(Bin1)})
     end.
 
+%% Only data segments read bytes. The module keeps them for every instantiation
+%% anyway, so copying costs their size once, under a millisecond for the 3 MB
+%% of CPython's; see `custom/3' on why a sub-binary would not do.
 bytevec(Bin0) ->
     {Len, Bin1} = wasm_leb128:u32(Bin0),
     case Bin1 of
-        <<Bytes:Len/binary, Rest/binary>> -> {Bytes, Rest};
+        <<Bytes:Len/binary, Rest/binary>> -> {binary:copy(Bytes), Rest};
         _ -> wasm_error:malformed(unexpected_end,
                                   <<"unexpected end of section or function">>,
                                   #{reading => bytes, declared => Len,

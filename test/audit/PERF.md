@@ -7098,3 +7098,27 @@ request waits, because the load is over before traffic.
 this harness, and why is not established: `atomics:info/1` and
 `counters:get/2` alone do not. The harness reads the `entered` counter
 directly.
+
+## What a decoded module keeps of its input
+
+The decoder matched custom sections, data segments and names longer than 64
+bytes out of the input as sub-binaries, and a sub-binary keeps the whole input
+alive off heap. So a module, and the `persistent_term` entry the cache made of
+it, pinned the entire `.wasm`: for the CPython reactor, 31 MB, 23 MB of which
+is DWARF nothing reads. The decoder now copies what it keeps and drops
+`.debug_*` sections.
+
+`bench/paths/retainbench.erl`, one fresh VM per file, 0.7.0 and the branch
+interleaved three times in both orders, load 10 to 25. "Held" is the binary
+memory given back when the only process holding the module exits;
+`wasm:compile/1` is decode and validate, minimum of three:
+
+| module | size | held, 0.7.0 | held, branch | compile, 0.7.0 | compile, branch |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `py_reactor.wasm` | 30.9 MB | 30.9 MB | 3.40 MB | 464 ms | 485 ms |
+| `qjs_reactor.wasm` | 1.35 MB | 1.35 MB | 105 KB | 119 ms | 118 ms |
+| `qjs.wasm` | 1.84 MB | 1.84 MB | 552 KB | 142 ms | 146 ms |
+
+What is held now is the data segments (3.17 MB of the CPython reactor's,
+488 KB of QuickJS's) and the name section. Compile time moves within the run
+to run spread of each arm (464 to 507 ms and 486 to 495 ms on CPython).

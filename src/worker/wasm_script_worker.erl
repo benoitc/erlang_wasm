@@ -39,8 +39,8 @@ These are covered by compatibility and the release notes:
 
 So are the option keys this module takes (`root`, `timeout`, `trusted`,
 `limits`, `capture_timeout`, `runner_min_heap_words`,
-`capture_min_heap_words`, `restore_ahead`, `recycle_idle`, `compiled`,
-`preload`, and the `limits` keys `docs/worker-reference.md` lists), the
+`capture_min_heap_words`, `restore_ahead`, `recycle_idle`, `compiled`, and the
+`limits` keys `docs/worker-reference.md` lists), the
 `wasm` application settings `scratch_roots` and `reaper_options`, and the
 error shapes: a running worker answers `{error, wasm_worker_error:worker_error()}`,
 and `start_link/2,3` fails with a `gen_server` start reason, one of
@@ -221,10 +221,6 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 %% What `compiled => true' sets, under the caller's own `limits'. `baseline'
 %% and a threshold of one because a worker restores a fresh instance for every
 %% request: `docs/compiled-tier.md' has the measurements behind both.
-%% How long a background preload waits for the first request to answer before
-%% it loads anyway, inside the bound `wasm_jit' puts on a whole preload.
--define(PRELOAD_GATE, 20_000).
-
 -define(COMPILED_LIMITS,
         #{fuel => infinity, compile => true, compile_after => 1,
           compile_quality => baseline}).
@@ -259,10 +255,6 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
             %% The reservation handed to the request in flight, released when
             %% its outcome arrives unless its runner already did.
             handed         :: undefined | reservation(),
-            %% The background preload, waiting for the first request to
-            %% answer before it loads, and whether one has.
-            preload        :: undefined | pid(),
-            answered = false :: boolean(),
             %% in flight, at most one
             ref            :: undefined | reference(),
             id             :: undefined | binary(),
@@ -503,7 +495,7 @@ init({Adapter, Opts}) ->
                 {error, E} ->
                     {stop, E};
                 {ok, Artifact} ->
-                    case options(Opts) of
+                    case compiled(Opts) of
                         {error, E} ->
                             {stop, E};
                         {ok, Compiled} ->
@@ -526,12 +518,6 @@ init({Adapter, Opts}) ->
 %% The one combination that cannot mean what it says is refused rather than
 %% resolved: a finite `fuel' is a metering the caller asked for, and the tier
 %% gives it up by construction.
-options(Opts) ->
-    case maps:get(preload, Opts, async) of
-        P when P =:= async; P =:= wait -> compiled(Opts);
-        Other -> {error, {bad_option, preload, Other}}
-    end.
-
 compiled(Opts) ->
     Limits = maps:get(limits, Opts, #{}),
     case maps:get(compiled, Opts, false) of
@@ -569,78 +555,31 @@ started(Adapter, Artifact, Opts, Limits, Root) ->
                          floor => CapHeap}) of
         {error, E}          -> {stop, E};
         {ok, undefined, _}  ->
-            {ok, preload(module_of(Artifact), Limits, Opts, W)};
+            ok = preload(module_of(Artifact), Limits),
+            {ok, W};
         {ok, Image, Cap}    ->
-            W1 = preload(maps:get(module, Cap), Limits, Opts, W),
-            {ok, start_ahead(W1#w{image = Image, snapshot_cap = Cap})}
+            ok = preload(maps:get(module, Cap), Limits),
+            {ok, start_ahead(W#w{image = Image, snapshot_cap = Cap})}
     end.
 
-%% Compiled code from the disk cache, loaded without waiting for a compile to be
-%% asked for. Only a worker that compiles asks, and a miss is the start every
+%% Compiled code from the disk cache, loaded before the first request, so that
+%% request enters it rather than interpreting while a compiler reads the same
+%% file back. Only a worker that compiles asks, and a miss is the start every
 %% release had until this: the tier compiles as it always did.
 %%
-%% Loading a large artifact holds up two things besides the process loading
-%% it: 0.2 s for Lua, 0.9 s for QuickJS, 2.9 s for CPython. Every other module
-%% load on the node waits for it, because the code server's
-%% `erlang:finish_loading/1' does not complete while another process is in
-%% `erlang:prepare_loading/2', and so does `persistent_term:put/2'. And
-%% `prepare_loading' does not yield, so a process queued on the same scheduler
-%% waits for all of it: the other schedulers, asleep, take nothing off it.
-%% Processes elsewhere carry on.
-%% `test/audit/PERF.md' has the traces.
-%%
-%% So `wait' loads here, inside `start_link/2', before any traffic, and request
-%% 1 is compiled. `async', the default, reads, checks and claims now, and loads
-%% once the first request has answered: in a node that loads modules on first
-%% use, that request is the one that loads what a request needs (`json',
-%% `sets' and the rest), and loading them during the preload made it wait for
-%% the whole of it. Holding the claim meanwhile is what keeps the compile that
-%% request asks for from starting a second, uncached one: it finds the slot
-%% `loading' and interprets. The gate alone did not keep the load out of that
-%% request: the load held whichever scheduler it began on, usually this one,
-%% until `wasm_jit' moved it to the last one (see `aside/1' there).
+%% Here, inside `start_link/2', and not in the background: the load holds up
+%% every other module load on the node and whichever scheduler it runs on
+%% (0.2 s for Lua, 1.1 s for QuickJS, 2.9 s for CPython), so it is paid before
+%% any traffic. Only the first worker of a module on a node pays it; the next
+%% finds the code resident. `test/audit/PERF.md' has the traces.
 %%
 %% After the capture and not before: the capture runs guest code under no
 %% compile limits, and nothing it does should wait on or race this.
-preload(Module, #{compile := true} = Limits, Opts, W)
-  when Module =/= undefined ->
-    case maps:get(preload, Opts, async) of
-        wait  -> _ = wasm_jit:preload(Module, Limits), W;
-        async -> preload_async(Module, Limits), W
-    end;
-preload(_Module, _Limits, _Opts, W) ->
-    W.
-
-%% The background preload is its own process, neither linked nor monitored.
-%% It holds nothing of the worker's: its slot reservation and lease are
-%% monitored by `wasm_code_slots' and go when it exits, and `wasm_jit' bounds
-%% the whole preload. Tying it to the worker would only throw away a load that
-%% the next worker of the same module would use. It does monitor the worker,
-%% so a worker that stops before its first request lets it load at once rather
-%% than at the end of its wait.
-preload_async(Module, Limits) ->
-    Worker = self(),
-    Before = fun() ->
-                 Mon = erlang:monitor(process, Worker),
-                 Worker ! {preload_ready, self()},
-                 receive
-                     {preload_go, Worker} -> ok;
-                     {'DOWN', Mon, process, Worker, _} -> ok
-                 after ?PRELOAD_GATE -> ok
-                 end,
-                 erlang:demonitor(Mon, [flush])
-             end,
-    _ = spawn(fun() -> wasm_jit:preload(Module, Limits, Before) end),
+preload(Module, #{compile := true} = Limits) when Module =/= undefined ->
+    _ = wasm_jit:preload(Module, Limits),
+    ok;
+preload(_Module, _Limits) ->
     ok.
-
-%% Once per worker: let a waiting preload load, or remember that it may.
-preload_go(#w{answered = true} = W) ->
-    W;
-preload_go(#w{preload = Pid} = W) when is_pid(Pid) ->
-    Pid ! {preload_go, self()},
-    W#w{preload = undefined, answered = true};
-preload_go(W) ->
-    W#w{answered = true}.
 
 %% The module an adapter serves, where its artifact says. Every shipped adapter
 %% puts it under `module'; one that does not simply gets no preload.
@@ -874,12 +813,6 @@ handle_call(_Msg, _F, W) ->
 
 handle_cast(_, W) -> {noreply, W}.
 
-%% A background preload has read and claimed, and asks whether it may load.
-handle_info({preload_ready, Pid}, #w{answered = true} = W) ->
-    Pid ! {preload_go, self()},
-    {noreply, W};
-handle_info({preload_ready, Pid}, W) ->
-    {noreply, W#w{preload = Pid}};
 handle_info({guardian_done, Ref, Outcome}, #w{ref = Ref} = W) ->
     {noreply, publish(Outcome, W)};
 
@@ -1148,7 +1081,7 @@ publish(Outcome, W) ->
     %% memory. One that never got that far -- refused before its restore,
     %% killed, crashed -- did not, and releasing again is harmless.
     ok = release_reservation(W#w.handed),
-    W1 = preload_go(clear_waiter(W)),
+    W1 = clear_waiter(W),
     W1#w{ref = undefined, id = undefined, guardian = undefined,
          gmon = undefined, smon = undefined, handed = undefined,
          done_ref = W#w.ref, done_outcome = Outcome}.

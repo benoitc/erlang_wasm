@@ -56,7 +56,7 @@ moved, because even with all three a refusal still interprets.
 """.
 
 -export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
--export([preload/2, preload/3]).
+-export([preload/2]).
 -export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
 -export([compile_limits/0, max_heap_words/0, compile_budget_heap_words/0]).
 -export([reentered/0, ensure_counts/0]).
@@ -347,28 +347,12 @@ for it, up to a bound, and a preload that overruns is killed and is a miss.
 
 **Loading holds up more than the caller.** While `code:load_binary/3`
 prepares the module, 0.2 s for a Lua artifact and 2.9 s for CPython, no other
-module on the node finishes loading and `persistent_term:put/2` waits, and the
+module on the node finishes loading, `persistent_term:put/2` waits, and the
 preparation does not yield, so a process queued on its scheduler waits too.
-The load runs on the last online scheduler, which a lightly loaded node keeps
-free, so that is rarely a request's. Module loads and `persistent_term:put/2`
-still wait, so call this before traffic, or use `preload/3`.
+Call this before traffic, as a worker does at start.
 """.
 -spec preload(wasm:module_(), map()) -> ok | miss.
 preload(Module, Limits) ->
-    preload(Module, Limits, fun() -> ok end).
-
--doc """
-As `preload/2`, with `Before` called just before the load.
-
-By then the manifest and the artifact have been read and checked and the
-module's slot is claimed, so a compile anyone asks for meanwhile finds it
-`loading` and interprets rather than starting another. `Before` runs in the
-preloading process and decides when the load, which holds up the node, may
-begin. The whole preload is still bounded; a `Before` that does not return
-in time is a miss.
-""".
--spec preload(wasm:module_(), map(), fun(() -> term())) -> ok | miss.
-preload(Module, Limits, Before) ->
     case maps:get(compile, Limits, false) =:= true andalso
          maps:get(fuel, Limits, infinity) =:= infinity of
         false -> miss;
@@ -377,8 +361,7 @@ preload(Module, Limits, Before) ->
                 {sha256, _} = Id ->
                     in_passing(fun() ->
                                    preload_1(Id, maps:get(compile_quality,
-                                                          Limits, full),
-                                             Before)
+                                                          Limits, full))
                                end);
                 _ ->
                     miss
@@ -414,26 +397,24 @@ in_passing(F) ->
 
 %% Manifest first, so a module that has none costs one file read and no round
 %% trip to the slot manager.
-preload_1({sha256, Hash} = Id, Quality, Before) ->
+preload_1({sha256, Hash} = Id, Quality) ->
     case wasm_code_cache:set_key(Id, ?ABI, Quality) of
         undefined -> miss;
         SetKey ->
             case wasm_code_cache:lookup_set(SetKey) of
-                {ok, Funcs} -> preload_2(Id, Hash, Quality, Funcs, Before);
+                {ok, Funcs} -> preload_2(Id, Hash, Quality, Funcs);
                 miss        -> miss
             end
     end.
 
-preload_2(Id, Hash, Quality, Funcs, Before) ->
+preload_2(Id, Hash, Quality, Funcs) ->
     case wasm_code_slots:claim_loading({Id, ?ABI}, {manual, preload}, self()) of
         {resident, _Mod} -> ok;
         {compile, Mod, Token} ->
             %% The stamp of a hashed module is its hash, as `stamp/2' says.
             Key = wasm_code_cache:key(Id, ?ABI, Mod, Quality, Funcs, Hash),
             case wasm_code_cache:lookup(Key) of
-                {ok, Bin} ->
-                    _ = Before(),
-                    load(Mod, Token, Bin, length(Funcs));
+                {ok, Bin} -> load(Mod, Token, Bin, length(Funcs));
                 miss      -> ok = wasm_code_slots:abort(Token), miss
             end;
         _Busy ->
@@ -441,7 +422,7 @@ preload_2(Id, Hash, Quality, Funcs, Before) ->
     end.
 
 load(Mod, Token, Bin, N) ->
-    case aside(fun() -> code:load_binary(Mod, "wasm_generated", Bin) end) of
+    case code:load_binary(Mod, "wasm_generated", Bin) of
         {module, Mod} ->
             case wasm_code_slots:publish(Token) of
                 ok ->
@@ -454,37 +435,6 @@ load(Mod, Token, Bin, N) ->
         {error, _} ->
             ok = wasm_code_slots:abort(Token),
             miss
-    end.
-
-%% `F' run on the last online scheduler, which is where a preload loads.
-%%
-%% `code:load_binary/3' runs `erlang:prepare_loading/2' in the calling process,
-%% and that does not yield: for all of its 2.7 s on CPython the scheduler it
-%% runs on runs nothing else, and nothing takes work off it, because the
-%% others are asleep. A lightly loaded node compacts its runnable processes
-%% onto its first schedulers, the preload's among them, so the load mostly
-%% began next to the worker and its caller. Gating it behind the first answer
-%% was not enough: the caller's `consumed' call, which `run/2' makes after the
-%% answer, and every request after it, waited out the load whenever they were
-%% queued there, which was request 1 in 4 fresh starts of 5. Compaction empties
-%% the last scheduler first, so a process bound there keeps the load away from
-%% them. `test/audit/PERF.md' has the timelines.
-%%
-%% `process_flag(scheduler, N)' is not documented, hence `apply/3', and it is
-%% undone before returning. Where it is refused, `F' runs where it is, as it
-%% did before this.
-aside(F) ->
-    case erlang:system_info(schedulers_online) of
-        1 -> F();
-        Last ->
-            Was = bind(Last),
-            erlang:yield(),
-            try F() after bind(Was) end
-    end.
-
-bind(N) ->
-    try erlang:apply(erlang, process_flag, [scheduler, N])
-    catch error:badarg -> 0
     end.
 
 -doc "How much has been compiled, and how often generated code was entered.".

@@ -37,15 +37,12 @@ get it by passing the key.
 | `runner_min_heap_words` | the adapter's | a heap floor for each request's runner: 200,000 words for `wasm_lua` and `wasm_javascript`, 1,500,000 for `wasm_python` on the compiled tier and 1,000,000 on the interpreter, none for an adapter without `defaults/1`. `0` turns it off; see [Tuning a worker host](tuning.md) |
 | `capture_min_heap_words` | the adapter's | the same, for the process that captures the snapshot. No shipped adapter sets one |
 | `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and function-only imports, and holds one instance's memory per idle worker |
-| `compiled` | `false` | `true` runs requests in the compiled tier: it sets `fuel => infinity`, `compile => true`, `compile_after => 1` and `compile_quality => baseline` under your own `limits`, and loads cached code at start. Only the deadline stops a runaway; see [Hosting scripting languages](scripting.md) |
-| `preload` | `async` | how a compiling worker loads cached code at start. `async` loads it in the background and the start does not wait. `wait` loads it before `start_link/2` returns, so request 1 is compiled, and moves the load into the start: about 0.2 s for Lua, 1.1 s for QuickJS and 2.9 s for CPython, for the first worker on a node only. `async` claims the cached code at start and loads it once the first request has answered; the requests after that interpret until it lands. The load runs on the last online scheduler, so a request waits for it only when it loads a module or writes a `persistent_term` meanwhile, or when the node is busy enough to run it there |
+| `compiled` | `false` | `true` runs requests in the compiled tier: it sets `fuel => infinity`, `compile => true`, `compile_after => 1` and `compile_quality => baseline` under your own `limits`. With `code_cache_dir` set and a warm cache, the worker loads the cached code before `start_link/2` returns, so request 1 is compiled; the first worker on a node pays the load, about 0.2 s for Lua, 1.1 s for QuickJS and 2.9 s for CPython. Only the deadline stops a runaway; see [Hosting scripting languages](scripting.md) |
 | `recycle_idle` | `30_000` | milliseconds an idle worker keeps the memory its last request's instance left, for the next restore to reuse; counted in the node's page budget while kept. `0` keeps none; see [Tuning a worker host](tuning.md) |
 
 `start_link/2,3` refuses a `root` the reaper does not have, with
 `{error, {unknown_root, Root, Known}}`, and `compiled => true` together with a
 finite `fuel` in `limits`, with `{error, {bad_option, compiled, #{fuel => N}}}`.
-A `preload` other than `async` or `wait` is
-`{error, {bad_option, preload, Value}}`.
 
 ## Per node, for the reaper
 

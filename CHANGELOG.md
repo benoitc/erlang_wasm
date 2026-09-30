@@ -25,12 +25,12 @@ Workers built on `py_reactor.wasm` need the new build.
   baseline` under your own `limits`. With a finite `fuel` the start fails with
   `{bad_option, compiled, #{fuel => N}}`; that combination used to interpret
   without a word. Metered stays the default.
-- **A compiled worker loads cached code at start.** The code cache keeps a
-  small manifest beside each artifact, and `wasm_jit:preload/2` reads it.
-  New worker option `preload`: `async` (the default) keeps the start time and
-  loads once the first request has answered; `wait` makes request 1 compiled
-  and adds the load to the first worker's start on a node (about 0.2 s for
-  Lua, 1.1 s for QuickJS, 2.9 s for CPython). Needs `code_cache_dir`.
+- **A compiled worker loads cached code at start.** With `code_cache_dir`
+  set and a warm cache, a `compiled => true` worker loads its code before
+  `start_link/2` returns, so request 1 is compiled. The first worker on a node
+  pays the load: about 0.2 s for Lua, 1.1 s for QuickJS, 2.9 s for CPython.
+  The code cache keeps a small manifest beside each artifact, and
+  `wasm_jit:preload/2` reads it.
 - **`wasm:restore/3` expands `profile`** as `wasm:instantiate/3` does. A
   restored instance under `profile => script` used to keep the default compile
   threshold of 32.

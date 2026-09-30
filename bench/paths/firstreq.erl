@@ -17,13 +17,11 @@ has made the module resident.
 
 Arguments: `warm` or `measure`, the guest (`lua`, `qjs`, `py`), a directory
 under your home directory holding `code/` and `images/`, and how to ask for
-the tier: `compiled` for `compiled => true`, which preloads in the
-background, `wait` for that with `preload => wait`, and `limits` for the four
-keys it sets, spelled out, which is the only way a build without the option can
-ask. Requests are sent back to back; under `compiled` the load starts once
-request 1 has answered, and the first compiled request is the first one
-issued after it lands. `worst_before_ms` is the slowest request up to and
-including the first compiled one.
+the tier: `compiled` for `compiled => true`, which loads cached code at start,
+and `limits` for the four keys it sets, spelled out, which is the only way a
+build without the option can ask. Requests are sent back to back.
+`worst_before_ms` is the slowest request up to and including the first
+compiled one.
 
 Every measured line prints `cached => N` from `wasm_jit:counts/0`; a line with
 0 did not read the cache and measures a compile. **Read `uptime` first.**
@@ -147,7 +145,6 @@ check({ok, #{result := _}} = R) -> R;
 check(Other) -> error({bad_request, Other}).
 
 tier(compiled) -> {#{compiled => true}, #{}};
-tier(wait) -> {#{compiled => true, preload => wait}, #{}};
 tier(limits) ->
     {#{}, #{fuel => infinity, compile => true, compile_after => 1,
             compile_quality => baseline}}.

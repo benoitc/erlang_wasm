@@ -7157,6 +7157,43 @@ A small `first` under head is the stall: requests queued behind the load and
 the next one found it done. Under the fix they interpret through it, about
 90 CPython requests in the 2.7 s, and the load lands at the same time.
 
+**Withdrawn.** The binding and `async` went, and a compiled worker now loads at
+start, as `wait` did. The binding relied on `process_flag(scheduler, N)`,
+which OTP does not document, and `async` kept clear of requests only because
+of it: without it, `async` was 0.7.0's behaviour, a load that can stall
+whichever requests share its scheduler, only later. Loading at start gives the
+guarantee with public calls only: no request waits for the load, request 1 is
+compiled, and the first worker on a node pays for it.
+
+The same `cmb.erl` lat mode with a second worker started after the first
+one's steady requests: five interleaved fresh-VM rounds, `+S 10:10`, head
+(`async` with the binding) against loading at start (`new`), with 0.7.0
+(`base`) for the second worker. Head and new share one warm cache. One-minute
+load 5.0 to 15.7. In ms, per round, or the range of five:
+
+| guest | tier | build | start | req 1 | first compiled | 2nd start | steady p50 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| CPython | compiled | base | 961 to 1079 | 155 to 172 | 3 to 21 | 40.2 to 41.2 | 23.4 to 25.6 |
+| CPython | compiled | head | 957 to 1053 | 60.9 to 70.0 | 88 to 92 | 23.2 to 24.1 | 17.2 to 17.9 |
+| CPython | compiled | new | 3670 to 3864 | 25.3 to 28.8 | 1 | 22.9 to 24.5 | 16.8 to 17.9 |
+| CPython | interp | head | 954 to 1075 | 58.4 to 63.6 | | 22.6 to 23.5 | 26.7 to 28.2 |
+| CPython | interp | new | 956 to 1011 | 59.1 to 61.3 | | 22.2 to 23.2 | 26.9 to 28.4 |
+| QuickJS | compiled | base | 211 to 220 | 56.3 to 64.4 | 21 or 22 | 2.1 or 2.2 | 8.6 to 9.4 |
+| QuickJS | compiled | head | 173 to 188 | 25.8 to 29.4 | 69 to 81 | 2.0 or 2.1 | 7.6 to 8.2 |
+| QuickJS | compiled | new | 1188 to 1232 | 9.2 to 10.2 | 1 | 2.1 to 2.9 | 7.5 to 8.2 |
+| QuickJS | interp | head | 176 to 187 | 26.1 to 29.7 | | 2.0 or 2.1 | 12.1 to 13.9 |
+| QuickJS | interp | new | 178 to 193 | 25.8 to 29.4 | | 2.1 to 2.4 | 12.2 to 13.1 |
+| Lua | compiled | base | 44.1 to 48.0 | 28.6 to 35.3 | 3 to 10 | 1.0 or 1.1 | 4.9 to 5.6 |
+| Lua | compiled | head | 40.5 to 45.9 | 14.0 to 15.3 | 24 to 27 | 1.0 to 1.2 | 3.9 to 4.2 |
+| Lua | compiled | new | 232 to 244 | 5.3 to 6.9 | 1 | 1.1 to 1.3 | 4.1 to 4.6 |
+| Lua | interp | head | 40.8 to 81.6 | 12.8 to 14.3 | | 1.1 or 1.2 | 7.1 to 7.8 |
+| Lua | interp | new | 40.3 to 44.7 | 13.1 to 14.2 | | 1.0 to 1.7 | 7.3 to 8.1 |
+
+Request 1 of a compiled worker enters generated code in every round, inside
+the gates set before the run (30, 11 and 8 ms). The first worker's start grows
+by the load, as `wait` measured it; the second worker's start, a worker that
+does not compile, and the steady request are where head has them.
+
 ## What a decoded module keeps of its input
 
 The decoder matched custom sections, data segments and names longer than 64

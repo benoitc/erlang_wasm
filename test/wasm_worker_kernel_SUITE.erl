@@ -126,8 +126,8 @@ snapshot_cases() ->
 compiled_cases() ->
     [compiled_with_a_finite_fuel_refuses_to_start,
      a_compiled_worker_enters_generated_code_on_its_first_request,
-     a_default_preload_does_not_hold_the_start,
-     a_background_load_keeps_off_the_request_schedulers,
+     a_worker_that_does_not_compile_loads_nothing,
+     a_retired_preload_option_is_ignored,
      a_compiled_worker_with_a_damaged_manifest_still_answers].
 
 end_per_group(_G, _Config) -> ok.
@@ -786,8 +786,6 @@ compiled_with_a_finite_fuel_refuses_to_start(Config) ->
                                        limits => #{fuel => 1_000_000}})),
     ?assertEqual({error, {bad_option, compiled, yes}},
                  start(Config, Root, #{compiled => yes})),
-    ?assertEqual({error, {bad_option, preload, later}},
-                 start(Config, Root, #{compiled => true, preload => later})),
     %% Infinite fuel said twice is not a conflict, and `false' is no option.
     {ok, W} = start(Config, Root, #{compiled => true,
                                     limits => #{fuel => infinity}}),
@@ -795,9 +793,10 @@ compiled_with_a_finite_fuel_refuses_to_start(Config) ->
     {ok, W2} = start(Config, Root, #{compiled => false}),
     ok = wasm_script_worker:stop(W2).
 
-%% With `preload => wait' and the code cache warm, a new worker's first request
-%% runs generated code. Before it, that request interpreted and asked for a
-%% compile that read the same artifact back after it had answered.
+%% With the code cache warm, a new compiled worker's first request runs
+%% generated code, with no option but `compiled'. Before it, that request
+%% interpreted and asked for a compile that read the same artifact back after
+%% it had answered.
 %%
 %% The cache directory is under the home directory because one under the
 %% system temporary directory is refused: its ancestors are writable by others.
@@ -806,8 +805,9 @@ a_compiled_worker_enters_generated_code_on_its_first_request(Config) ->
         ok = warm_the_cache(Config),
         %% The restart: nothing resident, the disk as the first worker left it.
         wasm_test_slots:reset(),
-        {ok, W} = start(Config, ?config(root, Config),
-                        #{compiled => true, preload => wait}),
+        {ok, W} = start(Config, ?config(root, Config), #{compiled => true}),
+        ?assertNotEqual([], wasm_code_slots:resident(),
+                        "the start returned before the cached code loaded"),
         ok = wasm_jit:reset_counts(),
         Want = wasm_script_worker:run(W, #{}),
         ?assertMatch({ok, #{values := [_]}}, Want),
@@ -816,93 +816,42 @@ a_compiled_worker_enters_generated_code_on_its_first_request(Config) ->
         ok = wasm_script_worker:stop(W)
     end).
 
-%% The default does not load at start. While a large artifact loads, no other
-%% module on the node can, so a first request that loads the modules it needs
-%% would wait for all of it: the preload claims at start, loads once that
-%% request has answered, and a later request enters the code it brings.
-a_default_preload_does_not_hold_the_start(Config) ->
+%% Everyone who does not ask for `compiled' starts as in 0.7.0: a warm cache
+%% for the same module is on disk, and the worker loads none of it, and its
+%% first request interprets.
+a_worker_that_does_not_compile_loads_nothing(Config) ->
     with_home_cache(fun() ->
         ok = warm_the_cache(Config),
         wasm_test_slots:reset(),
-        {ok, W} = start(Config, ?config(root, Config), #{compiled => true}),
-        ?assertEqual([], wasm_code_slots:resident()),
+        {ok, W} = start(Config, ?config(root, Config), #{}),
+        ?assertEqual([], wasm_code_slots:resident(),
+                     "a worker that does not compile loaded code at start"),
         ok = wasm_jit:reset_counts(),
         ?assertMatch({ok, #{values := [_]}}, wasm_script_worker:run(W, #{})),
         ?assertEqual(0, maps:get(entered, wasm_jit:counts())),
-        ok = until_true(fun() -> wasm_code_slots:resident() =/= [] end,
-                        30_000),
-        ?assertMatch({ok, #{values := [_]}}, wasm_script_worker:run(W, #{})),
-        ?assert(maps:get(entered, wasm_jit:counts()) > 0,
-                "the background preload was not adopted"),
+        ?assertEqual([], wasm_code_slots:resident()),
         ok = wasm_script_worker:stop(W)
     end).
 
-%% Loading holds the scheduler it runs on for all of its length, and a lightly
-%% loaded node keeps its runnable processes on its first schedulers, so a load
-%% that began on one of them held up the worker, its caller and the request
-%% they were on: 2.7 s on a CPython request 1 in 4 fresh starts of 5, although
-%% the load waited for that request to answer. The load still waits, and then
-%% runs on the last online scheduler.
-a_background_load_keeps_off_the_request_schedulers(Config) ->
-    case erlang:system_info(schedulers_online) of
-        1    -> {skip, "one scheduler: there is no other to use"};
-        Last -> with_home_cache(fun() -> load_is_aside(Config, Last) end)
-    end.
-
-load_is_aside(Config, Last) ->
-    ok = warm_the_cache(Config),
-    wasm_test_slots:reset(),
-    Self = self(),
-    Tracer = spawn_link(fun() -> traced(Self, []) end),
-    _ = erlang:trace_pattern({erlang, prepare_loading, 2}, true, [global]),
-    _ = erlang:trace_pattern({wasm_script_worker, publish, 2}, true, [local]),
-    _ = erlang:trace(new_processes, true,
-                     [call, scheduler_id, monotonic_timestamp,
-                      {tracer, Tracer}]),
-    Events =
-        try
-            {ok, W} = start(Config, ?config(root, Config),
-                            #{compiled => true}),
-            ?assertMatch({ok, #{values := [_]}},
-                         wasm_script_worker:run(W, #{})),
-            ok = until_true(fun() -> wasm_code_slots:resident() =/= [] end,
-                            30_000),
-            ok = wasm_script_worker:stop(W),
-            Ref = erlang:trace_delivered(all),
-            receive {trace_delivered, all, Ref} -> ok end,
-            Tracer ! {done, Self},
-            receive {traced, Es} -> Es after 5_000 -> [] end
-        after
-            _ = erlang:trace(new_processes, false, [call]),
-            _ = erlang:trace_pattern({erlang, prepare_loading, 2}, false,
-                                     [global]),
-            _ = erlang:trace_pattern({wasm_script_worker, publish, 2}, false,
-                                     [local])
-        end,
-    Published = lists:sort([T || {publish, _S, T} <- Events]),
-    ?assertNotEqual([], Published),
-    Loads = [{T, S} || {load, S, T} <- Events],
-    ?assertMatch([_], Loads, "the background preload loaded nothing"),
-    [{LoadedAt, On}] = Loads,
-    ?assert(LoadedAt > hd(Published),
-            "the load began before the first request answered"),
-    ?assertEqual(Last, On, "the load ran on a scheduler requests use").
-
-%% The loads of generated modules and the worker's answers, nothing else.
-traced(Parent, Acc) ->
-    receive
-        {trace_ts, _P, call, {erlang, prepare_loading, [M, _]}, S, T} ->
-            case lists:prefix("wasm_code_", atom_to_list(M)) of
-                true  -> traced(Parent, [{load, S, T} | Acc]);
-                false -> traced(Parent, Acc)
-            end;
-        {trace_ts, _P, call, {wasm_script_worker, publish, _}, S, T} ->
-            traced(Parent, [{publish, S, T} | Acc]);
-        {done, Parent} ->
-            Parent ! {traced, lists:reverse(Acc)};
-        _ ->
-            traced(Parent, Acc)
-    end.
+%% `preload' was an option while this release was being made and is gone. A
+%% worker takes it as it takes any key it does not know: it ignores it, and
+%% whatever the value, a compiled worker still loads at start.
+a_retired_preload_option_is_ignored(Config) ->
+    with_home_cache(fun() ->
+        ok = warm_the_cache(Config),
+        [begin
+             wasm_test_slots:reset(),
+             {ok, W} = start(Config, ?config(root, Config),
+                             #{compiled => true, Key => Value}),
+             ?assertNotEqual([], wasm_code_slots:resident()),
+             ok = wasm_jit:reset_counts(),
+             ?assertMatch({ok, #{values := [_]}},
+                          wasm_script_worker:run(W, #{})),
+             ?assert(maps:get(entered, wasm_jit:counts()) > 0),
+             ok = wasm_script_worker:stop(W)
+         end || {Key, Value} <- [{preload, later}, {preload, async},
+                                 {not_an_option, later}]]
+    end).
 
 %% A manifest that cannot be read is a miss and nothing else: the worker
 %% starts, answers what it always answered, and compiles as it always did.
@@ -926,7 +875,7 @@ a_compiled_worker_with_a_damaged_manifest_still_answers(Config) ->
              wasm_test_slots:reset(),
              ok = Damage(),
              {ok, W} = start(Config, ?config(root, Config),
-                             #{compiled => true, preload => wait}),
+                             #{compiled => true}),
              ok = wasm_jit:reset_counts(),
              ?assertMatch({ok, #{values := [_]}},
                           wasm_script_worker:run(W, #{})),
@@ -1250,7 +1199,7 @@ settings() ->
     Worker ++ wasm_worker_reaper:setting_keys() ++
         [trusted, capture_timeout, runner_min_heap_words,
          capture_min_heap_words, restore_ahead, recycle_idle,
-         root, compiled, preload,
+         root, compiled,
          %% Node-wide, and each one turns something substantial on or off.
          max_snapshot_bytes, max_snapshot_dir_bytes, snapshot_dir,
          code_cache_dir, scratch_roots, reaper_options, worker_timeout].

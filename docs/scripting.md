@@ -83,11 +83,10 @@ Compiled is worth it once the code is hot: a QuickJS reactor request goes from
 to budget for:
 
 - **Set `code_cache_dir`.** With it, a compiled worker loads the code an
-  earlier start compiled, once its first request has answered, and the
-  requests after that load run compiled. Add `preload => wait` if you start
-  workers ahead of traffic and want request 1 compiled: the first worker on a
-  node then takes about 0.2 s (Lua), 1.1 s (QuickJS) or 2.9 s (CPython)
-  longer to start, and later workers start as before. Without the cache,
+  earlier start compiled before `start_link/2` returns, and request 1 runs
+  compiled. The first worker on a node takes about 0.2 s (Lua), 1.1 s
+  (QuickJS) or 2.9 s (CPython) longer to start, so start workers before you
+  take traffic; later workers start as before. Without the cache,
   every node start compiles again, about 150 s and several thousand
   interpreted requests on QuickJS.
 - **Time is the only bound**, so compiled is the one configuration where an

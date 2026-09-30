@@ -105,8 +105,8 @@ therefore never be snapshotted. Build both with
 | tag | `v3.14.7` |
 | shim | `test/fixtures/lang/python_reactor/worker_reactor.c`, in this repository |
 | toolchain | wasi-sdk 34.0, clang 23.1.0, `wasm32-wasip1` |
-| size | 30,887,792 bytes |
-| standard library | `test/fixtures/lang/py_reactor_lib`, 11 MB, 554 modules |
+| size | 7,408,173 bytes, stripped of DWARF |
+| standard library | `test/fixtures/lang/py_reactor_lib`, 22 MB, 554 modules, each with its `.pyc` |
 | shape | **reactor**: `_initialize`, `init`, `handle`, `ready` |
 | transport | `script_v1.channel` |
 
@@ -120,7 +120,30 @@ fixed directory under `_build/` rather than a temporary one, so two builds from
 the same checkout do agree; two checkouts in different places do not.
 
 For provenance rather than verification, the artifact this box built is
-`b4a78ad5046df47d0c8422eca122aa660f83933b70fcf0736519dc0dd0bc5514`.
+`6effdaac49f7e7cee63ad5337a3030049d51a9acafb359876a519bb878364849`.
+
+## Stripped, and precompiled
+
+The link produces 30.9 MB, of which 23.2 MB is DWARF. The script runs
+`wasm-opt --strip-debug` over it with the module's own nine features named,
+and no `-O` level: every one measured made this runtime slower, and the
+stripped artifact answers requests at the same speed as the unstripped one.
+
+The standard library used to ship as source alone, because the script deleted
+every `__pycache__`, so a module a request imported that was not in the image
+was compiled in that request. The script now compiles it with the build's own
+host interpreter, which is the same CPython by construction: `-o 0`, the plain
+`.pyc` the shim's isolated configuration looks for, and unchecked hash-based,
+so an import neither stats nor reads the source and a copy that loses mtimes
+does not silently fall back to it. The embedded paths are the guest's
+`/lib/...`, and two builds of the same checkout produce the same files.
+
+The precompiled library needs two things from the shim, and `init()` does
+both. Nothing in it compiles a source any more, so it compiles one throwaway
+line through `compile()`, which otherwise paid a one-time setup in every
+request. And it ends with `gc.collect()` and `gc.freeze()`, so a collection
+due right after the capture is not due in every request. `test/audit/PERF.md`
+has the numbers for each.
 
 What keeps a broken build from passing quietly is not a checksum but the build
 failing: `scripts/build-python-reactor.sh` stops on the first error, and the
@@ -163,7 +186,7 @@ argv, and a marker read during `init()` would be frozen into the image.
 
 `ro` is the kernel's, holding the tenant's staged `main.py` and
 `context.json`. `/lib` is the adapter's own `dirs` entry, pointing at the
-standard library the build produced; it is 11 MB of files the adapter ships,
+standard library the build produced; it is 22 MB of files the adapter ships,
 not something to stage per request. The record above predicted exactly this
 split, and it is the one an upstream build forces.
 

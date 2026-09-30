@@ -2,44 +2,45 @@
 
 ## Unreleased
 
-A worker built on a shipped adapter gives each request runner the heap floor
-its guest was measured at, without any option.
+Script requests are faster by default, a worker can run compiled with one
+option, and a loaded module no longer keeps its whole input file in memory.
 
-- **New optional adapter callback `defaults/1`.** It is given the worker's
-  resolved limits and answers `runner_min_heap_words` and
-  `capture_min_heap_words` for a worker whose caller did not set them, so an
-  adapter can answer per tier. An adapter without it behaves as before.
-- **`wasm_lua` and `wasm_javascript` default `runner_min_heap_words` to
-  200,000 words. `wasm_python` defaults it to 1,500,000 on the compiled tier
-  (`compile => true`, `fuel => infinity`) and 1,000,000 otherwise.** Pass the
-  option to change it, or `0` to turn it off. The floor is held only while a
-  request executes; `docs/tuning.md` has what it costs a pool. No adapter
-  sets `capture_min_heap_words`: set it yourself, with a larger
-  `max_heap_words`, as `docs/python.md` shows.
-- A floor that does not fit under `max_heap_words` is still refused with a
-  warning, which now says when the floor was the adapter's default.
-
-A script worker can run compiled with one option, and with a warm code cache
-its first request is compiled.
-
+- **Default heap floors.** A new optional adapter callback, `defaults/1`, is
+  given the worker's resolved limits and answers `runner_min_heap_words` and
+  `capture_min_heap_words` when the caller did not set them. `wasm_lua` and
+  `wasm_javascript` default the runner floor to 200,000 words; `wasm_python`
+  to 1,500,000 on the compiled tier (`compile => true`, `fuel => infinity`)
+  and 1,000,000 otherwise. Pass the option to change it, or `0` to turn it
+  off. A floor is held only while a request executes; `docs/tuning.md` has
+  what it costs a pool and how `+MMmcs` affects RSS. No adapter sets a
+  capture floor.
+- **Lowered code is shared per module.** A module loaded through the module
+  cache publishes its validation context, function table and the function
+  bodies requests reach, once per node, so a request in a fresh runner no
+  longer lowers them again. Nothing to set.
 - **New worker option `compiled`.** `compiled => true` sets `fuel =>
   infinity`, `compile => true`, `compile_after => 1` and `compile_quality =>
-  baseline` under your own `limits`. With a finite `fuel` in `limits` the start
-  fails with `{bad_option, compiled, #{fuel => N}}`; that combination used to
-  interpret without a word. Metered stays the default.
-- **A compiled worker loads cached code when it starts.** The code cache keeps
-  a small manifest beside each artifact, and `wasm_jit:preload/2` reads it to
-  load the artifact without a request asking. Needs `code_cache_dir`; a miss
-  changes nothing. Manifests share the directory's size cap.
-- **New worker option `preload`**, `async` (default) or `wait`. `async`
-  leaves the start as it was: it claims the cached code and loads it once the
-  first request has answered, since any module loaded on the node meanwhile
-  waits for that load. `wait` makes request 1 compiled and moves the load into
-  the start of the first worker on a node: about 0.2 s for Lua, 1.1 s for
-  QuickJS, 2.9 s for CPython.
+  baseline` under your own `limits`. With a finite `fuel` the start fails with
+  `{bad_option, compiled, #{fuel => N}}`; that combination used to interpret
+  without a word. Metered stays the default.
+- **A compiled worker loads cached code at start.** The code cache keeps a
+  small manifest beside each artifact, and `wasm_jit:preload/2` reads it.
+  New worker option `preload`: `async` (the default) keeps the start time and
+  loads once the first request has answered; `wait` makes request 1 compiled
+  and adds the load to the first worker's start on a node (about 0.2 s for
+  Lua, 1.1 s for QuickJS, 2.9 s for CPython). Needs `code_cache_dir`.
 - **`wasm:restore/3` expands `profile`** as `wasm:instantiate/3` does. A
   restored instance under `profile => script` used to keep the default compile
   threshold of 32.
+- **A decoded module owns its bytes.** Data segments, names and the custom
+  sections it keeps are copied out of the input, and `.debug_*` sections are
+  dropped, so the input binary is freed when the caller lets go of it. A
+  module used to pin the whole file: 31 MB for the CPython reactor.
+- **Fixed:** the per-process function cache ignored `fuse`, so an unfused
+  instance could hand its bodies to a fused one in the same process.
+- `bench/paths/` gains `gap.erl`, `guestprof.erl`, `lowbench.erl`,
+  `firstreq.erl` and `retainbench.erl`; reqbench's QuickJS and Lua arms now
+  run at infinite fuel, and so reach the compiled tier.
 
 ## 0.7.0
 

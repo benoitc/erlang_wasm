@@ -127,7 +127,6 @@ compiled_cases() ->
     [compiled_with_a_finite_fuel_refuses_to_start,
      a_compiled_worker_enters_generated_code_on_its_first_request,
      a_worker_that_does_not_compile_loads_nothing,
-     a_retired_preload_option_is_ignored,
      a_compiled_worker_with_a_damaged_manifest_still_answers].
 
 end_per_group(_G, _Config) -> ok.
@@ -831,26 +830,6 @@ a_worker_that_does_not_compile_loads_nothing(Config) ->
         ?assertEqual(0, maps:get(entered, wasm_jit:counts())),
         ?assertEqual([], wasm_code_slots:resident()),
         ok = wasm_script_worker:stop(W)
-    end).
-
-%% `preload' was an option while this release was being made and is gone. A
-%% worker takes it as it takes any key it does not know: it ignores it, and
-%% whatever the value, a compiled worker still loads at start.
-a_retired_preload_option_is_ignored(Config) ->
-    with_home_cache(fun() ->
-        ok = warm_the_cache(Config),
-        [begin
-             wasm_test_slots:reset(),
-             {ok, W} = start(Config, ?config(root, Config),
-                             #{compiled => true, Key => Value}),
-             ?assertNotEqual([], wasm_code_slots:resident()),
-             ok = wasm_jit:reset_counts(),
-             ?assertMatch({ok, #{values := [_]}},
-                          wasm_script_worker:run(W, #{})),
-             ?assert(maps:get(entered, wasm_jit:counts()) > 0),
-             ok = wasm_script_worker:stop(W)
-         end || {Key, Value} <- [{preload, later}, {preload, async},
-                                 {not_an_option, later}]]
     end).
 
 %% A manifest that cannot be read is a miss and nothing else: the worker

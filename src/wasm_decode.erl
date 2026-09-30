@@ -113,9 +113,9 @@ section(Id, Body, Rank, Seen, M) ->
 
 %% Nothing in the runtime reads a custom section today, but the name section,
 %% `producers' and anything unknown are small next to DWARF and are what a
-%% diagnostic or a tool would want, so they are kept. DWARF (`.debug_*') is dropped: it is most
-%% of a debug build (23 MB of the 31 MB CPython reactor), and the runtime has
-%% no debugger to hand it to.
+%% diagnostic or a tool would want, so they are kept. DWARF (`.debug_*') is
+%% dropped: it is most of a debug build (23 MB of the 31 MB CPython reactor),
+%% and the runtime has no debugger to hand it to.
 %%
 %% What is kept is copied. A sub-binary would keep the whole input alive, off
 %% heap, for as long as the module lives, which is the life of the cache entry.

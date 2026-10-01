@@ -776,3 +776,133 @@ minimum of nine:
 
 The read-first version is what shipped. A memory only tracks when a restore
 asked to recycle, so everything else pays the field test alone.
+
+## Four slots for a word: 32-bit `atomics` slots for private memories
+
+**Private memories storing 4 bytes per `atomics` slot instead of 8, so no slot
+can hold a bignum; shared memories unchanged, because a 64-bit atomic
+read-modify-write needs one slot.** Built as a spike against 0.7.0, not landed.
+It passed the suites except the one that bounds a page's allocation, which is
+the doubled storage it costs.
+
+It did what it was for. QuickJS read no bignum words at all (648k per run
+before), its collection share fell from 15.0% to 8.5%, and the byte
+read-modify-write kernel went from 73 to 25 ns. Gates set before measuring,
+against 0.7.0, five interleaved pairs, minimums:
+
+| gate | result |
+| --- | --- |
+| QuickJS compiled at least 10% faster | 10.9% faster, pass |
+| CPython request no more than 3% slower | 2.4% faster, pass |
+| restore no more than 20% slower | +46% in a request, +65% alone: **fail** |
+
+Every recycled restore re-laid 69 chunks of 64 KiB at one `atomics:put` a
+slot, so halving the slot doubled the puts (508k to 1,016k). Re-gated on
+top of 4 KiB recycling (below), the recycled restore came to +19.4% on
+minimums with one pair of three at +20.9%, and a fresh restore stayed at +68%:
+it lays the whole image, and twice the slots is twice the puts.
+
+What a worker sees, CPython, the 32-bit build on 4 KiB recycling, three
+interleaved rounds:
+
+| | 0.7.0 | 32-bit slots |
+| --- | ---: | ---: |
+| one caller, p50 | 32.3 to 33.4 ms | 29.5 to 30.1 ms |
+| first request of a new worker, p50 | reference | +16% |
+| backing memory per worker | 45.6 MB | 91.1 MB |
+| throughput, same memory budget (14 against 7 workers) | 202 to 231 req/s | 189 to 192 req/s |
+
+Faster per worker, slower per megabyte, slower to start. It stays a possible
+opt-in for memory-rich, long-lived, CPU-bound guests; as a default it fails a
+gate set before it was measured. Landing it would also need the keeper to
+charge a private page as two, which the spike did not do.
+
+## Recycling at a finer grain
+
+**Recycled restores re-lay 4 or 16 KiB chunks instead of 64 KiB.** A CPython
+request dirties 69 chunks of 64 KiB (4.06 MB) but writes only 323 distinct
+blocks of 4 KiB (1.3 MB), 170 of 16 KiB. Built as spikes, not landed.
+
+Making the chunk smaller made the restore faster and multiplied the arrays: a
+CPython memory is 10,240 of them at 4 KiB and 2,560 at 16 KiB, against 640,
+and several costs follow the array count rather than the bytes. The first
+spike's destroy took 0.75 ms instead of 0.07: rebuilding the kept-chunk tuple
+(`clean_only/1`, 264 us), then a collection of its temporaries. The kept map
+grew from 2,507 words to 40,651 and was copied through four processes per
+request. Three fixes (a one-pass rebuild, the kept map sent runner to worker
+and pulled by the next runner, the dirty array reused) took destroy back to 132
+and 48 us. The gates, set before measuring, against 0.7.0:
+
+| gate | 4 KiB | 16 KiB |
+| --- | --- | --- |
+| recycled restore faster | 6.0 to 3.5 ms, pass | -24%, pass |
+| one caller, p50 no more than 1% slower | -4%, pass | -3%, pass |
+| QuickJS flat | pass | pass |
+| first request of a new worker, p50 no more than 3% slower | +10%, **fail** | +8%, **fail** |
+| first request after `recycle_idle`, no more than 3% slower | inconclusive | inconclusive |
+| memory per worker no more than 3% more | +12.9%, **fail** | +4.7%, **fail** |
+| throughput under the same memory budget | unreadable on this box | unreadable |
+
+A fresh restore allocates every array, and each `atomics` array costs about
+292 bytes beyond its payload. The first-request and memory failures are the
+array count, and no fix to the recycling path touches them.
+
+**A throughput collapse that was the box.** With 12 workers and 64 callers
+the fixed 4 KiB build ran below 0.7.0's slowest run in 6 of its 8 pool runs,
+as low as 107 to 112 req/s. Worker queues stayed at 3 at most, callers never
+saw `busy`, the pull took 0.30 to 0.47 ms and every restore recycled. A rerun
+put the collapse on the build without the fixes instead: the same reductions
+per request, done at 248M a second against 284 to 360M in the healthy runs,
+and 0.7.0 had a bad round too. Twelve to fourteen busy workers on ten
+performance cores, with `mediaanalysisd` at 235% CPU, is what it measured.
+Pool numbers on this box need `+S 10:10` and at most ten workers, or rounds
+discarded when their reductions a second fall well below the build's median.
+
+## Repairing written blocks in place
+
+**Keeping 64 KiB chunks, marking writes per 4 KiB block, and overwriting each
+written block with the image's bytes instead of discarding its chunk.** Not
+built. It would keep the array count, and so the first-request and memory
+costs above, where 0.7.0 has them, for a restore estimated at 3.5 to 4 ms
+against 6.
+
+Declined on isolation. Today a written chunk is thrown away: the dirty half of
+recycling is structural, and only the clean half rests on the marks. Repairing
+in place moves the dirty half to bookkeeping too, so the guarantee becomes
+"the marks were right and the repair was complete" rather than "that memory is
+gone", and a request's bytes would stay in the node until the repair ran. About
+5 to 7% of a CPython request was not judged worth that in a runtime whose case
+is being plain Erlang.
+
+## Compiled-tier gaps the guests do not need yet
+
+**Inline f64 arithmetic, a cheaper call convention (an inline depth check,
+bare results from functions that cannot change `#mut{}`), and `call_indirect`
+resolved inside a unit.** Not built. Each closes a gap `bench/paths/gap.erl`
+shows (4.1x, 6.4x, 30x against Erlang), and each is under 1% of a compiled
+QuickJS run and of a CPython request: 1.3k float operations, 23k depth checks
+and 5k indirect calls a QuickJS run. Worth building when a guest that spends
+its time there turns up, and not before.
+
+## Loading cached compiled code at worker start
+
+**A function-set manifest beside each code-cache artifact, read at worker start
+to load the artifact before request 1.** Built and withdrawn. The code cache
+stored a `.set` manifest naming the functions an artifact held, the part of
+the key a new node cannot know; `wasm_jit:preload/2` read it, built the key
+and loaded the artifact, and a `compiled => true` worker called it at start.
+It went through an `async` mode that loaded after request 1 answered, a
+`wait` mode, and a binding of the load to the last scheduler.
+
+It worked: request 1 ran compiled on Lua, QuickJS and CPython. The first
+worker on a node started 0.2, 1.0 and 2.7 s later, which is
+`code:load_binary/3` of the artifact. `PERF.md` has the runs under "A
+compiled worker's first request, with the code cache warm" and the two
+sections after it; `bench/paths/firstreq.erl` is in the git history.
+
+Withdrawn because it bought compiled code from request 1 instead of request 9
+to 21, once per worker and node, for about 300 lines and a change to what a
+worker start costs. The `async` form kept clear of requests only through
+`process_flag(scheduler, N)`, which OTP does not document. If it returns, it
+belongs to a build-and-boot lifecycle, where a release loads its compiled
+code before it takes traffic, and not to the worker.

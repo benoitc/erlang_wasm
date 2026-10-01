@@ -853,6 +853,9 @@ count, the seconds per arm and extra worker options as a term, for example
 `"#{restore_ahead => true}"`. Images and generated code are kept under
 `_build/reqbench`, so warm it once with a long `REQBENCH_WARM` (CPython's tier
 takes minutes the first time) and later runs load it in seconds.
+Each guest runs at infinite fuel: until 2026-09-28 the `qjs`
+and `lua` arms passed only `compile => true`, kept `untrusted()`'s finite fuel,
+and so ran interpreted whatever the output said about the tier.
 `REQBENCH_POOL=fifo` rotates idle workers instead of reusing the last one,
 which is the case `restore_ahead` helps; `REQBENCH_MSACC=1` prints microstate
 accounting for the loaded arm.
@@ -878,3 +881,58 @@ erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
 
 Run it before touching the inlined store in `wasm_core`, interleaved against
 the previous build, and compare minimums: the difference is a few nanoseconds.
+
+### How far compiled code is from plain Erlang
+
+`gap` runs a kernel as hand-written Erlang, interpreted and compiled, one arm
+per VM:
+
+```sh
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin \
+    bench/paths/benchlib.erl bench/paths/allocwords.erl bench/paths/gap.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run gap main sieve native
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run gap main sieve compiled
+```
+
+Run the `null` kernel's `native` and `native_b` arms first: they are the same
+code, and the difference between them is the box. `alloc_compiled` gives heap
+words per unit, and `dump` writes `core.txt` and `wasm.S` to the current
+directory so the compiled kernel's instructions can be read against
+`erlc -S` of the Erlang arm. The table it produced for 0.7.0 is in `PERF.md`.
+
+### Where a real guest's time goes
+
+`guestprof` profiles a compiled QuickJS run or 50 CPython requests. Run it
+before ranking engine work, because a kernel's gap says nothing about how
+much of a guest's time sits there:
+
+```sh
+erlc -o bench/paths -pa _build/test/lib/wasm/ebin bench/paths/benchlib.erl \
+    bench/paths/reqbench.erl bench/paths/guestprof.erl
+erl -noshell -pa _build/test/lib/wasm/ebin -pa bench/paths \
+    -run guestprof main qjs count
+```
+
+The first VM compiles the guest into `_build/guestprof/code`, which takes
+minutes. Every later VM must print `cached => 1` in its counts. `compiled`
+counts a cache hit too, so it is not the check.
+
+- `count` gives exact calls per function.
+- `bigword` sorts every word `atomics:get/2` answers into small and bignum.
+- `widths` counts memory accesses by width on the interpreter.
+- `sample` prints the OS pid for macOS `sample <pid> 20 1`.
+
+`+JPperf` is refused on macOS, so a sample shows generated code as bare
+addresses; split that bucket with `count`, and call the split an estimate.
+
+### Pool numbers on a laptop
+
+A pool arm with more busy workers than performance cores measures the
+scheduler of the OS as much as the runtime: on a 10+4 core M4 Pro with
+background indexing running, one build's run fell from about 210 to 143 req/s
+with the same reductions per request, and a rerun moved the collapse to
+another build. Run pool arms with `+S 10:10` and at most ten workers, or
+repeat the rounds and discard any whose reductions a second fall well below
+that build's median, and say which.

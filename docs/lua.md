@@ -40,9 +40,13 @@ A worker starts in about 75 ms and a request costs 30 ms, or **12.7 ms** with
 the heap floor below, which is the one place Lua is simply better than the
 other two guests here.
 
-## Give the runner a heap floor
+## The runner's heap floor
 
-One option, and it more than halves a request:
+`wasm_lua` gives every request runner a 200,000-word heap floor by default, so
+you do not set anything to get it. It more than halves a request: **30.0 ms
+becomes 12.7 ms**, and the collections in it go from 98 to 23.
+
+Set the option yourself to change it, or pass `0` to turn it off:
 
 <!-- check: run -->
 <!-- check: fresh -->
@@ -52,11 +56,9 @@ One option, and it more than halves a request:
             wasm_lua,
             #{path => "test/fixtures/lang/lua_reactor.wasm",
               limits => wasm_lua:limits(),
-              runner_min_heap_words => 200_000}).
+              runner_min_heap_words => 0}).
 ```
-
-**30.0 ms a request becomes 12.7 ms**, and the collections in it go from 98 to
-23. A restored instance keeps almost nothing on the runner's own heap, so the
+ A restored instance keeps almost nothing on the runner's own heap, so the
 collector gives it the emulator's 233 words and collects constantly through a
 call that allocates far more than that.
 
@@ -64,7 +66,8 @@ Note the option sits beside `root` and **not** inside the map
 `wasm_lua:limits/0` returns. A floor is not a bound, and one written
 into the limits map is ignored silently.
 
-200,000 words is where Lua plateaus. It is a property of the guest, so a
+200,000 words is where Lua plateaus, and it rounds up to 318,187 words, about
+2.5 MB held only while a request runs. It is a property of the guest, so a
 different build wants its own; [the tuning guide](tuning.md) is how to find
 one. `capture_min_heap_words` exists for the worker start and is worth nothing
 here, because 75 ms is already most of the way to free.

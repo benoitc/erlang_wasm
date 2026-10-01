@@ -131,7 +131,14 @@ static PyObject *init_worker(void)
  * rather than before: a tenant's import-time exception is a real outcome and
  * has to be framed as one.
  *
- * `_worker_call` is what `call()` runs, handed the entry or `None`. */
+ * `_worker_call` is what `call()` runs, handed the entry or `None`.
+ *
+ * The last line compiles a source through the `compile()` builtin, as the
+ * import of `/main.py` does, and throws the result away. The first such call
+ * after start pays a one-time setup, and with a precompiled standard library
+ * nothing in `init()` compiles anything, so without this line that setup
+ * landed in every request: 1.24 s of a trivial request's 1.4 s, interpreted,
+ * against 26 ms once it is in the image. It costs the capture 0.25 s. */
 static const char PRELOAD[] =
     "import sys, json, importlib.util, worker\n"
     "def _worker_run():\n"
@@ -162,7 +169,39 @@ static const char PRELOAD[] =
     "        worker.result(json.dumps({'ok': entry(context)}))\n"
     "    except Exception as e:\n"
     "        worker.result(json.dumps(\n"
-    "            {'error': {'code': 'exception', 'message': str(e)}}))\n";
+    "            {'error': {'code': 'exception', 'message': str(e)}}))\n"
+    "compile(b'pass\\n', '/main.py', 'exec', dont_inherit=True)\n";
+
+/* Collect, then move every survivor into the permanent generation, as the
+ * last thing a capture does. The image carries the collector's state as the
+ * capture left it, and every request restores the same state, so a pass
+ * that is due soon after the capture is due in every request. With a
+ * precompiled standard library one was: a cyclic pass over the interpreter
+ * landed in each request, and the trivial one took 237 ms interpreted against
+ * 134 for the build that compiled its library at start. Frozen, the image's
+ * objects are never traversed again and a request pays only for what it
+ * allocates: 138 ms.
+ *
+ * The cost is that nothing in the image is ever collected, which is what an
+ * image is for: every request restores it and throws its own copy away. */
+static int freeze(void)
+{
+    PyObject *gc = PyImport_ImportModule("gc");
+    PyObject *r;
+
+    if (gc == NULL)
+        return -1;
+    r = PyObject_CallMethod(gc, "collect", NULL);
+    if (r != NULL) {
+        Py_DECREF(r);
+        r = PyObject_CallMethod(gc, "freeze", NULL);
+    }
+    Py_DECREF(gc);
+    if (r == NULL)
+        return -1;
+    Py_DECREF(r);
+    return 0;
+}
 
 /* A callable the preload defined in `__main__`, as a new reference. */
 static PyObject *main_global(const char *name)
@@ -226,7 +265,9 @@ int init(void)
         return 2;
     run_fn = main_global("_worker_run");
     call_fn = main_global("_worker_call");
-    return run_fn != NULL && call_fn != NULL ? 0 : 4;
+    if (run_fn == NULL || call_fn == NULL)
+        return 4;
+    return freeze() == 0 ? 0 : 5;
 
 fail:
     PyConfig_Clear(&config);
@@ -265,10 +306,23 @@ static int finish(PyObject *ret)
     return 0;
 }
 
+/* An entry's capture runs `handle()` once after `init()`, and the entry's own
+ * imports land after `init()`'s freeze. So the run that sets the entry freezes
+ * again at its end, which makes it the last thing the capture does. A
+ * restored image already has its entry, so a request never gets here; a
+ * tenant that calls `worker.set_entry` in a plain request pays for one
+ * collection in that request and changes nothing past it. */
 __attribute__((export_name("handle")))
 int handle(void)
 {
-    return finish(PyObject_CallNoArgs(run_fn));
+    int had_entry = entry != NULL;
+    int rc = finish(PyObject_CallNoArgs(run_fn));
+
+    if (!had_entry && entry != NULL && freeze() != 0) {
+        PyErr_Print();
+        return 1;
+    }
+    return rc;
 }
 
 __attribute__((export_name("call")))

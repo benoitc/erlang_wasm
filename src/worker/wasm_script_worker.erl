@@ -39,13 +39,14 @@ These are covered by compatibility and the release notes:
 
 So are the option keys this module takes (`root`, `timeout`, `trusted`,
 `limits`, `capture_timeout`, `runner_min_heap_words`,
-`capture_min_heap_words`, `restore_ahead`, `recycle_idle`, and the `limits` keys
-`docs/worker-reference.md` lists), the
+`capture_min_heap_words`, `restore_ahead`, `recycle_idle`, `compiled`, and the
+`limits` keys `docs/worker-reference.md` lists), the
 `wasm` application settings `scratch_roots` and `reaper_options`, and the
 error shapes: a running worker answers `{error, wasm_worker_error:worker_error()}`,
 and `start_link/2,3` fails with a `gen_server` start reason, one of
-`{missing_option, Key}`, `{unknown_root, Root, Known}`,
-`{unknown_reaper_option, Keys}` or the adapter's own `wasm_worker_error()`.
+`{missing_option, Key}`, `{bad_option, Key, Why}`,
+`{unknown_root, Root, Known}`, `{unknown_reaper_option, Keys}` or the adapter's
+own `wasm_worker_error()`.
 
 `wasm_worker_reaper`, `wasm_worker_sup` and `wasm_script_v1` are internal:
 they may change in any release.
@@ -216,6 +217,13 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
           max_request_bytes  => 1_048_576,      % source plus encoded context
           max_staged_bytes   => 8_388_608,
           max_staged_files   => 64}).
+
+%% What `compiled => true' sets, under the caller's own `limits'. `baseline'
+%% and a threshold of one because a worker restores a fresh instance for every
+%% request: `docs/compiled-tier.md' has the measurements behind both.
+-define(COMPILED_LIMITS,
+        #{fuel => infinity, compile => true, compile_after => 1,
+          compile_quality => baseline}).
 
 -record(w, {adapter        :: module(),
             artifact       :: artifact(),
@@ -487,23 +495,59 @@ init({Adapter, Opts}) ->
                 {error, E} ->
                     {stop, E};
                 {ok, Artifact} ->
-                    Limits = maps:merge(
-                               maps:merge(wasm_limits:untrusted(), ?WORKER_LIMITS),
-                               maps:get(limits, Opts, #{})),
-                    started(Adapter, Artifact, Opts, Limits, Root)
+                    case compiled(Opts) of
+                        {error, E} ->
+                            {stop, E};
+                        {ok, Compiled} ->
+                            Limits = maps:merge(
+                                       maps:merge(wasm_limits:untrusted(),
+                                                  ?WORKER_LIMITS),
+                                       maps:merge(Compiled,
+                                                  maps:get(limits, Opts, #{}))),
+                            started(Adapter, Artifact, Opts, Limits, Root)
+                    end
             end
     end.
 
+%% `compiled => true' is the compiled tier's four keys under one name, beneath
+%% whatever the caller set in `limits'. Four because the tier runs only with
+%% `compile => true' *and* infinite fuel, and a worker's base is
+%% `wasm_limits:untrusted/0', whose fuel is finite: asking for one without the
+%% other has always interpreted without a word.
+%%
+%% The one combination that cannot mean what it says is refused rather than
+%% resolved: a finite `fuel' is a metering the caller asked for, and the tier
+%% gives it up by construction.
+compiled(Opts) ->
+    Limits = maps:get(limits, Opts, #{}),
+    case maps:get(compiled, Opts, false) of
+        false ->
+            {ok, #{}};
+        true ->
+            case maps:get(fuel, Limits, infinity) of
+                infinity ->
+                    {ok, ?COMPILED_LIMITS};
+                Fuel ->
+                    {error, {bad_option, compiled, #{fuel => Fuel}}}
+            end;
+        Other ->
+            {error, {bad_option, compiled, Other}}
+    end.
+
+%% `Limits' is final here, merged from the preset, the worker's own and the
+%% caller's, and it is what the adapter's `defaults/1' is asked with, so a
+%% default can follow the tier the requests will actually run on.
 started(Adapter, Artifact, Opts, Limits, Root) ->
-    {Heap, Note} = runner_heap_words(Opts, Limits),
-    ok = say_heap(Adapter, runner_min_heap_words, Note),
+    Floors = maps:merge(adapter_defaults(Adapter, Limits), Opts),
+    {Heap, Note} = runner_heap_words(Floors, Limits),
+    ok = say_heap(Adapter, runner_min_heap_words, Opts, Note),
     W = #w{adapter = Adapter, artifact = Artifact, opts = Opts,
            limits = Limits, root = Root, runner_heap = Heap,
            timeout = maps:get(timeout, Limits, ?DEFAULT_TIMEOUT),
            trusted = maps:get(trusted, Opts, false),
            recycle_idle = recycle_idle(Opts)},
-    {CapHeap, CapNote} = capture_heap_words(Opts, Limits),
-    ok = say_heap(Adapter, capture_min_heap_words, CapNote),
+    {CapHeap, CapNote} = capture_heap_words(Floors, Limits),
+    ok = say_heap(Adapter, capture_min_heap_words, Opts, CapNote),
     case capture_image(Adapter, Artifact,
                        #{timeout => maps:get(capture_timeout, Opts,
                                              ?CAPTURE_TIMEOUT),
@@ -822,9 +866,12 @@ How much heap a request runner starts with, and what happened to the number.
 
 `runner_min_heap_words` is a **floor**, not a bound: it says how much room to
 give a request, where every key in a limits map says what a guest may not
-exceed. Off unless set, because the right value is a property of the guest and
-there is no number that suits all of them. `docs/tuning.md` is how to find your
-own; `test/audit/PERF.md` has the one measured for QuickJS.
+exceed. The right value is a property of the guest and there is no number that
+suits all of them, so an unset one comes from the adapter's optional
+`defaults/1`, and is off for an adapter without one. The shipped adapters set
+the values `test/audit/PERF.md` measured; `docs/tuning.md` is how to find your
+own. This function reads only `Opts`: the worker merges the adapter's defaults
+under the caller's options before calling it.
 
 Resolved once at `start_link/2` and reported rather than applied silently,
 which is `wasm_jit`'s `resolve_max_heap_words` arrangement and is here for the
@@ -877,17 +924,44 @@ heap_words(Key, Opts, Limits) ->
             {0, {bad, Bad}}
     end.
 
+%% The two floors an adapter may suggest, and nothing else it answers. An
+%% answer that is not a map is no suggestion rather than a worker that will
+%% not start: a default is the adapter's, and nothing here raises.
+adapter_defaults(Adapter, Limits) ->
+    case erlang:function_exported(Adapter, defaults, 1) of
+        false ->
+            #{};
+        true ->
+            case Adapter:defaults(Limits) of
+                D when is_map(D) ->
+                    maps:with([runner_min_heap_words,
+                               capture_min_heap_words], D);
+                _ ->
+                    #{}
+            end
+    end.
+
 %% Once per worker, at its start, because that is where the value is resolved.
-%% A worker per tenant would otherwise log the same line per tenant.
-say_heap(_Adapter, _Key, ok) ->
+%% A worker per tenant would otherwise log the same line per tenant. A default
+%% is named as one, because an operator who never set the key has to be told
+%% where it came from.
+say_heap(_Adapter, _Key, _Opts, ok) ->
     ok;
-say_heap(Adapter, Key, {bad, Bad}) ->
-    logger:warning("wasm_script_worker: ~p: ~s is ~p, which is not a heap size; "
-                   "no floor is applied", [Adapter, Key, Bad]);
-say_heap(Adapter, Key, {no_room, Ceiling}) ->
-    logger:warning("wasm_script_worker: ~p: ~s does not fit under max_heap_words "
-                   "of ~p with room for the emulator's rounding; no floor is "
-                   "applied", [Adapter, Key, Ceiling]).
+say_heap(Adapter, Key, Opts, {bad, Bad}) ->
+    logger:warning("wasm_script_worker: ~p: ~s~s is ~p, which is not a heap "
+                   "size; no floor is applied",
+                   [Adapter, Key, origin(Key, Opts), Bad]);
+say_heap(Adapter, Key, Opts, {no_room, Ceiling}) ->
+    logger:warning("wasm_script_worker: ~p: ~s~s does not fit under "
+                   "max_heap_words of ~p with room for the emulator's "
+                   "rounding; no floor is applied",
+                   [Adapter, Key, origin(Key, Opts), Ceiling]).
+
+origin(Key, Opts) ->
+    case maps:is_key(Key, Opts) of
+        true  -> "";
+        false -> " (the adapter's default)"
+    end.
 
 %%% ------------------------------------------------------------- submitting ---
 

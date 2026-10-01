@@ -75,7 +75,7 @@ the old secret. Rotation means recapturing, which is one `init()`.
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,
-         snapshot_capability/1]).
+         snapshot_capability/1, defaults/1]).
 -export([limits/0]).
 
 -define(DEFAULT_SOURCE, ~"def main(context):\n    return context\n").
@@ -95,6 +95,48 @@ exactly why an adapter never raises one for you.
 limits() ->
     #{timeout => 120_000, fuel => infinity, max_memory_pages => 8192,
       max_host_calls => 10_000_000, max_heap_words => 16 * 1024 * 1024}.
+
+-doc """
+The heap floor a request runner starts with, unless the caller sets one.
+
+It depends on the tier, which `Limits` names: the worker's resolved limits.
+
+- **Compiled**, `compile => true` with `fuel => infinity`, the condition
+  `wasm_jit:entry/3` runs generated code under: 1,500,000 words. Unfloored, a
+  request took 23.6 to 25.3 ms at p50 with 18 collections and peaked at
+  1.40M words. At 1,000,000 it took 20.6 to 21.9 ms with 5, but the heap grew
+  mid-request to 2.88M words; at 1,500,000 it took 20.5 to 21.0 ms with 4
+  and never grew, and was 0.6 to 1.2 ms (3 to 6%) faster than 1,000,000 at
+  p50 in each of four paired rounds. In a pool of ten it gave 29 to 34% more
+  throughput where 1,000,000 gave 17 to 24% (`test/audit/PERF.md`, "Compiled
+  CPython's floor, by tier" and "Default floors in a pool").
+- **Interpreted**, anything else: 1,000,000 words, the measured knee. A
+  request fell from 141 to 145 ms at p50 to 44 to 46 ms, and 2,000,000 bought
+  about a millisecond for 60% more peak heap (the first section).
+
+Both fit with the worker's 2x headroom: 3,000,000 words under `limits/0`'s
+16,777,216 and under the untrusted preset's 8,388,608.
+
+**No capture floor**, although `capture_min_heap_words => 2_000_000` takes a
+worker start from about 92 s to 17 s ("The same floor on the capture, which is
+worth more"). Under `limits/0`'s own 16,777,216-word ceiling that floor
+kills the capture: three of four fresh starts died on 0.7.0, each after about
+18 s, as `test/audit/ATTEMPTS.md` recorded before. It is only safe beside a
+larger `max_heap_words`, and a default cannot know the caller raised one.
+`docs/python.md` sets the two together, at 33,554,432 words.
+""".
+-spec defaults(map()) -> wasm_worker_adapter:defaults().
+defaults(Limits) ->
+    case compiled_tier(Limits) of
+        true  -> #{runner_min_heap_words => 1_500_000};
+        false -> #{runner_min_heap_words => 1_000_000}
+    end.
+
+%% `wasm_jit:entry/3''s test, less its per-call `max_depth' clause, which a
+%% worker's limits cannot trip: they are the instance's own.
+compiled_tier(Limits) ->
+    maps:get(compile, Limits, false) =:= true andalso
+        maps:get(fuel, Limits, infinity) =:= infinity.
 
 artifact(Opts) ->
     case maps:get(entry, Opts, undefined) of

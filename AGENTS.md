@@ -123,3 +123,13 @@ them managed it.
   never reclaimed, so a guest that can mint one atom per call is a permanent
   leak. `wasm_prop_SUITE` asserts both halves.
 - `rebar.lock` is committed: CI keys its build cache on the lock hash.
+- Options express what the embedder knows: semantics and resources, such as
+  limits, timeouts, isolation and whether to compile. They never select an
+  implementation tactic: cache shape, page or memory layout, chunk size, GC
+  strategy, preload mode or generated-code ABI. When a tactic wins only for
+  some workloads, pick it mechanically from what the runtime can observe, or
+  record the trade-off in `test/audit/ATTEMPTS.md` and ship the one default
+  that measures well enough. Do not add a knob for it.
+- Use only documented OTP APIs. A behaviour that holds only through an
+  undocumented call (`process_flag(scheduler, N)` was one) can change under an
+  upgrade without notice; remove the need for it instead.

@@ -70,7 +70,7 @@ wasm_script_worker:start_link(my_adapter, #{compiled => true}).
 | `fuel` | a ceiling, from `wasm_limits:untrusted/0` | `infinity` |
 | option | none | `compiled => true` |
 | what stops a runaway | the fuel budget | **only** the deadline |
-| speed | interpreted | compiled, from the first request once the code cache is warm |
+| speed | interpreted | compiled, after several thousand requests |
 
 `compiled => true` sets `fuel => infinity`, `compile => true`,
 `compile_after => 1` and `compile_quality => baseline`. A key you set in
@@ -82,13 +82,10 @@ Compiled is worth it once the code is hot: a QuickJS reactor request goes from
 20.4 ms to 6.9, Lua from 11.4 to 4.4 and CPython from 93.1 to 37.6. Two things
 to budget for:
 
-- **Set `code_cache_dir`.** With it, a compiled worker loads the code an
-  earlier start compiled before `start_link/2` returns, and request 1 runs
-  compiled. The first worker on a node takes about 0.2 s (Lua), 1.1 s
-  (QuickJS) or 2.9 s (CPython) longer to start, so start workers before you
-  take traffic; later workers start as before. Without the cache,
-  every node start compiles again, about 150 s and several thousand
-  interpreted requests on QuickJS.
+- **Getting there takes a while**, about 150 s and several thousand requests
+  on QuickJS, every one of them interpreted. Set `code_cache_dir` so a restart
+  does not pay it again: a QuickJS worker then gets there in 1.5 s instead of
+  147.
 - **Time is the only bound**, so compiled is the one configuration where an
   untrusted guest is stopped by the deadline alone.
 

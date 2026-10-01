@@ -883,3 +883,26 @@ shows (4.1x, 6.4x, 30x against Erlang), and each is under 1% of a compiled
 QuickJS run and of a CPython request: 1.3k float operations, 23k depth checks
 and 5k indirect calls a QuickJS run. Worth building when a guest that spends
 its time there turns up, and not before.
+
+## Loading cached compiled code at worker start
+
+**A function-set manifest beside each code-cache artifact, read at worker start
+to load the artifact before request 1.** Built and withdrawn. The code cache
+stored a `.set` manifest naming the functions an artifact held, the part of
+the key a new node cannot know; `wasm_jit:preload/2` read it, built the key
+and loaded the artifact, and a `compiled => true` worker called it at start.
+It went through an `async` mode that loaded after request 1 answered, a
+`wait` mode, and a binding of the load to the last scheduler.
+
+It worked: request 1 ran compiled on Lua, QuickJS and CPython. The first
+worker on a node started 0.2, 1.0 and 2.7 s later, which is
+`code:load_binary/3` of the artifact. `PERF.md` has the runs under "A
+compiled worker's first request, with the code cache warm" and the two
+sections after it; `bench/paths/firstreq.erl` is in the git history.
+
+Withdrawn because it bought compiled code from request 1 instead of request 9
+to 21, once per worker and node, for about 300 lines and a change to what a
+worker start costs. The `async` form kept clear of requests only through
+`process_flag(scheduler, N)`, which OTP does not document. If it returns, it
+belongs to a build-and-boot lifecycle, where a release loads its compiled
+code before it takes traffic, and not to the worker.

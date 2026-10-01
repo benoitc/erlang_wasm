@@ -25,12 +25,6 @@ Workers built on `py_reactor.wasm` need the new build.
   baseline` under your own `limits`. With a finite `fuel` the start fails with
   `{bad_option, compiled, #{fuel => N}}`; that combination used to interpret
   without a word. Metered stays the default.
-- **A compiled worker loads cached code at start.** With `code_cache_dir`
-  set and a warm cache, a `compiled => true` worker loads its code before
-  `start_link/2` returns, so request 1 is compiled. The first worker on a node
-  pays the load: about 0.2 s for Lua, 1.1 s for QuickJS, 2.9 s for CPython.
-  The code cache keeps a small manifest beside each artifact, and
-  `wasm_jit:preload/2` reads it.
 - **`wasm:restore/3` expands `profile`** as `wasm:instantiate/3` does. A
   restored instance under `profile => script` used to keep the default compile
   threshold of 32.
@@ -40,9 +34,9 @@ Workers built on `py_reactor.wasm` need the new build.
   module used to pin the whole file: 31 MB for the CPython reactor.
 - **Fixed:** the per-process function cache ignored `fuse`, so an unfused
   instance could hand its bodies to a fused one in the same process.
-- `bench/paths/` gains `gap.erl`, `guestprof.erl`, `lowbench.erl`,
-  `firstreq.erl` and `retainbench.erl`; reqbench's QuickJS and Lua arms now
-  run at infinite fuel, and so reach the compiled tier.
+- `bench/paths/` gains `gap.erl`, `guestprof.erl`, `lowbench.erl` and
+  `retainbench.erl`; reqbench's QuickJS and Lua arms now run at infinite fuel,
+  and so reach the compiled tier.
 - **`scripts/build-python-reactor.sh` strips the DWARF** with
   `wasm-opt --strip-debug`: 7.4 MB instead of 30.9, at the same request
   speed. The build now needs binaryen's `wasm-opt`, or `WASM_OPT` set to it.

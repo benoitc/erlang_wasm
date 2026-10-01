@@ -70,13 +70,6 @@ the module:
 - the slot the artifact was built for, because a module's name is part of its
   BEAM file and cannot be changed without rewriting it
 
-The set is the one input a start cannot know, since it is what a workload ran.
-So storing an artifact also stores a **manifest** beside it: the sorted set,
-keyed by everything above except the slot and the set, framed and checked like
-an artifact. `wasm_jit:preload/2` reads it to build the full key before any
-request has run. A manifest only chooses which key to look up, so a wrong one
-is a miss and never someone else's code.
-
 A module identified by a `reference()` rather than a content hash is never
 cached. That is every module built from text: its identity is fresh on every
 validation, so there is nothing stable to key on.
@@ -84,8 +77,7 @@ validation, so there is nothing stable to key on.
 ## What it does not do
 
 No sharing between nodes, no signature, no compression. A cache entry is a file
-named for the hash of its key, `.beam` for an artifact and `.set` for a
-manifest -- framed with a magic, a format number, a length
+named for the hash of its key -- framed with a magic, a format number, a length
 and a digest, in the shape `wasm_snapshot_file` uses -- and eviction is by total
 size, oldest first.
 
@@ -96,7 +88,6 @@ digest is what turns damage from a crash into a miss.
 """.
 
 -export([lookup/1, store/2, key/6, dir/0, purge/0]).
--export([lookup_set/1, store_set/2, set_key/3]).
 
 %% The validation policy, reachable from the suite and from nowhere else. A
 %% rule about who may own a directory is this module's business, not something
@@ -110,10 +101,6 @@ digest is what turns damage from a crash into a miss.
 -include_lib("kernel/include/file.hrl").
 
 -define(SUFFIX, ".beam").
--define(SET_SUFFIX, ".set").
-%% Both kinds of entry, as a wildcard tail: a manifest is evicted, purged and
-%% counted against the size cap exactly as an artifact is.
--define(ENTRIES, "{" ?SUFFIX "," ?SET_SUFFIX "}").
 
 %% The frame an entry carries. `?FORMAT' moves when the frame's shape does; an
 %% entry from before framing existed has no magic, fails to match, and is a
@@ -180,95 +167,29 @@ filesystem this runs on.
 -spec store(binary(), binary()) -> ok.
 store(Key, Bin) ->
     case usable(create) of
-        refused   -> ok;
-        {ok, Dir} -> write(Dir, path(Dir, Key), Bin)
+        refused -> ok;
+        {ok, Dir} ->
+            File = path(Dir, Key),
+            %% `.tmp`, and not a suffix after `.beam`: `*.beam` does not match
+            %% `X.beam.7`, so a temp named that way is invisible to both the
+            %% sweep and the size cap and accumulates for ever.
+            Tmp = filename:join(Dir, integer_to_list(erlang:unique_integer([positive]))
+                                ++ ".tmp"),
+            case file:write_file(Tmp, frame(Bin)) of
+                ok ->
+                    case file:rename(Tmp, File) of
+                        ok -> ok;
+                        %% Renaming can fail, and a temp nobody deletes is a
+                        %% leak that no later run cleans up.
+                        {error, _} -> _ = file:delete(Tmp), ok
+                    end,
+                    evict(Dir, File),
+                    ok;
+                {error, _} ->
+                    _ = file:delete(Tmp),
+                    ok
+            end
     end.
-
-write(Dir, File, Bin) ->
-    %% `.tmp`, and not a suffix after `.beam`: `*.beam` does not match
-    %% `X.beam.7`, so a temp named that way is invisible to both the sweep
-    %% and the size cap and accumulates for ever.
-    Tmp = filename:join(Dir, integer_to_list(erlang:unique_integer([positive]))
-                        ++ ".tmp"),
-    case file:write_file(Tmp, frame(Bin)) of
-        ok ->
-            case file:rename(Tmp, File) of
-                ok -> ok;
-                %% Renaming can fail, and a temp nobody deletes is a leak that
-                %% no later run cleans up.
-                {error, _} -> _ = file:delete(Tmp), ok
-            end,
-            evict(Dir, File),
-            ok;
-        {error, _} ->
-            _ = file:delete(Tmp),
-            ok
-    end.
-
--doc """
-The function set last stored for this module, if a manifest records one.
-
-An artifact is keyed by the set of functions it holds, and that set is what a
-workload ran, which nothing knows before a request. The manifest records it
-when the artifact is stored, so a start can build the artifact's key without
-running anything: `wasm_jit:preload/2` is the one reader. It only chooses which
-key to look up; the artifact it names is read under every check `lookup/1`
-applies.
-
-Kept as its own entry, framed and digested like an artifact, in the same
-directory and under the same checks. Anything unexpected in it is a miss,
-including a payload that is not a list of function indices.
-""".
--spec lookup_set(binary()) -> {ok, [non_neg_integer()]} | miss.
-lookup_set(Key) ->
-    case usable(create) of
-        {ok, Dir} -> decode_set(read(set_path(Dir, Key)));
-        refused   -> miss
-    end.
-
-%% `safe', so a damaged manifest cannot make an atom, and then checked for
-%% shape: a digest proves the bytes are the ones written, not what they say.
-decode_set({ok, Bin}) ->
-    try binary_to_term(Bin, [safe]) of
-        Funcs when is_list(Funcs) ->
-            case lists:all(fun(F) -> is_integer(F) andalso F >= 0 end, Funcs) of
-                true  -> {ok, Funcs};
-                false -> miss
-            end;
-        _ ->
-            miss
-    catch
-        error:badarg -> miss
-    end;
-decode_set(miss) ->
-    miss.
-
--doc "Record the function set an artifact of this module was stored for.".
--spec store_set(binary(), [non_neg_integer()]) -> ok.
-store_set(Key, Funcs) ->
-    case usable(create) of
-        refused   -> ok;
-        {ok, Dir} -> write(Dir, set_path(Dir, Key),
-                           term_to_binary(lists:sort(Funcs)))
-    end.
-
--doc """
-The key for one module's manifest, or `undefined` when it cannot be cached.
-
-Everything in `key/6` except the slot, the set itself and the stamp: the slot
-is only known once one is claimed, and the stamp of a hashed module is its
-hash, which is here already.
-""".
--spec set_key(term(), non_neg_integer(), baseline | full) ->
-          binary() | undefined.
-set_key({sha256, Hash}, Abi, Quality) ->
-    crypto:hash(sha256,
-                term_to_binary({set, Hash, Abi, Quality,
-                                erlang:system_info(otp_release),
-                                erlang:system_info(emu_flavor),
-                                erlang:system_info(system_architecture)}));
-set_key(_Other, _Abi, _Quality) ->
-    undefined.
 
 -doc """
 The key for one artifact, or `undefined` when this module cannot be cached.
@@ -299,7 +220,7 @@ dir() -> application:get_env(wasm, code_cache_dir, undefined).
 purge() ->
     case usable(no_create) of
         refused   -> ok;
-        {ok, Dir} -> wasm_file_cache:purge(Dir, ?ENTRIES)
+        {ok, Dir} -> wasm_file_cache:purge(Dir, ?SUFFIX)
     end.
 
 %%% ---------------------------------------------------------------- frame ---
@@ -574,12 +495,9 @@ say(Dir, {refused, Why}) ->
 path(Dir, Key) ->
     filename:join(Dir, binary_to_list(binary:encode_hex(Key)) ++ ?SUFFIX).
 
-set_path(Dir, Key) ->
-    filename:join(Dir, binary_to_list(binary:encode_hex(Key)) ++ ?SET_SUFFIX).
-
 %% Oldest first, until the total is under the cap, with stale temporaries swept
 %% on the way. The policy is `wasm_file_cache`, shared with the snapshot image
 %% store, which had none and grew without bound until it was lifted out of
 %% here. `Keep` is the entry just written, which is never the one dropped.
 evict(Dir, Written) ->
-    wasm_file_cache:sweep_and_evict(Dir, ?ENTRIES, ?MAX_BYTES, Written).
+    wasm_file_cache:sweep_and_evict(Dir, ?SUFFIX, ?MAX_BYTES, Written).

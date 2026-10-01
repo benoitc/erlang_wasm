@@ -120,14 +120,9 @@ snapshot_cases() ->
      an_adapter_default_follows_the_tier,
      an_adapter_default_with_no_room_is_said_and_skipped].
 
-%% `compiled => true', on the one adapter in the required gate with a module
-%% loaded from bytes: only a content hash can be cached, and so only one can
-%% be preloaded.
+%% `compiled => true', and the one combination it refuses.
 compiled_cases() ->
-    [compiled_with_a_finite_fuel_refuses_to_start,
-     a_compiled_worker_enters_generated_code_on_its_first_request,
-     a_worker_that_does_not_compile_loads_nothing,
-     a_compiled_worker_with_a_damaged_manifest_still_answers].
+    [compiled_with_a_finite_fuel_refuses_to_start].
 
 end_per_group(_G, _Config) -> ok.
 
@@ -791,122 +786,6 @@ compiled_with_a_finite_fuel_refuses_to_start(Config) ->
     ok = wasm_script_worker:stop(W),
     {ok, W2} = start(Config, Root, #{compiled => false}),
     ok = wasm_script_worker:stop(W2).
-
-%% With the code cache warm, a new compiled worker's first request runs
-%% generated code, with no option but `compiled'. Before it, that request
-%% interpreted and asked for a compile that read the same artifact back after
-%% it had answered.
-%%
-%% The cache directory is under the home directory because one under the
-%% system temporary directory is refused: its ancestors are writable by others.
-a_compiled_worker_enters_generated_code_on_its_first_request(Config) ->
-    with_home_cache(fun() ->
-        ok = warm_the_cache(Config),
-        %% The restart: nothing resident, the disk as the first worker left it.
-        wasm_test_slots:reset(),
-        {ok, W} = start(Config, ?config(root, Config), #{compiled => true}),
-        ?assertNotEqual([], wasm_code_slots:resident(),
-                        "the start returned before the cached code loaded"),
-        ok = wasm_jit:reset_counts(),
-        Want = wasm_script_worker:run(W, #{}),
-        ?assertMatch({ok, #{values := [_]}}, Want),
-        ?assert(maps:get(entered, wasm_jit:counts()) > 0,
-                "the first request of a compiled worker interpreted"),
-        ok = wasm_script_worker:stop(W)
-    end).
-
-%% Everyone who does not ask for `compiled' starts as in 0.7.0: a warm cache
-%% for the same module is on disk, and the worker loads none of it, and its
-%% first request interprets.
-a_worker_that_does_not_compile_loads_nothing(Config) ->
-    with_home_cache(fun() ->
-        ok = warm_the_cache(Config),
-        wasm_test_slots:reset(),
-        {ok, W} = start(Config, ?config(root, Config), #{}),
-        ?assertEqual([], wasm_code_slots:resident(),
-                     "a worker that does not compile loaded code at start"),
-        ok = wasm_jit:reset_counts(),
-        ?assertMatch({ok, #{values := [_]}}, wasm_script_worker:run(W, #{})),
-        ?assertEqual(0, maps:get(entered, wasm_jit:counts())),
-        ?assertEqual([], wasm_code_slots:resident()),
-        ok = wasm_script_worker:stop(W)
-    end).
-
-%% A manifest that cannot be read is a miss and nothing else: the worker
-%% starts, answers what it always answered, and compiles as it always did.
-a_compiled_worker_with_a_damaged_manifest_still_answers(Config) ->
-    with_home_cache(fun(Dir) ->
-        ok = warm_the_cache(Config),
-        [Set] = filelib:wildcard(filename:join(Dir, "*.set")),
-        {ok, Framed} = file:read_file(Set),
-        Damaged = [fun() ->
-                       Size = byte_size(Framed),
-                       <<Head:(Size - 1)/binary, Last>> = Framed,
-                       file:write_file(Set, <<Head/binary, (Last bxor 255)>>)
-                   end,
-                   fun() ->
-                       Keep = byte_size(Framed) - 3,
-                       <<Short:Keep/binary, _/binary>> = Framed,
-                       file:write_file(Set, Short)
-                   end,
-                   fun() -> file:delete(Set) end],
-        [begin
-             wasm_test_slots:reset(),
-             ok = Damage(),
-             {ok, W} = start(Config, ?config(root, Config),
-                             #{compiled => true}),
-             ok = wasm_jit:reset_counts(),
-             ?assertMatch({ok, #{values := [_]}},
-                          wasm_script_worker:run(W, #{})),
-             ?assertEqual(0, maps:get(entered, wasm_jit:counts())),
-             ok = wasm_script_worker:stop(W)
-         end || Damage <- Damaged]
-    end).
-
-%% One compiled worker, run until its module's artifact and manifest are on
-%% disk. A compile is started by the first request and finishes after it.
-warm_the_cache(Config) ->
-    wasm_test_slots:reset(),
-    {ok, W} = start(Config, ?config(root, Config), #{compiled => true}),
-    {ok, _} = wasm_script_worker:run(W, #{}),
-    Dir = wasm_code_cache:dir(),
-    %% Resident as well as filed, so the restart below does not race the
-    %% compiler's own publish.
-    ok = until_true(fun() ->
-                        filelib:wildcard(filename:join(Dir, "*.set")) =/= []
-                            andalso wasm_code_slots:resident() =/= []
-                    end, 60_000),
-    ok = wasm_script_worker:stop(W).
-
-until_true(F, Left) when Left =< 0 ->
-    ?assert(F(), "the cache was never warmed");
-until_true(F, Left) ->
-    case F() of
-        true  -> ok;
-        false -> timer:sleep(50), until_true(F, Left - 50)
-    end.
-
-with_home_cache(F) ->
-    Home = filename:join([os:getenv("HOME"), ".cache"]),
-    Dir = filename:join(Home, "wasm-ct-" ++
-                            integer_to_list(erlang:unique_integer([positive]))),
-    ok = file:make_dir(Dir),
-    ok = file:change_mode(Dir, 8#700),
-    Was = application:get_env(wasm, code_cache_dir),
-    ok = application:set_env(wasm, code_cache_dir, Dir),
-    try
-        case erlang:fun_info(F, arity) of
-            {arity, 0} -> F();
-            {arity, 1} -> F(Dir)
-        end
-    after
-        case Was of
-            undefined -> application:unset_env(wasm, code_cache_dir);
-            {ok, Old} -> application:set_env(wasm, code_cache_dir, Old)
-        end,
-        wasm_test_slots:reset(),
-        _ = file:del_dir_r(Dir)
-    end.
 
 %%% ------------------------------------------------- the runner heap floor ---
 %%

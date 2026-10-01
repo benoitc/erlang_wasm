@@ -554,37 +554,10 @@ started(Adapter, Artifact, Opts, Limits, Root) ->
                          words => maps:get(max_heap_words, Limits),
                          floor => CapHeap}) of
         {error, E}          -> {stop, E};
-        {ok, undefined, _}  ->
-            ok = preload(module_of(Artifact), Limits),
-            {ok, W};
+        {ok, undefined, _}  -> {ok, W};
         {ok, Image, Cap}    ->
-            ok = preload(maps:get(module, Cap), Limits),
             {ok, start_ahead(W#w{image = Image, snapshot_cap = Cap})}
     end.
-
-%% Compiled code from the disk cache, loaded before the first request, so that
-%% request enters it rather than interpreting while a compiler reads the same
-%% file back. Only a worker that compiles asks, and a miss is the start every
-%% release had until this: the tier compiles as it always did.
-%%
-%% Here, inside `start_link/2', and not in the background: the load holds up
-%% every other module load on the node and whichever scheduler it runs on
-%% (0.2 s for Lua, 1.1 s for QuickJS, 2.9 s for CPython), so it is paid before
-%% any traffic. Only the first worker of a module on a node pays it; the next
-%% finds the code resident. `test/audit/PERF.md' has the traces.
-%%
-%% After the capture and not before: the capture runs guest code under no
-%% compile limits, and nothing it does should wait on or race this.
-preload(Module, #{compile := true} = Limits) when Module =/= undefined ->
-    _ = wasm_jit:preload(Module, Limits),
-    ok;
-preload(_Module, _Limits) ->
-    ok.
-
-%% The module an adapter serves, where its artifact says. Every shipped adapter
-%% puts it under `module'; one that does not simply gets no preload.
-module_of(#{module := M}) -> M;
-module_of(_Artifact) -> undefined.
 
 %% The image is taken once, here, from a **trusted** initialisation context and
 %% before any tenant code has run. That is the whole security argument for

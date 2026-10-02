@@ -59,6 +59,11 @@ current fixtures.
               | {result, desc() | none, desc() | none}
               | {flags, [name()]}
               | handle
+              %% A typed resource handle. `own<rt>`/`borrow<rt>` carry the
+              %% resource-type index so the runtime can check and transfer them; at
+              %% the ABI level they are the same opaque i32 as a bare `handle`.
+              | {own, non_neg_integer()}
+              | {borrow, non_neg_integer()}
               %% The async value types: a `future<T>`/`stream<T>` readable or writable
               %% end and an `error-context` are all opaque i32 handles at the ABI level
               %% (the payload descriptor is metadata for the runtime, not the shape).
@@ -106,6 +111,8 @@ lower_flat(_Inst, D, V) when D =:= u64; D =:= s64 ->
 lower_flat(_Inst, handle, V) -> [V band 16#FFFFFFFF];
 lower_flat(_Inst, {future, _}, V) -> [V band 16#FFFFFFFF];
 lower_flat(_Inst, {stream, _}, V) -> [V band 16#FFFFFFFF];
+lower_flat(_Inst, {own, _}, V) -> [V band 16#FFFFFFFF];
+lower_flat(_Inst, {borrow, _}, V) -> [V band 16#FFFFFFFF];
 lower_flat(_Inst, error_context, V) -> [V band 16#FFFFFFFF];
 lower_flat(_Inst, bool, V) -> [bool_int(V)];
 lower_flat(_Inst, f32, V)  -> [V];
@@ -309,7 +316,9 @@ lift_value(Inst, D, [V | R]) when D =:= u8; D =:= u16; D =:= u32;
                                   D =:= f32; D =:= f64; D =:= handle ->
     {lift_flat(Inst, D, [V]), R};
 lift_value(_Inst, D, [V | R]) when element(1, D) =:= future;
-                                   element(1, D) =:= stream ->
+                                   element(1, D) =:= stream;
+                                   element(1, D) =:= own;
+                                   element(1, D) =:= borrow ->
     {V band 16#FFFFFFFF, R};
 lift_value(_Inst, error_context, [V | R]) ->
     {V band 16#FFFFFFFF, R};
@@ -396,6 +405,8 @@ load(Inst, u32, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
 load(Inst, handle, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
 load(Inst, {future, _}, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
 load(Inst, {stream, _}, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
+load(Inst, {own, _}, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
+load(Inst, {borrow, _}, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
 load(Inst, error_context, Ptr) -> read_int(Inst, Ptr, 4, unsigned);
 load(Inst, u64, Ptr) -> read_int(Inst, Ptr, 8, unsigned);
 load(Inst, s8, Ptr)  -> read_int(Inst, Ptr, 1, signed);
@@ -481,6 +492,8 @@ size_align(D) when D =:= u32; D =:= s32; D =:= f32; D =:= char -> {4, 4};
 size_align(handle) -> {4, 4};
 size_align({future, _}) -> {4, 4};
 size_align({stream, _}) -> {4, 4};
+size_align({own, _}) -> {4, 4};
+size_align({borrow, _}) -> {4, 4};
 size_align(error_context) -> {4, 4};
 size_align(D) when D =:= u64; D =:= s64; D =:= f64 -> {8, 8};
 size_align(string)    -> {8, 4};
@@ -532,6 +545,8 @@ flat_types(D) when D =:= u8; D =:= u16; D =:= u32;
 flat_types(handle) -> [i32];
 flat_types({future, _}) -> [i32];
 flat_types({stream, _}) -> [i32];
+flat_types({own, _}) -> [i32];
+flat_types({borrow, _}) -> [i32];
 flat_types(error_context) -> [i32];
 flat_types(D) when D =:= u64; D =:= s64 -> [i64];
 flat_types(f32) -> [f32];
@@ -655,6 +670,8 @@ store(Inst, D, Ptr, V) when D =:= u16; D =:= s16 ->
     ok = wasm:write_memory(Inst, Ptr, <<(V band 16#FFFF):16/little>>);
 store(Inst, {future, _}, Ptr, V) -> store(Inst, handle, Ptr, V);
 store(Inst, {stream, _}, Ptr, V) -> store(Inst, handle, Ptr, V);
+store(Inst, {own, _}, Ptr, V) -> store(Inst, handle, Ptr, V);
+store(Inst, {borrow, _}, Ptr, V) -> store(Inst, handle, Ptr, V);
 store(Inst, error_context, Ptr, V) -> store(Inst, handle, Ptr, V);
 store(Inst, D, Ptr, V) when D =:= u32; D =:= s32; D =:= char; D =:= handle ->
     ok = wasm:write_memory(Inst, Ptr, <<(V band 16#FFFFFFFF):32/little>>);

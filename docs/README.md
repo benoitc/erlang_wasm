@@ -6,6 +6,7 @@ Pick the row that matches what you want to do, then follow the index below.
 | --- | --- |
 | call exported WebAssembly functions from Erlang | [Getting started](getting-started.md), then [Embedding](embedding.md) |
 | run a program that has a `main` (a WASI command) | [WASI](wasi.md) |
+| run a Component Model component with typed interfaces | [Components](components.md) |
 | run WebAssembly I did not write | [Workers](worker.md), then [Security](security.md) |
 | run JavaScript, Python or Lua source | [JavaScript](javascript.md), [Python](python.md), [Lua](lua.md) |
 | stop paying interpreter startup on every request | [Snapshots](snapshots.md) |
@@ -51,6 +52,7 @@ You are running WebAssembly and want to know how.
 | [Embedding](embedding.md) | holding modules and instances correctly |
 | [Host functions](host-functions.md) | calling from WebAssembly into Erlang |
 | [WASI](wasi.md) | running a `wasm32-wasip1` program, and its capabilities |
+| [Components](components.md) | running and composing Component Model components, and their typed signatures |
 | [Streams](streams.md) | talking to a guest while it runs |
 | [Using workers](worker.md) | running untrusted code one request at a time, with a deadline |
 | [Hosting scripting languages](scripting.md) | JavaScript, Python and Lua, one request per sandbox |

@@ -29,7 +29,8 @@ all() ->
      a_lift_selects_its_declared_core,
      an_ill_typed_lift_is_rejected,
      a_double_drop_traps,
-     a_destructor_runs_once_on_drop].
+     a_destructor_runs_once_on_drop,
+     a_wrong_type_handle_traps].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -166,6 +167,16 @@ a_destructor_runs_once_on_drop(_Config) ->
     {ok, Bin} = file:read_file(component_fixture("audit/dtor.wasm")),
     {ok, I} = wasm_component:instantiate(Bin),
     ?assertEqual({ok, 1}, wasm_component:call(I, <<"run">>, {[], u32}, [])),
+    ok = wasm_component:destroy(I).
+
+%% The guest mints a handle of one resource type and reads its representation as a
+%% different type. A handle of the wrong resource type traps rather than returning
+%% a representation. Was returning the representation.
+a_wrong_type_handle_traps(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("audit/wrong_type.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertMatch({error, #{class := trap, msg := <<"resource_wrong_type">>}},
+                 wasm_component:call(I, <<"run">>, {[], u32}, [])),
     ok = wasm_component:destroy(I).
 
 component_fixture(Name) ->

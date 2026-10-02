@@ -36,6 +36,7 @@ One task per page, each run as written by the test suite.
 | [Run a WASI command](examples/run-a-wasi-command.md) | a Rust program with one read-only directory |
 | [Stop a runaway](examples/stop-a-runaway.md) | a fuel budget, and a deadline in a worker |
 | [A plugin per request](examples/plugin-per-request.md) | a fresh instance for every request |
+| [Use a component resource](examples/use-a-component-resource.md) | construct, use and drop a resource, and pass one between composed components |
 | [Restore a snapshot](examples/restore-a-snapshot.md) | start once, restore a fresh copy per request |
 | [Turn on the compiled tier](examples/turn-on-the-tier.md) | compile a hot function to BEAM code |
 | [Run JavaScript](examples/run-javascript.md) | a script through the worker kernel |

@@ -117,6 +117,19 @@ A resource type appears in a signature as `{own, TypeIndex}` or
 {ok, 42} = wasm_component:call(Inst, ~"[method]counter.increment", {[{borrow, 0}], u32}, [Handle]).
 ```
 
+Each component instance has its own handle table and the handles in it are
+checked, so resource misuse is caught rather than silently accepted:
+
+- Dropping a handle runs the resource's destructor, once, and frees the handle.
+- Dropping a handle twice, or calling a method on one after it was dropped,
+  traps.
+- A handle of one resource type passed where another type is expected traps.
+- When a resource is passed between composed components, ownership moves with it:
+  it is live in one component at a time, and using one a component has handed away
+  traps. A borrowed handle is reachable in the callee only for that call.
+
+For a runnable version, see [Use a component resource](examples/use-a-component-resource.md).
+
 ## Notes
 
 - One component instance is owned by the process that instantiated it; call it

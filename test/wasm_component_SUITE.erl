@@ -28,7 +28,8 @@ all() ->
      a_post_return_trap_fails_the_call,
      a_lift_selects_its_declared_core,
      an_ill_typed_lift_is_rejected,
-     a_double_drop_traps].
+     a_double_drop_traps,
+     a_destructor_runs_once_on_drop].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -155,6 +156,16 @@ a_double_drop_traps(_Config) ->
     {ok, I} = wasm_component:instantiate(Bin),
     ?assertMatch({error, #{class := trap, msg := <<"resource_not_live">>}},
                  wasm_component:call(I, <<"run">>, {[], u32}, [])),
+    ok = wasm_component:destroy(I).
+
+%% The resource type names a destructor that increments a counter; the guest mints
+%% a handle, drops it, and reads the counter back. Dropping the owned handle runs
+%% the destructor exactly once, so `run` returns 1. Was 0 (the destructor was
+%% never run on a drop).
+a_destructor_runs_once_on_drop(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("audit/dtor.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 1}, wasm_component:call(I, <<"run">>, {[], u32}, [])),
     ok = wasm_component:destroy(I).
 
 component_fixture(Name) ->

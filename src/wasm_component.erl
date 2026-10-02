@@ -296,7 +296,8 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts)
     Resolve = fun(Imps) ->
                   resolve_imports(Imps, Imports, resource_imports(Imps))
               end,
-    LinkOpts = Opts#{drop_fun => drop_fun(Opts)},
+    LinkOpts = Opts#{drop_fun => drop_fun(Opts),
+                     resource_dtors => wasm_component_types:resource_dtors(Sec)},
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
             case wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts) of

@@ -14,7 +14,7 @@ composition case. An aggregate type (list, record, variant, ...) it does not yet
 reported as `{error, {unsupported_valtype, Byte}}`, to be extended rather than guessed.
 """.
 
--export([import_interfaces/1, parse_types/1]).
+-export([import_interfaces/1, parse_types/1, resource_dtors/1]).
 
 -export_type([sig/0]).
 
@@ -26,6 +26,7 @@ reported as `{error, {unsupported_valtype, Byte}}`, to be extended rather than g
 -type typedef() :: {func, [valdesc()], valdesc() | none}
                  | {instance, [{binary(), {func, non_neg_integer()}}]}
                  | {value, valdesc()}
+                 | {resource, non_neg_integer() | none}
                  | other.
 
 -define(SEC_TYPE, 7).
@@ -94,9 +95,44 @@ deftype(<<16#40, Rest0/binary>>) ->
 deftype(<<16#42, Rest0/binary>>) ->
     {Decls, Rest1} = instance_decls(Rest0),
     {{instance, Decls}, Rest1};
+%% A resource type: `0x3f`, a one-byte core rep valtype, then `0x00` (no
+%% destructor) or `0x01` and the destructor's core-func index. The index lets the
+%% runtime run the destructor when an owned handle of this type is dropped.
+deftype(<<16#3f, _Rep, 16#00, Rest/binary>>) ->
+    {{resource, none}, Rest};
+deftype(<<16#3f, _Rep, 16#01, Rest0/binary>>) ->
+    {Dtor, Rest1} = wasm_leb128:u32(Rest0),
+    {{resource, Dtor}, Rest1};
 deftype(Bin) ->
     {Desc, Rest} = valtype(Bin),
     {{value, Desc}, Rest}.
+
+-doc """
+Each defined resource type's destructor, as `#{TypeIndex => CoreFuncIndex}`.
+
+A resource type may name a core function the runtime runs when an owned handle of
+that type is dropped. Only the first type section is read (as `parse_types/1`),
+which covers a component that defines its resources there. A resource with no
+destructor, or a type that is not a resource, is omitted. Never raises.
+""".
+-spec resource_dtors(binary()) -> #{non_neg_integer() => non_neg_integer()}.
+resource_dtors(Sec) ->
+    try
+        {Count, Rest} = wasm_leb128:u32(collect(?SEC_TYPE, Sec)),
+        resource_dtors(Count, Rest, 0, #{})
+    catch
+        _:_ -> #{}
+    end.
+
+resource_dtors(0, _Rest, _Idx, Acc) ->
+    Acc;
+resource_dtors(N, Bin, Idx, Acc) ->
+    {Def, Rest} = deftype(Bin),
+    Acc1 = case Def of
+               {resource, Dtor} when is_integer(Dtor) -> Acc#{Idx => Dtor};
+               _                                      -> Acc
+           end,
+    resource_dtors(N - 1, Rest, Idx + 1, Acc1).
 
 %% Function parameters: a vector of `(name, valtype)`.
 func_params(Bin) ->

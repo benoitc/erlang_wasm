@@ -637,7 +637,10 @@ step({canon_resource, drop, Rt}, S) ->
     %% so dropping one twice or dropping a never-minted handle traps.
     Drop = maps:get(drop_fun, maps:get(opts, S), fun(_H) -> ok end),
     Defined = lists:member(Rt, maps:get(defined_rts, S, [])),
-    Fun = fun(_Ctx, [H]) -> resource_drop(Defined, H, Drop) end,
+    %% The resource type's destructor (a core function already built, since it is
+    %% aliased before the drop in graph order), run when an owned handle is dropped.
+    Dtor = resource_dtor(Rt, S),
+    Fun = fun(_Ctx, [H]) -> resource_drop(Defined, Dtor, H, Drop) end,
     {ok, bump(S, n_cf, core_funcs, Fun)};
 step({canon_resource, new, Rt}, S) ->
     %% A defined resource: record the handle live in the current instance so a later
@@ -758,21 +761,43 @@ missing(Key, _S) ->
 %% Dropping a live one forgets it and runs the host drop (which closes a socket or
 %% file). A handle of a type this component does not define (an imported or host
 %% resource) is not tracked here, so it passes straight to the host drop as before.
-resource_drop(true, H, Drop) ->
+resource_drop(true, Dtor, H, Drop) ->
     case wasm_resources:drop(H) of
         error ->
             wasm_error:trap(resource_not_live, #{handle => H, operation => drop});
-        {ok, _Kind} ->
-            case Drop(H) of
-                {trap, _} = Trap -> Trap;
-                _                -> {ok, []}
-            end
+        {ok, own} ->
+            run_dtor(Dtor, H),
+            host_drop_result(Drop, H);
+        {ok, borrow} ->
+            %% Dropping a borrow ends the loan; it never runs the destructor.
+            host_drop_result(Drop, H)
     end;
-resource_drop(false, H, Drop) ->
+resource_drop(false, _Dtor, H, Drop) ->
+    host_drop_result(Drop, H).
+
+host_drop_result(Drop, H) ->
     case Drop(H) of
         {trap, _} = Trap -> Trap;
         _                -> {ok, []}
     end.
+
+%% The destructor core function for resource type `Rt`, or `none`. It is resolved
+%% from the core-func space built so far; the alias that defines it precedes the
+%% `canon resource.drop` in graph order, so it is present by the time this runs.
+resource_dtor(Rt, S) ->
+    Dtors = maps:get(resource_dtors, maps:get(opts, S), #{}),
+    case maps:get(Rt, Dtors, none) of
+        none    -> none;
+        DtorIdx -> maps:get(DtorIdx, maps:get(core_funcs, S), none)
+    end.
+
+%% Run a resource's destructor with its representation. The destructor is a core
+%% function (an extern `{wasm_func, Fun, _}` or a bare host fun); its result is
+%% ignored, and a trap in it unwinds the drop.
+run_dtor(none, _H) -> ok;
+run_dtor({wasm_func, Fun, _Type}, H) -> _ = Fun(#{}, [H]), ok;
+run_dtor(Fun, H) when is_function(Fun, 2) -> _ = Fun(#{}, [H]), ok;
+run_dtor(_Other, _H) -> ok.
 
 %% `canon resource.rep`. For a defined resource the handle must be live, so reading
 %% the representation of a dropped or bogus handle traps; otherwise it passes

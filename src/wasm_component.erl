@@ -407,24 +407,62 @@ bridge_imports(Args, Bytes, Insts) ->
 
 %% One cross-component call, as a host function the consumer's core imports. This
 %% function runs in the consumer's instance context; `call/4` switches to the
-%% provider for the call and back, so a resource the call returns is adopted into
-%% the consumer's handle table here.
-bridge(Provider, FuncName, {_Params, Result} = Sig) ->
+%% provider for the call and back. Resource handles move between the two instances'
+%% tables around the call: a `borrow` argument is lent to the provider for the call
+%% and reclaimed after, an `own` argument is moved into the provider, and an `own`
+%% result is moved out of the provider into the consumer. So a resource is live in
+%% exactly one instance at a time and using it after it was transferred traps.
+bridge(Provider, FuncName, {Params, Result} = Sig) ->
+    ProviderId = maps:get(res_id, Provider, undefined),
     import_fun(Sig,
                fun(Terms) ->
+                   Lent = lend_to_provider(Params, Terms, ProviderId),
                    case call(Provider, FuncName, Sig, Terms) of
-                       {ok, Value}    -> adopt_result(Result, Value);
-                       {error, _} = E -> throw({wasm_bridge_failed, FuncName, E})
+                       {ok, Value} ->
+                           reclaim_borrows(Lent, ProviderId),
+                           adopt_result(Result, Value, ProviderId);
+                       {error, _} = E ->
+                           reclaim_borrows(Lent, ProviderId),
+                           throw({wasm_bridge_failed, FuncName, E})
                    end
                end).
 
+%% Make the handle arguments reachable in the provider for the duration of the
+%% call: a borrow becomes a scoped entry in the provider's table (returned so it
+%% can be reclaimed after), and an own is moved out of the consumer into the
+%% provider. Non-handle arguments are left alone.
+lend_to_provider(_Params, _Terms, undefined) ->
+    [];
+lend_to_provider(Params, Terms, ProviderId) ->
+    lists:foldl(
+      fun({{borrow, Rt}, Rep}, Acc) when is_integer(Rep) ->
+              wasm_resources:add(ProviderId, Rep, Rt, borrow),
+              [Rep | Acc];
+         ({{own, Rt}, Rep}, Acc) when is_integer(Rep) ->
+              _ = wasm_resources:untrack(Rep),
+              wasm_resources:add(ProviderId, Rep, Rt, own),
+              Acc;
+         (_Other, Acc) ->
+              Acc
+      end, [], lists:zip(Params, Terms)).
+
+reclaim_borrows(_Lent, undefined) ->
+    ok;
+reclaim_borrows(Lent, ProviderId) ->
+    lists:foreach(fun(Rep) -> _ = wasm_resources:take(ProviderId, Rep) end, Lent),
+    ok.
+
 %% A cross-component call that returns an `own<T>` transfers the resource to the
-%% consumer: record the handle live in the consumer's table so its later drop
-%% succeeds rather than trapping. Any other result shape passes through unchanged.
-adopt_result({own, Rt}, Handle) ->
+%% consumer: take it out of the provider's table (so the provider can no longer use
+%% it) and record it live in the consumer's. Any other result shape passes through.
+adopt_result({own, Rt}, Handle, ProviderId) when is_integer(Handle) ->
+    _ = case ProviderId of
+            undefined -> ok;
+            _         -> wasm_resources:take(ProviderId, Handle)
+        end,
     wasm_resources:track(Handle, Rt),
     Handle;
-adopt_result(_Result, Value) ->
+adopt_result(_Result, Value, _ProviderId) ->
     Value.
 
 %% The drop function `canon resource.drop` runs, returning `ok` or `{trap, Reason}`.

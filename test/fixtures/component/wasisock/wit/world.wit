@@ -1,0 +1,6 @@
+package example:wasisock;
+world app {
+  import wasi:sockets/instance-network;
+  import wasi:sockets/ip-name-lookup;
+  export lookup: func(name: string) -> list<string>;
+}

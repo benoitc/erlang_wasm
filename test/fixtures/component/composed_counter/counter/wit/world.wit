@@ -1,0 +1,12 @@
+package test:counter;
+
+interface ops {
+    resource counter {
+        constructor(init: u32);
+        increment: func() -> u32;
+    }
+}
+
+world provider {
+    export ops;
+}

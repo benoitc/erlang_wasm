@@ -1,0 +1,12 @@
+// A versioned import (`wasi:random/random@0.2.0`), to prove the host resolves a
+// versioned interface id to its bare handler.
+package wasi:random@0.2.0;
+
+interface random {
+  get-random-u64: func() -> u64;
+}
+
+world app {
+  import random;
+  export roll: func() -> u64;
+}

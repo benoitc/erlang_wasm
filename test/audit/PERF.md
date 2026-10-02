@@ -6404,6 +6404,68 @@ floor is about 420 us, so the per-request steward the PR introduces costs roughl
 30 us; that lands in the accept phase, which the measurement border allows to
 grow, not in the guest execution envelope.
 
+## Running a real WASI 0.2 component costs a cold instantiation per call
+
+`wasi_preview2:run_command/2` decodes a `wasi:cli/command` component, instantiates
+its inner core module with the full command import bundle (io, clocks, random,
+environment, exit, terminals), calls `wasi:cli/run.run`, and drops it. Measured
+on the committed `realupper` fixture (a real `wasm32-wasip2` Rust program that
+upper-cases stdin), 200 calls after warm-up, minimum-of-run the signal:
+
+| step | per call |
+| --- | --- |
+| decode only | ~17 us |
+| run_command (decode + instantiate + run + drop) | ~810 us |
+
+So a real command is dominated by instantiation, not decode: wiring the WASI host
+and loading the inner core module per request is the ~795 us. This is the
+cold-start-per-request cost of a component with no snapshot; component snapshot is
+deferred (live resource handles), so there is no warm path to compare against yet.
+The number is for orientation, not a regression gate; the core-module worker
+envelope above is unchanged, since the component path is a separate default-off
+branch.
+
+## Multi-core component linking: native decode unchanged (2026-09-23)
+
+`wasm_component` now reads a component's core-instance graph so a core can take an
+import from another core (the linker, `wasm_component_link`), not only from a host
+function. The risk was slowing the common path, where the guest core imports WASI
+directly and no linking is needed.
+
+The graph is parsed only when the entry core has a cross-core import; the common
+`decode/1` keeps its single cheap section walk. Measured on the committed
+fixtures, 5000 decodes after warm-up, minimum the signal, the linker build against
+the pre-change shortcut interleaved:
+
+| fixture | decode, shortcut | decode, linker |
+| --- | --- | --- |
+| realupper | ~2 us | ~2 us |
+| realcat | ~3 us | ~3 us |
+| filewrite | ~3 us | ~3 us |
+| counter | ~0 us | ~0 us |
+
+Identical: a native component never parses the graph. An earlier version parsed
+the full graph in every `decode` and cost ~11 us on realupper (~5x); making the
+parse lazy removed that. The graph parse runs only for a component that actually
+links core to core (the two-core fixture, the preview1 adapter), where it precedes
+a per-request instantiate already dominated by loading the inner core module.
+
+## Multi-core linking: the realloc override is off the guarded path (2026-09-23)
+
+Running a preview1->preview2 adapter component needs a canon-lowered host function
+to allocate its result through the realloc the lowering names (the adapter's own,
+reached through a shim table), not a `cabi_realloc` export on the calling
+instance. `wasm_canon:realloc/3` now consults a per-call override
+(`wasm_canon:with_realloc/2`, installed by the linker around the host function)
+before the default export call.
+
+The override is one `get/1` on the by-memory result path, and it is `undefined`
+for every single-core component (native fixtures), so their path is byte-for-byte
+the one they had. This is not on `wasm_exec:run/3`/`branch/3`/`do_call/4` -- the
+core-execution path the realbench guard covers -- so it needs no realbench run;
+`wasm_canon` is the component ABI, entered only on a component call. The component
+suites (vectors, import, resource) that exercise the lowering path stay green.
+
 ## Requests on a pool, and what they queued behind
 
 hornbeam serves a CPython reactor per request from 14 `wasm_script_worker`s

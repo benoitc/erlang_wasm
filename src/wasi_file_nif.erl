@@ -29,7 +29,7 @@ call is O(1) or bounded by an explicit length, and all of them run on dirty I/O
 schedulers because they block.
 """.
 
--export([available/0, open_at/4, open_dir/1, pread/3, pwrite/3, fstat/1,
+-export([available/0, open_at/4, open_dir/1, dup/1, pread/3, pwrite/3, fstat/1,
          futimes/2,
          readdir/3, readdir_names/1, path_op/4, path_op2/5,
          ftruncate/2, fsync/1, close/1]).
@@ -67,6 +67,16 @@ anchoring means.
 """.
 -spec open_dir(string()) -> {ok, term()} | {error, integer()}.
 open_dir(_Path) -> ?NOT_LOADED.
+
+-doc """
+Duplicate a handle into an independent one.
+
+The copy has its own descriptor, closed on its own, so a read stream taken from
+a descriptor can outlive it. Both share the open file description, so the shared
+offset does not matter to the positional `pread` a stream uses.
+""".
+-spec dup(term()) -> {ok, term()} | {error, integer()}.
+dup(_H) -> ?NOT_LOADED.
 
 -spec pread(term(), integer(), non_neg_integer()) ->
           {ok, binary()} | eof | {error, integer()}.

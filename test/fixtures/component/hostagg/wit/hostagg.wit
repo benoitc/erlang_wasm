@@ -1,0 +1,10 @@
+package example:agg;
+
+interface host {
+  shout: func(s: string) -> string;
+}
+
+world app {
+  import host;
+  export announce: func(s: string) -> string;
+}

@@ -13,6 +13,10 @@ Here WASI is an Erlang host interface, not an embedded WASI runtime. Every
 syscall is an ordinary host function, so you can trace it, replace it, or refuse
 it, and every capability decision is made in Erlang.
 
+Most of this page is WASI Preview 1 (`wasm32-wasip1`). For WASI 0.2
+(`wasm32-wasip2`, the Component Model), read the **WASI 0.2** section below, or go
+straight to [Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
+
 ## Run a command
 
 ```erlang
@@ -281,6 +285,57 @@ wasi_fs:backend().   %% native | fallback
 
 Check it if your guests rely on symlinks: the answer decides which twelve
 behaviours you have.
+
+## WASI 0.2
+
+WASI 0.2 (`wasm32-wasip2`) is the Component Model form of WASI: a guest imports
+typed worlds such as `wasi:cli`, `wasi:io`, `wasi:filesystem`, `wasi:clocks`,
+`wasi:sockets` and `wasi:random`, and ships as a *component* rather than a core
+module. Reach for it when your toolchain targets `wasm32-wasip2` or emits a
+component; the same Erlang host answers both, so the capabilities and their
+grants read the same as above.
+
+Run a command component with `wasi_preview2:run_command/3`. It takes the component
+bytes, the stdin to feed it, and an options map, and returns the exit code and
+what it wrote:
+
+```erlang
+{ok, Bin} = file:read_file("app.component.wasm"),
+{ok, #{exit_code := Code, stdout := Out, stderr := Err}} =
+    wasi_preview2:run_command(Bin, <<"input bytes">>,
+                              #{args    => [~"app", ~"--flag"],
+                                env     => [{~"MODE", ~"prod"}],
+                                preopen => "/srv/app/data",
+                                writable => false}).
+```
+
+The options grant capabilities the same way the Preview 1 map does:
+
+| key | grants | leaving it out means |
+| --- | --- | --- |
+| `args` | the command line | zero arguments |
+| `env` | environment variables, as `{Name, Value}` pairs | zero variables |
+| `preopen` | one host directory, at the guest root | **no filesystem at all** |
+| `writable` | `true` adds create, write, rename and unlink | read-only |
+
+For a component that exports typed functions rather than a command, instantiate it
+and call an export by name, lowering the arguments and lifting the result through
+the Canonical ABI (see [Pass data in and out](passing-data.md)):
+
+```erlang
+{ok, Inst} = wasm_component:instantiate(Bin),
+{ok, Result} = wasm_component:call(Inst, ~"run", {[{list, u8}], {list, u8}}, [~"hi"]),
+ok = wasm_component:destroy(Inst).
+```
+
+A worked, runnable version of both is in
+[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
+
+The host implements the full `wasi:filesystem` and `wasi:clocks` surface and the
+synchronous `wasi:io/poll` model, so a real command component runs end to end. It
+reuses the same sandbox and NIF as Preview 1, so the directory guarantees above
+hold unchanged. The one boundary is the async Canonical ABI (`stream`, `future`),
+which is WASI 0.3 and not implemented; a 0.2 component never needs it.
 
 ## Check it against the official suite
 

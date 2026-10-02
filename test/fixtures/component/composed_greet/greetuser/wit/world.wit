@@ -1,0 +1,6 @@
+package test:app;
+
+world consumer {
+    import test:greet/greeter;
+    export run: func() -> string;
+}

@@ -1,0 +1,26 @@
+package wasi:sockets;
+interface network {
+  resource network;
+  enum error-code {
+    unknown, access-denied, not-supported, invalid-argument, out-of-memory,
+    timeout, concurrency-conflict, not-in-progress, would-block, invalid-state,
+    new-socket-limit, address-not-bindable, address-in-use, remote-unreachable,
+    connection-refused, connection-reset, connection-aborted, datagram-too-large,
+    name-unresolvable, temporary-resolver-failure, permanent-resolver-failure
+  }
+  type ipv4-address = tuple<u8, u8, u8, u8>;
+  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
+  variant ip-address { ipv4(ipv4-address), ipv6(ipv6-address) }
+}
+interface instance-network {
+  use network.{network};
+  instance-network: func() -> network;
+}
+interface ip-name-lookup {
+  use network.{network, error-code, ip-address};
+  resource resolve-address-stream {
+    resolve-next-address: func() -> result<option<ip-address>, error-code>;
+  }
+  resolve-addresses: func(network: borrow<network>, name: string)
+      -> result<resolve-address-stream, error-code>;
+}

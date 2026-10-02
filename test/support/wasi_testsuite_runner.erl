@@ -42,6 +42,9 @@
 
 -export([run_all/0, run_all/1, run_dir/1, dirs/0, in_scope/1,
          suite_dir/0, format_report/1]).
+%% Reused by the preview2 adapter runner, which shares the manifest format and
+%% only changes how a case is executed.
+-export([spec_for/1, config/2, cleanup/1]).
 
 -type result() :: #{dir := binary(),
                     pass := non_neg_integer(),

@@ -1,0 +1,5 @@
+package example:echo;
+
+world echo {
+  export run: func(input: list<u8>) -> result<list<u8>, string>;
+}

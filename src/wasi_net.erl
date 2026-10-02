@@ -51,7 +51,8 @@ cloud metadata addresses, and this module will not second-guess you. Name what
 you mean. See `docs/security.md`.
 """.
 
--export([grant/1, allows/3, bindable/1, resolves/1, max_sockets/1, timeout/1]).
+-export([grant/1, allows/3, bindable/1, resolves/1, tcp_allowed/1, udp_allowed/1,
+         max_sockets/1, timeout/1]).
 -export([normalise/1, parse/1]).
 
 %% `rule/0` because `grant/0` is made of them.
@@ -66,6 +67,8 @@ you mean. See `docs/security.md`.
 -nominal grant() :: none | #{connect := [rule()],
                              listen := [rule()],
                              resolve := boolean(),
+                             tcp := boolean(),
+                             udp := boolean(),
                              max_sockets := pos_integer(),
                              timeout := timeout()}.
 
@@ -94,6 +97,11 @@ grant(Map) when is_map(Map) ->
     #{connect => rules(maps:get(connect, Map, [])),
       listen => rules(maps:get(listen, Map, [])),
       resolve => resolve(maps:get(resolve, Map, deny)),
+      %% Whether the TCP and UDP transports may be created at all, distinct from the
+      %% address rules: a grant may offer the sockets interface yet deny a transport
+      %% outright, which is `access-denied` at create. Both default to permitted.
+      tcp => transport(tcp, maps:get(tcp, Map, true)),
+      udp => transport(udp, maps:get(udp, Map, true)),
       max_sockets => count(maps:get(max_sockets, Map, ?DEFAULT_MAX_SOCKETS)),
       timeout => wait(maps:get(timeout, Map, ?DEFAULT_TIMEOUT))};
 grant(Other) ->
@@ -102,6 +110,9 @@ grant(Other) ->
 resolve(allow) -> true;
 resolve(deny) -> false;
 resolve(Other) -> erlang:error({bad_net_grant, {resolve, Other}}).
+
+transport(_Proto, B) when is_boolean(B) -> B;
+transport(Proto, Other) -> erlang:error({bad_net_grant, {Proto, Other}}).
 
 count(N) when is_integer(N), N > 0 -> N;
 count(Other) -> erlang:error({bad_net_grant, {max_sockets, Other}}).
@@ -212,6 +223,16 @@ bindable(#{listen := Rules}) ->
 -spec resolves(grant()) -> boolean().
 resolves(none) -> false;
 resolves(#{resolve := R}) -> R.
+
+-doc "Whether the grant permits creating a TCP socket.".
+-spec tcp_allowed(grant()) -> boolean().
+tcp_allowed(none) -> true;
+tcp_allowed(#{tcp := B}) -> B.
+
+-doc "Whether the grant permits creating a UDP socket.".
+-spec udp_allowed(grant()) -> boolean().
+udp_allowed(none) -> true;
+udp_allowed(#{udp := B}) -> B.
 
 -doc "How many sockets an instance may hold open at once.".
 -spec max_sockets(grant()) -> non_neg_integer().

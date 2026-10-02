@@ -1,0 +1,19 @@
+// The minimal slice of wasi:io 0.2 the host implements: an output-stream with
+// blocking-write-and-flush. Declared locally so the fixture pins no external
+// WIT. Unversioned, so host keys are the bare interface ids.
+package wasi:io;
+
+interface error {
+  resource error;
+}
+
+interface streams {
+  use error.{error};
+  variant stream-error {
+    last-operation-failed(error),
+    closed,
+  }
+  resource output-stream {
+    blocking-write-and-flush: func(contents: list<u8>) -> result<_, stream-error>;
+  }
+}

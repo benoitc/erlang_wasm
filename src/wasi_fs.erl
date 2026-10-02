@@ -45,6 +45,7 @@ the right to read may still be refused a path that escapes its preopen.
 -export([open/3, pread/3, pwrite/3, size/1, stat_fd/1, close/1,
          list_dir/2, backend/0]).
 -export([truncate/2, sync/1, preopen/1, forget/1, list/1, readdir/3]).
+-export([open_dir_at/2, dup/1]).
 -export([mkdir/2, unlink/2, rmdir/2, symlink/3, readlink/2, stat/2,
          set_times/4, set_times/5, set_times_fd/3,
          stat/3, rename/4, link/4]).
@@ -90,6 +91,29 @@ preopen(Host) ->
 -spec forget(root()) -> ok.
 forget({native, H}) -> wasi_file_nif:close(H), ok;
 forget({fallback, _}) -> ok.
+
+-doc """
+Open directory `Guest` beneath `Root` as a new root.
+
+A guest that opens a directory (rather than being granted a preopen) then does
+path operations under it. The native backend uses the opened directory fd itself
+as the root -- `openat` beneath a directory fd is exactly what a root does. The
+fallback resolves the name through the sandbox and adopts the host path, the same
+shape `preopen/1` produces. `forget/1` releases either.
+""".
+-spec open_dir_at(root(), binary()) -> {ok, root()} | {error, non_neg_integer()}.
+open_dir_at({native, _} = Root, Guest) ->
+    open(Root, Guest, [read, follow]);
+open_dir_at({fallback, Base}, Guest) ->
+    case wasi_path:resolve(Base, Guest, true) of
+        {error, E} ->
+            {error, E};
+        {ok, Full} ->
+            case filelib:is_dir(Full) of
+                true  -> {ok, {fallback, Full}};
+                false -> {error, ?ENOTDIR}
+            end
+    end.
 
 -doc "Which backend is in use. `fallback` still refuses every detectable escape.".
 -spec backend() -> native | fallback.
@@ -541,6 +565,25 @@ size({fallback, D, _}) ->
 -spec close(handle()) -> ok.
 close({native, H}) -> wasi_file_nif:close(H);
 close({fallback, D, _}) -> _ = file:close(D), ok.
+
+-doc """
+Duplicate a handle into an independent one, closed on its own.
+
+Native only: it duplicates the open descriptor, so the copy owns its own fd and
+reads positionally without touching the descriptor's offset, and closing either
+does not affect the other. The fallback cannot duplicate an `io_device`, and
+reopening by pathname would resolve the name a second time and could follow a
+symlink swapped in since the descriptor was opened, so `dup` is refused there and
+the caller reads eagerly instead.
+""".
+-spec dup(handle()) -> {ok, handle()} | {error, non_neg_integer()}.
+dup({native, H}) ->
+    case wasi_file_nif:dup(H) of
+        {ok, H2}       -> {ok, {native, H2}};
+        {error, Errno} -> {error, map_posix(Errno)}
+    end;
+dup({fallback, _D, _Path}) ->
+    {error, ?ENOTSUP}.
 
 -spec list_dir(file:filename_all(), binary()) ->
           {ok, [binary()]} | {error, non_neg_integer()}.

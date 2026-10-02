@@ -1,0 +1,9 @@
+package example:wasitcp;
+world app {
+  import wasi:sockets/instance-network;
+  import wasi:sockets/tcp-create-socket;
+  import wasi:sockets/tcp;
+  import wasi:io/streams;
+  export echo-to: func(a: u8, b: u8, c: u8, d: u8, port: u16, msg: list<u8>) -> list<u8>;
+  export serve-on: func(port: u16) -> list<u8>;
+}

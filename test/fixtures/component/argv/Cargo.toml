@@ -1,0 +1,10 @@
+[package]
+name = "argv"
+version = "0.0.0"
+edition = "2021"
+[[bin]]
+name = "argv"
+path = "src/main.rs"
+[profile.release]
+opt-level = "s"
+strip = true

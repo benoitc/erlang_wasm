@@ -1,0 +1,3 @@
+target/
+Cargo.lock
+echo.component.wasm

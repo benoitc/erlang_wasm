@@ -1708,6 +1708,7 @@ check_spec(_) ->
 execute(G, Spec, AState) ->
     #{invoke := Invoke} = Spec,
     Limits = G#g.limits,
+    Runtime = maps:get(runtime, Spec, core),
     case start_instance(G, Spec) of
         {error, #{class := _} = WErr} ->
             %% An adapter's own refusal, already in the worker's shape.
@@ -1716,16 +1717,26 @@ execute(G, Spec, AState) ->
             {trapped, [], undefined, E};
         {ok, Inst} ->
             R = invoke_loop(Invoke, Inst, Limits, G#g.adapter, AState),
-            ok = wasm:destroy(Inst),
+            ok = destroy_instance(Runtime, Inst),
             R
     end.
+
+%% A component instance is a map over an inner core instance; a core instance is
+%% the instance itself. Default is core, so the existing path is unchanged.
+destroy_instance(component, Inst) ->
+    wasm_component:destroy(Inst, fun wasi_preview2:close_resource/1);
+destroy_instance(_Core, Inst)     -> wasm:destroy(Inst).
 
 %% One instance per request either way. The image only changes where the
 %% instance starts: a restore lands at the captured point, so the adapter's
 %% `invoke' is the request's work and nothing else.
 start_instance(#g{image = undefined, limits = Limits}, Spec) ->
     #{module := M, imports := ImportSet} = Spec,
-    wasm:instantiate(M, maps:get(bindings, ImportSet), Limits);
+    Bindings = maps:get(bindings, ImportSet),
+    case maps:get(runtime, Spec, core) of
+        component -> wasm_component:instantiate(M, Bindings, Limits);
+        _Core     -> wasm:instantiate(M, Bindings, Limits)
+    end;
 start_instance(#g{image = Image} = G, #{imports := ImportSet}) ->
     %% The module is not passed: `restore/3' takes it from the image, so there
     %% is no argument left to lay one module's bytes over another's layout.
@@ -1781,8 +1792,8 @@ call_fun(F, Args) ->
 %% trapped, and the kernel interprets none of them. A WASI exit arrives as a
 %% trap carrying the status, so "stop on every trap" and "let one adapter
 %% continue past that trap" cannot both hold: the adapter answers.
-invoke_loop([{call, Name, Args} | Rest], Inst, Limits, Adapter, AState) ->
-    IR = wasm:call(Inst, Name, Args, Limits),
+invoke_loop([Entry | Rest], Inst, Limits, Adapter, AState) ->
+    IR = invoke_one(Entry, Inst, Limits),
     case call_back(Adapter, classify, [IR, AState]) of
         {error, E} ->
             {trapped, [], undefined, error_of(E)};
@@ -1799,6 +1810,17 @@ invoke_loop([{call, Name, Args} | Rest], Inst, Limits, Adapter, AState) ->
             %% An adapter that does not understand a result gets the safe
             %% answer rather than the ignorant one.
             stopped(trapped, IR)
+    end.
+
+%% A core call names a core export; a component call carries its Canonical ABI
+%% signature and lifts a single value, which classify sees as `{ok, [Value]}`,
+%% the same shape a core call returns.
+invoke_one({call, Name, Args}, Inst, Limits) ->
+    wasm:call(Inst, Name, Args, Limits);
+invoke_one({call, Name, Sig, Args}, Inst, _Limits) ->
+    case wasm_component:call(Inst, Name, Sig, Args) of
+        {ok, Value}    -> {ok, [Value]};
+        {error, _} = E -> E
     end.
 
 stopped(returned, {ok, Vs})        -> {returned, Vs, undefined, undefined};

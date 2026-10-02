@@ -1,0 +1,31 @@
+// The non-pollable parts of wasi:clocks 0.2, declared locally so the fixture
+// pins no external WIT. subscribe-* return a pollable (a wasi:io resource) and
+// are left out until wasi:io lands. Unversioned, so host keys are the bare
+// interface ids. The host supplies these (see src/wasi_preview2.erl).
+package wasi:clocks;
+
+interface monotonic-clock {
+  type instant = u64;
+  type duration = u64;
+  now: func() -> instant;
+  resolution: func() -> duration;
+}
+
+interface wall-clock {
+  record datetime {
+    seconds: u64,
+    nanoseconds: u32,
+  }
+  now: func() -> datetime;
+  resolution: func() -> datetime;
+}
+
+world app {
+  use wall-clock.{datetime};
+  import monotonic-clock;
+  import wall-clock;
+  export mono-now: func() -> u64;
+  export mono-res: func() -> u64;
+  export wall-now: func() -> datetime;
+  export wall-res: func() -> datetime;
+}

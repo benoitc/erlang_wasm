@@ -1,0 +1,12 @@
+package example:host;
+
+interface clock {
+  now: func() -> u64;
+  add: func(a: u32, b: u32) -> u32;
+}
+
+world app {
+  import clock;
+  export read-now: func() -> u64;
+  export read-add: func(a: u32, b: u32) -> u32;
+}

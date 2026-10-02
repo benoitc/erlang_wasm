@@ -1,0 +1,12 @@
+package wasi:cli;
+
+interface stdin {
+  use wasi:io/streams.{input-stream};
+  get-stdin: func() -> input-stream;
+}
+
+world app {
+  import stdin;
+  import wasi:io/streams;
+  export slurp: func() -> list<u8>;
+}

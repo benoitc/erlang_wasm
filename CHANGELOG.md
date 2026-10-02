@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.1
+
+A component's own resource handles are tracked per instance, so misusing one is
+caught instead of silently ignored.
+
+- **Resource handle liveness.** A component that hands out a resource (a handle
+  to something it owns, like a counter or an open file) now has each instance
+  track its live handles. Dropping one twice, or using one after dropping it,
+  fails cleanly rather than passing silently. Handles that belong to the host (a
+  WASI stream or socket) and resources passed between composed components are
+  unaffected.
+- **A Component Model guide.** `docs/components.md` covers running and composing
+  components, and the typed signatures `wasm_component:call/4` takes.
+
 ## 0.8.0
 
 The synchronous WebAssembly Component Model and WASI 0.2 (preview 2). A component

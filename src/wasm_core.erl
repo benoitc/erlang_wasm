@@ -1564,16 +1564,71 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
     %% `Bit' is the bit offset of the access within its word, and the straddle
     %% test is on it, so it is computed once and shared by the guard and the
     %% body.
+    Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
+               cerl:c_let([Ci], bif('bsr', [A, Sh]),
+                 cerl:c_let([Ck], chunk_at(Mem, Ci),
+                   cerl:c_let([Ix], word_index(A, Sh), Fast)))),
     cerl:c_let([Mem], mem_at(Mut, M),
       cerl:c_let([A], Addr,
         cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
                                     cerl:abstract(8)]),
           ordinary(Mem, A, N, Bit,
-                   cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
-                     cerl:c_let([Ci], bif('bsr', [A, Sh]),
-                       cerl:c_let([Ck], chunk_at(Mem, Ci),
-                         cerl:c_let([Ix], word_index(A, Sh), Fast)))),
+                   cerl:c_case(bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)]),
+                               [cerl:c_clause([cerl:abstract(true)], Growth),
+                                cerl:c_clause([cerl:c_var('_Img')],
+                                              image_region(Dir, Mut, Mem, A, N,
+                                                           Kind, Bit, Val,
+                                                           Slow))]),
                    Slow)))).
+
+%% Below the image region's end the page table decides. A page no write has
+%% reached is read from the image's binary; a private one is a word in an arena
+%% chunk, found from the table entry by a shift and a mask exactly as
+%% `wasm_memory:slot_word/3' finds it. A store to a page still the image's has
+%% to copy it first, and an arena chunk this handle has not seen is looked up
+%% in the published cell: both are the helper's.
+image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow) ->
+    E = cerl:c_var('E'), K = cerl:c_var('K'), Ar = cerl:c_var('Ar'),
+    Ck = cerl:c_var('Ck'), Ix = cerl:c_var('Ix'),
+    Entry = atomic(get, [field(Mem, ?MEM_TAB),
+                         bif('+', [bif('bsr', [A, cerl:abstract(12)]),
+                                   cerl:abstract(1)])]),
+    Private =
+        cerl:c_let([K], bif('bsr', [E, cerl:abstract(16)]),
+          cerl:c_let([Ar], field(Mem, ?MEM_ARENA),
+            cerl:c_case(
+              bif('=<', [K, bif(tuple_size, [Ar])]),
+              [cerl:c_clause(
+                 [cerl:abstract(true)],
+                 cerl:c_let([Ck], bif(element, [K, Ar]),
+                   cerl:c_let([Ix], slot_index(E, A),
+                     case Dir of
+                         load -> inline_load(N, Kind, A, undefined, Ix, Ck, Bit);
+                         store -> cerl:c_seq(inline_store(N, Kind, A, undefined,
+                                                          Ix, Ck, Bit, Val),
+                                             Mut)
+                     end))),
+               cerl:c_clause([cerl:c_var('_Unseen')], Slow)]))),
+    Untouched = case Dir of
+                    load ->
+                        load_word(N, Kind,
+                                  cerl:c_call(cerl:c_atom(wasm_memory),
+                                              cerl:c_atom(image_word_at),
+                                              [field(Mem, ?MEM_IMAGE), A]),
+                                  Bit);
+                    store ->
+                        Slow
+                end,
+    cerl:c_let([E], Entry,
+               cerl:c_case(E, [cerl:c_clause([cerl:abstract(0)], Untouched),
+                               cerl:c_clause([cerl:c_var('_Slot')], Private)])).
+
+slot_index(E, A) ->
+    bif('+', [bif('+', [bif('*', [bif('band', [E, cerl:abstract(16#FFFF)]),
+                                  cerl:abstract(512)]),
+                        bif('bsr', [bif('band', [A, cerl:abstract(4095)]),
+                                    cerl:abstract(3)])]),
+              cerl:abstract(1)]).
 
 mem_at(Mut, M) ->
     bif(element, [cerl:abstract(M + 1),
@@ -1613,11 +1668,7 @@ ordinary(Mem, A, N, Bit, Fast, Slow) ->
          bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]), cerl:abstract(64)]),
          %% One field read and a multiply.
          bif('=<', [bif('+', [A, cerl:abstract(N)]),
-                    bif('*', [field(Mem, ?MEM_PAGES), cerl:abstract(65536)])]),
-         %% Past the image region, where `chunks' holds arrays. Below it the
-         %% chunk is a placeholder and the page table decides, which the
-         %% helper does.
-         bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)])],
+                    bif('*', [field(Mem, ?MEM_PAGES), cerl:abstract(65536)])])],
         Fast, Slow).
 
 %% Nested cases, because Core Erlang has no `andalso`: it is sugar the parser
@@ -1649,11 +1700,14 @@ atomic(F, Args) -> cerl:c_call(cerl:c_atom(atomics), cerl:c_atom(F), Args).
 %% bignum arithmetic on a value that is usually small. `i64.load` measured
 %% 39.81 nanoseconds against `i32.load`'s 9.35, which is backwards: an aligned
 %% eight-byte load is one `atomics:get` and should be the cheapest of the two.
-inline_load(8, Kind, _A, _Sh, Ix, Ck, _Bit) ->
-    decode_word(Kind, atomic(get, [Ck, Ix]));
 inline_load(N, Kind, _A, _Sh, Ix, Ck, Bit) ->
-    Raw = bif('band', [bif('bsr', [atomic(get, [Ck, Ix]), Bit]),
-                       cerl:abstract(mask(N))]),
+    load_word(N, Kind, atomic(get, [Ck, Ix]), Bit).
+
+%% A load given the word it is in, wherever that word came from.
+load_word(8, Kind, Word, _Bit) ->
+    decode_word(Kind, Word);
+load_word(N, Kind, Word, Bit) ->
+    Raw = bif('band', [bif('bsr', [Word, Bit]), cerl:abstract(mask(N))]),
     decode(Kind, N, Raw).
 
 %% The word as `atomics` hands it over: unsigned, `[0, 2^64)`.

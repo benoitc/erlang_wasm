@@ -17,6 +17,9 @@
 -define(MEM_CHUNKS_REF, 6).
 -define(MEM_SHIFT, 10).
 -define(MEM_IMG_BYTES, 12).
+-define(MEM_IMAGE, 13).
+-define(MEM_TAB, 14).
+-define(MEM_ARENA, 15).
 -define(MEM_SIZE, 16).
 
 -endif.

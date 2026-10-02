@@ -553,6 +553,7 @@ the_memory_field_indices_match_the_record(_) ->
     ?assertEqual(#{chunks => ?MEM_CHUNKS, pages => ?MEM_PAGES,
                    pages_ref => ?MEM_PAGES_REF, chunks_ref => ?MEM_CHUNKS_REF,
                    shift => ?MEM_SHIFT, img_bytes => ?MEM_IMG_BYTES,
+                   image => ?MEM_IMAGE, tab => ?MEM_TAB, arena => ?MEM_ARENA,
                    size => ?MEM_SIZE},
                  wasm_memory:field_indices()).
 
@@ -623,6 +624,11 @@ over_image(A, Stores, Loads, Image) ->
     [begin
          {ok, Ii} = wasm:instantiate(M, #{}, Opts),
          {ok, Ic} = wasm:instantiate(M, #{}, Opts),
+         %% Thirteen other pages made private first, so the page under test
+         %% lands in a slot well into its arena chunk, where reading the
+         %% table entry wrongly would land on the wrong slot.
+         [ok = wasm:write_memory(X, Pg * 4096 + 2048, <<Pg>>)
+          || X <- [Ii, Ic], Pg <- lists:seq(2, 14)],
          Target = fun(Name) ->
                           #{Name := {func, X}} = Ic#inst.exports, X
                   end,

@@ -83,7 +83,11 @@ moved, because even with all three a refusal still interprets.
 %% 7: a store answers the state to go on with, and the fast path is refused
 %% below a memory's image region. An artifact built by 6 would index a
 %% placeholder as an array.
--define(ABI, 7).
+%%
+%% 8: the image region is read inline: a page table entry now names the arena
+%% chunk and slot of a private page, and an artifact built by 7 would read it as
+%% a slot number.
+-define(ABI, 8).
 
 -define(DEFAULT_AFTER, 32).
 

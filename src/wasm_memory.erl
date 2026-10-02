@@ -50,7 +50,7 @@ who holds the memory and releases it when they are all gone.
 -export([field_indices/0, mask/1]).
 -export([grow/2, fill/4, copy/4, copy/5, init/5]).
 -export([to_binary/1]).
--export([store_r/4, image/1]).
+-export([store_r/4, image/1, image_word_at/2]).
 -ifdef(TEST).
 -export([image_of/1, faults/1, fault_hook/1]).
 -endif.
@@ -132,9 +132,11 @@ who holds the memory and releases it when they are all gone.
     %% shared by every memory restored from the same image.
     image     :: undefined | tuple(),
     %% One entry per 4 KiB page of the region: 0 while the page is still the
-    %% image's, else the private slot that holds it, set once by
-    %% `compare_exchange'. Two more entries follow the pages: the last slot
-    %% claimed and the number of arena chunks published.
+    %% image's, else where its private slot is, set once by
+    %% `compare_exchange': the arena chunk in the high bits and the slot within
+    %% it in the low sixteen, so generated code finds the word with a shift
+    %% and a mask. Two more entries follow the pages: the last slot claimed and
+    %% the number of arena chunks published.
     tab       :: undefined | atomics:atomics_ref(),
     %% The arena chunks this handle has seen. Chunks are only ever appended,
     %% so a slot past this tuple is found in the published cell.
@@ -1052,11 +1054,11 @@ ensure_private(#mem{tab = Tab} = M, P) ->
     end.
 
 fault(#mem{tab = Tab} = M, P) ->
-    S = claim(M),
-    ok = fill_slot(M, S, P),
+    E = located(claim(M)),
+    ok = fill_slot(M, E, P),
     ok = fault_hook(fault),
-    case atomics:compare_exchange(Tab, P + 1, 0, S) of
-        ok -> S;
+    case atomics:compare_exchange(Tab, P + 1, 0, E) of
+        ok -> E;
         %% Another writer published the page first. Its slot is the page from
         %% now on; this one is abandoned, which costs a slot and nothing else.
         Published -> Published
@@ -1115,15 +1117,37 @@ chunk_of(S) when S =< 112 -> 3;
 chunk_of(S) when S =< 240 -> 4;
 chunk_of(S) -> 5 + (S - 241) div 256.
 
-%% The array and word index of `Addr' within slot `S'.
-slot_word(#mem{arena = Arena, arena_ref = Ref}, S, Addr) ->
+%% Where slot `S' is, as a table entry: its chunk above bit sixteen, its index
+%% in that chunk below. Never zero, since chunks count from one.
+located(S) ->
     K = chunk_of(S),
+    (K bsl 16) bor (S - 1 - arena_slots(K - 1)).
+
+%% The array and word index of `Addr' within the slot a table entry names.
+%% `wasm_core' computes the same two from the entry inline.
+slot_word(#mem{arena = Arena, arena_ref = Ref}, E, Addr) ->
+    K = E bsr 16,
     C = case K =< tuple_size(Arena) of
             true  -> element(K, Arena);
             false -> element(K, wasm_engine:cell_get(Ref))
         end,
-    {C, (S - 1 - arena_slots(K - 1)) * ?SLOT_WORDS
+    {C, (E band 16#FFFF) * ?SLOT_WORDS
         + ((Addr band (?SLOT_BYTES - 1)) bsr 3) + 1}.
+
+-doc """
+The 64-bit word at `Addr` in an image, which must be in its region: what
+generated code reads for a page no write has reached.
+""".
+-spec image_word_at(tuple(), non_neg_integer()) -> non_neg_integer().
+image_word_at(Image, Addr) ->
+    case element((Addr bsr ?PAGE_SIZE_SHIFT) + 1, Image) of
+        zero ->
+            0;
+        Bin ->
+            Off = Addr band (?PAGE_SIZE - 8),
+            <<_:Off/binary, W:64/little, _/binary>> = Bin,
+            W
+    end.
 
 %% Arena chunks up to `Target', charged to the node budget before any array
 %% exists, unless another writer already published them. The count in the
@@ -1278,4 +1302,5 @@ answer equals `include/wasm_memory.hrl`, so adding a field breaks a test.
 field_indices() ->
     #{chunks => #mem.chunks, pages => #mem.pages, pages_ref => #mem.pages_ref,
       chunks_ref => #mem.chunks_ref, shift => #mem.shift,
-      img_bytes => #mem.img_bytes, size => record_info(size, mem)}.
+      img_bytes => #mem.img_bytes, image => #mem.image, tab => #mem.tab,
+      arena => #mem.arena, size => record_info(size, mem)}.

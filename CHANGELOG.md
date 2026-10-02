@@ -7,6 +7,10 @@ option, a loaded module no longer keeps its whole input file in memory, and
 the CPython reactor ships stripped with its standard library precompiled.
 Workers built on `py_reactor.wasm` need the new build.
 
+- **Restore recycling is gone.** `wasm:restore/3` no longer takes
+  `recycle`, and the worker option `recycle_idle` is removed. A restore lays
+  the whole image into fresh memory, and a worker keeps nothing between
+  requests.
 - **Default heap floors.** A new optional adapter callback, `defaults/1`, is
   given the worker's resolved limits and answers `runner_min_heap_words` and
   `capture_min_heap_words` when the caller did not set them. `wasm_lua` and

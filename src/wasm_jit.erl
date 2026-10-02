@@ -76,7 +76,10 @@ moved, because even with all three a refusal still interprets.
 %% 5: an inlined store marks its chunk in the memory's `dirty' slots. An
 %% artifact built by 4 writes without marking, and a memory recycled for the
 %% next restore would keep one request's bytes for the next.
--define(ABI, 5).
+%%
+%% 6: the dirty marking is gone with recycling, and the memory handle lost its
+%% `dirty' field, so every index generated code reads past it moved.
+-define(ABI, 6).
 
 -define(DEFAULT_AFTER, 32).
 

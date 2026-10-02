@@ -19,6 +19,7 @@ testing the artifact rather than the mechanism.
 -include("wasm.hrl").
 -include("wasm_snapshot_budget.hrl").
 -include("wasm_exec.hrl").
+-include("wasm_memory.hrl").
 
 suite() -> [{timetrap, {seconds, 60}}].
 
@@ -52,8 +53,9 @@ all() ->
      a_restore_hook_that_fails_leaves_no_instance,
      a_grown_unexported_memory_restores,
      an_exported_global_is_not_shared_between_restores,
-     a_recycled_restore_is_the_image,
-     a_recycled_restore_is_the_image_in_generated_code,
+     a_repeated_restore_is_the_image,
+     a_repeated_restore_is_the_image_in_generated_code,
+     a_destroyed_restore_leaves_nothing_for_the_next,
      a_grown_table_restores,
      a_data_segment_the_guest_zeroed_stays_zero,
      a_zeroed_gap_between_runs_stays_zero,
@@ -1110,43 +1112,70 @@ every_atom_an_image_holds_exists_once_the_decoder_is_loaded(_Config) ->
         peer:stop(Peer)
     end.
 
-%%% -------------------------------------------------------------- recycling ---
+%%% ------------------------------------------------------ repeated restores ---
 %%
-%% A recycling restore keeps every chunk the last instance did not write, so
-%% the claim is only as good as the marking. Each cycle below writes through
-%% every path a guest or a host has -- a plain store, a wide store, fill, copy,
-%% init, an atomic read-modify-write, a vector store, growth and a host write --
-%% at addresses spread over the whole memory, and the next restore must hand
-%% back exactly the bytes of a restore that recycled nothing.
+%% One image restored over and over in one process, each instance written and
+%% destroyed before the next. Each cycle below writes through every path a
+%% guest or a host has -- a plain store, a wide store, fill, copy, init, an
+%% atomic read-modify-write, a vector store, growth and a host write -- at
+%% addresses spread over the whole memory, and the next restore must hand back
+%% exactly the bytes of the first.
 
-a_recycled_restore_is_the_image(_Config) ->
-    recycled_cycles(#{}, 30).
+a_repeated_restore_is_the_image(_Config) ->
+    restore_cycles(#{}, 30).
 
-%% The same through generated code, whose stores are inlined and mark the chunk
-%% themselves rather than through `wasm_memory`. `store` compiles; the other
-%% writes are in a function the generator refuses and stay interpreted.
-a_recycled_restore_is_the_image_in_generated_code(_Config) ->
+%% The same through generated code, whose stores are inlined rather than going
+%% through `wasm_memory`. `store` compiles; the other writes are in a function
+%% the generator refuses and stay interpreted.
+a_repeated_restore_is_the_image_in_generated_code(_Config) ->
     ct:timetrap({minutes, 3}),
     Before = maps:get(entered, wasm_jit:counts()),
-    recycled_cycles(#{compile => true, compile_after => 1, compile_force => true},
-                    60),
+    restore_cycles(#{compile => true, compile_after => 1, compile_force => true},
+                   60),
     ?assert(maps:get(entered, wasm_jit:counts()) > Before).
 
-recycled_cycles(Tier, Cycles) ->
+%% A destroyed instance leaves nothing behind for the next restore of its
+%% image: no memory kept in this process, no reservation held for it, and not
+%% one array shared with the instance that follows. `recycle' is passed to show
+%% that asking for the old reuse no longer gets it.
+a_destroyed_restore_leaves_nothing_for_the_next(_Config) ->
+    {ok, H} = wasm:load(scribbler()),
+    Run = #{fuel => infinity},
+    {ok, I0} = wasm:instantiate(H, #{}, Run#{snapshotable => true}),
+    {ok, Image} = wasm:snapshot(I0, #{version => ~"nothing kept"}),
+    ok = wasm:destroy(I0),
+    {ok, I1} = wasm:restore(Image, #{}, Run#{recycle => true}),
+    First = chunks_of(I1),
+    ok = wasm:destroy(I1),
+    ?assertEqual([], [K || {{wasm_snapshot, recycle, _} = K, _} <- get()]),
+    ?assertEqual([], [T || {_, _, _, Hs} <- ets:tab2list(wasm_holders),
+                           is_map(Hs),
+                           {recycle, _} = T <- maps:keys(Hs)]),
+    {ok, I2} = wasm:restore(Image, #{}, Run#{recycle => true}),
+    Second = chunks_of(I2),
+    ?assertEqual([], [C || C <- Second, lists:member(C, First)]),
+    ok = wasm:destroy(I2),
+    ok = wasm:release(Image).
+
+chunks_of(I) ->
+    #mut{mems = {Mem}} = wasm_instance:mut(I),
+    tuple_to_list(element(?MEM_CHUNKS, Mem)).
+
+restore_cycles(Tier, Cycles) ->
     rand:seed(exsss, {7, 11, 13}),
     {ok, H} = wasm:load(scribbler()),
     Run = Tier#{fuel => infinity},
     {ok, I0} = wasm:instantiate(H, #{}, Run#{snapshotable => true}),
     %% Something worth keeping in the image, in some chunks and not others.
     [ok = scribble(I0, Run) || _ <- lists:seq(1, 40)],
-    {ok, Image} = wasm:snapshot(I0, #{version => ~"recycle"}),
+    {ok, Image} = wasm:snapshot(I0, #{version => ~"cycles"}),
     ok = wasm:destroy(I0),
     {ok, Ref} = wasm:restore(Image, #{}, Run),
     Pristine = memory_of(Ref),
     ok = wasm:destroy(Ref),
     lists:foreach(
       fun(N) ->
-          {ok, I} = wasm:restore(Image, #{}, Run#{recycle => true}),
+          {ok, I} = wasm:restore(Image, #{}, Run),
           ?assertEqual({cycle, N, true}, {cycle, N, memory_of(I) =:= Pristine}),
           [ok = scribble(I, Run) || _ <- lists:seq(1, 8)],
           ok = wasm:destroy(I)

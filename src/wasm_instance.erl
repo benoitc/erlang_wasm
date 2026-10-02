@@ -1163,10 +1163,9 @@ is_float_special(_) -> false.
 %% Importing the same memory through two slots takes one token, not two,
 %% because the token is the same value both times.
 %%
-%% `MemOpts' is what `wasm_snapshot' asks of the memories it is about to lay an
-%% image over, by memory index: created at the image's size, in the chunk size
-%% it recycles, from the chunks of a previous instance. Empty for everything
-%% else, which gets the memory the module declares.
+%% `MemOpts' is what a caller asks of each memory the module defines, by memory
+%% index. Empty for everything else, which gets the memory the module
+%% declares.
 build_mems(#module{imports = Imports, mems = Mems}, Provided,
            #ctx{shared_mems = Shared}, Holder, MemOpts) ->
     Imported = [hold(import_memory(I, Provided), Holder)

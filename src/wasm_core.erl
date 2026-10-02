@@ -1568,31 +1568,8 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
                    cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
                      cerl:c_let([Ci], bif('bsr', [A, Sh]),
                        cerl:c_let([Ck], chunk_at(Mem, Ci),
-                         cerl:c_let([Ix], word_index(A, Sh),
-                                    marked(Dir, Mem, Ci, Fast))))),
+                         cerl:c_let([Ix], word_index(A, Sh), Fast)))),
                    Slow)))).
-
-%% A store sets its chunk's slot in the memory's `dirty' array first, when the
-%% memory has one: `wasm_memory:wchunk/2' is the same rule for every write the
-%% interpreter makes. A memory that does not track costs a field read and a
-%% compare.
-marked(load, _Mem, _Ci, Fast) ->
-    Fast;
-marked(store, Mem, Ci, Fast) ->
-    D = cerl:c_var('Dy'), Slot = cerl:c_var('Sl'),
-    cerl:c_seq(
-      cerl:c_case(field(Mem, ?MEM_DIRTY),
-                  [cerl:c_clause([cerl:abstract(undefined)], cerl:abstract(ok)),
-                   cerl:c_clause(
-                     [D],
-                     cerl:c_let([Slot], bif('+', [Ci, cerl:abstract(1)]),
-                       cerl:c_case(atomic(get, [D, Slot]),
-                                   [cerl:c_clause([cerl:abstract(0)],
-                                                  atomic(put, [D, Slot,
-                                                               cerl:abstract(1)])),
-                                    cerl:c_clause([cerl:c_var('_Set')],
-                                                  cerl:abstract(ok))])))]),
-      Fast).
 
 mem_at(Mut, M) ->
     bif(element, [cerl:abstract(M + 1),

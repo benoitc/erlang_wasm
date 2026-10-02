@@ -648,8 +648,10 @@ step({canon_resource, new, Rt}, S) ->
     Fun = fun(_Ctx, [Rep]) -> wasm_resources:track(Rep, Rt), {ok, [Rep]} end,
     {ok, bump(S, n_cf, core_funcs, Fun)};
 step({canon_resource, rep, Rt}, S) ->
-    Defined = lists:member(Rt, maps:get(defined_rts, S, [])),
-    Fun = fun(_Ctx, [H]) -> resource_rep(Defined, H) end,
+    %% `canon resource.rep Rt` is always on a type this component defines, so the
+    %% handle must be live and of that type: a dropped or bogus handle, or one of a
+    %% different resource type, traps.
+    Fun = fun(_Ctx, [H]) -> resource_rep(Rt, H) end,
     {ok, bump(S, n_cf, core_funcs, Fun)};
 step({core_alias, func, InstIdx, Name}, S) ->
     case export_val(S, InstIdx, Name) of
@@ -802,13 +804,19 @@ run_dtor(_Other, _H) -> ok.
 %% `canon resource.rep`. For a defined resource the handle must be live, so reading
 %% the representation of a dropped or bogus handle traps; otherwise it passes
 %% through (the representation is the handle in the identity model).
-resource_rep(true, H) ->
+resource_rep(Expected, H) ->
     case wasm_resources:lookup(H) of
-        {ok, _Rt} -> {ok, [H]};
-        error     -> wasm_error:trap(resource_not_live, #{handle => H, operation => rep})
-    end;
-resource_rep(false, H) ->
-    {ok, [H]}.
+        error ->
+            wasm_error:trap(resource_not_live, #{handle => H, operation => rep});
+        {ok, undefined} ->
+            %% Tracked without a type (the identity-intrinsic path): liveness only.
+            {ok, [H]};
+        {ok, Expected} ->
+            {ok, [H]};
+        {ok, Actual} ->
+            wasm_error:trap(resource_wrong_type,
+                            #{handle => H, expected => Expected, actual => Actual})
+    end.
 
 %% The value of core instance `InstIdx`'s export `Name`: an `extern()` from a real
 %% instance, or the stored value of a synthetic one.

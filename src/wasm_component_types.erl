@@ -252,13 +252,15 @@ valtype(<<16#6a, R0/binary>>) ->
     {Ok, R1} = opt_valtype(R0),
     {Err, R2} = opt_valtype(R1),
     {{result, Ok, Err}, R2};
-%% own<rt> / borrow<rt>: a resource handle, opaque to the ABI as an i32.
+%% own<rt> / borrow<rt>: a resource handle, opaque to the ABI as an i32. The
+%% resource-type index is kept so the runtime can type-check and transfer the
+%% handle; marshalling treats both as a bare i32 (see wasm_canon).
 valtype(<<16#69, R0/binary>>) ->
-    {_Rt, R1} = wasm_leb128:u32(R0),
-    {handle, R1};
+    {Rt, R1} = wasm_leb128:u32(R0),
+    {{own, Rt}, R1};
 valtype(<<16#68, R0/binary>>) ->
-    {_Rt, R1} = wasm_leb128:u32(R0),
-    {handle, R1};
+    {Rt, R1} = wasm_leb128:u32(R0),
+    {{borrow, Rt}, R1};
 valtype(Bin) ->
     {Idx, R} = wasm_leb128:u32(Bin),
     {{typeref, Idx}, R}.

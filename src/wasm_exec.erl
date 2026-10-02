@@ -409,8 +409,10 @@ run([{lg_lg_store, I, J, {_A, Offset, M}} | Rest], Ctrl,
     #st{locals = L, mut = Mu} = St) ->
     Mem = element(M + 1, Mu#mut.mems),
     Addr = wasm_num:to_u32(element(I, L)) + Offset,
-    ok = wasm_memory:store(Mem, Addr, 4, element(J, L)),
-    run(Rest, Ctrl, St);
+    case wasm_memory:store_r(Mem, Addr, 4, element(J, L)) of
+        ok -> run(Rest, Ctrl, St);
+        {refresh, Mem1} -> run(Rest, Ctrl, St#st{mut = refreshed(Mu, M, Mem1)})
+    end;
 run([{lg_load_tee, I, {_A, Offset, M}, T} | Rest], Ctrl,
     #st{stack = S, locals = L, mut = Mu} = St) ->
     Mem = element(M + 1, Mu#mut.mems),
@@ -965,8 +967,10 @@ run2([Op | Rest] = Is, Ctrl, St, A, B) when is_atom(Op) ->
 %% the record not at all.
 run2([{i32_store, {_A, Off, M}} | Rest], Ctrl, #st{mut = Mu} = St, A, B) ->
     Mem = element(M + 1, Mu#mut.mems),
-    ok = wasm_memory:store(Mem, wasm_num:to_u32(B) + Off, 4, A),
-    run(Rest, Ctrl, St);
+    case wasm_memory:store_r(Mem, wasm_num:to_u32(B) + Off, 4, A) of
+        ok -> run(Rest, Ctrl, St);
+        {refresh, Mem1} -> run(Rest, Ctrl, St#st{mut = refreshed(Mu, M, Mem1)})
+    end;
 run2([{local_set, I} | Rest], Ctrl, #st{locals = L} = St, A, B) ->
     run1(Rest, Ctrl, St#st{locals = setelement(I + 1, L, A)}, B);
 run2([{local_tee, I} | Rest], Ctrl, #st{locals = L} = St, A, B) ->
@@ -1162,12 +1166,18 @@ load_at(Mu, M, N, Kind, Addr) ->
     Mem = element(M + 1, Mu#mut.mems),
     decode_loaded(Kind, N, wasm_memory:load(Mem, Addr, N)).
 
--doc "A memory store. Writes into `atomics` in place, so `#mut{}` does not change.".
+-doc """
+A memory store, answering the state to go on with: the same one, or one whose
+memory handle has seen arena chunks this store published.
+""".
 -spec store_at(#mut{}, non_neg_integer(), pos_integer(), atom(), non_neg_integer(),
-               term()) -> ok.
+               term()) -> #mut{}.
 store_at(Mu, M, N, Kind, Addr, Value) ->
     Mem = element(M + 1, Mu#mut.mems),
-    wasm_memory:store(Mem, Addr, N, encode_stored(Kind, Value)).
+    case wasm_memory:store_r(Mem, Addr, N, encode_stored(Kind, Value)) of
+        ok -> Mu;
+        {refresh, Mem1} -> refreshed(Mu, M, Mem1)
+    end.
 
 %%% ------------------------------------------------------------ simd memory ---
 %%
@@ -2089,9 +2099,18 @@ mem_op(Op, Offset, M, Width, #st{mut = Mu} = St) ->
             {store, N, Kind} = store_spec(Op),
             [Value, Base | S] = St#st.stack,
             Addr = unsigned(Base, Width) + Offset,
-            wasm_memory:store(Mem, Addr, N, encode_stored(Kind, Value)),
-            St#st{stack = S}
+            case wasm_memory:store_r(Mem, Addr, N, encode_stored(Kind, Value)) of
+                ok -> St#st{stack = S};
+                {refresh, Mem1} ->
+                    St#st{stack = S, mut = refreshed(Mu, M, Mem1)}
+            end
     end.
+
+%% A store that published arena chunks hands back a handle that has seen them.
+%% Keeping it only saves a lookup, so it is not checkpointed: a state that
+%% loses it is still correct.
+refreshed(Mu, M, Mem) ->
+    Mu#mut{mems = setelement(M + 1, Mu#mut.mems, Mem)}.
 
 %% Also generated inline by `wasm_core:decode/3`, which cannot share this code
 %% because it builds Core rather than running. The two are pinned together by

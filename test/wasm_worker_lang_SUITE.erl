@@ -64,7 +64,23 @@ groups() ->
      {python_reactor_ahead, [], python_reactor_cases() ++ ahead_cases()},
      %% An entry set at capture and called with no source. Not in `all/0`, for
      %% the reason the other CPython groups are not.
-     {python_entry, [], entry_cases()}].
+     {python_entry, [], entry_cases()},
+     %% Each reactor again on the compiled tier, restored per request, with and
+     %% without `restore_ahead'. The kit must hold unchanged, and the case
+     %% added to each shows a request's own call reaching generated code
+     %% rather than relying on the configuration's name. Not in `all/0': the
+     %% tier needs hundreds of requests and a compile measured in minutes.
+     {qjs_reactor_compiled, [], reactor_cases() ++ [compiled_requests]},
+     {lua_reactor_compiled, [], lua_cases() ++ [compiled_requests]},
+     {python_reactor_compiled, [],
+      python_reactor_cases() ++ [compiled_requests]},
+     {qjs_reactor_ahead_compiled, [],
+      reactor_cases() ++ ahead_cases() ++ [compiled_requests]},
+     {lua_reactor_ahead_compiled, [],
+      lua_cases() ++ ahead_cases() ++ [compiled_requests]},
+     {python_reactor_ahead_compiled, [],
+      python_reactor_cases() ++ ahead_cases() ++ [compiled_requests]},
+     {python_entry_compiled, [], entry_cases() ++ [compiled_requests]}].
 
 %% `groups/0' runs before `init_per_suite', and listing an adapter's capability
 %% cases means building its artifact, which for a real engine means loading a
@@ -182,6 +198,20 @@ init_per_group(python_entry, Config) ->
              {limits, Limits#{max_request_bytes => 4 * 1024 * 1024}}
              | proplists:delete(limits, proplists:delete(worker_opts, C))]
     end;
+init_per_group(qjs_reactor_compiled, Config) ->
+    compiled_tier(init_per_group(qjs_reactor, Config));
+init_per_group(lua_reactor_compiled, Config) ->
+    compiled_tier(init_per_group(lua_reactor, Config));
+init_per_group(python_reactor_compiled, Config) ->
+    compiled_tier(init_per_group(python_reactor, Config));
+init_per_group(qjs_reactor_ahead_compiled, Config) ->
+    compiled_tier(init_per_group(qjs_reactor_ahead, Config));
+init_per_group(lua_reactor_ahead_compiled, Config) ->
+    compiled_tier(init_per_group(lua_reactor_ahead, Config));
+init_per_group(python_reactor_ahead_compiled, Config) ->
+    compiled_tier(init_per_group(python_reactor_ahead, Config));
+init_per_group(python_entry_compiled, Config) ->
+    compiled_tier(init_per_group(python_entry, Config));
 init_per_group(python_metered, Config) ->
     skip_without(python(), [{adapter, wasm_python_command}, {config, metered},
                             {engine, python()}, {opts, python_opts()},
@@ -190,6 +220,16 @@ init_per_group(python_compiled, Config) ->
     skip_without(python(), [{adapter, wasm_python_command}, {config, compiled},
                             {engine, python()}, {opts, python_opts()},
                             {limits, python_compiled()} | Config]).
+
+%% `compiled => true' on the worker, which needs `fuel => infinity' under it.
+compiled_tier({skip, _} = Skip) ->
+    Skip;
+compiled_tier(Config) ->
+    Opts = proplists:get_value(worker_opts, Config, #{}),
+    Limits = ?config(limits, Config),
+    [{worker_opts, Opts#{compiled => true}},
+     {limits, Limits#{fuel => infinity}}
+     | proplists:delete(limits, proplists:delete(worker_opts, Config))].
 
 ahead({skip, _} = Skip) ->
     Skip;
@@ -498,6 +538,47 @@ the_tier_enters_a_compiled_worker(Config) ->
     %% passes. `profile => script' sets `compile_after => 1' because a script
     %% is often a single call and the default threshold of 32 is never reached.
     ?assert(until_entered(W, echo(Config), 800)).
+
+%% Requests, each traced, until one of them is seen calling a generated
+%% function of a resident slot module, in whichever process runs it: a waiting
+%% runner already exists, so every process is traced, and only generated
+%% modules have patterns. The node-wide `entered' count is not used: an
+%% earlier case may have moved it, and then it proves nothing about this
+%% worker.
+compiled_requests(Config) ->
+    ct:timetrap({minutes, 30}),
+    W = ?config(worker, Config),
+    %% Until a deadline rather than a count: QuickJS needs minutes of compile,
+    %% and fast requests would spend any count before it lands.
+    Deadline = erlang:monotonic_time(second) + 25 * 60,
+    ?assert(traced_until_generated(W, echo(Config), Deadline)).
+
+traced_until_generated(W, R, Deadline) ->
+    erlang:monotonic_time(second) < Deadline
+        andalso traced_request(W, R, Deadline).
+
+traced_request(W, R, Deadline) ->
+    Self = self(),
+    Tracer = spawn_link(fun() -> generated_calls(Self, false) end),
+    [erlang:trace_pattern({Mod, '_', '_'}, true, [local])
+     || Mod <- wasm_code_slots:slots()],
+    _ = erlang:trace(all, true, [call, {tracer, Tracer}]),
+    Got = wasm_script_worker:run(W, R),
+    _ = erlang:trace(all, false, [call]),
+    Tracer ! {done, Self},
+    Seen = receive {seen, Tracer, S} -> S end,
+    ?assertMatch({ok, _}, Got),
+    Seen orelse traced_until_generated(W, R, Deadline).
+
+generated_calls(Owner, Seen) ->
+    receive
+        {trace, _, call, {Mod, F, _}} ->
+            Generated = lists:prefix("wasm_code_", atom_to_list(Mod))
+                andalso lists:prefix("wasm_f_", atom_to_list(F)),
+            generated_calls(Owner, Seen orelse Generated);
+        {done, Owner} ->
+            Owner ! {seen, self(), Seen}
+    end.
 
 entered() -> maps:get(entered, wasm_jit:counts(), 0).
 

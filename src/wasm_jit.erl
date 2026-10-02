@@ -79,7 +79,11 @@ moved, because even with all three a refusal still interprets.
 %%
 %% 6: the dirty marking is gone with recycling, and the memory handle lost its
 %% `dirty' field, so every index generated code reads past it moved.
--define(ABI, 6).
+%%
+%% 7: a store answers the state to go on with, and the fast path is refused
+%% below a memory's image region. An artifact built by 6 would index a
+%% placeholder as an array.
+-define(ABI, 7).
 
 -define(DEFAULT_AFTER, 32).
 

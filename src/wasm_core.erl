@@ -1029,10 +1029,11 @@ instr({Op, {_Align, Offset, M}}, Rest, G0, Exit) when is_atom(Op), is_integer(Of
         false ->
             true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
             {Val, G1} = pop(G0), {Base, G2} = pop(G1),
+            {Mut1, G3} = var(G2),
             {store, N, Kind} = wasm_exec:store_spec(Op),
-            cerl:c_seq(access(store, G0#g.mut, M, N, Kind,
-                              address(Base, Offset), Val),
-                       seq(Rest, G2, Exit))
+            cerl:c_let([Mut1], access(store, G0#g.mut, M, N, Kind,
+                                      address(Base, Offset), Val),
+                       seq(Rest, G3#g{mut = Mut1}, Exit))
     end;
 
 %%% ------------------------------------------------------------------ simd ---
@@ -1553,9 +1554,12 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
                store -> call_op(store_at, [Mut, cerl:abstract(M), cerl:abstract(N),
                                            cerl:c_atom(Kind), A, Val])
            end,
+    %% A store answers the state to go on with, which the slow path may have
+    %% refreshed and the inline one never changes.
     Fast = case Dir of
                load -> inline_load(N, Kind, A, Sh, Ix, Ck, Bit);
-               store -> inline_store(N, Kind, A, Sh, Ix, Ck, Bit, Val)
+               store -> cerl:c_seq(inline_store(N, Kind, A, Sh, Ix, Ck, Bit, Val),
+                                   Mut)
            end,
     %% `Bit' is the bit offset of the access within its word, and the straddle
     %% test is on it, so it is computed once and shared by the guard and the
@@ -1609,7 +1613,11 @@ ordinary(Mem, A, N, Bit, Fast, Slow) ->
          bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]), cerl:abstract(64)]),
          %% One field read and a multiply.
          bif('=<', [bif('+', [A, cerl:abstract(N)]),
-                    bif('*', [field(Mem, ?MEM_PAGES), cerl:abstract(65536)])])],
+                    bif('*', [field(Mem, ?MEM_PAGES), cerl:abstract(65536)])]),
+         %% Past the image region, where `chunks' holds arrays. Below it the
+         %% chunk is a placeholder and the page table decides, which the
+         %% helper does.
+         bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)])],
         Fast, Slow).
 
 %% Nested cases, because Core Erlang has no `andalso`: it is sugar the parser

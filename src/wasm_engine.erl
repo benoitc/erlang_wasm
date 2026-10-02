@@ -44,7 +44,7 @@ eventually refuses every allocation on the node.
          page_limit/0, set_pages_in_use/1,
          set_page_limit/1, stats/0]).
 -export([table_put/2, table_get/1, table_forget/1]).
--export([cell_put/2, cell_get/1, cell_forget/1]).
+-export([cell_put/2, cell_get/1, cell_forget/1, cell_extend/3]).
 -export([intern_rec_group/1, ensure_store/0]).
 -export([rec_group_limit/0, rec_groups_in_use/0]).
 -export([ensure_waiters/0, ensure_waiter_table/0]).
@@ -295,6 +295,18 @@ cell_get(Id) -> table_get(Id).
 
 -spec cell_forget(reference()) -> ok.
 cell_forget(Id) -> table_forget(Id).
+
+-doc """
+Replace a cell holding a tuple of `Size` elements with `New`, and answer
+whether it did. A compare-and-swap on the tuple's length, for a cell whose
+tuple only ever grows: two writers extending it at once cannot both win.
+""".
+-spec cell_extend(reference(), non_neg_integer(), tuple()) -> boolean().
+cell_extend(Id, Size, New) ->
+    1 =:= ets:select_replace(
+            ?TABLES_TAB,
+            [{{Id, '$1'}, [{'=:=', {tuple_size, '$1'}, Size}],
+              [{{Id, {const, New}}}]}]).
 
 -doc """
 Intern a canonical recursive type group, returning its node-wide identity.

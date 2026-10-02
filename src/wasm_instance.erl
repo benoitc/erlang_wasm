@@ -1281,12 +1281,21 @@ link_missing(Mod, Name) ->
 
 new_memory(#memtype{limits = #limits{min = Min} = Limits}, Observable,
            {Token, Owner}, Extra) ->
-    case wasm_memory:create(Limits, Extra#{observable => Observable,
+    Asked = memory_extra(Extra),
+    case wasm_memory:create(Limits, Asked#{observable => Observable,
                                            holder => {Token, Owner}}) of
         {ok, Mem} -> Mem;
         {error, _Why} ->
             wasm_error:exhaustion(memory_limit, #{requested => Min})
     end.
+
+%% An image laid under a memory is for tests until the keeper accounts for the
+%% pages it makes private; nothing else may ask for one.
+-ifdef(TEST).
+memory_extra(Extra) -> Extra.
+-else.
+memory_extra(Extra) -> maps:without([image], Extra).
+-endif.
 
 build_tables(#module{imports = Imports, tables = Tables}, Provided, Globals,
              Inst, Holder) ->

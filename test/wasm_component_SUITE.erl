@@ -27,7 +27,8 @@ all() ->
      a_declared_post_return_runs,
      a_post_return_trap_fails_the_call,
      a_lift_selects_its_declared_core,
-     an_ill_typed_lift_is_rejected].
+     an_ill_typed_lift_is_rejected,
+     a_double_drop_traps].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -145,6 +146,16 @@ an_ill_typed_lift_is_rejected(_Config) ->
     {ok, Bin} = file:read_file(component_fixture("audit/invalid_lift.wasm")),
     ?assertMatch({error, {invalid_lift_type, _}},
                  wasm_component:instantiate(Bin)).
+
+%% The guest mints a resource handle, drops it, then drops the same handle again.
+%% The second drop is a use of a handle no longer live in the instance, so it
+%% traps rather than returning. Was returning 42 (the drop was a silent no-op).
+a_double_drop_traps(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("audit/double_drop.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertMatch({error, #{class := trap, msg := <<"resource_not_live">>}},
+                 wasm_component:call(I, <<"run">>, {[], u32}, [])),
+    ok = wasm_component:destroy(I).
 
 component_fixture(Name) ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",

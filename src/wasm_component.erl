@@ -59,7 +59,6 @@ lower/lift, and the async Canonical ABI.
 -define(CORE_MODULE_SEC, 1).
 -define(NESTED_COMPONENT_SEC, 4).
 -define(EXPORT_SEC, 11).
--define(HANDLES, {?MODULE, handles}).
 -define(HOST, {?MODULE, host_resources}).
 -define(HOST_NEXT, {?MODULE, host_next}).
 %% An optional cap on how many host resources may be live at once, so a guest that
@@ -272,7 +271,10 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
 
 with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings) ->
     {ok, Inst#{export_map => ExportMap, str_enc => StrEnc,
-               export_bindings => Bindings}};
+               export_bindings => Bindings,
+               %% This instance's own resource handle table (see wasm_resources);
+               %% guest calls run with it current, and destroy frees it.
+               res_id => wasm_resources:new_instance()}};
 with_export_map(Other, _ExportMap, _StrEnc, _Bindings) ->
     Other.
 
@@ -403,15 +405,27 @@ bridge_imports(Args, Bytes, Insts) ->
           end
       end, #{}, Args).
 
-%% One cross-component call, as a host function the consumer's core imports.
-bridge(Provider, FuncName, Sig) ->
+%% One cross-component call, as a host function the consumer's core imports. This
+%% function runs in the consumer's instance context; `call/4` switches to the
+%% provider for the call and back, so a resource the call returns is adopted into
+%% the consumer's handle table here.
+bridge(Provider, FuncName, {_Params, Result} = Sig) ->
     import_fun(Sig,
                fun(Terms) ->
                    case call(Provider, FuncName, Sig, Terms) of
-                       {ok, Value}    -> Value;
+                       {ok, Value}    -> adopt_result(Result, Value);
                        {error, _} = E -> throw({wasm_bridge_failed, FuncName, E})
                    end
                end).
+
+%% A cross-component call that returns an `own<T>` transfers the resource to the
+%% consumer: record the handle live in the consumer's table so its later drop
+%% succeeds rather than trapping. Any other result shape passes through unchanged.
+adopt_result({own, Rt}, Handle) ->
+    wasm_resources:track(Handle, Rt),
+    Handle;
+adopt_result(_Result, Value) ->
+    Value.
 
 %% The drop function `canon resource.drop` runs, returning `ok` or `{trap, Reason}`.
 %% A caller that owns OS resources supplies `resource_closer` (the same closer
@@ -473,8 +487,18 @@ destroy(Inst) ->
 -spec destroy(instance(), fun(({atom(), term()}) -> ok)) -> ok.
 destroy(Inst, Closer) ->
     lists:foreach(fun wasm:destroy/1, cores_of(Inst)),
+    lists:foreach(fun wasm_resources:destroy_instance/1, res_ids(Inst)),
     sweep_host(Closer),
     ok.
+
+%% The resource-table ids an instance holds: its own, plus every sub-instance's
+%% for a composed instance, so destroying it frees each nested table and leaves
+%% any other instance's table in the process untouched.
+res_ids(#{insts := Insts}) ->
+    [Id || {instance, Sub} <- maps:values(Insts),
+           Id <- res_ids(Sub)];
+res_ids(#{res_id := Id}) -> [Id];
+res_ids(_) -> [].
 
 cores_of(#{cores := Insts}) -> Insts;
 cores_of(#{core := Inst})   -> [Inst].
@@ -492,7 +516,6 @@ sweep_host(Closer) ->
           end,
           host_drop(H)
       end, host_live()),
-    _ = erase(?HANDLES),
     ok.
 
 -doc "The export names a decoded component instance offers.".
@@ -537,7 +560,14 @@ call(#{} = I, Export, {Params, Result}, Args) ->
             Enc, fun() -> do_call(I, Export, {Params, Result}, Args) end)
       end).
 
-do_call(I, Export, {Params, Result}, Args) ->
+do_call(I, Export, Sig, Args) ->
+    %% Run with this component instance's resource handle table current, so the
+    %% resource intrinsics (and a cross-component bridge) act on the right table.
+    wasm_resources:with_instance(
+      maps:get(res_id, I),
+      fun() -> do_call_1(I, Export, Sig, Args) end).
+
+do_call_1(I, Export, {Params, Result}, Args) ->
     %% A multi-core component lifts different exports from different cores (a proxy
     %% component lifts `wasi:cli/run#run` from a command shim and
     %% `wasi:http/incoming-handler#handle` from the main module), and two cores can
@@ -805,10 +835,14 @@ Run a resource's destructor for a handle the host owns.
 `example:counter/counters#`; the destructor export is `<Prefix>[dtor]<Res>`.
 """.
 -spec drop_resource(instance(), binary(), non_neg_integer()) -> ok.
-drop_resource(#{core := Inst}, DtorExport, Handle) ->
-    _ = wasm:call(Inst, DtorExport, [Handle]),
-    _ = untrack(Handle),
-    ok.
+drop_resource(#{core := Inst} = I, DtorExport, Handle) ->
+    wasm_resources:with_instance(
+      maps:get(res_id, I, wasm_resources:new_instance()),
+      fun() ->
+          _ = wasm:call(Inst, DtorExport, [Handle]),
+          _ = wasm_resources:untrack(Handle),
+          ok
+      end).
 
 %%% ------------------------------------------------------ import resolution ---
 
@@ -859,9 +893,24 @@ is_intrinsic(Field) ->
 
 intrinsic(Field) ->
     case intrinsic_kind(Field) of
-        new  -> fun(_Ctx, [Rep])    -> {ok, [track(Rep)]} end;
-        drop -> fun(_Ctx, [Handle]) -> _ = untrack(Handle), {ok, []} end;
-        rep  -> fun(_Ctx, [Handle]) -> {ok, [Handle]} end
+        new  -> fun(_Ctx, [Rep])    -> wasm_resources:track(Rep, undefined), {ok, [Rep]} end;
+        drop -> fun(_Ctx, [Handle]) -> intrinsic_drop(Handle) end;
+        rep  -> fun(_Ctx, [Handle]) -> intrinsic_rep(Handle) end
+    end.
+
+%% A guest that manages its own owns: dropping or reading a handle that is not
+%% live in this instance (a double drop, a use-after-drop, a never-minted handle)
+%% traps rather than silently passing. Lenient when no instance is current.
+intrinsic_drop(Handle) ->
+    case wasm_resources:drop(Handle) of
+        {ok, _Kind} -> {ok, []};
+        error       -> wasm_error:trap(resource_not_live, #{handle => Handle, operation => drop})
+    end.
+
+intrinsic_rep(Handle) ->
+    case wasm_resources:lookup(Handle) of
+        {ok, _Rt} -> {ok, [Handle]};
+        error     -> wasm_error:trap(resource_not_live, #{handle => Handle, operation => rep})
     end.
 
 intrinsic_kind(Field) ->
@@ -872,22 +921,6 @@ intrinsic_kind(Field) ->
                 _       -> drop
             end;
         _ -> new
-    end.
-
-%% Identity handles: the handle is the representation. The table records which are
-%% live so a double drop or a use-after-drop is a table miss rather than silent.
-track(Rep) ->
-    put(?HANDLES, maps:put(Rep, true, live())),
-    Rep.
-
-untrack(Handle) ->
-    put(?HANDLES, maps:remove(Handle, live())),
-    ok.
-
-live() ->
-    case get(?HANDLES) of
-        undefined -> #{};
-        Map       -> Map
     end.
 
 %%% -------------------------------------------------- host resource table ---

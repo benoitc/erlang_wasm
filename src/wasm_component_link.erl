@@ -499,7 +499,12 @@ link(Graph, EntryModIdx, HostResolve, Opts) ->
            core_globals => #{}, n_cg => 0, comp_insts => #{}, n_pi => 0,
            comp_funcs => #{}, n_pf => 0, built => [], entry_mod => EntryModIdx,
            entry_by_mod => undefined, run_inst => undefined,
-           core_func_target => #{}},
+           core_func_target => #{},
+           %% The resource types this component DEFINES (a `resource.new` names
+           %% only a defined type). Liveness is enforced on drop/rep of these; an
+           %% imported or host resource (a WASI stream) is not a defined type and
+           %% its drop passes straight through, as before.
+           defined_rts => [Rt || {canon_resource, new, Rt} <- Graph]},
     case fold(Graph, S0) of
         {ok, S} ->
             Built = lists:reverse(maps:get(built, S)),
@@ -623,21 +628,26 @@ step({canon_async, Which, Meta}, S) ->
     %% Each async built-in is a core function the guest imports; bind it to the
     %% `wasm_async` runtime (a task is a BEAM process, a wait a selective receive).
     {ok, bump(S, n_cf, core_funcs, wasm_async:builtin(Which, Meta))};
-step({canon_resource, drop, _Rt}, S) ->
+step({canon_resource, drop, Rt}, S) ->
     %% `canon resource.drop` runs the drop function the caller supplied (which closes
     %% a host resource and forgets its handle), so a guest that drops a socket or file
     %% frees it at once instead of leaking until the instance is destroyed. With no
     %% drop function it stays a no-op (the destroy-time sweep still frees everything).
+    %% For a resource this component DEFINES, the handle's liveness is checked first,
+    %% so dropping one twice or dropping a never-minted handle traps.
     Drop = maps:get(drop_fun, maps:get(opts, S), fun(_H) -> ok end),
-    Fun = fun(_Ctx, [H]) ->
-              case Drop(H) of
-                  {trap, _} = Trap -> Trap;
-                  _                -> {ok, []}
-              end
-          end,
+    Defined = lists:member(Rt, maps:get(defined_rts, S, [])),
+    Fun = fun(_Ctx, [H]) -> resource_drop(Defined, H, Drop) end,
     {ok, bump(S, n_cf, core_funcs, Fun)};
-step({canon_resource, Kind, _Rt}, S) ->
-    {ok, bump(S, n_cf, core_funcs, resource_fun(Kind))};
+step({canon_resource, new, Rt}, S) ->
+    %% A defined resource: record the handle live in the current instance so a later
+    %% drop or rep can tell a live handle from a dropped or bogus one.
+    Fun = fun(_Ctx, [Rep]) -> wasm_resources:track(Rep, Rt), {ok, [Rep]} end,
+    {ok, bump(S, n_cf, core_funcs, Fun)};
+step({canon_resource, rep, Rt}, S) ->
+    Defined = lists:member(Rt, maps:get(defined_rts, S, [])),
+    Fun = fun(_Ctx, [H]) -> resource_rep(Defined, H) end,
+    {ok, bump(S, n_cf, core_funcs, Fun)};
 step({core_alias, func, InstIdx, Name}, S) ->
     case export_val(S, InstIdx, Name) of
         {ok, Val} ->
@@ -743,11 +753,37 @@ realloc_callable(Idx, S) ->
 missing(Key, _S) ->
     {error, {unresolved_import, Key}}.
 
-%% Identity handle intrinsics for `canon resource.{new,drop,rep}`; the host owns
-%% real resource state elsewhere, so these just pass the handle through.
-resource_fun(new)  -> fun(_Ctx, [Rep])    -> {ok, [Rep]} end;
-resource_fun(drop) -> fun(_Ctx, [_Handle]) -> {ok, []} end;
-resource_fun(rep)  -> fun(_Ctx, [Handle]) -> {ok, [Handle]} end.
+%% `canon resource.drop`. For a defined resource the handle must be live in the
+%% current instance; a double drop or a drop of a never-minted handle traps.
+%% Dropping a live one forgets it and runs the host drop (which closes a socket or
+%% file). A handle of a type this component does not define (an imported or host
+%% resource) is not tracked here, so it passes straight to the host drop as before.
+resource_drop(true, H, Drop) ->
+    case wasm_resources:drop(H) of
+        error ->
+            wasm_error:trap(resource_not_live, #{handle => H, operation => drop});
+        {ok, _Kind} ->
+            case Drop(H) of
+                {trap, _} = Trap -> Trap;
+                _                -> {ok, []}
+            end
+    end;
+resource_drop(false, H, Drop) ->
+    case Drop(H) of
+        {trap, _} = Trap -> Trap;
+        _                -> {ok, []}
+    end.
+
+%% `canon resource.rep`. For a defined resource the handle must be live, so reading
+%% the representation of a dropped or bogus handle traps; otherwise it passes
+%% through (the representation is the handle in the identity model).
+resource_rep(true, H) ->
+    case wasm_resources:lookup(H) of
+        {ok, _Rt} -> {ok, [H]};
+        error     -> wasm_error:trap(resource_not_live, #{handle => H, operation => rep})
+    end;
+resource_rep(false, H) ->
+    {ok, [H]}.
 
 %% The value of core instance `InstIdx`'s export `Name`: an `extern()` from a real
 %% instance, or the stored value of a synthetic one.

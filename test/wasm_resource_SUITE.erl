@@ -246,7 +246,8 @@ a_grower_that_dies_gives_its_reservation_back(_Config) ->
     Res = wasm_memory:resource(Mem),
     Self = self(),
     Grower = spawn(fun() ->
-                       {ok, _GrowRef, _Old} = wasm_keeper:grow_begin(Res, 4, 64),
+                       {ok, _Old} = wasm_keeper:grow_begin(Res, make_ref(), 4,
+                                                           64),
                        Self ! claimed,
                        receive never -> ok end
                    end),
@@ -364,7 +365,8 @@ a_builder_killed_before_it_finishes_releases_what_it_took(_Config) ->
                         receive never -> ok end
                     end),
     receive taken -> ok after 5000 -> ct:fail(nothing_taken) end,
-    ?assertEqual(Base + 5, wasm_engine:pages_in_use()),
+    %% What is allocated: the three-page memory is one 256 KiB chunk.
+    ?assertEqual(Base + 2 + 4, wasm_engine:pages_in_use()),
     Ref = monitor(process, Builder),
     exit(Builder, kill),
     receive {'DOWN', Ref, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
@@ -494,7 +496,8 @@ a_keeper_restart_keeps_the_registry(_Config) ->
                       receive never -> ok end
                   end),
     Owned = receive {mine, R} -> R after 5000 -> ct:fail(no_memory) end,
-    ?assertEqual(Base + 5, wasm_engine:pages_in_use()),
+    %% What is allocated: the three-page memory is one 256 KiB chunk.
+    ?assertEqual(Base + 4 + 2, wasm_engine:pages_in_use()),
 
     Pid = whereis(wasm_keeper),
     Ref = monitor(process, Pid),
@@ -505,14 +508,14 @@ a_keeper_restart_keeps_the_registry(_Config) ->
 
     %% Still known, still charged, still releasable.
     ?assertEqual([{process, self()}], wasm_keeper:holders_of(Res)),
-    ?assertEqual(Base + 5, wasm_engine:pages_in_use()),
+    ?assertEqual(Base + 4 + 2, wasm_engine:pages_in_use()),
 
     %% And the monitors came back with it: killing the other owner still
     %% returns its pages, which is the half a restart could silently lose.
     OwnerRef = monitor(process, Owner),
     exit(Owner, kill),
     receive {'DOWN', OwnerRef, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
-    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base + 3 end, 2000),
+    wait_until(fun() -> wasm_engine:pages_in_use() =:= Base + 4 end, 2000),
     ?assertEqual([], wasm_keeper:holders_of(Owned)),
 
     ok = wasm_memory:free(Mem),
@@ -564,21 +567,25 @@ an_aborted_growth_does_not_block_the_next_one(_Config) ->
     Base = wasm_engine:pages_in_use(),
     {ok, Mem} = wasm_memory:new(1, 8),
     Res = wasm_memory:resource(Mem),
-    {ok, GrowRef, 1} = wasm_keeper:grow_begin(Res, 4, 8),
+    GrowRef = make_ref(),
+    {ok, 1} = wasm_keeper:grow_begin(Res, GrowRef, 4, 8),
     ok = wasm_keeper:grow_abort(Res, GrowRef),
     ?assertEqual(1, wasm_keeper:charge_of(Res)),
     %% From another process and with a deadline, because the defect is a block
     %% and asserting it from here would hang the suite instead of failing it.
     Self = self(),
     Tag = make_ref(),
-    P = spawn(fun() -> Self ! {Tag, wasm_keeper:grow_begin(Res, 2, 8)} end),
-    Second = receive {Tag, R} -> ?assertMatch({ok, _, 1}, R), R
-             after 5000 -> exit(P, kill), ct:fail(a_second_growth_never_started)
-             end,
-    %% Ended explicitly rather than left to the grower's death, so the next case
-    %% does not start while this memory is still mid-transaction.
-    {ok, Second_Ref, _} = Second,
-    ok = wasm_keeper:grow_abort(Res, Second_Ref),
+    Second_Ref = make_ref(),
+    P = spawn(fun() ->
+                      Self ! {Tag, wasm_keeper:grow_begin(Res, Second_Ref, 2, 8)},
+                      %% Ended explicitly rather than left to the grower's
+                      %% death, so the next case does not start while this
+                      %% memory is still mid-transaction.
+                      ok = wasm_keeper:grow_abort(Res, Second_Ref)
+              end),
+    receive {Tag, R} -> ?assertMatch({ok, 1}, R)
+    after 5000 -> exit(P, kill), ct:fail(a_second_growth_never_started)
+    end,
     wait_until(fun() -> wasm_keeper:charge_of(Res) =:= 1 end, 2000),
     ok = wasm_memory:free(Mem),
     wait_until(fun() -> wasm_engine:pages_in_use() =:= Base end, 2000),
@@ -599,7 +606,8 @@ a_keeper_restart_mid_growth_leaves_the_size_it_promised(_Config) ->
 
     %% Begun and not committed, which is where the grower sits while it
     %% allocates its chunks.
-    {ok, GrowRef, 1} = wasm_keeper:grow_begin(Res, 4, 8),
+    GrowRef = make_ref(),
+    {ok, 1} = wasm_keeper:grow_begin(Res, GrowRef, 4, 8),
     ?assertEqual(5, wasm_keeper:charge_of(Res)),
 
     Pid = whereis(wasm_keeper),
@@ -730,7 +738,11 @@ a_tree_death_does_not_leak_the_page_budget(_Config) ->
 %% a memory two instances share is one charge, and `wasm_keeper:adopt_totals/0`
 %% counts it twice on purpose because it is building per-token totals.
 registry_pages() ->
-    ets:foldl(fun({_Res, _Meta, Pages, H}, Acc) when is_map(H) -> Acc + Pages;
+    ets:foldl(fun({_Res, {memory, _, _, _, _, _}, _L, H, #{phys := Phys}}, Acc)
+                    when is_map(H) ->
+                      Acc + lists:sum(maps:values(Phys));
+                 ({_Res, {image, _}, _L, H, _}, Acc) when is_map(H) -> Acc;
+                 ({_Res, _Meta, Pages, H, _}, Acc) when is_map(H) -> Acc + Pages;
                  (_Other, Acc) -> Acc
               end, 0, wasm_holders).
 
@@ -742,7 +754,7 @@ registry_pages() ->
 %% that matters: the first crash moves ownership to the supervisor, and a
 %% version that tried to take the tables back would fail on the second.
 a_table_owner_crash_does_not_lose_the_tables(_Config) ->
-    Row = {{marker, make_ref()}, keep, 7, #{}},
+    Row = {{marker, make_ref()}, keep, 7, #{}, #{state => live}},
     true = ets:insert(wasm_holders, Row),
     Sup = whereis(wasm_store_sup),
     _ = [begin

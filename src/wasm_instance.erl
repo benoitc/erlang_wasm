@@ -1285,16 +1285,23 @@ new_memory(#memtype{limits = #limits{min = Min} = Limits}, Observable,
     case wasm_memory:create(Limits, Asked#{observable => Observable,
                                            holder => {Token, Owner}}) of
         {ok, Mem} -> Mem;
+        %% The image the memory was to be laid over was released before the
+        %% restore reached it.
+        {error, gone} ->
+            wasm_error:invalid(snapshot_invalidated,
+                               ~"this image has been released", #{});
         {error, _Why} ->
             wasm_error:exhaustion(memory_limit, #{requested => Min})
     end.
 
-%% An image laid under a memory is for tests until the keeper accounts for the
-%% pages it makes private; nothing else may ask for one.
+%% An image is laid under a memory only when the keeper holds a record of it,
+%% which a restore's always is. A test build may lay one without, to test the
+%% representation alone.
 -ifdef(TEST).
 memory_extra(Extra) -> Extra.
 -else.
-memory_extra(Extra) -> maps:without([image], Extra).
+memory_extra(#{image_res := Img} = Extra) when Img =/= undefined -> Extra;
+memory_extra(Extra) -> maps:without([image, image_res], Extra).
 -endif.
 
 build_tables(#module{imports = Imports, tables = Tables}, Provided, Globals,

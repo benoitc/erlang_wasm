@@ -212,16 +212,25 @@ create(#limits{max = Max, index_type = IdxType, shared = Shared}, Opts, Pages,
             true -> {make_ref(), atomics:new(1, [{signed, false}])};
             false -> {undefined, undefined}
         end,
-    case wasm_keeper:reserve(Pages, {memory, CRef, PagesRef}, Token, Owner) of
+    Img = case Image of undefined -> 0; _ -> tuple_size(Image) end,
+    Shift = case Img of
+                0 -> chunk_shift(Pages);
+                _ -> image_shift(Img)
+            end,
+    %% The arena's cell, like the others, exists before the row that names it,
+    %% so the keeper's reclaim is what forgets it whatever happens next.
+    ARef = case Img of
+               0 -> undefined;
+               _ -> R = make_ref(), ok = wasm_engine:cell_put(R, {}), R
+           end,
+    Meta = {memory, CRef, PagesRef, ARef, maps:get(image_res, Opts, undefined),
+            {Img, (1 bsl Shift) div ?PAGE_SIZE}},
+    case wasm_keeper:reserve(Pages, Meta, Token, Owner) of
         {error, Why} ->
+            ARef =:= undefined orelse wasm_engine:cell_forget(ARef),
             {error, page_error(Why)};
         {ok, Res} ->
             try
-                Img = case Image of undefined -> 0; _ -> tuple_size(Image) end,
-                Shift = case Img of
-                            0 -> chunk_shift(Pages);
-                            _ -> image_shift(Img)
-                        end,
                 NChunks = chunks_for(Pages, Shift),
                 Mapped = chunks_for(Img, Shift),
                 Chunks = list_to_tuple(
@@ -234,7 +243,7 @@ create(#limits{max = Max, index_type = IdxType, shared = Shared}, Opts, Pages,
                          index_type = IdxType, shift = Shift, token = Held,
                          pages_ref = PagesRef, chunks_ref = CRef,
                          shared = Shared},
-                {ok, with_image(M, Image, Img)}
+                {ok, with_image(M, Image, Img, ARef)}
             catch
                 %% The reservation is already recorded, and the caller may well
                 %% catch what running out of `atomics' arrays throws. Dying is
@@ -248,14 +257,12 @@ create(#limits{max = Max, index_type = IdxType, shared = Shared}, Opts, Pages,
 %% The image region, laid over a memory whose chunk tuple already holds a
 %% placeholder for every chunk the image covers. No page is copied here: a
 %% restore costs the table, whatever the image's size.
-with_image(M, undefined, 0) ->
+with_image(M, _Image, 0, _ARef) ->
     M;
-with_image(M, Image, Img) ->
-    Ref = make_ref(),
-    ok = wasm_engine:cell_put(Ref, {}),
+with_image(M, Image, Img, ARef) ->
     M#mem{img_bytes = Img * ?PAGE_SIZE, image = Image,
           tab = atomics:new(Img * 16 + 2, [{signed, false}]),
-          arena = {}, arena_ref = Ref}.
+          arena = {}, arena_ref = ARef}.
 
 %% The largest chunk, up to 1 MiB, that the image's size is a multiple of, so
 %% the region ends exactly on a chunk boundary and growth appends whole chunks
@@ -272,6 +279,7 @@ image_shift(Bytes, Shift) -> image_shift(Bytes, Shift - 1).
 default_holder(true) -> {manual, none};
 default_holder(false) -> {{process, self()}, self()}.
 
+page_error(gone) -> gone;
 page_error(limit) -> page_limit;
 page_error(instance_limit) -> instance_limit;
 %% The keeper is supervised and restarted, so this is a resource refusal for as
@@ -390,24 +398,34 @@ grow(#mem{id = Res, max = Max, index_type = IdxType} = M, Delta) ->
     Space = case IdxType of i32 -> ?MAX_PAGES_32; i64 -> ?MAX_PAGES_64 end,
     Declared = case Max of undefined -> Space; _ -> Max end,
     Ceiling = erlang:min(Declared, Space),
-    case wasm_keeper:grow_begin(Res, Delta, Ceiling) of
+    OpId = make_ref(),
+    case keeper(fun() -> wasm_keeper:grow_begin(Res, OpId, Delta, Ceiling) end) of
         {error, exceeds_max} when Declared >= Space ->
             {error, exceeds_address_space};
         {error, Why} ->
             {error, grow_error(Why)};
-        {ok, GrowRef, Pages} ->
+        {done, _Lost} ->
+            %% Settled before this process heard of it: the keeper took the
+            %% growth back. A refused `memory.grow' is a legal -1.
+            ok = wasm_keeper:ack(Res, OpId),
+            {error, grow_error(gone)};
+        {ok, Pages} ->
             New = Pages + Delta,
             try extend(M, Pages, New) of
                 Chunks ->
-                    case wasm_keeper:grow_commit(Res, GrowRef, Chunks, New) of
-                        ok ->
+                    Committed = keeper(fun() ->
+                                           wasm_keeper:grow_commit(Res, OpId,
+                                                                   Chunks)
+                                       end),
+                    ok = wasm_keeper:ack(Res, OpId),
+                    case Committed of
+                        {ok, Pages} ->
                             {ok, Pages, M#mem{chunks = Chunks, pages = New}};
-                        %% The keeper restarted between the reservation and
-                        %% here and gave the pages back, so this growth never
-                        %% happened. The extension is dropped with the record
-                        %% that would have carried it, and the guest gets -1,
-                        %% which `memory.grow` allows for any refusal.
-                        stale ->
+                        %% A keeper restart found this growth's grower looking
+                        %% dead, or found no such growth, and gave it back. The
+                        %% extension is dropped with the record that would have
+                        %% carried it.
+                        _ ->
                             {error, grow_error(gone)}
                     end
             catch
@@ -415,16 +433,29 @@ grow(#mem{id = Res, max = Max, index_type = IdxType} = M, Delta) ->
                 %% failure is not, so the growth has to be given back or every
                 %% later grower on this memory queues behind one that ended.
                 Class:Reason:Stack ->
-                    ok = wasm_keeper:grow_abort(Res, GrowRef),
+                    ok = keeper(fun() -> wasm_keeper:grow_abort(Res, OpId) end),
+                    ok = wasm_keeper:ack(Res, OpId),
                     erlang:raise(Class, Reason, Stack)
             end
+    end.
+
+%% A keeper transaction, asked again with the same operation id until a keeper
+%% answers. There is no giving up: only the keeper knows whether the operation
+%% was committed or undone, and answering anything without it would be a
+%% guess. A caller that has to stop is stopped from outside, and the keeper
+%% settles what it leaves.
+keeper(F) ->
+    case F() of
+        {error, keeper_unavailable} ->
+            receive after 10 -> keeper(F) end;
+        R ->
+            R
     end.
 
 grow_error(limit) -> page_limit;
 %% Refused because a holder would pass its own ceiling, which `memory.grow'
 %% turns into -1 exactly as it does a node budget refusal.
 grow_error(instance_limit) -> instance_limit;
-grow_error(keeper_unavailable) -> page_limit;
 grow_error(Why) -> Why.
 
 %% Built against the published tuple rather than this handle's, because the
@@ -1094,23 +1125,54 @@ slot_word(#mem{arena = Arena, arena_ref = Ref}, S, Addr) ->
     {C, (S - 1 - arena_slots(K - 1)) * ?SLOT_WORDS
         + ((Addr band (?SLOT_BYTES - 1)) bsr 3) + 1}.
 
-%% Publish arena chunks up to `Target', unless another writer already did. The
-%% count in the table moves only after the cell holds the chunks, and only up.
-extend_arena(#mem{arena_ref = Ref, tab = Tab} = M, Target) ->
-    Have = wasm_engine:cell_get(Ref),
-    case tuple_size(Have) >= Target of
+%% Arena chunks up to `Target', charged to the node budget before any array
+%% exists, unless another writer already published them. The count in the
+%% table moves only after the cell holds the chunks, and only up.
+extend_arena(#mem{id = Res, arena_ref = Ref, tab = Tab} = M, Target) ->
+    Have = tuple_size(wasm_engine:cell_get(Ref)),
+    case Have >= Target of
         true ->
-            raise_count(Tab, next_ix(M) + 1, tuple_size(Have));
+            raise_count(Tab, next_ix(M) + 1, Have);
         false ->
-            New = list_to_tuple(
-                    tuple_to_list(Have)
-                    ++ [atomics:new(chunk_slots(K) * ?SLOT_WORDS,
-                                    [{signed, false}])
-                        || K <- lists:seq(tuple_size(Have) + 1, Target)]),
-            case wasm_engine:cell_extend(Ref, tuple_size(Have), New) of
-                true  -> raise_count(Tab, next_ix(M) + 1, Target);
-                false -> extend_arena(M, Target)
+            Pages = lists:sum([chunk_slots(K) * ?SLOT_BYTES div ?PAGE_SIZE
+                               || K <- lists:seq(Have + 1, Target)]),
+            OpId = make_ref(),
+            case keeper(fun() ->
+                                wasm_keeper:arena_begin(Res, OpId, Target,
+                                                        {Have, Pages})
+                        end) of
+                covered ->
+                    extend_arena(M, Target);
+                {changed, _} ->
+                    extend_arena(M, Target);
+                {done, _} ->
+                    ok = wasm_keeper:ack(Res, OpId),
+                    extend_arena(M, Target);
+                {error, _Why} ->
+                    wasm_error:exhaustion(memory_limit, #{requested => Pages});
+                {ok, Have} ->
+                    New = arena_tuple(Ref, Have, Target, Res, OpId),
+                    _ = keeper(fun() ->
+                                       wasm_keeper:arena_commit(Res, OpId, New)
+                               end),
+                    ok = wasm_keeper:ack(Res, OpId),
+                    extend_arena(M, Target)
             end
+    end.
+
+%% The published chunks and new ones after them. Allocating can fail; the
+%% reservation is given back before the failure goes on.
+arena_tuple(Ref, Have, Target, Res, OpId) ->
+    try
+        list_to_tuple(
+          tuple_to_list(wasm_engine:cell_get(Ref))
+          ++ [atomics:new(chunk_slots(K) * ?SLOT_WORDS, [{signed, false}])
+              || K <- lists:seq(Have + 1, Target)])
+    catch
+        Class:Reason:Stack ->
+            ok = keeper(fun() -> wasm_keeper:arena_abort(Res, OpId) end),
+            ok = wasm_keeper:ack(Res, OpId),
+            erlang:raise(Class, Reason, Stack)
     end.
 
 raise_count(Tab, Ix, To) ->

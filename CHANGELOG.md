@@ -7,10 +7,26 @@ option, a loaded module no longer keeps its whole input file in memory, and
 the CPython reactor ships stripped with its standard library precompiled.
 Workers built on `py_reactor.wasm` need the new build.
 
-- **Restore recycling is gone.** `wasm:restore/3` no longer takes
-  `recycle`, and the worker option `recycle_idle` is removed. A restore lays
-  the whole image into fresh memory, and a worker keeps nothing between
-  requests.
+- **Restored memory shares its image.** A restore no longer copies the
+  image: the memory reads the image's pages in place and copies a 4 KiB page
+  on its first write. A restore costs a page table and a request the pages it
+  writes. `wasm:restore/3` no longer takes `recycle`, and the worker option
+  `recycle_idle` is removed.
+- **The node page budget counts allocated pages.** A restored memory charges
+  its page table and the pages it writes; any memory charges its growth in
+  whole chunks, so a three-page memory counts four. `max_memory_pages` still
+  bounds the size a guest sees.
+- **A write can now be refused for want of budget**, with `exhaustion` /
+  `memory_limit`, leaving every byte as it was. A restore that cannot be
+  afforded is refused the same way; it used to surface as `malformed` /
+  `internal`.
+- **The snapshot budget charges whole pages**: 64 KiB for each page that holds
+  data and 8 bytes per page of address space, held while the image or any
+  memory restored from it remains.
+- **A snapshot file is checked against its module before it is built.** One
+  with runs out of order or overlapping, or memories outside the module's
+  limits, is refused by name; one over the budget, or mapping more than 2^20
+  pages in one memory, is refused as `exhaustion` / `snapshot_budget`.
 - **Default heap floors.** A new optional adapter callback, `defaults/1`, is
   given the worker's resolved limits and answers `runner_min_heap_words` and
   `capture_min_heap_words` when the caller did not set them. `wasm_lua` and

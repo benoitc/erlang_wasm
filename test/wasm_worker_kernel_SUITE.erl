@@ -682,7 +682,12 @@ two_page_worker(Config, Opts) ->
     Self = self(),
     Hook = fun(Inst) ->
                #mut{mems = {Mem}} = wasm_instance:mut(Inst),
-               Chunks = tuple_to_list(element(?MEM_CHUNKS, Mem)),
+               %% The arrays: chunks past any image placeholder, and the
+               %% page table. An image's pages are shared on purpose and are
+               %% not arrays.
+               Chunks = [C || C <- [element(?MEM_IMG_BYTES + 2, Mem)
+                                    | tuple_to_list(element(?MEM_CHUNKS, Mem))],
+                              not is_atom(C)],
                {ok, <<Seen>>} = wasm:read_memory(Inst, 65536, 1),
                ok = wasm:write_memory(Inst, 65536, <<7>>),
                Self ! {restored, Chunks, Seen},

@@ -441,11 +441,16 @@ which `restore_ahead` above takes off the request's path. These were taken
 while another job loaded the machine (load average 250 to 275), so read the
 gaps rather than the absolute times; `test/audit/PERF.md` has the runs.
 
-## Every request restores the whole image
+## Every request shares the image
 
-A script worker restores its image for every request, into fresh memory, and
-keeps nothing between requests. A CPython restore writes about 12 ms of
-image; `restore_ahead` above takes it off the request's path. Nothing to set.
+A script worker restores its image for every request and keeps nothing between
+requests. The restored memory reads the image's pages in place, and a request
+copies only the 4 KiB pages it writes, so a node holds one copy of each image
+however many requests run on it. Nothing to set.
+
+The node page budget counts what is allocated: a restored memory's page table
+and the pages it wrote, and for any memory its growth in whole chunks. A
+memory created at three pages sits in one 256 KiB chunk and counts four.
 
 ## What this project has not measured
 

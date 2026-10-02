@@ -57,7 +57,8 @@ single most important sentence here.
 """.
 
 -export([capture/3, restore/4, info/1, bytes/1, module_of/1]).
--export([owner/1, with_owner/2]).
+-export([owner/1, with_owner/2, build/2]).
+-export([image_cost/1]).
 -export([to_parts/1, from_parts/3, logical_bytes/1]).
 
 -include("wasm.hrl").
@@ -85,6 +86,10 @@ single most important sentence here.
           %% What each import module's hook said to keep, by module name.
           hooks         :: #{binary() => portable()},
           bytes         :: non_neg_integer(),
+          %% The keeper's record of the image's pages, which every memory
+          %% restored from it names, and which keeps them charged for as long
+          %% as one of those memories or a holder of the image remains.
+          img_res       :: undefined | wasm_keeper:resource(),
           %% The process that holds this image's claim on its module and its
           %% share of the byte budget, and that knows who still wants it. An
           %% image is an Erlang term and the BEAM will collect it, but a term
@@ -103,8 +108,11 @@ never captured.
 -type portable() :: binary() | number() | atom() | [portable()]
                   | tuple() | #{portable() => portable()}.
 
+%% A memory as an image: one immutable binary per 64 KiB page, or `zero'. Off
+%% disk, before the image is built, the runs the file carried.
 -type captured_mem() :: #{pages := non_neg_integer(),
-                          runs := [{non_neg_integer(), binary()}]}.
+                          image => tuple(),
+                          runs => [{non_neg_integer(), binary()}]}.
 
 -doc "An immutable image. Copyable between processes; see `wasm:acquire/1`.".
 %% `portable/0` and `captured_mem/0` go out with `snapshot/0` because the
@@ -320,11 +328,9 @@ do_capture(Inst, M, Handle, Opts) ->
     Captured = [capture_mem(Mem) || Mem <- tuple_to_list(Mems)],
     Tables = contents(Ts),
     %% What is **retained**, which is what the budget charges and what
-    %% `snapshot_info/1` has always answered. Keeping runs rather than whole
-    %% memories drops it by about 9x on a real interpreter, so a node with
-    %% `max_snapshot_bytes` set admits proportionally more images.
-    Bytes = lists:sum([byte_size(R) || C <- Captured,
-                                       {_, R} <- maps:get(runs, C)]),
+    %% `snapshot_info/1` answers: every page that is not zero, whole, and a word
+    %% per page for the tuple that maps them.
+    Bytes = image_cost(Captured),
     %% **No owner yet.** Holding an image's claim means calling the module
     %% cache, and the cache calls `wasm:compile/2` on a miss, so anything
     %% long-lived that holds one is inside the facade's cycle. `wasm` attaches
@@ -343,7 +349,7 @@ captured(Inst, Handle, Opts, Gs, Tables, Captured, DE, DD, Bytes, Kept) ->
                    source = Inst#inst.id,
                    globals = Gs, tables = Tables, mems = Captured,
                    dropped_elems = DE, dropped_datas = DD, hooks = Kept,
-                   bytes = Bytes, owner = undefined}}.
+                   bytes = Bytes, img_res = undefined, owner = undefined}}.
 
 deref(Globals) ->
     list_to_tuple([case wasm_global:is_global(G) of
@@ -365,9 +371,39 @@ contents(Tables) ->
 %% `limits` is gone with it: nothing read it, and it was an Erlang record, so
 %% dropping it means an image holds no positional tuple over `wasm.hrl`.
 capture_mem(Mem) ->
-    Pages = wasm_memory:size_pages(Mem),
-    #{pages => Pages,
-      runs => runs(wasm_memory:to_binary(Mem))}.
+    #{pages => wasm_memory:size_pages(Mem), image => wasm_memory:image(Mem)}.
+
+-doc """
+What images cost the snapshot budget: every page that is not zero, whole, and
+a word per page for the tuple that maps them. One non-zero byte in each of 640
+pages is 40 MiB, because 640 pages are what is kept.
+""".
+-spec image_cost([captured_mem()]) -> non_neg_integer().
+image_cost(Mems) ->
+    lists:sum([65536 * nonzero_pages(M) + 8 * maps:get(pages, M) || M <- Mems]).
+
+nonzero_pages(#{image := Image}) ->
+    length([P || P <- tuple_to_list(Image), P =/= zero]);
+nonzero_pages(#{runs := Runs}) ->
+    length(lists:usort([P || {Off, Bin} <- Runs,
+                             P <- lists:seq(Off div 65536,
+                                            (Off + max(1, byte_size(Bin)) - 1)
+                                            div 65536)])).
+
+%% The runs a file holds for an image: per page, with today's alignment and
+%% gap rules, and a run that ends where the next page's begins joined to it.
+image_runs(Image) ->
+    join_runs([{P * 65536 + Off, Run}
+               || {P, Page} <- lists:enumerate(0, tuple_to_list(Image)),
+                  Page =/= zero,
+                  {Off, Run} <- runs(Page)]).
+
+join_runs([{A, X}, {B, Y} | Rest]) when A + byte_size(X) =:= B ->
+    join_runs([{A, <<X/binary, Y/binary>>} | Rest]);
+join_runs([R | Rest]) ->
+    [R | join_runs(Rest)];
+join_runs([]) ->
+    [].
 
 %% Aligned **down** to 8 for the offset and **up** to 8 for the length, so a
 %% write lands on `wasm_memory`'s word path rather than its read-modify-write
@@ -469,10 +505,15 @@ restore(#snapshot{handle = Handle, key = Key} = S, M, Bindings, Opts) ->
             %% 54% of a CPython restore. `wasm_instance` still makes their
             %% bounds decision, so a module that could not be instantiated is
             %% refused here exactly as it was.
+            MemOpts = maps:from_list(
+                        [{I, #{image => Image, image_res => S#snapshot.img_res}}
+                         || {I, #{image := Image}}
+                                <- lists:enumerate(0, S#snapshot.mems)]),
             case wasm_instance:new(M, Bindings,
                                    maps:without([compatibility_key],
                                                 Opts#{module_handle => Handle,
-                                                      segments => false})) of
+                                                      segments => false,
+                                                      memory_opts => MemOpts})) of
                 {error, _} = E -> E;
                 {ok, Inst}     -> lay_over(S, Inst)
             end;
@@ -562,12 +603,6 @@ restore_tables([T | Ts], [Elems | Es], From, To) ->
     ok = wasm_table:init(T, 0, [reloc(V, From, To) || V <- Elems]),
     restore_tables(Ts, Es, From, To).
 
-lay_runs(_Mem, []) ->
-    ok;
-lay_runs(Mem, [{Off, Run} | Rest]) ->
-    ok = wasm_memory:store_bytes(Mem, Off, Run),
-    lay_runs(Mem, Rest).
-
 fit(_T, Have, Want) when Have >= Want ->
     ok;
 fit(T, Have, Want) ->
@@ -578,7 +613,7 @@ fit(T, Have, Want) ->
 
 restore_mems([], []) ->
     [];
-restore_mems([Mem | Ms], [#{pages := Pages, runs := Runs} | Cs]) ->
+restore_mems([Mem | Ms], [#{pages := Pages} | Cs]) ->
     Have = wasm_memory:size_pages(Mem),
     %% The fresh instance's memory is at the module's declared minimum, and the
     %% image may have grown past it. A refusal here is the node's page budget
@@ -589,15 +624,13 @@ restore_mems([Mem | Ms], [#{pages := Pages, runs := Runs} | Cs]) ->
     %% that is neither imported nor exported that count lives in the record
     %% rather than an atomics cell (`wasm_memory:275`), so the write tripped
     %% `check_bounds`. It survived only because reactors export their memory.
-    Grown = case Have >= Pages of
-                true ->
-                    Mem;
-                false ->
-                    case wasm_memory:grow(Mem, Pages - Have) of
-                        {ok, _, New} -> New;
-                        {error, Why} ->
-                            erlang:error({snapshot_restore_grow_failed, Why})
-                    end
+    %% The memory was made over the image, at the image's size, so there is
+    %% nothing to grow and nothing to lay: its pages are read in place until
+    %% something writes them. A memory of another size is an image that does
+    %% not fit this module, refused by name rather than run.
+    Grown = case Have =:= Pages of
+                true -> Mem;
+                false -> erlang:error({snapshot_restore_size, Have, Pages})
             end,
     %% **Only the runs are written, and the gaps are left alone.** Two things
     %% have to hold for that and each is enforced by something: `atomics:new/2`
@@ -612,7 +645,6 @@ restore_mems([Mem | Ms], [#{pages := Pages, runs := Runs} | Cs]) ->
     %% dense pays far less for it -- QuickJS's is 53.7% non-zero against
     %% CPython's 17.7% -- which is why it looked small on the guest the restore
     %% path was first measured on.
-    ok = lay_runs(Grown, Runs),
     %% The grown handle goes **back into `#mut.mems`**, not just written
     %% through. An observable memory keeps its size in an atomics cell, so the
     %% old record would still read the new size; an unexported one keeps it in
@@ -675,7 +707,8 @@ to_parts(#snapshot{handle = {wasm_module, Hash}, source = Src} = S) ->
       shape => shape(S),
       globals => [reloc(V, Src, self) || V <- tuple_to_list(S#snapshot.globals)],
       tables => [[reloc(V, Src, self) || V <- T] || T <- S#snapshot.tables],
-      mems => S#snapshot.mems,
+      mems => [#{pages => P, runs => image_runs(I)}
+               || #{pages := P, image := I} <- S#snapshot.mems],
       dropped => {S#snapshot.dropped_elems, S#snapshot.dropped_datas},
       hooks => S#snapshot.hooks}.
 
@@ -715,7 +748,8 @@ from_parts(#{hash := Hash} = P, {wasm_module, Want} = Handle, M) ->
 restore_admissible(P, M) ->
     Checks = [fun() -> no_imported_state(M) end,
               fun() -> no_defined_shared_memory(M) end,
-              fun() -> restore_values_ok(P, M) end],
+              fun() -> restore_values_ok(P, M) end,
+              fun() -> mems_ok(P, M) end],
     lists:foldl(fun(_C, {error, _} = E) -> E;
                    (C, ok) -> C()
                 end, ok, Checks).
@@ -746,6 +780,52 @@ restore_values_ok(#{globals := Gs, tables := Ts}, M) when is_list(Gs),
 restore_values_ok(_P, _M) ->
     refuse(snapshot_corrupt, ~"the image's globals or tables are malformed", #{}).
 
+%% Every memory the file describes, checked against the module before any page
+%% is built: as many as the module defines, each within its declared limits and
+%% the address space, its runs in order, apart, and inside it. What a capture
+%% writes always passes; anything else is a file this node did not write.
+mems_ok(#{mems := Ms}, #module{mems = Types}) when length(Ms) =:= length(Types) ->
+    first_error([mem_ok(Mem, T) || {Mem, T} <- lists:zip(Ms, Types)]);
+mems_ok(_P, _M) ->
+    refuse(snapshot_wrong_shape,
+           ~"the image's memories do not match the module's", #{}).
+
+mem_ok(#{pages := Pages, runs := Runs},
+       #memtype{limits = #limits{min = Min, max = Max, index_type = IT}}) ->
+    Space = case IT of i32 -> ?MAX_PAGES_32; i64 -> ?MAX_PAGES_64 end,
+    Ceiling = case Max of undefined -> Space; _ -> min(Max, Space) end,
+    if
+        Pages < Min; Pages > Ceiling ->
+            refuse(snapshot_wrong_shape,
+                   ~"an image memory is outside the module's limits",
+                   #{pages => Pages, min => Min, max => Ceiling});
+        %% A fixed ceiling on what the image's tuple alone may cost, which
+        %% holds when `max_snapshot_bytes' is `infinity': 2^20 pages is 8 MiB
+        %% of tuple for 64 GiB of address space.
+        Pages > 1 bsl 20 ->
+            {error, #{class => exhaustion, kind => snapshot_budget,
+                      msg => ~"an image memory is too large to load",
+                      ctx => #{pages => Pages, limit => 1 bsl 20}}};
+        true ->
+            runs_ok(Runs, 0, Pages * 65536)
+    end.
+
+runs_ok([], _From, _End) ->
+    ok;
+runs_ok([{Off, Bin} | Rest], From, End)
+  when Off >= From, Off + byte_size(Bin) =< End ->
+    runs_ok(Rest, Off + byte_size(Bin), End);
+runs_ok(_Runs, _From, _End) ->
+    refuse(snapshot_corrupt,
+           ~"an image memory's runs overlap, are out of order or past its end",
+           #{}).
+
+first_error(Rs) ->
+    case [E || {error, _} = E <- Rs] of
+        [] -> ok;
+        [E | _] -> E
+    end.
+
 %% On disk a funcref names its own instance as `self'; restore relocates it.
 restore_value_ok({funcref, self, F}, NFuncs) ->
     is_integer(F) andalso F >= 0 andalso F < NFuncs;
@@ -763,13 +843,71 @@ built(P, Handle) ->
     %% A fresh identity per load, so two images read from the same file are as
     %% distinct as two captured in this node would be.
     Src = make_ref(),
-    Bytes = lists:sum([byte_size(R) || M <- Ms, {_, R} <- maps:get(runs, M)]),
+    Bytes = image_cost(Ms),
     {ok, #snapshot{id = make_ref(), handle = Handle, version = V, key = K,
                    source = Src,
                    globals = list_to_tuple([reloc(G, self, Src) || G <- Gs]),
                    tables = [[reloc(E, self, Src) || E <- T] || T <- Ts],
                    mems = Ms, dropped_elems = DE, dropped_datas = DD,
-                   hooks = Hooks, bytes = Bytes, owner = undefined}}.
+                   hooks = Hooks, bytes = Bytes, img_res = undefined,
+                   owner = undefined}}.
+
+-doc """
+The image's pages, built and registered under `ImgRes`.
+
+A captured image already has its pages; one read from a file has runs, laid
+here into a fresh binary per page that is not zero. Each page is copied, so
+nothing in the image refers to the file it came from.
+""".
+-spec build(snapshot(), wasm_keeper:resource()) -> snapshot().
+build(#snapshot{mems = Ms} = S, ImgRes) ->
+    S#snapshot{mems = [built_mem(M) || M <- Ms], img_res = ImgRes}.
+
+built_mem(#{image := _} = M) ->
+    M;
+built_mem(#{pages := Pages, runs := Runs}) ->
+    ByPage = lists:foldl(fun({Off, Bin}, Acc) -> by_page(Off, Bin, Acc) end,
+                         #{}, Runs),
+    ok = build_hook(page),
+    #{pages => Pages,
+      image => list_to_tuple([page(maps:get(P, ByPage, [])) ||
+                                 P <- lists:seq(0, Pages - 1)])}.
+
+%% A run cut at page boundaries, each piece filed under its page.
+by_page(_Off, <<>>, Acc) ->
+    Acc;
+by_page(Off, Bin, Acc) ->
+    P = Off div 65536,
+    In = min(byte_size(Bin), (P + 1) * 65536 - Off),
+    <<Here:In/binary, Rest/binary>> = Bin,
+    by_page(Off + In, Rest,
+            Acc#{P => [{Off rem 65536, Here} | maps:get(P, Acc, [])]}).
+
+-ifdef(TEST).
+%% A test's way into a build half done: `{wasm, build_hook}' in the
+%% application environment, a fun called before each memory is built.
+build_hook(Point) ->
+    case application:get_env(wasm, build_hook) of
+        {ok, F} when is_function(F, 1) -> _ = F(Point), ok;
+        _ -> ok
+    end.
+-else.
+build_hook(_Point) -> ok.
+-endif.
+
+page([]) ->
+    zero;
+page(Pieces) ->
+    {End, Parts} = lists:foldl(fun({Off, Bin}, {At, Acc}) ->
+                                       {Off + byte_size(Bin),
+                                        [Bin, <<0:((Off - At) * 8)>> | Acc]}
+                               end, {0, []}, lists:reverse(Pieces)),
+    Page = binary:copy(iolist_to_binary(
+                         lists:reverse([<<0:((65536 - End) * 8)>> | Parts]))),
+    case Page of
+        <<0:(65536 * 8)>> -> zero;
+        _ -> Page
+    end.
 
 -doc """
 The address space an image covers, as against the `bytes` it retains.

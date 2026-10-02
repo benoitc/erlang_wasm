@@ -293,13 +293,11 @@ restore_reports_what_it_holds(_Config) ->
     {ok, Image} = wasm:snapshot(Init, #{version => ~"7"}),
     ok = wasm:destroy(Init),
     Info = wasm:snapshot_info(Image),
-    %% What the image **retains**, not the address space it covers: an image
-    %% keeps the non-zero runs, so a page holding one number is a few bytes
-    %% rather than 65,536. Asserting the page size here was asserting that the
-    %% whole memory was kept, which is the thing that changed.
+    %% What the image **retains**: every page that is not zero, whole, and a
+    %% word per page for the tuple that maps them. The reactor's one page holds
+    %% data, so it is kept, and that is all.
     Bytes = maps:get(bytes, Info),
-    ?assert(Bytes > 0),
-    ?assert(Bytes < 65536),
+    ?assertEqual(65536 + 8, Bytes),
     %% And it is the number the budget charges, which is the only reading of
     %% `bytes` a host can act on.
     ?assertEqual(Bytes, wasm_snapshot_owner:charged()),
@@ -825,37 +823,44 @@ concurrent_charges_are_all_counted(_Config) ->
     N = 200,
     Self = self(),
     Pids = [spawn(fun() ->
-                          ok = wasm_snapshot_owner:charge(1),
-                          Self ! {done, self()}
+                          {ok, _} = wasm_keeper:image_reserve(1, self(),
+                                                              make_ref()),
+                          Self ! {done, self()},
+                          receive stop -> ok end
                   end) || _ <- lists:seq(1, N)],
     [receive {done, P} -> ok after 5000 -> ct:fail(timeout) end || P <- Pids],
     ?assertEqual(Base + N, wasm_snapshot_owner:charged()),
-    _ = wasm_snapshot_owner:refund(N),
-    ?assertEqual(Base, wasm_snapshot_owner:charged()).
+    %% Each image's only holder goes, and with it the charge.
+    [P ! stop || P <- Pids],
+    ?assertEqual(Base, until_charged(Base, 100)).
 
 %% A counter an older, racy build left is not trusted after an upgrade: a new
 %% charge fails closed by name, and the diagnostics never raise.
 charge_fails_closed_on_a_legacy_counter(_Config) ->
+    Handle = fixture(reactor),
+    Init = init(Handle, #{}),
     with_counter({legacy_bare_ref, atomics:new(1, [])},
                  fun() ->
                          ?assertMatch({error, #{kind := snapshot_counter_untrusted}},
-                                      wasm_snapshot_owner:charge(1)),
-                         ?assertEqual(0, wasm_snapshot_owner:charged()),
-                         ?assertEqual(0, wasm_snapshot_owner:refund(1))
-                 end).
+                                      wasm:snapshot(Init)),
+                         ?assertEqual(0, wasm_snapshot_owner:charged())
+                 end),
+    ok = wasm:destroy(Init).
 
 %% Reachable on a hot upgrade where the old build never created its lazy
 %% counter: the application is up but the counter is absent.
 charge_fails_closed_when_the_counter_is_missing(_Config) ->
+    Handle = fixture(reactor),
+    Init = init(Handle, #{}),
     Saved = persistent_term:get(?SNAPSHOT_BUDGET_KEY),
     _ = persistent_term:erase(?SNAPSHOT_BUDGET_KEY),
     try
         ?assertMatch({error, #{kind := snapshot_counter_uninitialised}},
-                     wasm_snapshot_owner:charge(1)),
-        ?assertEqual(0, wasm_snapshot_owner:charged()),
-        ?assertEqual(0, wasm_snapshot_owner:refund(1))
+                     wasm:snapshot(Init)),
+        ?assertEqual(0, wasm_snapshot_owner:charged())
     after
-        persistent_term:put(?SNAPSHOT_BUDGET_KEY, Saved)
+        persistent_term:put(?SNAPSHOT_BUDGET_KEY, Saved),
+        ok = wasm:destroy(Init)
     end.
 
 %% Swap the counter for a given value, run F, and restore the real one so the
@@ -1148,7 +1153,8 @@ a_destroyed_restore_leaves_nothing_for_the_next(_Config) ->
     First = chunks_of(I1),
     ok = wasm:destroy(I1),
     ?assertEqual([], [K || {{wasm_snapshot, recycle, _} = K, _} <- get()]),
-    ?assertEqual([], [T || {_, _, _, Hs} <- ets:tab2list(wasm_holders),
+    ?assertEqual([], [T || Row <- ets:tab2list(wasm_holders),
+                           tuple_size(Row) >= 4, Hs <- [element(4, Row)],
                            is_map(Hs),
                            {recycle, _} = T <- maps:keys(Hs)]),
     {ok, I2} = wasm:restore(Image, #{}, Run#{recycle => true}),
@@ -1157,9 +1163,13 @@ a_destroyed_restore_leaves_nothing_for_the_next(_Config) ->
     ok = wasm:destroy(I2),
     ok = wasm:release(Image).
 
+%% The arrays a memory is made of: its chunks, past any image placeholder,
+%% and its page table.
 chunks_of(I) ->
     #mut{mems = {Mem}} = wasm_instance:mut(I),
-    tuple_to_list(element(?MEM_CHUNKS, Mem)).
+    [C || C <- [element(?MEM_IMG_BYTES + 2, Mem)
+                | tuple_to_list(element(?MEM_CHUNKS, Mem))],
+          not is_atom(C)].
 
 restore_cycles(Tier, Cycles) ->
     rand:seed(exsss, {7, 11, 13}),

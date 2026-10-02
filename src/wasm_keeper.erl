@@ -57,6 +57,20 @@ really was exhausted.
 The registry, not the caller's possibly stale handle, is the authority for how
 many pages a resource has. That is why `release/2` releases the size the memory is
 now rather than the size the handle was made at.
+
+## One row, one write
+
+Every change to what a memory owes is a single `ets:insert` of its row, and
+the row carries the transaction in flight with it: a growth or an arena
+extension, named by the operation id its caller made. A keeper killed between
+two steps therefore leaves either the old row or the new one, and a restart
+finishes or undoes the transaction from what the row says. The node counter
+and the snapshot byte counter are caches of the rows, rebuilt at every start.
+
+A memory owes two things. Its **logical** pages are what the guest sees, and
+what `max_memory_pages` and the declared maximum bound. Its **charged** pages
+are what is allocated: the page table of an image, its growth chunks and its
+arena of private pages. The node budget counts the second.
 """.
 -behaviour(gen_server).
 
@@ -64,10 +78,14 @@ now rather than the size the handle was made at.
 -export([reserve/4, acquire/3, release/2, release_all/1, transfer/3,
          discard/1]).
 -export([set_limit/2, build_limit/2, total_of/1]).
--export([grow_begin/3, grow_commit/4, grow_abort/2]).
+-export([grow_begin/4, grow_commit/3, grow_abort/2]).
+-export([arena_begin/4, arena_commit/3, arena_abort/2, ack/2]).
+-export([image_reserve/3, image_live/1]).
 -export([reconcile/2, reconcile/3]).
 -export([charge_of/1, holders_of/1, resources/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
+
+-include("wasm_snapshot_budget.hrl").
 
 -define(SERVER, ?MODULE).
 -define(TAB, wasm_holders).
@@ -76,6 +94,7 @@ now rather than the size the handle was made at.
 -type token() :: {instance, reference()}
                | {process, pid()}
                | {build, reference()}
+               | {snapshot, reference()}
                | manual.
 
 -doc "A resource's stable identity, minted here so it exists before the
@@ -92,7 +111,9 @@ identity here and using it as the row key means there is one name for the
 thing, not two that have to be kept in step.
 """.
 -type meta() :: {memory, undefined | reference(),
-                 undefined | atomics:atomics_ref()}
+                 undefined | atomics:atomics_ref(),
+                 undefined | reference(), undefined | resource(),
+                 {non_neg_integer(), pos_integer()}}
               | cell
               %% A garbage-collected object store, and the two ETS tables it
               %% is. They are recorded here rather than passed to `reconcile/2`
@@ -129,11 +150,12 @@ Reserve `Pages` and register `Token` as the first holder, in one step.
 
 The `Owner` is the process whose death releases the token, or `none` for a
 `manual` token. You get back the resource's identity, which every later call
-names it by.
+names it by. `gone` answers a memory to be laid over an image that is no
+longer registered.
 """.
 -spec reserve(non_neg_integer(), meta(), token(), pid() | none) ->
           {ok, resource()}
-        | {error, limit | instance_limit | keeper_unavailable}.
+        | {error, limit | instance_limit | gone | keeper_unavailable}.
 reserve(Pages, Meta, Token, Owner) ->
     call({reserve, Pages, Meta, Token, Owner, pending_limit(Token)}).
 
@@ -291,51 +313,107 @@ reconcile(Resource, Ceiling, Extra) ->
     call({reconcile, Resource, Ceiling, Extra}).
 
 -doc """
-Claim the right to grow `Resource` by `Delta`, up to `Ceiling` pages.
+Claim the right to grow `Resource` by `Delta`, up to `Ceiling` pages, as
+operation `OpId`.
 
-Answers the authoritative current size, which is what the new chunk tuple has
-to be built against: another holder may have grown this memory since the caller
-last looked. Concurrent growers queue here rather than being refused.
+Answers the size before the growth. Every holder's ceiling and the node budget
+are checked, and the chunks the growth needs are charged, before the answer.
+Asking again with the same `OpId` answers the same: a caller that lost the
+reply to a keeper restart resumes its own transaction rather than queueing
+behind it. Concurrent growers of one memory queue rather than being refused.
 """.
--spec grow_begin(resource(), non_neg_integer(), non_neg_integer()) ->
-          {ok, reference(), non_neg_integer()}
+-spec grow_begin(resource(), reference(), non_neg_integer(),
+                 non_neg_integer()) ->
+          {ok, non_neg_integer()} | {done, term()}
         | {error, exceeds_max | limit | instance_limit | gone
                 | keeper_unavailable}.
-grow_begin(Resource, Delta, Ceiling) ->
-    call({grow_begin, Resource, Delta, Ceiling}).
+grow_begin(Resource, OpId, Delta, Ceiling) ->
+    call({grow_begin, Resource, OpId, Delta, Ceiling}).
 
 -doc """
-Publish the chunk tuple and the new size together, ending the growth.
-
-`stale` when the keeper has no record of this growth, which a restart between
-`grow_begin/3` and here produces: it rolled the reservation back, so publishing
-now would put a size into the store that nothing is charged for. The caller
-gives up and the guest sees -1.
+Publish growth `OpId`: the chunk tuple, then the size, then the end of the
+transaction. Answers the size before the growth, or `aborted` when a restart
+found the grower gone and gave the growth back, or `stale` when this memory
+has no such operation.
 """.
--spec grow_commit(resource(), reference(), tuple(), non_neg_integer()) ->
-          ok | stale.
-grow_commit(Resource, GrowRef, Chunks, NewPages) ->
-    case call({grow_commit, Resource, GrowRef, Chunks, NewPages}) of
-        ok -> ok;
-        stale -> stale;
-        %% No keeper at all is not the same as a keeper that disowned this
-        %% growth: nothing rolled anything back, so the local extension stands.
-        {error, keeper_unavailable} -> ok
+-spec grow_commit(resource(), reference(), tuple()) ->
+          {ok, non_neg_integer()} | aborted | stale
+        | {error, keeper_unavailable}.
+grow_commit(Resource, OpId, Chunks) ->
+    call({grow_commit, Resource, OpId, Chunks}).
+
+-doc "Give back growth `OpId` without publishing it. Always `ok` once answered.".
+-spec grow_abort(resource(), reference()) -> ok | {error, keeper_unavailable}.
+grow_abort(Resource, OpId) ->
+    call({txn_abort, Resource, OpId}).
+
+-doc """
+Make sure the memory's arena has `Target` chunks, as operation `OpId`. The
+caller names the published length it saw and the pages chunks from there to
+`Target` cost. `covered` when another writer already published them,
+`{changed, Have}` when the length moved and the cost has to be worked out
+again, and `{ok, Have}` when the caller is to allocate chunks `Have + 1..Target`
+and commit them.
+""".
+-spec arena_begin(resource(), reference(), pos_integer(),
+                  {non_neg_integer(), non_neg_integer()}) ->
+          covered | {ok, non_neg_integer()} | {changed, non_neg_integer()}
+        | {done, term()} | {error, limit | gone | keeper_unavailable}.
+arena_begin(Resource, OpId, Target, Pages) ->
+    call({arena_begin, Resource, OpId, Target, Pages}).
+
+-doc "Publish arena extension `OpId`. Never replaces a published tuple.".
+-spec arena_commit(resource(), reference(), tuple()) ->
+          ok | aborted | stale | {error, keeper_unavailable}.
+arena_commit(Resource, OpId, Arena) ->
+    call({arena_commit, Resource, OpId, Arena}).
+
+-doc "Give back arena extension `OpId` without publishing it.".
+-spec arena_abort(resource(), reference()) -> ok | {error, keeper_unavailable}.
+arena_abort(Resource, OpId) ->
+    call({txn_abort, Resource, OpId}).
+
+-doc """
+Forget the outcome kept for the caller's operation `OpId`, now that it has
+the answer. Kept until then so a caller retrying after a lost reply gets its
+own result back, whatever has happened to the memory since.
+""".
+-spec ack(resource(), reference()) -> ok.
+ack(Resource, OpId) ->
+    case whereis(?SERVER) of
+        undefined -> ok;
+        Pid -> gen_server:cast(Pid, {ack, Resource, OpId, self()})
     end.
 
--doc "Give back a growth's reservation without publishing anything.".
--spec grow_abort(resource(), reference()) -> ok.
-grow_abort(Resource, GrowRef) ->
-    case call({grow_abort, Resource, GrowRef}) of
-        ok -> ok;
-        {error, keeper_unavailable} -> ok
+-doc """
+Charge an image's `Bytes` to the node's snapshot budget and register it, held
+by `Owner` under `{snapshot, Id}`. The image is reclaimed, and its bytes given
+back, when that holder has gone and no memory restored from it remains.
+""".
+-spec image_reserve(non_neg_integer(), pid(), reference()) ->
+          {ok, resource()} | {error, wasm_error:error()}.
+image_reserve(Bytes, Owner, Id) ->
+    case call({image_reserve, Bytes, Owner, Id}) of
+        {error, keeper_unavailable} ->
+            {error, #{class => exhaustion, kind => snapshot_budget,
+                      msg => ~"the keeper is not available",
+                      ctx => #{wanted => Bytes}}};
+        R -> R
+    end.
+
+-doc "Whether an image is registered and not being reclaimed.".
+-spec image_live(resource()) -> boolean().
+image_live(ImgRes) ->
+    case row(ImgRes) of
+        {_, {image, _}, _, _, #{state := live}} -> true;
+        _ -> false
     end.
 
 -doc "Pages currently reserved for a resource, or 0 if it is gone.".
 -spec charge_of(resource()) -> non_neg_integer().
 charge_of(Resource) ->
     case row(Resource) of
-        {_, _, Pages, _} -> Pages;
+        {_, _, Pages, _, _} -> Pages;
         undefined -> 0
     end.
 
@@ -343,7 +421,7 @@ charge_of(Resource) ->
 -spec holders_of(resource()) -> [token()].
 holders_of(Resource) ->
     case row(Resource) of
-        {_, _, _, Holders} -> lists:sort(maps:keys(Holders));
+        {_, _, _, Holders, _} -> lists:sort(maps:keys(Holders));
         undefined -> []
     end.
 
@@ -415,31 +493,37 @@ ensure_table() ->
 
 %% held    :: #{pid() => #{{resource(), token()} => true}}
 %% mons    :: #{pid() => reference()}
-%% growing :: #{resource() => {reference(), pid(), reference(), Delta}}
 %% caps    :: #{token() => non_neg_integer()}, a holder's page ceiling
 %% totals  :: #{token() => non_neg_integer()}, what it holds against that
+%% queued  :: #{resource() => [{From, Request}]}, transactions waiting for the
+%%            one in flight on that memory
+%% writers :: #{pid() => {reference(), #{resource() => true}}}, the processes
+%%            with a transaction in flight or an outcome not yet acknowledged,
+%%            monitored so their death ends either
+%% images  :: #{resource() => non_neg_integer()}, how many memory rows name
+%%            each image; derived from the rows and rebuilt at every start
 %%
 %% A running total rather than an index from holder to memories. Growth has to
 %% check every holder of the memory being grown, and a total is one map read
 %% each where an index would be a sum over everything they hold.
-%% queued  :: #{resource() => [{From, Delta, Ceiling}]}
 init([]) ->
     ok = ensure_table(),
     %% A restart inherits the rows the previous keeper left, so the monitors
     %% are rebuilt from them. Without this the registry would survive and its
     %% death-release would not, which is the worse of the two halves to keep.
     {Held, Mons} = adopt(),
-    %% And the growths in flight, which used to be forgotten. The charge moves
-    %% at `grow_begin` and the size is published at `grow_commit`, so a keeper
-    %% that came up believing nothing was growing left the memory charged for
-    %% pages the guest could not see, and then answered the *next* grow with
-    %% that inflated size as its previous one. `memory.grow` promises the guest
-    %% the size before the growth, so that is a specification violation and not
-    %% only a leak.
-    {Growing, Totals, Caps} = adopt_growths(adopt_totals(), adopt_caps()),
+    S0 = #{held => Held, mons => Mons, queued => #{}, writers => #{},
+           caps => adopt_caps(), totals => adopt_totals(),
+           images => adopt_images()},
+    %% Cleanups a dead keeper left half done, then the transactions it left in
+    %% flight: each is finished if what it published is there, kept for a
+    %% writer that is still alive, and undone for one that is not.
+    S1 = finish_retiring(S0),
+    S2 = recover_transactions(S1),
+    S3 = sweep_images(S2),
     ok = reconcile_pages(),
-    {ok, #{held => Held, mons => Mons, growing => Growing, queued => #{},
-           caps => Caps, totals => Totals}}.
+    ok = reconcile_snapshot_bytes(),
+    {ok, S3}.
 
 %% Put the node page counter back in step with the registry.
 %%
@@ -457,10 +541,7 @@ init([]) ->
 %% made from this process, and callers block on `gen_server:call' until `init/1'
 %% returns, so no reservation can be in flight while it runs.
 reconcile_pages() ->
-    Charged = ets:foldl(fun({_Res, _Meta, Pages, H}, Acc) when is_map(H) ->
-                                Acc + Pages;
-                           (_Other, Acc) -> Acc
-                        end, 0, ?TAB),
+    Charged = ets:foldl(fun(Row, Acc) -> Acc + charged(Row) end, 0, ?TAB),
     %% Per resource row, not per holder: `adopt_totals/0' counts a two-holder
     %% memory twice on purpose, because it is building per-token totals. The
     %% node count must not.
@@ -475,12 +556,49 @@ reconcile_pages() ->
             ok
     end.
 
+%% What a row costs the node budget: a memory its page table, growth chunks
+%% and arena, reserved or published; a heap or a cell its pages; an image
+%% nothing, since images are counted in bytes against their own budget.
+charged({_Res, {memory, _, _, _, _, _}, _L, H, #{phys := Phys}})
+  when is_map(H) ->
+    maps:fold(fun(_K, V, A) -> A + V end, 0, Phys);
+charged({_Res, {image, _}, _L, H, _Ledger}) when is_map(H) ->
+    0;
+charged({_Res, _Meta, Pages, H, _Ledger}) when is_map(H) ->
+    Pages;
+charged(_Other) ->
+    0.
+
+%% The snapshot byte counter, rebuilt from the image rows as the page counter
+%% is from the memory rows. Its reference is remembered in a row of its own,
+%% so a node whose last image went while the keeper was down still finds it.
+reconcile_snapshot_bytes() ->
+    case snapshot_counter() of
+        undefined ->
+            ok;
+        Ref ->
+            Bytes = ets:foldl(fun({_, {image, B}, _, H, _}, A) when is_map(H) ->
+                                      A + B;
+                                 (_Other, A) -> A
+                              end, 0, ?TAB),
+            atomics:put(Ref, 1, Bytes)
+    end.
+
+snapshot_counter() ->
+    case persistent_term:get(?SNAPSHOT_BUDGET_KEY, undefined) of
+        {snapshot_counter, ?SNAPSHOT_BUDGET_VERSION, Ref} -> Ref;
+        _ -> undefined
+    end.
+
 %% Rebuilt from the registry on a restart, for the same reason the monitors are.
+%% Logical pages for a memory, which is what a holder's ceiling bounds; what a
+%% heap or a cell is charged; nothing for an image.
 adopt_totals() ->
     ets:foldl(
-      fun({_Res, _Meta, Pages, Holders}, Acc) when is_map(Holders) ->
+      fun({_Res, Meta, Pages, Holders, _}, Acc) when is_map(Holders) ->
+          Counted = case Meta of {image, _} -> 0; _ -> Pages end,
           maps:fold(fun(Tok, _Owner, A) ->
-                        A#{Tok => maps:get(Tok, A, 0) + Pages}
+                        A#{Tok => maps:get(Tok, A, 0) + Counted}
                     end, Acc, Holders);
          (_Other, Acc) -> Acc
       end, #{}, ?TAB).
@@ -499,41 +617,60 @@ adopt_caps() ->
 
 adopt() ->
     ets:foldl(
-      fun({Res, _Meta, _Pages, Holders}, Acc) when is_map(Holders) ->
+      fun({Res, _Meta, _Pages, Holders, _}, Acc) when is_map(Holders) ->
           maps:fold(fun(_Tok, none, A) -> A;
                        (Tok, Pid, A) -> add_held(Pid, Res, Tok, A)
                     end, Acc, Holders);
          (_Other, Acc) -> Acc
       end, {#{}, #{}}, ?TAB).
 
-%% Growths the previous keeper was holding when it died.
-%%
-%% A live grower keeps its transaction: it is between `extend/3` and
-%% `grow_commit/4` and may still succeed, so the monitor is rebuilt and the
-%% entry restored. A dead one cannot, and its reservation goes back the way the
-%% `DOWN` handler would have given it back.
-%%
-%% The `{growing, Res}` row exists for this and for nothing else. The state map
-%% did not survive the restart and the charge did, which is the asymmetry that
-%% made the defect.
-adopt_growths(Totals, Caps) ->
-    Rows = ets:select(?TAB, [{{{growing, '$1'}, '$2'}, [], [{{'$1', '$2'}}]}]),
-    lists:foldl(
-      fun({Res, {GrowRef, Pid, Delta}}, {G, T, C}) ->
-          case is_process_alive(Pid) of
-              true ->
-                  MonRef = erlang:monitor(process, Pid),
-                  {G#{Res => {GrowRef, Pid, MonRef, Delta}}, T, C};
-              false ->
-                  true = ets:delete(?TAB, {growing, Res}),
-                  %% `caps` as well as `totals`: `sub_total/3` drops a token's
-                  %% ceiling with its last page, and this runs before the state
-                  %% map exists.
-                  #{totals := T1, caps := C1} =
-                      unreserve(Res, Delta, #{totals => T, caps => C}),
-                  {G, T1, C1}
-          end
-      end, {#{}, Totals, Caps}, Rows).
+adopt_images() ->
+    ets:foldl(fun({_, {memory, _, _, _, Img, _}, _, H, _}, A)
+                    when is_map(H), Img =/= undefined ->
+                      A#{Img => maps:get(Img, A, 0) + 1};
+                 (_Other, A) -> A
+              end, #{}, ?TAB).
+
+finish_retiring(State) ->
+    Rows = ets:select(?TAB, [{{'_', '_', '_', '_', #{state => retiring}}, [],
+                              ['$_']}]),
+    lists:foldl(fun(Row, S) -> retire(Row, S) end, State, Rows).
+
+%% Transactions the previous keeper left in flight, and outcomes it was keeping
+%% for writers that had not acknowledged them.
+recover_transactions(State) ->
+    Rows = ets:select(?TAB, [{{'_', {memory, '_', '_', '_', '_', '_'}, '_', '_',
+                               '_'}, [], ['$_']}]),
+    lists:foldl(fun recover_row/2, State, Rows).
+
+recover_row({Res, _Meta, _L, _H, #{txn := Txn, done := Done}} = Row, S0) ->
+    %% Outcomes for writers still alive stay, watched; the rest go.
+    Live = maps:filter(fun(Pid, _) -> is_process_alive(Pid) end, Done),
+    S1 = maps:fold(fun(Pid, _, S) -> watch_writer(Pid, Res, S) end, S0, Live),
+    Row1 = case map_size(Live) =:= map_size(Done) of
+               true -> Row;
+               false -> put_ledger(Row, done, Live)
+           end,
+    case Txn of
+        none -> S1;
+        T ->
+            Pid = element(2, T),
+            case is_process_alive(Pid) of
+                true -> watch_writer(Pid, Res, S1);
+                false -> settle(Res, Row1, T, S1)
+            end
+    end.
+
+%% Images with no holder and no memory left, which a keeper killed between the
+%% last release and the reclaim leaves behind.
+sweep_images(State) ->
+    Rows = ets:select(?TAB, [{{'_', {image, '_'}, '_', '_', '_'}, [], ['$_']}]),
+    lists:foldl(fun({Img, _, _, H, _} = Row, S) ->
+                        case map_size(H) =:= 0 andalso image_count(Img, S) =:= 0 of
+                            true -> retire(Row, S);
+                            false -> S
+                        end
+                end, State, Rows).
 
 handle_call({bequeath, Heir}, _From, State) ->
     %% A no-op when the supervisor created the table itself, which is the
@@ -555,17 +692,22 @@ handle_call({total_of, Token}, _From, #{totals := Totals} = State) ->
 
 handle_call({reserve, Pages, Meta, Token, Owner, Limit}, _From, State0) ->
     State = pending_cap(Token, Limit, State0),
-    case within(Token, Pages, State) of
-        false ->
+    case {within(Token, Pages, State), image_ok(Meta)} of
+        {false, _} ->
             {reply, {error, instance_limit}, State};
-        true ->
-            case wasm_engine:reserve_pages(Pages) of
+        {true, false} ->
+            {reply, {error, gone}, State};
+        {true, true} ->
+            Ledger = new_ledger(Meta, Pages),
+            case wasm_engine:reserve_pages(charged({x, Meta, Pages, #{},
+                                                    Ledger})) of
                 {error, limit} ->
                     {reply, {error, limit}, State};
                 ok ->
                     Res = make_ref(),
-                    true = ets:insert(?TAB, {Res, Meta, Pages, #{Token => Owner}}),
-                    S1 = add_total(Token, Pages, State),
+                    true = ets:insert(?TAB, {Res, Meta, Pages, #{Token => Owner},
+                                             Ledger}),
+                    S1 = count_image(Meta, 1, add_total(Token, Pages, State)),
                     {reply, {ok, Res}, watch(Owner, Res, Token, S1)}
             end
     end;
@@ -573,9 +715,11 @@ handle_call({reserve, Pages, Meta, Token, Owner, Limit}, _From, State0) ->
 handle_call({acquire, Res, Token, Owner, Limit}, _From, State0) ->
     State = pending_cap(Token, Limit, State0),
     case ets:lookup(?TAB, Res) of
+        [{Res, _Meta, _Pages, _Holders, #{state := retiring}}] ->
+            {reply, {error, gone}, State};
         [] ->
             {reply, {error, gone}, State};
-        [{Res, Meta, Pages, Holders}] ->
+        [{Res, Meta, Pages, Holders, Ledger}] ->
             %% Idempotent by construction: one instance importing the same
             %% memory through two slots is one holder, which is what makes the
             %% accounting count memories rather than import slots, and what
@@ -589,7 +733,8 @@ handle_call({acquire, Res, Token, Owner, Limit}, _From, State0) ->
                             {reply, {error, instance_limit}, State};
                         true ->
                             true = ets:insert(?TAB, {Res, Meta, Pages,
-                                                     Holders#{Token => Owner}}),
+                                                     Holders#{Token => Owner},
+                                                     Ledger}),
                             S1 = add_total(Token, Pages, State),
                             {reply, ok, watch(Owner, Res, Token, S1)}
                     end
@@ -636,7 +781,7 @@ handle_call({transfer, From, To, Owner}, {Pid, _}, #{held := Held} = State) ->
 handle_call({reconcile, Res, Ceiling, Extra}, _From, State) ->
     ok = hook(charge_entry),
     case ets:lookup(?TAB, Res) of
-        [{Res, {heap, Objs, Elems}, _Pages, _Holders}] ->
+        [{Res, {heap, Objs, Elems}, _Pages, _Holders, _}] ->
             Words = words_of(Objs) + words_of(Elems),
             Pages = pages_of(Words),
             %% These pages are spent, and the answer is only whether that,
@@ -649,75 +794,103 @@ handle_call({reconcile, Res, Ceiling, Extra}, _From, State) ->
             {reply, {error, gone}, State}
     end;
 
-handle_call({grow_begin, Res, Delta, Ceiling}, From,
-            #{growing := Growing} = State) ->
-    case maps:is_key(Res, Growing) of
-        true ->
-            %% Queued, not refused. A refusal would surface as -1 to the guest,
-            %% which the specification reserves for a budget that really is
-            %% exhausted rather than for a momentarily busy registry.
-            Q = maps:get(Res, maps:get(queued, State), []),
-            {noreply, State#{queued := (maps:get(queued, State))
-                                       #{Res => Q ++ [{From, Delta, Ceiling}]}}};
-        false ->
-            {Reply, S1} = start_growth(Res, Delta, Ceiling, From, State),
-            {reply, Reply, S1}
+handle_call({image_reserve, Bytes, Owner, Id}, _From, State) ->
+    case snapshot_counter() of
+        undefined ->
+            {reply, {error, #{class => invalid,
+                              kind => snapshot_counter_uninitialised,
+                              msg => ~"the snapshot budget counter is not initialised",
+                              ctx => #{}}}, State};
+        Ref ->
+            Limit = application:get_env(wasm, max_snapshot_bytes, infinity),
+            Now = atomics:add_get(Ref, 1, Bytes),
+            case Limit =:= infinity orelse Now =< Limit of
+                false ->
+                    _ = atomics:sub_get(Ref, 1, Bytes),
+                    {reply, {error, #{class => exhaustion,
+                                      kind => snapshot_budget,
+                                      msg => ~"the node snapshot budget is exhausted",
+                                      ctx => #{limit => Limit, wanted => Bytes}}},
+                     State};
+                true ->
+                    ok = hook(image_charged),
+                    Img = make_ref(),
+                    Token = {snapshot, Id},
+                    true = ets:insert(?TAB, {Img, {image, Bytes}, 0,
+                                             #{Token => Owner},
+                                             #{state => live}}),
+                    {reply, {ok, Img}, watch(Owner, Img, Token, State)}
+            end
     end;
 
-handle_call({grow_commit, Res, GrowRef, Chunks, NewPages}, _From,
-            #{growing := Growing} = State) ->
-    case maps:find(Res, Growing) of
-        {ok, {GrowRef, _Pid, MonRef, _Delta}} ->
-            erlang:demonitor(MonRef, [flush]),
-            true = ets:delete(?TAB, {growing, Res}),
-            ok = publish(Res, Chunks, NewPages),
-            {reply, ok, next_growth(Res, State#{growing := maps:remove(Res, Growing)})};
-        %% A transaction this keeper does not have. It answered `ok` and
-        %% published nothing, so the guest believed it had grown while the store
-        %% still held the old size and the old chunk tuple, and the next grow
-        %% reported the inflated charge as the previous size. `stale` instead,
-        %% and the grower gives up: a refused `memory.grow` is a legal -1 and a
-        %% silently unpublished one is not.
-        _ ->
-            {reply, stale, State}
+handle_call({grow_begin, Res, OpId, _Delta, _Ceiling} = Req, From, State) ->
+    transaction(Res, OpId, Req, From, State);
+handle_call({arena_begin, Res, OpId, _Target, _Pages} = Req, From, State) ->
+    transaction(Res, OpId, Req, From, State);
+
+handle_call({grow_commit, Res, OpId, Chunks}, {Pid, _}, State) ->
+    case lookup(Res) of
+        {Res, {memory, CRef, PagesRef, _, _, _}, _L, _H,
+         #{txn := {OpId, _P, grow, From, To, _PD, CT}}} = Row ->
+            ok = hook(grow_commit_start),
+            ok = publish_chunks(CRef, Chunks, CT),
+            ok = hook(grow_commit_chunks),
+            PagesRef =:= undefined orelse atomics:put(PagesRef, 1, To),
+            ok = hook(grow_commit_size),
+            S1 = finish(Res, Row, Pid, OpId, {ok, From}, State),
+            {reply, {ok, From}, next_transaction(Res, S1)};
+        Row ->
+            {reply, outcome(Row, Pid, OpId), State}
     end;
 
-handle_call({grow_abort, Res, GrowRef}, _From, #{growing := Growing} = State) ->
-    case maps:find(Res, Growing) of
-        {ok, {GrowRef, _Pid, MonRef, Delta}} ->
-            erlang:demonitor(MonRef, [flush]),
-            true = ets:delete(?TAB, {growing, Res}),
-            %% Removed from `growing', which this did not do. The commit path
-            %% and the `DOWN' handler both did, so an aborted growth was the one
-            %% way out that left the resource marked as growing for ever, and
-            %% `grow_begin/3' queues behind that mark on an `infinity' call:
-            %% every later grow of that memory blocked, permanently, with no
-            %% error and no timeout.
-            Left = maps:remove(Res, Growing),
-            {reply, ok,
-             next_growth(Res, unreserve(Res, Delta, State#{growing := Left}))};
+handle_call({arena_commit, Res, OpId, Arena}, {Pid, _}, State) ->
+    case lookup(Res) of
+        {Res, {memory, _, _, ARef, _, _}, _L, _H,
+         #{txn := {OpId, _P, arena, _Have, Target, _PD}}} = Row ->
+            ok = hook(arena_commit_start),
+            ok = publish_chunks(ARef, Arena, Target),
+            ok = hook(arena_commit_published),
+            S1 = finish(Res, Row, Pid, OpId, ok, State),
+            {reply, ok, next_transaction(Res, S1)};
+        Row ->
+            {reply, case outcome(Row, Pid, OpId) of
+                        {ok, _} -> ok;
+                        Other -> Other
+                    end, State}
+    end;
+
+handle_call({txn_abort, Res, OpId}, {Pid, _}, State) ->
+    case lookup(Res) of
+        {Res, _, _, _, #{txn := {OpId, _, arena, _, _, _} = T}} = Row ->
+            S1 = settle(Res, Row, T, State),
+            {reply, ok, S1};
+        {Res, _, _, _, #{txn := {OpId, _, _, _, _, _, _} = T}} = Row ->
+            S1 = settle(Res, Row, T, State),
+            {reply, ok, S1};
         _ ->
-            {reply, ok, State}
+            {reply, ok, forget_outcome(Res, OpId, Pid, State)}
     end;
 
 handle_call(_Req, _From, State) ->
     {reply, {error, unknown_call}, State}.
 
+handle_cast({ack, Res, OpId, Pid}, State) ->
+    {noreply, forget_outcome(Res, OpId, Pid, State)};
 handle_cast(_Msg, State) -> {noreply, State}.
 
 handle_info({'DOWN', MonRef, process, Pid, _Reason},
-            #{growing := Growing} = State) ->
-    %% A grower that died between claiming the growth and committing it. Its
-    %% reservation goes back, and whoever is queued behind it proceeds.
-    Aborted = [{Res, Delta} || {Res, {_G, P, M, Delta}} <- maps:to_list(Growing),
-                               P =:= Pid, M =:= MonRef],
-    S1 = lists:foldl(
-           fun({Res, Delta}, S) ->
-               Left = maps:remove(Res, maps:get(growing, S)),
-               true = ets:delete(?TAB, {growing, Res}),
-               next_growth(Res, unreserve(Res, Delta, S#{growing := Left}))
-           end, State, Aborted),
-    {noreply, forget_holder(Pid, S1)};
+            #{writers := Writers} = State) ->
+    %% A writer that died: its transactions are finished if what they published
+    %% is there and undone if not, and the outcomes kept for it go.
+    S1 = case maps:find(Pid, Writers) of
+             {ok, {MonRef, Rs}} ->
+                 S0 = State#{writers := maps:remove(Pid, Writers)},
+                 lists:foldl(fun(Res, S) -> writer_gone(Res, Pid, S) end,
+                             S0, maps:keys(Rs));
+             _ ->
+                 State
+         end,
+    {noreply, forget_holder(Pid, MonRef, S1)};
 
 %% A heap whose creating process died. Named as heir by `wasm_heap:new/2` so
 %% the store outlives the process that made it, which a linked instance in
@@ -728,6 +901,308 @@ handle_info({'ETS-TRANSFER', _Tab, _From, wasm_heap}, State) ->
 
 handle_info(_Info, State) ->
     {noreply, State}.
+
+%%% ------------------------------------------------------------- ledger ---
+
+lookup(Res) ->
+    case ets:lookup(?TAB, Res) of
+        [Row] -> Row;
+        [] -> undefined
+    end.
+
+%% What a new row owes. A memory's charge is its geometry's; anything else is
+%% charged its pages.
+new_ledger({memory, _, _, _, _, {I, C}}, L) ->
+    #{phys => #{table => table_pages(I), growth => growth_pages(L, I, C),
+                arena => 0},
+      txn => none, done => #{}, state => live};
+new_ledger(_Meta, _Pages) ->
+    #{state => live}.
+
+%% Sixteen 64-bit entries per image page, and two more after them.
+table_pages(0) -> 0;
+table_pages(I) -> ((I * 16 + 2) * 8 + 65535) div 65536.
+
+%% The growth chunks a memory of `L' pages has allocated past an image of `I',
+%% in chunks of `C' pages. Image placeholders are not chunks and never count.
+growth_pages(L, I, C) ->
+    ((max(0, L - I) + C - 1) div C) * C.
+
+chunk_count(L, C) -> (L + C - 1) div C.
+
+image_ok({memory, _, _, _, Img, _}) when Img =/= undefined -> image_live(Img);
+image_ok(_Meta) -> true.
+
+count_image({memory, _, _, _, Img, _}, N, #{images := Imgs} = S)
+  when Img =/= undefined ->
+    S#{images := Imgs#{Img => maps:get(Img, Imgs, 0) + N}};
+count_image(_Meta, _N, S) ->
+    S.
+
+image_count(Img, #{images := Imgs}) -> maps:get(Img, Imgs, 0).
+
+put_ledger({Res, Meta, L, H, Ledger}, Key, Value) ->
+    Row = {Res, Meta, L, H, Ledger#{Key => Value}},
+    true = ets:insert(?TAB, Row),
+    Row.
+
+%% A growth or an arena extension. A retry of the caller's own operation is
+%% answered from the row, so it never queues behind itself; anything else
+%% waits for the transaction in flight on this memory.
+transaction(Res, OpId, Req, {Pid, _} = From, State) ->
+    case lookup(Res) of
+        undefined ->
+            {reply, {error, gone}, State};
+        {Res, _, _, _, #{state := retiring}} ->
+            {reply, {error, gone}, State};
+        {Res, _, _, _, #{txn := Txn, done := Done}} = Row ->
+            case {Txn, maps:find(Pid, Done)} of
+                {_, {ok, {OpId, Result}}} ->
+                    {reply, {done, Result}, State};
+                {{OpId, _, grow, F, _, _, _}, _} ->
+                    {reply, {ok, F}, State};
+                {{OpId, _, arena, Have, _, _}, _} ->
+                    {reply, {ok, Have}, State};
+                {none, _} ->
+                    {Reply, S1} = start(Req, Row, Pid, State),
+                    {reply, Reply, S1};
+                _Busy ->
+                    #{queued := Q} = State,
+                    Waiting = maps:get(Res, Q, []) ++ [{From, Req}],
+                    {noreply, State#{queued := Q#{Res => Waiting}}}
+            end;
+        _ ->
+            {reply, {error, gone}, State}
+    end.
+
+start({grow_begin, Res, OpId, Delta, Ceiling},
+      {Res, {memory, _, _, _, _, {I, C}} = Meta, L, H, Ledger}, Pid, State) ->
+    To = L + Delta,
+    #{phys := Phys} = Ledger,
+    PD = growth_pages(To, I, C) - growth_pages(L, I, C),
+    Toks = maps:keys(H),
+    %% Every holder, not just the one asking. A memory two instances share
+    %% grows only as far as the stricter of them allows, or one of them would
+    %% be growing past a ceiling the other was promised. Checked whether or not
+    %% the growth needs a new chunk: capacity already allocated is not a
+    %% licence to pass a limit.
+    AllFit = lists:all(fun(T) -> within(T, Delta, State) end, Toks),
+    if
+        To > Ceiling ->
+            {{error, exceeds_max}, State};
+        not AllFit ->
+            {{error, instance_limit}, State};
+        true ->
+            case wasm_engine:reserve_pages(PD) of
+                {error, limit} ->
+                    {{error, limit}, State};
+                ok ->
+                    ok = hook(grow_reserved),
+                    Txn = {OpId, Pid, grow, L, To, PD, chunk_count(To, C)},
+                    true = ets:insert(
+                             ?TAB, {Res, Meta, To, H,
+                                    Ledger#{phys := Phys#{growth :=
+                                                maps:get(growth, Phys) + PD},
+                                            txn := Txn,
+                                            done := maps:remove(Pid,
+                                                maps:get(done, Ledger))}}),
+                    ok = hook(grow_begun),
+                    S1 = lists:foldl(fun(T, S) -> add_total(T, Delta, S) end,
+                                     State, Toks),
+                    {{ok, L}, watch_writer(Pid, Res, S1)}
+            end
+    end;
+start({arena_begin, Res, OpId, Target, {Seen, PD}},
+      {Res, {memory, _, _, ARef, _, _} = Meta, L, H, Ledger}, Pid, State) ->
+    Have = tuple_size(wasm_engine:cell_get(ARef)),
+    if
+        Have >= Target ->
+            {covered, State};
+        %% The charge was worked out from a published length that has moved
+        %% since: the caller works it out again.
+        Have =/= Seen ->
+            {{changed, Have}, State};
+        true ->
+            case wasm_engine:reserve_pages(PD) of
+                {error, limit} ->
+                    {{error, limit}, State};
+                ok ->
+                    ok = hook(arena_reserved),
+                    #{phys := Phys} = Ledger,
+                    Txn = {OpId, Pid, arena, Have, Target, PD},
+                    true = ets:insert(
+                             ?TAB, {Res, Meta, L, H,
+                                    Ledger#{phys := Phys#{arena :=
+                                                maps:get(arena, Phys) + PD},
+                                            txn := Txn,
+                                            done := maps:remove(Pid,
+                                                maps:get(done, Ledger))}}),
+                    ok = hook(arena_begun),
+                    {{ok, Have}, watch_writer(Pid, Res, State)}
+            end
+    end.
+
+%% A tuple goes into its cell only while the cell is still shorter than the
+%% tuple the transaction is for. A published tuple is never replaced: a slot
+%% may already be living in one of its arrays.
+publish_chunks(undefined, _Tuple, _Target) ->
+    ok;
+publish_chunks(Ref, Tuple, Target) ->
+    case tuple_size(wasm_engine:cell_get(Ref)) < Target of
+        true -> wasm_engine:cell_put(Ref, Tuple);
+        false -> ok
+    end.
+
+%% The transaction ends with its outcome kept for its writer.
+finish(Res, {Res, Meta, L, H, Ledger}, Pid, OpId, Result, State) ->
+    #{done := Done} = Ledger,
+    true = ets:insert(?TAB, {Res, Meta, L, H,
+                             Ledger#{txn := none,
+                                     done := Done#{Pid => {OpId, Result}}}}),
+    ok = hook(txn_finished),
+    watch_writer(Pid, Res, State).
+
+%% What a commit for an operation that is not in flight is told: the outcome
+%% kept for it, or that there is no such operation.
+outcome({_, _, _, _, #{done := Done}}, Pid, OpId) ->
+    case maps:find(Pid, Done) of
+        {ok, {OpId, Result}} -> Result;
+        _ -> stale
+    end;
+outcome(_Row, _Pid, _OpId) ->
+    stale.
+
+%% A transaction whose writer cannot finish it: dead, or asking to abort.
+%% Finished when what it was to publish is already published, undone otherwise.
+settle(Res, {Res, Meta, L, H, Ledger} = Row, Txn, State) ->
+    case published(Meta, Txn) of
+        true ->
+            finish_published(Res, Row, Txn, State);
+        false ->
+            {OpId, Pid, Kind, A, B, PD} = undo_shape(Txn),
+            #{phys := Phys, done := Done} = Ledger,
+            Key = case Kind of grow -> growth; arena -> arena end,
+            L1 = case Kind of grow -> A; arena -> L end,
+            true = ets:insert(?TAB, {Res, Meta, L1, H,
+                                     Ledger#{phys := Phys#{Key :=
+                                                 maps:get(Key, Phys) - PD},
+                                             txn := none,
+                                             done := Done#{Pid =>
+                                                 {OpId, aborted}}}}),
+            ok = hook(txn_undone),
+            ok = wasm_engine:release_pages(PD),
+            S1 = case Kind of
+                     grow ->
+                         lists:foldl(fun(T, S) -> sub_total(T, B - A, S) end,
+                                     State, maps:keys(H));
+                     arena ->
+                         State
+                 end,
+            next_transaction(Res, S1)
+    end.
+
+undo_shape({OpId, Pid, grow, From, To, PD, _CT}) -> {OpId, Pid, grow, From, To, PD};
+undo_shape({OpId, Pid, arena, Have, Target, PD}) ->
+    {OpId, Pid, arena, Have, Target, PD}.
+
+%% Whether a transaction's first visible effect happened. For a growth that
+%% allocated chunks that is the chunk tuple, which is published before the
+%% size; for one inside capacity it is the size itself, since capacity proves
+%% nothing. A private memory publishes nothing at all: its only copy of a
+%% growth is in its grower's handle.
+published({memory, CRef, PagesRef, _, _, _},
+          {_OpId, _Pid, grow, _From, To, PD, CT}) ->
+    case {CRef, PD} of
+        {undefined, _} -> false;
+        {_, 0} -> atomics:get(PagesRef, 1) >= To;
+        _ -> tuple_size(wasm_engine:cell_get(CRef)) >= CT
+    end;
+published({memory, _, _, ARef, _, _}, {_OpId, _Pid, arena, _Have, Target, _}) ->
+    tuple_size(wasm_engine:cell_get(ARef)) >= Target.
+
+finish_published(Res, Row, {OpId, Pid, grow, From, To, _PD, _CT}, State) ->
+    {Res, {memory, _, PagesRef, _, _, _}, _, _, _} = Row,
+    atomics:put(PagesRef, 1, To),
+    next_transaction(Res, finish(Res, Row, Pid, OpId, {ok, From}, State));
+finish_published(Res, Row, {OpId, Pid, arena, _Have, _Target, _PD}, State) ->
+    next_transaction(Res, finish(Res, Row, Pid, OpId, ok, State)).
+
+next_transaction(Res, #{queued := Queued} = State) ->
+    case maps:get(Res, Queued, []) of
+        [] ->
+            State#{queued := maps:remove(Res, Queued)};
+        [{From, Req} | Rest] ->
+            S0 = State#{queued := Queued#{Res => Rest}},
+            OpId = element(3, Req),
+            case transaction(Res, OpId, Req, From, S0) of
+                {reply, Reply, S1} ->
+                    gen_server:reply(From, Reply),
+                    %% A refusal or an answer from the row frees the slot
+                    %% again, so the rest of the queue is not left waiting.
+                    case lookup(Res) of
+                        {_, _, _, _, #{txn := none}} -> next_transaction(Res, S1);
+                        _ -> S1
+                    end;
+                {noreply, S1} ->
+                    S1
+            end
+    end.
+
+watch_writer(Pid, Res, #{writers := Writers} = State) ->
+    case maps:find(Pid, Writers) of
+        {ok, {Mon, Rs}} ->
+            State#{writers := Writers#{Pid => {Mon, Rs#{Res => true}}}};
+        error ->
+            Mon = erlang:monitor(process, Pid),
+            State#{writers := Writers#{Pid => {Mon, #{Res => true}}}}
+    end.
+
+%% A writer died: its transaction on `Res', if any, is settled, and the
+%% outcome kept for it goes.
+writer_gone(Res, Pid, State) ->
+    case lookup(Res) of
+        {Res, _, _, _, #{txn := Txn, done := Done}} = Row ->
+            Row1 = case maps:is_key(Pid, Done) of
+                       true -> put_ledger(Row, done, maps:remove(Pid, Done));
+                       false -> Row
+                   end,
+            case Txn of
+                {_, Pid, _, _, _, _} -> settle(Res, Row1, Txn, State);
+                {_, Pid, _, _, _, _, _} -> settle(Res, Row1, Txn, State);
+                _ -> State
+            end;
+        _ ->
+            State
+    end.
+
+forget_outcome(Res, OpId, Pid, State) ->
+    case lookup(Res) of
+        {Res, _, _, _, #{done := Done}} = Row ->
+            case maps:find(Pid, Done) of
+                {ok, {OpId, _}} ->
+                    _ = put_ledger(Row, done, maps:remove(Pid, Done)),
+                    unwatch_writer(Pid, Res, State);
+                _ ->
+                    State
+            end;
+        _ ->
+            unwatch_writer(Pid, Res, State)
+    end.
+
+%% A writer with nothing left on `Res': no transaction, no outcome kept.
+unwatch_writer(Pid, Res, #{writers := Writers} = State) ->
+    case maps:find(Pid, Writers) of
+        {ok, {Mon, Rs}} ->
+            case maps:remove(Res, Rs) of
+                Empty when map_size(Empty) =:= 0 ->
+                    erlang:demonitor(Mon, [flush]),
+                    State#{writers := maps:remove(Pid, Writers)};
+                Rest ->
+                    State#{writers := Writers#{Pid => {Mon, Rest}}}
+            end;
+        error ->
+            State
+    end.
 
 move_cap(From, To, #{caps := Caps} = State) ->
     case maps:take(From, Caps) of
@@ -799,36 +1274,52 @@ add_held(Pid, Res, Token, {Held, Mons}) ->
     Mine = maps:get(Pid, Held, #{}),
     {Held#{Pid => Mine#{{Res, Token} => true}}, Mons1}.
 
+%% What a holder counts against its ceiling: a memory's logical pages, a heap's
+%% or a cell's charge, nothing for an image.
+counted({image, _}, _Pages) -> 0;
+counted(_Meta, Pages) -> Pages.
+
 drop(Res, Token, State) ->
-    case ets:lookup(?TAB, Res) of
-        [] ->
+    case lookup(Res) of
+        undefined ->
             State;
-        [{Res, Meta, Pages, Holders}] ->
+        {Res, Meta, Pages, Holders, Ledger} = Row ->
             case maps:take(Token, Holders) of
                 error ->
                     State;
-                {Owner, Rest} when map_size(Rest) =:= 0 ->
-                    ok = reclaim(Res, Meta, Pages),
-                    unhold(Owner, Res, Token, sub_total(Token, Pages, State));
                 {Owner, Rest} ->
-                    true = ets:insert(?TAB, {Res, Meta, Pages, Rest}),
-                    unhold(Owner, Res, Token, sub_total(Token, Pages, State))
+                    S1 = unhold(Owner, Res, Token,
+                                sub_total(Token, counted(Meta, Pages), State)),
+                    case map_size(Rest) =:= 0 andalso reclaimable(Meta, Res, S1) of
+                        true ->
+                            retire(setelement(4, Row, Rest), S1);
+                        false ->
+                            true = ets:insert(?TAB, {Res, Meta, Pages, Rest,
+                                                     Ledger}),
+                            S1
+                    end
             end
     end.
 
+%% An image outlives its last snapshot holder for as long as a memory restored
+%% from it remains, because that memory reads the image's pages.
+reclaimable({image, _}, Img, State) -> image_count(Img, State) =:= 0;
+reclaimable(_Meta, _Res, _State) -> true.
+
 retag(Res, From, To, Owner, State) ->
-    case ets:lookup(?TAB, Res) of
-        [{Res, Meta, Pages, Holders}] ->
+    case lookup(Res) of
+        {Res, Meta, Pages, Holders, Ledger} ->
             case maps:take(From, Holders) of
                 {Old, Rest} ->
                     true = ets:insert(?TAB, {Res, Meta, Pages,
-                                             Rest#{To => Owner}}),
-                    S1 = add_total(To, Pages, sub_total(From, Pages, State)),
+                                             Rest#{To => Owner}, Ledger}),
+                    N = counted(Meta, Pages),
+                    S1 = add_total(To, N, sub_total(From, N, State)),
                     watch(Owner, Res, To, unhold(Old, Res, From, S1));
                 error ->
                     State
             end;
-        [] -> State
+        undefined -> State
     end.
 
 unhold(none, _Res, _Token, State) ->
@@ -853,21 +1344,63 @@ unwatch(Pid, #{held := Held, mons := Mons} = State) ->
             State#{held := maps:remove(Pid, Held)}
     end.
 
-%% Everything this process still held is unreachable now.
-forget_holder(Pid, #{held := Held, mons := Mons} = State) ->
-    Mine = maps:get(Pid, Held, #{}),
-    S0 = State#{held := maps:remove(Pid, Held), mons := maps:remove(Pid, Mons)},
-    lists:foldl(fun({Res, Token}, S) -> drop(Res, Token, S) end,
-                S0, maps:keys(Mine)).
+%% Everything this process still held is unreachable now. Only when `MonRef' is
+%% the holder monitor: a writer's monitor is a different one.
+forget_holder(Pid, MonRef, #{held := Held, mons := Mons} = State) ->
+    case maps:find(Pid, Mons) of
+        {ok, MonRef} ->
+            Mine = maps:get(Pid, Held, #{}),
+            S0 = State#{held := maps:remove(Pid, Held),
+                        mons := maps:remove(Pid, Mons)},
+            lists:foldl(fun({Res, Token}, S) -> drop(Res, Token, S) end,
+                        S0, maps:keys(Mine));
+        _ ->
+            State
+    end.
 
-reclaim(Res, Meta, Pages) ->
+%% The end of a resource, restartable. The row is marked first, so a keeper
+%% killed anywhere after that finds the duty to finish and finishes it: the
+%% cells are forgotten before the row that names them goes, the row before the
+%% charge is given back, and the memory before its image.
+retire({Res, Meta, Pages, H, Ledger} = Row0, State) ->
+    Row = case Ledger of
+              #{state := retiring} -> Row0;
+              _ -> R = {Res, Meta, Pages, H, Ledger#{state => retiring}},
+                   true = ets:insert(?TAB, R),
+                   R
+          end,
+    ok = hook(retiring),
     ok = forget_meta(Res, Meta),
-    ok = wasm_engine:release_pages(Pages),
+    ok = hook(forgotten),
     true = ets:delete(?TAB, Res),
-    ok.
+    ok = hook(deleted),
+    ok = give_back(Row),
+    after_retire(Meta, State).
 
-forget_meta(_Res, {memory, undefined, _}) -> ok;
-forget_meta(_Res, {memory, CRef, _}) -> wasm_engine:cell_forget(CRef);
+give_back({_, {image, Bytes}, _, _, _}) ->
+    case snapshot_counter() of
+        undefined -> ok;
+        Ref -> _ = atomics:sub_get(Ref, 1, Bytes), ok
+    end;
+give_back(Row) ->
+    wasm_engine:release_pages(charged(Row)).
+
+after_retire({memory, _, _, _, Img, _} = Meta, State) when Img =/= undefined ->
+    S1 = count_image(Meta, -1, State),
+    case {image_count(Img, S1), lookup(Img)} of
+        {0, {Img, {image, _}, _, H, _} = ImgRow} when map_size(H) =:= 0 ->
+            retire(ImgRow, S1);
+        _ ->
+            S1
+    end;
+after_retire(_Meta, State) ->
+    State.
+
+forget_meta(_Res, {memory, CRef, _, ARef, _, _}) ->
+    CRef =:= undefined orelse wasm_engine:cell_forget(CRef),
+    ARef =:= undefined orelse wasm_engine:cell_forget(ARef),
+    ok;
+forget_meta(_Res, {image, _}) -> ok;
 forget_meta(Res, cell) -> wasm_engine:cell_forget(Res);
 %% A heap's two tables, which nothing else is left to delete.
 %%
@@ -883,6 +1416,8 @@ forget_meta(Res, cell) -> wasm_engine:cell_forget(Res);
 forget_meta(_Res, {heap, Objs, Elems}) ->
     try ets:delete(Objs) catch error:badarg -> true end,
     try ets:delete(Elems) catch error:badarg -> true end,
+    ok;
+forget_meta(_Res, _Other) ->
     ok.
 
 %% A table that has already gone answers `undefined`, which is a heap being torn
@@ -893,62 +1428,8 @@ words_of(Tab) ->
         N -> N
     end.
 
-%%% --------------------------------------------------------------- growth ---
+%%% ---------------------------------------------------------------- heaps ---
 
-start_growth(Res, Delta, Ceiling, {Pid, _} = _From, State) ->
-    case ets:lookup(?TAB, Res) of
-        [] ->
-            {{error, gone}, State};
-        [{Res, Meta, Pages, Holders}] ->
-            New = Pages + Delta,
-            Toks = maps:keys(Holders),
-            %% Every holder, not just the one asking. A memory two instances
-            %% share grows only as far as the stricter of them allows, or one
-            %% of them would be growing past a ceiling the other was promised.
-            AllFit = lists:all(fun(T) -> within(T, Delta, State) end, Toks),
-            if
-                New > Ceiling ->
-                    {{error, exceeds_max}, State};
-                not AllFit ->
-                    {{error, instance_limit}, State};
-                true ->
-                    case wasm_engine:reserve_pages(Delta) of
-                        {error, limit} ->
-                            {{error, limit}, State};
-                        ok ->
-                            %% The charge moves now rather than at commit, so a
-                            %% keeper that dies mid-growth leaves the pages
-                            %% attributed to the memory that asked for them and
-                            %% a later release gives them back.
-                            true = ets:insert(?TAB, {Res, Meta, New, Holders}),
-                            GrowRef = make_ref(),
-                            %% Written beside the charge and in the same table,
-                            %% because the two have to survive together: a
-                            %% keeper that came up with the charge and without
-                            %% the transaction left the memory paying for pages
-                            %% nobody could see. `adopt_growths/1` is the other
-                            %% half of this line.
-                            true = ets:insert(?TAB,
-                                              {{growing, Res},
-                                               {GrowRef, Pid, Delta}}),
-                            MonRef = erlang:monitor(process, Pid),
-                            S1 = lists:foldl(
-                                   fun(T, S) -> add_total(T, Delta, S) end,
-                                   State, Toks),
-                            G = (maps:get(growing, S1))#{Res =>
-                                    {GrowRef, Pid, MonRef, Delta}},
-                            {{ok, GrowRef, Pages}, S1#{growing := G}}
-                    end
-            end
-    end.
-
-%% Up or down to an absolute number, in one transaction with the registry row.
-%%
-%% The counter and the row move together here for the same reason they do in
-%% `start_growth/5`: a charge recorded against no resource is a charge nothing
-%% will ever give back, and `wasm_engine`'s moduledoc is explicit that a counter
-%% which disagrees with the registry eventually refuses every allocation on the
-%% node.
 pages_of(Words) ->
     (Words * erlang:system_info(wordsize) + 65535) div 65536.
 
@@ -959,14 +1440,14 @@ pages_of(Words) ->
 %% unrepresentable: it could set a live fourteen-page store to zero without
 %% looking at it. Nothing used it.
 do_resize(Res, Want, Ceiling, Extra, State) ->
-    case ets:lookup(?TAB, Res) of
-        [] ->
+    case lookup(Res) of
+        undefined ->
             {reply, {error, gone}, State};
-        [{Res, Meta, Pages, Holders}] when Want < Pages ->
+        {Res, Meta, Pages, Holders, Ledger} when Want < Pages ->
             %% Giving pages back never fails and never consults a ceiling.
             Back = Pages - Want,
+            true = ets:insert(?TAB, {Res, Meta, Want, Holders, Ledger}),
             ok = wasm_engine:release_pages(Back),
-            true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
             S1 = lists:foldl(fun(T, S) -> sub_total(T, Back, S) end,
                              State, maps:keys(Holders)),
             {reply, ok, S1};
@@ -974,10 +1455,10 @@ do_resize(Res, Want, Ceiling, Extra, State) ->
         %% is *already* over a holder's ceiling has to keep saying so, or a
         %% guest whose next interval happens not to move the page count is let
         %% through. `within/3` asks about the total, not about the delta.
-        [{Res, Meta, Pages, Holders}] ->
+        {Res, Meta, Pages, Holders, Ledger} ->
             Delta = Want - Pages,
             Toks = maps:keys(Holders),
-            grow(Res, Meta, Want, Delta, Holders, Toks,
+            grow(Res, Meta, Want, Delta, Holders, Ledger, Toks,
                  ceilings(Want, Ceiling, Delta, Extra, Toks, State),
                  Extra, State)
     end.
@@ -1002,9 +1483,9 @@ ceilings(Want, Ceiling, Delta, Extra, Toks, State) ->
 %% them, so the registry row, the holder totals and the node counter all move to
 %% the measured size and the refusal is only the *answer*. Leaving them behind
 %% was how a heap sat at twelve pages charged for six, once per heap.
-grow(Res, Meta, Want, Delta, Holders, Toks, Ceil, Extra, State) ->
+grow(Res, Meta, Want, Delta, Holders, Ledger, Toks, Ceil, Extra, State) ->
     Node = wasm_engine:charge_pages(Delta, Extra),
-    true = ets:insert(?TAB, {Res, Meta, Want, Holders}),
+    true = ets:insert(?TAB, {Res, Meta, Want, Holders, Ledger}),
     S1 = lists:foldl(fun(T, S) -> add_total(T, Delta, S) end, State, Toks),
     {reply, first_error(Ceil, Node), S1}.
 
@@ -1012,16 +1493,12 @@ first_error(ok, R) -> R;
 first_error({error, _} = E, _R) -> E.
 
 -ifdef(TEST).
-%% A sync point at the top of the transaction that sets a heap's charge.
-%%
-%% `wasm_heap:charge/1` used to measure the two tables and *then* call here, so
-%% an older, smaller sample could land after a newer, larger one and release the
-%% pages of rows that still existed. A test cannot land in that window by
-%% racing, and the one written for it passed whether the defect was there or
-%% not. Holding a process here instead makes the schedule exact: the store grows
-%% while a charge is in flight, and where the measurement happens decides the
-%% answer. Both clauses carry it because the defect put the measurement on the
-%% other side of this line. Never compiled into a release.
+%% A sync point inside a transaction, for a test to hold a process at or to
+%% kill the keeper at. `charge_entry' is the top of the heap charge, where an
+%% older, smaller sample used to land after a newer, larger one; the others are
+%% the boundaries between the effects of a growth, an arena extension and a
+%% reclaim. A test cannot land in those windows by racing, and holding the
+%% keeper here makes the schedule exact. Never compiled into a release.
 hook(Where) ->
     case application:get_env(wasm, keeper_hook) of
         {ok, F} when is_function(F, 1) -> _ = F(Where), ok;
@@ -1030,49 +1507,3 @@ hook(Where) ->
 -else.
 hook(_Where) -> ok.
 -endif.
-
-%% The reservation an abandoned growth took, given back without publishing
-%% anything. The delta is the growth's own, not a difference between the charge
-%% and a published size: a private memory publishes nothing, so there would be
-%% nothing to take the difference against.
-unreserve(Res, Delta, State) ->
-    case ets:lookup(?TAB, Res) of
-        [{Res, Meta, Pages, Holders}] ->
-            Back = erlang:min(Delta, Pages),
-            true = ets:insert(?TAB, {Res, Meta, Pages - Back, Holders}),
-            ok = wasm_engine:release_pages(Back),
-            lists:foldl(fun(T, S) -> sub_total(T, Back, S) end,
-                        State, maps:keys(Holders));
-        [] ->
-            State
-    end.
-
-publish(Res, Chunks, NewPages) ->
-    case ets:lookup(?TAB, Res) of
-        [{Res, {memory, CRef, PagesRef} = Meta, _Pages, Holders}] ->
-            %% Chunks first, then the size. A reader that sees the new size
-            %% therefore always finds the chunks that back it; the reverse
-            %% order would hand it an index past the end of the tuple.
-            CRef =:= undefined orelse wasm_engine:cell_put(CRef, Chunks),
-            PagesRef =:= undefined orelse atomics:put(PagesRef, 1, NewPages),
-            true = ets:insert(?TAB, {Res, Meta, NewPages, Holders}),
-            ok;
-        _ ->
-            ok
-    end.
-
-next_growth(Res, #{queued := Queued} = State) ->
-    case maps:get(Res, Queued, []) of
-        [] ->
-            State#{queued := maps:remove(Res, Queued)};
-        [{From, Delta, Ceiling} | Rest] ->
-            {Reply, S1} = start_growth(Res, Delta, Ceiling, From, State),
-            gen_server:reply(From, Reply),
-            S2 = S1#{queued := Queued#{Res => Rest}},
-            case Reply of
-                {ok, _, _} -> S2;
-                %% A refusal frees the slot again, so the rest of the queue is
-                %% not left waiting behind a growth that never started.
-                _ -> next_growth(Res, S2)
-            end
-    end.

@@ -906,3 +906,31 @@ worker start costs. The `async` form kept clear of requests only through
 `process_flag(scheduler, N)`, which OTP does not document. If it returns, it
 belongs to a build-and-boot lifecycle, where a release loads its compiled
 code before it takes traffic, and not to the worker.
+
+## Shared image pages: what was left out, and the constants
+
+**Images for fresh instantiation, built from a module's data segments.** Not
+built. A restored memory shares its image; a freshly instantiated one could
+share an image of its data segments the same way. Segment offsets can read
+imported globals and segments can target imported memories, so only a prefix
+of constant, own-memory segments could be imaged, and the image would need an
+owner and a budget tied to the module's lifetime rather than a snapshot's.
+Every worker restores, so no guest needs it to benefit; worth building when a
+host that instantiates per request turns up.
+
+**One image per file rather than per worker.** Not built. A worker loads its
+image from the snapshot store itself, so fifty workers on one file hold fifty
+copies of its pages; `bench/paths/densitybench.erl` reports that as image
+duplication. Sharing them needs the store to hand out one loaded image per
+file, with its own holder.
+
+**The constants**, each fixed and none an option:
+
+- a page of 4 KiB, what one first write copies. The probe that motivated the
+  change counted a CPython request writing about 200 such pages, against 64
+  of 64 KiB, and a fault copies sixteen times less at 4 KiB.
+- arena chunks of 64, 128, 256 and 512 KiB, then 1 MiB each: about four keeper
+  transactions for 200 written pages, and at most one partly filled chunk
+  charged ahead of its writes.
+- a ceiling of 2^20 pages on one memory of a loaded file, which bounds the
+  image's tuple at 8 MiB when `max_snapshot_bytes` is `infinity`.

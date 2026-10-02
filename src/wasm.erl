@@ -987,23 +987,23 @@ captured(Inst, Handle, Opts) ->
         {error, _} = E ->
             E;
         {ok, Snapshot} ->
-            case wasm_snapshot_owner:charge(wasm_snapshot:bytes(Snapshot)) of
-                {error, _} = E ->
-                    E;
-                ok ->
-                    start_owner(Snapshot, Handle)
-            end
+            start_owner(Snapshot, Handle)
     end.
 
+%% The owner charges the image, registers its pages with the keeper and, for
+%% one read from a file, builds them, all in its own process: whatever fails
+%% there gives back what was taken by that process exiting.
 start_owner(Snapshot, Handle) ->
+    Build = fun(Img) -> wasm_snapshot:build(Snapshot, Img) end,
     case wasm_snapshot_owner:start(Handle, wasm_snapshot:bytes(Snapshot),
-                                   self()) of
-        {ok, Owner} ->
-            {ok, wasm_snapshot:with_owner(Snapshot, Owner)};
+                                   self(), Build) of
+        {ok, Owner, Built} ->
+            {ok, wasm_snapshot:with_owner(Built, Owner)};
         {error, not_loaded} ->
-            _ = wasm_snapshot_owner:refund(wasm_snapshot:bytes(Snapshot)),
             {error, err(invalid, module_not_loaded, ~"module is not loaded",
-                        #{handle => Handle})}
+                        #{handle => Handle})};
+        {error, _} = E ->
+            E
     end.
 
 -doc """
@@ -1145,10 +1145,7 @@ from_file(Bin, Handle, M) ->
 %% An image off disk gets an owner exactly as a captured one does: it holds the
 %% module claim and the byte charge, and a term cannot say when it is gone.
 adopt(Image, Handle) ->
-    case wasm_snapshot_owner:charge(wasm_snapshot:bytes(Image)) of
-        {error, _} = E -> E;
-        ok             -> start_owner(Image, Handle)
-    end.
+    start_owner(Image, Handle).
 
 -doc """
 Take an instance's export in the form another module can import it.

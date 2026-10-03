@@ -812,10 +812,14 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %%   tsigs  type index -> {NParams, NResults}. An indirect call is typed by the
 %%          *type* it names rather than by any function, since which function it
 %%          reaches is not known until it runs.
-%%   tlb    memory 0's translation cache, `{Page, Array, Base}' as three Core
-%%          expressions, or `undefined' in a pure function. Carried through
+%%   tlb    memory 0's translation cache, two entries of `Page, Array, Base',
+%%          the most recently used first, as a tuple of six Core expressions,
+%%          or `undefined' in a pure function. Carried through
 %%          every continuation as the locals are, and handed on by every access
 %%          to memory 0. See `access/8'.
+%% The translation cache's Core values: two entries of three.
+-define(TLB_SIZE, 6).
+
 -record(g, {env = #{}, stack = [], frames = [], depth = 0, n = 0,
             nlocals = 0, nres = 0, inst, mut, d, unit = #{}, sigs = #{},
             tsigs = #{}, mod, elsewhere = #{}, gen = 0, tlb}).
@@ -850,7 +854,8 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
     Tlb = case Shape of
               pure -> undefined;
               stateful -> {cerl:abstract(-1), cerl:abstract(none),
-                           cerl:abstract(0)}
+                           cerl:abstract(0), cerl:abstract(-1),
+                           cerl:abstract(none), cerl:abstract(0)}
           end,
     G = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
            inst = Inst, mut = Mut, d = D, unit = Unit, sigs = Sigs,
@@ -884,8 +889,8 @@ go({K, NArgs}, #g{stack = S} = G) ->
 %% is any. Both change as a body runs, which is exactly why they are parameters
 %% where an operand below the frame's base is closed over instead.
 carried(#g{mut = undefined} = G) -> locals(G);
-carried(#g{mut = Mut, d = D, tlb = {P, A, B}} = G) ->
-    locals(G) ++ [Mut, D, P, A, B].
+carried(#g{mut = Mut, d = D, tlb = Tlb} = G) ->
+    locals(G) ++ [Mut, D | tuple_to_list(Tlb)].
 
 locals(#g{env = Env, nlocals = N}) -> [maps:get(I, Env) || I <- lists:seq(0, N - 1)].
 
@@ -897,7 +902,7 @@ var(#g{n = N} = G) -> {cerl:c_var(N), G#g{n = N + 1}}.
 %% scoping puts a sibling's name out of scope and only a nesting path has to be
 %% unique.
 frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
-    NCarried = case Mut of undefined -> NL; _ -> NL + 5 end,
+    NCarried = case Mut of undefined -> NL; _ -> NL + 2 + ?TLB_SIZE end,
     Total = NCarried + NRes,
     Name = cerl:c_fname(frame_name(Depth), Total),
     Vars = [cerl:c_var(N) || N <- lists:seq(N0, N0 + Total - 1)],
@@ -907,8 +912,7 @@ frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
         case Mut of
             undefined -> {undefined, undefined, undefined};
             _ -> {lists:nth(NL + 1, Vars), lists:nth(NL + 2, Vars),
-                  {lists:nth(NL + 3, Vars), lists:nth(NL + 4, Vars),
-                   lists:nth(NL + 5, Vars)}}
+                  list_to_tuple(lists:sublist(Vars, NL + 3, ?TLB_SIZE))}
         end,
     {Name, Vars, Env, {NewMut, NewTlb}, NewD, lists:nthtail(NCarried, Vars),
      G#g{n = N0 + Total}}.
@@ -991,10 +995,11 @@ instr(return, _Rest, G, _Exit) ->
     go(return, G);
 
 %% With the cache handed to the trap, so that a trap is a use of it: see
-%% `answer/5' and `cache_use/3'. The state goes too, because a use of the cache
+%% `answer/3' and `cache_use/3'. The state goes too, because a use of the cache
 %% has to be a use of the state.
-instr(unreachable, _Rest, #g{mut = Mut, tlb = {P, A, B}}, _Exit) ->
-    call_op(unreachable_at, [Mut, P, A, B]);
+instr(unreachable, _Rest, #g{mut = Mut, tlb = {_, _, _, _, _, _} = Tlb},
+      _Exit) ->
+    call_op(unreachable_at, [Mut | tuple_to_list(Tlb)]);
 instr(unreachable, _Rest, _G, _Exit) ->
     cerl:c_call(cerl:c_atom(wasm_error), cerl:c_atom(trap),
                 [cerl:c_atom(unreachable)]);
@@ -1039,12 +1044,15 @@ instr({f64_const, C}, Rest, G, Exit) ->
 %% it. A store writes into `atomics' in place and does not change `#mut{}',
 %% which is why only `global.set' rebinds it.
 
-instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _}} = G0, Exit)
+instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _, _, _, _}} = G0,
+      Exit)
   when is_atom(Op), is_integer(Offset) ->
     %% Memory 0, through the translation cache: the access answers its result
     %% and the cache to go on with, in the form `join/4' explains.
-    {P, G1} = var(G0), {Ar, G2} = var(G1), {B, G3} = var(G2),
+    {P, G1} = var(G0), {Ar, G2} = var(G1), {B, G2a} = var(G2),
+    {P2, G2b} = var(G2a), {Ar2, G2c} = var(G2b), {B2, G3} = var(G2c),
     Tlb = G0#g.tlb,
+    New = {P, Ar, B, P2, Ar2, B2},
     case lists:member(Op, ?LOADS) of
         true ->
             {Base, G4} = pop(G3),
@@ -1052,16 +1060,16 @@ instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _}} = G0, Exit)
             {load, N, Kind} = wasm_exec:load_spec(Op),
             {Form, Next} =
                 case cache_use(Rest, Exit, length(G0#g.frames)) of
-                    must -> {first, {P, Ar, B}};
+                    must -> {first, New};
                     %% Nothing after this access reads the cache it would
                     %% answer, so what it answers is never referenced and the
                     %% cache it was given goes on.
                     none -> {last, Tlb};
-                    mixed -> {tuple, {P, Ar, B}}
+                    mixed -> {tuple, New}
                 end,
             join(Form, cached(load, G0#g.mut, N, Kind, address(Base, Offset),
                               undefined, Tlb, Form),
-                 [V, P, Ar, B],
+                 [V | tuple_to_list(New)],
                  seq(Rest, push(V, G5#g{tlb = Next}), Exit));
         false ->
             true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
@@ -1070,8 +1078,8 @@ instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _}} = G0, Exit)
             {store, N, Kind} = wasm_exec:store_spec(Op),
             join(last, cached(store, G0#g.mut, N, Kind, address(Base, Offset),
                               Val, Tlb, last),
-                 [Mut1, P, Ar, B],
-                 seq(Rest, G6#g{mut = Mut1, tlb = {P, Ar, B}}, Exit))
+                 [Mut1 | tuple_to_list(New)],
+                 seq(Rest, G6#g{mut = Mut1, tlb = New}, Exit))
     end;
 instr({Op, {_Align, Offset, M}}, Rest, G0, Exit) when is_atom(Op), is_integer(Offset) ->
     case lists:member(Op, ?LOADS) of
@@ -1646,27 +1654,34 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
 
 %% An access to memory 0 through its translation cache.
 %%
-%% The cache holds one translation: a 4 KiB page and the array and word index
-%% its first word is at. Only translations to an array are ever put in it, a
-%% private slot or a growth chunk, and both are set once and never move: a page
-%% table entry goes from 0 to a slot once, and growth only appends chunks. So a
-%% cached translation can never go stale, whatever any other process or holder
-%% does, and nothing ever has to invalidate one.
+%% The cache holds two translations, the most recently used first: each a
+%% 4 KiB page and the array and word index its first word is at. Only
+%% translations to an array are ever put in it, a private slot or a growth
+%% chunk, and both are set once and never move: a page table entry goes from 0
+%% to a slot once, and growth only appends chunks. So a cached translation can
+%% never go stale, whatever any other process or holder does, and nothing ever
+%% has to invalidate one.
 %%
-%% A hit is one compare against the cached page, plus the straddle test every
-%% fast access makes; the bounds test is not needed, because a page that was in
-%% bounds stays in bounds and a word inside it is inside the memory. A miss is
-%% the ordinary access, which refills the cache when it ends on an array. An
-%% untouched image page is read from the binary and never cached.
-cached(Dir, Mut, N, Kind, Addr, Val, {TP, TA, TB}, Form) ->
+%% A hit is the straddle test every fast access makes and one compare against
+%% each cached page until one matches; the bounds test is not needed, because a
+%% page that was in bounds stays in bounds and a word inside it is inside the
+%% memory. A hit on the second entry swaps the two. A miss is the ordinary
+%% access, which, when it ends on an array, puts that translation first and
+%% the old first entry second. An untouched image page is read from the binary
+%% and never cached. An access that straddles a word goes straight to the
+%% helper, as the ordinary access would send it.
+cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
+    {TP, TA, TB, TP2, TA2, TB2} = Tlb,
     Mem = cerl:c_var('Mem'), A = cerl:c_var('A'), Sh = cerl:c_var('Sh'),
     Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
     Ci = cerl:c_var('Ci'), Pg = cerl:c_var('Pg'),
     Off = bif('bsr', [bif('band', [A, cerl:abstract(4095)]), cerl:abstract(3)]),
     %% What an access answers: its own result, and the cache after it.
-    Done = fun(R, P, Ar, B) -> answer(Form, R, P, Ar, B) end,
-    Keep = fun(R) -> Done(R, TP, TA, TB) end,
-    Refill = fun(R, C, I) -> Done(R, Pg, C, bif('-', [I, Off])) end,
+    Done = fun(R, Cache) -> answer(Form, R, Cache) end,
+    Keep = fun(R) -> Done(R, Tlb) end,
+    Refill = fun(R, C, I) ->
+                     Done(R, {Pg, C, bif('-', [I, Off]), TP, TA, TB})
+             end,
     Do = fun(C, I) ->
                  case Dir of
                      load -> inline_load(N, Kind, A, undefined, I, C, Bit);
@@ -1683,6 +1698,8 @@ cached(Dir, Mut, N, Kind, Addr, Val, {TP, TA, TB}, Form) ->
                                                 cerl:c_atom(Kind), A, Val])
                 end),
     Hit = cerl:c_let([Ix], bif('+', [TB, Off]), Keep(Do(TA, Ix))),
+    Hit2 = cerl:c_let([Ix], bif('+', [TB2, Off]),
+                      Done(Do(TA2, Ix), {TP2, TA2, TB2, TP, TA, TB})),
     Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
                cerl:c_let([Ci], bif('bsr', [A, Sh]),
                  cerl:c_let([Ck], chunk_at(Mem, Ci),
@@ -1700,14 +1717,15 @@ cached(Dir, Mut, N, Kind, Addr, Val, {TP, TA, TB}, Form) ->
         cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
                                     cerl:abstract(8)]),
           cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
-            all([bif('=:=', [Pg, TP]),
-                 bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
+            all([bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
                             cerl:abstract(64)])],
-                Hit, Miss))))).
+                all([bif('=:=', [Pg, TP])], Hit,
+                    all([bif('=:=', [Pg, TP2])], Hit2, Miss)),
+                Slow))))).
 
 %% How an access to memory 0 hands back its result and the cache after it.
 %%
-%% Four values, as a Core value list, unless that is not safe. OTP 29 with
+%% Seven values, as a Core value list, unless that is not safe. OTP 29 with
 %% `no_ssa_opt', which is the `baseline' quality, gives a value of a
 %% multi-value `let' that nothing uses a zero-length live interval, so it can
 %% be given the register of a value bound alongside it that is used. The values
@@ -1719,34 +1737,43 @@ cached(Dir, Mut, N, Kind, Addr, Val, {TP, TA, TB}, Form) ->
 %% So every list is ordered so that a value is used whenever one before it is:
 %% then no unused value comes after a used one, and none can clobber one.
 %%
-%%   last   the cache, then the result: `<Array, Base, Page, R>'. Within the
-%%          cache this order holds by construction, since every use of the
-%%          array or the base (the hit path, the slow path handing the cache
-%%          on, a continuation, a trap) also uses the page, and every use of
-%%          the page also uses the instance state. A store answers the state,
-%%          so a store is always `last'. A load is `last' only when
-%%          `cache_use/3' finds no use of its cache at all, and then the cache
-%%          it answers is not handed on, so nothing can refer to it.
-%%   first  the result, then the cache. For a load whose cache is used on every
-%%          path, which leaves the result as the one value that may be unused,
-%%          as it is after `drop'.
-%%   tuple  `{R, Page, Array, Base}', for a load whose cache is used on some
-%%          paths and not others: either value may then be the unused one, and
-%%          the tuple is one value. It costs five words.
-answer(tuple, R, P, Ar, B) ->
-    Rv = cerl:c_var('Tr'), Pv = cerl:c_var('Tp'),
-    Av = cerl:c_var('Ta'), Bv = cerl:c_var('Tb'),
-    cerl:c_let([Rv], R,
-      cerl:c_let([Pv], P,
-        cerl:c_let([Av], Ar,
-          cerl:c_let([Bv], B, cerl:c_tuple([Rv, Pv, Av, Bv])))));
-answer(Form, R, P, Ar, B) ->
-    cerl:c_values(order(Form, [R, P, Ar, B])).
+%%   last   the cache, then the result: `<A2, B2, A1, B1, P2, P1, R>', the
+%%          second entry's array and base, the first's, then the pages. Within
+%%          the cache this order holds by construction:
+%%          - The next access tests the straddle once and then both hits sit
+%%            under it, so a hit on the second entry exists only where one on
+%%            the first does; every other use (the slow path, a refill, a
+%%            continuation, a trap) hands on the first entry with the second.
+%%            A use of `A2' or `B2' is therefore a use of `A1' and `B1'.
+%%          - A hit uses both its array and its base, and a hand-on both.
+%%          - Every use of an array or a base uses its page: a hit compares it
+%%            first, a hand-on carries it.
+%%          - The second page is compared only after the first missed, and
+%%            handed on only with it, so a use of `P2' is a use of `P1'.
+%%          - Every use of a page uses the instance state, read first.
+%%          A store answers the state, so a store is always `last'. A load is
+%%          `last' only when `cache_use/3' finds no use of its cache at all,
+%%          and then the cache it answers is not handed on, so nothing can
+%%          refer to it.
+%%   first  the result, then the cache in the same order. For a load whose
+%%          cache is used on every path, which leaves the result as the one
+%%          value that may be unused, as it is after `drop'.
+%%   tuple  `{R, P1, A1, B1, P2, A2, B2}', for a load whose cache is used on
+%%          some paths and not others: either the result or the cache may then
+%%          be the unused one, and the tuple is one value. It costs eight
+%%          words.
+answer(tuple, R, Cache) ->
+    Vs = [cerl:c_var(V) || V <- ['Tr', 'Tp', 'Ta', 'Tb', 'Tp2', 'Ta2', 'Tb2']],
+    lists:foldr(fun({V, E}, Body) -> cerl:c_let([V], E, Body) end,
+                cerl:c_tuple(Vs),
+                lists:zip(Vs, [R | tuple_to_list(Cache)]));
+answer(Form, R, Cache) ->
+    cerl:c_values(order(Form, [R | tuple_to_list(Cache)])).
 
-order(first, [R, P, Ar, B]) -> [R, Ar, B, P];
-order(last, [R, P, Ar, B]) -> [Ar, B, P, R].
+order(first, [R, P, Ar, B, P2, Ar2, B2]) -> [R, Ar2, B2, Ar, B, P2, P];
+order(last, [R, P, Ar, B, P2, Ar2, B2]) -> [Ar2, B2, Ar, B, P2, P, R].
 
-%% Binding what `answer/5' builds, in the same order.
+%% Binding what `answer/3' builds, in the same order.
 join(tuple, Access, Vars, Body) ->
     cerl:c_case(Access, [cerl:c_clause([cerl:c_tuple(Vars)], Body)]);
 join(Form, Access, Vars, Body) ->

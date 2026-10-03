@@ -531,7 +531,8 @@ mem(I) ->
 %% the result of a load that is dropped. With `no_ssa_opt' (the `baseline'
 %% quality) OTP 29 lets an unused value of a multi-value `let' overwrite a used
 %% one bound before it, so each shape is run under both qualities and checked
-%% against the interpreter.
+%% against the interpreter. The cache has two entries, so the shapes include
+%% two pages taking turns, a third evicting one, and dead results at the end.
 an_unused_access_result_never_clobbers_a_used_one(_Config) ->
     ct:timetrap({minutes, 3}),
     %% One module per quality: the compiled code is shared by every instance of
@@ -564,7 +565,24 @@ an_unused_access_result_never_clobbers_a_used_one(_Config) ->
             [{~"ldcalltrap", [64]}],
             [{~"dropblock", [64]}],
             [{~"dropblock", [70000]}],
-            [{~"filltrap", [64]}]],
+            [{~"filltrap", [64]}],
+            %% Two pages taking turns, and a third evicting one of them:
+            %% within one array, and across the arrays growth adds.
+            [{~"alt", [64, 4104]}],
+            [{~"alt", [4104, 4104]}],
+            [{~"grow", []}, {~"alt", [64, 65544]}],
+            [{~"evict", [64, 4104, 8208]}],
+            [{~"grow", []}, {~"evict", [64, 65544, 131088]}],
+            [{~"grow", []}, {~"evict", [131088, 64, 131088]}],
+            [{~"grow", []}, {~"altst", [72, 65552, 131096]}, {~"ld", [72]}],
+            [{~"altdrop", [64, 4104]}],
+            [{~"altdrop", [64, 70000]}],
+            [{~"grow", []}, {~"altloop", [64, 65544, 131088, 7]}],
+            [{~"grow", []}, {~"altmixed", [64, 65544, 0]}],
+            [{~"grow", []}, {~"altmixed", [64, 65544, 1]}],
+            [{~"grow", []}, {~"alttrap", [64, 65544, 0]}],
+            [{~"grow", []}, {~"alttrap", [64, 65544, 1]}],
+            [{~"grow", []}, {~"altcall", [64, 65544]}]],
     Run = fun(Q, Extra) ->
                   M = Module(Q),
                   Opts = Extra#{fuel => infinity},
@@ -638,7 +656,71 @@ clobber_wat() ->
         i32.const 96 local.get 0 i32.load i32.const 4 memory.fill
         unreachable)
       (func $two (param i32 i32) (result i32)
-        local.get 0 local.get 1 i32.sub)".
+        local.get 0 local.get 1 i32.sub)
+      (func (export \"grow\") (result i32)
+        i32.const 2 memory.grow
+        i32.const 65544 i32.const 65544 i32.store
+        i32.const 131088 i32.const 131088 i32.store
+        i32.const 65552 i32.const 7 i32.store)
+      (func (export \"alt\") (param i32 i32) (result i32)
+        local.get 0 i32.load
+        local.get 1 i32.load i32.add
+        local.get 0 i32.const 4 i32.add i32.load i32.add
+        local.get 1 i32.const 4 i32.add i32.load i32.add
+        local.get 0 i32.load8_u i32.add)
+      (func (export \"evict\") (param i32 i32 i32) (result i32)
+        local.get 0 i32.load
+        local.get 1 i32.load i32.sub
+        local.get 2 i32.load i32.add
+        local.get 0 i32.load8_u i32.sub
+        local.get 1 i32.load16_u i32.add
+        local.get 2 i32.load8_s i32.add
+        local.get 1 i32.load i32.add)
+      (func (export \"altst\") (param i32 i32 i32) (result i32)
+        local.get 0 i32.const 11 i32.store
+        local.get 1 i32.const 22 i32.store
+        local.get 0 i32.load
+        local.get 2 i32.const 33 i32.store
+        local.get 1 i32.load i32.add
+        local.get 0 local.get 2 i32.load i32.store
+        local.get 0 i32.load i32.add)
+      (func (export \"altdrop\") (param i32 i32) (result i32) (local i32)
+        local.get 0 i32.load local.set 2
+        local.get 1 i32.load drop
+        local.get 0 i32.const 4 i32.add i32.load drop
+        local.get 1 i32.const 4 i32.add i32.load drop
+        local.get 2)
+      (func (export \"altloop\") (param i32 i32 i32 i32) (result i32)
+        (local i32)
+        loop
+          local.get 4
+          local.get 0 i32.load i32.add
+          local.get 1 i32.load i32.add
+          local.get 2 i32.load8_u i32.add
+          local.set 4
+          local.get 0 local.get 4 i32.store
+          local.get 3 i32.const 1 i32.sub local.tee 3
+          br_if 0
+        end
+        local.get 4 local.get 1 i32.load i32.add)
+      (func (export \"altmixed\") (param i32 i32 i32) (result i32)
+        (local i32)
+        local.get 0 i32.load
+        local.get 1 i32.load i32.add local.set 3
+        local.get 2 i32.eqz if local.get 3 return end
+        local.get 3 local.get 0 i32.const 4 i32.add i32.load i32.add)
+      (func (export \"alttrap\") (param i32 i32 i32) (result i32)
+        (local i32)
+        local.get 0 i32.load
+        local.get 1 i32.load i32.add local.set 3
+        local.get 2 if unreachable end
+        local.get 3)
+      (func (export \"altcall\") (param i32 i32) (result i32)
+        local.get 0 i32.load
+        local.get 1 i32.load
+        call $two
+        local.get 0 i32.load8_u
+        call $peek i32.add)".
 
 settle(false, _I) -> ok;
 settle(true, I) -> wasm_jit:await(I, 120_000).

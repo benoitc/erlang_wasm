@@ -101,7 +101,10 @@ moved, because even with all three a refusal still interprets.
 %% 12: a load from an untouched image page matches its own bytes out of the
 %% page binary, and `wasm_memory:image_word_at/2', which an artifact built by
 %% 11 calls, is gone.
--define(ABI, 12).
+%%
+%% 14: memory 0's translation cache holds two entries, which changes every
+%% frame's arity again. 13 is the mmap prototype's, kept apart from this line.
+-define(ABI, 14).
 
 -define(DEFAULT_AFTER, 32).
 

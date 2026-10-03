@@ -36,7 +36,8 @@ all() ->
      two_memories_each_with_an_image,
      a_cached_translation_never_hides_a_later_write,
      an_unused_access_result_never_clobbers_a_used_one,
-     writes_outside_generated_code_keep_its_reads_inline].
+     writes_outside_generated_code_keep_its_reads_inline,
+     an_untouched_page_reads_every_width_in_place].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -740,3 +741,90 @@ load_at_calls(I, F, Opts) ->
     after
         erlang:trace_pattern(MFA, false, [call_count])
     end.
+
+%%% ------------------------------------------- reads from untouched pages ---
+
+%% Generated code reads an untouched image page by matching the access's own
+%% bytes out of the page binary, signed or not per load. Every load at every
+%% offset 0..15 of a page of 0xFF, a page of mixed bytes and a page of zeros
+%% answers what the interpreter answers, under either quality. The offsets
+%% that straddle a word go to the helper and are checked all the same.
+an_untouched_page_reads_every_width_in_place(_Config) ->
+    ct:timetrap({minutes, 3}),
+    Bin = <<(binary:copy(<<16#FF>>, ?PAGE))/binary,
+            << <<((I * 37 + 11) band 16#FF)>>
+               || I <- lists:seq(0, ?PAGE - 1) >>/binary,
+            0:(?PAGE * 8)>>,
+    Calls = [{Op, [P * ?PAGE + Off]}
+             || Op <- width_loads(), P <- [0, 1, 2], Off <- lists:seq(0, 15)],
+    Run = fun(Q, Extra) ->
+                  {ok, M} = wasm:compile({wat, width_wat(Q)}),
+                  Opts = Extra#{fuel => infinity,
+                                memory_opts =>
+                                    #{0 => #{image =>
+                                                 wasm_memory:image_of(Bin)}}},
+                  Compiled = maps:is_key(compile, Extra),
+                  case Compiled of
+                      true ->
+                          {ok, I0} = wasm:instantiate(M, #{}, Opts),
+                          _ = [wasm:call(I0, F, [0], Opts)
+                               || F <- width_loads()],
+                          ok = wasm_jit:await(I0, 120_000),
+                          ok = wasm:destroy(I0);
+                      false ->
+                          ok
+                  end,
+                  {ok, I} = wasm:instantiate(M, #{}, Opts),
+                  ok = settle(Compiled, I),
+                  MFA = {wasm_exec, load_at, 5},
+                  _ = erlang:trace_pattern(MFA, true, [call_count]),
+                  {Rs, Slow} =
+                      try
+                          {entered(Compiled, I,
+                                   fun() ->
+                                           [{F, A, wasm:call(I, F, A, Opts)}
+                                            || {F, A} <- Calls]
+                                   end),
+                           element(2, erlang:trace_info(MFA, call_count))}
+                      after
+                          erlang:trace_pattern(MFA, false, [call_count])
+                      end,
+                  %% Only an access that straddles a word leaves the inline
+                  %% path, and only in generated code.
+                  ?assertEqual({Q, Compiled andalso straddles(Calls)},
+                               {Q, Compiled andalso Slow}),
+                  #mut{mems = {Mem}} = wasm_instance:mut(I),
+                  ?assertEqual({0, 0}, wasm_memory:faults(Mem)),
+                  ok = wasm:destroy(I),
+                  Rs
+          end,
+    Want = Run(interpreted, #{}),
+    [?assertEqual({Q, Want},
+                  {Q, Run(Q, #{compile => true, compile_after => 1,
+                               compile_force => true, compile_quality => Q})})
+     || Q <- [full, baseline]],
+    ok.
+
+straddles(Calls) ->
+    length([A || {Op, [A]} <- Calls, (A band 7) + width(Op) > 8]).
+
+width(Op) ->
+    case binary:split(Op, ~".load") of
+        [T, <<>>] -> binary_to_integer(binary:part(T, 1, 2)) div 8;
+        [_, Suffix] -> binary_to_integer(hd(binary:split(Suffix, ~"_"))) div 8
+    end.
+
+width_loads() ->
+    [~"i32.load", ~"i32.load8_s", ~"i32.load8_u", ~"i32.load16_s",
+     ~"i32.load16_u", ~"i64.load", ~"i64.load8_s", ~"i64.load8_u",
+     ~"i64.load16_s", ~"i64.load16_u", ~"i64.load32_s", ~"i64.load32_u",
+     ~"f32.load", ~"f64.load"].
+
+width_wat(Q) ->
+    Fns = [begin
+               [T | _] = binary:split(Op, ~"."),
+               <<"(func (export \"", Op/binary, "\") (param i32) (result ",
+                 T/binary, ") local.get 0 ", Op/binary, ")\n">>
+           end || Op <- width_loads()],
+    iolist_to_binary(["(module (memory 3)\n", Fns,
+                      "(func (export \"", atom_to_binary(Q), "\")))"]).

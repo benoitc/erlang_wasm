@@ -97,7 +97,11 @@ moved, because even with all three a refusal still interprets.
 %% 11: a bulk or vector write answers the state to go on with, whose memory
 %% handle may have seen arena chunks the write published. An artifact built by
 %% 10 drops it and goes on reading through the stale one.
--define(ABI, 11).
+%%
+%% 12: a load from an untouched image page matches its own bytes out of the
+%% page binary, and `wasm_memory:image_word_at/2', which an artifact built by
+%% 11 calls, is gone.
+-define(ABI, 12).
 
 -define(DEFAULT_AFTER, 32).
 

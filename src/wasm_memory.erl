@@ -50,7 +50,7 @@ who holds the memory and releases it when they are all gone.
 -export([field_indices/0, mask/1]).
 -export([grow/2, fill/4, copy/4, copy/5, init/5]).
 -export([to_binary/1]).
--export([store_r/4, refresh/1, image/1, image_word_at/2]).
+-export([store_r/4, refresh/1, image/1]).
 -ifdef(TEST).
 -export([image_of/1, faults/1, fault_hook/1]).
 -endif.
@@ -1139,21 +1139,6 @@ slot_word(#mem{arena = Arena, arena_ref = Ref}, E, Addr) ->
         end,
     {C, (E band 16#FFFF) * ?SLOT_WORDS
         + ((Addr band (?SLOT_BYTES - 1)) bsr 3) + 1}.
-
--doc """
-The 64-bit word at `Addr` in an image, which must be in its region: what
-generated code reads for a page no write has reached.
-""".
--spec image_word_at(tuple(), non_neg_integer()) -> non_neg_integer().
-image_word_at(Image, Addr) ->
-    case element((Addr bsr ?PAGE_SIZE_SHIFT) + 1, Image) of
-        zero ->
-            0;
-        Bin ->
-            Off = Addr band (?PAGE_SIZE - 8),
-            <<_:Off/binary, W:64/little, _/binary>> = Bin,
-            W
-    end.
 
 %% Arena chunks up to `Target', charged to the node budget before any array
 %% exists, unless another writer already published them. The count in the

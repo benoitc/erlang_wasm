@@ -1832,18 +1832,64 @@ image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow, {Keep, Refill}) ->
                             end, Ck, Ix)))),
                cerl:c_clause([cerl:c_var('_Unseen')], Slow)]))),
     Untouched = case Dir of
-                    load ->
-                        Keep(load_word(N, Kind,
-                                       cerl:c_call(cerl:c_atom(wasm_memory),
-                                                   cerl:c_atom(image_word_at),
-                                                   [field(Mem, ?MEM_IMAGE), A]),
-                                       Bit));
-                    store ->
-                        Slow
+                    load -> image_load(Mem, A, N, Kind, Slow, Keep);
+                    store -> Slow
                 end,
     cerl:c_let([E], Entry,
                cerl:c_case(E, [cerl:c_clause([cerl:abstract(0)], Untouched),
                                cerl:c_clause([cerl:c_var('_Slot')], Private)])).
+
+%% A load from a page no write has reached: exactly its `N' bytes, matched out
+%% of the image's binary at the page offset, never the word around them.
+%%
+%% The word was a remote call and, for a word with its top bits set, a bignum,
+%% built to be shifted and masked down to the few bytes wanted. The match is
+%% the width and the signedness the result is held in, so nothing is left to
+%% decode for an integer: signed for a `_s' kind and for a full-width load,
+%% whose `wrap/2' is the signed reading, unsigned otherwise. A float is decoded
+%% from its bits, as everywhere.
+%%
+%% The guard before this has already refused an access that straddles a word,
+%% so the bytes are inside one page. The last clause cannot be reached and
+%% hands an image that broke that to the helper rather than raising.
+image_load(Mem, A, N, Kind, Slow, Keep) ->
+    Pb = cerl:c_var('Pb'), Po = cerl:c_var('Po'), X = cerl:c_var('Px'),
+    Page = bif(element, [bif('+', [bif('bsr', [A, cerl:abstract(16)]),
+                                   cerl:abstract(1)]),
+                         field(Mem, ?MEM_IMAGE)]),
+    Bytes = cerl:c_binary(
+              [cerl:c_bitstr(cerl:c_var('_Pre'), Po, cerl:abstract(8),
+                             cerl:abstract(binary),
+                             cerl:abstract([unsigned, big])),
+               cerl:c_bitstr(X, cerl:abstract(N * 8), cerl:abstract(1),
+                             cerl:abstract(integer),
+                             cerl:abstract([image_sign(Kind, N), little])),
+               cerl:c_bitstr(cerl:c_var('_Post'), cerl:c_atom(all),
+                             cerl:abstract(8), cerl:abstract(binary),
+                             cerl:abstract([unsigned, big]))]),
+    cerl:c_let([Pb], Page,
+      cerl:c_case(Pb,
+        [cerl:c_clause([cerl:abstract(zero)], Keep(image_zero(Kind))),
+         cerl:c_clause([cerl:c_var('_Bin')],
+           cerl:c_let([Po], bif('band', [A, cerl:abstract(16#FFFF)]),
+             cerl:c_case(Pb,
+               [cerl:c_clause([Bytes], Keep(image_value(Kind, X))),
+                cerl:c_clause([cerl:c_var('_Short')], Slow)])))])).
+
+image_sign(i32_s, _N) -> signed;
+image_sign(i64_s, _N) -> signed;
+image_sign(i32_u, 4) -> signed;
+image_sign(i64_u, 8) -> signed;
+image_sign(_Kind, _N) -> unsigned.
+
+image_value(f32, X) -> decode(f32, 4, X);
+image_value(f64, X) -> decode(f64, 8, X);
+image_value(_Int, X) -> X.
+
+%% What a page of zeros answers, settled here rather than decoded per access.
+image_zero(f32) -> cerl:abstract(wasm_num:f32_from_bits(0));
+image_zero(f64) -> cerl:abstract(wasm_num:f64_from_bits(0));
+image_zero(_Int) -> cerl:abstract(0).
 
 slot_index(E, A) ->
     bif('+', [bif('+', [bif('*', [bif('band', [E, cerl:abstract(16#FFFF)]),

@@ -812,9 +812,13 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %%   tsigs  type index -> {NParams, NResults}. An indirect call is typed by the
 %%          *type* it names rather than by any function, since which function it
 %%          reaches is not known until it runs.
+%%   tlb    memory 0's translation cache, `{Page, Array, Base}' as three Core
+%%          expressions, or `undefined' in a pure function. Carried through
+%%          every continuation as the locals are, and handed on by every access
+%%          to memory 0. See `access/8'.
 -record(g, {env = #{}, stack = [], frames = [], depth = 0, n = 0,
             nlocals = 0, nres = 0, inst, mut, d, unit = #{}, sigs = #{},
-            tsigs = #{}, mod, elsewhere = #{}, gen = 0}).
+            tsigs = #{}, mod, elsewhere = #{}, gen = 0, tlb}).
 
 %% Two shapes, not three. `pure' keeps what the spike measured -- locals as Core
 %% variables, nothing threaded, a loop that carries no state. Anything touching
@@ -842,10 +846,16 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
     %% name crashes `sys_core_fold'. Integers, so no atom is created for a
     %% variable; only *function* identifiers have to be atoms, which is what the
     %% pools in this module exist for.
+    %% The cache starts empty: no page is -1.
+    Tlb = case Shape of
+              pure -> undefined;
+              stateful -> {cerl:abstract(-1), cerl:abstract(none),
+                           cerl:abstract(0)}
+          end,
     G = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
            inst = Inst, mut = Mut, d = D, unit = Unit, sigs = Sigs,
            tsigs = TSigs, mod = Mod, elsewhere = Elsewhere,
-           gen = Stamp},
+           gen = Stamp, tlb = Tlb},
     %% Parameters arrive in the interpreter's representation, which holds
     %% integers *signed*, and `wasm_exec:op1/2' and `op2/3' expect exactly that.
     %%
@@ -874,7 +884,8 @@ go({K, NArgs}, #g{stack = S} = G) ->
 %% is any. Both change as a body runs, which is exactly why they are parameters
 %% where an operand below the frame's base is closed over instead.
 carried(#g{mut = undefined} = G) -> locals(G);
-carried(#g{mut = Mut, d = D} = G) -> locals(G) ++ [Mut, D].
+carried(#g{mut = Mut, d = D, tlb = {P, A, B}} = G) ->
+    locals(G) ++ [Mut, D, P, A, B].
 
 locals(#g{env = Env, nlocals = N}) -> [maps:get(I, Env) || I <- lists:seq(0, N - 1)].
 
@@ -886,27 +897,30 @@ var(#g{n = N} = G) -> {cerl:c_var(N), G#g{n = N + 1}}.
 %% scoping puts a sibling's name out of scope and only a nesting path has to be
 %% unique.
 frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
-    NCarried = case Mut of undefined -> NL; _ -> NL + 2 end,
+    NCarried = case Mut of undefined -> NL; _ -> NL + 5 end,
     Total = NCarried + NRes,
     Name = cerl:c_fname(frame_name(Depth), Total),
     Vars = [cerl:c_var(N) || N <- lists:seq(N0, N0 + Total - 1)],
     Env = maps:from_list(lists:zip(lists:seq(0, NL - 1),
                                    lists:sublist(Vars, NL))),
-    {NewMut, NewD} =
+    {NewMut, NewD, NewTlb} =
         case Mut of
-            undefined -> {undefined, undefined};
-            _ -> {lists:nth(NL + 1, Vars), lists:nth(NL + 2, Vars)}
+            undefined -> {undefined, undefined, undefined};
+            _ -> {lists:nth(NL + 1, Vars), lists:nth(NL + 2, Vars),
+                  {lists:nth(NL + 3, Vars), lists:nth(NL + 4, Vars),
+                   lists:nth(NL + 5, Vars)}}
         end,
-    {Name, Vars, Env, NewMut, NewD, lists:nthtail(NCarried, Vars),
+    {Name, Vars, Env, {NewMut, NewTlb}, NewD, lists:nthtail(NCarried, Vars),
      G#g{n = N0 + Total}}.
 
 %%% -------------------------------------------------------------- control ---
 
 instr({block, NPar, NRes, Body}, Rest, G, Exit) ->
-    {K, KVars, KEnv, KMut, KD, KRes, G1} = frame(NRes, G),
+    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
                       seq(Rest, G1#g{env = KEnv, mut = KMut, d = KD,
+                                     tlb = KTlb,
                                      stack = lists:reverse(KRes) ++ Below},
                           Exit)),
     Inner = G1#g{stack = Top, frames = [{K, NRes} | G#g.frames],
@@ -917,15 +931,17 @@ instr({block, NPar, NRes, Body}, Rest, G, Exit) ->
 %% takes its *parameters* where a block's takes its results, and falling off the
 %% end goes to the continuation instead.
 instr({loop, NPar, NRes, Body}, Rest, G, Exit) ->
-    {K, KVars, KEnv, KMut, KD, KRes, G1} = frame(NRes, G),
+    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
                       seq(Rest, G1#g{env = KEnv, mut = KMut, d = KD,
+                                     tlb = KTlb,
                                      stack = lists:reverse(KRes) ++ Below},
                           Exit)),
     G2 = G1#g{depth = G#g.depth + 1},
-    {Lp, LpVars, LpEnv, LpMut, LpD, LpPar, G3} = frame(NPar, G2),
+    {Lp, LpVars, LpEnv, {LpMut, LpTlb}, LpD, LpPar, G3} = frame(NPar, G2),
     Inner = G3#g{env = LpEnv, mut = LpMut, d = LpD,
+                 tlb = LpTlb,
                  stack = lists:reverse(LpPar),
                  frames = [{Lp, NPar} | G#g.frames],
                  depth = G2#g.depth + 1},
@@ -937,10 +953,11 @@ instr({loop, NPar, NRes, Body}, Rest, G, Exit) ->
 
 instr({if_, NPar, NRes, Then, Else}, Rest, G0, Exit) ->
     {C, G} = pop(G0),
-    {K, KVars, KEnv, KMut, KD, KRes, G1} = frame(NRes, G),
+    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
                       seq(Rest, G1#g{env = KEnv, mut = KMut, d = KD,
+                                     tlb = KTlb,
                                      stack = lists:reverse(KRes) ++ Below},
                           Exit)),
     Inner = G1#g{stack = Top, frames = [{K, NRes} | G#g.frames],
@@ -1017,6 +1034,31 @@ instr({f64_const, C}, Rest, G, Exit) ->
 %% it. A store writes into `atomics' in place and does not change `#mut{}',
 %% which is why only `global.set' rebinds it.
 
+instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _}} = G0, Exit)
+  when is_atom(Op), is_integer(Offset) ->
+    %% Memory 0, through the translation cache: the access answers its result
+    %% and the cache to go on with, as four values, so nothing is allocated.
+    {P, G1} = var(G0), {Ar, G2} = var(G1), {B, G3} = var(G2),
+    Tlb = G0#g.tlb,
+    case lists:member(Op, ?LOADS) of
+        true ->
+            {Base, G4} = pop(G3),
+            {V, G5} = var(G4),
+            {load, N, Kind} = wasm_exec:load_spec(Op),
+            cerl:c_let([V, P, Ar, B],
+                       cached(load, G0#g.mut, N, Kind,
+                              address(Base, Offset), undefined, Tlb),
+                       seq(Rest, push(V, G5#g{tlb = {P, Ar, B}}), Exit));
+        false ->
+            true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
+            {Val, G4} = pop(G3), {Base, G5} = pop(G4),
+            {Mut1, G6} = var(G5),
+            {store, N, Kind} = wasm_exec:store_spec(Op),
+            cerl:c_let([Mut1, P, Ar, B],
+                       cached(store, G0#g.mut, N, Kind,
+                              address(Base, Offset), Val, Tlb),
+                       seq(Rest, G6#g{mut = Mut1, tlb = {P, Ar, B}}, Exit))
+    end;
 instr({Op, {_Align, Offset, M}}, Rest, G0, Exit) when is_atom(Op), is_integer(Offset) ->
     case lists:member(Op, ?LOADS) of
         true ->
@@ -1581,6 +1623,67 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
                                                            Slow))]),
                    Slow)))).
 
+%% An access to memory 0 through its translation cache.
+%%
+%% The cache holds one translation: a 4 KiB page and the array and word index
+%% its first word is at. Only translations to an array are ever put in it, a
+%% private slot or a growth chunk, and both are set once and never move: a page
+%% table entry goes from 0 to a slot once, and growth only appends chunks. So a
+%% cached translation can never go stale, whatever any other process or holder
+%% does, and nothing ever has to invalidate one.
+%%
+%% A hit is one compare against the cached page, plus the straddle test every
+%% fast access makes; the bounds test is not needed, because a page that was in
+%% bounds stays in bounds and a word inside it is inside the memory. A miss is
+%% the ordinary access, which refills the cache when it ends on an array. An
+%% untouched image page is read from the binary and never cached.
+cached(Dir, Mut, N, Kind, Addr, Val, {TP, TA, TB}) ->
+    Mem = cerl:c_var('Mem'), A = cerl:c_var('A'), Sh = cerl:c_var('Sh'),
+    Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
+    Ci = cerl:c_var('Ci'), Pg = cerl:c_var('Pg'),
+    Off = bif('bsr', [bif('band', [A, cerl:abstract(4095)]), cerl:abstract(3)]),
+    %% What an access answers: its own result, and the cache after it.
+    Done = fun(R, P, Ar, B) -> cerl:c_values([R, P, Ar, B]) end,
+    Keep = fun(R) -> Done(R, TP, TA, TB) end,
+    Refill = fun(R, C, I) -> Done(R, Pg, C, bif('-', [I, Off])) end,
+    Do = fun(C, I) ->
+                 case Dir of
+                     load -> inline_load(N, Kind, A, undefined, I, C, Bit);
+                     store -> cerl:c_seq(inline_store(N, Kind, A, undefined,
+                                                      I, C, Bit, Val), Mut)
+                 end
+         end,
+    Slow = Keep(case Dir of
+                    load -> call_op(load_at, [Mut, cerl:abstract(0),
+                                              cerl:abstract(N),
+                                              cerl:c_atom(Kind), A]);
+                    store -> call_op(store_at, [Mut, cerl:abstract(0),
+                                                cerl:abstract(N),
+                                                cerl:c_atom(Kind), A, Val])
+                end),
+    Hit = cerl:c_let([Ix], bif('+', [TB, Off]), Keep(Do(TA, Ix))),
+    Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
+               cerl:c_let([Ci], bif('bsr', [A, Sh]),
+                 cerl:c_let([Ck], chunk_at(Mem, Ci),
+                   cerl:c_let([Ix], word_index(A, Sh),
+                              Refill(Do(Ck, Ix), Ck, Ix))))),
+    Image = image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val,
+                         Slow, {Keep, Refill}),
+    Miss = ordinary(Mem, A, N, Bit,
+                    cerl:c_case(bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)]),
+                                [cerl:c_clause([cerl:abstract(true)], Growth),
+                                 cerl:c_clause([cerl:c_var('_Img')], Image)]),
+                    Slow),
+    cerl:c_let([Mem], mem_at(Mut, 0),
+      cerl:c_let([A], Addr,
+        cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+                                    cerl:abstract(8)]),
+          cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
+            all([bif('=:=', [Pg, TP]),
+                 bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
+                            cerl:abstract(64)])],
+                Hit, Miss))))).
+
 %% Below the image region's end the page table decides. A page no write has
 %% reached is read from the image's binary; a private one is a word in an arena
 %% chunk, found from the table entry by a shift and a mask exactly as
@@ -1588,6 +1691,12 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
 %% to copy it first, and an arena chunk this handle has not seen is looked up
 %% in the published cell: both are the helper's.
 image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow) ->
+    image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow,
+                 {fun(R) -> R end, fun(R, _C, _I) -> R end}).
+
+%% `Keep' wraps a result that leaves the cache as it was, `Refill' one that ends
+%% on an array the cache can take.
+image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow, {Keep, Refill}) ->
     E = cerl:c_var('E'), K = cerl:c_var('K'), Ar = cerl:c_var('Ar'),
     Ck = cerl:c_var('Ck'), Ix = cerl:c_var('Ix'),
     Entry = atomic(get, [field(Mem, ?MEM_TAB),
@@ -1602,20 +1711,22 @@ image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow) ->
                  [cerl:abstract(true)],
                  cerl:c_let([Ck], bif(element, [K, Ar]),
                    cerl:c_let([Ix], slot_index(E, A),
-                     case Dir of
-                         load -> inline_load(N, Kind, A, undefined, Ix, Ck, Bit);
-                         store -> cerl:c_seq(inline_store(N, Kind, A, undefined,
-                                                          Ix, Ck, Bit, Val),
-                                             Mut)
-                     end))),
+                     Refill(case Dir of
+                                load -> inline_load(N, Kind, A, undefined, Ix,
+                                                    Ck, Bit);
+                                store -> cerl:c_seq(inline_store(N, Kind, A,
+                                                                 undefined, Ix,
+                                                                 Ck, Bit, Val),
+                                                    Mut)
+                            end, Ck, Ix)))),
                cerl:c_clause([cerl:c_var('_Unseen')], Slow)]))),
     Untouched = case Dir of
                     load ->
-                        load_word(N, Kind,
-                                  cerl:c_call(cerl:c_atom(wasm_memory),
-                                              cerl:c_atom(image_word_at),
-                                              [field(Mem, ?MEM_IMAGE), A]),
-                                  Bit);
+                        Keep(load_word(N, Kind,
+                                       cerl:c_call(cerl:c_atom(wasm_memory),
+                                                   cerl:c_atom(image_word_at),
+                                                   [field(Mem, ?MEM_IMAGE), A]),
+                                       Bit));
                     store ->
                         Slow
                 end,

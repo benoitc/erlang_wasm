@@ -33,7 +33,8 @@ all() ->
      generated_code_agrees_with_a_flat_memory,
      a_private_memory_grows_from_an_image,
      atomics_and_waits_on_an_image,
-     two_memories_each_with_an_image].
+     two_memories_each_with_an_image,
+     a_cached_translation_never_hides_a_later_write].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -469,3 +470,55 @@ put_bytes(Model, Addr, Bin) ->
     Len = byte_size(Bin),
     <<Pre:Addr/binary, _:Len/binary, Post/binary>> = Model,
     <<Pre/binary, Bin/binary, Post/binary>>.
+
+%%% ---------------------------------------------------- translation cache ---
+
+%% Generated code caches the translation of a page it reached through an array,
+%% and never one of an untouched image page. A compiled function that reads an
+%% untouched page, has the host write that page through the memory handle
+%% (making it private), and reads it again must see the host's write; and a
+%% page it already reached privately and then grew past stays where it was.
+a_cached_translation_never_hides_a_later_write(_Config) ->
+    Bin = image_bin(2),
+    {ok, M} = wasm:compile({wat, ~"(module
+      (import \"h\" \"touch\" (func $touch))
+      (memory (export \"m\") 2 8)
+      (func (export \"f\") (result i32) (local i32)
+        i32.const 5000 i32.load8_u local.set 0
+        call $touch
+        i32.const 5000 i32.load8_u
+        local.get 0 i32.const 256 i32.mul i32.add)
+      (func (export \"g\") (result i32)
+        i32.const 6000 i32.const 7 i32.store8
+        i32.const 1 memory.grow drop
+        i32.const 6000 i32.load8_u))"}),
+    Self = self(),
+    Touch = fun(_Ctx, []) ->
+                    Mem = persistent_term:get({?MODULE, mem}),
+                    ok = wasm_memory:store(Mem, 5000, 1, 16#AB),
+                    Self ! touched,
+                    {ok, []}
+            end,
+    Opts = #{fuel => infinity, compile => true, compile_after => 1,
+             compile_force => true,
+             memory_opts => #{0 => #{image => wasm_memory:image_of(Bin)}}},
+    {ok, I} = wasm:instantiate(M, #{{~"h", ~"touch"} => Touch}, Opts),
+    persistent_term:put({?MODULE, mem}, mem(I)),
+    {ok, _} = wasm:call(I, ~"g", [], Opts),
+    ok = wasm_jit:await(I, 120_000),
+    %% Rebuilt from the image so page 1 (5000) is untouched again.
+    {ok, I2} = wasm:instantiate(M, #{{~"h", ~"touch"} => Touch}, Opts),
+    persistent_term:put({?MODULE, mem}, mem(I2)),
+    ok = wasm_jit:await(I2, 120_000),
+    <<_:5000/binary, Before, _/binary>> = Bin,
+    ?assertEqual({ok, [16#AB + Before * 256]},
+                 entered(true, I2, fun() -> wasm:call(I2, ~"f", [], Opts) end)),
+    receive touched -> ok end,
+    ?assertEqual({ok, [7]},
+                 entered(true, I2, fun() -> wasm:call(I2, ~"g", [], Opts) end)),
+    persistent_term:erase({?MODULE, mem}),
+    ok = wasm:destroy(I), ok = wasm:destroy(I2).
+
+mem(I) ->
+    #mut{mems = {M}} = wasm_instance:mut(I),
+    M.

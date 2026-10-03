@@ -87,7 +87,10 @@ moved, because even with all three a refusal still interprets.
 %% 8: the image region is read inline: a page table entry now names the arena
 %% chunk and slot of a private page, and an artifact built by 7 would read it as
 %% a slot number.
--define(ABI, 8).
+%%
+%% 9: memory 0 is reached through a translation cache carried through every
+%% continuation, which changes every frame's arity.
+-define(ABI, 9).
 
 -define(DEFAULT_AFTER, 32).
 

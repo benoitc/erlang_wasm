@@ -50,7 +50,7 @@ who holds the memory and releases it when they are all gone.
 -export([field_indices/0, mask/1]).
 -export([grow/2, fill/4, copy/4, copy/5, init/5]).
 -export([to_binary/1]).
--export([store_r/4, image/1, image_word_at/2]).
+-export([store_r/4, refresh/1, image/1, image_word_at/2]).
 -ifdef(TEST).
 -export([image_of/1, faults/1, fault_hook/1]).
 -endif.
@@ -1227,9 +1227,23 @@ always correct.
           ok | {refresh, mem()}.
 store_r(#mem{img_bytes = 0} = M, Addr, Nbytes, Value) ->
     store(M, Addr, Nbytes, Value);
-store_r(#mem{tab = Tab, arena = Arena, arena_ref = Ref} = M, Addr, Nbytes,
-        Value) ->
+store_r(M, Addr, Nbytes, Value) ->
     ok = store(M, Addr, Nbytes, Value),
+    refresh(M).
+
+-doc """
+`ok`, or `{refresh, Mem}` when arena chunks were published that this handle
+has not seen.
+
+Any write can publish them, through this handle or another one on the same
+memory: a bulk operation, a host function, `wasm:write_memory/3`. A handle
+that has not seen a chunk still reads it correctly, through the published
+cell, but generated code then leaves the inline path for every access to it.
+""".
+-spec refresh(mem()) -> ok | {refresh, mem()}.
+refresh(#mem{img_bytes = 0}) ->
+    ok;
+refresh(#mem{tab = Tab, arena = Arena, arena_ref = Ref} = M) ->
     case atomics:get(Tab, next_ix(M) + 1) > tuple_size(Arena) of
         true  -> {refresh, M#mem{arena = wasm_engine:cell_get(Ref)}};
         false -> ok

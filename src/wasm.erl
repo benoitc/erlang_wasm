@@ -507,7 +507,11 @@ invoke_at(Entry, Inst, Idx, Args, Opts, Depth) ->
                  0 -> wasm_exec:open_budget(Limits);
                  _ -> keep
              end,
-    Mut = wasm_instance:mut(Inst),
+    %% Brought up to date with what was written since the state was stored,
+    %% by `write_memory/3' or another holder, and stored back below if that
+    %% changed it.
+    Stored = wasm_instance:mut(Inst),
+    Mut = wasm_exec:fresh_mems(Stored),
     %% Compiled code is entered *here*, at the outermost invocation, and nowhere
     %% else. The interpreter's dispatch path is not touched at all: three
     %% separate changes to `run/3', `branch/3' or what they call have cost about
@@ -531,7 +535,7 @@ invoke_at(Entry, Inst, Idx, Args, Opts, Depth) ->
               %% write vanishes. Measured, that write was 177 ns of a 386 ns
               %% call: nearly half the cost of a short invocation was
               %% persisting state that had not changed.
-              case Mut1 =:= Mut of
+              case Mut1 =:= Stored of
                   true -> ok;
                   false -> ok = wasm_instance:set_mut(Inst, Mut1)
               end,

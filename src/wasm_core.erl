@@ -1146,10 +1146,11 @@ instr({simd_load, Op, Offset, M, W, N}, Rest, G0, Exit) ->
 
 instr({simd_store, Offset, M, W}, Rest, G0, Exit) ->
     {V, G1} = pop(G0), {Base, G2} = pop(G1),
-    cerl:c_seq(call_op(simd_store_at,
-                       [G0#g.mut, cerl:abstract(M), cerl:abstract(Offset),
-                        cerl:abstract(W), Base, V]),
-               seq(Rest, G2, Exit));
+    {M1, G3} = var(G2),
+    cerl:c_let([M1], call_op(simd_store_at,
+                             [G0#g.mut, cerl:abstract(M), cerl:abstract(Offset),
+                              cerl:abstract(W), Base, V]),
+               seq(Rest, G3#g{mut = M1}, Exit));
 
 instr({simd_load_lane, Op, Offset, M, W, N, Lane}, Rest, G0, Exit) ->
     {V, G1} = pop(G0), {Base, G2} = pop(G1),
@@ -1162,16 +1163,18 @@ instr({simd_load_lane, Op, Offset, M, W, N, Lane}, Rest, G0, Exit) ->
 
 instr({simd_store_lane, Op, Offset, M, W, Lane}, Rest, G0, Exit) ->
     {V, G1} = pop(G0), {Base, G2} = pop(G1),
-    cerl:c_seq(call_op(simd_store_lane_at,
-                       [G0#g.mut, cerl:abstract(M), cerl:c_atom(Op),
-                        cerl:abstract(Offset), cerl:abstract(W),
-                        cerl:abstract(Lane), Base, V]),
-               seq(Rest, G2, Exit));
+    {M1, G3} = var(G2),
+    cerl:c_let([M1], call_op(simd_store_lane_at,
+                             [G0#g.mut, cerl:abstract(M), cerl:c_atom(Op),
+                              cerl:abstract(Offset), cerl:abstract(W),
+                              cerl:abstract(Lane), Base, V]),
+               seq(Rest, G3#g{mut = M1}, Exit));
 
 %% Bulk memory. Each is the operand shuffle and a call to the helper the
 %% interpreter's own clause calls, so a bound or a width cannot be restated
-%% differently here. The two that change `#mut{}' rebind it; the three that
-%% write into `atomics' in place do not.
+%% differently here. Every one but `memory.size' rebinds `#mut{}': the three
+%% that write into `atomics' in place answer a handle that has seen the arena
+%% chunks a write into an image published.
 
 instr({memory_size, M}, Rest, G0, Exit) ->
     {V, G} = var(G0),
@@ -1190,23 +1193,27 @@ instr({memory_grow, M}, Rest, G0, Exit) ->
 
 instr({memory_fill, M}, Rest, G0, Exit) ->
     {N, G1} = pop(G0), {B, G2} = pop(G1), {D, G3} = pop(G2),
-    cerl:c_seq(call_op(memory_fill_at,
-                       [G0#g.mut, cerl:abstract(M), D, B, N, cerl:abstract(32)]),
-               seq(Rest, G3, Exit));
+    {M1, G4} = var(G3),
+    cerl:c_let([M1], call_op(memory_fill_at,
+                             [G0#g.mut, cerl:abstract(M), D, B, N,
+                              cerl:abstract(32)]),
+               seq(Rest, G4#g{mut = M1}, Exit));
 
 instr({memory_copy, Dm, Sm}, Rest, G0, Exit) ->
     {N, G1} = pop(G0), {Sa, G2} = pop(G1), {Da, G3} = pop(G2),
-    cerl:c_seq(call_op(memory_copy_at,
-                       [G0#g.mut, cerl:abstract(Dm), cerl:abstract(Sm), Da, Sa,
-                        N, cerl:abstract(32), cerl:abstract(32)]),
-               seq(Rest, G3, Exit));
+    {M1, G4} = var(G3),
+    cerl:c_let([M1], call_op(memory_copy_at,
+                             [G0#g.mut, cerl:abstract(Dm), cerl:abstract(Sm),
+                              Da, Sa, N, cerl:abstract(32), cerl:abstract(32)]),
+               seq(Rest, G4#g{mut = M1}, Exit));
 
 instr({memory_init, D, M}, Rest, G0, Exit) ->
     {N, G1} = pop(G0), {So, G2} = pop(G1), {Da, G3} = pop(G2),
-    cerl:c_seq(call_op(memory_init_at,
-                       [G0#g.inst, G0#g.mut, cerl:abstract(D), cerl:abstract(M),
-                        Da, So, N, cerl:abstract(32)]),
-               seq(Rest, G3, Exit));
+    {M1, G4} = var(G3),
+    cerl:c_let([M1], call_op(memory_init_at,
+                             [G0#g.inst, G0#g.mut, cerl:abstract(D),
+                              cerl:abstract(M), Da, So, N, cerl:abstract(32)]),
+               seq(Rest, G4#g{mut = M1}, Exit));
 
 instr({data_drop, D}, Rest, G0, Exit) ->
     {M1, G1} = var(G0),

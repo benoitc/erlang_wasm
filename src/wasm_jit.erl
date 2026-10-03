@@ -93,7 +93,11 @@ moved, because even with all three a refusal still interprets.
 %%
 %% 10: a load answers only the values its continuation uses, as a value list
 %% or a tuple. An artifact built by 9 allocates a tuple at every access.
--define(ABI, 10).
+%%
+%% 11: a bulk or vector write answers the state to go on with, whose memory
+%% handle may have seen arena chunks the write published. An artifact built by
+%% 10 drops it and goes on reading through the stale one.
+-define(ABI, 11).
 
 -define(DEFAULT_AFTER, 32).
 

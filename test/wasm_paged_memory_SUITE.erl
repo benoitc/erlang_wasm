@@ -35,7 +35,8 @@ all() ->
      atomics_and_waits_on_an_image,
      two_memories_each_with_an_image,
      a_cached_translation_never_hides_a_later_write,
-     an_unused_access_result_never_clobbers_a_used_one].
+     an_unused_access_result_never_clobbers_a_used_one,
+     writes_outside_generated_code_keep_its_reads_inline].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -652,3 +653,90 @@ answers(Compiled, I, Opts, Calls) ->
 outcome({ok, _} = R) -> R;
 outcome({error, #{class := C, kind := K}}) -> {error, C, K};
 outcome(Other) -> Other.
+
+%%% ------------------------------------------------- handles kept current ---
+
+%% A write that is not a plain store can publish arena chunks: a host
+%% function's, `wasm:write_memory/3' between two calls, a `memory.fill'. The
+%% handle generated code reads through has to see them, or every later read of
+%% a page in those chunks leaves the inline path for `wasm_exec:load_at/5'.
+%% Ten reads of ten pages the write made private call it not once, under
+%% either quality, each with a module of its own as in the case above.
+writes_outside_generated_code_keep_its_reads_inline(_Config) ->
+    ct:timetrap({minutes, 3}),
+    [ok = inline_reads(Q) || Q <- [full, baseline]],
+    ok.
+
+inline_reads(Q) ->
+    Bin = image_bin(2),
+    {ok, M} = wasm:compile({wat, <<"(module
+      (import \"h\" \"touch\" (func $touch))
+      (memory (export \"m\") 2 8)
+      (func $read (export \"read\") (result i32)
+        i32.const 0
+        i32.const 8 i32.load8_u i32.add
+        i32.const 4104 i32.load8_u i32.add
+        i32.const 8200 i32.load8_u i32.add
+        i32.const 12296 i32.load8_u i32.add
+        i32.const 16392 i32.load8_u i32.add
+        i32.const 20488 i32.load8_u i32.add
+        i32.const 24584 i32.load8_u i32.add
+        i32.const 28680 i32.load8_u i32.add
+        i32.const 32776 i32.load8_u i32.add
+        i32.const 36872 i32.load8_u i32.add
+      )
+      (func (export \"f\") (result i32) call $touch call $read)
+      (func (export \"g\") (result i32)
+        i32.const 0 i32.const 1 i32.const 40960 memory.fill call $read)
+      (func (export \"", (atom_to_binary(Q))/binary, "\")))">>}),
+    Touch = fun(Ctx, []) -> ok = touch(Ctx), {ok, []} end,
+    Opts = #{fuel => infinity, compile => true, compile_after => 1,
+             compile_force => true, compile_quality => Q,
+             memory_opts => #{0 => #{image => wasm_memory:image_of(Bin)}}},
+    New = fun() ->
+                  {ok, I} = wasm:instantiate(M, #{{~"h", ~"touch"} => Touch},
+                                             Opts),
+                  I
+          end,
+    I0 = New(),
+    {ok, _} = wasm:call(I0, ~"f", [], Opts),
+    {ok, _} = wasm:call(I0, ~"read", [], Opts),
+    {ok, _} = wasm:call(I0, ~"g", [], Opts),
+    ok = wasm_jit:await(I0, 120_000),
+    Want = lists:sum([binary:at(Bin, 4096 * K + 8) bxor 16#FF
+                      || K <- lists:seq(0, 9)]),
+    %% Through a host function, during a call.
+    I1 = New(),
+    ok = wasm_jit:await(I1, 120_000),
+    ?assertEqual({{ok, [Want]}, 0}, load_at_calls(I1, ~"f", Opts)),
+    %% From outside, before one.
+    I2 = New(),
+    ok = wasm_jit:await(I2, 120_000),
+    ok = touch(I2),
+    ?assertEqual({{ok, [Want]}, 0}, load_at_calls(I2, ~"read", Opts)),
+    %% By a bulk write in generated code.
+    I3 = New(),
+    ok = wasm_jit:await(I3, 120_000),
+    ?assertEqual({{ok, [10]}, 0}, load_at_calls(I3, ~"g", Opts)),
+    [ok = wasm:destroy(I) || I <- [I0, I1, I2, I3]],
+    ok.
+
+%% Ten pages written, one byte each: one arena chunk published.
+touch(Ctx) ->
+    lists:foreach(
+      fun(K) ->
+              A = 4096 * K + 8,
+              {ok, <<B>>} = wasm:read_memory(Ctx, A, 1),
+              ok = wasm:write_memory(Ctx, A, <<(B bxor 16#FF)>>)
+      end, lists:seq(0, 9)).
+
+load_at_calls(I, F, Opts) ->
+    MFA = {wasm_exec, load_at, 5},
+    _ = erlang:trace_pattern(MFA, true, [call_count]),
+    try
+        R = entered(true, I, fun() -> wasm:call(I, F, [], Opts) end),
+        {call_count, N} = erlang:trace_info(MFA, call_count),
+        {R, N}
+    after
+        erlang:trace_pattern(MFA, false, [call_count])
+    end.

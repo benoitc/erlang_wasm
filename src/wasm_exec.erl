@@ -69,7 +69,8 @@ to, so the interpreted and compiled paths cannot disagree; `%%% exceptions`,
 %% Read by `wasm_core` at generation time, so the width and signedness of an
 %% access are decided once and in one place.
 -export([load_spec/1, store_spec/1]).
--export([call_out/7, shard_call/8, check_depth/2, indirect_out/9]).
+-export([call_out/7, shard_call/8, check_depth/2, indirect_out/9,
+         unreachable_at/4]).
 -export([memory_size_at/2, memory_grow_at/5, memory_fill_at/6, memory_copy_at/8,
          memory_init_at/8, data_drop_at/3]).
 -export([simd_load_at/7, simd_store_at/6, simd_load_lane_at/9,
@@ -1099,6 +1100,16 @@ check_depth(Inst, Depth) ->
     end.
 
 max_depth(#inst{limits = L}) -> maps:get(max_depth, L, 1024).
+
+-doc """
+Trap `unreachable` from compiled code.
+
+The arguments are the state and memory 0's translation cache, and are not read.
+Passing them makes the trap a use of them, which the generator's ordering of an
+access's results depends on: see `wasm_core:answer/5`.
+""".
+-spec unreachable_at(#mut{}, term(), term(), term()) -> no_return().
+unreachable_at(_Mut, _Page, _Array, _Base) -> wasm_error:trap(unreachable).
 
 -doc """
 An indirect call out of compiled code.

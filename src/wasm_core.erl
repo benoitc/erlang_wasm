@@ -990,6 +990,11 @@ instr({br_table, Labels, Default}, _Rest, G0, _Exit) ->
 instr(return, _Rest, G, _Exit) ->
     go(return, G);
 
+%% With the cache handed to the trap, so that a trap is a use of it: see
+%% `answer/5' and `cache_use/3'. The state goes too, because a use of the cache
+%% has to be a use of the state.
+instr(unreachable, _Rest, #g{mut = Mut, tlb = {P, A, B}}, _Exit) ->
+    call_op(unreachable_at, [Mut, P, A, B]);
 instr(unreachable, _Rest, _G, _Exit) ->
     cerl:c_call(cerl:c_atom(wasm_error), cerl:c_atom(trap),
                 [cerl:c_atom(unreachable)]);
@@ -1037,7 +1042,7 @@ instr({f64_const, C}, Rest, G, Exit) ->
 instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _}} = G0, Exit)
   when is_atom(Op), is_integer(Offset) ->
     %% Memory 0, through the translation cache: the access answers its result
-    %% and the cache to go on with.
+    %% and the cache to go on with, in the form `join/4' explains.
     {P, G1} = var(G0), {Ar, G2} = var(G1), {B, G3} = var(G2),
     Tlb = G0#g.tlb,
     case lists:member(Op, ?LOADS) of
@@ -1045,22 +1050,28 @@ instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _}} = G0, Exit)
             {Base, G4} = pop(G3),
             {V, G5} = var(G4),
             {load, N, Kind} = wasm_exec:load_spec(Op),
-            cerl:c_case(cached(load, G0#g.mut, N, Kind,
-                               address(Base, Offset), undefined, Tlb),
-                        [cerl:c_clause(
-                           [cerl:c_tuple([V, P, Ar, B])],
-                           seq(Rest, push(V, G5#g{tlb = {P, Ar, B}}), Exit))]);
+            {Form, Next} =
+                case cache_use(Rest, Exit, length(G0#g.frames)) of
+                    must -> {first, {P, Ar, B}};
+                    %% Nothing after this access reads the cache it would
+                    %% answer, so what it answers is never referenced and the
+                    %% cache it was given goes on.
+                    none -> {last, Tlb};
+                    mixed -> {tuple, {P, Ar, B}}
+                end,
+            join(Form, cached(load, G0#g.mut, N, Kind, address(Base, Offset),
+                              undefined, Tlb, Form),
+                 [V, P, Ar, B],
+                 seq(Rest, push(V, G5#g{tlb = Next}), Exit));
         false ->
             true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
             {Val, G4} = pop(G3), {Base, G5} = pop(G4),
             {Mut1, G6} = var(G5),
             {store, N, Kind} = wasm_exec:store_spec(Op),
-            cerl:c_case(cached(store, G0#g.mut, N, Kind,
-                               address(Base, Offset), Val, Tlb),
-                        [cerl:c_clause(
-                           [cerl:c_tuple([Mut1, P, Ar, B])],
-                           seq(Rest, G6#g{mut = Mut1, tlb = {P, Ar, B}},
-                               Exit))])
+            join(last, cached(store, G0#g.mut, N, Kind, address(Base, Offset),
+                              Val, Tlb, last),
+                 [Mut1, P, Ar, B],
+                 seq(Rest, G6#g{mut = Mut1, tlb = {P, Ar, B}}, Exit))
     end;
 instr({Op, {_Align, Offset, M}}, Rest, G0, Exit) when is_atom(Op), is_integer(Offset) ->
     case lists:member(Op, ?LOADS) of
@@ -1640,24 +1651,13 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
 %% bounds stays in bounds and a word inside it is inside the memory. A miss is
 %% the ordinary access, which refills the cache when it ends on an array. An
 %% untouched image page is read from the binary and never cached.
-cached(Dir, Mut, N, Kind, Addr, Val, {TP, TA, TB}) ->
+cached(Dir, Mut, N, Kind, Addr, Val, {TP, TA, TB}, Form) ->
     Mem = cerl:c_var('Mem'), A = cerl:c_var('A'), Sh = cerl:c_var('Sh'),
     Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
     Ci = cerl:c_var('Ci'), Pg = cerl:c_var('Pg'),
     Off = bif('bsr', [bif('band', [A, cerl:abstract(4095)]), cerl:abstract(3)]),
-    %% What an access answers: its own result, and the cache after it, as a
-    %% tuple the caller matches. A Core value list here compiled to code that
-    %% handed a cache value on as the instance state in real guests (Lua,
-    %% QuickJS and CPython all crashed in `element/2'); the tuple does not.
-    Done = fun(R, P, Ar, B) ->
-                   Rv = cerl:c_var('Tr'), Pv = cerl:c_var('Tp'),
-                   Av = cerl:c_var('Ta'), Bv = cerl:c_var('Tb'),
-                   cerl:c_let([Rv], R,
-                     cerl:c_let([Pv], P,
-                       cerl:c_let([Av], Ar,
-                         cerl:c_let([Bv], B,
-                                    cerl:c_tuple([Rv, Pv, Av, Bv])))))
-           end,
+    %% What an access answers: its own result, and the cache after it.
+    Done = fun(R, P, Ar, B) -> answer(Form, R, P, Ar, B) end,
     Keep = fun(R) -> Done(R, TP, TA, TB) end,
     Refill = fun(R, C, I) -> Done(R, Pg, C, bif('-', [I, Off])) end,
     Do = fun(C, I) ->
@@ -1697,6 +1697,96 @@ cached(Dir, Mut, N, Kind, Addr, Val, {TP, TA, TB}) ->
                  bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
                             cerl:abstract(64)])],
                 Hit, Miss))))).
+
+%% How an access to memory 0 hands back its result and the cache after it.
+%%
+%% Four values, as a Core value list, unless that is not safe. OTP 29 with
+%% `no_ssa_opt', which is the `baseline' quality, gives a value of a
+%% multi-value `let' that nothing uses a zero-length live interval, so it can
+%% be given the register of a value bound alongside it that is used. The values
+%% become one parallel copy at the join, and `beam_ssa_codegen' keeps only the
+%% *last* copy into a register: an unused value copied after a used one
+%% overwrites it, and one copied before it is overwritten. Real guests crashed
+%% on that, the instance state replaced by a cache word.
+%%
+%% So every list is ordered so that a value is used whenever one before it is:
+%% then no unused value comes after a used one, and none can clobber one.
+%%
+%%   last   the cache, then the result: `<Array, Base, Page, R>'. Within the
+%%          cache this order holds by construction, since every use of the
+%%          array or the base (the hit path, the slow path handing the cache
+%%          on, a continuation, a trap) also uses the page, and every use of
+%%          the page also uses the instance state. A store answers the state,
+%%          so a store is always `last'. A load is `last' only when
+%%          `cache_use/3' finds no use of its cache at all, and then the cache
+%%          it answers is not handed on, so nothing can refer to it.
+%%   first  the result, then the cache. For a load whose cache is used on every
+%%          path, which leaves the result as the one value that may be unused,
+%%          as it is after `drop'.
+%%   tuple  `{R, Page, Array, Base}', for a load whose cache is used on some
+%%          paths and not others: either value may then be the unused one, and
+%%          the tuple is one value. It costs five words.
+answer(tuple, R, P, Ar, B) ->
+    Rv = cerl:c_var('Tr'), Pv = cerl:c_var('Tp'),
+    Av = cerl:c_var('Ta'), Bv = cerl:c_var('Tb'),
+    cerl:c_let([Rv], R,
+      cerl:c_let([Pv], P,
+        cerl:c_let([Av], Ar,
+          cerl:c_let([Bv], B, cerl:c_tuple([Rv, Pv, Av, Bv])))));
+answer(Form, R, P, Ar, B) ->
+    cerl:c_values(order(Form, [R, P, Ar, B])).
+
+order(first, [R, P, Ar, B]) -> [R, Ar, B, P];
+order(last, [R, P, Ar, B]) -> [Ar, B, P, R].
+
+%% Binding what `answer/5' builds, in the same order.
+join(tuple, Access, Vars, Body) ->
+    cerl:c_case(Access, [cerl:c_clause([cerl:c_tuple(Vars)], Body)]);
+join(Form, Access, Vars, Body) ->
+    cerl:c_let(order(Form, Vars), Access, Body).
+
+%% Whether the cache an access answers is used after it: `must' when every
+%% path from the access reaches a use before leaving the function, `none' when
+%% none does, `mixed' otherwise. It follows `seq/3': a use is another access to
+%% memory 0, a continuation (which is handed the cache by `carried/1'), or an
+%% `unreachable' (which passes it to the trap); leaving is a `return' or a
+%% branch to the function's own label. A block's `Rest' is not looked at,
+%% because it runs in a continuation that takes the cache as a parameter.
+%% `Depth' is how many labels are in scope, as `target/2' counts them.
+cache_use(Is, Exit, Depth) ->
+    case paths(Is, Exit, Depth) of
+        {true, false} -> must;
+        {false, _} -> none;
+        {true, true} -> mixed
+    end.
+
+%% `{SomePathUses, SomePathLeaves}'.
+paths([], return, _D) -> {false, true};
+paths([], _K, _D) -> {true, false};
+paths([{block, _, _, Body} | _], _Exit, D) -> paths(Body, cont, D + 1);
+paths([{loop, _, _, _} | _], _Exit, _D) -> {true, false};
+paths([{if_, _, _, Then, Else} | _], _Exit, D) ->
+    either(paths(Then, cont, D + 1), paths(Else, cont, D + 1));
+paths([{br, N} | _], _Exit, D) -> branch(N, D);
+paths([{br_if, N} | Rest], Exit, D) ->
+    either(branch(N, D), paths(Rest, Exit, D));
+paths([{br_table, Labels, Default} | _], _Exit, D) ->
+    lists:foldl(fun(L, Acc) -> either(branch(L, D), Acc) end,
+                branch(Default, D), tuple_to_list(Labels));
+paths([return | _], _Exit, _D) -> {false, true};
+paths([unreachable | _], _Exit, _D) -> {true, false};
+paths([{Op, {_, Offset, 0}} | Rest], Exit, D)
+  when is_atom(Op), is_integer(Offset) ->
+    case lists:member(Op, ?LOADS) orelse lists:member(Op, ?STORES) of
+        true -> {true, false};
+        false -> paths(Rest, Exit, D)
+    end;
+paths([_ | Rest], Exit, D) -> paths(Rest, Exit, D).
+
+branch(N, D) when N < D -> {true, false};
+branch(_N, _D) -> {false, true}.
+
+either({U1, L1}, {U2, L2}) -> {U1 orelse U2, L1 orelse L2}.
 
 %% Below the image region's end the page table decides. A page no write has
 %% reached is read from the image's binary; a private one is a word in an arena

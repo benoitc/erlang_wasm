@@ -34,7 +34,8 @@ all() ->
      a_private_memory_grows_from_an_image,
      atomics_and_waits_on_an_image,
      two_memories_each_with_an_image,
-     a_cached_translation_never_hides_a_later_write].
+     a_cached_translation_never_hides_a_later_write,
+     an_unused_access_result_never_clobbers_a_used_one].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -522,3 +523,132 @@ a_cached_translation_never_hides_a_later_write(_Config) ->
 mem(I) ->
     #mut{mems = {M}} = wasm_instance:mut(I),
     M.
+
+%% An access to memory 0 answers its result and the translation cache, and
+%% either can be unused afterwards: the cache after a function's last access,
+%% the result of a load that is dropped. With `no_ssa_opt' (the `baseline'
+%% quality) OTP 29 lets an unused value of a multi-value `let' overwrite a used
+%% one bound before it, so each shape is run under both qualities and checked
+%% against the interpreter.
+an_unused_access_result_never_clobbers_a_used_one(_Config) ->
+    ct:timetrap({minutes, 3}),
+    %% One module per quality: the compiled code is shared by every instance of
+    %% the same module, so a second quality over the same bytes would run the
+    %% first one's code.
+    Module = fun(Q) ->
+                     {ok, M} = wasm:compile({wat, <<(clobber_wat())/binary,
+                                                    "(func (export \"",
+                                                    (atom_to_binary(Q))/binary,
+                                                    "\")))">>}),
+                     M
+             end,
+    %% Each sequence on an instance of its own, so a shape that corrupts the
+    %% state cannot hide behind the one before it.
+    Seqs = [[{~"st", [64, 16#12345678]}, {~"ld", [64]}],
+            [{~"st", [70000, 7]}],
+            [{~"ld", [68]}],
+            [{~"ld", [70000]}],
+            [{~"stld", [72, 16#7EADBEEF]}],
+            [{~"dropld", [64]}],
+            [{~"dropld", [70000]}],
+            [{~"ldtrap", [68, 0]}],
+            [{~"ldtrap", [68, 1]}],
+            [{~"ldmixed", [64, 0]}],
+            [{~"ldmixed", [64, 1]}],
+            [{~"sttrap", [80, 5]}, {~"ld", [80]}],
+            [{~"stcall", [84, 300]}],
+            [{~"ldcall", [64]}],
+            [{~"ldcall2", [64]}],
+            [{~"ldcalltrap", [64]}],
+            [{~"dropblock", [64]}],
+            [{~"dropblock", [70000]}],
+            [{~"filltrap", [64]}]],
+    Run = fun(Q, Extra) ->
+                  M = Module(Q),
+                  Opts = Extra#{fuel => infinity},
+                  Compiled = maps:is_key(compile, Extra),
+                  case Compiled of
+                      true ->
+                          {ok, I} = wasm:instantiate(M, #{}, Opts),
+                          _ = [wasm:call(I, F, A, Opts)
+                               || Seq <- Seqs, {F, A} <- Seq],
+                          ok = wasm_jit:await(I, 120_000),
+                          ok = wasm:destroy(I);
+                      false ->
+                          ok
+                  end,
+                  [begin
+                       {ok, I0} = wasm:instantiate(M, #{}, Opts),
+                       ok = settle(Compiled, I0),
+                       answers(Compiled, I0, Opts, Seq)
+                   end || Seq <- Seqs]
+          end,
+    Want = Run(interpreted, #{}),
+    [?assertEqual({Q, Want},
+                  {Q, Run(Q, #{compile => true, compile_after => 1,
+                               compile_force => true, compile_quality => Q})})
+     || Q <- [full, baseline]],
+    ok.
+
+clobber_wat() ->
+    ~"(module
+      (memory (export \"m\") 1)
+      (data (i32.const 64) \"\\01\\02\\03\\04\\05\\06\\07\\08\\09\\0a\\0b\\0c\")
+      (func (export \"st\") (param i32 i32)
+        local.get 0 local.get 1 i32.store)
+      (func (export \"ld\") (param i32) (result i32)
+        local.get 0 i32.load)
+      (func (export \"stld\") (param i32 i32) (result i32)
+        local.get 0 local.get 1 i32.store
+        local.get 0 i32.const 4 i32.add i32.load)
+      (func (export \"dropld\") (param i32) (result i32)
+        local.get 0 i32.load drop
+        local.get 0 i32.const 4 i32.add i32.load)
+      (func (export \"ldtrap\") (param i32 i32) (result i32) (local i32)
+        local.get 0 i32.load local.set 2
+        local.get 1 if unreachable end
+        local.get 2)
+      (func (export \"ldmixed\") (param i32 i32) (result i32) (local i32)
+        local.get 0 i32.load local.set 2
+        local.get 1 i32.eqz if local.get 2 return end
+        local.get 2 local.get 0 i32.const 4 i32.add i32.load i32.add)
+      (func (export \"sttrap\") (param i32 i32)
+        local.get 0 local.get 1 i32.store unreachable)
+      (func $peek (param i32) (result i32)
+        local.get 0 i32.load8_u)
+      (func (export \"stcall\") (param i32 i32) (result i32)
+        local.get 0 local.get 1 i32.store
+        local.get 0 call $peek)
+      (func (export \"ldcall\") (param i32) (result i32)
+        local.get 0 i32.load call $peek)
+      (func (export \"ldcall2\") (param i32) (result i32)
+        local.get 0 i32.load
+        local.get 0 i32.const 4 i32.add i32.load
+        call $two)
+      (func (export \"ldcalltrap\") (param i32)
+        local.get 0 i32.load call $peek drop unreachable)
+      (func (export \"dropblock\") (param i32) (result i32)
+        block
+          local.get 0 i32.const 4 i32.add i32.load drop
+        end
+        local.get 0 i32.load)
+      (func (export \"filltrap\") (param i32)
+        i32.const 96 local.get 0 i32.load i32.const 4 memory.fill
+        unreachable)
+      (func $two (param i32 i32) (result i32)
+        local.get 0 local.get 1 i32.sub)".
+
+settle(false, _I) -> ok;
+settle(true, I) -> wasm_jit:await(I, 120_000).
+
+answers(Compiled, I, Opts, Calls) ->
+    Rs = [{F, A, entered(Compiled, I, fun() -> outcome(wasm:call(I, F, A, Opts))
+                                      end)}
+          || {F, A} <- Calls],
+    Mem = wasm:read_memory(I, 0, 128),
+    _ = wasm:destroy(I),
+    {Rs, Mem}.
+
+outcome({ok, _} = R) -> R;
+outcome({error, #{class := C, kind := K}}) -> {error, C, K};
+outcome(Other) -> Other.

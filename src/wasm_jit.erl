@@ -90,7 +90,10 @@ moved, because even with all three a refusal still interprets.
 %%
 %% 9: memory 0 is reached through a translation cache carried through every
 %% continuation, which changes every frame's arity.
--define(ABI, 9).
+%%
+%% 10: a load answers only the values its continuation uses, as a value list
+%% or a tuple. An artifact built by 9 allocates a tuple at every access.
+-define(ABI, 10).
 
 -define(DEFAULT_AFTER, 32).
 

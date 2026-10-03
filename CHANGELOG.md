@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.2
+
+Component resource handling is completed: ownership moves correctly across a
+composed call, destructors run, and misuse is caught.
+
+- **Resource ownership moves across a composed call.** When one component hands a
+  resource to another, the handle moves with it: a lent resource is reachable in
+  the callee only for that call, an owned one passes over, and a returned one
+  passes back. A resource is live in one component at a time, so using one that
+  was handed away traps.
+- **Destructors run on drop.** Dropping the handle that owns a resource runs the
+  resource's destructor, exactly once.
+- **Wrong-type handles trap.** Reading a handle as a resource type other than its
+  own traps instead of returning a representation.
+- **A Component Model resource guide and example.** `docs/components.md` spells
+  out the resource rules, with a runnable walk-through in
+  `docs/examples/use-a-component-resource.md`.
+
 ## 0.8.1
 
 A component's own resource handles are tracked per instance, so misusing one is

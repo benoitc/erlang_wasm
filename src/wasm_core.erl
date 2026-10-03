@@ -1037,7 +1037,7 @@ instr({f64_const, C}, Rest, G, Exit) ->
 instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _}} = G0, Exit)
   when is_atom(Op), is_integer(Offset) ->
     %% Memory 0, through the translation cache: the access answers its result
-    %% and the cache to go on with, as four values, so nothing is allocated.
+    %% and the cache to go on with.
     {P, G1} = var(G0), {Ar, G2} = var(G1), {B, G3} = var(G2),
     Tlb = G0#g.tlb,
     case lists:member(Op, ?LOADS) of
@@ -1045,19 +1045,22 @@ instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _}} = G0, Exit)
             {Base, G4} = pop(G3),
             {V, G5} = var(G4),
             {load, N, Kind} = wasm_exec:load_spec(Op),
-            cerl:c_let([V, P, Ar, B],
-                       cached(load, G0#g.mut, N, Kind,
-                              address(Base, Offset), undefined, Tlb),
-                       seq(Rest, push(V, G5#g{tlb = {P, Ar, B}}), Exit));
+            cerl:c_case(cached(load, G0#g.mut, N, Kind,
+                               address(Base, Offset), undefined, Tlb),
+                        [cerl:c_clause(
+                           [cerl:c_tuple([V, P, Ar, B])],
+                           seq(Rest, push(V, G5#g{tlb = {P, Ar, B}}), Exit))]);
         false ->
             true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
             {Val, G4} = pop(G3), {Base, G5} = pop(G4),
             {Mut1, G6} = var(G5),
             {store, N, Kind} = wasm_exec:store_spec(Op),
-            cerl:c_let([Mut1, P, Ar, B],
-                       cached(store, G0#g.mut, N, Kind,
-                              address(Base, Offset), Val, Tlb),
-                       seq(Rest, G6#g{mut = Mut1, tlb = {P, Ar, B}}, Exit))
+            cerl:c_case(cached(store, G0#g.mut, N, Kind,
+                               address(Base, Offset), Val, Tlb),
+                        [cerl:c_clause(
+                           [cerl:c_tuple([Mut1, P, Ar, B])],
+                           seq(Rest, G6#g{mut = Mut1, tlb = {P, Ar, B}},
+                               Exit))])
     end;
 instr({Op, {_Align, Offset, M}}, Rest, G0, Exit) when is_atom(Op), is_integer(Offset) ->
     case lists:member(Op, ?LOADS) of
@@ -1642,8 +1645,19 @@ cached(Dir, Mut, N, Kind, Addr, Val, {TP, TA, TB}) ->
     Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
     Ci = cerl:c_var('Ci'), Pg = cerl:c_var('Pg'),
     Off = bif('bsr', [bif('band', [A, cerl:abstract(4095)]), cerl:abstract(3)]),
-    %% What an access answers: its own result, and the cache after it.
-    Done = fun(R, P, Ar, B) -> cerl:c_values([R, P, Ar, B]) end,
+    %% What an access answers: its own result, and the cache after it, as a
+    %% tuple the caller matches. A Core value list here compiled to code that
+    %% handed a cache value on as the instance state in real guests (Lua,
+    %% QuickJS and CPython all crashed in `element/2'); the tuple does not.
+    Done = fun(R, P, Ar, B) ->
+                   Rv = cerl:c_var('Tr'), Pv = cerl:c_var('Tp'),
+                   Av = cerl:c_var('Ta'), Bv = cerl:c_var('Tb'),
+                   cerl:c_let([Rv], R,
+                     cerl:c_let([Pv], P,
+                       cerl:c_let([Av], Ar,
+                         cerl:c_let([Bv], B,
+                                    cerl:c_tuple([Rv, Pv, Av, Bv])))))
+           end,
     Keep = fun(R) -> Done(R, TP, TA, TB) end,
     Refill = fun(R, C, I) -> Done(R, Pg, C, bif('-', [I, Off])) end,
     Do = fun(C, I) ->

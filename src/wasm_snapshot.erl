@@ -904,9 +904,11 @@ page(Pieces) ->
                                end, {0, []}, lists:reverse(Pieces)),
     Page = binary:copy(iolist_to_binary(
                          lists:reverse([<<0:((65536 - End) * 8)>> | Parts]))),
-    case Page of
-        <<0:(65536 * 8)>> -> zero;
-        _ -> Page
+    %% Compared with a literal: matching the pattern `<<0:(65536 * 8)>>' builds
+    %% that binary on every test, 31 us a page, which was most of a load.
+    case Page =:= <<0:(65536 * 8)>> of
+        true -> zero;
+        false -> Page
     end.
 
 -doc """

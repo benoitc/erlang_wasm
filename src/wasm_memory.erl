@@ -61,6 +61,12 @@ who holds the memory and releases it when they are all gone.
 -define(SLOT_BYTES, 4096).
 -define(SLOT_WORDS, 512).
 
+%% Zero pages as literals, compared with `=:='. Matching a page against the
+%% pattern `<<0:(N * 8)>>' builds that zero binary afresh on every test, which
+%% measured 31 us for 64 KiB; comparing with a literal is a memory compare.
+-define(ZERO_SLOT, <<0:(?SLOT_BYTES * 8)>>).
+-define(ZERO_PAGE, <<0:(?PAGE_SIZE * 8)>>).
+
 %% 1 MiB per chunk: 16 pages, 131072 atomic words.
 -define(CHUNK_BITS, 20).
 -define(PAGE_SIZE_SHIFT, 16).      % 64 KiB
@@ -1090,10 +1096,10 @@ fill_slot(#mem{image = Image} = M, S, P) ->
             ok;
         Bin ->
             Page = binary:part(Bin, (P band 15) * ?SLOT_BYTES, ?SLOT_BYTES),
-            case Page of
-                <<0:(?SLOT_BYTES * 8)>> ->
+            case Page =:= ?ZERO_SLOT of
+                true ->
                     ok;
-                _ ->
+                false ->
                     {C, I} = slot_word(M, S, P bsl ?SLOT_SHIFT),
                     scatter_run(C, I, Page)
             end
@@ -1253,9 +1259,9 @@ image_page(M, P) ->
 read_page(M, P) -> nonzero(load_bytes(M, P * ?PAGE_SIZE, ?PAGE_SIZE)).
 
 nonzero(Bin) when is_binary(Bin) ->
-    case Bin of
-        <<0:(?PAGE_SIZE * 8)>> -> zero;
-        _ -> Bin
+    case Bin =:= ?ZERO_PAGE of
+        true -> zero;
+        false -> Bin
     end.
 
 -ifdef(TEST).

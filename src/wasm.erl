@@ -990,15 +990,22 @@ captured(Inst, Handle, Opts) ->
             start_owner(Snapshot, Handle)
     end.
 
-%% The owner charges the image, registers its pages with the keeper and, for
-%% one read from a file, builds them, all in its own process: whatever fails
-%% there gives back what was taken by that process exiting.
+%% The owner charges the image and registers its pages with the keeper before
+%% any page is built. This process then builds them, which for an image read
+%% from a file is the expensive half; a build that fails here ends the owner,
+%% and one that dies with this process is ended by the owner's monitor.
 start_owner(Snapshot, Handle) ->
-    Build = fun(Img) -> wasm_snapshot:build(Snapshot, Img) end,
     case wasm_snapshot_owner:start(Handle, wasm_snapshot:bytes(Snapshot),
-                                   self(), Build) of
-        {ok, Owner, Built} ->
-            {ok, wasm_snapshot:with_owner(Built, Owner)};
+                                   self()) of
+        {ok, Owner, Img} ->
+            case wasm_error:capture(
+                   fun() -> {ok, wasm_snapshot:build(Snapshot, Img)} end) of
+                {ok, Built} ->
+                    {ok, wasm_snapshot:with_owner(Built, Owner)};
+                {error, _} = E ->
+                    ok = wasm_snapshot_owner:abandon(Owner),
+                    E
+            end;
         {error, not_loaded} ->
             {error, err(invalid, module_not_loaded, ~"module is not loaded",
                         #{handle => Handle})};

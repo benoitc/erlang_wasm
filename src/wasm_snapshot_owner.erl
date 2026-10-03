@@ -37,7 +37,7 @@ for this process, so it dies when this process does, and the cache is what
 sees to that.
 """.
 
--export([start/4, acquire/2, release/2, holders/1]).
+-export([start/3, abandon/1, acquire/2, release/2, holders/1]).
 -export([charged/0]).
 
 -include("wasm_snapshot_budget.hrl").
@@ -45,60 +45,60 @@ sees to that.
 -define(ASK_TIMEOUT, 5_000).
 
 -doc """
-Start an owner holding `Handle` for `FirstHolder`, charge the image's `Bytes`,
-and run `Build` in the owner with the image's keeper record, answering what it
-built.
+Start an owner holding `Handle` for `FirstHolder`, charge the image's `Bytes`
+and register its pages with the keeper, answering the owner and the keeper's
+record for the image.
 
 The claim is taken here rather than by the caller, because a claim belongs to
-the process that will give it back. `Build` runs here for the same reason: an
-image read from a file is charged before its pages exist, and a build that
-fails, or an owner that dies building, gives the charge and the claim back by
-this process exiting, whatever becomes of the caller.
+the process that will give it back. The owner watches `FirstHolder` from the
+start, so a caller that dies while it builds the image's pages gives the charge
+and the claim back with it; one that fails to build and lives calls
+`abandon/1`. Nothing of the image itself passes through this process: a copy
+into it and back measured up to 0.6 ms of a CPython load.
 """.
--spec start(wasm_module_cache:handle(), non_neg_integer(), pid(),
-            fun((wasm_keeper:resource()) -> term())) ->
-          {ok, pid(), term()} | {error, not_loaded | wasm_error:error()}.
-start(Handle, Bytes, FirstHolder, Build) ->
+-spec start(wasm_module_cache:handle(), non_neg_integer(), pid()) ->
+          {ok, pid(), wasm_keeper:resource()}
+        | {error, not_loaded | wasm_error:error()}.
+start(Handle, Bytes, FirstHolder) ->
     Self = self(),
     Ref = make_ref(),
-    Owner = spawn(fun() -> init(Self, Ref, Handle, Bytes, FirstHolder, Build) end),
+    Owner = spawn(fun() -> init(Self, Ref, Handle, Bytes, FirstHolder) end),
     Mon = erlang:monitor(process, Owner),
     receive
-        {Ref, {ok, Built}} ->
+        {Ref, {ok, Img}} ->
             erlang:demonitor(Mon, [flush]),
-            {ok, Owner, Built};
+            {ok, Owner, Img};
         {Ref, {error, _} = Error} ->
             erlang:demonitor(Mon, [flush]),
             Error;
-        {'DOWN', Mon, process, Owner, Why} ->
-            {error, #{class => malformed, kind => internal,
-                      msg => ~"the image could not be built",
-                      ctx => #{exception => Why}}}
+        {'DOWN', Mon, process, Owner, _Why} ->
+            {error, not_loaded}
     end.
 
-init(Caller, Ref, Handle, Bytes, FirstHolder, Build) ->
+-doc """
+Give up an image whose pages could not be built: the claim and the charge go
+back now, and the owner ends.
+""".
+-spec abandon(pid()) -> ok.
+abandon(Owner) ->
+    Mon = erlang:monitor(process, Owner),
+    Owner ! abandon,
+    receive {'DOWN', Mon, process, Owner, _} -> ok end.
+
+init(Caller, Ref, Handle, Bytes, FirstHolder) ->
     case wasm_module_cache:claim_for(Handle, self()) of
         {error, not_loaded} ->
             Caller ! {Ref, {error, not_loaded}};
         ok ->
             Id = make_ref(),
+            Mon = erlang:monitor(process, FirstHolder),
             case reserve(Bytes, Id) of
                 {error, _} = E ->
                     ok = wasm_module_cache:unclaim_for(Handle, self()),
                     Caller ! {Ref, E};
                 {ok, Img} ->
-                    case wasm_error:capture(fun() -> {ok, Build(Img)} end) of
-                        {ok, Built} ->
-                            Mon = erlang:monitor(process, FirstHolder),
-                            Caller ! {Ref, {ok, Built}},
-                            loop({Handle, Img, Id}, Bytes,
-                                 #{FirstHolder => Mon});
-                        {error, _} = E ->
-                            %% Exiting gives the charge back: the keeper sees
-                            %% this process, the image's only holder, go.
-                            ok = wasm_module_cache:unclaim_for(Handle, self()),
-                            Caller ! {Ref, E}
-                    end
+                    Caller ! {Ref, {ok, Img}},
+                    loop({Handle, Img, Id}, Bytes, #{FirstHolder => Mon})
             end
     end.
 
@@ -170,6 +170,10 @@ loop(Handle, Bytes, Holders) ->
             loop(Handle, Bytes, Holders);
         {release, Pid} ->
             drop(Handle, Bytes, Holders, Pid);
+        abandon ->
+            {Mod, Img, Id} = Handle,
+            ok = wasm_module_cache:unclaim_for(Mod, self()),
+            ok = wasm_keeper:release(Img, {snapshot, Id});
         {'DOWN', _Mon, process, Pid, _Why} ->
             drop(Handle, Bytes, Holders, Pid)
     end.

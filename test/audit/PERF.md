@@ -7328,3 +7328,189 @@ The capture, a fresh image directory each time:
 The image is 2,747,289 bytes old and 2,032,933 new for a plain worker,
 2,746,838 and 2,030,826 with an entry. One-minute load average 5.7 to 43
 across the three rounds; the heavy-import rows' first round ran at 20 to 39.
+
+## Shared pages: the page table against the mmap NIF
+
+Restored memory had two candidate shapes, both built, and a rule written before
+either was measured decided between them. The rule chose A4, the pure-Erlang
+page table with a two-entry translation cache. B, the mmap NIF, was faster on
+every request but fit a third fewer CPython instances in the page budget.
+
+| arm | tree | what it is |
+| --- | --- | --- |
+| base | `a2bda33` | before shared pages: a restore copies the image |
+| A3 | `9fcf3a8` | 4 KiB page table over a shared image, one-entry cache |
+| A4 | `9230dbf` | A3 with a two-entry cache |
+| B | `435bace` (`mmap-pages`) | linear memory in an mmap region, copied on write by the kernel |
+
+### The rule and how it came out
+
+A4 replaces A3 only if both hold, A4 against A3:
+
+| clause | py | qjs | lua | |
+| --- | ---: | ---: | ---: | --- |
+| compiled guest time (`split` call) below 1 | 0.983 | 0.969 | 0.939 | pass |
+| compiled whole request p50 at most 1 | 0.965 | 0.964 | 0.997 | pass |
+
+B replaces A, now A4, only if every clause holds, B against A4:
+
+| clause | py | qjs | lua | |
+| --- | ---: | ---: | ---: | --- |
+| compiled guest time at most 0.90 | 0.343 | 0.350 | 0.516 | pass |
+| compiled whole request p50 below 1 | 0.394 | 0.431 | 0.594 | pass |
+| interpreted whole request p50 at most 1.05 | 0.873 | 0.844 | 0.880 | pass |
+| budget density at least 1 | **0.669** | 1.000 | 1.000 | **fail** |
+| physical footprint per instance at most 1.25 | 1.246 | 0.936 | 0.944 | pass |
+| full ct on `mmap-pages` | | | | pass |
+
+So A4 ships first and B is deferred. `ATTEMPTS.md` has why B lost density
+and what would bring it back.
+
+### Per guest, against base
+
+Each figure is the median of the per-round medians; each ratio is the median
+of the per-round ratios, the reference arm named in its column. Requests are
+`requestbench`, a stock script worker with `restore_ahead` off.
+
+Whole request p50, ms:
+
+| guest, tier | base | A3 | A4 | B | A4 / base | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| py compiled | 16.93 | 18.35 | 17.66 | 7.15 | 1.034 | 0.394 |
+| py interpreted | 26.87 | 24.96 | 24.90 | 21.35 | 0.923 | 0.873 |
+| qjs compiled | 6.53 | 8.12 | 7.72 | 3.39 | 1.190 | 0.431 |
+| qjs interpreted | 11.62 | 12.48 | 12.42 | 10.46 | 1.061 | 0.844 |
+| lua compiled | 3.64 | 3.90 | 3.88 | 2.27 | 1.083 | 0.594 |
+| lua interpreted | 6.94 | 7.42 | 7.34 | 6.42 | 1.066 | 0.880 |
+
+Compiled guest time, the `split` call phase, ms:
+
+| guest | base | A3 | A4 | B | A4 / base | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| py | 10.39 | 15.90 | 15.43 | 5.49 | 1.485 | 0.343 |
+| qjs | 4.99 | 6.97 | 6.75 | 2.32 | 1.343 | 0.350 |
+| lua | 2.38 | 2.80 | 2.68 | 1.36 | 1.123 | 0.516 |
+
+The page table makes the restore cheap and every compiled access dearer: A4's
+compiled request is slower than base on all three guests, by 3% to 19%, and
+its guest time by 12% to 49%. Gate 1 of the next part holds A4 as the
+reference, not base.
+
+`restorebench`, `wasm:restore/3` and `wasm:load_snapshot/2`, median us:
+
+| guest | restore base | A4 | B | A4 / base | B / A4 | load base | A4 | B | A4 / base | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| py | 11955 | 792 | 740 | 0.067 | 0.904 | 24359 | 24591 | 28161 | 1.021 | 1.152 |
+| qjs | 419 | 118 | 171 | 0.283 | 1.442 | 1036 | 1257 | 1634 | 1.230 | 1.312 |
+| lua | 167 | 60 | 111 | 0.366 | 1.845 | 318 | 306 | 573 | 1.024 | 1.894 |
+| plain | 11.0 | 9.5 | 19.6 | 0.877 | 2.088 | 29 | 36 | 216 | 1.305 | 6.043 |
+
+Density, `densitybench density`, instances under `page_limit` 4096, identical
+in all eight rounds:
+
+| guest | base | A3 | A4 | B |
+| --- | ---: | ---: | ---: | ---: |
+| py | 6 | 124 | 124 | 83 |
+| qjs | 682 | 1024 | 1024 | 1024 |
+| lua | 1365 | 2048 | 2048 | 2048 |
+
+Per held instance, `optbshare` with K = 50, KiB:
+
+| guest | `erlang:memory` base | A4 | B | B / A4 | footprint base | A4 | B | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| py | 42930 | 4050 | 3266 | 0.807 | 43049 | 3502 | 4342 | 1.246 |
+| qjs | 914 | 939 | 714 | 0.759 | 1403 | 1301 | 1188 | 0.936 |
+| lua | 780 | 539 | 461 | 0.856 | 942 | 707 | 666 | 0.944 |
+
+`erlang:memory/0` cannot see B's mmap regions, so B's own column there is
+low by construction; the footprint (`footprint -p`) is the comparable one.
+
+### realbench QuickJS is a collector mode, not a speedup
+
+`realbench qjs`, median ms over the three runs of each VM: base 12437, A3
+12230, A4 12279, B 1722 (B / A4 0.140). The 7x is not the engine. Rerun of
+one VM per tree, realbench's shape with `msacc` around each run, load 11 to
+13:
+
+| | A4 | B |
+| --- | ---: | ---: |
+| wall | 11.9 s | 1.65 s |
+| dirty scheduler time in `gc` | about 9.5 s | about 0.03 s |
+| scheduler time in `emulator` | about 2.4 s | about 1.6 s |
+| reductions | 822 M | 776 M |
+| collections | 772 | 1439 |
+| words reclaimed | 1.434 G | 1.431 G |
+
+The same work, within 6% of reductions and with the same words reclaimed;
+the 10 s between them is collection, A4's runs falling in the mode where
+QuickJS's 10-million-word heap is collected expensively on the dirty
+schedulers (the bimodality in "The measurement protocol" in
+`bench/paths/README.md`). The equality is checked, not inferred: both print
+`864318946`, and the smallest fuel with which `_start` completes, found by
+bisection, is 805062 on both trees. Spawned without realbench's warm-up and
+`+S 10:10`, the same run takes 1.80 s on A4 and 1.78 s on B. Realbench on qjs
+compares A against A; between a heap-backed and an mmap-backed memory it
+compares collector modes.
+
+### The hornbeam path: CPython with an entry
+
+`py_entry` captures an entry into the image, so a request is one function
+call. Arms base, A4 and B; three arms in all six orderings, one round each:
+
+| | base | A4 | B | A4 / base | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| whole request p50 compiled, ms | 5.44 | 3.01 | 1.91 | 0.549 | 0.633 |
+| whole request p50 interpreted, ms | 7.83 | 5.08 | 4.64 | 0.638 | 0.913 |
+| compiled call phase, ms | 1.00 | 1.71 | 0.64 | 1.675 | 0.367 |
+| compiled restore phase, ms | 3.18 | 0.39 | 0.38 | 0.121 | 0.965 |
+| compiled destroy phase, us | 79 | 18 | 55 | 0.218 | 3.078 |
+| density at `page_limit` 4096 | 6 | 455 | 124 | 75.8 | **0.273** |
+| `erlang:memory` per held instance, KiB | 42322 | 2620 | 2645 | 0.062 | 1.010 |
+
+455 instances is about 9 pages each, 124 about 33. The footprint and RSS
+deltas per instance came out negative for A4 and B (A4 -4.4 MB), so the OS
+numbers for `py_entry` are not used. The decision block `analyze.escript`
+prints for this pass is empty: it reads only py, qjs and lua.
+
+### First writes
+
+What a request pays to make image pages private, from `requestbench
+firstwrite` on scratch builds with counters (`arb_inst`), never timed arms.
+Mean per request; A's `fault` copies a 4 KiB page, B's `buy` is a budget
+purchase through the keeper and a new bit is a host page first written:
+
+| guest, tier | A3 faults | A3 us | A4 faults | A4 us | B buys | B buy us | B pages | B page us |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| py compiled | 255 | 1321 | 256 | 1314 | 6 | 50 | 140 | 315 |
+| py interpreted | 255 | 1485 | 256 | 1366 | 6 | 55 | 140 | 356 |
+| qjs compiled | 41 | 209 | 41 | 214 | 2 | 14 | 12 | 29 |
+| qjs interpreted | 41 | 172 | 41 | 168 | 2 | 16 | 12 | 33 |
+| lua compiled | 12 | 58 | 12 | 56 | 1 | 8 | 4 | 11 |
+| lua interpreted | 12 | 53 | 12 | 54 | 1 | 6 | 4 | 10 |
+| py_entry compiled | | | 90 | 456 | | | | |
+| py_entry interpreted | | | 90 | 461 | | | | |
+
+A CPython request makes 1 MiB private under A (256 pages of 4 KiB) and 2.2
+MiB under B (140 host pages of 16 KiB on this machine), in about a quarter
+of the time.
+
+### Protocol
+
+- Four arms, each in its own fresh VM with `+S 10:10`, run from inside its
+  own tree, with its own code cache primed before the rounds.
+- Eight rounds in Williams order: rounds 1 to 4 have every arm precede every
+  other once, rounds 5 to 8 repeat them.
+- A cell, one metric for one guest and tier on all four arms, starts at a
+  one-minute load below 8 and is redone when the load at the end of its last
+  arm is 8 or more; the discarded files are kept under `redone/`.
+- 732 arm runs, 23 cells redone, 0 void. The `py_entry` pass: 117 arm runs, 3
+  cells redone, 0 void.
+- Every arm carried byte-identical harness sources, checked by sha256 in
+  `manifest.txt`; B's NIF was checked to be built without sanitizers.
+- Samples: 200 timed requests after warm-up (interpreted 20; compiled, until
+  a request enters generated code), 200 restores and 20 loads, K = 50 held
+  instances, three realbench runs per VM.
+
+Scripts, raw terms, logs and both `analysis.txt` are in
+`test/audit/raw/shared-pages/arbitration/`; the harnesses are in
+`bench/paths/`. One machine: 14 cores (10 performance), Darwin 27, OTP 29.

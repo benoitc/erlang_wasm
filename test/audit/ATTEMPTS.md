@@ -934,3 +934,59 @@ file, with its own holder.
   charged ahead of its writes.
 - a ceiling of 2^20 pages on one memory of a loaded file, which bounds the
   image's tuple at 8 MiB when `max_snapshot_bytes` is `infinity`.
+
+## Restored memory in an mmap region: B, deferred
+
+**Linear memory as an mmap region over the image, copied on write by the
+kernel, through a NIF.** Built on `mmap-pages` at `435bace` and passed the
+full ct. Not chosen: it lost the density clause of the rule written before the
+arbitration (`PERF.md`, "Shared pages: the page table against the mmap NIF"),
+and won every other one. A4 ships first; B is deferred, not merged in a
+switched-off state.
+
+At `page_limit` 4096 on macOS, B fit 83 CPython script instances against A4's
+124, and 124 `py_entry` instances against 455: about 33 budget pages an
+instance against about 9.
+
+**The gap is the 16 KiB host page.** Charged pages per instance, by ledger
+key (`test/audit/raw/shared-pages/density-breakdown/`):
+
+| guest | system | backend | table | arena | growth | instances |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| py | macOS | paged | 2 | 31 | 0 | 124 |
+| py | macOS | mmap | 2 | 47 | 0 | 83 |
+| py_entry | macOS | paged | 2 | 7 | 0 | 455 |
+| py_entry | macOS | mmap | 2 | 31 | 0 | 124 |
+| py | Linux aarch64 | either | 2 | 31 | 0 | 124 |
+| py_entry | Linux aarch64 | either | 2 | 7 | 0 | 455 |
+
+- On Linux, with 4 KiB host pages, the two backends charge the same pages
+  and fit the same instances.
+- On macOS a `py_entry` request writes 70 host pages of 16 KiB, about 1120
+  KiB, where paged copies 90 slots of 4 KiB, about 360 KiB. Credit bought in
+  doubling chunks then rounds that up: 33 pages against 9.
+- Charging exactly what was written would still leave macOS mmap at 0.94 of
+  paged for py and 0.50 for `py_entry`. On Linux it would beat paged: 256
+  against 124, and 682 against 455.
+- The table pages and growth charging contribute nothing to the gap.
+
+**When to look at B again.** Only if an improved A4 still leaves a material
+bottleneck, and B then shows all of:
+
+- a useful latency or throughput gain on real workloads;
+- at least as many concurrent calls within the same physical memory budget;
+- page-by-page charging and density verified on Linux;
+- acceptable BEAM scheduler behaviour under load.
+
+The A4 improvements to measure first are cheaper first-write copies, bounded
+preparation during `restore_ahead`, and resolving a page once for a group of
+accesses.
+
+**realbench QuickJS cannot compare the two.** It reported B at 0.140 of A4,
+1.72 s against 12.28. The runs do the same work: the same output, the same
+minimum fuel (805062), reductions within 6% and the same words reclaimed. A4's
+runs spend about 9.5 s of their 12 in collection on the dirty schedulers and
+B's almost none, the bimodal collector mode `bench/paths/README.md` describes.
+Spawned outside realbench's shape both take 1.8 s. Between a heap-backed and
+an mmap-backed memory, check `msacc`, reductions and the output before reading
+a realbench ratio as speed.

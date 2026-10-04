@@ -2,16 +2,28 @@
 
 ## Unreleased
 
-Script requests are faster by default, a worker can run compiled with one
-option, a loaded module no longer keeps its whole input file in memory, and
-the CPython reactor ships stripped with its standard library precompiled.
-Workers built on `py_reactor.wasm` need the new build.
+A restore shares its snapshot's image instead of copying it, script requests
+are faster by default, a worker can run compiled with one option, a loaded
+module no longer keeps its whole input file in memory, and the CPython reactor
+ships stripped with its standard library precompiled. Workers built on
+`py_reactor.wasm` need the new build. Drop `recycle` from `wasm:restore/3` calls
+and `recycle_idle` from worker options; both are now ignored.
 
 - **Restored memory shares its image.** A restore no longer copies the
   image: the memory reads the image's pages in place and copies a 4 KiB page
   on its first write. A restore costs a page table and a request the pages it
-  writes. `wasm:restore/3` no longer takes `recycle`, and the worker option
-  `recycle_idle` is removed.
+  writes: a CPython restore is 0.79 ms instead of 12.0, and a node holds 124
+  CPython instances under `page_limit` 4096 instead of 6. Loading a snapshot
+  file costs what it did.
+- **Restore recycling is removed.** `wasm:restore/3` no longer takes `recycle`,
+  and the worker option `recycle_idle` is gone. Nothing replaces them: every
+  restore now shares the image.
+- **Compiled code reaches restored memory through a translation cache.** A
+  compiled request's guest time is 12% to 49% higher than with a copied image;
+  whether the whole request is faster depends on how much of it the restore
+  was (a CPython request with an `entry`: 5.4 ms to 3.0 ms; a compiled QuickJS
+  script request: 6.5 ms to 7.7 ms). Generated code is ABI 14, so the compiled
+  tier's disk cache is rebuilt once.
 - **The node page budget counts allocated pages.** A restored memory charges
   its page table and the pages it writes; any memory charges its growth in
   whole chunks, so a three-page memory counts four. `max_memory_pages` still

@@ -132,6 +132,21 @@ from it, and the first write to a 4 KiB page copies that page into memory of
 the instance's own. So a restore costs a page table, one 8-byte entry per
 4 KiB of image, and a request costs the pages it writes.
 
+Against the 0.8 releases, which copied the image into every restore, medians
+from `test/audit/PERF.md`, "Shared pages":
+
+| guest | `wasm:restore/3`, 0.8 | now | first writes per request | instances under `page_limit` 4096, 0.8 | now |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CPython | 12.0 ms | 0.79 ms | 256 pages, 1.3 ms | 6 | 124 |
+| QuickJS | 0.42 ms | 0.12 ms | 41 pages, 0.21 ms | 682 | 1024 |
+| Lua | 0.17 ms | 0.06 ms | 12 pages, 0.06 ms | 1365 | 2048 |
+
+The price is on access. Compiled code reaches a page through a lookup, so a
+compiled request's guest time is 12% to 49% higher than before, and the whole
+request moves between 8% faster and 19% slower depending on how much of it
+was the restore. A CPython worker with an `entry`, where the restore was most
+of the request, went from 5.4 ms to 3.0 ms.
+
 The instance underneath is built without the module's active data segments
 applied, because the image already holds what they wrote. Their bounds are
 still checked against the module's declared minimum, so a module that could not
@@ -154,7 +169,9 @@ Acquire **before** the capturing process exits. The reverse order is a race.
 `wasm:snapshot_info/1` answers `#{bytes, module, version}`.
 
 `wasm:restore/3` takes a holder for you if the calling process has none, and
-drops it when the copy finishes, so N restores leave no holders behind.
+drops it when the restore returns, so N restores leave no holders behind.
+Each restored memory holds the image itself until it is freed, which is what
+keeps its pages readable after you release the image.
 
 ## Keep images across restarts
 
@@ -223,6 +240,10 @@ mapping more than 2^20 pages, is refused as `exhaustion` / `snapshot_budget`.
 The node page budget plays no part in loading: a sparse image loads on a node
 too small to hold its whole address space, and its restores pay only for what
 they write.
+
+Loading costs what it did: the file's runs are laid into 64 KiB pages once, about
+25 ms for a started CPython and 1.3 ms for QuickJS (`test/audit/PERF.md`,
+"Shared pages"). Every restore after that shares them.
 
 ## Declare what your imports hold
 

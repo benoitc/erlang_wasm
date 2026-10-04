@@ -178,7 +178,9 @@ thousand objects or a hundred thousand, where tracing all of the latter costs
 
 **`atomics` makes linear memory viable without native code.** A store costs
 6 ns against 1201 ns for rebuilding an immutable binary. Memory is chunked
-`atomics` arrays sized to the memory, so growth appends instead of copying.
+`atomics` arrays sized to the memory, so growth appends instead of copying. A
+memory restored from a snapshot reads the image's pages in place and copies a
+4 KiB page on its first write, so a CPython restore is 0.8 ms rather than 12.
 
 The full reasoning, including the trade-offs rejected and the benchmark that
 lied, is in the module documentation and [docs/features.md](docs/features.md).

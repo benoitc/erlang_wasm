@@ -124,7 +124,9 @@ initialized instance --capture--> image --restore--> fresh instance
 A **snapshot** is a frozen copy of a guest after startup, used as a template.
 Restoring it gives a fresh instance that skips startup, so an interpreter that
 takes seconds to start costs milliseconds per request. It is not a paused
-process. The **image** is the stored copy, in memory or on disk. See
+process. The **image** is the stored copy, in memory or on disk. A restore
+does not copy it: every instance restored from one image reads its pages in
+place and copies only the 4 KiB pages it writes. See
 [Restore a snapshot](examples/restore-a-snapshot.md) and
 [Snapshots](snapshots.md).
 

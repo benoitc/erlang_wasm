@@ -372,9 +372,10 @@ and 0.5.0 gave 167 to 211, and the busier the disk the wider the gap: a request
 no longer waits for another request's file system calls. `test/audit/PERF.md`
 has every run.
 
-With those queues at 0 to 2, what is left is CPU: a restore writes the image
-into memory one word at a time and allocates about 42 MB of pages, and the
-guest runs. On this machine 10 of the 14 cores are performance cores, so 14
+With those queues at 0 to 2, what was left was CPU: at the time a restore
+wrote the image into memory one word at a time and allocated about 42 MB of
+pages, and the guest ran. A restore now shares the image and copies only the
+pages a request writes (see "Every request shares the image" below). On this machine 10 of the 14 cores are performance cores, so 14
 workers do not get 14 times one request's rate.
 
 ### Restore the next instance ahead
@@ -395,6 +396,10 @@ requests, median of 60 in one emulator:
 | the guest's own call | 28.3 ms | 28.3 ms |
 | whole request, first to last callback | 46.4 ms | 30.0 ms |
 
+Those figures predate shared images. A CPython restore is now about 0.8 ms,
+so `restore_ahead` saves less than it did, and a request still pays its
+first-write copies inside the call.
+
 It needs idle time between a worker's requests. A pool that hands the next
 request to the worker that just answered gives it none, so rotate idle workers
 (first in, first out). At full load it adds no throughput: the restore still
@@ -402,9 +407,10 @@ runs, only earlier. Each idle worker holds one restored instance.
 
 ### Keep freed memory segments
 
-A restore allocates its linear memory fresh, and with many workers restoring
-at once the operating system's page mapping becomes a cost of its own. Letting
-the emulator cache more freed segments halves it:
+Memory a guest grows, and the arena a restored memory copies its written pages
+into, are allocated fresh, and with many workers allocating at once the
+operating system's page mapping becomes a cost of its own. Letting the emulator
+cache more freed segments halves it:
 
 ```sh
 erl +MMmcs 30 +MMamcbf 1000000 ...
@@ -415,7 +421,9 @@ erl +MMmcs 30 +MMamcbf 1000000 ...
 | default | 4.0 ms | 11.1 ms |
 | `+MMmcs 30 +MMamcbf 1000000` | 2.4 ms | 5.2 ms |
 
-End to end on the pool above that was worth about 3%. The same cache holds
+End to end on the pool above that was worth about 3%, measured when a
+CPython restore still allocated all 43 chunks; a restore now allocates only
+what the request writes, so expect less. The same cache holds
 freed runner heaps, so with heap floors it also raises RSS: see "Why the
 operating system sees more than `erlang:memory`" above before you raise it.
 

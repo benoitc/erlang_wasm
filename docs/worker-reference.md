@@ -36,7 +36,7 @@ get it by passing the key.
 | `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2`. CPython needs about 90 s and so must raise it |
 | `runner_min_heap_words` | the adapter's | a heap floor for each request's runner: 200,000 words for `wasm_lua` and `wasm_javascript`, 1,500,000 for `wasm_python` on the compiled tier and 1,000,000 on the interpreter, none for an adapter without `defaults/1`. `0` turns it off; see [Tuning a worker host](tuning.md) |
 | `capture_min_heap_words` | the adapter's | the same, for the process that captures the snapshot. No shipped adapter sets one |
-| `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and function-only imports, and holds one instance's memory per idle worker |
+| `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and function-only imports, and holds one restored instance per idle worker: its page table, not a copy of the image |
 | `compiled` | `false` | `true` runs requests in the compiled tier: it sets `fuel => infinity`, `compile => true`, `compile_after => 1` and `compile_quality => baseline` under your own `limits`. Only the deadline stops a runaway; see [Hosting scripting languages](scripting.md) |
 
 `start_link/2,3` refuses a `root` the reaper does not have, with

@@ -18,9 +18,10 @@ other tree.
     erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
         -run densitybench main density py raw/density.terms
 
-Guests are `py`, `qjs`, `lua` and `plain`; `workers` and `expiry` take the
-first three. The last argument is the raw file, `none` for none. A round that
-breaks the protocol prints `VOID` with the reason and still tears down.
+Guests are `py`, `py_entry`, `qjs`, `lua` and `plain`; `workers` and
+`expiry` take all but `plain`. The last argument is the raw file, `none` for
+none. A round that breaks the protocol prints `VOID` with the reason and still
+tears down.
 
 ## `sharing`: A, runtime sharing
 
@@ -73,7 +74,11 @@ is traced with `erlang:trace_pattern/3` and `return_trace`, and the failure
 counts only if a traced call refused with `{error, limit}` after the last
 success, and the error is `exhaustion`/`memory_limit`, or `malformed`/
 `internal` carrying `{error, {snapshot_restore_grow_failed, page_limit}}`.
-The result is the number of live, verified instances.
+A restored memory takes its pages when it writes them, so the refusal can
+also come during the call: an `exhaustion`/`memory_limit` the call's error
+carries, at any depth of `{error, _}` and `ctx := #{error := _}`, at any
+stage after the restore. The result is the number of live, verified
+instances.
 """.
 
 -export([main/1]).
@@ -557,8 +562,24 @@ budget_shape({error, restore,
                              {error, {snapshot_restore_grow_failed,
                                       page_limit}}}}}) ->
     snapshot_restore_grow_failed;
+%% A page fault refused by the budget during the call: the guest's write fails
+%% with `exhaustion'/`memory_limit', which the call wraps (as a
+%% `runtime_failure' whose `ctx' carries it) and the adapter's `decode'
+%% reports. The traced `reserve_pages' refusal is still required by `judge/4'.
+budget_shape({error, Stage, E}) when Stage =/= restore ->
+    case carries_memory_limit(E, 8) of
+        true -> memory_limit_in_call;
+        false -> false
+    end;
 budget_shape(_) ->
     false.
+
+carries_memory_limit(_E, 0) -> false;
+carries_memory_limit(#{class := exhaustion, kind := memory_limit}, _D) -> true;
+carries_memory_limit({error, E}, D) -> carries_memory_limit(E, D - 1);
+carries_memory_limit(#{ctx := #{error := E}}, D) ->
+    carries_memory_limit(E, D - 1);
+carries_memory_limit(_E, _D) -> false.
 
 summary({error, Stage, #{class := C, kind := K} = E}) ->
     {Stage, C, K, maps:get(exception, maps:get(ctx, E, #{}), none)};

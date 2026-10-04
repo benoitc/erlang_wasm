@@ -1,0 +1,17 @@
+#{mode => firstwrite,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 51,tier => interp,verdict => ok,warm_requests => 20,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 4046.625,total => 4482.0,restore => 396.125,destroy => 29.667,
+        post => 0.125},
+  min_us =>
+      #{call => 3778.875,total => 4178.958,restore => 364.0,destroy => 20.208,
+        post => 0.0},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 90.0,fault_ns => 460642.33},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 90,fault_ns => 448836},
+  recycled_in => 0}

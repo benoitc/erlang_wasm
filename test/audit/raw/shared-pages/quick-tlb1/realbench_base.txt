@@ -1,0 +1,12 @@
+== r1 base 12:05  up 9 days,  4:18, 39 users, load averages: 12.85 23.40 32.93
+qjs-30k-js-iterations run 1	12547.5 ms
+qjs-30k-js-iterations run 2	12769.1 ms
+qjs-30k-js-iterations run 3	12164.5 ms
+== r2 base 12:13  up 9 days,  4:25, 39 users, load averages: 7.95 12.20 23.20
+qjs-30k-js-iterations run 1	14274.4 ms
+qjs-30k-js-iterations run 2	14368.8 ms
+qjs-30k-js-iterations run 3	14003.9 ms
+== r3 base 12:16  up 9 days,  4:28, 40 users, load averages: 6.88 9.90 20.24
+qjs-30k-js-iterations run 1	12745.4 ms
+qjs-30k-js-iterations run 2	13041.0 ms
+qjs-30k-js-iterations run 3	12587.1 ms

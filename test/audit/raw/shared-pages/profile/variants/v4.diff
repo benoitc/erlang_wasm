@@ -1,0 +1,14 @@
+diff --color -ru /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_snapshot.erl src/wasm_snapshot.erl
+--- /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_snapshot.erl	2026-10-02 16:10:21
++++ src/wasm_snapshot.erl	2026-10-03 03:35:49
+@@ -897,6 +897,10 @@
+ 
+ page([]) ->
+     zero;
++%% PROFILING VARIANT V4: a page one run covers whole is that run's sub-binary,
++%% not a copy. A run never holds 64 zero bytes in a row, so it is not zero.
++page([{0, Bin}]) when byte_size(Bin) =:= 65536 ->
++    Bin;
+ page(Pieces) ->
+     {End, Parts} = lists:foldl(fun({Off, Bin}, {At, Acc}) ->
+                                        {Off + byte_size(Bin),

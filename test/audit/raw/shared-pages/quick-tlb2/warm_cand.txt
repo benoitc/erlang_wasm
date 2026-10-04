@@ -1,0 +1,35 @@
+== warm cand py compiled
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/candidate",
+  guest => py,ahead => false,start_ms => 71,tier => compiled,
+  warm_requests => 9589,verdict => ok,entry_ms => 680566,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 17907.743,min_us => 16990.238}
+== warm cand qjs compiled
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/candidate",
+  guest => qjs,ahead => false,start_ms => 10,tier => compiled,
+  warm_requests => 9873,verdict => ok,entry_ms => 437732,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 9494.204,min_us => 8506.491}
+== warm cand lua compiled
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/candidate",
+  guest => lua,ahead => false,start_ms => 9,tier => compiled,
+  warm_requests => 4240,verdict => ok,entry_ms => 156720,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 1005},
+  median_us => 4042.516,min_us => 3322.305}
+# 13:15  up 9 days,  5:27, 42 users, load averages: 8.93 10.37 13.16
+guest    operation           n       min us    median us
+py       restore             2        646.8        646.8
+py       load_snapshot       2      23979.3      23979.3
+qjs      restore             2        130.2        130.2
+qjs      load_snapshot       2       1097.9       1097.9
+lua      restore             2         97.4         97.4
+lua      load_snapshot       2        361.7        361.7
+plain    restore             2         13.7         13.7
+plain    load_snapshot       2         40.5         40.5
+# 13:15  up 9 days,  5:27, 42 users, load averages: 8.93 10.37 13.16

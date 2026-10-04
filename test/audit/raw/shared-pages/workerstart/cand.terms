@@ -1,0 +1,25 @@
+{meta,capturebench_worker,#{otp => "29",schedulers => {10,10},cwd => "/Users/benoitc/Projects/erlang_wasm-shared-pages",uptime => "2:19  up 8 days, 18:31, 36 users, load averages: 5.02 4.88 6.15",fixtures => [{"test/fixtures/lang/py_reactor.wasm",<<"a4dcd239d8262c9f074d9dc22d99bee8c1c89f52b543043dab41cad5a3003564">>},{"test/fixtures/lang/qjs_reactor.wasm",<<"7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb">>},{"test/fixtures/lang/lua_reactor.wasm",<<"65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb">>},{"test/fixtures/snapshot/reactor.wasm",<<"813a2aaf9bbc3293c9b5420bd34194d23d6844c82395fe0cd5772f49948837f2">>}],wasm_vsn => "0.7.0"}}.
+{worker_start,py,[17993287.876]}.
+{worker_start,py_entry,[41228580.647]}.
+{worker_start,qjs,[249594.0]}.
+{worker_start,lua,[95266.708]}.
+{meta,capturebench_worker,#{otp => "29",schedulers => {10,10},cwd => "/Users/benoitc/Projects/erlang_wasm-shared-pages",uptime => "2:20  up 8 days, 18:32, 36 users, load averages: 4.11 4.65 5.98",fixtures => [{"test/fixtures/lang/py_reactor.wasm",<<"a4dcd239d8262c9f074d9dc22d99bee8c1c89f52b543043dab41cad5a3003564">>},{"test/fixtures/lang/qjs_reactor.wasm",<<"7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb">>},{"test/fixtures/lang/lua_reactor.wasm",<<"65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb">>},{"test/fixtures/snapshot/reactor.wasm",<<"813a2aaf9bbc3293c9b5420bd34194d23d6844c82395fe0cd5772f49948837f2">>}],wasm_vsn => "0.7.0"}}.
+{worker_start,py,[17949142.837]}.
+{worker_start,py_entry,[41809301.483]}.
+{worker_start,qjs,[244098.167]}.
+{worker_start,lua,[90384.083]}.
+{meta,capturebench_worker,#{otp => "29",schedulers => {10,10},cwd => "/Users/benoitc/Projects/erlang_wasm-shared-pages",uptime => "2:23  up 8 days, 18:35, 36 users, load averages: 3.89 4.28 5.57",fixtures => [{"test/fixtures/lang/py_reactor.wasm",<<"a4dcd239d8262c9f074d9dc22d99bee8c1c89f52b543043dab41cad5a3003564">>},{"test/fixtures/lang/qjs_reactor.wasm",<<"7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb">>},{"test/fixtures/lang/lua_reactor.wasm",<<"65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb">>},{"test/fixtures/snapshot/reactor.wasm",<<"813a2aaf9bbc3293c9b5420bd34194d23d6844c82395fe0cd5772f49948837f2">>}],wasm_vsn => "0.7.0"}}.
+{worker_start,py,[18349952.909]}.
+{worker_start,py_entry,[43323245.545]}.
+{worker_start,qjs,[237696.5]}.
+{worker_start,lua,[86444.25]}.
+{meta,capturebench_worker,#{otp => "29",schedulers => {10,10},cwd => "/Users/benoitc/Projects/erlang_wasm-shared-pages",uptime => "2:24  up 8 days, 18:36, 36 users, load averages: 4.80 4.52 5.57",fixtures => [{"test/fixtures/lang/py_reactor.wasm",<<"a4dcd239d8262c9f074d9dc22d99bee8c1c89f52b543043dab41cad5a3003564">>},{"test/fixtures/lang/qjs_reactor.wasm",<<"7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb">>},{"test/fixtures/lang/lua_reactor.wasm",<<"65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb">>},{"test/fixtures/snapshot/reactor.wasm",<<"813a2aaf9bbc3293c9b5420bd34194d23d6844c82395fe0cd5772f49948837f2">>}],wasm_vsn => "0.7.0"}}.
+{worker_start,py,[18535815.077]}.
+{worker_start,py_entry,[42591904.789]}.
+{worker_start,qjs,[254631.125]}.
+{worker_start,lua,[96395.125]}.
+{meta,capturebench_worker,#{otp => "29",schedulers => {10,10},cwd => "/Users/benoitc/Projects/erlang_wasm-shared-pages",uptime => "2:27  up 8 days, 18:39, 36 users, load averages: 7.37 5.70 5.83",fixtures => [{"test/fixtures/lang/py_reactor.wasm",<<"a4dcd239d8262c9f074d9dc22d99bee8c1c89f52b543043dab41cad5a3003564">>},{"test/fixtures/lang/qjs_reactor.wasm",<<"7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb">>},{"test/fixtures/lang/lua_reactor.wasm",<<"65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb">>},{"test/fixtures/snapshot/reactor.wasm",<<"813a2aaf9bbc3293c9b5420bd34194d23d6844c82395fe0cd5772f49948837f2">>}],wasm_vsn => "0.7.0"}}.
+{worker_start,py,[18975616.93]}.
+{worker_start,py_entry,[45153378.706]}.
+{worker_start,qjs,[281910.041]}.
+{worker_start,lua,[95379.292]}.

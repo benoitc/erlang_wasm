@@ -1,0 +1,53 @@
+# start 10:14  up 10 days,  2:27, 41 users, load averages: 23.97 36.93 37.02
+# 10:14  up 10 days,  2:27, 41 users, load averages: 23.97 36.93 37.02
+guest    operation           n       min us    median us
+py       restore             3        798.1        829.4
+py       load_snapshot       1      30325.3      30325.3
+qjs      restore             3        188.5        232.3
+qjs      load_snapshot       1       1969.3       1969.3
+lua      restore             3        115.5        141.4
+lua      load_snapshot       1       1006.3       1006.3
+plain    restore             3         31.5         47.8
+plain    load_snapshot       1        197.3        197.3
+# 10:14  up 10 days,  2:27, 41 users, load averages: 21.08 35.67 36.57
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 16454,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 23765.417,min_us => 22275.125}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-arb/b",guest => py,
+  ahead => false,start_ms => 51,tier => compiled,verdict => ok,
+  warm_requests => 728,entry_ms => 51279,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10122.584,min_us => 8764.709}
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 66,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13493.459,min_us => 11818.375}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-arb/b",guest => qjs,
+  ahead => false,start_ms => 12,tier => compiled,verdict => ok,
+  warm_requests => 611,entry_ms => 30533,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 202,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5606.792,min_us => 4439.666}
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 54,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 9038.25,min_us => 7761.625}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-arb/b",guest => lua,
+  ahead => false,start_ms => 10,tier => compiled,verdict => ok,
+  warm_requests => 221,entry_ms => 8560,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 1005},
+  median_us => 4054.791,min_us => 2787.75}
+# cache        3 files  19M
+PRIME_DONE 10:16  up 10 days,  2:29, 41 users, load averages: 23.64 30.22 34.18

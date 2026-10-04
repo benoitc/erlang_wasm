@@ -1,0 +1,209 @@
+== r4 split interp base attempt 1 18:43  up 10 days, 10:55, 42 users, load averages: 5.74 7.78 9.33
+#{mode => split,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 44,tier => interp,verdict => ok,warm_requests => 20,
+  recycles => true,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 3316.666,total => 6587.708,restore => 3172.459,
+        destroy => 87.959,post => 0.125},
+  min_us =>
+      #{call => 3134.958,total => 6281.917,restore => 3003.334,
+        destroy => 76.75,post => 0.0},
+  recycled_in => 200}
+== r4 split interp b attempt 1 18:43  up 10 days, 10:55, 42 users, load averages: 5.52 7.70 9.30
+#{mode => split,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 49,tier => interp,verdict => ok,warm_requests => 20,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 3321.125,total => 3774.042,restore => 382.125,
+        destroy => 73.959,post => 0.125},
+  min_us =>
+      #{call => 3141.083,total => 3586.5,restore => 342.167,destroy => 63.75,
+        post => 0.0},
+  recycled_in => 0}
+== r4 split interp a4 attempt 1 18:43  up 10 days, 10:55, 42 users, load averages: 5.52 7.70 9.30
+#{mode => split,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 45,tier => interp,verdict => ok,warm_requests => 20,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 3851.708,total => 4274.042,restore => 387.166,
+        destroy => 31.292,post => 0.084},
+  min_us =>
+      #{call => 3638.458,total => 4036.333,restore => 330.375,
+        destroy => 19.125,post => 0.0},
+  recycled_in => 0}
+== r4 split compiled base attempt 1 18:43  up 10 days, 10:55, 42 users, load averages: 5.15 7.59 9.25
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-arb/base",
+  guest => py_entry,ahead => false,start_ms => 47,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 1295,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 957.209,total => 4189.5,restore => 3144.333,destroy => 77.916,
+        post => 0.25},
+  min_us =>
+      #{call => 647.708,total => 3763.042,restore => 2981.417,
+        destroy => 63.583,post => 0.0},
+  recycled_in => 200}
+== r4 split compiled b attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 5.15 7.59 9.25
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-arb/b",guest => py_entry,
+  ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 884,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 626.292,total => 1060.208,restore => 376.584,
+        destroy => 55.417,post => 0.083},
+  min_us =>
+      #{call => 550.708,total => 936.416,restore => 333.125,destroy => 45.917,
+        post => 0.0},
+  recycled_in => 0}
+== r4 split compiled a4 attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.82 7.48 9.20
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-arb/a4",
+  guest => py_entry,ahead => false,start_ms => 47,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2906,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1672.0,total => 2065.917,restore => 381.875,destroy => 16.916,
+        post => 0.167},
+  min_us =>
+      #{call => 1398.667,total => 1760.125,restore => 345.917,
+        destroy => 10.917,post => 0.0},
+  recycled_in => 0}
+== r4 steady interp base attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.60 7.39 9.16
+#{mode => steady,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 43,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7624.209,min_us => 7206.625}
+== r4 steady interp b attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.60 7.39 9.16
+#{mode => steady,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 52,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4641.583,min_us => 4377.125}
+== r4 steady interp a4 attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.39 7.30 9.12
+#{mode => steady,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 44,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5053.041,min_us => 4807.375}
+== r4 steady compiled base attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.39 7.30 9.12
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-arb/base",
+  guest => py_entry,ahead => false,start_ms => 42,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 1216,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 5434.167,min_us => 4881.833}
+== r4 steady compiled b attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.28 7.23 9.08
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-arb/b",
+  guest => py_entry,ahead => false,start_ms => 47,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 831,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 1914.917,min_us => 1754.25}
+== r4 steady compiled a4 attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.28 7.23 9.08
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-arb/a4",
+  guest => py_entry,ahead => false,start_ms => 47,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2827,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 2978.417,min_us => 2654.625}
+== r4 density - base attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.09 7.14 9.04
+# 18:43  up 10 days, 10:56, 42 users, load averages: 4.09 7.14 9.04
+#{count => 6,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => py_entry,pages_in_use => 3840,arm => density,
+  image_bytes => 7404984,verdict => ok,
+  refusals =>
+      [#{seq => 13,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 3840,n => 640}],
+  shape => memory_limit}
+== r4 density - b attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.09 7.14 9.04
+# 18:43  up 10 days, 10:56, 42 users, load averages: 4.09 7.14 9.04
+#{count => 124,
+  failure =>
+      {error,decode,
+             {error,#{msg => <<"memory limit exceeded">>,
+                      kind => runtime_failure,class => runtime,
+                      ctx =>
+                          #{error =>
+                                #{msg => <<"memory limit exceeded">>,
+                                  kind => memory_limit,class => exhaustion,
+                                  ctx => #{func => 51,requested => 2}}}}}},
+  page_limit => 4096,guest => py_entry,pages_in_use => 4092,arm => density,
+  image_bytes => 8328192,verdict => ok,
+  refusals =>
+      [#{seq => 872,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 2}],
+  shape => memory_limit_in_call}
+== r4 density - a4 attempt 1 18:43  up 10 days, 10:56, 42 users, load averages: 4.17 7.11 9.01
+# 18:43  up 10 days, 10:56, 42 users, load averages: 4.17 7.11 9.01
+#{count => 455,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => py_entry,pages_in_use => 4095,arm => density,
+  image_bytes => 8328192,verdict => ok,
+  refusals =>
+      [#{seq => 2276,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 2}],
+  shape => memory_limit}
+== r4 sharing - base attempt 1 18:44  up 10 days, 10:56, 42 users, load averages: 3.99 7.02 8.97
+# 18:44  up 10 days, 10:56, 42 users, load averages: 3.99 7.02 8.97
+#{k => 50,verdict => ok,guest => py_entry,image_bytes => 7404984,
+  load_end =>
+      "18:44  up 10 days, 10:56, 42 users, load averages: 3.75 6.92 8.93",
+  pages_before => 0,pages_held => 32000,charged_pages_per_instance => 640.0,
+  erlang_delta_kb =>
+      #{atom => 0.001015625,atom_used => 0.001015625,binary => 0.08,
+        code => 0.0,ets => 385.82078125,processes => 960.87296875,
+        processes_used => 960.71015625,system => 41353.543125,
+        total => 42314.41609375},
+  erlang_total_delta_kb => 42314.41609375,footprint_delta_kb => 43376.64,
+  rss_delta_kb => 43351.36}
+== r4 sharing - b attempt 1 18:44  up 10 days, 10:56, 42 users, load averages: 3.75 6.92 8.93
+# 18:44  up 10 days, 10:56, 42 users, load averages: 3.75 6.92 8.93
+#{k => 50,verdict => ok,guest => py_entry,image_bytes => 8328192,
+  load_end =>
+      "18:44  up 10 days, 10:56, 42 users, load averages: 3.75 6.92 8.93",
+  pages_before => 0,pages_held => 1650,charged_pages_per_instance => 33.0,
+  erlang_delta_kb =>
+      #{atom => 0.001015625,atom_used => 0.001015625,binary => 0.41921875,
+        code => 0.0,ets => 383.6384375,processes => 2254.46453125,
+        processes_used => 2254.23578125,system => 389.516875,
+        total => 2643.98140625},
+  erlang_total_delta_kb => 2643.98140625,footprint_delta_kb => 3317.76,
+  rss_delta_kb => 4306.56}
+== r4 sharing - a4 attempt 1 18:44  up 10 days, 10:56, 42 users, load averages: 3.75 6.92 8.93
+# 18:44  up 10 days, 10:56, 42 users, load averages: 3.75 6.92 8.93
+#{k => 50,verdict => ok,guest => py_entry,image_bytes => 8328192,
+  load_end =>
+      "18:44  up 10 days, 10:56, 42 users, load averages: 3.75 6.92 8.93",
+  pages_before => 0,pages_held => 450,charged_pages_per_instance => 9.0,
+  erlang_delta_kb =>
+      #{atom => 0.001015625,atom_used => 0.001015625,binary => 0.08078125,
+        code => 0.0,ets => 397.61921875,processes => 1688.11234375,
+        processes_used => 1687.6784375,system => 930.62,
+        total => 2618.73234375},
+  erlang_total_delta_kb => 2618.73234375,footprint_delta_kb => -4423.68,
+  rss_delta_kb => -4417.92}

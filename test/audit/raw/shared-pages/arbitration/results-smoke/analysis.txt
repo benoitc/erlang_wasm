@@ -1,0 +1,589 @@
+
+== density lua - count
+  round       base         a3         a4          b
+  r1          1365       2048       2048       2048
+  b/a3 median 1.000  per round 1.000
+  b/a4 median 1.000  per round 1.000
+  a4/a3 median 1.000  per round 1.000
+  a3/base median 1.500  per round 1.500
+  a4/base median 1.500  per round 1.500
+  b/base median 1.500  per round 1.500
+
+== density py - count
+  round       base         a3         a4          b
+  r1             6        124        124         83
+  b/a3 median 0.669  per round 0.669
+  b/a4 median 0.669  per round 0.669
+  a4/a3 median 1.000  per round 1.000
+  a3/base median 20.667  per round 20.667
+  a4/base median 20.667  per round 20.667
+  b/base median 13.833  per round 13.833
+
+== density qjs - count
+  round       base         a3         a4          b
+  r1           682       1024       1024       1024
+  b/a3 median 1.000  per round 1.000
+  b/a4 median 1.000  per round 1.000
+  a4/a3 median 1.000  per round 1.000
+  a3/base median 1.501  per round 1.501
+  a4/base median 1.501  per round 1.501
+  b/base median 1.501  per round 1.501
+
+== real qjs - ms
+  round       base         a3         a4          b
+  r1     12870.100  12497.400  12526.900   1773.700
+  b/a3 median 0.142  per round 0.142
+  b/a4 median 0.142  per round 0.142
+  a4/a3 median 1.002  per round 1.002
+  a3/base median 0.971  per round 0.971
+  a4/base median 0.973  per round 0.973
+  b/base median 0.138  per round 0.138
+
+== restore lua - load_us
+  round       base         a3         a4          b
+  r1       450.750    410.375    442.541    573.000
+  b/a3 median 1.396  per round 1.396
+  b/a4 median 1.295  per round 1.295
+  a4/a3 median 1.078  per round 1.078
+  a3/base median 0.910  per round 0.910
+  a4/base median 0.982  per round 0.982
+  b/base median 1.271  per round 1.271
+
+== restore lua - restore_us
+  round       base         a3         a4          b
+  r1       190.917     76.166     85.833    166.167
+  b/a3 median 2.182  per round 2.182
+  b/a4 median 1.936  per round 1.936
+  a4/a3 median 1.127  per round 1.127
+  a3/base median 0.399  per round 0.399
+  a4/base median 0.450  per round 0.450
+  b/base median 0.870  per round 0.870
+
+== restore plain - load_us
+  round       base         a3         a4          b
+  r1        81.500     47.542     74.791    258.584
+  b/a3 median 5.439  per round 5.439
+  b/a4 median 3.457  per round 3.457
+  a4/a3 median 1.573  per round 1.573
+  a3/base median 0.583  per round 0.583
+  a4/base median 0.918  per round 0.918
+  b/base median 3.173  per round 3.173
+
+== restore plain - restore_us
+  round       base         a3         a4          b
+  r1        17.208     15.667     25.125     37.333
+  b/a3 median 2.383  per round 2.383
+  b/a4 median 1.486  per round 1.486
+  a4/a3 median 1.604  per round 1.604
+  a3/base median 0.910  per round 0.910
+  a4/base median 1.460  per round 1.460
+  b/base median 2.170  per round 2.170
+
+== restore py - load_us
+  round       base         a3         a4          b
+  r1     23319.625  24568.708  24298.917  30963.500
+  b/a3 median 1.260  per round 1.260
+  b/a4 median 1.274  per round 1.274
+  a4/a3 median 0.989  per round 0.989
+  a3/base median 1.054  per round 1.054
+  a4/base median 1.042  per round 1.042
+  b/base median 1.328  per round 1.328
+
+== restore py - restore_us
+  round       base         a3         a4          b
+  r1     14541.000    690.542    707.958    712.833
+  b/a3 median 1.032  per round 1.032
+  b/a4 median 1.007  per round 1.007
+  a4/a3 median 1.025  per round 1.025
+  a3/base median 0.047  per round 0.047
+  a4/base median 0.049  per round 0.049
+  b/base median 0.049  per round 0.049
+
+== restore qjs - load_us
+  round       base         a3         a4          b
+  r1      1089.083   1157.125   1341.125   7242.583
+  b/a3 median 6.259  per round 6.259
+  b/a4 median 5.400  per round 5.400
+  a4/a3 median 1.159  per round 1.159
+  a3/base median 1.062  per round 1.062
+  a4/base median 1.231  per round 1.231
+  b/base median 6.650  per round 6.650
+
+== restore qjs - restore_us
+  round       base         a3         a4          b
+  r1       413.208    126.792    168.708    201.792
+  b/a3 median 1.592  per round 1.592
+  b/a4 median 1.196  per round 1.196
+  a4/a3 median 1.331  per round 1.331
+  a3/base median 0.307  per round 0.307
+  a4/base median 0.408  per round 0.408
+  b/base median 0.488  per round 0.488
+
+== sharing lua - erlang_kb
+  round       base         a3         a4          b
+  r1       884.273    633.324    623.754    556.816
+  b/a3 median 0.879  per round 0.879
+  b/a4 median 0.893  per round 0.893
+  a4/a3 median 0.985  per round 0.985
+  a3/base median 0.716  per round 0.716
+  a4/base median 0.705  per round 0.705
+  b/base median 0.630  per round 0.630
+
+== sharing lua - footprint_kb
+  round       base         a3         a4          b
+  r1      1024.000   1024.000    512.000   1024.000
+  b/a3 median 1.000  per round 1.000
+  b/a4 median 2.000  per round 2.000
+  a4/a3 median 0.500  per round 0.500
+  a3/base median 1.000  per round 1.000
+  a4/base median 0.500  per round 0.500
+  b/base median 1.000  per round 1.000
+
+== sharing lua - rss_kb
+  round       base         a3         a4          b
+  r1      1000.000    792.000    896.000    904.000
+  b/a3 median 1.141  per round 1.141
+  b/a4 median 1.009  per round 1.009
+  a4/a3 median 1.131  per round 1.131
+  a3/base median 0.792  per round 0.792
+  a4/base median 0.896  per round 0.896
+  b/base median 0.904  per round 0.904
+
+== sharing py - erlang_kb
+  round       base         a3         a4          b
+  r1     43309.281   4623.805   4215.586   3305.508
+  b/a3 median 0.715  per round 0.715
+  b/a4 median 0.784  per round 0.784
+  a4/a3 median 0.912  per round 0.912
+  a3/base median 0.107  per round 0.107
+  a4/base median 0.097  per round 0.097
+  b/base median 0.076  per round 0.076
+
+== sharing py - footprint_kb
+  round       base         a3         a4          b
+  r1     40960.000    512.000   1536.000    512.000
+  b/a3 median 1.000  per round 1.000
+  b/a4 median 0.333  per round 0.333
+  a4/a3 median 3.000  per round 3.000
+  a3/base median 0.013  per round 0.013
+  a4/base median 0.038  per round 0.038
+  b/base median 0.013  per round 0.013
+
+== sharing py - rss_kb
+  round       base         a3         a4          b
+  r1     41280.000    400.000   1312.000   1376.000
+  b/a3 median 3.440  per round 3.440
+  b/a4 median 1.049  per round 1.049
+  a4/a3 median 3.280  per round 3.280
+  a3/base median 0.010  per round 0.010
+  a4/base median 0.032  per round 0.032
+  b/base median 0.033  per round 0.033
+
+== sharing qjs - erlang_kb
+  round       base         a3         a4          b
+  r1       953.445   1092.313   1091.605    765.953
+  b/a3 median 0.701  per round 0.701
+  b/a4 median 0.702  per round 0.702
+  a4/a3 median 0.999  per round 0.999
+  a3/base median 1.146  per round 1.146
+  a4/base median 1.145  per round 1.145
+  b/base median 0.803  per round 0.803
+
+== sharing qjs - footprint_kb
+  round       base         a3         a4          b
+  r1      2560.000   2048.000   1024.000    512.000
+  b/a3 median 0.250  per round 0.250
+  b/a4 median 0.500  per round 0.500
+  a4/a3 median 0.500  per round 0.500
+  a3/base median 0.800  per round 0.800
+  a4/base median 0.400  per round 0.400
+  b/base median 0.200  per round 0.200
+
+== sharing qjs - rss_kb
+  round       base         a3         a4          b
+  r1      2728.000   1976.000   1208.000    312.000
+  b/a3 median 0.158  per round 0.158
+  b/a4 median 0.258  per round 0.258
+  a4/a3 median 0.611  per round 0.611
+  a3/base median 0.724  per round 0.724
+  a4/base median 0.443  per round 0.443
+  b/base median 0.114  per round 0.114
+
+== split lua compiled call
+  round       base         a3         a4          b
+  r1      2858.584   3467.721   4725.561   1509.042
+  b/a3 median 0.435  per round 0.435
+  b/a4 median 0.319  per round 0.319
+  a4/a3 median 1.363  per round 1.363
+  a3/base median 1.213  per round 1.213
+  a4/base median 1.653  per round 1.653
+  b/base median 0.528  per round 0.528
+
+== split lua compiled destroy
+  round       base         a3         a4          b
+  r1        44.208     37.416     64.958     39.666
+  b/a3 median 1.060  per round 1.060
+  b/a4 median 0.611  per round 0.611
+  a4/a3 median 1.736  per round 1.736
+  a3/base median 0.846  per round 0.846
+  a4/base median 1.469  per round 1.469
+  b/base median 0.897  per round 0.897
+
+== split lua compiled post
+  round       base         a3         a4          b
+  r1         0.375      0.375      0.541      0.125
+  b/a3 median 0.333  per round 0.333
+  b/a4 median 0.231  per round 0.231
+  a4/a3 median 1.443  per round 1.443
+  a3/base median 1.000  per round 1.000
+  a4/base median 1.443  per round 1.443
+  b/base median 0.333  per round 0.333
+
+== split lua compiled restore
+  round       base         a3         a4          b
+  r1       182.458     94.418    109.041    109.125
+  b/a3 median 1.156  per round 1.156
+  b/a4 median 1.001  per round 1.001
+  a4/a3 median 1.155  per round 1.155
+  a3/base median 0.517  per round 0.517
+  a4/base median 0.598  per round 0.598
+  b/base median 0.598  per round 0.598
+
+== split lua compiled total
+  round       base         a3         a4          b
+  r1      3126.750   3584.390   4889.810   1657.875
+  b/a3 median 0.463  per round 0.463
+  b/a4 median 0.339  per round 0.339
+  a4/a3 median 1.364  per round 1.364
+  a3/base median 1.146  per round 1.146
+  a4/base median 1.564  per round 1.564
+  b/base median 0.530  per round 0.530
+
+== split lua interp call
+  round       base         a3         a4          b
+  r1      5811.084   6628.375   6586.708   5815.166
+  b/a3 median 0.877  per round 0.877
+  b/a4 median 0.883  per round 0.883
+  a4/a3 median 0.994  per round 0.994
+  a3/base median 1.141  per round 1.141
+  a4/base median 1.133  per round 1.133
+  b/base median 1.001  per round 1.001
+
+== split lua interp destroy
+  round       base         a3         a4          b
+  r1        43.959     44.584     50.709     72.917
+  b/a3 median 1.635  per round 1.635
+  b/a4 median 1.438  per round 1.438
+  a4/a3 median 1.137  per round 1.137
+  a3/base median 1.014  per round 1.014
+  a4/base median 1.154  per round 1.154
+  b/base median 1.659  per round 1.659
+
+== split lua interp post
+  round       base         a3         a4          b
+  r1         0.084      0.250      0.167      0.416
+  b/a3 median 1.664  per round 1.664
+  b/a4 median 2.491  per round 2.491
+  a4/a3 median 0.668  per round 0.668
+  a3/base median 2.976  per round 2.976
+  a4/base median 1.988  per round 1.988
+  b/base median 4.952  per round 4.952
+
+== split lua interp restore
+  round       base         a3         a4          b
+  r1       141.167     82.083     81.250    139.584
+  b/a3 median 1.701  per round 1.701
+  b/a4 median 1.718  per round 1.718
+  a4/a3 median 0.990  per round 0.990
+  a3/base median 0.581  per round 0.581
+  a4/base median 0.576  per round 0.576
+  b/base median 0.989  per round 0.989
+
+== split lua interp total
+  round       base         a3         a4          b
+  r1      5993.417   6755.292   6724.667   6014.833
+  b/a3 median 0.890  per round 0.890
+  b/a4 median 0.894  per round 0.894
+  a4/a3 median 0.995  per round 0.995
+  a3/base median 1.127  per round 1.127
+  a4/base median 1.122  per round 1.122
+  b/base median 1.004  per round 1.004
+
+== split py compiled call
+  round       base         a3         a4          b
+  r1     10809.966  17516.330  16133.708   6049.916
+  b/a3 median 0.345  per round 0.345
+  b/a4 median 0.375  per round 0.375
+  a4/a3 median 0.921  per round 0.921
+  a3/base median 1.620  per round 1.620
+  a4/base median 1.492  per round 1.492
+  b/base median 0.560  per round 0.560
+
+== split py compiled destroy
+  round       base         a3         a4          b
+  r1       133.209     69.125     72.208    122.750
+  b/a3 median 1.776  per round 1.776
+  b/a4 median 1.700  per round 1.700
+  a4/a3 median 1.045  per round 1.045
+  a3/base median 0.519  per round 0.519
+  a4/base median 0.542  per round 0.542
+  b/base median 0.921  per round 0.921
+
+== split py compiled post
+  round       base         a3         a4          b
+  r1         0.541      0.708      0.625      0.709
+  b/a3 median 1.001  per round 1.001
+  b/a4 median 1.134  per round 1.134
+  a4/a3 median 0.883  per round 0.883
+  a3/base median 1.309  per round 1.309
+  a4/base median 1.155  per round 1.155
+  b/base median 1.311  per round 1.311
+
+== split py compiled restore
+  round       base         a3         a4          b
+  r1      4494.355    446.794    529.791    462.000
+  b/a3 median 1.034  per round 1.034
+  b/a4 median 0.872  per round 0.872
+  a4/a3 median 1.186  per round 1.186
+  a3/base median 0.099  per round 0.099
+  a4/base median 0.118  per round 0.118
+  b/base median 0.103  per round 0.103
+
+== split py compiled total
+  round       base         a3         a4          b
+  r1     15438.405  18629.628  16700.958   6633.458
+  b/a3 median 0.356  per round 0.356
+  b/a4 median 0.397  per round 0.397
+  a4/a3 median 0.896  per round 0.896
+  a3/base median 1.207  per round 1.207
+  a4/base median 1.082  per round 1.082
+  b/base median 0.430  per round 0.430
+
+== split py interp call
+  round       base         a3         a4          b
+  r1     20095.791  22075.708  24551.167  19635.000
+  b/a3 median 0.889  per round 0.889
+  b/a4 median 0.800  per round 0.800
+  a4/a3 median 1.112  per round 1.112
+  a3/base median 1.099  per round 1.099
+  a4/base median 1.222  per round 1.222
+  b/base median 0.977  per round 0.977
+
+== split py interp destroy
+  round       base         a3         a4          b
+  r1       167.250     84.667     97.458    177.000
+  b/a3 median 2.091  per round 2.091
+  b/a4 median 1.816  per round 1.816
+  a4/a3 median 1.151  per round 1.151
+  a3/base median 0.506  per round 0.506
+  a4/base median 0.583  per round 0.583
+  b/base median 1.058  per round 1.058
+
+== split py interp post
+  round       base         a3         a4          b
+  r1         0.875      0.625      0.667      0.583
+  b/a3 median 0.933  per round 0.933
+  b/a4 median 0.874  per round 0.874
+  a4/a3 median 1.067  per round 1.067
+  a3/base median 0.714  per round 0.714
+  a4/base median 0.762  per round 0.762
+  b/base median 0.666  per round 0.666
+
+== split py interp restore
+  round       base         a3         a4          b
+  r1      4360.125    415.500    472.917    613.542
+  b/a3 median 1.477  per round 1.477
+  b/a4 median 1.297  per round 1.297
+  a4/a3 median 1.138  per round 1.138
+  a3/base median 0.095  per round 0.095
+  a4/base median 0.108  per round 0.108
+  b/base median 0.141  per round 0.141
+
+== split py interp total
+  round       base         a3         a4          b
+  r1     24595.875  22576.500  25166.541  20352.458
+  b/a3 median 0.901  per round 0.901
+  b/a4 median 0.809  per round 0.809
+  a4/a3 median 1.115  per round 1.115
+  a3/base median 0.918  per round 0.918
+  a4/base median 1.023  per round 1.023
+  b/base median 0.827  per round 0.827
+
+== split qjs compiled call
+  round       base         a3         a4          b
+  r1      5759.375   7748.905   8024.948   3288.667
+  b/a3 median 0.424  per round 0.424
+  b/a4 median 0.410  per round 0.410
+  a4/a3 median 1.036  per round 1.036
+  a3/base median 1.345  per round 1.345
+  a4/base median 1.393  per round 1.393
+  b/base median 0.571  per round 0.571
+
+== split qjs compiled destroy
+  round       base         a3         a4          b
+  r1        54.500     46.917     59.876     62.584
+  b/a3 median 1.334  per round 1.334
+  b/a4 median 1.045  per round 1.045
+  a4/a3 median 1.276  per round 1.276
+  a3/base median 0.861  per round 0.861
+  a4/base median 1.099  per round 1.099
+  b/base median 1.148  per round 1.148
+
+== split qjs compiled post
+  round       base         a3         a4          b
+  r1         0.666      0.333      0.625      0.167
+  b/a3 median 0.502  per round 0.502
+  b/a4 median 0.267  per round 0.267
+  a4/a3 median 1.877  per round 1.877
+  a3/base median 0.500  per round 0.500
+  a4/base median 0.938  per round 0.938
+  b/base median 0.251  per round 0.251
+
+== split qjs compiled restore
+  round       base         a3         a4          b
+  r1       317.917    117.918    125.667    162.209
+  b/a3 median 1.376  per round 1.376
+  b/a4 median 1.291  per round 1.291
+  a4/a3 median 1.066  per round 1.066
+  a3/base median 0.371  per round 0.371
+  a4/base median 0.395  per round 0.395
+  b/base median 0.510  per round 0.510
+
+== split qjs compiled total
+  round       base         a3         a4          b
+  r1      6145.625   7928.074   8217.325   3513.083
+  b/a3 median 0.443  per round 0.443
+  b/a4 median 0.428  per round 0.428
+  a4/a3 median 1.036  per round 1.036
+  a3/base median 1.290  per round 1.290
+  a4/base median 1.337  per round 1.337
+  b/base median 0.572  per round 0.572
+
+== split qjs interp call
+  round       base         a3         a4          b
+  r1      9900.333  11151.083  10906.208   9598.333
+  b/a3 median 0.861  per round 0.861
+  b/a4 median 0.880  per round 0.880
+  a4/a3 median 0.978  per round 0.978
+  a3/base median 1.126  per round 1.126
+  a4/base median 1.102  per round 1.102
+  b/base median 0.969  per round 0.969
+
+== split qjs interp destroy
+  round       base         a3         a4          b
+  r1        47.917     47.875     47.083     93.583
+  b/a3 median 1.955  per round 1.955
+  b/a4 median 1.988  per round 1.988
+  a4/a3 median 0.983  per round 0.983
+  a3/base median 0.999  per round 0.999
+  a4/base median 0.983  per round 0.983
+  b/base median 1.953  per round 1.953
+
+== split qjs interp post
+  round       base         a3         a4          b
+  r1         0.292      0.209      0.292      0.417
+  b/a3 median 1.995  per round 1.995
+  b/a4 median 1.428  per round 1.428
+  a4/a3 median 1.397  per round 1.397
+  a3/base median 0.716  per round 0.716
+  a4/base median 1.000  per round 1.000
+  b/base median 1.428  per round 1.428
+
+== split qjs interp restore
+  round       base         a3         a4          b
+  r1       298.458    101.667    104.125    162.500
+  b/a3 median 1.598  per round 1.598
+  b/a4 median 1.561  per round 1.561
+  a4/a3 median 1.024  per round 1.024
+  a3/base median 0.341  per round 0.341
+  a4/base median 0.349  per round 0.349
+  b/base median 0.544  per round 0.544
+
+== split qjs interp total
+  round       base         a3         a4          b
+  r1     10248.375  11300.875  11059.042   9850.000
+  b/a3 median 0.872  per round 0.872
+  b/a4 median 0.891  per round 0.891
+  a4/a3 median 0.979  per round 0.979
+  a3/base median 1.103  per round 1.103
+  a4/base median 1.079  per round 1.079
+  b/base median 0.961  per round 0.961
+
+== steady lua compiled p50
+  round       base         a3         a4          b
+  r1      5281.208   6207.666   6243.042   3161.833
+  b/a3 median 0.509  per round 0.509
+  b/a4 median 0.506  per round 0.506
+  a4/a3 median 1.006  per round 1.006
+  a3/base median 1.175  per round 1.175
+  a4/base median 1.182  per round 1.182
+  b/base median 0.599  per round 0.599
+
+== steady lua interp p50
+  round       base         a3         a4          b
+  r1      7981.625   8231.208   8418.542   7832.375
+  b/a3 median 0.952  per round 0.952
+  b/a4 median 0.930  per round 0.930
+  a4/a3 median 1.023  per round 1.023
+  a3/base median 1.031  per round 1.031
+  a4/base median 1.055  per round 1.055
+  b/base median 0.981  per round 0.981
+
+== steady py compiled p50
+  round       base         a3         a4          b
+  r1     19689.292  22599.750  22647.125   8391.042
+  b/a3 median 0.371  per round 0.371
+  b/a4 median 0.371  per round 0.371
+  a4/a3 median 1.002  per round 1.002
+  a3/base median 1.148  per round 1.148
+  a4/base median 1.150  per round 1.150
+  b/base median 0.426  per round 0.426
+
+== steady py interp p50
+  round       base         a3         a4          b
+  r1     30422.833  35027.125  31858.875  23448.000
+  b/a3 median 0.669  per round 0.669
+  b/a4 median 0.736  per round 0.736
+  a4/a3 median 0.910  per round 0.910
+  a3/base median 1.151  per round 1.151
+  a4/base median 1.047  per round 1.047
+  b/base median 0.771  per round 0.771
+
+== steady qjs compiled p50
+  round       base         a3         a4          b
+  r1      8342.000  11340.208  11058.917   4844.042
+  b/a3 median 0.427  per round 0.427
+  b/a4 median 0.438  per round 0.438
+  a4/a3 median 0.975  per round 0.975
+  a3/base median 1.359  per round 1.359
+  a4/base median 1.326  per round 1.326
+  b/base median 0.581  per round 0.581
+
+== steady qjs interp p50
+  round       base         a3         a4          b
+  r1     13280.708  14365.958  14225.500  11769.375
+  b/a3 median 0.819  per round 0.819
+  b/a4 median 0.827  per round 0.827
+  a4/a3 median 0.990  per round 0.990
+  a3/base median 1.082  per round 1.082
+  a4/base median 1.071  per round 1.071
+  b/base median 0.886  per round 0.886
+
+== loads: 80 arm runs, max end load 105.200, 0 cells redone, arm runs ending >= 8: 79
+
+== A4 against A3 (A4 merges only if it ranks ahead)
+  FAIL compiled guest time a4/a3 < 1  py=0.921 qjs=1.036 lua=1.363
+  FAIL compiled whole-request p50 a4/a3 < 1  py=1.002 qjs=0.975 lua=1.006
+  PASS interpreted whole-request p50 a4/a3 =< 1.05  py=0.910 qjs=0.990 lua=1.023
+  PASS budget density a4/a3 >= 1  py=1.000 qjs=1.000 lua=1.000
+  FAIL physical per instance (footprint) a4/a3 =< 1.25  py=3.000 qjs=0.500 lua=0.500
+  => A4 does not rank ahead of A3
+
+== Decision rule: B against a3 (the best A arm)
+  PASS compiled guest time b/a3 =< 0.90  py=0.345 qjs=0.424 lua=0.435
+  PASS compiled whole-request p50 b/a3 < 1  py=0.371 qjs=0.427 lua=0.509
+  PASS interpreted whole-request p50 b/a3 =< 1.05  py=0.669 qjs=0.819 lua=0.952
+  FAIL budget density b/a3 >= 1  py=0.669 qjs=1.000 lua=1.000
+  PASS physical per instance (footprint) b/a3 =< 1.25  py=1.000 qjs=0.250 lua=1.000
+  FAIL full ct on mmap-pages (given: unverified)
+  => a3 goes to the production plan

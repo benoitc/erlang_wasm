@@ -1,0 +1,11 @@
+# 13:21  up 9 days,  5:34, 42 users, load averages: 5.52 7.50 10.74
+guest    operation           n       min us    median us
+py       restore            20      11131.2      11548.8
+py       load_snapshot      20      21615.2      22433.5
+qjs      restore            20        371.2        405.7
+qjs      load_snapshot      20        825.9        915.4
+lua      restore            20        143.9        160.7
+lua      load_snapshot      20        251.1        269.6
+plain    restore            20         13.1         14.3
+plain    load_snapshot      20         18.9         22.8
+# 13:21  up 9 days,  5:34, 42 users, load averages: 5.24 7.40 10.69

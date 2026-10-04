@@ -1,0 +1,13 @@
+round	metric	guest	tier	arm	attempt	secs	load_start	load_end
+1	split	py	interp	base	1	1	11.94	11.94
+1	split	py	interp	a3	1	2	11.94	11.30
+1	split	py	interp	b	1	17	11.30	9.74
+1	split	py	interp	a4	1	18	9.74	8.26
+1	split	py	compiled	base	1	116	8.26	11.58
+1	split	py	compiled	a3	1	646	11.58	7.94
+1	split	py	compiled	b	1	49	7.94	9.53
+1	split	py	compiled	a4	1	423	9.53	12.14
+1	split	qjs	interp	base	1	1	12.14	12.14
+1	split	qjs	interp	a3	1	1	12.14	12.14
+1	split	qjs	interp	b	1	0	12.14	12.14
+1	split	qjs	interp	a4	1	1	12.14	12.14

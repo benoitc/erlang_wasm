@@ -1,0 +1,162 @@
+== r1 split py interp base attempt 1  0:53  up 9 days, 17:05, 47 users, load averages: 11.94 14.26 13.54
+#{mode => split,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,verdict => ok,warm_requests => 2,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 20333.333,total => 24726.458,restore => 4331.042,
+        destroy => 175.791,post => 0.792},
+  min_us =>
+      #{call => 20009.208,total => 24514.875,restore => 4214.541,
+        destroy => 173.75,post => 0.584},
+  recycled_in => 3}
+== r1 split py interp a3 attempt 1  0:53  up 9 days, 17:05, 47 users, load averages: 11.94 14.26 13.54
+#{mode => split,cache => "none",guest => py,ahead => false,start_ms => 48,
+  tier => interp,verdict => ok,warm_requests => 2,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 23491.458,total => 23992.458,restore => 437.458,
+        destroy => 89.833,post => 0.459},
+  min_us =>
+      #{call => 22793.458,total => 23384.292,restore => 409.833,
+        destroy => 89.125,post => 0.417},
+  recycled_in => 0}
+== r1 split py interp b attempt 1  0:53  up 9 days, 17:05, 47 users, load averages: 11.30 14.09 13.48
+#{mode => split,cache => "none",guest => py,ahead => false,start_ms => 15702,
+  tier => interp,verdict => ok,warm_requests => 2,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 20284.25,total => 21207.75,restore => 729.166,
+        destroy => 191.708,post => 0.583},
+  min_us =>
+      #{call => 20013.667,total => 20953.792,restore => 719.333,
+        destroy => 182.208,post => 0.5},
+  recycled_in => 0}
+== r1 split py interp a4 attempt 1  0:53  up 9 days, 17:06, 47 users, load averages: 9.74 13.61 13.32
+#{mode => split,cache => "none",guest => py,ahead => false,start_ms => 17324,
+  tier => interp,verdict => ok,warm_requests => 2,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 24742.542,total => 25281.292,restore => 448.459,
+        destroy => 103.666,post => 0.625},
+  min_us =>
+      #{call => 24662.583,total => 25217.5,restore => 444.25,
+        destroy => 93.875,post => 0.542},
+  recycled_in => 0}
+== r1 split py compiled base attempt 1  0:53  up 9 days, 17:06, 47 users, load averages: 8.26 13.02 13.11
+=WARNING REPORT==== 4-Oct-2026::00:54:00.030239 ===
+wasm: code_cache_dir /Users/benoitc/.cache/wasm-arb-smoke/base is not usable ({cannot_stat,
+                                                                               "/Users/benoitc/.cache/wasm-arb-smoke",
+                                                                               enoent}); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-arb-smoke/base",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 1635,entry_ms => 114643,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 5,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 12782.311,total => 18218.466,restore => 4763.209,
+        destroy => 167.465,post => 0.917},
+  min_us =>
+      #{call => 12458.589,total => 17389.93,restore => 4762.209,
+        destroy => 162.465,post => 0.667},
+  recycled_in => 3}
+== r1 split py compiled a3 attempt 1  0:55  up 9 days, 17:08, 47 users, load averages: 11.58 12.81 13.02
+=WARNING REPORT==== 4-Oct-2026::00:55:56.076986 ===
+wasm: code_cache_dir /Users/benoitc/.cache/wasm-arb-smoke/a3 is not usable ({cannot_stat,
+                                                                             "/Users/benoitc/.cache/wasm-arb-smoke",
+                                                                             enoent}); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-arb-smoke/a3",
+  guest => py,ahead => false,start_ms => 48,tier => compiled,verdict => ok,
+  warm_requests => 9305,entry_ms => 644729,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 16463.451,total => 17035.828,restore => 502.669,
+        destroy => 68.791,post => 0.667},
+  min_us =>
+      #{call => 14960.276,total => 15406.446,restore => 383.502,
+        destroy => 62.001,post => 0.416},
+  recycled_in => 0}
+== r1 split py compiled b attempt 1  1:06  up 9 days, 17:19, 47 users, load averages: 7.94 12.24 12.96
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-arb-smoke/b",guest => py,
+  ahead => false,start_ms => 54,tier => compiled,verdict => ok,
+  warm_requests => 829,entry_ms => 47417,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 5503.375,total => 6176.125,restore => 562.834,
+        destroy => 109.625,post => 0.291},
+  min_us =>
+      #{call => 5135.209,total => 5666.417,restore => 423.209,
+        destroy => 107.708,post => 0.291},
+  recycled_in => 0}
+== r1 split py compiled a4 attempt 1  1:07  up 9 days, 17:20, 47 users, load averages: 9.53 12.02 12.83
+=INFO REPORT==== 4-Oct-2026::01:14:32.797096 ===
+SIGTERM received - shutting down
+
+== r1 split qjs interp base attempt 1  1:14  up 9 days, 17:27, 48 users, load averages: 12.14 14.24 13.59
+#{mode => split,cache => "none",guest => qjs,ahead => false,start_ms => 10,
+  tier => interp,verdict => ok,warm_requests => 2,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 11090.209,total => 11482.875,restore => 308.791,
+        destroy => 73.0,post => 0.708},
+  min_us =>
+      #{call => 11078.334,total => 11443.167,restore => 302.834,
+        destroy => 61.333,post => 0.666},
+  recycled_in => 3}
+== r1 split qjs interp a3 attempt 1  1:14  up 9 days, 17:27, 48 users, load averages: 12.14 14.24 13.59
+#{mode => split,cache => "none",guest => qjs,ahead => false,start_ms => 10,
+  tier => interp,verdict => ok,warm_requests => 2,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 12521.625,total => 12748.834,restore => 156.459,
+        destroy => 68.416,post => 0.667},
+  min_us =>
+      #{call => 12149.584,total => 12379.333,restore => 134.542,
+        destroy => 62.5,post => 0.583},
+  recycled_in => 0}
+== r1 split qjs interp b attempt 1  1:14  up 9 days, 17:27, 48 users, load averages: 12.14 14.24 13.59
+#{mode => split,cache => "none",guest => qjs,ahead => false,start_ms => 58,
+  tier => interp,verdict => ok,warm_requests => 2,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 9114.041,total => 9343.334,restore => 163.75,
+        destroy => 67.125,post => 0.334},
+  min_us =>
+      #{call => 9078.0,total => 9307.667,restore => 162.334,destroy => 65.209,
+        post => 0.208},
+  recycled_in => 0}
+== r1 split qjs interp a4 attempt 1  1:14  up 9 days, 17:27, 48 users, load averages: 12.14 14.24 13.59
+#{mode => split,cache => "none",guest => qjs,ahead => false,start_ms => 107,
+  tier => interp,verdict => ok,warm_requests => 2,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 11222.041,total => 11403.875,restore => 118.625,
+        destroy => 49.333,post => 0.417},
+  min_us =>
+      #{call => 11046.208,total => 11200.417,restore => 109.583,
+        destroy => 44.209,post => 0.25},
+  recycled_in => 0}
+== r1 split qjs compiled base attempt 1  1:14  up 9 days, 17:27, 48 users, load averages: 12.14 14.24 13.59
+=INFO REPORT==== 4-Oct-2026::01:14:37.908776 ===
+SIGTERM received - shutting down
+

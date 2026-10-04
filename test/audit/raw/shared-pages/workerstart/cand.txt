@@ -1,0 +1,35 @@
+== r1 cand
+# 2:19  up 8 days, 18:31, 36 users, load averages: 5.02 4.88 6.15
+py        worker start        1  min   17993287.9 us  median   17993287.9 us
+py_entry  worker start        1  min   41228580.6 us  median   41228580.6 us
+qjs       worker start        1  min     249594.0 us  median     249594.0 us
+lua       worker start        1  min      95266.7 us  median      95266.7 us
+# 2:20  up 8 days, 18:32, 36 users, load averages: 4.11 4.65 5.98
+== r2 cand
+# 2:20  up 8 days, 18:32, 36 users, load averages: 4.11 4.65 5.98
+py        worker start        1  min   17949142.8 us  median   17949142.8 us
+py_entry  worker start        1  min   41809301.5 us  median   41809301.5 us
+qjs       worker start        1  min     244098.2 us  median     244098.2 us
+lua       worker start        1  min      90384.1 us  median      90384.1 us
+# 2:21  up 8 days, 18:33, 36 users, load averages: 4.17 4.56 5.85
+== r3 cand
+# 2:23  up 8 days, 18:35, 36 users, load averages: 3.89 4.28 5.57
+py        worker start        1  min   18349952.9 us  median   18349952.9 us
+py_entry  worker start        1  min   43323245.5 us  median   43323245.5 us
+qjs       worker start        1  min     237696.5 us  median     237696.5 us
+lua       worker start        1  min      86444.3 us  median      86444.3 us
+# 2:24  up 8 days, 18:36, 36 users, load averages: 4.80 4.52 5.57
+== r4 cand
+# 2:24  up 8 days, 18:36, 36 users, load averages: 4.80 4.52 5.57
+py        worker start        1  min   18535815.1 us  median   18535815.1 us
+py_entry  worker start        1  min   42591904.8 us  median   42591904.8 us
+qjs       worker start        1  min     254631.1 us  median     254631.1 us
+lua       worker start        1  min      96395.1 us  median      96395.1 us
+# 2:25  up 8 days, 18:37, 36 users, load averages: 4.25 4.45 5.47
+== r5 cand
+# 2:27  up 8 days, 18:39, 36 users, load averages: 7.37 5.70 5.83
+py        worker start        1  min   18975616.9 us  median   18975616.9 us
+py_entry  worker start        1  min   45153378.7 us  median   45153378.7 us
+qjs       worker start        1  min     281910.0 us  median     281910.0 us
+lua       worker start        1  min      95379.3 us  median      95379.3 us
+# 2:28  up 8 days, 18:40, 36 users, load averages: 4.99 5.33 5.68

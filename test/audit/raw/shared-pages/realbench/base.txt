@@ -1,0 +1,20 @@
+== r1 base  0:23  up 8 days, 16:36, 38 users, load averages: 3.36 5.11 5.13
+qjs-30k-js-iterations run 1	12547.5 ms
+qjs-30k-js-iterations run 2	12477.9 ms
+qjs-30k-js-iterations run 3	12884.1 ms
+== r2 base  0:25  up 8 days, 16:38, 38 users, load averages: 3.56 4.58 4.91
+qjs-30k-js-iterations run 1	12932.5 ms
+qjs-30k-js-iterations run 2	13493.4 ms
+qjs-30k-js-iterations run 3	12995.2 ms
+== r3 base  0:26  up 8 days, 16:39, 38 users, load averages: 7.67 5.76 5.33
+qjs-30k-js-iterations run 1	12373.0 ms
+qjs-30k-js-iterations run 2	13480.3 ms
+qjs-30k-js-iterations run 3	12431.5 ms
+== r4 base  0:31  up 8 days, 16:44, 38 users, load averages: 7.40 7.25 6.19
+qjs-30k-js-iterations run 1	12395.2 ms
+qjs-30k-js-iterations run 2	12766.6 ms
+qjs-30k-js-iterations run 3	12551.5 ms
+== r5 base  0:32  up 8 days, 16:45, 38 users, load averages: 4.90 6.64 6.02
+qjs-30k-js-iterations run 1	12622.1 ms
+qjs-30k-js-iterations run 2	12570.0 ms
+qjs-30k-js-iterations run 3	12654.7 ms

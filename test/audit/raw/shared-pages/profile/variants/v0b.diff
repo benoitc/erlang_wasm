@@ -1,0 +1,21 @@
+diff --color -ru /Users/benoitc/Projects/erlang_wasm-baseline-a2bda33/src/worker/wasm_script_worker.erl src/worker/wasm_script_worker.erl
+--- /Users/benoitc/Projects/erlang_wasm-baseline-a2bda33/src/worker/wasm_script_worker.erl	2026-10-03 00:13:42
++++ src/worker/wasm_script_worker.erl	2026-10-03 04:16:18
+@@ -1812,7 +1812,7 @@
+             post_restore(Inst, Image, G);
+         none ->
+             ok = use_recycled(Image, G#g.recycled),
+-            case wasm:restore(Image, Bindings, Opts#{recycle => true}) of
++            case wasm:restore(Image, Bindings, Opts) of %% PROFILING V0b: no recycle
+                 {error, E} -> {error, E};
+                 {ok, Inst} -> post_restore(Inst, Image, G)
+             end
+@@ -2057,7 +2057,7 @@
+     %% restore of the image can take the last one's memory and rewrite only
+     %% what the request wrote. Not in `Opts', which a request's own options
+     %% are compared with.
+-    case wasm:restore(Image, Forward, Opts#{recycle => true}) of
++    case wasm:restore(Image, Forward, Opts) of %% PROFILING V0b: no recycle
+         {ok, Inst}  -> put(?AHEAD, {Inst, Keys, Opts}), ok;
+         {error, _}  -> ok
+     end.

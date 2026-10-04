@@ -1,0 +1,105 @@
+== r1 v0 py  4:08  up 8 days, 20:21, 39 users, load averages: 6.19 6.35 8.50
+# 4:08  up 8 days, 20:21, 39 users, load averages: 6.19 6.35 8.50
+#{count => 6,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => py,pages_in_use => 3840,arm => density,
+  image_bytes => 7407000,verdict => ok,
+  refusals =>
+      [#{seq => 13,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 3840,n => 640}],
+  shape => memory_limit}
+== r1 v0 qjs  4:08  up 8 days, 20:21, 39 users, load averages: 5.39 6.17 8.40
+# 4:08  up 8 days, 20:21, 39 users, load averages: 5.39 6.17 8.40
+#{count => 682,
+  failure =>
+      {restore,malformed,internal,
+               {error,{snapshot_restore_grow_failed,page_limit}}},
+  page_limit => 4096,guest => qjs,pages_in_use => 4092,arm => density,
+  image_bytes => 211064,verdict => ok,
+  refusals =>
+      [#{seq => 2049,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 3}],
+  shape => snapshot_restore_grow_failed}
+== r1 v0 lua  4:09  up 8 days, 20:22, 39 users, load averages: 5.04 5.88 8.13
+# 4:09  up 8 days, 20:22, 39 users, load averages: 5.04 5.88 8.13
+#{count => 1365,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => lua,pages_in_use => 4095,arm => density,
+  image_bytes => 70456,verdict => ok,
+  refusals =>
+      [#{seq => 4096,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 2}],
+  shape => memory_limit}
+== r2 v0 py  4:10  up 8 days, 20:23, 39 users, load averages: 8.48 6.71 8.30
+# 4:10  up 8 days, 20:23, 39 users, load averages: 8.48 6.71 8.30
+#{count => 6,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => py,pages_in_use => 3840,arm => density,
+  image_bytes => 7407000,verdict => ok,
+  refusals =>
+      [#{seq => 13,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 3840,n => 640}],
+  shape => memory_limit}
+== r2 v0 qjs  4:11  up 8 days, 20:23, 39 users, load averages: 6.81 6.46 8.17
+# 4:11  up 8 days, 20:23, 39 users, load averages: 6.81 6.46 8.17
+#{count => 682,
+  failure =>
+      {restore,malformed,internal,
+               {error,{snapshot_restore_grow_failed,page_limit}}},
+  page_limit => 4096,guest => qjs,pages_in_use => 4092,arm => density,
+  image_bytes => 211064,verdict => ok,
+  refusals =>
+      [#{seq => 2049,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 3}],
+  shape => snapshot_restore_grow_failed}
+== r2 v0 lua  4:12  up 8 days, 20:24, 39 users, load averages: 5.10 6.07 7.91
+# 4:12  up 8 days, 20:24, 39 users, load averages: 5.10 6.07 7.91
+#{count => 1365,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => lua,pages_in_use => 4095,arm => density,
+  image_bytes => 70456,verdict => ok,
+  refusals =>
+      [#{seq => 4096,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 2}],
+  shape => memory_limit}
+== r3 v0 py  4:12  up 8 days, 20:24, 39 users, load averages: 4.35 5.86 7.80
+# 4:12  up 8 days, 20:24, 39 users, load averages: 4.35 5.86 7.80
+#{count => 6,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => py,pages_in_use => 3840,arm => density,
+  image_bytes => 7407000,verdict => ok,
+  refusals =>
+      [#{seq => 13,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 3840,n => 640}],
+  shape => memory_limit}
+== r3 v0 qjs  4:12  up 8 days, 20:25, 39 users, load averages: 5.80 6.13 7.86
+# 4:12  up 8 days, 20:25, 39 users, load averages: 5.80 6.13 7.86
+#{count => 682,
+  failure =>
+      {restore,malformed,internal,
+               {error,{snapshot_restore_grow_failed,page_limit}}},
+  page_limit => 4096,guest => qjs,pages_in_use => 4092,arm => density,
+  image_bytes => 211064,verdict => ok,
+  refusals =>
+      [#{seq => 2049,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 3}],
+  shape => snapshot_restore_grow_failed}
+== r3 v0 lua  4:13  up 8 days, 20:26, 39 users, load averages: 9.52 7.28 8.18
+# 4:13  up 8 days, 20:26, 39 users, load averages: 9.52 7.28 8.18
+#{count => 1365,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => lua,pages_in_use => 4095,arm => density,
+  image_bytes => 70456,verdict => ok,
+  refusals =>
+      [#{seq => 4096,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 2}],
+  shape => memory_limit}

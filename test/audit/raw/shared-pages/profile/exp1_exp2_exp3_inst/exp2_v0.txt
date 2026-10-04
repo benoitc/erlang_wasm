@@ -1,0 +1,66 @@
+== r1 v0  4:08  up 8 days, 20:20, 39 users, load averages: 4.44 6.06 8.47
+#  4:08  up 8 days, 20:20, 39 users, load averages: 4.44 6.06 8.47 cand=false
+py #{total => 24065,read => 250,decode => 23397,from_parts => 190,charge => 2,
+     owner_start => 15}
+  shape [#{runs => 1544,pages => 640,file_bytes => 2746716,
+           run_bytes => 7407000,touched_pages => 127,whole_run_pages => 23}]
+  digest C67E5CD1A835942C2F49BC85981DAEFABD9B299599FA11276FE89B083EEE2CC8
+qjs #{total => 861,read => 31,decode => 817,from_parts => 13,charge => 0,
+      owner_start => 3}
+  shape [#{runs => 433,pages => 6,file_bytes => 101609,run_bytes => 211064,
+           touched_pages => 6,whole_run_pages => 0}]
+  digest F0F376D5FE1753379307427F3FBC38C98E52EAC6696D4B939BC933CE76A13DDF
+lua #{total => 265,read => 25,decode => 237,from_parts => 3,charge => 0,
+      owner_start => 4}
+  shape [#{runs => 9,pages => 3,file_bytes => 35361,run_bytes => 70456,
+           touched_pages => 3,whole_run_pages => 0}]
+  digest 96E19C31BDC2CC86E4CDE9CCEAFA09C4FC86C62C7EBF71FE031DFD64607BEDB8
+plain #{total => 30,read => 19,decode => 8,from_parts => 0,charge => 0,
+        owner_start => 4}
+  shape [#{runs => 1,pages => 1,file_bytes => 345,run_bytes => 8,
+           touched_pages => 1,whole_run_pages => 0}]
+  digest 74E23AC2D60E4E0A3A1A8085AF14C9C5F3F1706033401B515045BFE33603A0C2
+== r2 v0  4:08  up 8 days, 20:20, 39 users, load averages: 6.09 6.33 8.52
+#  4:08  up 8 days, 20:20, 39 users, load averages: 6.09 6.33 8.52 cand=false
+py #{total => 24335,read => 241,decode => 23585,from_parts => 191,charge => 2,
+     owner_start => 15}
+  shape [#{runs => 1544,pages => 640,file_bytes => 2746716,
+           run_bytes => 7407000,touched_pages => 127,whole_run_pages => 23}]
+  digest C67E5CD1A835942C2F49BC85981DAEFABD9B299599FA11276FE89B083EEE2CC8
+qjs #{total => 841,read => 31,decode => 804,from_parts => 12,charge => 0,
+      owner_start => 3}
+  shape [#{runs => 433,pages => 6,file_bytes => 101609,run_bytes => 211064,
+           touched_pages => 6,whole_run_pages => 0}]
+  digest F0F376D5FE1753379307427F3FBC38C98E52EAC6696D4B939BC933CE76A13DDF
+lua #{total => 282,read => 26,decode => 239,from_parts => 4,charge => 0,
+      owner_start => 4}
+  shape [#{runs => 9,pages => 3,file_bytes => 35361,run_bytes => 70456,
+           touched_pages => 3,whole_run_pages => 0}]
+  digest 96E19C31BDC2CC86E4CDE9CCEAFA09C4FC86C62C7EBF71FE031DFD64607BEDB8
+plain #{total => 35,read => 20,decode => 8,from_parts => 0,charge => 0,
+        owner_start => 4}
+  shape [#{runs => 1,pages => 1,file_bytes => 345,run_bytes => 8,
+           touched_pages => 1,whole_run_pages => 0}]
+  digest 74E23AC2D60E4E0A3A1A8085AF14C9C5F3F1706033401B515045BFE33603A0C2
+== r3 v0  4:08  up 8 days, 20:20, 39 users, load averages: 6.65 6.44 8.55
+#  4:08  up 8 days, 20:20, 39 users, load averages: 6.65 6.44 8.55 cand=false
+py #{total => 23809,read => 227,decode => 23396,from_parts => 185,charge => 1,
+     owner_start => 13}
+  shape [#{runs => 1544,pages => 640,file_bytes => 2746716,
+           run_bytes => 7407000,touched_pages => 127,whole_run_pages => 23}]
+  digest C67E5CD1A835942C2F49BC85981DAEFABD9B299599FA11276FE89B083EEE2CC8
+qjs #{total => 857,read => 30,decode => 798,from_parts => 13,charge => 0,
+      owner_start => 4}
+  shape [#{runs => 433,pages => 6,file_bytes => 101609,run_bytes => 211064,
+           touched_pages => 6,whole_run_pages => 0}]
+  digest F0F376D5FE1753379307427F3FBC38C98E52EAC6696D4B939BC933CE76A13DDF
+lua #{total => 276,read => 26,decode => 240,from_parts => 3,charge => 0,
+      owner_start => 4}
+  shape [#{runs => 9,pages => 3,file_bytes => 35361,run_bytes => 70456,
+           touched_pages => 3,whole_run_pages => 0}]
+  digest 96E19C31BDC2CC86E4CDE9CCEAFA09C4FC86C62C7EBF71FE031DFD64607BEDB8
+plain #{total => 40,read => 24,decode => 8,from_parts => 0,charge => 0,
+        owner_start => 4}
+  shape [#{runs => 1,pages => 1,file_bytes => 345,run_bytes => 8,
+           touched_pages => 1,whole_run_pages => 0}]
+  digest 74E23AC2D60E4E0A3A1A8085AF14C9C5F3F1706033401B515045BFE33603A0C2

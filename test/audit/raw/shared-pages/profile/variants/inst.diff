@@ -1,0 +1,168 @@
+diff --color -ru /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_core.erl src/wasm_core.erl
+--- /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_core.erl	2026-10-02 19:16:28
++++ src/wasm_core.erl	2026-10-03 03:34:24
+@@ -1564,10 +1564,11 @@
+     %% `Bit' is the bit offset of the access within its word, and the straddle
+     %% test is on it, so it is computed once and shared by the guard and the
+     %% body.
+-    Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
++    Growth = cerl:c_seq(prof_hit(case Dir of load -> 13; store -> 19 end),
++              cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
+                cerl:c_let([Ci], bif('bsr', [A, Sh]),
+                  cerl:c_let([Ck], chunk_at(Mem, Ci),
+-                   cerl:c_let([Ix], word_index(A, Sh), Fast)))),
++                   cerl:c_let([Ix], word_index(A, Sh), Fast))))),
+     cerl:c_let([Mem], mem_at(Mut, M),
+       cerl:c_let([A], Addr,
+         cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+@@ -1600,6 +1601,7 @@
+               bif('=<', [K, bif(tuple_size, [Ar])]),
+               [cerl:c_clause(
+                  [cerl:abstract(true)],
++                 cerl:c_seq(prof_hit(case Dir of load -> 15; store -> 16 end),
+                  cerl:c_let([Ck], bif(element, [K, Ar]),
+                    cerl:c_let([Ix], slot_index(E, A),
+                      case Dir of
+@@ -1607,21 +1609,25 @@
+                          store -> cerl:c_seq(inline_store(N, Kind, A, undefined,
+                                                           Ix, Ck, Bit, Val),
+                                              Mut)
+-                     end))),
+-               cerl:c_clause([cerl:c_var('_Unseen')], Slow)]))),
++                     end)))),
++               cerl:c_clause([cerl:c_var('_Unseen')],
++                             cerl:c_seq(prof_hit(17), Slow))]))),
+     Untouched = case Dir of
+                     load ->
+-                        load_word(N, Kind,
++                        cerl:c_seq(prof_hit(14), load_word(N, Kind,
+                                   cerl:c_call(cerl:c_atom(wasm_memory),
+                                               cerl:c_atom(image_word_at),
+                                               [field(Mem, ?MEM_IMAGE), A]),
+-                                  Bit);
++                                  Bit));
+                     store ->
+-                        Slow
++                        cerl:c_seq(prof_hit(18), Slow)
+                 end,
+     cerl:c_let([E], Entry,
+                cerl:c_case(E, [cerl:c_clause([cerl:abstract(0)], Untouched),
+                                cerl:c_clause([cerl:c_var('_Slot')], Private)])).
++
++prof_hit(I) ->
++    cerl:c_call(cerl:c_atom(wasm_prof_c), cerl:c_atom(hit), [cerl:abstract(I)]).
+ 
+ slot_index(E, A) ->
+     bif('+', [bif('+', [bif('*', [bif('band', [E, cerl:abstract(16#FFFF)]),
+diff --color -ru /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl src/wasm_exec.erl
+--- /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl	2026-10-02 15:05:48
++++ src/wasm_exec.erl	2026-10-03 03:34:24
+@@ -1163,6 +1163,7 @@
+ %% generator to read rather than copied into it, so a width can still only be
+ %% wrong in one place.
+ load_at(Mu, M, N, Kind, Addr) ->
++    wasm_prof_c:hit(20),
+     Mem = element(M + 1, Mu#mut.mems),
+     decode_loaded(Kind, N, wasm_memory:load(Mem, Addr, N)).
+ 
+@@ -1173,6 +1174,7 @@
+ -spec store_at(#mut{}, non_neg_integer(), pos_integer(), atom(), non_neg_integer(),
+                term()) -> #mut{}.
+ store_at(Mu, M, N, Kind, Addr, Value) ->
++    wasm_prof_c:hit(22),
+     Mem = element(M + 1, Mu#mut.mems),
+     case wasm_memory:store_r(Mem, Addr, N, encode_stored(Kind, Value)) of
+         ok -> Mu;
+diff --color -ru /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_keeper.erl src/wasm_keeper.erl
+--- /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_keeper.erl	2026-10-02 16:10:21
++++ src/wasm_keeper.erl	2026-10-03 03:34:24
+@@ -382,7 +382,8 @@
+ ack(Resource, OpId) ->
+     case whereis(?SERVER) of
+         undefined -> ok;
+-        Pid -> gen_server:cast(Pid, {ack, Resource, OpId, self()})
++        Pid -> wasm_prof_c:hit(8),
++               gen_server:cast(Pid, {ack, Resource, OpId, self()})
+     end.
+ 
+ -doc """
+@@ -450,6 +451,7 @@
+ %% path is the same one `wasm_engine' already offers: start an unsupervised
+ %% keeper on demand, and let whoever loses the race use the winner's.
+ call(Req) ->
++    wasm_prof_c:hit(7),
+     try gen_server:call(keeper(), Req, infinity)
+     catch exit:_ -> {error, keeper_unavailable}
+     end.
+diff --color -ru /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_memory.erl src/wasm_memory.erl
+--- /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_memory.erl	2026-10-02 19:16:28
++++ src/wasm_memory.erl	2026-10-03 03:34:24
+@@ -697,15 +697,19 @@
+ %% shifts and masks because the chunk size is a power of two. An address in the
+ %% image region goes through the page table instead.
+ word(#mem{img_bytes = IB} = M, Addr) when Addr < IB ->
++    wasm_prof_c:hit(9),
+     image_word(M, Addr);
+ word(#mem{shift = Shift} = M, Addr) ->
++    wasm_prof_c:hit(10),
+     Chunk = chunk(M, Addr bsr Shift),
+     atomics:get(Chunk, ((Addr band ((1 bsl Shift) - 1)) bsr 3) + 1).
+ 
+ put_word(#mem{img_bytes = IB} = M, Addr, Value) when Addr < IB ->
++    wasm_prof_c:hit(11),
+     {C, I} = slot_word(M, ensure_private(M, Addr bsr ?SLOT_SHIFT), Addr),
+     atomics:put(C, I, Value band 16#FFFFFFFFFFFFFFFF);
+ put_word(#mem{shift = Shift} = M, Addr, Value) ->
++    wasm_prof_c:hit(12),
+     Chunk = wchunk(M, Addr bsr Shift),
+     atomics:put(Chunk, ((Addr band ((1 bsl Shift) - 1)) bsr 3) + 1,
+                 Value band 16#FFFFFFFFFFFFFFFF).
+@@ -1053,9 +1057,18 @@
+         S -> S
+     end.
+ 
+-fault(#mem{tab = Tab} = M, P) ->
++fault(M, P) ->
++    T0 = erlang:monotonic_time(nanosecond),
++    R = fault0(M, P),
++    wasm_prof_c:hit(1),
++    wasm_prof_c:add(2, erlang:monotonic_time(nanosecond) - T0),
++    R.
++
++fault0(#mem{tab = Tab} = M, P) ->
+     E = located(claim(M)),
++    T1 = erlang:monotonic_time(nanosecond),
+     ok = fill_slot(M, E, P),
++    wasm_prof_c:add(3, erlang:monotonic_time(nanosecond) - T1),
+     ok = fault_hook(fault),
+     case atomics:compare_exchange(Tab, P + 1, 0, E) of
+         ok -> E;
+@@ -1076,7 +1089,10 @@
+                 _  -> claim(M)
+             end;
+         false ->
++            T0 = erlang:monotonic_time(nanosecond),
+             ok = extend_arena(M, chunk_of(N + 1)),
++            wasm_prof_c:hit(4),
++            wasm_prof_c:add(5, erlang:monotonic_time(nanosecond) - T0),
+             claim(M)
+     end.
+ 
+@@ -1161,6 +1177,7 @@
+             Pages = lists:sum([chunk_slots(K) * ?SLOT_BYTES div ?PAGE_SIZE
+                                || K <- lists:seq(Have + 1, Target)]),
+             OpId = make_ref(),
++            wasm_prof_c:hit(6),
+             case keeper(fun() ->
+                                 wasm_keeper:arena_begin(Res, OpId, Target,
+                                                         {Have, Pages})
+@@ -1225,7 +1242,7 @@
+         Value) ->
+     ok = store(M, Addr, Nbytes, Value),
+     case atomics:get(Tab, next_ix(M) + 1) > tuple_size(Arena) of
+-        true  -> {refresh, M#mem{arena = wasm_engine:cell_get(Ref)}};
++        true  -> wasm_prof_c:hit(21), {refresh, M#mem{arena = wasm_engine:cell_get(Ref)}};
+         false -> ok
+     end.
+ 
+Only in src: wasm_prof_c.erl

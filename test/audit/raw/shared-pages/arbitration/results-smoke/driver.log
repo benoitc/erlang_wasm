@@ -1,0 +1,22 @@
+r1 split py interp ok (attempt 1, end load 15.48) 01:15
+r1 split py compiled ok (attempt 1, end load 10.76) 01:28
+r1 split qjs interp ok (attempt 1, end load 10.76) 01:29
+r1 split qjs compiled ok (attempt 1, end load 11.28) 01:42
+r1 split lua interp ok (attempt 1, end load 11.28) 01:42
+r1 split lua compiled ok (attempt 1, end load 27.84) 01:47
+r1 steady py interp ok (attempt 1, end load 30.66) 01:47
+r1 steady py compiled ok (attempt 1, end load 30.16) 01:48
+r1 steady qjs interp ok (attempt 1, end load 35.75) 01:48
+r1 steady qjs compiled ok (attempt 1, end load 49.57) 01:49
+r1 steady lua interp ok (attempt 1, end load 49.57) 01:49
+r1 steady lua compiled ok (attempt 1, end load 49.93) 01:49
+r1 density py - ok (attempt 1, end load 84.17) 01:50
+r1 density qjs - ok (attempt 1, end load 51.63) 01:52
+r1 density lua - ok (attempt 1, end load 44.23) 01:54
+r1 sharing py - ok (attempt 1, end load 41.62) 01:54
+r1 sharing qjs - ok (attempt 1, end load 41.62) 01:54
+r1 sharing lua - ok (attempt 1, end load 39.88) 01:54
+r1 restore all - ok (attempt 1, end load 37.97) 01:54
+r1 real qjs - ok (attempt 1, end load 35.09) 01:56
+round 1 done Sun Oct  4 01:56:39 CEST 2026
+ROUNDS_DONE

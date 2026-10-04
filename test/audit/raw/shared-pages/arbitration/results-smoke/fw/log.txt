@@ -1,0 +1,352 @@
+== inst-a3 py interp  1:57  up 9 days, 18:09, 41 users, load averages: 45.59 43.21 33.64
+#{mode => firstwrite,cache => "none",guest => py,ahead => false,
+  start_ms => 51,tier => interp,verdict => ok,warm_requests => 2,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 24258.458,total => 24761.375,restore => 421.458,
+        destroy => 97.125,post => 0.75},
+  min_us =>
+      #{call => 23917.208,total => 24447.417,restore => 409.042,
+        destroy => 93.125,post => 0.667},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 255.0,fault_ns => 1390639.0},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 255,fault_ns => 1390168},
+  recycled_in => 0}
+== inst-a3 py compiled  1:57  up 9 days, 18:09, 41 users, load averages: 45.59 43.21 33.64
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb-smoke/inst-a3",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 9493,entry_ms => 641017,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 15887.772,total => 16459.4,restore => 491.752,
+        destroy => 70.833,post => 0.833},
+  min_us =>
+      #{call => 15344.186,total => 15810.854,restore => 401.584,
+        destroy => 64.251,post => 0.833},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 255.0,
+        fault_ns => 1263768.3333333333},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 255,fault_ns => 1241632},
+  recycled_in => 0}
+== inst-a3 qjs interp  2:07  up 9 days, 18:20, 41 users, load averages: 27.67 41.53 41.57
+#{mode => firstwrite,cache => "none",guest => qjs,ahead => false,
+  start_ms => 106,tier => interp,verdict => ok,warm_requests => 2,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 11198.459,total => 11373.791,restore => 106.708,
+        destroy => 56.375,post => 0.458},
+  min_us =>
+      #{call => 10985.417,total => 11137.083,restore => 94.791,
+        destroy => 56.042,post => 0.416},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 41.0,
+        fault_ns => 177568.33333333334},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 41,fault_ns => 169459},
+  recycled_in => 0}
+== inst-a3 qjs compiled  2:07  up 9 days, 18:20, 41 users, load averages: 27.67 41.53 41.57
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb-smoke/inst-a3",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 9051,entry_ms => 410020,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 7795.433,total => 7991.435,restore => 151.876,
+        destroy => 44.833,post => 0.542},
+  min_us =>
+      #{call => 7237.224,total => 7399.766,restore => 117.167,
+        destroy => 43.417,post => 0.375},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 41.0,
+        fault_ns => 257584.66666666666},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 41,fault_ns => 259711},
+  recycled_in => 0}
+== inst-a3 lua interp  2:14  up 9 days, 18:27, 41 users, load averages: 23.73 29.94 36.06
+#{mode => firstwrite,cache => "none",guest => lua,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 2,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 6410.209,total => 6501.917,restore => 62.833,
+        destroy => 36.166,post => 0.125},
+  min_us =>
+      #{call => 6385.458,total => 6486.375,restore => 58.334,
+        destroy => 33.333,post => 0.041},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 12.0,
+        fault_ns => 54917.333333333336},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 12,fault_ns => 53918},
+  recycled_in => 0}
+== inst-a3 lua compiled  2:14  up 9 days, 18:27, 41 users, load averages: 23.73 29.94 36.06
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb-smoke/inst-a3",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 4192,entry_ms => 159740,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 5,crashed => 0,refused => 0,
+        cached => 0,reentered => 25},
+  median_us =>
+      #{call => 3462.511,total => 3592.679,restore => 89.751,
+        destroy => 37.167,post => 0.458},
+  min_us =>
+      #{call => 2848.802,total => 2963.302,restore => 83.583,
+        destroy => 27.667,post => 0.166},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 12.0,
+        fault_ns => 57348.666666666664},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 12,fault_ns => 58043},
+  recycled_in => 0}
+== inst-a4 py interp  2:17  up 9 days, 18:29, 41 users, load averages: 16.30 24.01 32.56
+#{mode => firstwrite,cache => "none",guest => py,ahead => false,
+  start_ms => 49,tier => interp,verdict => ok,warm_requests => 2,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 23588.583,total => 24136.166,restore => 452.416,
+        destroy => 81.709,post => 0.584},
+  min_us =>
+      #{call => 21889.75,total => 22362.875,restore => 393.417,
+        destroy => 79.166,post => 0.542},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 256.0,fault_ns => 1267506.0},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 256,fault_ns => 1259744},
+  recycled_in => 0}
+== inst-a4 py compiled  2:17  up 9 days, 18:29, 41 users, load averages: 16.30 24.01 32.56
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb-smoke/inst-a4",
+  guest => py,ahead => false,start_ms => 55,tier => compiled,verdict => ok,
+  warm_requests => 6606,entry_ms => 423214,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 5,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 15001.8,total => 15474.095,restore => 403.752,
+        destroy => 67.876,post => 0.375},
+  min_us =>
+      #{call => 14862.841,total => 15318.177,restore => 390.418,
+        destroy => 64.543,post => 0.333},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 256.0,
+        fault_ns => 1281909.3333333333},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 256,fault_ns => 1264292},
+  recycled_in => 0}
+== inst-a4 qjs interp  2:24  up 9 days, 18:36, 41 users, load averages: 18.99 21.48 28.30
+#{mode => firstwrite,cache => "none",guest => qjs,ahead => false,
+  start_ms => 107,tier => interp,verdict => ok,warm_requests => 2,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 13368.0,total => 13554.167,restore => 118.667,
+        destroy => 62.875,post => 0.417},
+  min_us =>
+      #{call => 11677.916,total => 11864.208,restore => 100.125,
+        destroy => 56.917,post => 0.292},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 41.0,
+        fault_ns => 187072.33333333334},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 41,fault_ns => 180128},
+  recycled_in => 0}
+== inst-a4 qjs compiled  2:24  up 9 days, 18:36, 41 users, load averages: 18.99 21.48 28.30
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb-smoke/inst-a4",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 6263,entry_ms => 271745,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 5,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 7025.191,total => 7187.274,restore => 127.417,destroy => 48.0,
+        post => 0.417},
+  min_us =>
+      #{call => 6864.648,total => 7044.024,restore => 118.5,destroy => 43.25,
+        post => 0.333},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 41.0,
+        fault_ns => 219251.33333333334},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 41,fault_ns => 214921},
+  recycled_in => 0}
+== inst-a4 lua interp  2:28  up 9 days, 18:41, 41 users, load averages: 19.28 22.05 26.80
+#{mode => firstwrite,cache => "none",guest => lua,ahead => false,
+  start_ms => 72,tier => interp,verdict => ok,warm_requests => 2,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 6418.5,total => 6527.209,restore => 76.167,destroy => 38.167,
+        post => 0.167},
+  min_us =>
+      #{call => 6303.75,total => 6423.708,restore => 61.459,destroy => 37.167,
+        post => 0.125},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 12.0,
+        fault_ns => 56776.666666666664},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 12,fault_ns => 58375},
+  recycled_in => 0}
+== inst-a4 lua compiled  2:28  up 9 days, 18:41, 41 users, load averages: 19.28 22.05 26.80
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb-smoke/inst-a4",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3060,entry_ms => 108636,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us =>
+      #{call => 3450.262,total => 3593.053,restore => 99.25,destroy => 42.917,
+        post => 0.459},
+  min_us =>
+      #{call => 2731.843,total => 2835.802,restore => 71.333,
+        destroy => 32.459,post => 0.167},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 12.0,
+        fault_ns => 65861.33333333333},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 12,fault_ns => 60127},
+  recycled_in => 0}
+== inst-b py interp  2:30  up 9 days, 18:43, 41 users, load averages: 20.70 21.69 26.10
+#{mode => firstwrite,cache => "none",guest => py,ahead => false,
+  start_ms => 15533,tier => interp,verdict => ok,warm_requests => 2,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 19295.25,total => 20035.292,restore => 579.042,
+        destroy => 163.75,post => 0.667},
+  min_us =>
+      #{call => 19223.667,total => 19975.125,restore => 575.792,
+        destroy => 158.167,post => 0.5},
+  firstwrite_mean =>
+      #{buy_n => 6.0,buy_ns => 49972.0,fault_n => 0.0,fault_ns => 0.0,
+        newbit_ns => 359956.6666666667,newbit_pages => 140.0,
+        newbit_writes => 140.0},
+  firstwrite_median =>
+      #{buy_n => 6,buy_ns => 46082,fault_n => 0,fault_ns => 0,
+        newbit_ns => 354169,newbit_pages => 140,newbit_writes => 140},
+  recycled_in => 0}
+== inst-b py compiled  2:31  up 9 days, 18:43, 41 users, load averages: 19.64 21.37 25.89
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb-smoke/inst-b",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 847,entry_ms => 48047,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 5964.709,total => 6640.792,restore => 516.125,
+        destroy => 110.459,post => 0.458},
+  min_us =>
+      #{call => 5386.083,total => 5925.667,restore => 431.125,
+        destroy => 108.125,post => 0.334},
+  firstwrite_mean =>
+      #{buy_n => 6.0,buy_ns => 56430.666666666664,fault_n => 0.0,
+        fault_ns => 0.0,newbit_ns => 337137.0,newbit_pages => 140.0,
+        newbit_writes => 140.0},
+  firstwrite_median =>
+      #{buy_n => 6,buy_ns => 52540,fault_n => 0,fault_ns => 0,
+        newbit_ns => 337791,newbit_pages => 140,newbit_writes => 140},
+  recycled_in => 0}
+== inst-b qjs interp  2:31  up 9 days, 18:44, 41 users, load averages: 18.80 20.83 25.42
+#{mode => firstwrite,cache => "none",guest => qjs,ahead => false,
+  start_ms => 54,tier => interp,verdict => ok,warm_requests => 2,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 9366.75,total => 9589.792,restore => 158.583,destroy => 63.25,
+        post => 0.209},
+  min_us =>
+      #{call => 9304.958,total => 9526.667,restore => 146.0,destroy => 62.834,
+        post => 0.209},
+  firstwrite_mean =>
+      #{buy_n => 2.0,buy_ns => 14527.666666666666,fault_n => 0.0,
+        fault_ns => 0.0,newbit_ns => 32791.333333333336,newbit_pages => 12.0,
+        newbit_writes => 12.0},
+  firstwrite_median =>
+      #{buy_n => 2,buy_ns => 13041,fault_n => 0,fault_ns => 0,
+        newbit_ns => 32791,newbit_pages => 12,newbit_writes => 12},
+  recycled_in => 0}
+== inst-b qjs compiled  2:31  up 9 days, 18:44, 41 users, load averages: 18.80 20.83 25.42
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb-smoke/inst-b",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 861,entry_ms => 29179,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 5,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 2610.167,total => 2811.875,restore => 161.041,
+        destroy => 47.542,post => 0.375},
+  min_us =>
+      #{call => 2607.458,total => 2809.25,restore => 154.041,
+        destroy => 40.292,post => 0.209},
+  firstwrite_mean =>
+      #{buy_n => 2.0,buy_ns => 17763.666666666668,fault_n => 0.0,
+        fault_ns => 0.0,newbit_ns => 30472.0,newbit_pages => 12.0,
+        newbit_writes => 12.0},
+  firstwrite_median =>
+      #{buy_n => 2,buy_ns => 17749,fault_n => 0,fault_ns => 0,
+        newbit_ns => 29916,newbit_pages => 12,newbit_writes => 12},
+  recycled_in => 0}
+== inst-b lua interp  2:32  up 9 days, 18:44, 41 users, load averages: 20.49 21.03 25.33
+#{mode => firstwrite,cache => "none",guest => lua,ahead => false,
+  start_ms => 41,tier => interp,verdict => ok,warm_requests => 2,
+  recycles => false,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 5437.916,total => 5612.417,restore => 112.625,
+        destroy => 56.625,post => 0.166},
+  min_us =>
+      #{call => 5424.333,total => 5593.875,restore => 107.708,
+        destroy => 46.542,post => 0.084},
+  firstwrite_mean =>
+      #{buy_n => 1.0,buy_ns => 7750.0,fault_n => 0.0,fault_ns => 0.0,
+        newbit_ns => 10013.666666666666,newbit_pages => 4.0,
+        newbit_writes => 4.0},
+  firstwrite_median =>
+      #{buy_n => 1,buy_ns => 8167,fault_n => 0,fault_ns => 0,
+        newbit_ns => 9917,newbit_pages => 4,newbit_writes => 4},
+  recycled_in => 0}
+== inst-b lua compiled  2:32  up 9 days, 18:44, 41 users, load averages: 20.49 21.03 25.33
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb-smoke/inst-b",
+  guest => lua,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 312,entry_ms => 8569,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us =>
+      #{call => 1537.416,total => 1691.5,restore => 122.125,destroy => 31.834,
+        post => 0.125},
+  min_us =>
+      #{call => 1484.583,total => 1626.167,restore => 109.917,
+        destroy => 31.542,post => 0.125},
+  firstwrite_mean =>
+      #{buy_n => 1.0,buy_ns => 8083.333333333333,fault_n => 0.0,
+        fault_ns => 0.0,newbit_ns => 11222.666666666666,newbit_pages => 4.0,
+        newbit_writes => 4.0},
+  firstwrite_median =>
+      #{buy_n => 1,buy_ns => 8500,fault_n => 0,fault_ns => 0,
+        newbit_ns => 11042,newbit_pages => 4,newbit_writes => 4},
+  recycled_in => 0}

@@ -1,0 +1,68 @@
+guest=py backend=mmap host_page=16384 count=83 pages_before=0 pages_end=4067 arch=aarch64-apple-darwin27.0.0
+median-n instance 42:
+  restored rows [#{size => 640,kind => memory,
+                   phys => #{table => 2,arena => 0,growth => 0},
+                   charged => 2,holders => 1},
+                 #{size => 0,kind => cell,phys => none,charged => 0,
+                   holders => 1}]
+  after rows [#{size => 640,kind => memory,
+                phys => #{table => 2,arena => 47,growth => 0},
+                charged => 49,holders => 1},
+              #{size => 0,kind => cell,phys => none,charged => 0,
+                holders => 1}]
+  mem_restored #{credit_chunks => 0,img_pages => unknown,pages => 640,
+                 unused_credit_host_pages => 0,written_host_pages => 0}
+  mem_after #{credit_chunks => 6,img_pages => unknown,pages => 640,
+              unused_credit_host_pages => 48,written_host_pages => 140}
+per-instance delta: min 49 max 49 mean 49.00
+failure: #{pid => <0.187.0>,
+           failure =>
+               {failed,decode,
+                       {error,#{msg => <<"memory limit exceeded">>,
+                                kind => runtime_failure,class => runtime,
+                                ctx =>
+                                    #{error =>
+                                          #{msg => <<"memory limit exceeded">>,
+                                            kind => memory_limit,
+                                            class => exhaustion,
+                                            ctx =>
+                                                #{func => 50,
+                                                  requested => 16}}}}}},
+           pages_before => 4067,n => 84,stage => request,
+           mem_at_failure =>
+               #{credit_chunks => 4,img_pages => unknown,pages => 640,
+                 unused_credit_host_pages => 0,written_host_pages => 60},
+           mem_restored =>
+               #{credit_chunks => 0,img_pages => unknown,pages => 640,
+                 unused_credit_host_pages => 0,written_host_pages => 0},
+           pages_restored => 4069}
+failing instance's calls: [#{args => #{meta => {memory,{640,16}},pages => 640},
+                             f => reserve,result => ok,pages_in_use => 4069},
+                           #{args => #{meta => cell,pages => 0},
+                             f => reserve,result => ok,pages_in_use => 4069},
+                           #{args =>
+                                 #{budget_pages => 1,have => 0,target => 1},
+                             f => arena_begin,
+                             result => {ok,0},
+                             pages_in_use => 4070},
+                           #{args =>
+                                 #{budget_pages => 2,have => 1,target => 2},
+                             f => arena_begin,
+                             result => {ok,1},
+                             pages_in_use => 4072},
+                           #{args =>
+                                 #{budget_pages => 4,have => 2,target => 3},
+                             f => arena_begin,
+                             result => {ok,2},
+                             pages_in_use => 4076},
+                           #{args =>
+                                 #{budget_pages => 8,have => 3,target => 4},
+                             f => arena_begin,
+                             result => {ok,3},
+                             pages_in_use => 4084},
+                           #{args =>
+                                 #{budget_pages => 16,have => 4,target => 5},
+                             f => arena_begin,
+                             result => {error,limit},
+                             pages_in_use => 4084}]
+refusals in whole run: 1

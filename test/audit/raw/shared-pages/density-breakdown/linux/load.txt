@@ -1,0 +1,4 @@
+22:00  up 10 days, 14:13, 44 users, load averages: 11.65 10.01 8.88
+22:01  up 10 days, 14:14, 44 users, load averages: 11.53 10.23 9.00
+22:01  up 10 days, 14:14, 44 users, load averages: 11.42 10.24 9.02
+22:02  up 10 days, 14:14, 44 users, load averages: 9.75 9.93 8.93

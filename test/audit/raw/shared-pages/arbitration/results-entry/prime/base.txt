@@ -1,0 +1,14 @@
+#{mode => steady,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 18093,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8513.333,min_us => 8045.208}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-arb/base",
+  guest => py_entry,ahead => false,start_ms => 49,tier => compiled,
+  verdict => ok,warm_requests => 1278,entry_ms => 42079,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5990.791,min_us => 5401.333}
+PRIME_DONE

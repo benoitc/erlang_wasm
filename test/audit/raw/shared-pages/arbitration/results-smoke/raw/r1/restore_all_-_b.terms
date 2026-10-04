@@ -1,0 +1,9 @@
+{meta,restorebench,#{otp => "29",schedulers => {10,10},cwd => "/Users/benoitc/Projects/erlang_wasm-arb-b-435bace",uptime => "1:54  up 9 days, 18:07, 41 users, load averages: 37.97 46.02 32.82",fixtures => [{"test/fixtures/lang/py_reactor.wasm",<<"a4dcd239d8262c9f074d9dc22d99bee8c1c89f52b543043dab41cad5a3003564">>},{"test/fixtures/lang/qjs_reactor.wasm",<<"7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb">>},{"test/fixtures/lang/lua_reactor.wasm",<<"65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb">>},{"test/fixtures/snapshot/reactor.wasm",<<"813a2aaf9bbc3293c9b5420bd34194d23d6844c82395fe0cd5772f49948837f2">>}],wasm_vsn => "0.7.0"}}.
+{restore,py,[801.625,669.375,712.833]}.
+{load_snapshot,py,[30963.5]}.
+{restore,qjs,[234.084,190.583,201.792]}.
+{load_snapshot,qjs,[7242.583]}.
+{restore,lua,[176.375,166.167,155.875]}.
+{load_snapshot,lua,[573.0]}.
+{restore,plain,[127.583,37.333,28.0]}.
+{load_snapshot,plain,[258.584]}.

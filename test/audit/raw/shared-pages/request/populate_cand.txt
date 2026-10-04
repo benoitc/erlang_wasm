@@ -1,0 +1,45 @@
+== populate cand py interp
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 54,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 26888.416,min_us => 25847.042}
+== populate cand py compiled
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/candidate",
+  guest => py,ahead => false,start_ms => 52,tier => compiled,
+  warm_requests => 2939,verdict => ok,entry_ms => 207108,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 25585.743,min_us => 20575.021}
+== populate cand qjs interp
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 124,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 14974.5,min_us => 13523.5}
+== populate cand qjs compiled
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/candidate",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,
+  warm_requests => 2839,verdict => ok,entry_ms => 135399,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 202,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10883.991,min_us => 9191.735}
+== populate cand lua interp
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 8,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8322.333,min_us => 7758.792}
+== populate cand lua compiled
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/candidate",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 820,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 5919.417,min_us => 4777.625}

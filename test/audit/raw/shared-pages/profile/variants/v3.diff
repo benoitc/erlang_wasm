@@ -1,0 +1,23 @@
+diff --color -ru /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_memory.erl src/wasm_memory.erl
+--- /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_memory.erl	2026-10-02 19:16:28
++++ src/wasm_memory.erl	2026-10-03 03:34:01
+@@ -194,7 +194,18 @@
+ create(#limits{min = Min} = Limits, Opts) ->
+     case image_opt(Opts) of
+         undefined -> create(Limits, Opts, Min, undefined);
+-        Image     -> create(Limits, Opts, max(Min, tuple_size(Image)), Image)
++        %% PROFILING VARIANT V3: no image region. The image is copied into
++        %% ordinary chunks, as a restore did before shared pages.
++        Image     ->
++            case create(Limits, maps:without([image, image_res], Opts),
++                        max(Min, tuple_size(Image)), undefined) of
++                {ok, M} ->
++                    _ = [store_bytes(M, P * ?PAGE_SIZE, Bin)
++                         || {P, Bin} <- lists:enumerate(0, tuple_to_list(Image)),
++                            Bin =/= zero],
++                    {ok, M};
++                Err -> Err
++            end
+     end.
+ 
+ image_opt(Opts) -> maps:get(image, Opts, undefined).

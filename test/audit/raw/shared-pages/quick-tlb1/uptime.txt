@@ -1,0 +1,12 @@
+start Sat Oct  3 11:31:42 CEST 2026 11:31  up 9 days,  3:44, 39 users, load averages: 9.46 12.89 28.12
+warm done 1085s 11:49  up 9 days,  4:02, 39 users, load averages: 16.75 31.26 37.69
+# wait_load polls=28 load1=7.68 12:03  up 9 days,  4:16, 39 users, load averages: 7.68 28.39 35.88
+round 1 12:03:48 12:03  up 9 days,  4:16, 39 users, load averages: 7.68 28.39 35.88
+round 1 end 12:07:04 12:07  up 9 days,  4:19, 40 users, load averages: 13.14 20.97 31.14
+# wait_load polls=7 load1=7.73 12:10  up 9 days,  4:23, 39 users, load averages: 7.73 14.95 26.34
+round 2 12:10:34 12:10  up 9 days,  4:23, 39 users, load averages: 7.73 14.95 26.34
+round 2 end 12:14:06 12:14  up 9 days,  4:26, 39 users, load averages: 7.63 11.50 22.37
+# wait_load polls=0 load1=7.63 12:14  up 9 days,  4:26, 39 users, load averages: 7.63 11.50 22.37
+round 3 12:14:06 12:14  up 9 days,  4:26, 39 users, load averages: 7.63 11.50 22.37
+round 3 end 12:17:32 12:17  up 9 days,  4:30, 40 users, load averages: 7.00 9.12 19.01
+end Sat Oct  3 12:17:32 CEST 2026 wall=2750s 12:17  up 9 days,  4:30, 40 users, load averages: 7.00 9.12 19.01

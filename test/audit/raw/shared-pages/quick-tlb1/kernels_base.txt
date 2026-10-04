@@ -1,0 +1,12 @@
+r1 base store	plain	compiled	12.737 ns/unit	min_us=50949 units=4000000 img_bytes=no_image result=[]	load=13.33 23.86 33.20
+r1 base store	paged	compiled	12.518 ns/unit	min_us=50070 units=4000000 img_bytes=no_image result=[]	load=13.33 23.86 33.20
+r1 base sieve	plain	compiled	61.150 ns/unit	min_us=61150 units=1000000 img_bytes=no_image result=[78498]	load=12.66 23.54 33.04
+r1 base sieve	paged	compiled	60.152 ns/unit	min_us=60152 units=1000000 img_bytes=no_image result=[78498]	load=12.66 23.54 33.04
+r2 base store	plain	compiled	12.478 ns/unit	min_us=49913 units=4000000 img_bytes=no_image result=[]	load=8.38 12.87 24.08
+r2 base store	paged	compiled	12.317 ns/unit	min_us=49269 units=4000000 img_bytes=no_image result=[]	load=8.38 12.87 24.08
+r2 base sieve	plain	compiled	60.847 ns/unit	min_us=60847 units=1000000 img_bytes=no_image result=[78498]	load=10.43 13.22 24.13
+r2 base sieve	paged	compiled	61.678 ns/unit	min_us=61678 units=1000000 img_bytes=no_image result=[78498]	load=10.43 13.22 24.13
+r3 base store	plain	compiled	12.492 ns/unit	min_us=49967 units=4000000 img_bytes=no_image result=[]	load=7.40 10.10 20.44
+r3 base store	paged	compiled	12.794 ns/unit	min_us=51176 units=4000000 img_bytes=no_image result=[]	load=7.40 10.10 20.44
+r3 base sieve	plain	compiled	61.302 ns/unit	min_us=61302 units=1000000 img_bytes=no_image result=[78498]	load=7.05 9.99 20.33
+r3 base sieve	paged	compiled	62.623 ns/unit	min_us=62623 units=1000000 img_bytes=no_image result=[78498]	load=7.05 9.99 20.33

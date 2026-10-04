@@ -1,0 +1,47 @@
+baseline /Users/benoitc/Projects/erlang_wasm-baseline-a2bda33 a2bda3396cae7b5bbf48fad6e05730732142e675 (plus uncommitted bench/paths harness files)
+candidate /Users/benoitc/Projects/erlang_wasm-shared-pages 19ff613f247df5341da2e026257fc929affb7154 (plus uncommitted new bench/paths files: pagedbench.erl paged_store.wat/.wasm paged_sieve.wat/.wasm instbench.erl inst_gget.wat/.wasm requestbench.erl)
+otp_release 29
+system_version Erlang/OTP 29 [erts-17.0.3] [source] [64-bit] [smp:10:10] [ds:10:10:10] [async-threads:1] [jit]
+emulator flags: erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths
+hw.ncpu 14 Darwin MacBook-Pro-de-Benoit-5034.local 27.0.0 Darwin Kernel Version 27.0.0: Tue Aug 11 21:05:48 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_T6041 arm64
+code_cache_dir: ~/.cache/wasm-gates/{baseline,candidate} mode 700
+fixture sha256:
+erlang_wasm-baseline-a2bda33 a4dcd239d8262c9f074d9dc22d99bee8c1c89f52b543043dab41cad5a3003564  test/fixtures/lang/py_reactor.wasm
+erlang_wasm-baseline-a2bda33 7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb  test/fixtures/lang/qjs_reactor.wasm
+erlang_wasm-baseline-a2bda33 65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb  test/fixtures/lang/lua_reactor.wasm
+erlang_wasm-baseline-a2bda33 b8451261a244b7bc62ae95acb43882044aed2f3d5f08355889252b418ec89231  test/fixtures/lang/qjs.wasm
+erlang_wasm-baseline-a2bda33 813a2aaf9bbc3293c9b5420bd34194d23d6844c82395fe0cd5772f49948837f2  test/fixtures/snapshot/reactor.wasm
+erlang_wasm-baseline-a2bda33 59a3e75ff2eebfe96f5f76500127c95886599fc0ca3eb07d766e3dd17333a947  test/fixtures/plugin/plugin.wasm
+erlang_wasm-baseline-a2bda33 6d0f7343882b9a40f8837d08a1089ba51bddf9d2444ac770624ad2ec1c638574  bench/paths/paged_store.wasm
+erlang_wasm-baseline-a2bda33 31f19101949c0f27f87e56896bb17a4d176a17f2beb40a055656649ac96661a6  bench/paths/paged_sieve.wasm
+erlang_wasm-baseline-a2bda33 4f68e8f0cdcde93f79495aeea9ce54a3a6d56ead9814ada71aa9902d7304ac39  bench/paths/inst_gget.wasm
+erlang_wasm-shared-pages a4dcd239d8262c9f074d9dc22d99bee8c1c89f52b543043dab41cad5a3003564  test/fixtures/lang/py_reactor.wasm
+erlang_wasm-shared-pages 7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb  test/fixtures/lang/qjs_reactor.wasm
+erlang_wasm-shared-pages 65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb  test/fixtures/lang/lua_reactor.wasm
+erlang_wasm-shared-pages b8451261a244b7bc62ae95acb43882044aed2f3d5f08355889252b418ec89231  test/fixtures/lang/qjs.wasm
+erlang_wasm-shared-pages 813a2aaf9bbc3293c9b5420bd34194d23d6844c82395fe0cd5772f49948837f2  test/fixtures/snapshot/reactor.wasm
+erlang_wasm-shared-pages 59a3e75ff2eebfe96f5f76500127c95886599fc0ca3eb07d766e3dd17333a947  test/fixtures/plugin/plugin.wasm
+erlang_wasm-shared-pages 6d0f7343882b9a40f8837d08a1089ba51bddf9d2444ac770624ad2ec1c638574  bench/paths/paged_store.wasm
+erlang_wasm-shared-pages 31f19101949c0f27f87e56896bb17a4d176a17f2beb40a055656649ac96661a6  bench/paths/paged_sieve.wasm
+erlang_wasm-shared-pages 4f68e8f0cdcde93f79495aeea9ce54a3a6d56ead9814ada71aa9902d7304ac39  bench/paths/inst_gget.wasm
+harness sha256:
+erlang_wasm-baseline-a2bda33 6e230df932b57641fd4f7c0e5d6d07e217139e09b8989860a43587ed71e0953c  bench/paths/reactorlib.erl
+erlang_wasm-baseline-a2bda33 3a1d38418fa86756b97adaed9dfcabc335b78dfceb3be9169691297644faa836  bench/paths/restorebench.erl
+erlang_wasm-baseline-a2bda33 eacfeef904d99d3aec821719a63dc389402642eb26ecdd83cb2bcc5e65180d68  bench/paths/capturebench.erl
+erlang_wasm-baseline-a2bda33 d7995a9a9f19bd905f84bb34a767f4b5ace67f53fad78bcd4a2852eb320e94d4  bench/paths/densitybench.erl
+erlang_wasm-baseline-a2bda33 f714a8d33b7a871eab6e8135056c368588cd85726903d3acd7a4a132c8b17154  bench/paths/barrier_adapter.erl
+erlang_wasm-baseline-a2bda33 9086bc7cf5b0e29c2c41af006b9df860d968f3913b919b662f03fbb101d42f77  bench/paths/pagedbench.erl
+erlang_wasm-baseline-a2bda33 abfdd9ef08eab321940e2af93a1ba00dc33b5727db849a0be6ed3d66de4115a1  bench/paths/instbench.erl
+erlang_wasm-baseline-a2bda33 f1628859148e2caf7e584b2a6aa80f9f17bec49e6fd11958f30a878c064c618f  bench/paths/requestbench.erl
+erlang_wasm-baseline-a2bda33 97c3302e1ff6164600090ce9bbcf1e9dd5d684fe8f3307ea2c044dc4bc632691  bench/paths/realbench.erl
+erlang_wasm-baseline-a2bda33 80222c2505530f8634cbb01dcd578f68375eeab05664978e3519d05a6172c717  bench/paths/benchlib.erl
+erlang_wasm-shared-pages 6e230df932b57641fd4f7c0e5d6d07e217139e09b8989860a43587ed71e0953c  bench/paths/reactorlib.erl
+erlang_wasm-shared-pages 3a1d38418fa86756b97adaed9dfcabc335b78dfceb3be9169691297644faa836  bench/paths/restorebench.erl
+erlang_wasm-shared-pages eacfeef904d99d3aec821719a63dc389402642eb26ecdd83cb2bcc5e65180d68  bench/paths/capturebench.erl
+erlang_wasm-shared-pages d7995a9a9f19bd905f84bb34a767f4b5ace67f53fad78bcd4a2852eb320e94d4  bench/paths/densitybench.erl
+erlang_wasm-shared-pages f714a8d33b7a871eab6e8135056c368588cd85726903d3acd7a4a132c8b17154  bench/paths/barrier_adapter.erl
+erlang_wasm-shared-pages 9086bc7cf5b0e29c2c41af006b9df860d968f3913b919b662f03fbb101d42f77  bench/paths/pagedbench.erl
+erlang_wasm-shared-pages abfdd9ef08eab321940e2af93a1ba00dc33b5727db849a0be6ed3d66de4115a1  bench/paths/instbench.erl
+erlang_wasm-shared-pages f1628859148e2caf7e584b2a6aa80f9f17bec49e6fd11958f30a878c064c618f  bench/paths/requestbench.erl
+erlang_wasm-shared-pages 97c3302e1ff6164600090ce9bbcf1e9dd5d684fe8f3307ea2c044dc4bc632691  bench/paths/realbench.erl
+erlang_wasm-shared-pages 80222c2505530f8634cbb01dcd578f68375eeab05664978e3519d05a6172c717  bench/paths/benchlib.erl

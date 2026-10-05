@@ -482,7 +482,7 @@ repeated_requests_leak_nothing(Ctx) ->
     ?assertEqual([], journal_records(root(Ctx))).
 
 the_reaper_finishes_what_a_killed_guardian_left(Ctx) ->
-    W = patient(Ctx),
+    W = unhurried(Ctx),
     {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     [#{guardian := G}] = until_reservations(1, 40),
     exit(G, kill),
@@ -493,7 +493,7 @@ the_reaper_finishes_what_a_killed_guardian_left(Ctx) ->
     ok = wasm_script_worker:stop(W).
 
 a_restarted_reaper_adopts_a_live_request(Ctx) ->
-    W = patient(Ctx),
+    W = unhurried(Ctx),
     {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     [#{id := Id}] = until_reservations(1, 40),
     Dir = filename:join(root(Ctx), <<"req-", Id/binary>>),
@@ -688,6 +688,17 @@ patient(Ctx) ->
     %% `insufficient_limit`, and a case that then asserted `cancelled` would be
     %% asserting against a request that never started.
     start(Ctx, #{limits => #{timeout => patience(Ctx), fuel => infinity}}).
+
+%% For a case whose request must still be running after several steps that
+%% each take their own time: waiting for the reservation, restarting the
+%% reaper, polling a directory. Under `patient/1' those steps together can
+%% outlast the request's deadline on a loaded machine, and then the request's
+%% own cleanup removes what the case is checking the reaper did not remove.
+%% So no deadline at all, which `an_infinite_timeout_is_accepted' shows a
+%% worker takes, and every case that uses this ends its request itself, by
+%% cancelling it or killing its guardian.
+unhurried(Ctx) ->
+    start(Ctx, #{limits => #{timeout => infinity, fuel => infinity}}).
 
 fix(Ctx, Name) -> fixture(adapter(Ctx), Name, artifact_opts(Ctx)).
 
@@ -889,9 +900,9 @@ cleanup_capacity_refuses_admission(Ctx) ->
     %% claim on *future* cleanup, so a hundred long-running requests would
     %% otherwise overbook it and discover the shortfall as they finished.
     restart_reaper(Ctx, #{max_cleanup_jobs => 1, cleanup_queue_len => 1}),
-    A = patient(Ctx),
-    B = patient(Ctx),
-    C = patient(Ctx),
+    A = unhurried(Ctx),
+    B = unhurried(Ctx),
+    C = unhurried(Ctx),
     {ok, RefA} = wasm_script_worker:submit(A, fix(Ctx, runaway)),
     {ok, RefB} = wasm_script_worker:submit(B, fix(Ctx, runaway)),
     %% Two live reservations is the whole capacity, and `live' counts.
@@ -929,7 +940,7 @@ a_stale_job_is_refused_by_the_replacement(Ctx) ->
     %% A *real* reservation, because a made-up id is refused for having no
     %% record at all and would say nothing about the generation. That version
     %% of this case passed with the check removed.
-    W = patient(Ctx),
+    W = unhurried(Ctx),
     {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     [#{id := Id}] = until_reservations(1, 40),
     Old = wasm_worker_reaper:generation(),
@@ -1150,7 +1161,7 @@ probe_byte(Ctx, N) ->
 %%% ------------------------------------------- recovery, the harder cases ---
 
 a_reused_pid_denies_the_handshake(Ctx) ->
-    W = patient(Ctx),
+    W = unhurried(Ctx),
     {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
     [#{guardian := G}] = until_reservations(1, 40),
     ok = wasm_worker_reaper:stop(),

@@ -1,0 +1,39 @@
+diff --color -ru /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_memory.erl src/wasm_memory.erl
+--- /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_memory.erl	2026-10-02 19:16:28
++++ src/wasm_memory.erl	2026-10-03 03:33:49
+@@ -50,7 +50,7 @@
+ -export([field_indices/0, mask/1]).
+ -export([grow/2, fill/4, copy/4, copy/5, init/5]).
+ -export([to_binary/1]).
+--export([store_r/4, image/1, image_word_at/2]).
++-export([store_r/4, image/1, image_word_at/2, privatise_all/1]).
+ -ifdef(TEST).
+ -export([image_of/1, faults/1, fault_hook/1]).
+ -endif.
+@@ -1228,6 +1228,14 @@
+         true  -> {refresh, M#mem{arena = wasm_engine:cell_get(Ref)}};
+         false -> ok
+     end.
++
++%% PROFILING VARIANT V2: every image page private at once, and the handle
++%% refreshed so it has seen every arena chunk.
++-spec privatise_all(mem()) -> mem().
++privatise_all(#mem{img_bytes = 0} = M) -> M;
++privatise_all(#mem{img_bytes = IB, arena_ref = Ref} = M) ->
++    ok = prepare(M, 0, IB),
++    M#mem{arena = wasm_engine:cell_get(Ref)}.
+ 
+ -doc """
+ The memory as an image: one immutable binary per 64 KiB page, or `zero`.
+diff --color -ru /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_snapshot.erl src/wasm_snapshot.erl
+--- /Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_snapshot.erl	2026-10-02 16:10:21
++++ src/wasm_snapshot.erl	2026-10-03 03:33:49
+@@ -629,7 +629,7 @@
+     %% something writes them. A memory of another size is an image that does
+     %% not fit this module, refused by name rather than run.
+     Grown = case Have =:= Pages of
+-                true -> Mem;
++                true -> wasm_memory:privatise_all(Mem);
+                 false -> erlang:error({snapshot_restore_size, Have, Pages})
+             end,
+     %% **Only the runs are written, and the gaps are left alone.** Two things

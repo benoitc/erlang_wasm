@@ -143,7 +143,9 @@ wasm_engine:set_page_limit(16384),          % 1 GiB
 ```
 
 Set this. Linear memory is off-heap and invisible to `max_heap_size`, so nothing
-else bounds it. The budget also covers the garbage-collected object store, which
+else bounds it. It counts what is allocated rather than what a guest can
+address: a memory's chunks, and for a memory restored from an image, its page
+table and the pages it has written. The budget also covers the garbage-collected object store, which
 is measured rather than requested, so `pages_in_use` can read a little above the
 limit: it is the sum of what is held, and pages already spent are counted
 whether or not the budget likes them. Every further allocation on the node is

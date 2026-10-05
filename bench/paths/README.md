@@ -853,6 +853,9 @@ count, the seconds per arm and extra worker options as a term, for example
 `"#{restore_ahead => true}"`. Images and generated code are kept under
 `_build/reqbench`, so warm it once with a long `REQBENCH_WARM` (CPython's tier
 takes minutes the first time) and later runs load it in seconds.
+Each guest runs at infinite fuel: until 2026-09-28 the `qjs`
+and `lua` arms passed only `compile => true`, kept `untrusted()`'s finite fuel,
+and so ran interpreted whatever the output said about the tier.
 `REQBENCH_POOL=fifo` rotates idle workers instead of reusing the last one,
 which is the case `restore_ahead` helps; `REQBENCH_MSACC=1` prints microstate
 accounting for the loaded arm.
@@ -866,15 +869,169 @@ such as `/tmp` is refused, and that arm silently interprets).
 ### What a store costs in generated code
 
 `storebench` times a loop of `i32.store` and `i64.store` with the tier forced
-on, in a memory that does or does not track its writes the way a recycling
-restore's does:
+on:
 
 ```sh
 erlc -o bench/paths -I include -pa _build/default/lib/wasm/ebin \
     bench/paths/storebench.erl
 erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
-    -run storebench main tracked
+    -run storebench main plain
 ```
 
 Run it before touching the inlined store in `wasm_core`, interleaved against
 the previous build, and compare minimums: the difference is a few nanoseconds.
+
+### How far compiled code is from plain Erlang
+
+`gap` runs a kernel as hand-written Erlang, interpreted and compiled, one arm
+per VM:
+
+```sh
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin \
+    bench/paths/benchlib.erl bench/paths/allocwords.erl bench/paths/gap.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run gap main sieve native
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run gap main sieve compiled
+```
+
+Run the `null` kernel's `native` and `native_b` arms first: they are the same
+code, and the difference between them is the box. `alloc_compiled` gives heap
+words per unit, and `dump` writes `core.txt` and `wasm.S` to the current
+directory so the compiled kernel's instructions can be read against
+`erlc -S` of the Erlang arm. The table it produced for 0.7.0 is in `PERF.md`.
+
+### Where a real guest's time goes
+
+`guestprof` profiles a compiled QuickJS run or 50 CPython requests. Run it
+before ranking engine work, because a kernel's gap says nothing about how
+much of a guest's time sits there:
+
+```sh
+erlc -o bench/paths -pa _build/test/lib/wasm/ebin bench/paths/benchlib.erl \
+    bench/paths/reqbench.erl bench/paths/guestprof.erl
+erl -noshell -pa _build/test/lib/wasm/ebin -pa bench/paths \
+    -run guestprof main qjs count
+```
+
+The first VM compiles the guest into `_build/guestprof/code`, which takes
+minutes. Every later VM must print `cached => 1` in its counts. `compiled`
+counts a cache hit too, so it is not the check.
+
+- `count` gives exact calls per function.
+- `bigword` sorts every word `atomics:get/2` answers into small and bignum.
+- `widths` counts memory accesses by width on the interpreter.
+- `sample` prints the OS pid for macOS `sample <pid> 20 1`.
+
+`+JPperf` is refused on macOS, so a sample shows generated code as bare
+addresses; split that bucket with `count`, and call the split an estimate.
+
+### Pool numbers on a laptop
+
+A pool arm with more busy workers than performance cores measures the
+scheduler of the OS as much as the runtime: on a 10+4 core M4 Pro with
+background indexing running, one build's run fell from about 210 to 143 req/s
+with the same reductions per request, and a rerun moved the collapse to
+another build. Run pool arms with `+S 10:10` and at most ten workers, or
+repeat the rounds and discard any whose reductions a second fall well below
+that build's median, and say which.
+
+## Comparing memory representations
+
+These arms hold a change to linear memory, restore or the page budget against
+the gates in `PERF.md`. Each runs one arm in one fresh VM from inside the tree
+it measures, so run them interleaved across trees and give every tree its own
+code cache. The guests come from `reactorlib`: `py`, `py_entry` (CPython with
+an entry captured into the image, so a request is one function call, as
+hornbeam makes it), `qjs`, `lua` and, where it makes sense, `plain`.
+
+```sh
+erlc -o bench/paths -I include -pa _build/default/lib/wasm/ebin \
+     bench/paths/benchlib.erl bench/paths/reactorlib.erl \
+     bench/paths/barrier_adapter.erl bench/paths/requestbench.erl \
+     bench/paths/restorebench.erl bench/paths/densitybench.erl \
+     bench/paths/optbshare.erl bench/paths/pagedbench.erl \
+     bench/paths/instbench.erl
+```
+
+### One worker's request latency
+
+`requestbench` times requests on a stock script worker. Its modes:
+
+- `first`: the first request of a fresh node;
+- `steady`: 20 warm-up requests interpreted, or requests until one enters
+  generated code when compiled, then 200 timed;
+- `split`: the worker's per-request sequence replayed through the public
+  `wasm` API, each phase timed apart (`restore`, `post`, `call`, `destroy`);
+- `firstwrite`: `split` on a tree built with the `arb_inst` counters, reading
+  how many first writes a request paid and what they cost.
+
+```sh
+erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run requestbench main steady py_entry compiled off \
+        "$PWD/_build/cache-a" raw/steady.terms
+erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run requestbench main split py interp off none raw/split.terms
+```
+
+`split` and `firstwrite` need `restore_ahead` off and say `VOID` otherwise.
+`firstwrite` is never a timed arm: the counters are a scratch build's, not the
+tree under test. `ARB_SMOKE=1` cuts every count to a few requests, which
+proves a harness runs and is never a sample.
+
+### Restores, density and footprint
+
+```sh
+erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run restorebench main all 200 20 raw/restore.terms
+erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run densitybench main density py_entry raw/density.terms
+erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run optbshare main py 50 raw/sharing.terms
+```
+
+- `restorebench` times `wasm:restore/3` and `wasm:load_snapshot/2` per guest.
+- `densitybench density` counts the instances that fit under `page_limit`
+  4096. A refusal counts when the budget gave it, at restore or during the
+  call, since a restored memory takes its pages when it writes them.
+- `optbshare` holds K instances and reports, per instance, `erlang:memory/0`
+  and the VM's physical footprint and resident set. Use it rather than
+  `densitybench sharing` when a backend maps memory outside the BEAM's
+  allocators, which `erlang:memory/0` cannot see. It reads `footprint -p`, so
+  it runs on macOS.
+
+Density is a count, not a time: it does not move with load, and a ratio
+other than 1.000 across rounds is a harness problem, not noise.
+
+### Memory kernels and instantiation
+
+```sh
+erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run pagedbench main store paged compiled
+erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run instbench main gget
+```
+
+`pagedbench` runs the `storebench` and `gap` sieve kernels over a plain memory
+(`plain`) and over a restored one (`paged`). `instbench` times a fresh
+`wasm:instantiate/3` for a module loaded through the cache (`const`), one
+whose data segment sits at an imported global (`gget`), and one the cache
+never saw (`uncached`). The kernels are the `.wat` files beside them,
+encoded with `wasm-tools parse` into the `.wasm` files the arms load.
+
+### Arbitrating between representations
+
+When two representations are each defensible, settle it on a written rule
+before measuring, then run every metric on every arm:
+
+- **Williams order.** Each arm precedes each other arm once per block of
+  rounds, so drift in the box does not land on one arm. Eight rounds for four
+  arms is two blocks.
+- **A load gate per cell.** A cell, one metric on every arm, starts below load
+  8; if the load is 8 or more when its last arm ends, the cell is redone and
+  the discarded files are kept.
+- **Per-round ratios, then their median.** Each arm is compared to the
+  reference within its round.
+
+The scripts and results of the shared-pages arbitration are under
+`test/audit/raw/shared-pages/arbitration/`, and the outcome is in `PERF.md`.

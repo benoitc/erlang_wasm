@@ -1,0 +1,171 @@
+== populate inst lua interp  3:37  up 8 days, 19:49, 39 users, load averages: 14.45 21.81 16.59
+#{tree => "/Users/benoitc/Projects/erlang_wasm-prof-inst",
+  uptime =>
+      " 3:37  up 8 days, 19:49, 39 users, load averages: 14.45 21.81 16.59",
+  guest => lua,
+  counts =>
+      #{1 => 1200,2 => 8683333,3 => 7218511,4 => 100,5 => 1236165,6 => 100,
+        7 => 600,8 => 100,9 => 4581200,11 => 1338600,21 => 100},
+  counts_per_req =>
+      #{1 => 12.0,2 => 86833.33,3 => 72185.11,4 => 1.0,5 => 12361.65,6 => 1.0,
+        7 => 6.0,8 => 1.0,9 => 45812.0,11 => 13386.0,21 => 1.0},
+  jit =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8801.708,min_us => 8192.042,n => 100,
+  phases =>
+      #{call => #{median_us => 7733.625,n => 100,sum_ms => 774.7902920000004},
+        destroy => #{median_us => 65.209,n => 100,sum_ms => 6.622588000000002},
+        restore =>
+            #{median_us => 101.542,n => 100,sum_ms => 10.347411999999998}},
+  tier => interp,wall_ms => 882.554459,warm => 20}
+== populate inst lua compiled  3:37  up 8 days, 19:49, 39 users, load averages: 14.45 21.81 16.59
+#{tree => "/Users/benoitc/Projects/erlang_wasm-prof-inst",
+  uptime =>
+      " 3:38  up 8 days, 19:50, 39 users, load averages: 10.84 19.51 16.06",
+  guest => lua,
+  counts =>
+      #{1 => 1200,2 => 8819838,3 => 7276445,4 => 100,5 => 1289213,6 => 100,
+        7 => 600,8 => 100,9 => 95000,11 => 54100,14 => 322700,15 => 3005100,
+        16 => 1284500,18 => 1200,21 => 100,22 => 4300},
+  counts_per_req =>
+      #{1 => 12.0,2 => 88198.38,3 => 72764.45,4 => 1.0,5 => 12892.13,6 => 1.0,
+        7 => 6.0,8 => 1.0,9 => 950.0,11 => 541.0,14 => 3227.0,15 => 30051.0,
+        16 => 12845.0,18 => 12.0,21 => 1.0,22 => 43.0},
+  jit =>
+      #{failed => 0,compiled => 223,entered => 101,crashed => 0,refused => 0,
+        cached => 0,reentered => 505},
+  median_us => 5753.792,min_us => 5047.708,n => 100,
+  phases =>
+      #{call => #{median_us => 4718.25,n => 100,sum_ms => 479.0602460000001},
+        destroy => #{median_us => 49.792,n => 100,sum_ms => 5.172999000000002},
+        restore =>
+            #{median_us => 99.75,n => 100,sum_ms => 10.210750999999998}},
+  tier => compiled,wall_ms => 588.88675,warm => 1343}
+== populate inst qjs interp  3:38  up 8 days, 19:50, 39 users, load averages: 10.84 19.51 16.06
+#{tree => "/Users/benoitc/Projects/erlang_wasm-prof-inst",
+  uptime =>
+      " 3:38  up 8 days, 19:50, 39 users, load averages: 10.84 19.51 16.06",
+  guest => qjs,
+  counts =>
+      #{1 => 4100,2 => 28994193,3 => 24459486,4 => 200,5 => 3773709,6 => 200,
+        7 => 800,8 => 200,9 => 8548300,11 => 2605700,21 => 200},
+  counts_per_req =>
+      #{1 => 41.0,2 => 289941.93,3 => 244594.86,4 => 2.0,5 => 37737.09,
+        6 => 2.0,7 => 8.0,8 => 2.0,9 => 85483.0,11 => 26057.0,21 => 2.0},
+  jit =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 15160.291,min_us => 14229.708,n => 100,
+  phases =>
+      #{call => #{median_us => 13822.833,n => 100,sum_ms => 1389.301791},
+        destroy => #{median_us => 80.875,n => 100,sum_ms => 8.275456000000004},
+        restore =>
+            #{median_us => 147.167,n => 100,sum_ms => 14.838170999999999}},
+  tier => interp,wall_ms => 1523.113875,warm => 20}
+== populate inst qjs compiled  3:38  up 8 days, 19:50, 39 users, load averages: 10.84 19.51 16.06
+failed: {error,function_clause}
+[{profreq,until_generated,
+          [<0.105.0>,
+           #{context => #{<<"n">> => 21},
+             source =>
+                 <<"export function main(c) { return {doubled: c.n * 2}; }">>},
+           #{<<"doubled">> => 42},
+           2000],
+          [{file,"profreq.erl"},{line,164}]},
+ {profreq,run,4,[{file,"profreq.erl"},{line,56}]},
+ {profreq,main,1,[{file,"profreq.erl"},{line,18}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+== populate inst py interp  3:39  up 8 days, 19:52, 39 users, load averages: 9.84 16.95 15.41
+#{tree => "/Users/benoitc/Projects/erlang_wasm-prof-inst",
+  uptime =>
+      " 3:39  up 8 days, 19:52, 39 users, load averages: 9.45 16.75 15.35",
+  guest => py,
+  counts =>
+      #{1 => 25500,2 => 192669902,3 => 173118962,4 => 500,5 => 15585963,
+        6 => 500,7 => 1400,8 => 500,9 => 10575500,11 => 3095100,21 => 500},
+  counts_per_req =>
+      #{1 => 255.0,2 => 1926699.02,3 => 1731189.62,4 => 5.0,5 => 155859.63,
+        6 => 5.0,7 => 14.0,8 => 5.0,9 => 105755.0,11 => 30951.0,21 => 5.0},
+  jit =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 28562.541,min_us => 27575.708,n => 100,
+  phases =>
+      #{call =>
+            #{median_us => 26454.167,n => 100,sum_ms => 2654.9914590000003},
+        destroy =>
+            #{median_us => 182.166,n => 100,sum_ms => 18.21187900000001},
+        restore =>
+            #{median_us => 530.625,n => 100,sum_ms => 53.482575999999995}},
+  tier => interp,wall_ms => 2868.73425,warm => 20}
+== populate inst py compiled  3:39  up 8 days, 19:52, 39 users, load averages: 9.45 16.75 15.35
+failed: {error,function_clause}
+[{profreq,until_generated,
+          [<0.105.0>,
+           #{context => #{<<"n">> => 21},
+             source =>
+                 <<"def main(c):\n    return {'doubled': c['n'] * 2}\n">>},
+           #{<<"doubled">> => 42},
+           2000],
+          [{file,"profreq.erl"},{line,164}]},
+ {profreq,run,4,[{file,"profreq.erl"},{line,56}]},
+ {profreq,main,1,[{file,"profreq.erl"},{line,18}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+INST_DONE
+== populate inst qjs compiled  3:42  up 8 days, 19:54, 39 users, load averages: 12.27 14.96 14.82
+#{tree => "/Users/benoitc/Projects/erlang_wasm-prof-inst",
+  uptime =>
+      " 3:44  up 8 days, 19:57, 39 users, load averages: 27.51 17.08 15.51",
+  guest => qjs,
+  counts =>
+      #{1 => 4100,2 => 29131934,3 => 25097029,4 => 200,5 => 3114891,6 => 200,
+        7 => 800,8 => 200,9 => 506300,11 => 263900,14 => 665400,15 => 5134100,
+        16 => 2341800,18 => 3900,20 => 38600,21 => 200,22 => 49100},
+  counts_per_req =>
+      #{1 => 41.0,2 => 291319.34,3 => 250970.29,4 => 2.0,5 => 31148.91,
+        6 => 2.0,7 => 8.0,8 => 2.0,9 => 5063.0,11 => 2639.0,14 => 6654.0,
+        15 => 51341.0,16 => 23418.0,18 => 39.0,20 => 386.0,21 => 2.0,
+        22 => 491.0},
+  jit =>
+      #{failed => 0,compiled => 264,entered => 101,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13413.077,min_us => 11805.782,n => 100,
+  phases =>
+      #{call => #{median_us => 11755.157,n => 100,sum_ms => 1196.358845},
+        destroy => #{median_us => 89.709,n => 100,sum_ms => 12.229788},
+        restore =>
+            #{median_us => 164.126,n => 100,sum_ms => 16.368664999999996}},
+  tier => compiled,wall_ms => 1407.262624,warm => 3076}
+== populate inst py compiled  3:44  up 8 days, 19:57, 39 users, load averages: 27.51 17.08 15.51
+#{tree => "/Users/benoitc/Projects/erlang_wasm-prof-inst",
+  uptime =>
+      " 3:48  up 8 days, 20 hrs, 39 users, load averages: 13.10 14.10 14.49",
+  guest => py,
+  counts =>
+      #{1 => 25500,2 => 201995707,3 => 181722736,4 => 500,5 => 16271866,
+        6 => 500,7 => 1400,8 => 500,9 => 273700,11 => 202600,14 => 1280100,
+        15 => 6216200,16 => 2892500,18 => 25200,20 => 4600,21 => 500,
+        22 => 44800},
+  counts_per_req =>
+      #{1 => 255.0,2 => 2019957.07,3 => 1817227.36,4 => 5.0,5 => 162718.66,
+        6 => 5.0,7 => 14.0,8 => 5.0,9 => 2737.0,11 => 2026.0,14 => 12801.0,
+        15 => 62162.0,16 => 28925.0,18 => 252.0,20 => 46.0,21 => 5.0,
+        22 => 448.0},
+  jit =>
+      #{failed => 0,compiled => 896,entered => 101,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 21799.101,min_us => 20576.348,n => 100,
+  phases =>
+      #{call =>
+            #{median_us => 19376.011,n => 100,sum_ms => 1935.9769439999995},
+        destroy =>
+            #{median_us => 147.876,n => 100,sum_ms => 15.006454000000002},
+        restore =>
+            #{median_us => 680.877,n => 100,sum_ms => 68.39581900000002}},
+  tier => compiled,wall_ms => 2183.830874,warm => 3152}
+INSTC_DONE

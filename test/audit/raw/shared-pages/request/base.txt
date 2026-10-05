@@ -1,0 +1,3450 @@
+== r1 base first py interp off 1
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 84246.875,resident_before => 0}
+== r1 base first py interp off 2
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 83897.375,resident_before => 0}
+== r1 base first py interp off 3
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 49,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 96564.833,resident_before => 0}
+== r1 base first py interp off 4
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 89124.875,resident_before => 0}
+== r1 base first py interp off 5
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 85567.542,resident_before => 0}
+== r1 base steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 29219.583,min_us => 28038.917}
+== r1 base first py interp on 1
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 60,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 115406.542,resident_before => 0}
+== r1 base first py interp on 2
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 79793.791,resident_before => 0}
+== r1 base first py interp on 3
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 74366.958,resident_before => 0}
+== r1 base first py interp on 4
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 79803.791,resident_before => 0}
+== r1 base first py interp on 5
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 48,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 75685.041,resident_before => 0}
+== r1 base steady py interp on
+#{mode => steady,cache => "none",guest => py,ahead => true,start_ms => 51,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 29101.708,min_us => 25643.542}
+== r1 base first py compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 51,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 95237.333,resident_before => 0}
+== r1 base first py compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 82070.333,resident_before => 0}
+== r1 base first py compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 81906.083,resident_before => 0}
+== r1 base first py compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 81181.959,resident_before => 0}
+== r1 base first py compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 81750.0,resident_before => 0}
+== r1 base steady py compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 43,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 9233,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 17639.416,min_us => 16131.833}
+== r1 base first py compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 48,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 76827.416,resident_before => 0}
+== r1 base first py compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 43,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 76317.75,resident_before => 0}
+== r1 base first py compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 72232.458,resident_before => 0}
+== r1 base first py compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 77983.25,resident_before => 0}
+== r1 base first py compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 74267.416,resident_before => 0}
+== r1 base steady py compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 45,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 8529,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 17458.458,min_us => 15129.167}
+== r1 base first qjs interp off 1
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48550.792,resident_before => 0}
+== r1 base first qjs interp off 2
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47746.166,resident_before => 0}
+== r1 base first qjs interp off 3
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 51292.0,resident_before => 0}
+== r1 base first qjs interp off 4
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 10,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 63903.75,resident_before => 0}
+== r1 base first qjs interp off 5
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48558.792,resident_before => 0}
+== r1 base steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11837.833,min_us => 10920.0}
+== r1 base first qjs interp on 1
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 44636.75,resident_before => 0}
+== r1 base first qjs interp on 2
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47106.667,resident_before => 0}
+== r1 base first qjs interp on 3
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47912.958,resident_before => 0}
+== r1 base first qjs interp on 4
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 44395.0,resident_before => 0}
+== r1 base first qjs interp on 5
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 44327.084,resident_before => 0}
+== r1 base steady qjs interp on
+#{mode => steady,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12919.375,min_us => 11540.0}
+== r1 base first qjs compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 10,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 52965.584,resident_before => 0}
+== r1 base first qjs compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 53195.541,resident_before => 0}
+== r1 base first qjs compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 52435.292,resident_before => 0}
+== r1 base first qjs compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49423.458,resident_before => 0}
+== r1 base first qjs compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 53212.166,resident_before => 0}
+== r1 base steady qjs compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1947,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 7640.875,min_us => 6751.166}
+== r1 base first qjs compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 45766.625,resident_before => 0}
+== r1 base first qjs compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48924.125,resident_before => 0}
+== r1 base first qjs compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 44391.083,resident_before => 0}
+== r1 base first qjs compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 45238.042,resident_before => 0}
+== r1 base first qjs compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 9,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 46836.083,resident_before => 0}
+== r1 base steady qjs compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1751,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 6348.083,min_us => 5598.709}
+== r1 base first lua interp off 1
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25078.292,resident_before => 0}
+== r1 base first lua interp off 2
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24163.125,resident_before => 0}
+== r1 base first lua interp off 3
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25395.375,resident_before => 0}
+== r1 base first lua interp off 4
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 5,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24176.917,resident_before => 0}
+== r1 base first lua interp off 5
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26120.083,resident_before => 0}
+== r1 base steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 6919.541,min_us => 6594.667}
+== r1 base first lua interp on 1
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24391.708,resident_before => 0}
+== r1 base first lua interp on 2
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 22525.834,resident_before => 0}
+== r1 base first lua interp on 3
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 21645.584,resident_before => 0}
+== r1 base first lua interp on 4
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 21315.5,resident_before => 0}
+== r1 base first lua interp on 5
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23434.583,resident_before => 0}
+== r1 base steady lua interp on
+#{mode => steady,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7080.166,min_us => 6604.584}
+== r1 base first lua compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24611.042,resident_before => 0}
+== r1 base first lua compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24663.125,resident_before => 0}
+== r1 base first lua compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24767.833,resident_before => 0}
+== r1 base first lua compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25174.333,resident_before => 0}
+== r1 base first lua compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24391.291,resident_before => 0}
+== r1 base steady lua compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 521,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 3680.458,min_us => 2948.167}
+== r1 base first lua compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 22726.0,resident_before => 0}
+== r1 base first lua compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 21635.75,resident_before => 0}
+== r1 base first lua compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 21115.167,resident_before => 0}
+== r1 base first lua compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 21305.959,resident_before => 0}
+== r1 base first lua compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 21514.125,resident_before => 0}
+== r1 base steady lua compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 471,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 202,crashed => 0,refused => 0,
+        cached => 1,reentered => 1010},
+  median_us => 3546.416,min_us => 3014.167}
+== r2 base first py interp off 1
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 46,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 81399.459,resident_before => 0}
+== r2 base first py interp off 2
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 44,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 74704.75,resident_before => 0}
+== r2 base first py interp off 3
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 43,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 76499.792,resident_before => 0}
+== r2 base first py interp off 4
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 46,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 77519.0,resident_before => 0}
+== r2 base first py interp off 5
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 43,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 77696.792,resident_before => 0}
+== r2 base steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 44,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 26535.292,min_us => 25298.375}
+== r2 base first py interp on 1
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 44,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 62200.084,resident_before => 0}
+== r2 base first py interp on 2
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 44,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 70359.667,resident_before => 0}
+== r2 base first py interp on 3
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 46,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 68840.25,resident_before => 0}
+== r2 base first py interp on 4
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 43,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 69379.583,resident_before => 0}
+== r2 base first py interp on 5
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 44,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 64241.75,resident_before => 0}
+== r2 base steady py interp on
+#{mode => steady,cache => "none",guest => py,ahead => true,start_ms => 45,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 28655.75,min_us => 25399.167}
+== r2 base first py compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 77799.958,resident_before => 0}
+== r2 base first py compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 97838.916,resident_before => 0}
+== r2 base first py compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 88031.417,resident_before => 0}
+== r2 base first py compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 81862.541,resident_before => 0}
+== r2 base first py compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 86426.792,resident_before => 0}
+== r2 base steady py compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 8591,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 17259.125,min_us => 15968.959}
+== r2 base first py compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 70761.833,resident_before => 0}
+== r2 base first py compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 71529.292,resident_before => 0}
+== r2 base first py compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 79633.667,resident_before => 0}
+== r2 base first py compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 71562.584,resident_before => 0}
+== r2 base first py compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 44,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 66179.5,resident_before => 0}
+== r2 base steady py compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 47,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 8522,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 16889.459,min_us => 14383.417}
+== r2 base first qjs interp off 1
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 53024.0,resident_before => 0}
+== r2 base first qjs interp off 2
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 53242.416,resident_before => 0}
+== r2 base first qjs interp off 3
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 54570.417,resident_before => 0}
+== r2 base first qjs interp off 4
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 51100.25,resident_before => 0}
+== r2 base first qjs interp off 5
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 53865.958,resident_before => 0}
+== r2 base steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11834.0,min_us => 11060.541}
+== r2 base first qjs interp on 1
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 45902.5,resident_before => 0}
+== r2 base first qjs interp on 2
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 43512.25,resident_before => 0}
+== r2 base first qjs interp on 3
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 44218.334,resident_before => 0}
+== r2 base first qjs interp on 4
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 43430.083,resident_before => 0}
+== r2 base first qjs interp on 5
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 45300.708,resident_before => 0}
+== r2 base steady qjs interp on
+#{mode => steady,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12438.541,min_us => 11044.417}
+== r2 base first qjs compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 54120.208,resident_before => 0}
+== r2 base first qjs compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 63525.25,resident_before => 0}
+== r2 base first qjs compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47983.5,resident_before => 0}
+== r2 base first qjs compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 56159.125,resident_before => 0}
+== r2 base first qjs compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 51281.917,resident_before => 0}
+== r2 base steady qjs compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1840,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 6975.125,min_us => 6145.0}
+== r2 base first qjs compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 45509.875,resident_before => 0}
+== r2 base first qjs compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 45337.458,resident_before => 0}
+== r2 base first qjs compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 44623.25,resident_before => 0}
+== r2 base first qjs compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 43679.875,resident_before => 0}
+== r2 base first qjs compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47508.041,resident_before => 0}
+== r2 base steady qjs compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1816,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 7990.792,min_us => 6724.375}
+== r2 base first lua interp off 1
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 28293.166,resident_before => 0}
+== r2 base first lua interp off 2
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27379.542,resident_before => 0}
+== r2 base first lua interp off 3
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27222.541,resident_before => 0}
+== r2 base first lua interp off 4
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27406.5,resident_before => 0}
+== r2 base first lua interp off 5
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27903.958,resident_before => 0}
+== r2 base steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7870.25,min_us => 7223.792}
+== r2 base first lua interp on 1
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24605.584,resident_before => 0}
+== r2 base first lua interp on 2
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24514.25,resident_before => 0}
+== r2 base first lua interp on 3
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23538.75,resident_before => 0}
+== r2 base first lua interp on 4
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23813.792,resident_before => 0}
+== r2 base first lua interp on 5
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23889.209,resident_before => 0}
+== r2 base steady lua interp on
+#{mode => steady,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8236.542,min_us => 7367.083}
+== r2 base first lua compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27318.833,resident_before => 0}
+== r2 base first lua compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 28196.542,resident_before => 0}
+== r2 base first lua compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25923.875,resident_before => 0}
+== r2 base first lua compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27374.083,resident_before => 0}
+== r2 base first lua compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27049.916,resident_before => 0}
+== r2 base steady lua compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 546,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4919.25,min_us => 3529.875}
+== r2 base first lua compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24425.792,resident_before => 0}
+== r2 base first lua compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25501.459,resident_before => 0}
+== r2 base first lua compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25824.208,resident_before => 0}
+== r2 base first lua compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24293.459,resident_before => 0}
+== r2 base first lua compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25191.666,resident_before => 0}
+== r2 base steady lua compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 8,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 485,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4811.0,min_us => 4040.875}
+== r3 base first py interp off 1
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 48,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 96790.875,resident_before => 0}
+== r3 base first py interp off 2
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 86982.209,resident_before => 0}
+== r3 base first py interp off 3
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 92250.625,resident_before => 0}
+== r3 base first py interp off 4
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 45,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 94124.541,resident_before => 0}
+== r3 base first py interp off 5
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 45,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 93020.667,resident_before => 0}
+== r3 base steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 29418.625,min_us => 28144.375}
+== r3 base first py interp on 1
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 48,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 74504.209,resident_before => 0}
+== r3 base first py interp on 2
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 72162.792,resident_before => 0}
+== r3 base first py interp on 3
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 46,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 75062.375,resident_before => 0}
+== r3 base first py interp on 4
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 73541.75,resident_before => 0}
+== r3 base first py interp on 5
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 46,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 72062.041,resident_before => 0}
+== r3 base steady py interp on
+#{mode => steady,cache => "none",guest => py,ahead => true,start_ms => 47,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 31524.25,min_us => 27725.709}
+== r3 base first py compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 98268.958,resident_before => 0}
+== r3 base first py compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 86169.667,resident_before => 0}
+== r3 base first py compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 88803.708,resident_before => 0}
+== r3 base first py compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 87399.541,resident_before => 0}
+== r3 base first py compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 85094.875,resident_before => 0}
+== r3 base steady py compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 9312,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 20068.083,min_us => 17873.417}
+== r3 base first py compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 72841.334,resident_before => 0}
+== r3 base first py compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 72614.291,resident_before => 0}
+== r3 base first py compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 55,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 89077.875,resident_before => 0}
+== r3 base first py compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 72171.084,resident_before => 0}
+== r3 base first py compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 73821.084,resident_before => 0}
+== r3 base steady py compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 45,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 8741,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 17378.417,min_us => 15293.291}
+== r3 base first qjs interp off 1
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 55809.417,resident_before => 0}
+== r3 base first qjs interp off 2
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 54445.875,resident_before => 0}
+== r3 base first qjs interp off 3
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 50653.833,resident_before => 0}
+== r3 base first qjs interp off 4
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48720.083,resident_before => 0}
+== r3 base first qjs interp off 5
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 53854.625,resident_before => 0}
+== r3 base steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11908.583,min_us => 11047.167}
+== r3 base first qjs interp on 1
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47477.125,resident_before => 0}
+== r3 base first qjs interp on 2
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 43575.708,resident_before => 0}
+== r3 base first qjs interp on 3
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47305.958,resident_before => 0}
+== r3 base first qjs interp on 4
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47694.417,resident_before => 0}
+== r3 base first qjs interp on 5
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49413.417,resident_before => 0}
+== r3 base steady qjs interp on
+#{mode => steady,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12472.75,min_us => 11092.5}
+== r3 base first qjs compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49158.833,resident_before => 0}
+== r3 base first qjs compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 53023.709,resident_before => 0}
+== r3 base first qjs compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49145.5,resident_before => 0}
+== r3 base first qjs compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49636.167,resident_before => 0}
+== r3 base first qjs compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49510.125,resident_before => 0}
+== r3 base steady qjs compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1832,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 6438.542,min_us => 5777.875}
+== r3 base first qjs compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49528.625,resident_before => 0}
+== r3 base first qjs compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 46742.208,resident_before => 0}
+== r3 base first qjs compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48517.792,resident_before => 0}
+== r3 base first qjs compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 45580.333,resident_before => 0}
+== r3 base first qjs compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 44536.333,resident_before => 0}
+== r3 base steady qjs compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1774,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 7075.084,min_us => 5598.25}
+== r3 base first lua interp off 1
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26689.792,resident_before => 0}
+== r3 base first lua interp off 2
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26645.625,resident_before => 0}
+== r3 base first lua interp off 3
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25610.417,resident_before => 0}
+== r3 base first lua interp off 4
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26032.083,resident_before => 0}
+== r3 base first lua interp off 5
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25485.0,resident_before => 0}
+== r3 base steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 13,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7030.792,min_us => 6574.209}
+== r3 base first lua interp on 1
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 22249.75,resident_before => 0}
+== r3 base first lua interp on 2
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 21542.125,resident_before => 0}
+== r3 base first lua interp on 3
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23135.625,resident_before => 0}
+== r3 base first lua interp on 4
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24229.0,resident_before => 0}
+== r3 base first lua interp on 5
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23560.458,resident_before => 0}
+== r3 base steady lua interp on
+#{mode => steady,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8011.834,min_us => 6711.458}
+== r3 base first lua compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25668.458,resident_before => 0}
+== r3 base first lua compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24885.333,resident_before => 0}
+== r3 base first lua compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25843.459,resident_before => 0}
+== r3 base first lua compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25670.125,resident_before => 0}
+== r3 base first lua compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24745.667,resident_before => 0}
+== r3 base steady lua compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 517,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 3758.333,min_us => 3093.541}
+== r3 base first lua compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 22654.0,resident_before => 0}
+== r3 base first lua compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23336.75,resident_before => 0}
+== r3 base first lua compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 22009.375,resident_before => 0}
+== r3 base first lua compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 22120.042,resident_before => 0}
+== r3 base first lua compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 21251.167,resident_before => 0}
+== r3 base steady lua compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 461,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 3859.834,min_us => 3097.0}
+== r4 base first py interp off 1
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 45,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 82397.25,resident_before => 0}
+== r4 base first py interp off 2
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 43,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 76677.667,resident_before => 0}
+== r4 base first py interp off 3
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 44,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 81495.75,resident_before => 0}
+== r4 base first py interp off 4
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 43,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 82067.0,resident_before => 0}
+== r4 base first py interp off 5
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 43,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 79993.833,resident_before => 0}
+== r4 base steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 44,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 27384.792,min_us => 25890.583}
+== r4 base first py interp on 1
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 45,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 80063.0,resident_before => 0}
+== r4 base first py interp on 2
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 52,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 74924.292,resident_before => 0}
+== r4 base first py interp on 3
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 44,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 71826.417,resident_before => 0}
+== r4 base first py interp on 4
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 46,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 76898.458,resident_before => 0}
+== r4 base first py interp on 5
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 46,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 74065.875,resident_before => 0}
+== r4 base steady py interp on
+#{mode => steady,cache => "none",guest => py,ahead => true,start_ms => 46,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 31254.5,min_us => 27649.875}
+== r4 base first py compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 87537.042,resident_before => 0}
+== r4 base first py compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 86058.084,resident_before => 0}
+== r4 base first py compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 89829.375,resident_before => 0}
+== r4 base first py compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 85520.833,resident_before => 0}
+== r4 base first py compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 86984.75,resident_before => 0}
+== r4 base steady py compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 9028,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 19244.459,min_us => 17528.834}
+== r4 base first py compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 51,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 78906.875,resident_before => 0}
+== r4 base first py compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 73166.583,resident_before => 0}
+== r4 base first py compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 77267.708,resident_before => 0}
+== r4 base first py compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 73241.416,resident_before => 0}
+== r4 base first py compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 45,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 77506.792,resident_before => 0}
+== r4 base steady py compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 48,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 8750,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 18924.041,min_us => 15578.292}
+== r4 base first qjs interp off 1
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 56389.875,resident_before => 0}
+== r4 base first qjs interp off 2
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 59696.25,resident_before => 0}
+== r4 base first qjs interp off 3
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 61264.667,resident_before => 0}
+== r4 base first qjs interp off 4
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 54489.792,resident_before => 0}
+== r4 base first qjs interp off 5
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 55723.541,resident_before => 0}
+== r4 base steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13697.917,min_us => 12187.708}
+== r4 base first qjs interp on 1
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48601.084,resident_before => 0}
+== r4 base first qjs interp on 2
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48448.541,resident_before => 0}
+== r4 base first qjs interp on 3
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 46247.042,resident_before => 0}
+== r4 base first qjs interp on 4
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49708.417,resident_before => 0}
+== r4 base first qjs interp on 5
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47250.084,resident_before => 0}
+== r4 base steady qjs interp on
+#{mode => steady,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13205.25,min_us => 11450.75}
+== r4 base first qjs compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 54988.208,resident_before => 0}
+== r4 base first qjs compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 58822.583,resident_before => 0}
+== r4 base first qjs compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 52018.083,resident_before => 0}
+== r4 base first qjs compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 60132.125,resident_before => 0}
+== r4 base first qjs compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 63733.125,resident_before => 0}
+== r4 base steady qjs compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1912,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 7116.291,min_us => 6061.083}
+== r4 base first qjs compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 45857.667,resident_before => 0}
+== r4 base first qjs compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 46577.875,resident_before => 0}
+== r4 base first qjs compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 44815.292,resident_before => 0}
+== r4 base first qjs compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48262.875,resident_before => 0}
+== r4 base first qjs compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 45482.375,resident_before => 0}
+== r4 base steady qjs compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1849,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8113.542,min_us => 6151.167}
+== r4 base first lua interp off 1
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26048.584,resident_before => 0}
+== r4 base first lua interp off 2
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27024.75,resident_before => 0}
+== r4 base first lua interp off 3
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27040.541,resident_before => 0}
+== r4 base first lua interp off 4
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 31275.833,resident_before => 0}
+== r4 base first lua interp off 5
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 38817.708,resident_before => 0}
+== r4 base steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7827.5,min_us => 7012.875}
+== r4 base first lua interp on 1
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24622.958,resident_before => 0}
+== r4 base first lua interp on 2
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 11,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23397.833,resident_before => 0}
+== r4 base first lua interp on 3
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24264.542,resident_before => 0}
+== r4 base first lua interp on 4
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 22222.25,resident_before => 0}
+== r4 base first lua interp on 5
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23189.583,resident_before => 0}
+== r4 base steady lua interp on
+#{mode => steady,cache => "none",guest => lua,ahead => true,start_ms => 9,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7422.333,min_us => 6740.208}
+== r4 base first lua compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25528.25,resident_before => 0}
+== r4 base first lua compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26120.667,resident_before => 0}
+== r4 base first lua compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25810.583,resident_before => 0}
+== r4 base first lua compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26518.542,resident_before => 0}
+== r4 base first lua compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26976.0,resident_before => 0}
+== r4 base steady lua compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 554,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 3713.666,min_us => 3134.167}
+== r4 base first lua compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 22693.333,resident_before => 0}
+== r4 base first lua compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24647.334,resident_before => 0}
+== r4 base first lua compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23703.958,resident_before => 0}
+== r4 base first lua compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23450.541,resident_before => 0}
+== r4 base first lua compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 21901.042,resident_before => 0}
+== r4 base steady lua compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 480,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 3593.667,min_us => 3101.875}
+== r5 base first py interp off 1
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 46,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 85342.5,resident_before => 0}
+== r5 base first py interp off 2
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 44,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 81009.25,resident_before => 0}
+== r5 base first py interp off 3
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 88599.625,resident_before => 0}
+== r5 base first py interp off 4
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 45,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 90376.792,resident_before => 0}
+== r5 base first py interp off 5
+#{mode => first,cache => "none",guest => py,ahead => false,start_ms => 56,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 113688.917,resident_before => 0}
+== r5 base steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 46,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 27669.458,min_us => 26207.292}
+== r5 base first py interp on 1
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 47,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 79403.0,resident_before => 0}
+== r5 base first py interp on 2
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 72,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 70362.083,resident_before => 0}
+== r5 base first py interp on 3
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 46,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 71016.792,resident_before => 0}
+== r5 base first py interp on 4
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 50,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 76122.25,resident_before => 0}
+== r5 base first py interp on 5
+#{mode => first,cache => "none",guest => py,ahead => true,start_ms => 55,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 93863.333,resident_before => 0}
+== r5 base steady py interp on
+#{mode => steady,cache => "none",guest => py,ahead => true,start_ms => 47,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 32459.209,min_us => 28361.25}
+== r5 base first py compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 48,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 95200.208,resident_before => 0}
+== r5 base first py compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 87772.625,resident_before => 0}
+== r5 base first py compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 86626.167,resident_before => 0}
+== r5 base first py compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 57,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 138140.083,resident_before => 0}
+== r5 base first py compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 48,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 91888.75,resident_before => 0}
+== r5 base steady py compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 9417,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 20477.958,min_us => 18195.291}
+== r5 base first py compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 49,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 78318.875,resident_before => 0}
+== r5 base first py compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 47,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 76659.0,resident_before => 0}
+== r5 base first py compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 47,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 76650.333,resident_before => 0}
+== r5 base first py compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 47,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 91321.667,resident_before => 0}
+== r5 base first py compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 46,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 80211.541,resident_before => 0}
+== r5 base steady py compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => true,start_ms => 48,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 9167,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 18517.5,min_us => 15419.833}
+== r5 base first qjs interp off 1
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 58721.708,resident_before => 0}
+== r5 base first qjs interp off 2
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 53193.083,resident_before => 0}
+== r5 base first qjs interp off 3
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 52900.334,resident_before => 0}
+== r5 base first qjs interp off 4
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 52027.667,resident_before => 0}
+== r5 base first qjs interp off 5
+#{mode => first,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 52660.25,resident_before => 0}
+== r5 base steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12924.584,min_us => 12027.25}
+== r5 base first qjs interp on 1
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48096.75,resident_before => 0}
+== r5 base first qjs interp on 2
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48463.459,resident_before => 0}
+== r5 base first qjs interp on 3
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47725.708,resident_before => 0}
+== r5 base first qjs interp on 4
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 48727.333,resident_before => 0}
+== r5 base first qjs interp on 5
+#{mode => first,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49169.167,resident_before => 0}
+== r5 base steady qjs interp on
+#{mode => steady,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13323.209,min_us => 11934.709}
+== r5 base first qjs compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 52846.209,resident_before => 0}
+== r5 base first qjs compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 52375.042,resident_before => 0}
+== r5 base first qjs compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 54140.708,resident_before => 0}
+== r5 base first qjs compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 54095.667,resident_before => 0}
+== r5 base first qjs compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 56397.916,resident_before => 0}
+== r5 base steady qjs compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1898,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8185.625,min_us => 6696.5}
+== r5 base first qjs compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 9,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 51078.75,resident_before => 0}
+== r5 base first qjs compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 47637.291,resident_before => 0}
+== r5 base first qjs compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 50888.041,resident_before => 0}
+== r5 base first qjs compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 9,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 51357.125,resident_before => 0}
+== r5 base first qjs compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 49737.458,resident_before => 0}
+== r5 base steady qjs compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => true,start_ms => 8,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1831,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 7750.542,min_us => 6347.458}
+== r5 base first lua interp off 1
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 37597.667,resident_before => 0}
+== r5 base first lua interp off 2
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 28863.959,resident_before => 0}
+== r5 base first lua interp off 3
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27305.291,resident_before => 0}
+== r5 base first lua interp off 4
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26937.833,resident_before => 0}
+== r5 base first lua interp off 5
+#{mode => first,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 26898.292,resident_before => 0}
+== r5 base steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8111.583,min_us => 7512.875}
+== r5 base first lua interp on 1
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 22619.5,resident_before => 0}
+== r5 base first lua interp on 2
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23150.833,resident_before => 0}
+== r5 base first lua interp on 3
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 23635.459,resident_before => 0}
+== r5 base first lua interp on 4
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 6,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24588.833,resident_before => 0}
+== r5 base first lua interp on 5
+#{mode => first,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24383.042,resident_before => 0}
+== r5 base steady lua interp on
+#{mode => steady,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7877.5,min_us => 6878.791}
+== r5 base first lua compiled off 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 28582.042,resident_before => 0}
+== r5 base first lua compiled off 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27397.959,resident_before => 0}
+== r5 base first lua compiled off 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27750.834,resident_before => 0}
+== r5 base first lua compiled off 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25445.167,resident_before => 0}
+== r5 base first lua compiled off 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 27987.625,resident_before => 0}
+== r5 base steady lua compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 627,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4645.625,min_us => 3593.5}
+== r5 base first lua compiled on 1
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24181.75,resident_before => 0}
+== r5 base first lua compiled on 2
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24271.583,resident_before => 0}
+== r5 base first lua compiled on 3
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25263.291,resident_before => 0}
+== r5 base first lua compiled on 4
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 25525.584,resident_before => 0}
+== r5 base first lua compiled on 5
+#{mode => first,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  counts_after =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  counts_before =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  first_us => 24886.042,resident_before => 0}
+== r5 base steady lua compiled on
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => true,start_ms => 6,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 488,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4805.375,min_us => 3872.042}

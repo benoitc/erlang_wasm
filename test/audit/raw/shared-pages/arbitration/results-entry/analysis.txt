@@ -1,0 +1,256 @@
+
+== density py_entry - count
+  round       base         a3         a4          b
+  r1             6          -        455        124
+  r2             6          -        455        124
+  r3             6          -        455        124
+  r4             6          -        455        124
+  r5             6          -        455        124
+  r6             6          -        455        124
+  b/a3 median -  per round 
+  b/a4 median 0.273  per round 0.273 0.273 0.273 0.273 0.273 0.273
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 75.833  per round 75.833 75.833 75.833 75.833 75.833 75.833
+  b/base median 20.667  per round 20.667 20.667 20.667 20.667 20.667 20.667
+
+== sharing py_entry - erlang_kb
+  round       base         a3         a4          b
+  r1     42332.597          -   2564.809   2602.555
+  r2     42352.930          -   2640.327   2666.604
+  r3     42314.722          -   2521.111   2645.095
+  r4     42314.416          -   2618.732   2643.981
+  r5     42329.420          -   2667.717   2667.022
+  r6     42314.800          -   2620.596   2623.366
+  b/a3 median -  per round 
+  b/a4 median 1.010  per round 1.015 1.010 1.049 1.010 1.000 1.001
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.062  per round 0.061 0.062 0.060 0.062 0.063 0.062
+  b/base median 0.062  per round 0.061 0.063 0.063 0.062 0.063 0.062
+
+== sharing py_entry - footprint_kb
+  round       base         a3         a4          b
+  r1     43212.800          -  -4239.360   -593.920
+  r2     43294.720          -  -4464.640   -634.880
+  r3     43417.600          -  -4382.720   -552.960
+  r4     43376.640          -  -4423.680   3317.760
+  r5     43212.800          -  -4341.760   -757.760
+  r6     43438.080          -  -4362.240   -552.960
+  b/a3 median -  per round 
+  b/a4 median 0.133  per round 0.140 0.142 0.126 -0.750 0.175 0.127
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median -0.101  per round -0.098 -0.103 -0.101 -0.102 -0.100 -0.100
+  b/base median -0.013  per round -0.014 -0.015 -0.013 0.076 -0.018 -0.013
+
+== sharing py_entry - rss_kb
+  round       base         a3         a4          b
+  r1     43185.600          -  -4238.720    408.000
+  r2     43278.400          -  -4450.560    358.720
+  r3     43405.440          -  -4386.560    424.000
+  r4     43351.360          -  -4417.920   4306.560
+  r5     43197.760          -  -4330.560    242.880
+  r6     43410.560          -  -4356.800    439.040
+  b/a3 median -  per round 
+  b/a4 median -0.096  per round -0.096 -0.081 -0.097 -0.975 -0.056 -0.101
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median -0.101  per round -0.098 -0.103 -0.101 -0.102 -0.100 -0.100
+  b/base median 0.010  per round 0.009 0.008 0.010 0.099 0.006 0.010
+
+== split py_entry compiled call
+  round       base         a3         a4          b
+  r1       974.625          -   2049.375    581.917
+  r2       994.500          -   1594.625    656.958
+  r3      1769.417          -   2074.167    725.250
+  r4       957.209          -   1672.000    626.292
+  r5      1025.834          -   1688.625    606.958
+  r6      1013.208          -   1727.208    665.834
+  b/a3 median -  per round 
+  b/a4 median 0.367  per round 0.284 0.412 0.350 0.375 0.359 0.385
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 1.675  per round 2.103 1.603 1.172 1.747 1.646 1.705
+  b/base median 0.626  per round 0.597 0.661 0.410 0.654 0.592 0.657
+
+== split py_entry compiled destroy
+  round       base         a3         a4          b
+  r1        73.834          -     20.334     53.709
+  r2        79.042          -     16.125     55.792
+  r3       105.333          -     21.125     65.208
+  r4        77.916          -     16.916     55.417
+  r5        79.500          -     17.500     48.208
+  r6        81.750          -     17.917     55.000
+  b/a3 median -  per round 
+  b/a4 median 3.078  per round 2.641 3.460 3.087 3.276 2.755 3.070
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.218  per round 0.275 0.204 0.201 0.217 0.220 0.219
+  b/base median 0.689  per round 0.727 0.706 0.619 0.711 0.606 0.673
+
+== split py_entry compiled post
+  round       base         a3         a4          b
+  r1         0.208          -      0.208      0.083
+  r2         0.167          -      0.125      0.125
+  r3         0.833          -      0.250      0.125
+  r4         0.250          -      0.167      0.083
+  r5         0.167          -      0.208      0.042
+  r6         0.292          -      0.167      0.125
+  b/a3 median -  per round 
+  b/a4 median 0.499  per round 0.399 1.000 0.500 0.497 0.202 0.749
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.708  per round 1.000 0.749 0.300 0.668 1.246 0.572
+  b/base median 0.366  per round 0.399 0.749 0.150 0.332 0.251 0.428
+
+== split py_entry compiled restore
+  round       base         a3         a4          b
+  r1      3145.041          -    395.709    348.250
+  r2      3181.625          -    377.250    376.292
+  r3      3401.834          -    409.500    396.459
+  r4      3144.333          -    381.875    376.584
+  r5      3252.083          -    393.416    369.708
+  r6      3169.500          -    393.459    378.208
+  b/a3 median -  per round 
+  b/a4 median 0.965  per round 0.880 0.997 0.968 0.986 0.940 0.961
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.121  per round 0.126 0.119 0.120 0.121 0.121 0.124
+  b/base median 0.117  per round 0.111 0.118 0.117 0.120 0.114 0.119
+
+== split py_entry compiled total
+  round       base         a3         a4          b
+  r1      4146.125          -   2473.875    986.708
+  r2      4263.958          -   1987.208   1084.375
+  r3      5284.584          -   2508.042   1204.250
+  r4      4189.500          -   2065.917   1060.208
+  r5      4353.375          -   2108.000   1023.458
+  r6      4275.542          -   2138.750   1090.875
+  b/a3 median -  per round 
+  b/a4 median 0.498  per round 0.399 0.546 0.480 0.513 0.486 0.510
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.489  per round 0.597 0.466 0.475 0.493 0.484 0.500
+  b/base median 0.246  per round 0.238 0.254 0.228 0.253 0.235 0.255
+
+== split py_entry interp call
+  round       base         a3         a4          b
+  r1      3623.542          -   3893.041   3357.667
+  r2      3322.334          -   3781.292   3348.500
+  r3      3355.333          -   3814.125   3343.083
+  r4      3316.666          -   3851.708   3321.125
+  r5      3343.916          -   3870.208   3355.334
+  r6      3333.500          -   3864.917   3367.083
+  b/a3 median -  per round 
+  b/a4 median 0.869  per round 0.862 0.886 0.877 0.862 0.867 0.871
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 1.148  per round 1.074 1.138 1.137 1.161 1.157 1.159
+  b/base median 1.002  per round 0.927 1.008 0.996 1.001 1.003 1.010
+
+== split py_entry interp destroy
+  round       base         a3         a4          b
+  r1       111.250          -     30.333     76.667
+  r2        90.375          -     22.834     75.000
+  r3        91.208          -     23.708     75.250
+  r4        87.959          -     31.292     73.959
+  r5        90.292          -     24.583     75.125
+  r6        88.709          -     24.417     73.667
+  b/a3 median -  per round 
+  b/a4 median 3.037  per round 2.528 3.285 3.174 2.364 3.056 3.017
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.272  per round 0.273 0.253 0.260 0.356 0.272 0.275
+  b/base median 0.830  per round 0.689 0.830 0.825 0.841 0.832 0.830
+
+== split py_entry interp post
+  round       base         a3         a4          b
+  r1         0.500          -      0.208      0.125
+  r2         0.125          -      0.083      0.084
+  r3         0.166          -      0.083      0.125
+  r4         0.125          -      0.084      0.125
+  r5         0.125          -      0.125      0.084
+  r6         0.125          -      0.084      0.084
+  b/a3 median -  per round 
+  b/a4 median 1.006  per round 0.601 1.012 1.506 1.488 0.672 1.000
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.668  per round 0.416 0.664 0.500 0.672 1.000 0.672
+  b/base median 0.672  per round 0.250 0.672 0.753 1.000 0.672 0.672
+
+== split py_entry interp restore
+  round       base         a3         a4          b
+  r1      3209.709          -    379.458    390.958
+  r2      3114.666          -    361.125    383.542
+  r3      3181.667          -    365.584    408.375
+  r4      3172.459          -    387.166    382.125
+  r5      3186.625          -    371.500    383.333
+  r6      3216.125          -    371.209    386.041
+  b/a3 median -  per round 
+  b/a4 median 1.036  per round 1.030 1.062 1.117 0.987 1.032 1.040
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.116  per round 0.118 0.116 0.115 0.122 0.117 0.115
+  b/base median 0.121  per round 0.122 0.123 0.128 0.120 0.120 0.120
+
+== split py_entry interp total
+  round       base         a3         a4          b
+  r1      6989.417          -   4294.584   3833.959
+  r2      6535.625          -   4167.917   3804.125
+  r3      6634.959          -   4207.042   3828.333
+  r4      6587.708          -   4274.042   3774.042
+  r5      6607.708          -   4267.625   3809.792
+  r6      6636.000          -   4260.375   3822.041
+  b/a3 median -  per round 
+  b/a4 median 0.895  per round 0.893 0.913 0.910 0.883 0.893 0.897
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.640  per round 0.614 0.638 0.634 0.649 0.646 0.642
+  b/base median 0.576  per round 0.549 0.582 0.577 0.573 0.577 0.576
+
+== steady py_entry compiled p50
+  round       base         a3         a4          b
+  r1      5362.250          -   2937.875   1906.083
+  r2      5423.459          -   2982.875   1874.625
+  r3      5693.208          -   3218.417   1893.667
+  r4      5434.167          -   2978.417   1914.917
+  r5      5773.292          -   3037.958   1939.542
+  r6      5446.084          -   3992.750   1908.666
+  b/a3 median -  per round 
+  b/a4 median 0.633  per round 0.649 0.628 0.588 0.643 0.638 0.478
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.549  per round 0.548 0.550 0.565 0.548 0.526 0.733
+  b/base median 0.348  per round 0.355 0.346 0.333 0.352 0.336 0.350
+
+== steady py_entry interp p50
+  round       base         a3         a4          b
+  r1      7978.583          -   4853.917   4451.917
+  r2      7544.000          -   5096.458   4579.458
+  r3      7687.167          -   6692.375   5017.417
+  r4      7624.209          -   5053.041   4641.583
+  r5      8240.500          -   5056.500   4634.125
+  r6      9849.459          -   5361.500   4872.667
+  b/a3 median -  per round 
+  b/a4 median 0.913  per round 0.917 0.899 0.750 0.919 0.916 0.909
+  a4/a3 median -  per round 
+  a3/base median -  per round 
+  a4/base median 0.638  per round 0.608 0.676 0.871 0.663 0.614 0.544
+  b/base median 0.585  per round 0.558 0.607 0.653 0.609 0.562 0.495
+
+== loads: 117 arm runs, max end load 11.200, 3 cells redone, arm runs ending >= 8: 7
+
+== A4 against A3 (A4 is kept only if both hold)
+  FAIL compiled guest time a4/a3 < 1  py=- qjs=- lua=-
+  FAIL compiled whole-request p50 a4/a3 =< 1  py=- qjs=- lua=-
+  => a3 is A
+
+== Decision rule: B against A = a3
+  FAIL compiled guest time b/a3 =< 0.90  py=- qjs=- lua=-
+  FAIL compiled whole-request p50 b/a3 < 1  py=- qjs=- lua=-
+  FAIL interpreted whole-request p50 b/a3 =< 1.05  py=- qjs=- lua=-
+  FAIL budget density b/a3 >= 1  py=- qjs=- lua=-
+  FAIL physical per instance (footprint) b/a3 =< 1.25  py=- qjs=- lua=-
+  PASS full ct on mmap-pages (given: pass)
+  => a3 goes to the production plan

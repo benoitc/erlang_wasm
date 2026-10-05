@@ -1,0 +1,53 @@
+guest=py backend=paged host_page=4096 count=124 pages_before=0 pages_end=4092 arch=aarch64-unknown-linux-gnu
+median-n instance 62:
+  restored rows [#{size => 640,kind => memory,
+                   phys => #{table => 2,arena => 0,growth => 0},
+                   charged => 2,holders => 1},
+                 #{size => 0,kind => cell,phys => none,charged => 0,
+                   holders => 1}]
+  after rows [#{size => 640,kind => memory,
+                phys => #{table => 2,arena => 31,growth => 0},
+                charged => 33,holders => 1},
+              #{size => 0,kind => cell,phys => none,charged => 0,
+                holders => 1}]
+  mem_restored #{img_pages => 640,pages => 640,arena_chunks => 0,
+                 private_4k_pages => 0,slots_claimed => 0}
+  mem_after #{img_pages => 640,pages => 640,arena_chunks => 5,
+              private_4k_pages => 255,slots_claimed => 255}
+per-instance delta: min 33 max 33 mean 33.00
+failure: #{pid => <0.228.0>,
+           failure =>
+               {failed,decode,
+                       {error,#{msg => <<"memory limit exceeded">>,
+                                kind => runtime_failure,class => runtime,
+                                ctx =>
+                                    #{error =>
+                                          #{msg => <<"memory limit exceeded">>,
+                                            kind => memory_limit,
+                                            class => exhaustion,
+                                            ctx =>
+                                                #{func => 50,
+                                                  requested => 2}}}}}},
+           pages_before => 4092,n => 125,stage => request,
+           mem_at_failure =>
+               #{img_pages => 640,pages => 640,arena_chunks => 1,
+                 private_4k_pages => 16,slots_claimed => 16},
+           mem_restored =>
+               #{img_pages => 640,pages => 640,arena_chunks => 0,
+                 private_4k_pages => 0,slots_claimed => 0},
+           pages_restored => 4094}
+failing instance's calls: [#{args => #{meta => {memory,{640,16}},pages => 640},
+                             f => reserve,result => ok,pages_in_use => 4094},
+                           #{args => #{meta => cell,pages => 0},
+                             f => reserve,result => ok,pages_in_use => 4094},
+                           #{args =>
+                                 #{budget_pages => 1,have => 0,target => 1},
+                             f => arena_begin,
+                             result => {ok,0},
+                             pages_in_use => 4095},
+                           #{args =>
+                                 #{budget_pages => 2,have => 1,target => 2},
+                             f => arena_begin,
+                             result => {error,limit},
+                             pages_in_use => 4095}]
+refusals in whole run: 1

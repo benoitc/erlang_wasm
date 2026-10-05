@@ -1,0 +1,11 @@
+===> Verifying dependencies...
+wasm: NIFs configured in _build/cmake
+===> Analyzing applications...
+===> Compiling wasm
+wasm: NIFs built
+script_v1
+wasi_file_nif.so
+wasm_mem_nif.so
+getconf PAGESIZE 4096 aarch64 nproc 14
+1.25 0.88 0.85 1/1099 461
+1.21 0.88 0.85 1/1098 571

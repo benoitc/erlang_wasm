@@ -1,0 +1,14 @@
+debconf: unable to initialize frontend: Dialog
+debconf: (TERM is not set, so the dialog frontend is not usable.)
+debconf: falling back to frontend: Readline
+debconf: unable to initialize frontend: Readline
+debconf: (This frontend requires a controlling tty.)
+debconf: falling back to frontend: Teletype
+debconf: unable to initialize frontend: Teletype
+debconf: (This frontend requires a controlling tty.)
+debconf: falling back to frontend: Noninteractive
+script_v1
+wasi_file_nif.so
+getconf PAGESIZE 4096 aarch64 nproc 14
+1.71 0.87 0.85 1/1102 345
+1.53 0.90 0.86 1/1098 453

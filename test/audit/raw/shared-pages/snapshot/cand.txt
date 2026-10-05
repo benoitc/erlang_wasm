@@ -1,0 +1,35 @@
+== r1 cand
+# 0:47  up 8 days, 17 hrs, 38 users, load averages: 3.29 4.40 5.22
+py        snapshot first      2  min      75571.5 us  median      75571.5 us
+py        snapshot repeat     4  min      59269.0 us  median      59854.5 us
+py_entry  snapshot first      2  min      67882.4 us  median      67882.4 us
+py_entry  snapshot repeat     4  min      61484.5 us  median      63128.7 us
+# 0:50  up 8 days, 17:02, 38 users, load averages: 4.37 4.30 5.03
+== r2 cand
+# 0:50  up 8 days, 17:02, 38 users, load averages: 4.37 4.30 5.03
+py        snapshot first      2  min      78313.2 us  median      78313.2 us
+py        snapshot repeat     4  min      62397.3 us  median      62451.7 us
+py_entry  snapshot first      2  min      64325.2 us  median      64325.2 us
+py_entry  snapshot repeat     4  min      61057.1 us  median      61805.7 us
+# 0:52  up 8 days, 17:05, 38 users, load averages: 3.85 4.25 4.90
+== r3 cand
+# 1:02  up 8 days, 17:14, 38 users, load averages: 4.34 9.99 9.58
+py        snapshot first      2  min      65836.1 us  median      65836.1 us
+py        snapshot repeat     4  min      60836.4 us  median      61009.0 us
+py_entry  snapshot first      2  min      69545.1 us  median      69545.1 us
+py_entry  snapshot repeat     4  min      61672.0 us  median      62323.0 us
+# 1:04  up 8 days, 17:17, 38 users, load averages: 8.32 9.17 9.28
+== r4 cand
+# 1:05  up 8 days, 17:17, 38 users, load averages: 7.17 8.80 9.14
+py        snapshot first      2  min      75610.7 us  median      75610.7 us
+py        snapshot repeat     4  min      61265.3 us  median      61617.0 us
+py_entry  snapshot first      2  min      67064.5 us  median      67064.5 us
+py_entry  snapshot repeat     4  min      62147.8 us  median      62564.4 us
+# 1:07  up 8 days, 17:20, 39 users, load averages: 10.10 9.01 9.13
+== r5 cand
+# 1:12  up 8 days, 17:25, 39 users, load averages: 6.86 7.98 8.68
+py        snapshot first      2  min      67304.1 us  median      67304.1 us
+py        snapshot repeat     4  min      60505.5 us  median      61724.7 us
+py_entry  snapshot first      2  min      63766.4 us  median      63766.4 us
+py_entry  snapshot repeat     4  min      60318.1 us  median      61982.5 us
+# 1:15  up 8 days, 17:27, 39 users, load averages: 13.20 9.93 9.31

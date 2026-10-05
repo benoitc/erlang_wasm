@@ -1,5 +1,87 @@
 # Changelog
 
+## Unreleased
+
+A restore shares its snapshot's image instead of copying it, script requests
+are faster by default, a worker can run compiled with one option, a loaded
+module no longer keeps its whole input file in memory, and the CPython reactor
+ships stripped with its standard library precompiled. Workers built on
+`py_reactor.wasm` need the new build. Drop `recycle` from `wasm:restore/3` calls
+and `recycle_idle` from worker options; both are now ignored.
+
+- **Restored memory shares its image.** A restore no longer copies the
+  image: the memory reads the image's pages in place and copies a 4 KiB page
+  on its first write. A restore costs a page table and a request the pages it
+  writes: a CPython restore is 0.79 ms instead of 12.0, and a node holds 124
+  CPython instances under `page_limit` 4096 instead of 6. Loading a snapshot
+  file costs what it did.
+- **Restore recycling is removed.** `wasm:restore/3` no longer takes `recycle`,
+  and the worker option `recycle_idle` is gone. Nothing replaces them: every
+  restore now shares the image.
+- **Compiled code reaches restored memory through a translation cache.** A
+  compiled request's guest time is 12% to 49% higher than with a copied image;
+  whether the whole request is faster depends on how much of it the restore
+  was (a CPython request with an `entry`: 5.4 ms to 3.0 ms; a compiled QuickJS
+  script request: 6.5 ms to 7.7 ms). Generated code is ABI 14, so the compiled
+  tier's disk cache is rebuilt once.
+- **The node page budget counts allocated pages.** A restored memory charges
+  its page table and the pages it writes; any memory charges its growth in
+  whole chunks, so a three-page memory counts four. `max_memory_pages` still
+  bounds the size a guest sees.
+- **A write can now be refused for want of budget**, with `exhaustion` /
+  `memory_limit`, leaving every byte as it was. A restore that cannot be
+  afforded is refused the same way; it used to surface as `malformed` /
+  `internal`.
+- **The snapshot budget charges whole pages**: 64 KiB for each page that holds
+  data and 8 bytes per page of address space, held while the image or any
+  memory restored from it remains.
+- **A snapshot file is checked against its module before it is built.** One
+  with runs out of order or overlapping, or memories outside the module's
+  limits, is refused by name; one over the budget, or mapping more than 2^20
+  pages in one memory, is refused as `exhaustion` / `snapshot_budget`.
+- **Default heap floors.** A new optional adapter callback, `defaults/1`, is
+  given the worker's resolved limits and answers `runner_min_heap_words` and
+  `capture_min_heap_words` when the caller did not set them. `wasm_lua` and
+  `wasm_javascript` default the runner floor to 200,000 words; `wasm_python`
+  to 1,500,000 on the compiled tier (`compile => true`, `fuel => infinity`)
+  and 1,000,000 otherwise. Pass the option to change it, or `0` to turn it
+  off. A floor is held only while a request executes; `docs/tuning.md` has
+  what it costs a pool and how `+MMmcs` affects RSS. No adapter sets a
+  capture floor.
+- **Lowered code is shared per module.** A module loaded through the module
+  cache publishes its validation context, function table and the function
+  bodies requests reach, once per node, so a request in a fresh runner no
+  longer lowers them again. Nothing to set.
+- **New worker option `compiled`.** `compiled => true` sets `fuel =>
+  infinity`, `compile => true`, `compile_after => 1` and `compile_quality =>
+  baseline` under your own `limits`. With a finite `fuel` the start fails with
+  `{bad_option, compiled, #{fuel => N}}`; that combination used to interpret
+  without a word. Metered stays the default.
+- **`wasm:restore/3` expands `profile`** as `wasm:instantiate/3` does. A
+  restored instance under `profile => script` used to keep the default compile
+  threshold of 32.
+- **A decoded module owns its bytes.** Data segments, names and the custom
+  sections it keeps are copied out of the input, and `.debug_*` sections are
+  dropped, so the input binary is freed when the caller lets go of it. A
+  module used to pin the whole file: 31 MB for the CPython reactor.
+- **Fixed:** the per-process function cache ignored `fuse`, so an unfused
+  instance could hand its bodies to a fused one in the same process.
+- `bench/paths/` gains `gap.erl`, `guestprof.erl`, `lowbench.erl` and
+  `retainbench.erl`; reqbench's QuickJS and Lua arms now run at infinite fuel,
+  and so reach the compiled tier.
+- **`scripts/build-python-reactor.sh` strips the DWARF** with
+  `wasm-opt --strip-debug`: 7.4 MB instead of 30.9, at the same request
+  speed. The build now needs binaryen's `wasm-opt`, or `WASM_OPT` set to it.
+- **The standard library ships precompiled**, as unchecked hash-based `.pyc`
+  files compiled by the build's own host interpreter. A module a request
+  imports that is not in the image loads instead of compiling from source.
+  Editing a `.py` under the library has no effect until you rebuild it.
+- **The reactor freezes its image out of the cyclic collector.** `init()`, and
+  an entry's capture, end with `gc.collect()` and `gc.freeze()`, so a request
+  no longer pays for a collection over objects every request shares. Objects
+  from the image are never collected and `gc.get_objects()` does not list
+  them. See `docs/python.md`.
+
 ## 0.8.2
 
 Component resource handling is completed: ownership moves correctly across a

@@ -1,0 +1,12 @@
+r1 cand store	plain	compiled	17.965 ns/unit	min_us=71861 units=4000000 img_bytes=0 result=[]	load=7.87 9.11 12.17
+r1 cand store	paged	compiled	18.854 ns/unit	min_us=75415 units=4000000 img_bytes=1048576 result=[]	load=7.48 9.00 12.12
+r1 cand sieve	plain	compiled	58.638 ns/unit	min_us=58638 units=1000000 img_bytes=0 result=[78498]	load=7.48 9.00 12.12
+r1 cand sieve	paged	compiled	70.303 ns/unit	min_us=70303 units=1000000 img_bytes=1048576 result=[78498]	load=7.04 8.89 12.06
+r2 cand store	plain	compiled	17.942 ns/unit	min_us=71767 units=4000000 img_bytes=0 result=[]	load=5.24 7.40 10.69
+r2 cand store	paged	compiled	18.521 ns/unit	min_us=74086 units=4000000 img_bytes=1048576 result=[]	load=5.24 7.40 10.69
+r2 cand sieve	plain	compiled	59.713 ns/unit	min_us=59713 units=1000000 img_bytes=0 result=[78498]	load=4.98 7.31 10.64
+r2 cand sieve	paged	compiled	70.822 ns/unit	min_us=70822 units=1000000 img_bytes=1048576 result=[78498]	load=4.82 7.24 10.59
+r3 cand store	plain	compiled	17.794 ns/unit	min_us=71175 units=4000000 img_bytes=0 result=[]	load=7.38 7.34 9.93
+r3 cand store	paged	compiled	18.572 ns/unit	min_us=74286 units=4000000 img_bytes=1048576 result=[]	load=7.19 7.30 9.90
+r3 cand sieve	plain	compiled	59.414 ns/unit	min_us=59414 units=1000000 img_bytes=0 result=[78498]	load=7.19 7.30 9.90
+r3 cand sieve	paged	compiled	73.293 ns/unit	min_us=73293 units=1000000 img_bytes=1048576 result=[78498]	load=7.01 7.27 9.87

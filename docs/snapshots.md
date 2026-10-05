@@ -77,13 +77,12 @@ this guide always says which. For a started CPython:
 | | | what it bounds |
 | --- | ---: | --- |
 | the address space it covers | 41.9 MB | what a restore writes into, bounded by `max_memory_pages` |
-| what it **retains** in memory | 7.4 MB | `max_snapshot_bytes`, and what `wasm:snapshot_info/1` answers as `bytes` |
+| what it **retains** in memory | its pages that hold data | `max_snapshot_bytes`, and what `wasm:snapshot_info/1` answers as `bytes` |
 | the **file** on disk | 2.7 MB | `max_snapshot_dir_bytes` |
 
-They differ because an image keeps only the non-zero runs of each memory -- a
-started interpreter is mostly zero -- and the file is then compressed. For Lua
-the same three are 196,608 bytes, 77,280 and 35,366: a much narrower spread,
-because a small guest has little empty memory to leave out.
+They differ because an image keeps only the 64 KiB pages of each memory that
+are not all zero -- a started interpreter is mostly zero -- and the file keeps
+only their non-zero runs, compressed.
 
 An unqualified "image" below means the thing itself, not any one of its sizes.
 
@@ -127,48 +126,34 @@ there is nothing to pass that could lay an image over a different module's
 layout. It also does **not** run the module's start function, because the image
 already contains what that function did.
 
-**What a restore costs, and why it is not the whole address space.** Only the
-image's non-zero runs are written. The instance underneath is built without the
-module's active data segments applied, because every byte they would write is
-overwritten by the image and the memory is already zero -- applying them made a
-restore pay twice, once to write and once to zero the gaps back. Their bounds
-are still checked, so a module that could not be instantiated is still refused.
+**What a restore costs.** Nothing of the image is copied. A restored memory
+reads the image's pages in place, shared with every other instance restored
+from it, and the first write to a 4 KiB page copies that page into memory of
+the instance's own. So a restore costs a page table, one 8-byte entry per
+4 KiB of image, and a request costs the pages it writes.
 
-A CPython restore is 13 ms of a 35 ms request and a QuickJS one 0.4 ms of 6.2.
-The share follows how *dense* an image is rather than how large: CPython's
-covers 17.7% of its address space and QuickJS's 53.7%, so CPython gains more
-from writing only the runs.
+Against the 0.8 releases, which copied the image into every restore, medians
+from `test/audit/PERF.md`, "Shared pages":
 
-## Restore the same image again and again
+| guest | `wasm:restore/3`, 0.8 | now | first writes per request | instances under `page_limit` 4096, 0.8 | now |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CPython | 12.0 ms | 0.79 ms | 256 pages, 1.3 ms | 6 | 124 |
+| QuickJS | 0.42 ms | 0.12 ms | 41 pages, 0.21 ms | 682 | 1024 |
+| Lua | 0.17 ms | 0.06 ms | 12 pages, 0.06 ms | 1365 | 2048 |
 
-When one process restores the same image for every request and destroys each
-instance before restoring the next, as a worker's runner does with
-`restore_ahead`, pass `recycle => true`:
+The price is on access. Compiled code reaches a page through a lookup, so a
+compiled request's guest time is 12% to 49% higher than before, and the whole
+request moves between 8% faster and 19% slower depending on how much of it
+was the restore. A CPython worker with an `entry`, where the restore was most
+of the request, went from 5.4 ms to 3.0 ms.
 
-```erlang
-{ok, Fresh} = wasm:restore(Image, FreshBindings, #{recycle => true}),
-{ok, _Result} = wasm:call(Fresh, ~"handle", []),
-ok = wasm:destroy(Fresh).
-```
+The instance underneath is built without the module's active data segments
+applied, because the image already holds what they wrote. Their bounds are
+still checked against the module's declared minimum, so a module that could not
+be instantiated is still refused.
 
-The destroy keeps the instance's memory, and the next recycling restore of the
-same image in the same process takes it and rewrites only what the request
-wrote. The instance you get is the one a plain restore would give you, byte for
-byte; `wasm_snapshot_SUITE` checks that after writes through every path a guest
-or a host has.
-
-What to know:
-
-- **It records every write.** A memory restored this way marks the chunk each
-  store lands in, which costs about 4 ns a store in generated code.
-  [Tuning a worker host](tuning.md) has the numbers.
-- **Its chunks are 64 KiB**, so what a request writes is rewritten in small
-  pieces. A CPython request writes 44 of 640.
-- **Nothing may keep writing** through a handle on a destroyed instance's
-  memory, such as one taken with `wasm:extern/2`: that memory is the next
-  instance's now.
-- **Same process only.** What is kept lives in the destroying process, so a
-  restore in a different process starts from zeroed memory as before.
+A write that needs a page the node budget cannot give fails with `exhaustion`
+/ `memory_limit` before it changes a byte, and the instance stays usable.
 
 ## Hold an image past its creator
 
@@ -184,7 +169,9 @@ Acquire **before** the capturing process exits. The reverse order is a race.
 `wasm:snapshot_info/1` answers `#{bytes, module, version}`.
 
 `wasm:restore/3` takes a holder for you if the calling process has none, and
-drops it when the copy finishes, so N restores leave no holders behind.
+drops it when the restore returns, so N restores leave no holders behind.
+Each restored memory holds the image itself until it is freed, which is what
+keeps its pages readable after you release the image.
 
 ## Keep images across restarts
 
@@ -242,8 +229,21 @@ ok = wasm:save_snapshot(Image, Path),
 The module is an argument rather than something the file names, which is the
 same protection `restore/3` gets from the other direction. Every failure is a
 refusal by name: `snapshot_corrupt`, `snapshot_truncated`,
-`snapshot_wrong_module`, `snapshot_too_large`, `snapshot_unknown_atom`,
-`snapshot_abi_mismatch`. A worker treats all of them as a miss and captures.
+`snapshot_wrong_module`, `snapshot_wrong_shape`, `snapshot_too_large`,
+`snapshot_unknown_atom`, `snapshot_abi_mismatch`. A worker treats all of them as
+a miss and captures.
+
+A file's memories are checked against the module before any page is built: as
+many as the module defines, each within its declared limits, and its runs in
+order, apart and inside it. An image over `max_snapshot_bytes`, or one memory
+mapping more than 2^20 pages, is refused as `exhaustion` / `snapshot_budget`.
+The node page budget plays no part in loading: a sparse image loads on a node
+too small to hold its whole address space, and its restores pay only for what
+they write.
+
+Loading costs what it did: the file's runs are laid into 64 KiB pages once, about
+25 ms for a started CPython and 1.3 ms for QuickJS (`test/audit/PERF.md`,
+"Shared pages"). Every restore after that shares them.
 
 ## Declare what your imports hold
 
@@ -323,15 +323,18 @@ when the capture finishes.
 application:set_env(wasm, max_snapshot_bytes, 512 * 1024 * 1024).
 ```
 
-Node-wide, in bytes, charged once at capture. The default is `infinity`, which
-means unbounded rather than off.
+Node-wide, in bytes, charged once at capture or load. The default is
+`infinity`, which means unbounded rather than off.
 
-It charges the **retained** size, the middle row of the three above: 7.4 MB for
-a started CPython, not the 41.9 MB of address space it covers. So a ceiling
-admits far more images than the guest's memory size suggests.
+It charges the **retained** size, the middle row of the three above: 64 KiB for
+every page that holds data, and 8 bytes for every page of address space. The
+charge is held while the image is held **or** while any memory restored from it
+remains, including one another instance imported, because those memories read
+its pages.
 
-A restore does not charge it again. The memories a restore builds belong to the
-instance, and `max_memory_pages` bounds those.
+A restore does not charge it again. What a restored memory allocates, its page
+table and the pages it writes, is charged to the node page budget, and
+`max_memory_pages` bounds its size as for any memory.
 
 ## What an image freezes
 

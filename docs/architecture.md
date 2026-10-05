@@ -189,6 +189,8 @@ fourteen modules and a completely wrong picture.
   its internals, so the blast radius is what its callers use.
 - `wasm_keeper` is the lifetime authority for anything two instances can share.
   If you are adding a resource with a lifetime, it goes through there.
+  That includes a snapshot's image, which every memory restored from it holds,
+  and each memory's charged pages: its page table, growth chunks and arena.
 - `wasm_error` is at level 0 on purpose. Everything may build an error and
   nothing may ask the runtime a question while doing it.
 - Adding a module means deciding its level. If it needs something above it, you

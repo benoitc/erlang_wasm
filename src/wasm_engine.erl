@@ -296,6 +296,7 @@ cell_get(Id) -> table_get(Id).
 -spec cell_forget(reference()) -> ok.
 cell_forget(Id) -> table_forget(Id).
 
+
 -doc """
 Intern a canonical recursive type group, returning its node-wide identity.
 

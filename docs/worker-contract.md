@@ -24,8 +24,9 @@ component-model guests are outside the guarantee.
 > `wasm_worker_adapter`, the conformance kit `wasm_adapter_conformance` and
 > the worker kernel are installed with the application.
 
-Eight callbacks. `snapshot_capability/1` is optional and an absent one reads as
-`unsupported`.
+Eight callbacks. Two more are optional: `snapshot_capability/1`, where an
+absent one reads as `unsupported`, and `defaults/1`, where an absent one reads
+as no defaults.
 
 ```erlang
 -module(my_adapter).
@@ -220,6 +221,39 @@ Notes:
   is what keeps the isolation the worker promises.
 - `docs/snapshots.md` has the rest, including what a capture refuses and what
   an image freezes.
+
+## Give your guest a heap floor by default
+
+Export `defaults/1` when you have measured the heap floor your guest wants, so
+a caller who has never read the tuning guide gets it anyway. The worker reads
+`runner_min_heap_words` and `capture_min_heap_words` from it and ignores any
+other key.
+
+The argument is the worker's resolved limits map, so you can answer per tier.
+The compiled tier runs when `compile` is `true` and `fuel` is `infinity`, the
+test `wasm_jit` applies:
+
+```erlang
+defaults(#{compile := true, fuel := infinity}) ->
+    #{runner_min_heap_words => 1_500_000};
+defaults(_Limits) ->
+    #{runner_min_heap_words => 1_000_000}.
+```
+
+That is `wasm_python`'s rule. `wasm_lua` and `wasm_javascript` ignore the
+argument and answer 200,000 words for both tiers.
+
+Notes:
+
+- **The caller's value wins**, and `0` turns your default off.
+- **A default goes through the same checks** as a value the caller passed.
+  One that does not fit under the worker's `max_heap_words` is logged as the
+  adapter's default and not applied.
+- **Only set a number you measured.** [Tuning a worker host](tuning.md) is how
+  to find the knee. A floor past it costs time, and a capture floor can make a
+  capture that fits without it die under the same ceiling: CPython's 2,000,000
+  words under its own 16 M words killed three captures in four, which is why
+  `wasm_python` sets no capture default.
 
 ## Prove it
 

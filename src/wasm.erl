@@ -507,7 +507,11 @@ invoke_at(Entry, Inst, Idx, Args, Opts, Depth) ->
                  0 -> wasm_exec:open_budget(Limits);
                  _ -> keep
              end,
-    Mut = wasm_instance:mut(Inst),
+    %% Brought up to date with what was written since the state was stored,
+    %% by `write_memory/3' or another holder, and stored back below if that
+    %% changed it.
+    Stored = wasm_instance:mut(Inst),
+    Mut = wasm_exec:fresh_mems(Stored),
     %% Compiled code is entered *here*, at the outermost invocation, and nowhere
     %% else. The interpreter's dispatch path is not touched at all: three
     %% separate changes to `run/3', `branch/3' or what they call have cost about
@@ -531,7 +535,7 @@ invoke_at(Entry, Inst, Idx, Args, Opts, Depth) ->
               %% write vanishes. Measured, that write was 177 ns of a 386 ns
               %% call: nearly half the cost of a short invocation was
               %% persisting state that had not changed.
-              case Mut1 =:= Mut of
+              case Mut1 =:= Stored of
                   true -> ok;
                   false -> ok = wasm_instance:set_mut(Inst, Mut1)
               end,
@@ -816,13 +820,6 @@ do_destroy(Inst) ->
           fun() ->
               #mut{mems = Mems, tables = Tables, globals = Globals} =
                   wasm_instance:mut(Inst),
-              %% Kept for the next restore of the same image, before the
-              %% claims go: an instance restored with `recycle' leaves its
-              %% chunks and the record of which it wrote.
-              case wasm_instance:get_extra(Inst, recycle) of
-                  {ok, Id} -> ok = wasm_snapshot:recycle(Id, Mems);
-                  error    -> ok
-              end,
               Token = {instance, Inst#inst.id},
               %% One keeper call for all of them rather than one each: a
               %% worker destroys an instance per request.
@@ -843,11 +840,22 @@ do_destroy(Inst) ->
     %% The object store goes when the last instance sharing it goes, not with
     %% the first: linked instances hold references into one store.
     ok = wasm_heap:delete(Inst#inst.heap, Inst#inst.id),
+    ok = share_ir(Inst),
     %% Releasing the state table last makes this idempotent: a second call finds
     %% it gone, `mut/1' reports a dead instance, and `capture/1' turns that into
     %% a value rather than releasing the same pages twice.
     ok = wasm_instance:release(Inst),
     ok.
+
+%% What this instance lowered, published once for every later instance of its
+%% module before the release below erases it. Here and not in `wasm_instance',
+%% because publishing asks the module cache, which `wasm_instance' must not
+%% call.
+share_ir(Inst) ->
+    case wasm_instance:unshared_ir(Inst) of
+        none -> ok;
+        {Key, IRs} -> wasm_module_cache:publish_ir(Key, IRs)
+    end.
 
 -doc """
 Capture an initialised instance, so a later one can start where it left off.
@@ -921,15 +929,11 @@ It does **not** run the module's start function. Ordinary instantiation always
 does, and repeating arbitrary guest code against fresh imports would redo work
 the image already contains.
 
-`recycle => true` in `Opts` is for a process that restores the same image over
-and over, destroying each instance before the next: the next restore takes the
-destroyed instance's memory and rewrites only the chunks it wrote. The result
-is the same fresh instance. Nothing else may still write through a handle on
-the destroyed instance's memory, since that memory now belongs to the next one.
+`profile` in `Opts` expands exactly as it does for `instantiate/3`.
 """.
 -spec restore(snapshot(), map(), map()) ->
           {ok, instance()} | {error, wasm_error:error()}.
-restore(Snapshot, Bindings, Opts) ->
+restore(Snapshot, Bindings, Opts0) ->
     %% An image whose last holder has gone has given its module claim back, so
     %% the module may be evicted and the image is no longer restorable. Said
     %% plainly rather than surfacing as a confusing `module_not_loaded`.
@@ -938,7 +942,14 @@ restore(Snapshot, Bindings, Opts) ->
             {error, err(invalid, snapshot_invalidated,
                         ~"this image has been released", #{})};
         _ ->
-            restore_1(Snapshot, Bindings, Opts)
+            %% Expanded exactly as `instantiate/3' expands it. It was not, so
+            %% a restored instance under `profile => script' kept the default
+            %% threshold of 32 and a worker restoring one per request never
+            %% reached it.
+            case profile(Opts0) of
+                {error, _} = E -> E;
+                {ok, Opts}     -> restore_1(Snapshot, Bindings, Opts)
+            end
     end.
 
 restore_1(Snapshot, Bindings, Opts) ->
@@ -980,23 +991,30 @@ captured(Inst, Handle, Opts) ->
         {error, _} = E ->
             E;
         {ok, Snapshot} ->
-            case wasm_snapshot_owner:charge(wasm_snapshot:bytes(Snapshot)) of
-                {error, _} = E ->
-                    E;
-                ok ->
-                    start_owner(Snapshot, Handle)
-            end
+            start_owner(Snapshot, Handle)
     end.
 
+%% The owner charges the image and registers its pages with the keeper before
+%% any page is built. This process then builds them, which for an image read
+%% from a file is the expensive half; a build that fails here ends the owner,
+%% and one that dies with this process is ended by the owner's monitor.
 start_owner(Snapshot, Handle) ->
     case wasm_snapshot_owner:start(Handle, wasm_snapshot:bytes(Snapshot),
                                    self()) of
-        {ok, Owner} ->
-            {ok, wasm_snapshot:with_owner(Snapshot, Owner)};
+        {ok, Owner, Img} ->
+            case wasm_error:capture(
+                   fun() -> {ok, wasm_snapshot:build(Snapshot, Img)} end) of
+                {ok, Built} ->
+                    {ok, wasm_snapshot:with_owner(Built, Owner)};
+                {error, _} = E ->
+                    ok = wasm_snapshot_owner:abandon(Owner),
+                    E
+            end;
         {error, not_loaded} ->
-            _ = wasm_snapshot_owner:refund(wasm_snapshot:bytes(Snapshot)),
             {error, err(invalid, module_not_loaded, ~"module is not loaded",
-                        #{handle => Handle})}
+                        #{handle => Handle})};
+        {error, _} = E ->
+            E
     end.
 
 -doc """
@@ -1138,10 +1156,7 @@ from_file(Bin, Handle, M) ->
 %% An image off disk gets an owner exactly as a captured one does: it holds the
 %% module claim and the byte charge, and a term cannot say when it is gone.
 adopt(Image, Handle) ->
-    case wasm_snapshot_owner:charge(wasm_snapshot:bytes(Image)) of
-        {error, _} = E -> E;
-        ok             -> start_owner(Image, Handle)
-    end.
+    start_owner(Image, Handle).
 
 -doc """
 Take an instance's export in the form another module can import it.

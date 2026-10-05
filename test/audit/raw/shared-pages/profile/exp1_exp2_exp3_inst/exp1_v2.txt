@@ -1,0 +1,135 @@
+== r1 v2 py interp  3:49  up 8 days, 20:01, 39 users, load averages: 9.21 12.50 13.84
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 52,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 42916.375,min_us => 41149.292}
+== r1 v2 py compiled  3:50  up 8 days, 20:03, 39 users, load averages: 9.75 11.65 13.36
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-prof/v2",guest => py,
+  ahead => false,start_ms => 52,tier => compiled,warm_requests => 3,
+  verdict => ok,entry_ms => 13880,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 38942.584,min_us => 34871.625}
+== r1 v2 qjs interp  3:52  up 8 days, 20:04, 39 users, load averages: 7.60 10.26 12.64
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 10,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13165.417,min_us => 12695.542}
+== r1 v2 qjs compiled  3:52  up 8 days, 20:05, 39 users, load averages: 7.61 10.00 12.46
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-prof/v2",guest => qjs,
+  ahead => false,start_ms => 8,tier => compiled,warm_requests => 4,
+  verdict => ok,entry_ms => 3625,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8659.25,min_us => 7802.083}
+== r1 v2 lua interp  3:54  up 8 days, 20:06, 39 users, load averages: 7.53 9.46 12.02
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7793.0,min_us => 7181.291}
+== r1 v2 lua compiled  3:54  up 8 days, 20:07, 39 users, load averages: 7.74 9.44 11.99
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-prof/v2",guest => lua,
+  ahead => false,start_ms => 6,tier => compiled,warm_requests => 3,
+  verdict => ok,entry_ms => 800,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 5103.709,min_us => 4305.125}
+== r2 v2 py interp  3:57  up 8 days, 20:09, 39 users, load averages: 6.63 8.92 11.34
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 50,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 44114.791,min_us => 41113.583}
+== r2 v2 py compiled  3:58  up 8 days, 20:11, 39 users, load averages: 5.09 7.87 10.72
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-prof/v2",guest => py,
+  ahead => false,start_ms => 53,tier => compiled,warm_requests => 3,
+  verdict => ok,entry_ms => 13634,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 35613.667,min_us => 33629.166}
+== r2 v2 qjs interp  4:00  up 8 days, 20:13, 39 users, load averages: 5.87 7.45 10.23
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13445.416,min_us => 12794.833}
+== r2 v2 qjs compiled  4:01  up 8 days, 20:13, 39 users, load averages: 7.29 7.76 10.18
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-prof/v2",guest => qjs,
+  ahead => false,start_ms => 9,tier => compiled,warm_requests => 3,
+  verdict => ok,entry_ms => 3489,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8519.625,min_us => 7565.833}
+== r2 v2 lua interp  4:02  up 8 days, 20:14, 39 users, load averages: 5.53 7.30 9.86
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7343.625,min_us => 6970.084}
+== r2 v2 lua compiled  4:02  up 8 days, 20:15, 39 users, load averages: 5.34 7.17 9.77
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-prof/v2",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,warm_requests => 3,
+  verdict => ok,entry_ms => 752,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4336.083,min_us => 3867.583}
+== r3 v2 py interp  4:03  up 8 days, 20:15, 39 users, load averages: 6.97 7.42 9.77
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 51,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 42699.584,min_us => 41448.083}
+== r3 v2 py compiled  4:04  up 8 days, 20:17, 39 users, load averages: 6.55 6.98 9.34
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-prof/v2",guest => py,
+  ahead => false,start_ms => 54,tier => compiled,warm_requests => 3,
+  verdict => ok,entry_ms => 14004,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 37806.916,min_us => 34796.417}
+== r3 v2 qjs interp  4:06  up 8 days, 20:19, 39 users, load averages: 6.59 6.83 8.95
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13896.25,min_us => 12726.0}
+== r3 v2 qjs compiled  4:07  up 8 days, 20:19, 39 users, load averages: 5.17 6.48 8.76
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-prof/v2",guest => qjs,
+  ahead => false,start_ms => 10,tier => compiled,warm_requests => 3,
+  verdict => ok,entry_ms => 3737,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8875.709,min_us => 7976.25}
+== r3 v2 lua interp  4:07  up 8 days, 20:20, 39 users, load averages: 4.48 6.21 8.59
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 8,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7639.5,min_us => 7148.041}
+== r3 v2 lua compiled  4:07  up 8 days, 20:20, 39 users, load averages: 4.60 6.15 8.53
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-prof/v2",guest => lua,
+  ahead => false,start_ms => 8,tier => compiled,warm_requests => 3,
+  verdict => ok,entry_ms => 757,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4434.625,min_us => 3779.959}

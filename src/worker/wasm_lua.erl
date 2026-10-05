@@ -45,7 +45,7 @@ superseded encoding by default. `LUA.md` has it.
 
 -export([artifact/1, requirements/2, prepare/3, decode/2, cleanup/1,
          capabilities/1, conformance_fixtures/1, classify/2,
-         snapshot_capability/1]).
+         snapshot_capability/1, defaults/1]).
 -export([limits/0]).
 
 -define(DEFAULT_SOURCE, ~"function main(context) return context end").
@@ -56,6 +56,24 @@ superseded encoding by default. `LUA.md` has it.
 limits() ->
     #{timeout => 10_000, fuel => infinity, max_memory_pages => 1024,
       max_host_calls => 1_000_000, max_heap_words => 4 * 1024 * 1024}.
+
+-doc """
+The heap floor a request runner starts with, unless the caller sets one.
+
+200,000 words is the measured knee: a request fell from 30.0 ms and 98
+collections to 12.7 ms and 23 (`test/audit/PERF.md`, "The 26 ms. Found: it is
+the runner's own garbage collection"). It rounds up to 318,187 words, about
+2.5 MB, held only while a request runs. No capture floor: the image is 77 KB
+and the capture is not where the time goes.
+
+The same number for both tiers. In a pool of ten workers it gave the compiled
+tier 13 to 18% more throughput and cut the collector's share of scheduler
+time from about 9% to 0.9%, and the interpreter 2.1 to 2.2x ("Default floors
+in a pool").
+""".
+-spec defaults(map()) -> wasm_worker_adapter:defaults().
+defaults(_Limits) ->
+    #{runner_min_heap_words => 200_000}.
 
 artifact(Opts) ->
     case maps:find(path, Opts) of

@@ -4,9 +4,13 @@ One process per snapshot, holding what an Erlang term cannot hold for itself.
 
 An image is a term and the BEAM will collect it, but a term cannot say "I am
 gone", and two things have to be given back when it is: the image's claim on
-its module, and its share of the node-wide byte budget. So each image gets a
-process whose life matches its own, and whose only job is to know who still
-wants it.
+its module, and its hold on the keeper's record of its pages, which carries
+its share of the node-wide byte budget. So each image gets a process whose life
+matches its own, and whose only job is to know who still wants it.
+
+The pages can outlive this process. A memory restored from the image reads
+them in place, so the keeper keeps them charged until the last such memory is
+gone as well; this process only gives up the image's own hold.
 
 ## Why this is its own module
 
@@ -23,51 +27,95 @@ and what joins the knot is fifty lines whose entire purpose is to hold a claim.
 
 ## What it is not
 
-Not the keeper. The plan put this in `wasm_keeper`, on the grounds that it is
-already the long-lived owner of every other snapshot resource. The keeper keeps
-its state in ETS rows that a restart adopts, so a second concern there is real
-surgery on the one process a node cannot do without, and the guarantee does not
-need it: what an image needs is *a* lifetime matching its own.
+Not the keeper, though it holds a keeper record. Who still wants an image is
+a set of processes, and the keeper's records are about resources: the byte
+charge and the pages live there, beside the memories that read them, and this
+process is the image's holder of that record.
 
 It also makes invalidation fall out rather than be enforced. The claim is made
 for this process, so it dies when this process does, and the cache is what
 sees to that.
 """.
 
--export([start/3, acquire/2, release/2, holders/1]).
--export([charge/1, refund/1, charged/0]).
+-export([start/3, abandon/1, acquire/2, release/2, holders/1]).
+-export([charged/0]).
 
 -include("wasm_snapshot_budget.hrl").
 
 -define(ASK_TIMEOUT, 5_000).
 
 -doc """
-Start an owner holding `Handle` for `FirstHolder`, or say the module is gone.
+Start an owner holding `Handle` for `FirstHolder`, charge the image's `Bytes`
+and register its pages with the keeper, answering the owner and the keeper's
+record for the image.
 
 The claim is taken here rather than by the caller, because a claim belongs to
-the process that will give it back.
+the process that will give it back. The owner watches `FirstHolder` from the
+start, so a caller that dies while it builds the image's pages gives the charge
+and the claim back with it; one that fails to build and lives calls
+`abandon/1`. Nothing of the image itself passes through this process: a copy
+into it and back measured up to 0.6 ms of a CPython load.
 """.
 -spec start(wasm_module_cache:handle(), non_neg_integer(), pid()) ->
-          {ok, pid()} | {error, not_loaded}.
+          {ok, pid(), wasm_keeper:resource()}
+        | {error, not_loaded | wasm_error:error()}.
 start(Handle, Bytes, FirstHolder) ->
     Self = self(),
     Ref = make_ref(),
-    Owner = spawn(fun() ->
-                      case wasm_module_cache:claim_for(Handle, self()) of
-                          {error, not_loaded} ->
-                              Self ! {Ref, {error, not_loaded}};
-                          ok ->
-                              Self ! {Ref, ok},
-                              Mon = erlang:monitor(process, FirstHolder),
-                              loop(Handle, Bytes, #{FirstHolder => Mon})
-                      end
-                  end),
+    Owner = spawn(fun() -> init(Self, Ref, Handle, Bytes, FirstHolder) end),
+    Mon = erlang:monitor(process, Owner),
     receive
-        {Ref, ok}                 -> {ok, Owner};
-        {Ref, {error, _} = Error} -> Error
-    after ?ASK_TIMEOUT ->
-        exit(Owner, kill),
-        {error, not_loaded}
+        {Ref, {ok, Img}} ->
+            erlang:demonitor(Mon, [flush]),
+            {ok, Owner, Img};
+        {Ref, {error, _} = Error} ->
+            erlang:demonitor(Mon, [flush]),
+            Error;
+        {'DOWN', Mon, process, Owner, _Why} ->
+            {error, not_loaded}
+    end.
+
+-doc """
+Give up an image whose pages could not be built: the claim and the charge go
+back now, and the owner ends.
+""".
+-spec abandon(pid()) -> ok.
+abandon(Owner) ->
+    Mon = erlang:monitor(process, Owner),
+    Owner ! abandon,
+    receive {'DOWN', Mon, process, Owner, _} -> ok end.
+
+init(Caller, Ref, Handle, Bytes, FirstHolder) ->
+    case wasm_module_cache:claim_for(Handle, self()) of
+        {error, not_loaded} ->
+            Caller ! {Ref, {error, not_loaded}};
+        ok ->
+            Id = make_ref(),
+            Mon = erlang:monitor(process, FirstHolder),
+            case reserve(Bytes, Id) of
+                {error, _} = E ->
+                    ok = wasm_module_cache:unclaim_for(Handle, self()),
+                    Caller ! {Ref, E};
+                {ok, Img} ->
+                    Caller ! {Ref, {ok, Img}},
+                    loop({Handle, Img, Id}, Bytes, #{FirstHolder => Mon})
+            end
+    end.
+
+%% A counter left by an older build fails closed rather than metering against a
+%% value that may already be wrong, until the node is restarted.
+reserve(Bytes, Id) ->
+    case counter_state() of
+        {trusted, _Ref} ->
+            wasm_keeper:image_reserve(Bytes, self(), Id);
+        legacy ->
+            {error, #{class => invalid, kind => snapshot_counter_untrusted,
+                      msg => ~"the snapshot budget predates this version and is untrusted; restart the node",
+                      ctx => #{}}};
+        missing ->
+            {error, #{class => invalid, kind => snapshot_counter_uninitialised,
+                      msg => ~"the snapshot budget counter is not initialised",
+                      ctx => #{}}}
     end.
 
 -doc """
@@ -122,6 +170,10 @@ loop(Handle, Bytes, Holders) ->
             loop(Handle, Bytes, Holders);
         {release, Pid} ->
             drop(Handle, Bytes, Holders, Pid);
+        abandon ->
+            {Mod, Img, Id} = Handle,
+            ok = wasm_module_cache:unclaim_for(Mod, self()),
+            ok = wasm_keeper:release(Img, {snapshot, Id});
         {'DOWN', _Mon, process, Pid, _Why} ->
             drop(Handle, Bytes, Holders, Pid)
     end.
@@ -138,8 +190,9 @@ drop(Handle, Bytes, Holders, Pid) ->
             %% The claim would go when this process exits anyway; doing it here
             %% means the claim and the charge are given back together rather
             %% than one of them whenever the cache notices.
-            ok = wasm_module_cache:unclaim_for(Handle, self()),
-            _ = refund(Bytes),
+            {Mod, Img, Id} = Handle,
+            ok = wasm_module_cache:unclaim_for(Mod, self()),
+            ok = wasm_keeper:release(Img, {snapshot, Id}),
             ok
     end.
 
@@ -158,49 +211,6 @@ charged() ->
         {trusted, Ref} -> max(0, atomics:get(Ref, 1));
         %% An untrusted or absent counter reports zero rather than raise: this
         %% is diagnostics, and its spec stays `non_neg_integer()'.
-        _              -> 0
-    end.
-
--doc """
-Charge an image, once, at capture.
-
-A restore does **not** charge again: it takes the existing image, and the fresh
-memories it builds are an instance's and go to ordinary instance accounting
-where they belong. Charging per restore would make the budget mean something
-different depending on how many restores were in flight.
-""".
--spec charge(non_neg_integer()) -> ok | {error, wasm_error:error()}.
-charge(Bytes) ->
-    case counter_state() of
-        {trusted, Ref} ->
-            Limit = application:get_env(wasm, max_snapshot_bytes, infinity),
-            Now = atomics:add_get(Ref, 1, Bytes),
-            case Limit =:= infinity orelse Now =< Limit of
-                true ->
-                    ok;
-                false ->
-                    _ = atomics:sub_get(Ref, 1, Bytes),
-                    {error, #{class => exhaustion, kind => snapshot_budget,
-                              msg => ~"the node snapshot budget is exhausted",
-                              ctx => #{limit => Limit, wanted => Bytes}}}
-            end;
-        legacy ->
-            %% A same-VM upgrade off the racy build left a counter whose value
-            %% may already be wrong; a new charge fails closed rather than meter
-            %% against it, until the node is restarted.
-            {error, #{class => invalid, kind => snapshot_counter_untrusted,
-                      msg => ~"the snapshot budget predates this version and is untrusted; restart the node",
-                      ctx => #{}}};
-        missing ->
-            {error, #{class => invalid, kind => snapshot_counter_uninitialised,
-                      msg => ~"the snapshot budget counter is not initialised",
-                      ctx => #{}}}
-    end.
-
--spec refund(non_neg_integer()) -> integer().
-refund(Bytes) ->
-    case counter_state() of
-        {trusted, Ref} -> atomics:sub_get(Ref, 1, Bytes);
         _              -> 0
     end.
 

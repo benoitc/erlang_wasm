@@ -44,7 +44,7 @@ call inside a worker.
 | `max_heap_words` | Erlang terms on the owning process's own heap, applied by it. Not linear memory, not the object store |
 | `max_host_calls` | calls out through an import, per invocation |
 | `max_memory_pages` | every memory one instance can reach, imports included, and the object store it shares |
-| node page budget | linear memory and object stores across every instance |
+| node page budget | linear memory and object stores across every instance; for a restored memory, its page table and the pages it has written |
 | `max_rec_groups` | distinct recursive type groups interned node-wide |
 
 `max_memory_pages` counts an imported memory, because a module that imports one
@@ -82,7 +82,11 @@ the most tempting wrong claim available about this design. A process is a
    array is a row in ETS. Both are counted explicitly by `wasm_engine` instead,
    which is what `max_memory_pages` and the node page budget bound. A guest
    filling a twenty-million element array took 1.8 GB before the object store
-   was counted, with every limit reading zero.
+   was counted, with every limit reading zero. A snapshot's image is off-heap
+   binaries shared by every instance restored from it, bounded by
+   `max_snapshot_bytes`. An instance never writes to them: its first write to a
+   page copies that page into memory of its own, so one tenant's writes never
+   reach another restored from the same image.
 
 1. **Linear memory is invisible to `max_heap_size`.** It is `atomics`, which is
    off-heap. A module can exhaust node memory without its process heap moving.

@@ -70,3 +70,23 @@ code already resident beside them. `wasm_jit`'s `maybe_adopt` now looks for
 resident code first and consults the counter only when there is none, so an
 instance adopts on its first call; `test/audit/PERF.md` has the before and
 after.
+
+## Why a request's memory is a page table over the worker's image
+
+The runner restores the worker's image and the restored memory reads the
+image's pages in place, so a request allocates a page table and the 4 KiB
+pages it writes, and nothing else. When the runner exits, its arena goes back
+to the node and the image stays with the worker. There is no state to carry
+from one request to the next, which is why the kernel no longer recycles a
+destroyed instance's memory: that needed one process to restore every request
+and a mark on every store, and it shared nothing between workers.
+
+Two things a change here has to keep:
+
+- **The image outlives every memory restored from it.** The keeper counts each
+  restored memory as a holder of the image, so a worker that stops while a
+  runner is still finishing does not free pages the runner reads.
+- **One image per worker, not per file.** A worker loads its image from the
+  snapshot store itself, so fifty workers on one file hold fifty copies of its
+  pages. `test/audit/ATTEMPTS.md`, "Shared image pages: what was left out, and
+  the constants", says what sharing them would need.

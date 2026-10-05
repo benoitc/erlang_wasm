@@ -1,0 +1,9 @@
+{meta,restorebench,#{otp => "29",schedulers => {10,10},cwd => "/Users/benoitc/Projects/erlang_wasm-shared-pages",uptime => "1:54  up 9 days, 18:06, 41 users, load averages: 39.88 46.53 32.92",fixtures => [{"test/fixtures/lang/py_reactor.wasm",<<"a4dcd239d8262c9f074d9dc22d99bee8c1c89f52b543043dab41cad5a3003564">>},{"test/fixtures/lang/qjs_reactor.wasm",<<"7813fe2025c33b9e72645e696bfc8f14ecbc4a660a5d642b90af542473dbbabb">>},{"test/fixtures/lang/lua_reactor.wasm",<<"65a60e3119c4129e10e91a5bb4ba1abbed0d0baadfe6e1d2fe0822115e14d8eb">>},{"test/fixtures/snapshot/reactor.wasm",<<"813a2aaf9bbc3293c9b5420bd34194d23d6844c82395fe0cd5772f49948837f2">>}],wasm_vsn => "0.7.0"}}.
+{restore,py,[647.375,1293.375,690.542]}.
+{load_snapshot,py,[24568.708]}.
+{restore,qjs,[156.709,126.792,117.542]}.
+{load_snapshot,qjs,[1157.125]}.
+{restore,lua,[110.708,76.166,67.958]}.
+{load_snapshot,lua,[410.375]}.
+{restore,plain,[20.583,15.667,12.458]}.
+{load_snapshot,plain,[47.542]}.

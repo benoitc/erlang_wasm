@@ -1,0 +1,48 @@
+py_entry_mmap.terms count=124 pages_end=4092 count*per=4092 reserve=2 arena_begin=5 grow_begin=0 phys=[#{table =>
+                                                                                                             2,
+                                                                                                         arena =>
+                                                                                                             31,
+                                                                                                         growth =>
+                                                                                                             0}] unowned=[0]
+py_entry_paged.terms count=455 pages_end=4095 count*per=4095 reserve=2 arena_begin=3 grow_begin=0 phys=[#{table =>
+                                                                                                              2,
+                                                                                                          arena =>
+                                                                                                              7,
+                                                                                                          growth =>
+                                                                                                              0}] unowned=[0]
+py_mmap.terms count=83 pages_end=4067 count*per=4067 reserve=2 arena_begin=6 grow_begin=0 phys=[#{table =>
+                                                                                                      2,
+                                                                                                  arena =>
+                                                                                                      47,
+                                                                                                  growth =>
+                                                                                                      0}] unowned=[0]
+py_paged.terms count=124 pages_end=4092 count*per=4092 reserve=2 arena_begin=5 grow_begin=0 phys=[#{table =>
+                                                                                                        2,
+                                                                                                    arena =>
+                                                                                                        31,
+                                                                                                    growth =>
+                                                                                                        0}] unowned=[0]
+py_entry_mmap.terms count=455 pages_end=4095 count*per=4095 reserve=2 arena_begin=3 grow_begin=0 phys=[#{table =>
+                                                                                                             2,
+                                                                                                         arena =>
+                                                                                                             7,
+                                                                                                         growth =>
+                                                                                                             0}] unowned=[0]
+py_entry_paged.terms count=455 pages_end=4095 count*per=4095 reserve=2 arena_begin=3 grow_begin=0 phys=[#{table =>
+                                                                                                              2,
+                                                                                                          arena =>
+                                                                                                              7,
+                                                                                                          growth =>
+                                                                                                              0}] unowned=[0]
+py_mmap.terms count=124 pages_end=4092 count*per=4092 reserve=2 arena_begin=5 grow_begin=0 phys=[#{table =>
+                                                                                                       2,
+                                                                                                   arena =>
+                                                                                                       31,
+                                                                                                   growth =>
+                                                                                                       0}] unowned=[0]
+py_paged.terms count=124 pages_end=4092 count*per=4092 reserve=2 arena_begin=5 grow_begin=0 phys=[#{table =>
+                                                                                                        2,
+                                                                                                    arena =>
+                                                                                                        31,
+                                                                                                    growth =>
+                                                                                                        0}] unowned=[0]

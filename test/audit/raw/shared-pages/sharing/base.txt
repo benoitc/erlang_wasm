@@ -1,0 +1,140 @@
+== r1 base py
+# 0:34  up 8 days, 16:46, 38 users, load averages: 5.25 6.07 5.86
+#{k => 50,page_limit => 65536,guest => py,arm => sharing,
+  charged_pages_per_instance => 640.0,image_bytes => 7407000,
+  memory_before => {total,198219706},
+  memory_collected => {total,2392996466},
+  memory_held => {total,2395984810},
+  pages_after => 32000,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 43895535.2,
+  delta_per_instance => 43955302.08}
+== r1 base qjs
+# 0:34  up 8 days, 16:46, 38 users, load averages: 5.25 6.07 5.86
+#{k => 50,page_limit => 65536,guest => qjs,arm => sharing,
+  charged_pages_per_instance => 6.0,image_bytes => 211064,
+  memory_before => {total,84373543},
+  memory_collected => {total,130663231},
+  memory_held => {total,130880271},
+  pages_after => 300,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 925793.76,delta_per_instance => 930134.56}
+== r1 base lua
+# 0:34  up 8 days, 16:47, 38 users, load averages: 5.31 6.07 5.86
+#{k => 50,page_limit => 65536,guest => lua,arm => sharing,
+  charged_pages_per_instance => 3.0,image_bytes => 70456,
+  memory_before => {total,62330574},
+  memory_collected => {total,97342366},
+  memory_held => {total,101957510},
+  pages_after => 150,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 700235.84,delta_per_instance => 792538.72}
+== r2 base py
+# 0:34  up 8 days, 16:47, 38 users, load averages: 5.31 6.07 5.86
+#{k => 50,page_limit => 65536,guest => py,arm => sharing,
+  charged_pages_per_instance => 640.0,image_bytes => 7407000,
+  memory_before => {total,198602506},
+  memory_collected => {total,2391655586},
+  memory_held => {total,2391116202},
+  pages_after => 32000,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 43861061.6,
+  delta_per_instance => 43850273.92}
+== r2 base qjs
+# 0:34  up 8 days, 16:47, 38 users, load averages: 7.29 6.47 6.00
+#{k => 50,page_limit => 65536,guest => qjs,arm => sharing,
+  charged_pages_per_instance => 6.0,image_bytes => 211064,
+  memory_before => {total,84373127},
+  memory_collected => {total,127278663},
+  memory_held => {total,132793943},
+  pages_after => 300,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 858110.72,delta_per_instance => 968416.32}
+== r2 base lua
+# 0:34  up 8 days, 16:47, 38 users, load averages: 7.29 6.47 6.00
+#{k => 50,page_limit => 65536,guest => lua,arm => sharing,
+  charged_pages_per_instance => 3.0,image_bytes => 70456,
+  memory_before => {total,61650294},
+  memory_collected => {total,99585534},
+  memory_held => {total,100242278},
+  pages_after => 150,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 758704.8,delta_per_instance => 771839.68}
+== r3 base py
+# 0:34  up 8 days, 16:47, 38 users, load averages: 7.29 6.47 6.00
+#{k => 50,page_limit => 65536,guest => py,arm => sharing,
+  charged_pages_per_instance => 640.0,image_bytes => 7407000,
+  memory_before => {total,239119138},
+  memory_collected => {total,2409538618},
+  memory_held => {total,2397703466},
+  pages_after => 32000,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 43408389.6,
+  delta_per_instance => 43171686.56}
+== r3 base qjs
+# 0:34  up 8 days, 16:47, 38 users, load averages: 9.50 6.94 6.17
+#{k => 50,page_limit => 65536,guest => qjs,arm => sharing,
+  charged_pages_per_instance => 6.0,image_bytes => 211064,
+  memory_before => {total,84385511},
+  memory_collected => {total,129780431},
+  memory_held => {total,130258015},
+  pages_after => 300,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 907898.4,delta_per_instance => 917450.08}
+== r3 base lua
+# 0:34  up 8 days, 16:47, 38 users, load averages: 9.50 6.94 6.17
+#{k => 50,page_limit => 65536,guest => lua,arm => sharing,
+  charged_pages_per_instance => 3.0,image_bytes => 70456,
+  memory_before => {total,61648486},
+  memory_collected => {total,98849350},
+  memory_held => {total,100939494},
+  pages_after => 150,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 744017.28,delta_per_instance => 785820.16}
+== r4 base py
+# 0:35  up 8 days, 16:47, 38 users, load averages: 7.72 6.80 6.15
+#{k => 50,page_limit => 65536,guest => py,arm => sharing,
+  charged_pages_per_instance => 640.0,image_bytes => 7407000,
+  memory_before => {total,225482658},
+  memory_collected => {total,2398689178},
+  memory_held => {total,2393798186},
+  pages_after => 32000,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 43464130.4,
+  delta_per_instance => 43366310.56}
+== r4 base qjs
+# 0:35  up 8 days, 16:47, 38 users, load averages: 7.72 6.80 6.15
+#{k => 50,page_limit => 65536,guest => qjs,arm => sharing,
+  charged_pages_per_instance => 6.0,image_bytes => 211064,
+  memory_before => {total,84373679},
+  memory_collected => {total,129902943},
+  memory_held => {total,129774087},
+  pages_after => 300,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 910585.28,delta_per_instance => 908008.16}
+== r4 base lua
+# 0:35  up 8 days, 16:47, 38 users, load averages: 7.72 6.80 6.15
+#{k => 50,page_limit => 65536,guest => lua,arm => sharing,
+  charged_pages_per_instance => 3.0,image_bytes => 70456,
+  memory_before => {total,61670534},
+  memory_collected => {total,90360886},
+  memory_held => {total,101126430},
+  pages_after => 150,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 573807.04,delta_per_instance => 789117.92}
+== r5 base py
+# 0:35  up 8 days, 16:47, 38 users, load averages: 7.72 6.80 6.15
+#{k => 50,page_limit => 65536,guest => py,arm => sharing,
+  charged_pages_per_instance => 640.0,image_bytes => 7407000,
+  memory_before => {total,198183346},
+  memory_collected => {total,2396643114},
+  memory_held => {total,2399222994},
+  pages_after => 32000,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 43969195.36,
+  delta_per_instance => 44020792.96}
+== r5 base qjs
+# 0:35  up 8 days, 16:47, 38 users, load averages: 7.50 6.77 6.14
+#{k => 50,page_limit => 65536,guest => qjs,arm => sharing,
+  charged_pages_per_instance => 6.0,image_bytes => 211064,
+  memory_before => {total,84391399},
+  memory_collected => {total,132527823},
+  memory_held => {total,129656063},
+  pages_after => 300,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 962728.48,delta_per_instance => 905293.28}
+== r5 base lua
+# 0:35  up 8 days, 16:47, 38 users, load averages: 7.50 6.77 6.14
+#{k => 50,page_limit => 65536,guest => lua,arm => sharing,
+  charged_pages_per_instance => 3.0,image_bytes => 70456,
+  memory_before => {total,62335774},
+  memory_collected => {total,95129870},
+  memory_held => {total,101041086},
+  pages_after => 150,pages_before => 0,verdict => ok,
+  collected_delta_per_instance => 655881.92,delta_per_instance => 774106.24}

@@ -1,0 +1,405 @@
+== r1 cand steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 49,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 24929.125,min_us => 23190.25}
+== r1 cand steady py compiled off
+failed: {exit,
+         {wrong_result,
+          {error,
+           #{msg => <<"internal error">>,kind => runtime_failure,
+             class => runtime,
+             ctx =>
+              #{error =>
+                 #{msg => <<"internal error">>,kind => internal,
+                   class => malformed,
+                   ctx =>
+                    #{stacktrace =>
+                       [{erlang,element,
+                         [4,0],
+                         [{error_info,#{module => erl_erts_errors}}]},
+                        {wasm_code_7,wasm_f_567,10,[]},
+                        {wasm_code_7,'-wasm_f_569/9-wasm_k_3/21-22-',22,[]},
+                        {wasm_code_7,'-wasm_f_176/7-wasm_k_0/11-0-',12,[]},
+                        {wasm_code_7,invoke,6,[]},
+                        {wasm_exec,indirect_out,9,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1127}]},
+                        {wasm_code_7,'-wasm_f_167/4-wasm_k_1/10-1-',11,[]},
+                        {wasm_code_7,wasm_f_0,3,[]}],
+                      func => 50,
+                      exception => {error,badarg}}},
+                channels =>
+                 #{stdout => <<>>,stderr => <<>>,result => <<>>}}}}}}
+[{requestbench,traced,5,[{file,"bench/paths/requestbench.erl"},{line,157}]},
+ {requestbench,measure,6,[{file,"bench/paths/requestbench.erl"},{line,112}]},
+ {requestbench,run,6,[{file,"bench/paths/requestbench.erl"},{line,82}]},
+ {requestbench,main,1,[{file,"bench/paths/requestbench.erl"},{line,55}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+== r1 cand steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 10,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13620.125,min_us => 12766.291}
+== r1 cand steady qjs compiled off
+failed: {exit,
+         {wrong_result,
+          {error,
+           #{msg => <<"internal error">>,kind => runtime_failure,
+             class => runtime,
+             ctx =>
+              #{error =>
+                 #{msg => <<"internal error">>,kind => internal,
+                   class => malformed,
+                   ctx =>
+                    #{stacktrace =>
+                       [{erlang,element,
+                         [4,3073],
+                         [{error_info,#{module => erl_erts_errors}}]},
+                        {wasm_code_7,wasm_f_157,10,[]},
+                        {wasm_code_7,'-wasm_f_54/11-wasm_k_1/23-2-',24,[]},
+                        {wasm_code_7,invoke,6,[]},
+                        {wasm_exec,indirect_out,9,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1127}]},
+                        {wasm_code_7,'-wasm_f_127/8-wasm_k_0/15-1-',16,[]},
+                        {wasm_code_7,'-wasm_f_1/3-wasm_k_0/22-0-',23,[]},
+                        {wasm_code_7,invoke,6,[]}],
+                      func => 26,
+                      exception => {error,badarg}}},
+                channels =>
+                 #{stdout => <<>>,stderr => <<>>,result => <<>>}}}}}}
+[{requestbench,traced,5,[{file,"bench/paths/requestbench.erl"},{line,157}]},
+ {requestbench,measure,6,[{file,"bench/paths/requestbench.erl"},{line,112}]},
+ {requestbench,run,6,[{file,"bench/paths/requestbench.erl"},{line,82}]},
+ {requestbench,main,1,[{file,"bench/paths/requestbench.erl"},{line,55}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+== r1 cand steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7377.416,min_us => 7030.292}
+== r1 cand steady lua compiled off
+failed: {exit,
+         {wrong_result,
+          {error,
+           #{msg => <<"internal error">>,kind => runtime_failure,
+             class => runtime,
+             ctx =>
+              #{error =>
+                 #{msg => <<"internal error">>,kind => internal,
+                   class => malformed,
+                   ctx =>
+                    #{stacktrace =>
+                       [{erlang,element,
+                         [4,513],
+                         [{error_info,#{module => erl_erts_errors}}]},
+                        {wasm_code_9,wasm_f_109,6,[]},
+                        {wasm_code_9,wasm_f_104,5,[]},
+                        {wasm_code_9,'-wasm_f_103/5-wasm_k_3/17-9-',18,[]},
+                        {wasm_code_9,invoke,6,[]},
+                        {wasm_exec,do_call,4,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1553}]},
+                        {wasm_exec,with_depth,2,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1056}]},
+                        {wasm_exec,call_out,7,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1028}]}],
+                      func => 22,
+                      exception => {error,badarg}}},
+                channels =>
+                 #{stdout => <<>>,stderr => <<>>,result => <<>>}}}}}}
+[{requestbench,traced,5,[{file,"bench/paths/requestbench.erl"},{line,157}]},
+ {requestbench,measure,6,[{file,"bench/paths/requestbench.erl"},{line,112}]},
+ {requestbench,run,6,[{file,"bench/paths/requestbench.erl"},{line,82}]},
+ {requestbench,main,1,[{file,"bench/paths/requestbench.erl"},{line,55}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+== r2 cand steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 49,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 27123.708,min_us => 25323.208}
+== r2 cand steady py compiled off
+failed: {exit,
+         {wrong_result,
+          {error,
+           #{msg => <<"internal error">>,kind => runtime_failure,
+             class => runtime,
+             ctx =>
+              #{error =>
+                 #{msg => <<"internal error">>,kind => internal,
+                   class => malformed,
+                   ctx =>
+                    #{stacktrace =>
+                       [{erlang,element,
+                         [4,0],
+                         [{error_info,#{module => erl_erts_errors}}]},
+                        {wasm_code_7,wasm_f_567,10,[]},
+                        {wasm_code_7,'-wasm_f_569/9-wasm_k_3/21-22-',22,[]},
+                        {wasm_code_7,'-wasm_f_176/7-wasm_k_0/11-0-',12,[]},
+                        {wasm_code_7,invoke,6,[]},
+                        {wasm_exec,indirect_out,9,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1127}]},
+                        {wasm_code_7,'-wasm_f_167/4-wasm_k_1/10-1-',11,[]},
+                        {wasm_code_7,wasm_f_0,3,[]}],
+                      func => 50,
+                      exception => {error,badarg}}},
+                channels =>
+                 #{stdout => <<>>,stderr => <<>>,result => <<>>}}}}}}
+[{requestbench,traced,5,[{file,"bench/paths/requestbench.erl"},{line,157}]},
+ {requestbench,measure,6,[{file,"bench/paths/requestbench.erl"},{line,112}]},
+ {requestbench,run,6,[{file,"bench/paths/requestbench.erl"},{line,82}]},
+ {requestbench,main,1,[{file,"bench/paths/requestbench.erl"},{line,55}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+== r2 cand steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13723.042,min_us => 12265.0}
+== r2 cand steady qjs compiled off
+failed: {exit,
+         {wrong_result,
+          {error,
+           #{msg => <<"internal error">>,kind => runtime_failure,
+             class => runtime,
+             ctx =>
+              #{error =>
+                 #{msg => <<"internal error">>,kind => internal,
+                   class => malformed,
+                   ctx =>
+                    #{stacktrace =>
+                       [{erlang,element,
+                         [4,3073],
+                         [{error_info,#{module => erl_erts_errors}}]},
+                        {wasm_code_7,wasm_f_157,10,[]},
+                        {wasm_code_7,'-wasm_f_54/11-wasm_k_1/23-2-',24,[]},
+                        {wasm_code_7,invoke,6,[]},
+                        {wasm_exec,indirect_out,9,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1127}]},
+                        {wasm_code_7,'-wasm_f_127/8-wasm_k_0/15-1-',16,[]},
+                        {wasm_code_7,'-wasm_f_1/3-wasm_k_0/22-0-',23,[]},
+                        {wasm_code_7,invoke,6,[]}],
+                      func => 26,
+                      exception => {error,badarg}}},
+                channels =>
+                 #{stdout => <<>>,stderr => <<>>,result => <<>>}}}}}}
+[{requestbench,traced,5,[{file,"bench/paths/requestbench.erl"},{line,157}]},
+ {requestbench,measure,6,[{file,"bench/paths/requestbench.erl"},{line,112}]},
+ {requestbench,run,6,[{file,"bench/paths/requestbench.erl"},{line,82}]},
+ {requestbench,main,1,[{file,"bench/paths/requestbench.erl"},{line,55}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+== r2 cand steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 10,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7962.334,min_us => 7157.916}
+== r2 cand steady lua compiled off
+failed: {exit,
+         {wrong_result,
+          {error,
+           #{msg => <<"internal error">>,kind => runtime_failure,
+             class => runtime,
+             ctx =>
+              #{error =>
+                 #{msg => <<"internal error">>,kind => internal,
+                   class => malformed,
+                   ctx =>
+                    #{stacktrace =>
+                       [{erlang,element,
+                         [4,513],
+                         [{error_info,#{module => erl_erts_errors}}]},
+                        {wasm_code_9,wasm_f_109,6,[]},
+                        {wasm_code_9,wasm_f_104,5,[]},
+                        {wasm_code_9,'-wasm_f_103/5-wasm_k_3/17-9-',18,[]},
+                        {wasm_code_9,invoke,6,[]},
+                        {wasm_exec,do_call,4,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1553}]},
+                        {wasm_exec,with_depth,2,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1056}]},
+                        {wasm_exec,call_out,7,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1028}]}],
+                      func => 22,
+                      exception => {error,badarg}}},
+                channels =>
+                 #{stdout => <<>>,stderr => <<>>,result => <<>>}}}}}}
+[{requestbench,traced,5,[{file,"bench/paths/requestbench.erl"},{line,157}]},
+ {requestbench,measure,6,[{file,"bench/paths/requestbench.erl"},{line,112}]},
+ {requestbench,run,6,[{file,"bench/paths/requestbench.erl"},{line,82}]},
+ {requestbench,main,1,[{file,"bench/paths/requestbench.erl"},{line,55}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+== r3 cand steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 48,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 25627.958,min_us => 23869.625}
+== r3 cand steady py compiled off
+failed: {exit,
+         {wrong_result,
+          {error,
+           #{msg => <<"internal error">>,kind => runtime_failure,
+             class => runtime,
+             ctx =>
+              #{error =>
+                 #{msg => <<"internal error">>,kind => internal,
+                   class => malformed,
+                   ctx =>
+                    #{stacktrace =>
+                       [{erlang,element,
+                         [4,0],
+                         [{error_info,#{module => erl_erts_errors}}]},
+                        {wasm_code_7,wasm_f_567,10,[]},
+                        {wasm_code_7,'-wasm_f_569/9-wasm_k_3/21-22-',22,[]},
+                        {wasm_code_7,'-wasm_f_176/7-wasm_k_0/11-0-',12,[]},
+                        {wasm_code_7,invoke,6,[]},
+                        {wasm_exec,indirect_out,9,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1127}]},
+                        {wasm_code_7,'-wasm_f_167/4-wasm_k_1/10-1-',11,[]},
+                        {wasm_code_7,wasm_f_0,3,[]}],
+                      func => 50,
+                      exception => {error,badarg}}},
+                channels =>
+                 #{stdout => <<>>,stderr => <<>>,result => <<>>}}}}}}
+[{requestbench,traced,5,[{file,"bench/paths/requestbench.erl"},{line,157}]},
+ {requestbench,measure,6,[{file,"bench/paths/requestbench.erl"},{line,112}]},
+ {requestbench,run,6,[{file,"bench/paths/requestbench.erl"},{line,82}]},
+ {requestbench,main,1,[{file,"bench/paths/requestbench.erl"},{line,55}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+== r3 cand steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 14855.667,min_us => 14072.0}
+== r3 cand steady qjs compiled off
+failed: {exit,
+         {wrong_result,
+          {error,
+           #{msg => <<"internal error">>,kind => runtime_failure,
+             class => runtime,
+             ctx =>
+              #{error =>
+                 #{msg => <<"internal error">>,kind => internal,
+                   class => malformed,
+                   ctx =>
+                    #{stacktrace =>
+                       [{erlang,element,
+                         [4,3073],
+                         [{error_info,#{module => erl_erts_errors}}]},
+                        {wasm_code_7,wasm_f_157,10,[]},
+                        {wasm_code_7,'-wasm_f_54/11-wasm_k_1/23-2-',24,[]},
+                        {wasm_code_7,invoke,6,[]},
+                        {wasm_exec,indirect_out,9,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1127}]},
+                        {wasm_code_7,'-wasm_f_127/8-wasm_k_0/15-1-',16,[]},
+                        {wasm_code_7,'-wasm_f_1/3-wasm_k_0/22-0-',23,[]},
+                        {wasm_code_7,invoke,6,[]}],
+                      func => 26,
+                      exception => {error,badarg}}},
+                channels =>
+                 #{stdout => <<>>,stderr => <<>>,result => <<>>}}}}}}
+[{requestbench,traced,5,[{file,"bench/paths/requestbench.erl"},{line,157}]},
+ {requestbench,measure,6,[{file,"bench/paths/requestbench.erl"},{line,112}]},
+ {requestbench,run,6,[{file,"bench/paths/requestbench.erl"},{line,82}]},
+ {requestbench,main,1,[{file,"bench/paths/requestbench.erl"},{line,55}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]
+== r3 cand steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 8,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8296.625,min_us => 7780.5}
+== r3 cand steady lua compiled off
+failed: {exit,
+         {wrong_result,
+          {error,
+           #{msg => <<"internal error">>,kind => runtime_failure,
+             class => runtime,
+             ctx =>
+              #{error =>
+                 #{msg => <<"internal error">>,kind => internal,
+                   class => malformed,
+                   ctx =>
+                    #{stacktrace =>
+                       [{erlang,element,
+                         [4,513],
+                         [{error_info,#{module => erl_erts_errors}}]},
+                        {wasm_code_9,wasm_f_109,6,[]},
+                        {wasm_code_9,wasm_f_104,5,[]},
+                        {wasm_code_9,'-wasm_f_103/5-wasm_k_3/17-9-',18,[]},
+                        {wasm_code_9,invoke,6,[]},
+                        {wasm_exec,do_call,4,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1553}]},
+                        {wasm_exec,with_depth,2,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1056}]},
+                        {wasm_exec,call_out,7,
+                         [{file,
+                           "/Users/benoitc/Projects/erlang_wasm-shared-pages/src/wasm_exec.erl"},
+                          {line,1028}]}],
+                      func => 22,
+                      exception => {error,badarg}}},
+                channels =>
+                 #{stdout => <<>>,stderr => <<>>,result => <<>>}}}}}}
+[{requestbench,traced,5,[{file,"bench/paths/requestbench.erl"},{line,157}]},
+ {requestbench,measure,6,[{file,"bench/paths/requestbench.erl"},{line,112}]},
+ {requestbench,run,6,[{file,"bench/paths/requestbench.erl"},{line,82}]},
+ {requestbench,main,1,[{file,"bench/paths/requestbench.erl"},{line,55}]},
+ {init,start_it,1,[]},
+ {init,start_em,1,[]},
+ {init,do_boot,3,[]}]

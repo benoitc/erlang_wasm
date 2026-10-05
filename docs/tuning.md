@@ -51,6 +51,22 @@ on at all.
 
 ## Give the request runner a heap floor
 
+The shipped adapters already set the floor they were measured at, through
+their `defaults/1`: 200,000 words for `wasm_lua` and `wasm_javascript` on
+either tier, and for `wasm_python` 1,500,000 on the compiled tier and
+1,000,000 on the interpreter. You need this section to change or disable one,
+or to find the number for your own adapter.
+
+Override a default by passing the option, or disable it with `0`:
+
+<!-- check: modules my_adapter -->
+```erlang
+wasm_script_worker:start_link(my_adapter, #{root => scratch,
+                                       runner_min_heap_words => 0}).
+```
+
+Set one for an adapter that has none:
+
 <!-- check: modules my_adapter -->
 ```erlang
 wasm_script_worker:start_link(my_adapter, #{root => scratch,
@@ -118,6 +134,13 @@ Two things to know before you set it:
 
 `wasm_script_worker:runner_heap_words/2` answers what a given pair of options and
 limits resolves to, so you can check a configuration without starting a worker.
+It reads only the options you pass it; merge the adapter's `defaults/1`, asked
+with the worker's limits, under them first to see what a worker would get.
+
+A default that does not fit is refused the same way, and the warning says
+`(the adapter's default)`, so you can tell it from a value you set. A Lua or
+QuickJS default lacks room only under 400,000 words, and CPython's under
+2,000,000 interpreted and 3,000,000 compiled.
 
 ## Give the capture a floor as well
 
@@ -142,6 +165,11 @@ small for the same reason, and it is larger because the work is longer. It only
 applies where a capture happens: a worker reading its image from `snapshot_dir`
 pays none of this, and neither does an adapter that declares no snapshot
 capability.
+
+No shipped adapter sets a capture floor by default. CPython's 2,000,000 words
+under the 16 M words of `wasm_python:limits/0` killed the capture in three
+starts of four on 0.7.0, so set it only together with a larger
+`max_heap_words`, as [Python](python.md) does.
 
 ## Do not reach for `+hms` first
 
@@ -246,6 +274,78 @@ Run your own with the `throughput` mode, and read the caveat in
 by interleaving the way a latency sweep can, so it needs a quiet machine and
 there is no trick that substitutes for one.
 
+## How much memory the floors hold
+
+Read this before you size a node for many workers. A runner's floor is held
+only while that runner executes a request, and a worker executes at most one
+at a time; queued requests hold nothing, and the runner's heap goes when the
+request ends. So the extra memory is at most the floor times the number of
+**busy workers**, not times requests per second or callers waiting.
+
+Measured with ten workers, compiled tier except where noted, at 64 and 256
+callers, floors on against off, two rounds:
+
+| guest | throughput | extra `erlang:memory(total)`, mean |
+| --- | ---: | ---: |
+| Lua | +13 to 18% | 17 to 18 MB |
+| QuickJS | +8 to 13% | 13 MB |
+| CPython, 1,000,000 | +17 to 24% | 51 to 55 MB |
+| CPython, 1,500,000 | +29 to 34% | 53 to 56 MB |
+| Lua, interpreted | 2.1 to 2.2x | 14 to 16 MB |
+
+The extra memory did not grow from 64 callers to 256. With the floors, the
+collector's share of CPU fell from about 9% to 1% on Lua, p99 fell, and
+allocator segment calls fell 2 to 4x.
+
+To size a node, apply Little's law: busy workers = requests per second x time
+per request. As an extrapolation from the table, not a measurement, at 10,000
+requests per second:
+
+| guest | busy workers, off | on | held by the floors |
+| --- | ---: | ---: | ---: |
+| Lua | 96 | 83 | about 145 MB |
+| QuickJS | 133 | 120 | about 155 MB |
+| CPython, 1,500,000 | 346 | 265 | 1.4 to 1.5 GB |
+| Lua, interpreted | 393 | 182 | about 280 MB |
+
+The floors hold that memory and in return need 10 to 54% fewer workers busy
+for the same rate.
+
+### Why the operating system sees more than `erlang:memory`
+
+Read this when a node's RSS is higher than `erlang:memory(total)` explains
+after you give runners a floor. A floor of 200,000 words rounds up to a heap
+of 318,187 words, about 2.5 MB, which is above the process heap allocator's
+single-block threshold (`sbct`, 512 KB). So every floored runner heap is a
+carrier of its own. When the runner exits, that carrier goes to the emulator's
+segment cache rather than back to the operating system, and the cache keeps
+up to 10 segments per allocator instance. Those dirty pages count in RSS and
+not in `erlang:memory`.
+
+Ten workers, 64 callers, mean over two rounds:
+
+| guest | floors off | floors on | floors on, `+MMmcs 0` |
+| --- | ---: | ---: | ---: |
+| Lua, RSS | 150 MB | 261 MB | 151 MB |
+| QuickJS, RSS | 317 MB | 496 MB | 317 MB |
+
+`+MMmcs 2` keeps a small cache and recovers most of Lua's gap (194 MB) and
+part of QuickJS's (332 MB). Raising `+MHsbct` does not help: the heaps become
+multiblock carriers, which are cached the same way.
+
+The flag trades against the section below. A larger segment cache makes
+restores faster when many workers allocate at once, and a smaller one returns
+memory sooner. Which way the throughput goes with `+MMmcs 0` under the floors
+is not measured yet: on this machine it moved by less than the 30 to 60% the
+rounds varied by. Choose it when RSS is the limit, and measure your own pool.
+
+CPython's RSS is not a reliable guide here. On a machine under memory
+pressure the operating system compresses idle pages out of it, so read
+`footprint` (macOS) or the process's proportional set size instead. By
+footprint, floors on with `+MMmcs 0` came to about 1,310 MB against about
+1,450 MB for floors off with the same flag: a heap that starts at its working
+size does not leave a trail of outgrown ones.
+
 ## Serve many callers from a pool
 
 Use this when a pool of workers answers fewer requests a second than its
@@ -272,9 +372,10 @@ and 0.5.0 gave 167 to 211, and the busier the disk the wider the gap: a request
 no longer waits for another request's file system calls. `test/audit/PERF.md`
 has every run.
 
-With those queues at 0 to 2, what is left is CPU: a restore writes the image
-into memory one word at a time and allocates about 42 MB of pages, and the
-guest runs. On this machine 10 of the 14 cores are performance cores, so 14
+With those queues at 0 to 2, what was left was CPU: at the time a restore
+wrote the image into memory one word at a time and allocated about 42 MB of
+pages, and the guest ran. A restore now shares the image and copies only the
+pages a request writes (see "Every request shares the image" below). On this machine 10 of the 14 cores are performance cores, so 14
 workers do not get 14 times one request's rate.
 
 ### Restore the next instance ahead
@@ -295,6 +396,10 @@ requests, median of 60 in one emulator:
 | the guest's own call | 28.3 ms | 28.3 ms |
 | whole request, first to last callback | 46.4 ms | 30.0 ms |
 
+Those figures predate shared images. A CPython restore is now about 0.8 ms,
+so `restore_ahead` saves less than it did, and a request still pays its
+first-write copies inside the call.
+
 It needs idle time between a worker's requests. A pool that hands the next
 request to the worker that just answered gives it none, so rotate idle workers
 (first in, first out). At full load it adds no throughput: the restore still
@@ -302,9 +407,10 @@ runs, only earlier. Each idle worker holds one restored instance.
 
 ### Keep freed memory segments
 
-A restore allocates its linear memory fresh, and with many workers restoring
-at once the operating system's page mapping becomes a cost of its own. Letting
-the emulator cache more freed segments halves it:
+Memory a guest grows, and the arena a restored memory copies its written pages
+into, are allocated fresh, and with many workers allocating at once the
+operating system's page mapping becomes a cost of its own. Letting the emulator
+cache more freed segments halves it:
 
 ```sh
 erl +MMmcs 30 +MMamcbf 1000000 ...
@@ -315,7 +421,11 @@ erl +MMmcs 30 +MMamcbf 1000000 ...
 | default | 4.0 ms | 11.1 ms |
 | `+MMmcs 30 +MMamcbf 1000000` | 2.4 ms | 5.2 ms |
 
-End to end on the pool above that was worth about 3%.
+End to end on the pool above that was worth about 3%, measured when a
+CPython restore still allocated all 43 chunks; a restore now allocates only
+what the request writes, so expect less. The same cache holds
+freed runner heaps, so with heap floors it also raises RSS: see "Why the
+operating system sees more than `erlang:memory`" above before you raise it.
 
 ## Stop compiling the same Python on every request
 
@@ -339,66 +449,16 @@ which `restore_ahead` above takes off the request's path. These were taken
 while another job loaded the machine (load average 250 to 275), so read the
 gaps rather than the absolute times; `test/audit/PERF.md` has the runs.
 
-## Rewrite only what a request wrote
+## Every request shares the image
 
-A script worker restores the same image for every request, and a request
-writes a few percent of it: 44 of the 640 chunks of 64 KiB in a CPython
-request. So every restore recycles: the next instance takes the last one's
-memory and only the chunks it wrote are rewritten. Nothing to set.
-[Snapshots](snapshots.md) has the option for a host that restores by hand.
+A script worker restores its image for every request and keeps nothing between
+requests. The restored memory reads the image's pages in place, and a request
+copies only the 4 KiB pages it writes, so a node holds one copy of each image
+however many requests run on it. Nothing to set.
 
-Without `restore_ahead` the worker keeps that memory between requests, and
-`recycle_idle` bounds how long an idle worker does. While kept it counts in the
-node's page budget: up to about 40 MB per idle CPython worker, for at most
-`recycle_idle`. A node at its budget keeps nothing. Set it to `0`
-for a worker that should hold nothing between requests:
-
-<!-- check: modules my_adapter -->
-```erlang
-{ok, W} = wasm_script_worker:start_link(my_adapter, #{root => scratch,
-                                                      recycle_idle => 0}).
-```
-
-On CPython, 14 workers without `restore_ahead`, recycling took a pool from
-about 240 to about 340 requests a second at 64 callers, and one caller's median
-from 28 to 20 ms. `test/audit/PERF.md` has the runs.
-
-A CPython restore, median, in a runner-sized process:
-
-| restore | per restore |
-| --- | ---: |
-| into fresh memory | 12.0 ms |
-| recycled, 64 KiB chunks | 3.9 ms |
-| recycled, 256 KiB chunks | 6.1 ms |
-| recycled, 1 MiB chunks | 7.5 ms |
-
-Smaller chunks rewrite less of what a request touched, which is why 64 KiB is
-what a recycling restore uses.
-
-It costs every store a mark, so the chunks it wrote are known. Measured in
-generated code on a loop of stores, and on the guest's own call in the same
-CPython request:
-
-| | before | recycling |
-| --- | ---: | ---: |
-| a store in generated code | 12.3 ns | 16.7 ns |
-| a store, memory not recycled | 12.3 ns | 12.6 ns |
-| `handle()`, the guest's call | 26.3 ms | 30.4 ms |
-| `call()`, the guest's call | 2.3 ms | 2.5 ms |
-
-A request that compiles its source on every call, as `handle()` does, is the
-store-heavy case and pays about 4 ms; the restore saves about 8. With the entry
-`call()` runs, the mark is 0.15 ms.
-
-What it did to throughput, CPython, 14 workers, 64 callers, `restore_ahead` on,
-the three builds interleaved twice on a machine with other load on it (load
-average 57 to 98):
-
-| build | requests a second |
-| --- | ---: |
-| 0.5.0 | 128 to 156 |
-| 0.6.0 without recycling | 201 to 275 |
-| 0.6.0 | 368 to 466 |
+The node page budget counts what is allocated: a restored memory's page table
+and the pages it wrote, and for any memory its growth in whole chunks. A
+memory created at three pages sits in one 256 KiB chunk and counts four.
 
 ## What this project has not measured
 

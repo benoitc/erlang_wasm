@@ -1,0 +1,78 @@
+== r1 v4  4:08  up 8 days, 20:20, 39 users, load averages: 4.24 6.00 8.43
+#  4:08  up 8 days, 20:20, 39 users, load averages: 4.24 6.00 8.43 cand=true
+py #{total => 27789,read => 261,decode => 21777,build => 4695,
+     from_parts => 196,image_reserve => 6,local_build_copy => 5848,
+     local_build_nocopy => 5729,local_by_page => 185,owner_nobuild => 640}
+  shape [#{runs => 1547,pages => 640,file_bytes => 2747411,
+           run_bytes => 7407480,touched_pages => 127,whole_run_pages => 20}]
+  digest 875CF713263370EB6A240E5364CBBCF9FE7F73EA6466555CD4BAFDA82E6AFAF0
+qjs #{total => 1301,read => 39,decode => 838,build => 328,from_parts => 16,
+      image_reserve => 3,local_build_copy => 359,local_build_nocopy => 337,
+      local_by_page => 14,owner_nobuild => 104}
+  shape [#{runs => 435,pages => 6,file_bytes => 101632,run_bytes => 211080,
+           touched_pages => 6,whole_run_pages => 0}]
+  digest C997EB7470656158611F5B285C2EE4AB07BBA576611A2A17F640FEB98717CDF0
+lua #{total => 428,read => 27,decode => 239,build => 142,from_parts => 4,
+      image_reserve => 3,local_build_copy => 131,local_build_nocopy => 128,
+      local_by_page => 0,owner_nobuild => 39}
+  shape [#{runs => 9,pages => 3,file_bytes => 35362,run_bytes => 70456,
+           touched_pages => 3,whole_run_pages => 0}]
+  digest B5CC72322B59F229D7CD3CEC18B7DAD01F61CB2C63C67480EAB79F7D16FCC641
+plain #{total => 76,read => 18,decode => 3,build => 46,from_parts => 0,
+        image_reserve => 3,local_build_copy => 48,local_build_nocopy => 44,
+        local_by_page => 0,owner_nobuild => 7}
+  shape [#{runs => 1,pages => 1,file_bytes => 345,run_bytes => 8,
+           touched_pages => 1,whole_run_pages => 0}]
+  digest 74E23AC2D60E4E0A3A1A8085AF14C9C5F3F1706033401B515045BFE33603A0C2
+== r2 v4  4:08  up 8 days, 20:20, 39 users, load averages: 4.62 6.05 8.44
+#  4:08  up 8 days, 20:20, 39 users, load averages: 4.62 6.05 8.44 cand=true
+py #{total => 28066,read => 244,decode => 22295,build => 5006,
+     from_parts => 197,image_reserve => 5,local_build_copy => 6058,
+     local_build_nocopy => 5804,local_by_page => 183,owner_nobuild => 641}
+  shape [#{runs => 1547,pages => 640,file_bytes => 2747411,
+           run_bytes => 7407480,touched_pages => 127,whole_run_pages => 20}]
+  digest 875CF713263370EB6A240E5364CBBCF9FE7F73EA6466555CD4BAFDA82E6AFAF0
+qjs #{total => 1334,read => 30,decode => 870,build => 330,from_parts => 16,
+      image_reserve => 3,local_build_copy => 335,local_build_nocopy => 322,
+      local_by_page => 11,owner_nobuild => 101}
+  shape [#{runs => 435,pages => 6,file_bytes => 101632,run_bytes => 211080,
+           touched_pages => 6,whole_run_pages => 0}]
+  digest C997EB7470656158611F5B285C2EE4AB07BBA576611A2A17F640FEB98717CDF0
+lua #{total => 452,read => 27,decode => 251,build => 148,from_parts => 4,
+      image_reserve => 3,local_build_copy => 134,local_build_nocopy => 128,
+      local_by_page => 0,owner_nobuild => 39}
+  shape [#{runs => 9,pages => 3,file_bytes => 35362,run_bytes => 70456,
+           touched_pages => 3,whole_run_pages => 0}]
+  digest B5CC72322B59F229D7CD3CEC18B7DAD01F61CB2C63C67480EAB79F7D16FCC641
+plain #{total => 100,read => 33,decode => 4,build => 54,from_parts => 1,
+        image_reserve => 5,local_build_copy => 46,local_build_nocopy => 44,
+        local_by_page => 0,owner_nobuild => 7}
+  shape [#{runs => 1,pages => 1,file_bytes => 345,run_bytes => 8,
+           touched_pages => 1,whole_run_pages => 0}]
+  digest 74E23AC2D60E4E0A3A1A8085AF14C9C5F3F1706033401B515045BFE33603A0C2
+== r3 v4  4:08  up 8 days, 20:20, 39 users, load averages: 6.19 6.35 8.50
+#  4:08  up 8 days, 20:20, 39 users, load averages: 6.19 6.35 8.50 cand=true
+py #{total => 27502,read => 236,decode => 21870,build => 4599,
+     from_parts => 200,image_reserve => 5,local_build_copy => 5675,
+     local_build_nocopy => 5403,local_by_page => 182,owner_nobuild => 633}
+  shape [#{runs => 1547,pages => 640,file_bytes => 2747411,
+           run_bytes => 7407480,touched_pages => 127,whole_run_pages => 20}]
+  digest 875CF713263370EB6A240E5364CBBCF9FE7F73EA6466555CD4BAFDA82E6AFAF0
+qjs #{total => 1265,read => 32,decode => 834,build => 310,from_parts => 16,
+      image_reserve => 2,local_build_copy => 308,local_build_nocopy => 309,
+      local_by_page => 10,owner_nobuild => 103}
+  shape [#{runs => 435,pages => 6,file_bytes => 101632,run_bytes => 211080,
+           touched_pages => 6,whole_run_pages => 0}]
+  digest C997EB7470656158611F5B285C2EE4AB07BBA576611A2A17F640FEB98717CDF0
+lua #{total => 420,read => 27,decode => 238,build => 130,from_parts => 4,
+      image_reserve => 3,local_build_copy => 127,local_build_nocopy => 120,
+      local_by_page => 0,owner_nobuild => 38}
+  shape [#{runs => 9,pages => 3,file_bytes => 35362,run_bytes => 70456,
+           touched_pages => 3,whole_run_pages => 0}]
+  digest B5CC72322B59F229D7CD3CEC18B7DAD01F61CB2C63C67480EAB79F7D16FCC641
+plain #{total => 70,read => 23,decode => 2,build => 46,from_parts => 0,
+        image_reserve => 3,local_build_copy => 47,local_build_nocopy => 44,
+        local_by_page => 0,owner_nobuild => 7}
+  shape [#{runs => 1,pages => 1,file_bytes => 345,run_bytes => 8,
+           touched_pages => 1,whole_run_pages => 0}]
+  digest 74E23AC2D60E4E0A3A1A8085AF14C9C5F3F1706033401B515045BFE33603A0C2

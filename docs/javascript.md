@@ -115,10 +115,12 @@ Notes:
 - The numbers, their null experiment and where the time goes are in
   `test/audit/PERF.md`.
 
-## Give the runner a heap floor
+## The runner's heap floor
 
-Do this. It is the largest single thing you can do to a QuickJS request and it
-is one option:
+`wasm_javascript` gives every request runner a 200,000-word heap floor by
+default. It is the largest single thing you can do to a QuickJS request, and
+you get it without setting anything. Set the option yourself to change it, or
+pass `0` to turn it off:
 
 <!-- check: run -->
 <!-- check: fresh -->
@@ -127,16 +129,16 @@ is one option:
 {ok, W} = wasm_script_worker:start_link(
             wasm_javascript,
             #{path => "test/fixtures/lang/qjs_reactor.wasm",
-              runner_min_heap_words => 200_000,
+              runner_min_heap_words => 400_000,
               limits => #{timeout => 30_000, fuel => infinity,
                           max_memory_pages => 4096,
                           max_heap_words => 16 * 1024 * 1024}}).
 ```
 
-**56.0 ms a request becomes 21.1 ms**, because 61% of an unfloored request was
-garbage collection: a restored instance keeps almost nothing on the runner's
-own heap, so the collector gives it 233 words and collects 98 times through a
-call that allocates hundreds of millions.
+With the floor, **56.0 ms a request becomes 21.1 ms**, because 61% of an
+unfloored request was garbage collection: a restored instance keeps almost
+nothing on the runner's own heap, so the collector gives it 233 words and
+collects 98 times through a call that allocates hundreds of millions.
 
 Note the option sits beside `root` and **not** inside `limits`. A floor is not
 a bound, and one written into the limits map is ignored silently.

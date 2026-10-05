@@ -1,0 +1,26 @@
+guest=py_entry backend=paged host_page=4096 count=455 pages_before=0 pages_end=4095 arch=aarch64-apple-darwin27.0.0
+median-n instance 228:
+  restored rows [#{size => 0,kind => cell,phys => none,charged => 0,
+                   holders => 1},
+                 #{size => 640,kind => memory,
+                   phys => #{table => 2,arena => 0,growth => 0},
+                   charged => 2,holders => 1}]
+  after rows [#{size => 0,kind => cell,phys => none,charged => 0,holders => 1},
+              #{size => 640,kind => memory,
+                phys => #{table => 2,arena => 7,growth => 0},
+                charged => 9,holders => 1}]
+  mem_restored #{img_pages => 640,pages => 640,arena_chunks => 0,
+                 private_4k_pages => 0,slots_claimed => 0}
+  mem_after #{img_pages => 640,pages => 640,arena_chunks => 3,
+              private_4k_pages => 90,slots_claimed => 90}
+per-instance delta: min 9 max 9 mean 9.00
+failure: #{pid => <0.557.0>,
+           failure =>
+               {failed,restore,{exhaustion,memory_limit,#{requested => 640}}},
+           pages_before => 4095,n => 456,stage => restore,
+           mem_at_failure => none}
+failing instance's calls: [#{args => #{meta => {memory,{640,16}},pages => 640},
+                             f => reserve,
+                             result => {error,limit},
+                             pages_in_use => 4095}]
+refusals in whole run: 1

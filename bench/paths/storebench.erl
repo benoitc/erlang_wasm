@@ -1,21 +1,17 @@
 -module(storebench).
 -moduledoc """
-What a store costs in generated code, and what tracking which chunks it wrote
-adds to it.
+What a store costs in generated code.
 
 Use it before changing the inlined store in `wasm_core`, or anything a store
 reads from the memory handle. A loop of `i32.store` and `i64.store` over 64 KiB
-runs with the tier forced on; the arm says whether the memory tracks its
-writes the way a recycling restore's does.
+runs with the tier forced on.
 
     erlc -o bench/paths -I include -pa _build/default/lib/wasm/ebin \\
         bench/paths/storebench.erl
     erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \\
         -run storebench main plain
-    erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \\
-        -run storebench main tracked
 
-Interleave the arms, and against another build, and take minimums: the
+Interleave it against another build and take minimums: the
 difference being measured is a few nanoseconds.
 """.
 -export([main/1]).
@@ -49,11 +45,6 @@ main([Arm]) ->
                maps:get(entered, wasm_jit:counts())]),
     halt().
 
-%% A tracking memory, as `wasm_snapshot' makes one after laying an image.
-arm("tracked", I) ->
-    Mut = wasm_instance:mut(I),
-    {Mem} = Mut#mut.mems,
-    wasm_instance:set_mut(I, Mut#mut{mems = {wasm_memory:track(Mem, 16)}});
 arm(_Plain, _I) ->
     ok.
 

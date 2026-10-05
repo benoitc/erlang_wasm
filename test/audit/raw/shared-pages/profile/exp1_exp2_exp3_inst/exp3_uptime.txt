@@ -1,0 +1,4 @@
+# wait_load polls=0 load1=6.19  4:08  up 8 days, 20:21, 39 users, load averages: 6.19 6.35 8.50
+# wait_load polls=0 load1=7.79  4:10  up 8 days, 20:22, 39 users, load averages: 7.79 6.49 8.26
+# wait_load polls=0 load1=4.35  4:12  up 8 days, 20:24, 39 users, load averages: 4.35 5.86 7.80
+EXP3_DONE

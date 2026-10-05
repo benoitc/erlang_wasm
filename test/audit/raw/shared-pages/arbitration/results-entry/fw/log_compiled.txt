@@ -1,0 +1,17 @@
+#{mode => firstwrite,cache => "/Users/benoitc/.cache/wasm-arb/inst-a4",
+  guest => py_entry,ahead => false,start_ms => 16508,tier => compiled,
+  verdict => ok,warm_requests => 4766,entry_ms => 165686,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us =>
+      #{call => 1822.381,total => 2240.631,restore => 397.668,
+        destroy => 18.792,post => 0.208},
+  min_us =>
+      #{call => 1421.379,total => 1832.338,restore => 376.417,
+        destroy => 13.125,post => 0.0},
+  firstwrite_mean =>
+      #{buy_n => 0.0,buy_ns => 0.0,fault_n => 90.0,fault_ns => 456288.79},
+  firstwrite_median =>
+      #{buy_n => 0,buy_ns => 0,fault_n => 90,fault_ns => 451578},
+  recycled_in => 0}

@@ -1,0 +1,12 @@
+== r1 cand 12:06  up 9 days,  4:18, 40 users, load averages: 11.79 21.74 31.88
+qjs-30k-js-iterations run 1	12297.9 ms
+qjs-30k-js-iterations run 2	12188.5 ms
+qjs-30k-js-iterations run 3	12293.8 ms
+== r2 cand 12:12  up 9 days,  4:25, 39 users, load averages: 9.75 13.04 24.00
+qjs-30k-js-iterations run 1	12438.1 ms
+qjs-30k-js-iterations run 2	12705.1 ms
+qjs-30k-js-iterations run 3	13849.5 ms
+== r3 cand 12:16  up 9 days,  4:29, 40 users, load averages: 6.02 9.33 19.56
+qjs-30k-js-iterations run 1	12445.1 ms
+qjs-30k-js-iterations run 2	12483.3 ms
+qjs-30k-js-iterations run 3	12234.9 ms

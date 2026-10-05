@@ -1,0 +1,147 @@
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime => " 4:18  up 8 days, 20:30, 39 users, load averages: 5.28 6.79 7.72",
+  guest => py,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 25783.5,min_us => 24556.875,n => 100,
+  phases =>
+      #{call =>
+            #{median_us => 23682.333,n => 100,sum_ms => 2368.4405769999994},
+        destroy => #{median_us => 175.958,n => 100,sum_ms => 17.655161},
+        restore =>
+            #{median_us => 512.458,n => 100,sum_ms => 51.45875900000003}},
+  tier => interp,wall_ms => 2578.634417,warm => 20}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime => " 4:20  up 8 days, 20:32, 39 users, load averages: 9.60 7.84 8.00",
+  guest => py,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 896,entered => 101,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 18568.0,min_us => 17081.167,n => 100,
+  phases =>
+      #{call =>
+            #{median_us => 16355.334,n => 100,sum_ms => 1662.6691720000008},
+        destroy => #{median_us => 145.0,n => 100,sum_ms => 14.868331},
+        restore =>
+            #{median_us => 528.542,n => 100,sum_ms => 53.74382299999997}},
+  tier => compiled,wall_ms => 1887.131583,warm => 3}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime => " 4:21  up 8 days, 20:33, 39 users, load averages: 5.69 7.02 7.68",
+  guest => qjs,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12550.041,min_us => 11962.833,n => 100,
+  phases =>
+      #{call => #{median_us => 11402.0,n => 100,sum_ms => 1146.1619959999998},
+        destroy => #{median_us => 67.792,n => 100,sum_ms => 6.941297000000001},
+        restore =>
+            #{median_us => 131.792,n => 100,sum_ms => 13.299955000000002}},
+  tier => interp,wall_ms => 1261.885416,warm => 20}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime => " 4:21  up 8 days, 20:34, 39 users, load averages: 4.55 6.58 7.49",
+  guest => qjs,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 264,entered => 101,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8771.25,min_us => 7603.917,n => 100,
+  phases =>
+      #{call => #{median_us => 7564.208,n => 100,sum_ms => 763.38729},
+        destroy => #{median_us => 65.041,n => 100,sum_ms => 6.681255999999999},
+        restore => #{median_us => 147.208,n => 100,sum_ms => 14.869708}},
+  tier => compiled,wall_ms => 887.442042,warm => 3}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime => " 4:21  up 8 days, 20:34, 39 users, load averages: 4.16 6.43 7.43",
+  guest => lua,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7534.875,min_us => 7228.083,n => 100,
+  phases =>
+      #{call => #{median_us => 6585.417,n => 100,sum_ms => 659.9761640000002},
+        destroy => #{median_us => 53.875,n => 100,sum_ms => 5.549121000000001},
+        restore =>
+            #{median_us => 91.042,n => 100,sum_ms => 9.170046000000003}},
+  tier => interp,wall_ms => 763.672708,warm => 20}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime => " 4:22  up 8 days, 20:34, 39 users, load averages: 3.82 6.28 7.36",
+  guest => lua,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 223,entered => 101,crashed => 0,refused => 0,
+        cached => 1,reentered => 505},
+  median_us => 4540.75,min_us => 3879.959,n => 100,
+  phases =>
+      #{call => #{median_us => 3471.042,n => 100,sum_ms => 353.604787},
+        destroy => #{median_us => 46.875,n => 100,sum_ms => 4.650416},
+        restore => #{median_us => 95.625,n => 100,sum_ms => 9.773376}},
+  tier => compiled,wall_ms => 459.798792,warm => 3}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime => " 4:22  up 8 days, 20:34, 39 users, load averages: 4.56 6.35 7.37",
+  guest => py,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 26109.542,min_us => 24943.25,n => 100,
+  phases =>
+      #{call => #{median_us => 24008.041,n => 100,sum_ms => 2403.347877},
+        destroy =>
+            #{median_us => 174.291,n => 100,sum_ms => 17.651331999999996},
+        restore =>
+            #{median_us => 513.041,n => 100,sum_ms => 51.45075300000001}},
+  tier => interp,wall_ms => 2612.229375,warm => 20}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime => " 4:24  up 8 days, 20:36, 39 users, load averages: 8.91 7.47 7.69",
+  guest => py,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 896,entered => 101,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 19896.208,min_us => 17637.5,n => 100,
+  phases =>
+      #{call =>
+            #{median_us => 17545.375,n => 100,sum_ms => 1762.1365889999997},
+        destroy => #{median_us => 147.0,n => 100,sum_ms => 15.155871999999993},
+        restore =>
+            #{median_us => 546.417,n => 100,sum_ms => 55.59599199999999}},
+  tier => compiled,wall_ms => 1994.74525,warm => 3}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime =>
+      " 4:29  up 8 days, 20:42, 39 users, load averages: 15.19 11.66 9.65",
+  guest => qjs,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12521.667,min_us => 11721.375,n => 100,
+  phases =>
+      #{call =>
+            #{median_us => 11381.292,n => 100,sum_ms => 1266.5197910000002},
+        destroy => #{median_us => 71.583,n => 100,sum_ms => 7.371754999999998},
+        restore => #{median_us => 141.709,n => 100,sum_ms => 14.294877}},
+  tier => interp,wall_ms => 1395.756917,warm => 20}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime =>
+      " 4:36  up 8 days, 20:48, 39 users, load averages: 6.54 10.10 9.76",
+  guest => qjs,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 264,entered => 102,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8833.25,min_us => 7316.25,n => 100,
+  phases =>
+      #{call => #{median_us => 7583.208,n => 100,sum_ms => 773.9459219999997},
+        destroy => #{median_us => 69.959,n => 100,sum_ms => 7.167703000000001},
+        restore =>
+            #{median_us => 150.5,n => 100,sum_ms => 15.374580000000002}},
+  tier => compiled,wall_ms => 903.366458,warm => 4}
+#{tree => "/Users/benoitc/Projects/erlang_wasm-shared-pages",
+  uptime => " 4:36  up 8 days, 20:49, 39 users, load averages: 7.21 9.98 9.73",
+  guest => lua,counts => #{},counts_per_req => #{},
+  jit =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7285.833,min_us => 6891.959,n => 100,
+  phases =>
+      #{call => #{median_us => 6411.333,n => 100,sum_ms => 641.4752080000001},
+        destroy => #{median_us => 51.0,n => 100,sum_ms => 5.0785860000000005},
+        restore =>
+            #{median_us => 83.959,n => 100,sum_ms => 8.534918000000001}},
+  tier => interp,wall_ms => 730.276458,warm => 20}

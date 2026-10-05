@@ -1,0 +1,360 @@
+== r1 cand py off
+# 1:50  up 8 days, 18:02, 36 users, load averages: 6.18 11.42 10.90
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1279852960},
+  pages_idle => 0,busy_increment_per_worker => 25410935.04,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2550399712},
+  pages_busy => 1650}
+== r1 cand py on
+# 1:50  up 8 days, 18:03, 36 users, load averages: 6.84 10.93 10.74
+#{mode => busy,idle => ahead_ready,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,2253864248},
+  pages_idle => 100,busy_increment_per_worker => -5039369.28,
+  charged_pages_per_worker => 31.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2001895784},
+  pages_busy => 1650}
+== r1 cand qjs off
+# 1:51  up 8 days, 18:03, 36 users, load averages: 7.07 10.85 10.72
+#{mode => busy,idle => no_recycling,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,155593925},
+  pages_idle => 0,busy_increment_per_worker => 7022853.6,
+  charged_pages_per_worker => 4.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,506736605},
+  pages_busy => 200}
+== r1 cand qjs on
+# 1:51  up 8 days, 18:03, 36 users, load averages: 8.91 11.17 10.83
+#{mode => busy,idle => ahead_ready,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,383576765},
+  pages_idle => 50,busy_increment_per_worker => 3023960.64,
+  charged_pages_per_worker => 3.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,534774797},
+  pages_busy => 200}
+== r1 cand lua off
+# 1:55  up 8 days, 18:08, 36 users, load averages: 5.04 7.54 9.25
+#{mode => busy,idle => no_recycling,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,99291500},
+  pages_idle => 0,busy_increment_per_worker => 6946827.04,
+  charged_pages_per_worker => 2.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,446632852},
+  pages_busy => 100}
+== r1 cand lua on
+# 1:55  up 8 days, 18:08, 36 users, load averages: 5.04 7.54 9.25
+#{mode => busy,idle => ahead_ready,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,249826676},
+  pages_idle => 50,busy_increment_per_worker => -96652.96,
+  charged_pages_per_worker => 1.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,244994028},
+  pages_busy => 100}
+== r2 cand py off
+# 1:55  up 8 days, 18:08, 36 users, load averages: 5.04 7.54 9.25
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1298495552},
+  pages_idle => 0,busy_increment_per_worker => 25062680.96,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2551629600},
+  pages_busy => 1650}
+== r2 cand py on
+# 1:56  up 8 days, 18:08, 36 users, load averages: 4.70 7.31 9.13
+#{mode => busy,idle => ahead_ready,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,2254437680},
+  pages_idle => 100,busy_increment_per_worker => -4853784.8,
+  charged_pages_per_worker => 31.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2011748440},
+  pages_busy => 1650}
+== r2 cand qjs off
+# 1:56  up 8 days, 18:08, 36 users, load averages: 5.12 7.24 9.06
+#{mode => busy,idle => no_recycling,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,187100557},
+  pages_idle => 0,busy_increment_per_worker => 6346468.96,
+  charged_pages_per_worker => 4.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,504424005},
+  pages_busy => 200}
+== r2 cand qjs on
+# 1:56  up 8 days, 18:09, 36 users, load averages: 5.03 7.19 9.03
+#{mode => busy,idle => ahead_ready,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,278560333},
+  pages_idle => 50,busy_increment_per_worker => 4913645.28,
+  charged_pages_per_worker => 3.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,524242597},
+  pages_busy => 200}
+== r2 cand lua off
+# 1:56  up 8 days, 18:09, 36 users, load averages: 5.11 7.17 9.01
+#{mode => busy,idle => no_recycling,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,97155404},
+  pages_idle => 0,busy_increment_per_worker => 7150281.28,
+  charged_pages_per_worker => 2.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,454669468},
+  pages_busy => 100}
+== r2 cand lua on
+# 2:01  up 8 days, 18:13, 36 users, load averages: 6.31 6.34 8.09
+#{mode => busy,idle => ahead_ready,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,249483628},
+  pages_idle => 50,busy_increment_per_worker => -106250.72,
+  charged_pages_per_worker => 1.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,244171092},
+  pages_busy => 100}
+== r3 cand py off
+# 2:01  up 8 days, 18:14, 36 users, load averages: 6.51 6.39 8.07
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1288067400},
+  pages_idle => 0,busy_increment_per_worker => 25500764.64,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2563105632},
+  pages_busy => 1650}
+== r3 cand py on
+# 2:01  up 8 days, 18:14, 36 users, load averages: 6.35 6.36 8.04
+#{mode => busy,idle => ahead_ready,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1765744648},
+  pages_idle => 100,busy_increment_per_worker => 4408980.96,
+  charged_pages_per_worker => 31.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,1986193696},
+  pages_busy => 1650}
+== r3 cand qjs off
+# 2:01  up 8 days, 18:14, 36 users, load averages: 7.56 6.64 8.10
+#{mode => busy,idle => no_recycling,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,156080285},
+  pages_idle => 0,busy_increment_per_worker => 7015813.12,
+  charged_pages_per_worker => 4.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,506870941},
+  pages_busy => 200}
+== r3 cand qjs on
+# 2:02  up 8 days, 18:14, 36 users, load averages: 7.44 6.62 8.09
+#{mode => busy,idle => ahead_ready,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,382792373},
+  pages_idle => 50,busy_increment_per_worker => 2667296.8,
+  charged_pages_per_worker => 3.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,516157213},
+  pages_busy => 200}
+== r3 cand lua off
+# 2:06  up 8 days, 18:19, 36 users, load averages: 4.74 6.31 7.61
+#{mode => busy,idle => no_recycling,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,99958476},
+  pages_idle => 0,busy_increment_per_worker => 7146954.08,
+  charged_pages_per_worker => 2.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,457306180},
+  pages_busy => 100}
+== r3 cand lua on
+# 2:06  up 8 days, 18:19, 36 users, load averages: 4.76 6.29 7.59
+#{mode => busy,idle => ahead_ready,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,249948196},
+  pages_idle => 50,busy_increment_per_worker => -230240.8,
+  charged_pages_per_worker => 1.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,238436156},
+  pages_busy => 100}
+== r4 cand py off
+# 2:06  up 8 days, 18:19, 36 users, load averages: 4.76 6.29 7.59
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1304026656},
+  pages_idle => 0,busy_increment_per_worker => 25148529.6,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2561453136},
+  pages_busy => 1650}
+== r4 cand py on
+# 2:06  up 8 days, 18:19, 36 users, load averages: 5.67 6.42 7.62
+#{mode => busy,idle => ahead_ready,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1765670616},
+  pages_idle => 100,busy_increment_per_worker => 4683130.56,
+  charged_pages_per_worker => 31.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,1999827144},
+  pages_busy => 1650}
+== r4 cand qjs off
+# 2:07  up 8 days, 18:19, 36 users, load averages: 7.37 6.82 7.73
+#{mode => busy,idle => no_recycling,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,158301421},
+  pages_idle => 0,busy_increment_per_worker => 6921845.76,
+  charged_pages_per_worker => 4.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,504393709},
+  pages_busy => 200}
+== r4 cand qjs on
+# 2:07  up 8 days, 18:19, 36 users, load averages: 7.37 6.82 7.73
+#{mode => busy,idle => ahead_ready,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,383241125},
+  pages_idle => 50,busy_increment_per_worker => 2654371.2,
+  charged_pages_per_worker => 3.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,515959685},
+  pages_busy => 200}
+== r4 cand lua off
+# 2:07  up 8 days, 18:20, 36 users, load averages: 7.34 6.82 7.72
+#{mode => busy,idle => no_recycling,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,104266396},
+  pages_idle => 0,busy_increment_per_worker => 7104705.12,
+  charged_pages_per_worker => 2.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,459501652},
+  pages_busy => 100}
+== r4 cand lua on
+# 2:12  up 8 days, 18:24, 36 users, load averages: 8.24 6.71 7.34
+#{mode => busy,idle => ahead_ready,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,220605996},
+  pages_idle => 50,busy_increment_per_worker => 605363.2,
+  charged_pages_per_worker => 1.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,250874156},
+  pages_busy => 100}
+== r5 cand py off
+# 2:12  up 8 days, 18:25, 36 users, load averages: 6.96 6.57 7.25
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1285397584},
+  pages_idle => 0,busy_increment_per_worker => 25324615.68,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2551628368},
+  pages_busy => 1650}
+== r5 cand py on
+# 2:13  up 8 days, 18:25, 36 users, load averages: 6.73 6.54 7.23
+#{mode => busy,idle => ahead_ready,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,2254931984},
+  pages_idle => 100,busy_increment_per_worker => -5360814.56,
+  charged_pages_per_worker => 31.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,1986891256},
+  pages_busy => 1650}
+== r5 cand qjs off
+# 2:13  up 8 days, 18:25, 36 users, load averages: 6.57 6.51 7.21
+#{mode => busy,idle => no_recycling,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,158324877},
+  pages_idle => 0,busy_increment_per_worker => 6918712.0,
+  charged_pages_per_worker => 4.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,504260477},
+  pages_busy => 200}
+== r5 cand qjs on
+# 2:13  up 8 days, 18:25, 36 users, load averages: 6.57 6.51 7.21
+#{mode => busy,idle => ahead_ready,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,383372029},
+  pages_idle => 50,busy_increment_per_worker => 2715089.92,
+  charged_pages_per_worker => 3.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,519126525},
+  pages_busy => 200}
+== r5 cand lua off
+# 2:18  up 8 days, 18:30, 36 users, load averages: 3.01 4.65 6.19
+#{mode => busy,idle => no_recycling,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,97437492},
+  pages_idle => 0,busy_increment_per_worker => 7048323.04,
+  charged_pages_per_worker => 2.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,449853644},
+  pages_busy => 100}
+== r5 cand lua on
+# 2:18  up 8 days, 18:30, 36 users, load averages: 3.01 4.65 6.19
+#{mode => busy,idle => ahead_ready,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,250044044},
+  pages_idle => 50,busy_increment_per_worker => -181070.88,
+  charged_pages_per_worker => 1.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,240990500},
+  pages_busy => 100}

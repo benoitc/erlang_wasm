@@ -27,12 +27,14 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("proper/include/proper.hrl").
+-include("wasm.hrl").
 
 -define(NUMTESTS, 500).
 
 all() ->
     [decode_is_total, decode_creates_no_atoms, wasi_creates_no_atoms,
-     mutation_is_total, memory_matches_model, leb128_roundtrip].
+     mutation_is_total, memory_matches_model, paged_memory_matches_model,
+     leb128_roundtrip].
 
 %%% --------------------------------------------------------------- totality ---
 
@@ -200,6 +202,119 @@ model_write(Model, Addr, Bin) ->
     Len = byte_size(Bin),
     <<Pre:Addr/binary, _:Len/binary, Post/binary>> = Model,
     <<Pre/binary, Bin/binary, Post/binary>>.
+
+%% The same equivalence over a memory laid on an image, where a page is read in
+%% place until a write copies it. The image is random, some of its pages zero;
+%% addresses favour 4 KiB, 64 KiB and region boundaries, where a page or chunk
+%% is crossed; and an out-of-bounds operation must trap, not be skipped. Half
+%% the writes keep the refreshed handle a store may answer and half do not, so
+%% stale handles read everything too.
+paged_memory_matches_model(_Config) ->
+    run(?FORALL({Pages, Seed, Ops},
+                {integer(1, 3), integer(), list(paged_op())},
+                begin
+                    Bin = image(Pages, Seed),
+                    {ok, Mem} = wasm_memory:create(
+                                  #limits{min = Pages, max = Pages + 2},
+                                  #{image => wasm_memory:image_of(Bin),
+                                    observable => true}),
+                    {Final, Model} = lists:foldl(fun paged_step/2, {Mem, Bin},
+                                                 Ops),
+                    Same = wasm_memory:to_binary(Final) =:= Model
+                        andalso wasm_memory:to_binary(Mem) =:= Model,
+                    ok = wasm_memory:free(Final),
+                    Same
+                end), 200).
+
+image(Pages, Seed) ->
+    rand:seed(exsss, {Seed, 1, 2}),
+    << <<(case rand:uniform(3) of
+              1 -> <<0:(65536 * 8)>>;
+              _ -> rand:bytes(65536)
+          end)/binary>> || _ <- lists:seq(1, Pages) >>.
+
+paged_op() ->
+    oneof([{store, paddr(), width(), integer(0, 16#FFFFFFFFFFFFFFFF), boolean()},
+           {load, paddr(), width()},
+           {fill, paddr(), integer(0, 255), integer(0, 9000)},
+           {copy, paddr(), paddr(), integer(0, 9000)},
+           {store_bytes, paddr(), binary(), boolean()},
+           {load_bytes, paddr(), integer(0, 9000)},
+           {rmw, paddr(), integer(0, 16#FFFFFFFF)},
+           {grow}]).
+
+%% Near a boundary most of the time; some past the end, to see the trap.
+paddr() ->
+    oneof([integer(0, 5 * 65536),
+           ?LET({B, D}, {integer(1, 5 * 16), integer(-16, 16)},
+                max(0, B * 4096 + D))]).
+
+paged_step({store, A, N, V, Keep}, {M, Model}) ->
+    in_bounds(A, N, Model,
+              fun() ->
+                      R = wasm_memory:store_r(M, A, N, V),
+                      {keep(Keep, M, R), model_write(Model, A, <<V:(N * 8)/little>>)}
+              end, {M, Model});
+paged_step({load, A, N}, {M, Model}) ->
+    in_bounds(A, N, Model,
+              fun() ->
+                      V = wasm_memory:load(M, A, N),
+                      <<_:A/binary, V:(N * 8)/little, _/binary>> = Model,
+                      {M, Model}
+              end, {M, Model});
+paged_step({fill, A, B, Len}, {M, Model}) ->
+    in_bounds(A, Len, Model,
+              fun() ->
+                      ok = wasm_memory:fill(M, A, B, Len),
+                      {M, model_write(Model, A, binary:copy(<<B>>, Len))}
+              end, {M, Model});
+paged_step({copy, D, S, Len}, {M, Model}) ->
+    in_bounds(max(D, S), Len, Model,
+              fun() ->
+                      ok = wasm_memory:copy(M, D, S, Len),
+                      {M, model_write(Model, D, binary:part(Model, S, Len))}
+              end, {M, Model});
+paged_step({store_bytes, A, Bin, _Keep}, {M, Model}) ->
+    in_bounds(A, byte_size(Bin), Model,
+              fun() ->
+                      ok = wasm_memory:store_bytes(M, A, Bin),
+                      {M, model_write(Model, A, Bin)}
+              end, {M, Model});
+paged_step({load_bytes, A, Len}, {M, Model}) ->
+    in_bounds(A, Len, Model,
+              fun() ->
+                      Got = wasm_memory:load_bytes(M, A, Len),
+                      Got = binary:part(Model, A, Len),
+                      {M, Model}
+              end, {M, Model});
+paged_step({rmw, A0, V}, {M, Model}) ->
+    A = A0 band (bnot 3),
+    in_bounds(A, 4, Model,
+              fun() ->
+                      Old = wasm_memory:atomic_rmw(M, A, 4, add, V),
+                      <<_:A/binary, Old:32/little, _/binary>> = Model,
+                      New = (Old + V) band 16#FFFFFFFF,
+                      {M, model_write(Model, A, <<New:32/little>>)}
+              end, {M, Model});
+paged_step({grow}, {M, Model}) ->
+    case wasm_memory:grow(M, 1) of
+        {ok, _, M1} -> {M1, <<Model/binary, 0:(65536 * 8)>>};
+        {error, _} -> {M, Model}
+    end.
+
+keep(true, _M, {refresh, M1}) -> M1;
+keep(_, M, _) -> M.
+
+%% In bounds, the operation and the model move together. Out of bounds it must
+%% trap, before the model is consulted, and change nothing.
+in_bounds(A, Len, Model, Do, _State) when A + Len =< byte_size(Model) ->
+    Do();
+in_bounds(_A, _Len, _Model, Do, State) ->
+    try Do() of
+        _ -> error(no_trap)
+    catch
+        throw:{wasm_error, #{kind := out_of_bounds_memory_access}} -> State
+    end.
 
 %%% ---------------------------------------------------------------- leb128 ---
 

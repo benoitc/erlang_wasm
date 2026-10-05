@@ -1,0 +1,135 @@
+== r1 base steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 48,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 27995.708,min_us => 25261.25}
+== r1 base steady py compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 8434,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 16873.292,min_us => 15452.125}
+== r1 base steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12455.917,min_us => 11767.834}
+== r1 base steady qjs compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,
+  warm_requests => 4,verdict => ok,entry_ms => 1862,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 202,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 7883.375,min_us => 6837.625}
+== r1 base steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7100.583,min_us => 6526.5}
+== r1 base steady lua compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 553,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 3632.958,min_us => 2986.25}
+== r2 base steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 48,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 28417.916,min_us => 25850.625}
+== r2 base steady py compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 8794,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 18862.333,min_us => 16079.959}
+== r2 base steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12521.209,min_us => 11208.084}
+== r2 base steady qjs compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,
+  warm_requests => 4,verdict => ok,entry_ms => 1912,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 7827.958,min_us => 6291.666}
+== r2 base steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 7,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7445.166,min_us => 6931.875}
+== r2 base steady lua compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 8,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 551,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4301.875,min_us => 3136.208}
+== r3 base steady py interp off
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 50,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 31219.708,min_us => 25516.417}
+== r3 base steady py compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => py,ahead => false,start_ms => 46,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 8870,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 17303.125,min_us => 15870.625}
+== r3 base steady qjs interp off
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 9,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12955.667,min_us => 12113.542}
+== r3 base steady qjs compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 1999,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8560.042,min_us => 7086.833}
+== r3 base steady lua interp off
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 12,
+  tier => interp,warm_requests => 20,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7732.417,min_us => 7011.792}
+== r3 base steady lua compiled off
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-gates/baseline",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,
+  warm_requests => 3,verdict => ok,entry_ms => 540,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4329.333,min_us => 3646.541}

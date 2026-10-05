@@ -23,6 +23,7 @@ the only signal there is.
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("wasm/include/wasm_exec.hrl").
+-include_lib("wasm/include/wasm_memory.hrl").
 
 -define(KIT, wasm_adapter_conformance).
 
@@ -33,6 +34,7 @@ suite() -> [{timetrap, {seconds, 90}}].
 all() ->
     [every_setting_is_documented,
      a_runner_heap_floor_is_resolved_and_reported,
+     the_shipped_defaults_follow_the_tier,
      stopping_the_reaper_stops_its_journal_writers,
      {group, typed}, {group, command}, {group, script_v1},
      {group, script_v1_channel}, {group, reactor}, {group, reactor_ahead},
@@ -57,7 +59,8 @@ groups() ->
      %% integration job: a capability the required gate cannot exercise is a
      %% capability nobody would notice breaking.
      {reactor, [],
-      cases(fake_reactor_adapter) ++ snapshot_cases() ++ recycle_cases()},
+      cases(fake_reactor_adapter) ++ snapshot_cases() ++ fresh_memory_cases()
+      ++ compiled_cases()},
      %% The same, with the next instance restored before each request arrives.
      %% Every case the kit has must hold unchanged, which is the claim that a
      %% waiting instance is as fresh as one restored on demand.
@@ -111,7 +114,16 @@ snapshot_cases() ->
      a_runner_gets_the_heap_floor_it_was_given,
      an_unset_floor_leaves_the_runner_the_system_default,
      a_floor_with_no_room_under_the_ceiling_still_answers,
-     a_capture_floor_does_not_stop_a_worker_starting].
+     a_capture_floor_does_not_stop_a_worker_starting,
+     an_adapter_default_floor_reaches_the_runner,
+     an_explicit_floor_wins_over_the_adapter_default,
+     a_zero_floor_turns_the_adapter_default_off,
+     an_adapter_default_follows_the_tier,
+     an_adapter_default_with_no_room_is_said_and_skipped].
+
+%% `compiled => true', and the one combination it refuses.
+compiled_cases() ->
+    [compiled_with_a_finite_fuel_refuses_to_start].
 
 end_per_group(_G, _Config) -> ok.
 
@@ -120,6 +132,8 @@ end_per_group(_G, _Config) -> ok.
 init_per_testcase(every_setting_is_documented, Config) ->
     Config;
 init_per_testcase(a_runner_heap_floor_is_resolved_and_reported, Config) ->
+    Config;
+init_per_testcase(the_shipped_defaults_follow_the_tier, Config) ->
     Config;
 init_per_testcase(stopping_the_reaper_stops_its_journal_writers = TC, Config) ->
     start_case(TC, [{adapter, fake_typed_adapter} | Config]);
@@ -137,6 +151,8 @@ start_case(TC, Config) ->
 end_per_testcase(every_setting_is_documented, _Config) ->
     ok;
 end_per_testcase(a_runner_heap_floor_is_resolved_and_reported, _Config) ->
+    ok;
+end_per_testcase(the_shipped_defaults_follow_the_tier, _Config) ->
     ok;
 end_per_testcase(_TC, Config) ->
     try wasm_script_worker:stop(?config(worker, Config)) catch _:_ -> ok end,
@@ -630,100 +646,33 @@ a_worker_ignores_an_image_it_cannot_read(Config) ->
         ok = wasm_script_worker:stop(W2)
     end).
 
-%%% ------------------------------------------------------- recycled memory ---
+%%% ------------------------------------------------------- fresh memory ---
 %%
-%% A default worker carries the memory a request's instance leaves to the next
-%% restore. These are about what travels, and about it being counted while it
-%% does; `a_request_starts_from_the_image' is still the isolation claim.
+%% A default worker restores every request from the image and carries nothing
+%% from one request's instance to the next.
 
-recycle_cases() ->
-    [the_next_restore_reuses_what_the_last_request_did_not_write,
-     kept_memory_is_counted_until_the_restore,
-     kept_memory_goes_back_when_a_request_fails_early,
-     an_idle_worker_gives_its_memory_back,
-     recycle_idle_zero_keeps_nothing].
+fresh_memory_cases() ->
+    [the_next_restore_shares_nothing_with_the_last].
 
-%% Reuse and not only delivery: finding the memory in the worker would prove it
-%% got there, and nothing about whether the restore used it, or used it right.
-%% The two-page reactor answers from page 0, which nothing writes; the hook
-%% writes page 1 on every restore, which must therefore never come back.
-the_next_restore_reuses_what_the_last_request_did_not_write(Config) ->
-    W = recycling_worker(Config, #{}),
+%% Nothing a request wrote is seen by the next, no reservation is held between
+%% requests, and the two restores share no array: sharing one would be the old
+%% recycling, which kept the chunks a request had not written.
+the_next_restore_shares_nothing_with_the_last(Config) ->
+    W = two_page_worker(Config, #{}),
     First = wasm_script_worker:run(W, #{}),
     {C0, Seen0} = restored(),
+    ?assertEqual([], kept_holds()),
     ?assertEqual(First, wasm_script_worker:run(W, #{})),
     {C1, Seen1} = restored(),
-    %% What the hook writes is never seen by the next request.
     ?assertEqual({0, 0}, {Seen0, Seen1}),
-    ?assert(element(1, C0) =:= element(1, C1)),
-    ?assert(element(2, C0) =/= element(2, C1)),
+    ?assertEqual([], [C || C <- C1, lists:member(C, C0)]),
+    ?assertEqual([], kept_holds()),
     ok = wasm_script_worker:stop(W).
 
-%% From the moment the worker holds it to the moment the next restore reserves
-%% pages of its own, the memory is in the page budget. `prepare/3' is where a
-%% request waits longest before its restore, so the case stops it there.
-kept_memory_is_counted_until_the_restore(Config) ->
-    W = recycling_worker(Config, #{}),
-    {ok, _} = wasm_script_worker:run(W, #{}),
-    [T0] = recycle_holds(),
-    Self = self(),
-    Caller = spawn_link(fun() -> Self ! {done, wasm_script_worker:run(
-                                                  W, #{hold => Self})} end),
-    Runner = receive {preparing, R} -> R after 5_000 -> ct:fail(no_prepare) end,
-    ?assertEqual([T0], recycle_holds()),
-    Runner ! go,
-    receive {done, Got} -> ?assertMatch({ok, _}, Got)
-    after 5_000 -> ct:fail({no_answer, Caller})
-    end,
-    %% The runner released it at its restore, and the worker holds what this
-    %% request's instance left, under a reservation of its own.
-    [T1] = recycle_holds(),
-    ?assertNotEqual(T0, T1),
-    ok = wasm_script_worker:stop(W),
-    ?assertEqual([], recycle_holds()).
-
-%% A request that never reaches its restore still gives the reservation back:
-%% refused before it starts, or its runner killed in `prepare/3'.
-kept_memory_goes_back_when_a_request_fails_early(Config) ->
-    W = recycling_worker(Config, #{}),
-    {ok, _} = wasm_script_worker:run(W, #{}),
-    [T0] = recycle_holds(),
-    ?assertMatch({error, _}, wasm_script_worker:run(W, not_a_map)),
-    %% The memory was handed back unused and is kept again, counted once.
-    [T1] = recycle_holds(),
-    ?assertNotEqual(T0, T1),
-    Self = self(),
-    _ = spawn_link(fun() -> Self ! {done, wasm_script_worker:run(
-                                             W, #{hold => Self})} end),
-    Runner = receive {preparing, R} -> R after 5_000 -> ct:fail(no_prepare) end,
-    exit(Runner, kill),
-    receive {done, Got} -> ?assertMatch({error, #{kind := crashed}}, Got)
-    after 5_000 -> ct:fail(no_answer)
-    end,
-    ?assertEqual([], recycle_holds()),
-    ok = wasm_script_worker:stop(W).
-
-an_idle_worker_gives_its_memory_back(Config) ->
-    W = recycling_worker(Config, #{recycle_idle => 100}),
-    {ok, _} = wasm_script_worker:run(W, #{}),
-    ?assertMatch([_], recycle_holds()),
-    timer:sleep(400),
-    ?assertEqual([], recycle_holds()),
-    %% And the next request restores from fresh memory, the same answer.
-    ?assertMatch({ok, _}, wasm_script_worker:run(W, #{})),
-    ok = wasm_script_worker:stop(W).
-
-recycle_idle_zero_keeps_nothing(Config) ->
-    W = recycling_worker(Config, #{recycle_idle => 0}),
-    {ok, _} = wasm_script_worker:run(W, #{}),
-    {ok, _} = wasm_script_worker:run(W, #{}),
-    ?assertEqual([], recycle_holds()),
-    ok = wasm_script_worker:stop(W).
-
-%% The reactor with two pages instead of one, so one chunk can be written and
+%% The reactor with two pages instead of one, so one page can be written and
 %% one left alone. Patched rather than committed: it is the same module with a
 %% different minimum.
-recycling_worker(Config, Opts) ->
+two_page_worker(Config, Opts) ->
     {ok, Bytes} = file:read_file(
                     filename:join([wasm_spec_runner:fixtures_dir(),
                                    "snapshot", "reactor.wasm"])),
@@ -733,7 +682,12 @@ recycling_worker(Config, Opts) ->
     Self = self(),
     Hook = fun(Inst) ->
                #mut{mems = {Mem}} = wasm_instance:mut(Inst),
-               {_, _, Chunks, _} = wasm_memory:recyclable(Mem),
+               %% The arrays: chunks past any image placeholder, and the
+               %% page table. An image's pages are shared on purpose and are
+               %% not arrays.
+               Chunks = [C || C <- [element(?MEM_IMG_BYTES + 2, Mem)
+                                    | tuple_to_list(element(?MEM_CHUNKS, Mem))],
+                              not is_atom(C)],
                {ok, <<Seen>>} = wasm:read_memory(Inst, 65536, 1),
                ok = wasm:write_memory(Inst, 65536, <<7>>),
                Self ! {restored, Chunks, Seen},
@@ -748,10 +702,33 @@ restored() ->
     after 5_000 -> ct:fail(no_restore)
     end.
 
-%% The keeper's holders that are kept memory, whichever worker holds them.
-recycle_holds() ->
-    lists:sort([T || {_, _, _, H} <- ets:tab2list(wasm_holders),
-                     {recycle, _} = T <- maps:keys(H)]).
+%% Holders that are memory kept between requests, whichever worker would hold
+%% them. Read by position rather than by the row's whole shape, so a row that
+%% grew a field is still looked at instead of silently skipped.
+kept_holds() ->
+    Rows = ets:tab2list(wasm_holders),
+    lists:sort([T || Row <- Rows, tuple_size(Row) >= 4,
+                     Hs <- [element(4, Row)], is_map(Hs),
+                     {recycle, _} = T <- maps:keys(Hs)]).
+
+%%% -------------------------------------------------------- compiled mode ---
+
+%% A finite `fuel' is metering the caller asked for, and the tier gives it up by
+%% construction, so the two together cannot mean what they say. Every release
+%% before this one started such a worker and interpreted it without a word.
+compiled_with_a_finite_fuel_refuses_to_start(Config) ->
+    Root = ?config(root, Config),
+    ?assertEqual({error, {bad_option, compiled, #{fuel => 1_000_000}}},
+                 start(Config, Root, #{compiled => true,
+                                       limits => #{fuel => 1_000_000}})),
+    ?assertEqual({error, {bad_option, compiled, yes}},
+                 start(Config, Root, #{compiled => yes})),
+    %% Infinite fuel said twice is not a conflict, and `false' is no option.
+    {ok, W} = start(Config, Root, #{compiled => true,
+                                    limits => #{fuel => infinity}}),
+    ok = wasm_script_worker:stop(W),
+    {ok, W2} = start(Config, Root, #{compiled => false}),
+    ok = wasm_script_worker:stop(W2).
 
 %%% ------------------------------------------------- the runner heap floor ---
 %%
@@ -800,6 +777,35 @@ a_runner_heap_floor_is_resolved_and_reported(_Config) ->
     ?assertEqual({0, {no_room, 400_000}},
                  wasm_script_worker:runner_heap_words(
                    #{runner_min_heap_words => 200_001}, Small)).
+
+%% What the shipped adapters answer, asked directly: no worker, no guest. The
+%% worker cases below hold that an answer reaches the runner; this holds the
+%% answers. CPython's compiled tier wants more room than its interpreter
+%% (`test/audit/PERF.md', "Compiled CPython's floor, by tier"); Lua and QuickJS
+%% measured one number for both. Every answer fits, with the worker's 2x
+%% headroom, under the ceiling its adapter's `limits/0' sets and under the
+%% untrusted preset, so none is dropped as `no_room' under either. QuickJS
+%% has no `limits/0', so the preset is its only ceiling here.
+the_shipped_defaults_follow_the_tier(_Config) ->
+    Compiled = #{compile => true, fuel => infinity},
+    Fueled = #{compile => true, fuel => 10_000_000},
+    ?assertEqual(#{runner_min_heap_words => 1_500_000},
+                 wasm_python:defaults(Compiled)),
+    ?assertEqual(#{runner_min_heap_words => 1_000_000},
+                 wasm_python:defaults(Fueled)),
+    ?assertEqual(#{runner_min_heap_words => 1_000_000},
+                 wasm_python:defaults(#{fuel => infinity})),
+    [?assertEqual(#{runner_min_heap_words => 200_000}, M:defaults(L))
+     || M <- [wasm_lua, wasm_javascript], L <- [Compiled, Fueled, #{}]],
+    Ceilings = [{wasm_python, wasm_python:limits()},
+                {wasm_python, wasm_limits:untrusted()},
+                {wasm_lua, wasm_lua:limits()},
+                {wasm_lua, wasm_limits:untrusted()},
+                {wasm_javascript, wasm_limits:untrusted()}],
+    [?assertMatch({W, ok} when W > 0,
+                  wasm_script_worker:runner_heap_words(
+                    M:defaults(Tier), maps:merge(Ceiling, Tier)))
+     || {M, Ceiling} <- Ceilings, Tier <- [Compiled, #{}]].
 
 %% That the resolved number reaches the process running the guest, which the
 %% case above cannot say. The adapter reads its own flags in `decode/2', after
@@ -863,6 +869,110 @@ a_capture_floor_does_not_stop_a_worker_starting(Config) ->
     ?assertMatch({ok, _}, wasm_script_worker:run(W, #{})),
     ok = wasm_script_worker:stop(W).
 
+%%% ------------------------------------------- the adapter's default floor ---
+%%
+%% An adapter may answer `defaults/1', and the worker takes its floors from
+%% there when the caller set none. `fake_floor_adapter' is the reactor with
+%% that callback added and nothing else, so every difference below is the
+%% callback's. `an_unset_floor_leaves_the_runner_the_system_default' above is
+%% the control: an adapter without it is the worker it always was.
+%%
+%% Each case asserts the default first, so none of them can pass on a worker
+%% that ignores `defaults/1'.
+
+start_floored(Config, Opts) ->
+    Group = proplists:get_value(worker_opts, Config, #{}),
+    wasm_script_worker:start_link(fake_floor_adapter,
+                                  maps:merge(Group#{root => scratch}, Opts)).
+
+runner_heap(W) ->
+    {ok, #{runner_heap := Words}} = wasm_script_worker:run(W, #{probe => heap}),
+    ok = wasm_script_worker:stop(W),
+    Words.
+
+an_adapter_default_floor_reaches_the_runner(Config) ->
+    {ok, W} = start_floored(Config, #{}),
+    ?assert(runner_heap(W) >= 200_000).
+
+%% The two floors round to different heap-size classes, 200,000 to 318,187
+%% and 100,000 to 121,536, so the explicit one is told apart from the default
+%% by the class it landed in.
+an_explicit_floor_wins_over_the_adapter_default(Config) ->
+    {ok, W0} = start_floored(Config, #{}),
+    ?assert(runner_heap(W0) >= 200_000),
+    {ok, W} = start_floored(Config, #{runner_min_heap_words => 100_000}),
+    Words = runner_heap(W),
+    ?assert(Words >= 100_000 andalso Words < 200_000).
+
+a_zero_floor_turns_the_adapter_default_off(Config) ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    {ok, W0} = start_floored(Config, #{}),
+    ?assert(runner_heap(W0) >= 200_000),
+    {ok, W} = start_floored(Config, #{runner_min_heap_words => 0}),
+    ?assertEqual(Min, runner_heap(W)).
+
+%% The callback is asked with the worker's final limits, so an adapter can
+%% answer per tier. `fake_floor_adapter' gives 400,000 words where generated
+%% code runs and 200,000 elsewhere, the rule `wasm_python' ships; the two land
+%% in different heap-size classes, so each is told apart from the other.
+%% `compile => true' under the preset's finite fuel is the interpreter,
+%% because `wasm_jit:entry/3' runs no generated code under a fuel budget.
+an_adapter_default_follows_the_tier(Config) ->
+    Compiled = #{limits => #{compile => true, fuel => infinity}},
+    {ok, W} = start_floored(Config, Compiled),
+    ?assert(runner_heap(W) >= 400_000),
+    {ok, W1} = start_floored(Config, #{}),
+    Interpreted = runner_heap(W1),
+    ?assert(Interpreted >= 200_000 andalso Interpreted < 400_000),
+    {ok, W2} = start_floored(Config, #{limits => #{compile => true}}),
+    Fueled = runner_heap(W2),
+    ?assert(Fueled >= 200_000 andalso Fueled < 400_000),
+    %% On the compiled tier as on the other, a set value wins and 0 is off.
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    {ok, W3} = start_floored(Config, Compiled#{runner_min_heap_words => 0}),
+    ?assertEqual(Min, runner_heap(W3)),
+    {ok, W4} = start_floored(Config,
+                             Compiled#{runner_min_heap_words => 100_000}),
+    Explicit = runner_heap(W4),
+    ?assert(Explicit >= 100_000 andalso Explicit < 200_000),
+    %% And an adapter without the callback has no floor on either tier.
+    Group = proplists:get_value(worker_opts, Config, #{}),
+    {ok, W5} = wasm_script_worker:start_link(
+                 fake_reactor_adapter,
+                 maps:merge(Group#{root => scratch}, Compiled)),
+    ?assertEqual(Min, runner_heap(W5)).
+
+%% A default goes through the checks a set value does. Under a ceiling with
+%% no room for it the runner gets none and still answers, and the warning
+%% says the floor was the adapter's, because the operator never wrote it.
+an_adapter_default_with_no_room_is_said_and_skipped(Config) ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{to => self()}}),
+    try
+        {ok, W} = start_floored(Config,
+                                #{limits => #{max_heap_words => 300_000}}),
+        ?assertEqual(Min, runner_heap(W))
+    after
+        logger:remove_handler(?MODULE)
+    end,
+    ?assert(said(<<"runner_min_heap_words (the adapter's default) does not "
+                   "fit">>)).
+
+%% A logger handler, so a case can read what the worker said.
+log(#{msg := {Format, Args}}, #{config := #{to := Pid}})
+  when is_list(Format), is_list(Args) ->
+    Pid ! {said, iolist_to_binary(io_lib:format(Format, Args))};
+log(_Event, _Handler) ->
+    ok.
+
+said(What) ->
+    receive
+        {said, Line} ->
+            binary:match(Line, What) =/= nomatch orelse said(What)
+    after 0 ->
+        false
+    end.
+
 with_store(Dir, F) ->
     ok = filelib:ensure_path(Dir),
     application:set_env(wasm, snapshot_dir, Dir),
@@ -889,14 +999,18 @@ settings() ->
     Worker = maps:keys(wasm_script_worker:default_limits()),
     Worker ++ wasm_worker_reaper:setting_keys() ++
         [trusted, capture_timeout, runner_min_heap_words,
-         capture_min_heap_words, restore_ahead, recycle_idle,
-         root,
+         capture_min_heap_words, restore_ahead,
+         root, compiled,
          %% Node-wide, and each one turns something substantial on or off.
          max_snapshot_bytes, max_snapshot_dir_bytes, snapshot_dir,
          code_cache_dir, scratch_roots, reaper_options, worker_timeout].
 
+%% Quoted as code, so a setting is documented by being named and not by being
+%% an ordinary word: `compiled` appears in the guide's prose whether or not
+%% the option does.
 documented(Setting, Guide) ->
-    binary:match(Guide, atom_to_binary(Setting, utf8)) =/= nomatch.
+    binary:match(Guide, <<"`", (atom_to_binary(Setting, utf8))/binary, "`">>)
+        =/= nomatch.
 
 %% Walked up from the built application rather than counting `..` segments,
 %% because how deep `_build` puts it is rebar's business and not this suite's.

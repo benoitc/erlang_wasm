@@ -1,0 +1,10 @@
+# wait_load polls=0 load1=7.30  0:35  up 8 days, 16:47, 38 users, load averages: 7.30 6.74 6.14
+round 1  0:35  up 8 days, 16:47, 38 users, load averages: 7.30 6.74 6.14
+# wait_load polls=0 load1=6.61  0:37  up 8 days, 16:50, 38 users, load averages: 6.61 6.49 6.11
+round 2  0:37  up 8 days, 16:50, 38 users, load averages: 6.61 6.49 6.11
+# wait_load polls=0 load1=5.08  0:39  up 8 days, 16:52, 38 users, load averages: 5.08 6.36 6.14
+round 3  0:39  up 8 days, 16:52, 38 users, load averages: 5.08 6.36 6.14
+# wait_load polls=0 load1=4.66  0:41  up 8 days, 16:54, 38 users, load averages: 4.66 5.75 5.92
+round 4  0:41  up 8 days, 16:54, 38 users, load averages: 4.66 5.75 5.92
+# wait_load polls=0 load1=6.44  0:43  up 8 days, 16:55, 38 users, load averages: 6.44 5.61 5.81
+round 5  0:43  up 8 days, 16:55, 38 users, load averages: 6.44 5.61 5.81

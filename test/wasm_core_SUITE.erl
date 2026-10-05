@@ -47,6 +47,7 @@ all() ->
      a_hot_instance_runs_compiled_and_answers_the_same,
      the_memory_field_indices_match_the_record,
      every_memory_access_agrees_with_the_interpreter,
+     every_access_over_an_image_agrees_with_the_interpreter,
      a_caller_with_a_stale_generation_is_refused,
      compilation_does_not_block_the_call_that_triggers_it,
      everything_that_can_fail_falls_back_to_the_interpreter,
@@ -551,7 +552,9 @@ the_memory_field_indices_match_the_record(_) ->
     %% quietly. Adding a field to `#mem{}` fails here instead.
     ?assertEqual(#{chunks => ?MEM_CHUNKS, pages => ?MEM_PAGES,
                    pages_ref => ?MEM_PAGES_REF, chunks_ref => ?MEM_CHUNKS_REF,
-                   shift => ?MEM_SHIFT, dirty => ?MEM_DIRTY, size => ?MEM_SIZE},
+                   shift => ?MEM_SHIFT, img_bytes => ?MEM_IMG_BYTES,
+                   image => ?MEM_IMAGE, tab => ?MEM_TAB, arena => ?MEM_ARENA,
+                   size => ?MEM_SIZE},
                  wasm_memory:field_indices()).
 
 every_memory_access_agrees_with_the_interpreter(_) ->
@@ -575,6 +578,75 @@ every_memory_access_agrees_with_the_interpreter(_) ->
      || Op <- ["i32.load", "i32.load8_s", "i32.load8_u", "i32.load16_s",
                "i32.load16_u", "i64.load8_s", "i64.load16_u", "i64.load32_s"],
         A <- Addrs],
+    ok.
+
+%% Every store and every load, at each of the sixteen offsets on either side of
+%% a 4 KiB page boundary and of the end of an image, over a memory laid on an
+%% image: the first page is the image's, the second is ordinary memory after
+%% it. The interpreter and generated code start from the same image, run the
+%% same store, and must then agree on every load and on every byte.
+every_access_over_an_image_agrees_with_the_interpreter(_) ->
+    Image = << <<((I * 13) band 16#FF)>> || I <- lists:seq(0, 65535) >>,
+    Stores = [{"i32.store", i32, 16#89ABCDEF}, {"i32.store8", i32, 16#1FF},
+              {"i32.store16", i32, 16#8001}, {"i64.store", i64, -2},
+              {"i64.store8", i64, 16#80}, {"i64.store16", i64, 16#FFFE},
+              {"i64.store32", i64, 16#80000001}, {"f32.store", f32, -1.5},
+              {"f64.store", f64, 2.25}],
+    Loads = ["i32.load", "i32.load8_s", "i32.load8_u", "i32.load16_s",
+             "i32.load16_u", "i64.load", "i64.load8_s", "i64.load8_u",
+             "i64.load16_s", "i64.load16_u", "i64.load32_s", "i64.load32_u",
+             "f32.load", "f64.load"],
+    Addrs = [B + D || B <- [4096, 65536], D <- lists:seq(-16, 15)],
+    [over_image(A, Stores, Loads, Image) || A <- Addrs],
+    ok.
+
+over_image(A, Stores, Loads, Image) ->
+    Src = iolist_to_binary(
+            ["(memory 2)\n",
+             [["(func (export \"", S, "\") (param ", atom_to_list(T), ") i32.const ",
+               integer_to_list(A), " local.get 0 ", S, ")\n"]
+              || {S, T, _} <- Stores],
+             [["(func (export \"", L, "\") (result ", lists:sublist(L, 3),
+               ") i32.const ", integer_to_list(A), " ", L, ")\n"]
+              || L <- Loads]]),
+    {ok, P} = wasm_wat:module(iolist_to_binary(["(module ", Src, ")"])),
+    {ok, M} = wasm_validate:module(P),
+    Opts = #{memory_opts => #{0 => #{image => wasm_memory:image_of(Image)}}},
+    {ok, I0} = wasm:instantiate(M, #{}, Opts),
+    Fns = [F || F <- tuple_to_list(I0#inst.funcs), is_record(F, fn)],
+    Unit = [{Pos, F#fn.idx, F, wasm_instance:compiler_ir(F, I0)}
+            || {Pos, F} <- lists:enumerate(0, Fns)],
+    Sigs = maps:from_list([{F#fn.idx, {F#fn.nparams, F#fn.nresults}} || F <- Fns]),
+    Mod = 'wasm_code_0',
+    {ok, Bin} = wasm_core:module(Mod, Unit, Sigs, #{}),
+    {module, Mod} = code:load_binary(Mod, "generated", Bin),
+    ok = wasm:destroy(I0),
+    [begin
+         {ok, Ii} = wasm:instantiate(M, #{}, Opts),
+         {ok, Ic} = wasm:instantiate(M, #{}, Opts),
+         %% Thirteen other pages made private first, so the page under test
+         %% lands in a slot well into its arena chunk, where reading the
+         %% table entry wrongly would land on the wrong slot.
+         [ok = wasm:write_memory(X, Pg * 4096 + 2048, <<Pg>>)
+          || X <- [Ii, Ic], Pg <- lists:seq(2, 14)],
+         Target = fun(Name) ->
+                          #{Name := {func, X}} = Ic#inst.exports, X
+                  end,
+         {ok, []} = wasm:call(Ii, list_to_binary(S), [V]),
+         {ok, [], Mut} = Mod:invoke(Ic, wasm_instance:mut(Ic),
+                                    Target(list_to_binary(S)), [V], 0, 0),
+         ok = wasm_instance:set_mut(Ic, Mut),
+         [begin
+              {ok, Want} = wasm:call(Ii, list_to_binary(L), []),
+              {ok, Got, _} = Mod:invoke(Ic, wasm_instance:mut(Ic),
+                                        Target(list_to_binary(L)), [], 0, 0),
+              ?assertEqual({A, S, L, Want}, {A, S, L, Got})
+          end || L <- Loads],
+         ?assertEqual({A, S, wasm:read_memory(Ii, 0, 2 * 65536)},
+                      {A, S, wasm:read_memory(Ic, 0, 2 * 65536)}),
+         [ok = wasm:destroy(X) || X <- [Ii, Ic]]
+     end || {S, _T, V} <- Stores],
+    _ = code:purge(Mod), _ = code:delete(Mod), _ = code:purge(Mod),
     ok.
 
 %% Store the parameter and read it back through `Op`, so one module exercises

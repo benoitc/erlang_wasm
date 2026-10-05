@@ -6646,3 +6646,871 @@ branch interleaved in both orders:
 One caller's p50 went from 28 ms to 19 to 20 ms; 64 callers', from 258 to
 273 ms to 185 to 195 ms. That is about 1.4x in both rounds, with schedulers
 slightly less busy (64 to 65% against 68 to 73%).
+
+## Compiled wasm against the same work written in Erlang
+
+`bench/paths/gap.erl` runs each kernel as hand-written Erlang, interpreted and
+compiled. 0.7.0, OTP 29, one kernel and arm per VM, five interleaved rounds
+alternating the order, minimum of five runs per VM, load 11 to 20. The same
+Erlang under two arm names differed by 0.6%.
+
+| kernel, per | Erlang | interpreted | compiled | compiled / Erlang | words: Erlang, interpreted, compiled |
+| --- | ---: | ---: | ---: | ---: | --- |
+| i32 loop, iteration | 1.55 ns | 71.5 | 2.92 | 1.9x | 0, 45, 0 |
+| `br_table`, iteration | 1.38 | 123 | 2.96 | 2.1x | 0, 108, 0 |
+| FNV-1a 64, iteration | 25.8 | 156 | 50.4 | 1.95x | 6.9, 108, 10.6 |
+| xorshift64, iteration | 68.7 | 305 | 150 | 2.2x | 15.7, 87, 27.1 |
+| sieve, i8, element | 20.4 | 496 | 62.4 | 3.1x | 0, 209, 0 |
+| mandelbrot f64, inner iteration | 21.2 | 290 | 87.4 | 4.1x | 10.3, 427, 20.7 |
+| fib(27), call | 1.11 | 84.8 | 7.10 | 6.4x | 0, 109, 5 |
+| byte read-modify-write, byte | 10.5 | 201 | 76.5 | 7.3x | 0, 122, 9.5 |
+| `call_indirect`, call | 2.49 | 181 | 75.0 | 30x | 0, 129, 20 |
+
+The Erlang memory arms keep one byte per `atomics` slot. The layouts an Erlang
+programmer would use lose to the compiled kernel: `array` runs the sieve at
+210 ns an element, and a binary rebuilt per lap runs the byte kernel at 3.49 ns
+a byte but copies 64 KiB a lap.
+
+The BEAM assembly of each compiled kernel, read against `erlc -S` of the Erlang
+arm, names what compiled code pays on top:
+
+- **Signed values.** An unsigned compare is two `band`s before the test, an
+  `i32.add` a range test and a correction, a multiply or a shift three more
+  operations. The i32 loop body is 14 arithmetic instructions and 4 tests
+  against 6 and 1. i64 code does the same on bignum literals.
+- **Calls.** Each one calls `wasm_exec:check_depth/2`, which reads
+  `max_depth` from a map, passes three extra arguments and answers
+  `{[R], Mut}`: exactly 5.00 words per `fib` call and a 6-slot frame against 1.
+- **`call_indirect`** leaves generated code on every call: `indirect_out/9`, a
+  type check with `lists:member/2`, and `Mod:invoke/6` with an argument list.
+- **Floats** are not inlined: all 17 float operations of the mandelbrot loop
+  are remote calls to `wasm_exec:op2/3`, and it contains no `fadd` or `fmul`.
+- **Packed words.** A byte access reads the whole 64-bit word, and a word at or
+  past 2^59 is a heap bignum: 9.6 to 10.4 ns and 0 words for a read-modify-write
+  of `0x0102...`, 29.6 to 30.0 ns and 4 words for `0xFF02...`.
+
+## Where a compiled QuickJS run and a CPython request spend their time
+
+`bench/paths/guestprof.erl`, compiled code loaded from the cache, a fresh VM
+per run. QuickJS runs a 30,000-iteration loop as a command, 78 to 80 ms at load
+5 to 14. Shares from macOS `sample` at 1 ms over 60 runs in each of three VMs;
+counts exact and identical to within 8 calls in 6.03M.
+
+| QuickJS | share | calls per run |
+| --- | ---: | ---: |
+| bignum helpers (`erts_band`, `erts_shift`, `big_*`, `small_to_big`) | 21 to 23% | inlined, not countable |
+| `atomics` | 11 to 12% | 2.13M `get`, 0.72M `put` |
+| collection | 11 to 16% | |
+| generated code, estimated | about 42% | |
+| floats, `check_depth`, `call_indirect`, interpreter | under 1% each | 1.3k, 23k, 5k, 0 `run/3` |
+
+Half of the run's 4.0M allocated words are bignums answered by `atomics:get/2`,
+and 30.4% of the words it answers are at or past 2^59: 648k per run. Counted
+per access on the interpreter, which makes the same accesses: 93% come from
+one-byte loads of a packed word; 0.45% are i64 values that are bignums as
+values, whatever the layout.
+
+A CPython request, `reqbench`'s guest, 35 to 39 ms at load 2 to 12: the call is
+77%, the restore 16%, bignum helpers 1.4 to 2.0%, collection about 1%.
+`check_depth` and `call_indirect` are about 1% each, floats under 0.1%, the
+interpreter 0. 5.8% of words read are bignums.
+
+Accesses by width, interpreted, one run of each:
+
+| width | QuickJS | CPython request |
+| ---: | ---: | ---: |
+| 1 byte | 24.1% | 7.0% |
+| 2 bytes | 1.3% | 1.5% |
+| 4 bytes | 30.4% | 89.6% |
+| 8 bytes | 44.2% | 1.9% |
+
+Every 8-byte QuickJS access is an integer; neither guest loads an f64. So for
+these two guests the float, call and `call_indirect` gaps above are worth
+under 1% each, and the packed word is what costs.
+
+## Signed words, priced
+
+A byte read-modify-write on one word, `unsigned` against `signed` `atomics`,
+two runs in fresh VMs at load 10:
+
+| word | unsigned | signed |
+| --- | ---: | ---: |
+| small bytes | 10.5 ns, 0 words | 10.1 ns, 0 words |
+| all ones, or a negative i32 in the high half | 38.4 ns, 2 words | 10.4 ns, 0 words |
+| ASCII text | 38.3 ns, 2 words | 37.3 ns, 2 words |
+
+Signed storage makes a word whose top five bits are equal small; it does
+nothing for arbitrary bytes. Of QuickJS's 648k bignum words, 0.3% would become
+small; of CPython's, 23% (1.3% of its words). Not built.
+
+## Default heap floors for runners
+
+The floors measured in "~~The 26 ms~~. Found: it is the runner's own garbage
+collection" are now each adapter's `defaults/0`: 200,000 words for Lua and
+QuickJS, 1,000,000 for CPython. So a worker started with no floor option gets
+them. The gates were fixed before the run: interpreted Lua and QuickJS at
+least 30% faster with a default worker, and the compiled tier not worse.
+
+Each arm is a fresh VM with `+S 10:10` and one worker. The options are only
+the path, `root` and the guest's limits: `wasm_lua:limits()`,
+QuickJS's documented 16 M-word limits, and `wasm_python:limits()`. Compiled
+adds `fuel => infinity, compile => true, compile_after => 1` and warms until
+`wasm_jit:counts()` shows `entered`; every compiled VM printed `cached => 1`,
+from a 0700 cache under `$HOME`. The snapshot store and the code cache were
+filled in an earlier pass that is not in the tables. Each arm then answered
+20 warm-up requests and 200 timed ones (CPython: 100). Baseline is
+`git archive origin/main` (0.7.0), with the same fixtures. There were three
+rounds, and the order alternated between them. Load was 18.0 at the start of
+round 1, 8.3 at round 2, 5.7 at round 3 and 5.6 at the end. Values are in ms
+as min / p50 / p99, one row per round:
+
+| guest, tier | 0.7.0 | default floors |
+| --- | ---: | ---: |
+| Lua, interpreted | 24.3 / 26.9 / 115.8 | 10.0 / 10.5 / 16.8 |
+| | 23.8 / 25.7 / 28.1 | 9.2 / 10.3 / 11.7 |
+| | 24.5 / 25.9 / 28.4 | 10.1 / 10.6 / 11.4 |
+| QuickJS, interpreted | 46.6 / 55.9 / 67.2 | 19.3 / 19.9 / 20.6 |
+| | 45.4 / 53.6 / 61.1 | 19.5 / 20.3 / 26.6 |
+| | 46.4 / 55.6 / 67.9 | 19.4 / 20.0 / 21.2 |
+| CPython, interpreted | 128.5 / 140.5 / 149.1 | 42.8 / 43.9 / 45.2 |
+| | 127.3 / 138.8 / 148.1 | 42.6 / 43.7 / 44.8 |
+| | 128.3 / 142.2 / 150.6 | 42.6 / 43.8 / 47.8 |
+| Lua, compiled | 3.5 / 4.1 / 4.9 | 2.8 / 3.2 / 3.9 |
+| | 3.7 / 4.2 / 4.7 | 2.7 / 3.1 / 3.9 |
+| | 3.6 / 4.0 / 4.6 | 2.8 / 3.2 / 4.1 |
+| QuickJS, compiled | 6.4 / 7.0 / 7.5 | 5.2 / 5.9 / 6.4 |
+| | 6.3 / 7.0 / 7.9 | 5.3 / 5.9 / 6.5 |
+| | 6.7 / 7.3 / 8.0 | 5.4 / 6.0 / 6.6 |
+| CPython, compiled | 19.7 / 20.3 / 21.2 | 15.5 / 17.2 / 17.8 |
+| | 18.9 / 20.1 / 21.2 | 16.1 / 17.1 / 18.2 |
+| | 19.7 / 21.0 / 22.2 | 16.3 / 17.5 / 18.5 |
+
+By median p50, interpreted Lua is 59% faster (25.9 to 10.5 ms), QuickJS 64%
+(55.6 to 20.0 ms) and CPython 69% (140.5 to 43.8 ms). Both gates pass. Compiled
+is also faster, not merely not worse: Lua is 4.1 to 3.2 ms, QuickJS 7.0 to 5.9
+ms and CPython 20.3 to 17.2 ms. In every row, the floored arm's worst p99 is
+under the 0.7.0 arm's best min, apart from Lua and QuickJS compiled, where the
+two overlap by under a millisecond.
+
+**What it costs.** Collections per request and the largest heap block any
+process under the worker reached, read from `garbage_collection` trace events
+over ten further requests. The worker's own events are excluded, so this is
+the runner. The figures were identical in every round:
+
+| guest, tier | collections, 0.7.0 | floors | peak heap, 0.7.0 | floors |
+| --- | ---: | ---: | ---: | ---: |
+| Lua, interpreted | 78 to 80 | 17 | 954,562 words | 1,151,213 |
+| QuickJS, interpreted | 83 to 85 | 28 | 1,396,207 | 1,151,213 |
+| CPython, interpreted | 77 to 78 | 15 | 2,805,586 | 3,166,829 |
+| Lua, compiled | 30 | 5 | 139,267 | 318,187 |
+| QuickJS, compiled | 22 | 5 | 225,340 | 318,187 |
+| CPython, compiled | 18 | 5 | 1,396,207 | 2,878,936 |
+
+Interpreted, the peak moves by one heap-size class, up for Lua and CPython
+and down for QuickJS: the floor is small beside what an interpreted request
+grows to anyway. Compiled, where a request allocates little, the floor is the peak for
+Lua and QuickJS. That is 318,187 words, 2.5 MB, against 1.1 and 1.8 MB. For
+CPython it roughly doubles the peak, to 23 MB from 11 MB. That memory is held
+only while a request runs, because the runner dies at the end of each request.
+
+**No default capture floor for CPython.** The capture floor measured at 5x on a
+worker start, 2,000,000 words, is not a default. On this branch, four fresh
+starts at `wasm_python:limits()`, whose ceiling is 16,777,216 words, with
+`capture_min_heap_words => 2_000_000` and no `snapshot_dir`: three died with
+`the capture died` and one started, each after 17 to 19 s, at load 4.6 to 8.4.
+That is the `ATTEMPTS.md` result again: the floor raises the baseline under an
+unchanged ceiling. A default cannot know the caller raised `max_heap_words`,
+so the capture floor stays an option, set beside 32 M words as
+`docs/python.md` shows. Lua's capture also rules out a no-room Lua test: a
+Lua worker does not start under 1,000,000 words (its capture dies) and does at
+2,000,000, while the 200,000 default lacks room only under 400,000.
+
+## Compiled CPython's floor, by tier
+
+The section above gives CPython 1,000,000 words on both tiers. On the compiled
+tier that floor still lets the heap grow once mid-request, so the default now
+depends on the tier: `defaults/1` is asked with the worker's limits, and
+`wasm_python` answers 1,500,000 when `compile => true` and `fuel => infinity`,
+1,000,000 otherwise.
+
+One CPython worker per fresh VM, `+S 10:10`, built from c5ae8f9, the
+`reqbench` CPython guest and request, `wasm_python:limits()` with
+`max_heap_words` raised to 32 M words. Compiled adds `fuel => infinity,
+compile => true, compile_after => 1, compile_quality => baseline` and warms
+until `entered`, then 40 more; every compiled VM loaded its code from the
+cache. 100 timed requests per arm, then collections and the peak heap block
+from `garbage_collection` trace events over 20 more. Three rounds over
+0 to 2,000,000, order reversed on the middle one, load 5.2 to 12.3; then four
+rounds over 400,000 to 2,000,000 with the order alternating, load 6.4 to 8.6.
+Collections and peak were the same in every round. p50 in ms:
+
+| floor | class | compiled p50 | collections | peak heap |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 233 | 23.6 / 25.3 / 24.4 | 18 | 1,396,207 |
+| 100,000 | 121,536 | 23.5 / 22.1 / 23.1 | 14 | 1,347,864 |
+| 200,000 | 318,187 | 22.0 / 21.3 / 23.0 | 8.5 | 1,347,864 |
+| 400,000 | 514,838 | 21.5 / 21.9 / 23.0 | 6 | 1,666,052 |
+| 600,000 | 833,026 | 21.5 / 20.7 / 22.2 | 5 | 1,999,262 |
+| 1,000,000 | 1,199,557 | 21.6 / 21.1 / 20.6 | 5 | 2,878,936 |
+| 1,500,000 | 1,727,361 | (rounds 4 to 7 only) | 4 | 1,727,361 |
+| 2,000,000 | 2,072,833 | 20.0 / 19.5 / 20.5 | 4 | 2,072,833 |
+
+At 1,000,000 the peak is 2.88 M words: the heap outgrows its floor and is
+reallocated mid-request. At 1,500,000 and above the floor is the peak. In the
+four paired rounds, p50 at 1,000,000 then 1,500,000: 21.3 / 20.7, 21.9 / 20.8,
+21.8 / 21.0, 21.7 / 20.5. 1,500,000 was faster in every round, by 0.6 to
+1.2 ms (3 to 6%). 2,000,000 was within about a millisecond of 1,500,000 either
+way (20.2, 19.7, 20.5, 21.9) for a floor a fifth larger.
+
+Interpreted, p50 in ms over the three rounds:
+
+| floor | p50 | collections | peak heap |
+| ---: | ---: | ---: | ---: |
+| 0 | 141.2 / 144.5 / 142.4 | 77 to 78 | 2,805,586 |
+| 400,000 | 74.3 / 77.1 / 76.7 | 33 | 3,002,237 |
+| 1,000,000 | 44.0 / 45.0 / 45.8 | 15 | 3,166,829 |
+| 2,000,000 | 42.9 / 43.5 / 44.2 | 10 | 5,057,711 |
+
+2,000,000 buys about a millisecond for 60% more peak heap, so 1,000,000 stays
+the interpreter's default.
+
+Both defaults fit under `wasm_python:limits()`'s 16 M words and under the
+untrusted preset's 8 M with the worker's 2x headroom: 3 M words at most.
+
+## Default floors in a pool
+
+The question a host asks is what the floors cost across a pool. Ten workers
+per fresh VM, `+S 10:10`, built from c5ae8f9, a last-in pool of idle workers,
+64 and then 256 callers each looping on the `reqbench` request, 10 s of
+warm-up (compiled: until `entered`), then 20 s timed. Limits as above, QuickJS
+with no limits beyond the tier's. Each arm is the adapter's default floor
+against `runner_min_heap_words => 0`, plus CPython at 1,500,000. Two rounds,
+the second in reverse order. Load was 18 to 69 in round 1 and 20 to 135 in
+round 2, which is why only ratios within a round are read.
+
+Throughput in req/s, round 1 then 2:
+
+| guest | callers | floor off | floor on | change |
+| --- | ---: | ---: | ---: | ---: |
+| Lua, compiled | 64 | 999.0 / 1066.6 | 1146.4 / 1202.8 | +15%, +13% |
+| | 256 | 1062.9 / 1042.0 | 1226.6 / 1225.2 | +15%, +18% |
+| QuickJS, compiled | 64 | 730.0 / 755.1 | 825.3 / 834.0 | +13%, +10% |
+| | 256 | 738.2 / 775.2 | 831.3 / 836.8 | +13%, +8% |
+| CPython, compiled, 1,000,000 | 64 | 287.4 / 278.1 | 336.0 / 345.6 | +17%, +24% |
+| | 256 | 297.8 / 294.4 | 355.6 / 351.1 | +19%, +19% |
+| CPython, compiled, 1,500,000 | 64 | 287.4 / 278.1 | 370.0 / 373.5 | +29%, +34% |
+| | 256 | 297.8 / 294.4 | 385.1 / 383.6 | +29%, +30% |
+| Lua, interpreted | 64 | 253.8 / 248.8 | 557.5 / 540.4 | 2.2x, 2.2x |
+| | 256 | 259.1 / 256.1 | 548.5 / 549.8 | 2.1x, 2.1x |
+
+With the floors, p99 fell in every arm, for example Lua compiled at 256
+callers 275 to 236 ms and CPython at 1,500,000 934 to 726 ms. The collector's
+share of scheduler time (`msacc`) fell from 8.9 to 9.6% to 0.9% on Lua
+compiled, 7.4 to 7.8% to 1.0% on QuickJS and 4.4 to 4.6% to 1.2 to 1.3% on
+CPython. `mseg_alloc` calls for the heap allocator fell 4.0 to 4.7x on Lua
+compiled, 3.3 to 3.6x on QuickJS, 2.5 to 3.7x on CPython and 2.0 to 2.1x on
+Lua interpreted.
+
+**Memory.** Mean `erlang:memory(total)`, sampled every 10 ms, floor on minus
+floor off: Lua compiled +17.1 to 17.8 MB, QuickJS +12.7 to 13.3 MB, CPython
++51.1 to 54.7 MB at 1,000,000 and +52.6 to 56.1 MB at 1,500,000, Lua
+interpreted +14.4 to 15.7 MB. It did not grow from 64 callers to 256: a floor
+is held by a runner while it executes, a worker runs one request at a time,
+and a queued request has no runner. So the bound is floor x busy workers,
+about 10 here.
+
+Peak OS RSS went the other way on CPython, 114 to 291 MB lower with the floor,
+and up on Lua and QuickJS, 100 to 258 MB higher. The next section explains
+both, and the CPython half turned out to be the operating system's doing.
+
+**Little's law, as an extrapolation and not a measurement.** Busy workers =
+rate x time per request, and time per request is 10 workers / measured
+throughput. At 10,000 req/s, using the round means and the per-busy-worker
+memory above:
+
+| guest | busy workers, off | on | fewer | held by floors |
+| --- | ---: | ---: | ---: | ---: |
+| Lua, compiled | 96 | 83 | 13% | about 145 MB |
+| QuickJS, compiled | 133 | 120 | 10% | about 155 MB |
+| CPython, compiled, 1,500,000 | 346 | 265 | 23% | 1.4 to 1.5 GB |
+| Lua, interpreted | 393 | 182 | 54% | about 280 MB |
+
+## Why RSS rose more than `erlang:memory` with the floors
+
+**The segment cache holds the freed runner heaps.** A 200,000-word floor
+rounds to a 318,187-word heap, about 2.5 MB, above `eheap_alloc`'s
+single-block threshold (`sbct` 524,288 bytes; `lmbcs` 5 MB, `acul` 45 and
+`as aoffcbf` are the defaults already). So each floored runner heap is a
+single-block carrier. A runner exits after its request and the carrier goes
+to `mseg`, which keeps up to 10 segments per instance (`mcs` 10) across 11
+instances: about 73 cached segments, roughly 185 MB of dirty pages that RSS
+counts and `erlang:memory` does not. Sampled every 100 ms, about 10.5
+single-block heap carriers were live with the floors on (24 MB, one per busy
+runner) against about 11 small ones (4.5 MB) with them off. Standalone, five
+floored processes exiting took single-block bytes to 0, cached segments from
+13 to 18, and left RSS where it was. `footprint` agreed with `ps` (Lua with
+floors: 283 to 314 MB against 218 to 322), and the extra showed as dirty
+untagged regions, so it is not pages freed with `MADV_FREE`.
+
+Ten workers, 64 callers, two interleaved rounds gated on a load under 20, RSS
+max / mean in MB:
+
+| | off | on | on, `+MMmcs 0` | on, `+MMmcs 2` | off, `+MMmcs 0` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Lua compiled | 182 / 150 | 284 / 261 | 185 / 151 | 220 / 194 | 163 / 126 |
+| QuickJS compiled | 336 / 317 | 568 / 496 | 382 / 317 | 404 / 332 | 272 / 260 |
+
+`+MMmcs 0` closes Lua's gap and takes QuickJS's from about 230 MB to about 45.
+Throughput is not settled: the rounds varied by 30 to 60% from load outside
+the lock, and Lua with the floor and `+MMmcs 0` ran at 818 req/s against 760
+without the flag, which is inside that. A quiet machine and five pairs are
+needed before a throughput claim either way.
+
+Tried in a first pass at load 30 to 190, so only their memory counts, RSS
+max / mean in MB with the floors alone at Lua 272 / 229 and QuickJS 568 / 490:
+`+MHsbct 4096` 323 / 295 and 566 / 509 (the heaps move into 5 MB multiblock
+carriers, which are cached the same way); with `+MHlmbcs 20480` as well,
+377 / 333 and 642 / 565; `+MHlmbcs 20480` alone 349 / 330 and 603 / 559;
+`+MHacul 0` 296 / 283 and 572 / 546; `+MHramv true` 320 / 279 and 441 / 404,
+mixed; `+MHmmbcs 32768` 369 / 345 and 586 / 556, and it pins a main carrier
+per instance. A floor small enough to stay under `sbct` would be under 65,536
+words, which gives up the collection it exists to save.
+
+**CPython's lower RSS was the machine.** It did not reproduce: gated, floors
+on read 1,356 / 1,301 against 1,189 / 1,150 off. The machine had about 300 MB
+free, a compressor holding about 44 GB and 8 GB of swap in use, and CPython's
+`footprint` exceeded its `ps` RSS by up to 400 MB: idle pages, cached segments
+among them, were being compressed out of RSS. By footprint, two rounds each:
+off 1,609 and 1,318 MB, on 1,668 and 1,658, on with `+MMmcs 0` 1,309 and
+1,315, off with `+MMmcs 0` 1,447 and 1,458. With the cache off, the floor
+saves about 140 MB: an unfloored runner grows through about 3x as many
+collections and 2.5x the segment calls (56k to 76k against 24k to 27k), each
+new heap size a 10 to 130 MB carrier alongside the one it outgrew.
+
+`docs/tuning.md` gives the flag, and the trade against `+MMmcs 30`, which makes
+concurrent restores cheaper: a larger cache is faster allocation, a smaller one
+is memory returned sooner.
+
+## Lowering once per module, not once per request
+
+A request builds its instance in a fresh runner, and the validation context,
+the function table and every lowered body lived in that runner's dictionary,
+so every request built them again. The module cache now publishes the first
+two with the module and the bodies the first request lowered beside it, under
+`{wasm_ir_shared, Hash, Fuse}`.
+
+`bench/paths/lowbench.erl`, a default worker, no `restore_ahead`, `+S 10:10`,
+60 timed requests per run after 30 requests and 3 s of warm-up (10 s for the
+compiled arm), 3 interleaved fresh-VM rounds against main with the default
+heap floors (#49). Load averages 2.6 to 9.5.
+
+| guest, tier | #49 median | branch median | change |
+| --- | ---: | ---: | ---: |
+| Lua, interpreted | 9.27 ms | 6.77 ms | -27% |
+| QuickJS, interpreted | 17.85 ms | 11.12 ms | -38% |
+| CPython, interpreted | 39.97 ms | 25.43 ms | -36% |
+| CPython, compiled | 18.33 ms | 16.05 ms | -12% |
+
+`realbench` QuickJS, 5 pairs each tier, both orders, three runs each: median
+1697 ms against 1679 interpreted, 130.9 against 134.3 compiled, minimums 1581
+against 1620 and 125.4 against 125.1. Flat; the call path is not touched.
+
+The first request of a fresh node publishes, in the runner that destroys its
+instance: 1.7 ms for Lua, 4.7 ms for QuickJS, 9.6 to 11.9 ms for CPython. Its
+wall was 23 to 26 ms against 23 to 26 (Lua), 38 to 47 against 32 to 45
+(QuickJS) and 74 to 78 against 77 to 84 (CPython). The table was measured with
+the publish called from `wasm_instance:release/1`; it moved to `wasm:destroy/1`
+unchanged, to keep `wasm_instance` from calling the cache, and one run each
+afterwards gave Lua 7.48 ms with a 1.8 ms publish and QuickJS 11.84 ms with
+5.2 ms, the same bodies to the word.
+
+What stays resident per module: the published bodies are 248,022 words for
+Lua (1.9 MiB), 657,209 for QuickJS (5.0 MiB) and 1,162,237 for CPython
+(8.9 MiB); the context and function table add 0.16, 0.35 and 2.8 MiB to the
+module's own entry.
+
+They share the module's entry rather than a key of their own because a
+`persistent_term` preserves sharing only within one term. Published apart, the
+function table took 30.4 M words for CPython against 15.2 M for the whole
+module, since it carried its own copy of every raw body.
+
+A term read from `persistent_term` and put in the process dictionary is not
+copied: a process that put a 2 M-word literal there and collected had the same
+610-word heap before and after.
+
+## A compiled worker's first request, with the code cache warm
+
+`compiled => true` preloads the cached artifact at worker start. The question
+is which request first runs compiled, and what the start pays for it.
+`bench/paths/firstreq.erl`, one worker per fresh VM, `+S 10:10`, code cache and
+snapshot directory under `~/.cache` (`0700`), each filled by a warm VM of the
+same build, every measured VM reporting `cached => 1`. The 0.7.0 arm asks for
+the tier with the four keys spelled out in `limits`, since it has no option.
+Three rounds, order alternating, load 4.9 to 5.3:
+
+| guest | build | start, ms | first compiled request | its latency, ms | steady p50, ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Lua | 0.7.0 | 57.5 to 60.3 | 9 to 10 | 5.8 to 6.6 | 4.81 to 5.38 |
+| Lua | branch | 251.2 to 253.5 | **1** | 17.7 to 21.5 | 4.60 to 5.48 |
+| QuickJS | 0.7.0 | 208.2 to 226.1 | 13 to 23 | 9.4 to 9.5 | 8.31 to 8.94 |
+| QuickJS | branch | 1213.5 to 1227.8 | **1** | 22.0 to 23.5 | 8.05 to 8.83 |
+| CPython | 0.7.0 | 1021.7 to 1100.8 | 61 to 62 | 21.6 to 23.0 | 20.12 to 20.95 |
+| CPython | branch | 3765.0 to 3796.4 | **1** | 50.7 to 54.2 | 20.03 to 20.98 |
+
+The first compiled request is slower than a steady one because it is also the
+VM's first request. Against 0.7.0's first request, which interprets, it is
+faster: a second set of three rounds, at load 59 to 80, gave request 1 at 17.2
+to 30.4 ms against 34.7 to 40.4 on Lua, 21.9 to 22.4 against 69.7 to 72.3 on
+QuickJS, and 49.3 to 52.9 against 78.3 to 92.1 on CPython, with the same
+start times and first-compiled request numbers as above.
+
+**The start gate (at most 10% added) fails for the first worker on a node**,
+by +0.19 s on Lua, +1.0 s on QuickJS and +2.7 s on CPython. That is why the
+blocking preload became `preload => wait` and the default is `async`; see the
+next section.
+All of the difference is `code:load_binary/3` of the artifact, which is the
+emulator translating it to native code, timed alone: 206 ms for Lua's 4.3 MB,
+1107 ms for QuickJS's 12.4 MB, 2872 ms for CPython's 19.3 MB; the read is 1 ms
+and the digest 11 to 17 ms. 0.7.0 pays the same load, in the compiler a request
+starts, while the early requests interpret. A second worker on the same node
+finds the module resident and starts as it did: 0.9 to 1.3 ms on Lua, 1.9 to
+2.7 on QuickJS, 37.1 to 37.9 on CPython, in both builds.
+
+## What a code load holds up, and `preload => async`
+
+`async` first started the preload at worker start and returned. Its request
+1 then took the whole load: 190 to 230 ms on Lua, 1.0 to 1.15 s on QuickJS,
+2.6 to 2.8 s on CPython. An earlier version of this section put that down to
+the load pausing every process on the node. That was wrong, and the probe
+behind it was measuring something else.
+
+**What does not wait.** `+S 10:10`, the QuickJS artifact (12.4 MB) prepared
+while a ticker wakes every 1 ms, and a second ticker runs in a separate VM:
+
+| loader on | ticker bound to 2 | ticker unbound | ticker in another VM |
+| --- | ---: | ---: | ---: |
+| scheduler 2 (by chance) | 979 ms gap | 979 ms gap | 2 ms |
+| scheduler 1 (bound) | 2 ms | 2 ms | 3 ms |
+| scheduler 7 (by chance) | 2 ms | 2 ms | 5 ms |
+| scheduler 1 (bound) | 2 ms | 2 ms | 2 ms |
+
+The first probe's 995 ms gap was a ticker that shared the loader's scheduler.
+With the loader bound to scheduler 1, a process idle on scheduler 3 answers a
+message at once, a 1 ms `receive after` on scheduler 7 takes 2 ms, and
+`ets:new/2` and `atomics:info/1` return at once.
+
+**What does wait.** `erlang:prepare_loading/2` does not yield, and two things
+wait for the whole of it, 0.9 s for QuickJS:
+
+- **Any other module load.** With the loader bound to scheduler 1,
+  `code:ensure_loaded(json)` from scheduler 10 at 90 ms returned at 917 ms, and
+  `persistent_term:put/2` from scheduler 10 at 920 ms. In a traced worker the
+  code server went into `erlang:finish_loading/1` for the runner's `sets` at
+  262 ms and trapped (`erlang:bif_return_trap/2`) until 1174 ms, 0.1 ms after
+  the preload's `prepare_loading` returned.
+- **Processes queued on the loader's scheduler.** In the same trace the
+  worker, the runner and the caller went off scheduler 1 at 280.7 ms and came
+  back, on scheduler 2, at 936.8 ms: nothing took them from the busy
+  scheduler's queue until then.
+
+**Why request 1 took the load.** Traced, request 1 of an interactive node
+loads `json`, `array` and `sets` on first use. `json` and `array` finished at
+190 ms, the preload's `prepare_loading` began at 195.5 ms, and `sets`
+(`load_ok`, 228.7 ms) came back at 1085.2 ms, 11 ms after the prepare
+returned. With those three loaded before the request, the same request
+interpreted in 52 ms while the load ran. `wasm_jit:maybe_adopt` does not
+wait: a slot that is `loading` is not resident, and the call interprets.
+
+**So `async` now claims at start and loads after the first request has
+answered.** It reads the manifest and the artifact and claims the slot at
+start, so the compile that request 1 asks for finds the slot `loading` and
+does not start an uncached one, and it loads once request 1 has answered.
+That removes the module loads from the window. It cannot remove the second
+effect: a process queued on the loader's scheduler still waits.
+
+`bench/paths/firstreq.erl`, every module of `wasm`, `stdlib` and `kernel`
+loaded before the start (`FIRSTREQ_LOADALL=1`, as an embedded release does),
+three arms per guest in fresh VMs, order reversed each round, three rounds,
+load 49 to 57. `ready` is from the start of `start_link/2` to the answer of
+the first compiled request; `worst` is the slowest request up to it:
+
+| guest | arm | start, ms | req 1, ms | first compiled | worst, ms | ready, ms |
+| --- | --- | ---: | ---: | --- | ---: | ---: |
+| Lua | 0.7.0 | 39.1 to 42.0 | 26.2 to 27.8 | 9 to 10 | 28.2 to 32.0 | 267 to 288 |
+| Lua | async | 39.1 to 41.9 | 26.7 to 210.7 | 2 to 10 | 29.7 to 210.7 | 256 to 295 |
+| Lua | wait | 219.0 to 222.9 | 5.7 to 6.0 | **1** | 5.7 to 6.0 | 225 to 229 |
+| QuickJS | 0.7.0 | 185.1 to 196.0 | 53.0 to 55.5 | 3 to 23 | 59.1 to 969.1 | 1218 to 1313 |
+| QuickJS | async | 183.8 to 202.6 | 56.4 to 744.2 | 6 to 22 | 65.0 to 847.3 | 1243 to 1268 |
+| QuickJS | wait | 1140.3 to 1154.2 | 9.1 to 10.3 | **1** | 9.1 to 10.3 | 1149 to 1164 |
+| CPython | 0.7.0 | 865.5 to 907.6 | 48.2 to 57.2 | 61 to 63 | 53.8 to 66.2 | 3674 to 3733 |
+| CPython | async | 903.5 to 930.3 | 49.2 to 2641.8 | 2 to 56 | 59.5 to 2641.8 | 3565 to 3647 |
+| CPython | wait | 3424.6 to 3525.1 | 27.3 to 31.1 | **1** | 27.3 to 31.1 | 3452 to 3556 |
+
+Steady compiled p50 is the same in every arm: 4.07 to 4.24 ms on Lua, 7.12 to
+7.30 on QuickJS, 18.35 to 18.83 on CPython.
+
+In four `async` runs of nine, the caller of request 1 was queued on the
+loader's scheduler and got its answer only when the load ended; in the other
+five nothing waited. 0.7.0 has the same exposure, where its compiler loads
+the cached artifact: one QuickJS run above has a 969 ms request. `async`
+starts as 0.7.0 does and is ready no later; `wait` is the only arm in which no
+request waits, because the load is over before traffic.
+
+`wasm_jit:counts/0` called between two requests also waited for the load in
+this harness, and why is not established: `atomics:info/1` and
+`counters:get/2` alone do not. The harness reads the `entered` counter
+directly.
+
+## The preload loads on the last scheduler
+
+The gate above kept the load out of request 1's module loads but not out of
+its latency. A cold-start run against 0.7.0 still had CPython's request 1 at
+2.75 to 2.99 s in 4 rounds of 5 under `async`.
+
+**Timeline.** Probes (an ETS insert with the scheduler id, no tracer: a
+tracer keeps the other schedulers awake and hid the stall in 4 traced runs of
+4) in the preload, the worker and the caller, CPython, warm cache, `+S 10:10`:
+
+| ms | scheduler | event |
+| ---: | ---: | --- |
+| 942.6 | 1 | `start_link/2` returns, request 1 submitted |
+| 955.5 | 3 | preload has read and claimed, waits at the gate |
+| 991.2 to 1002.4 | 1 | runner's IR `persistent_term:put` |
+| 1002.6 | 1 | worker replies (`publish`), gate opens |
+| 1002.6 | 1 | preload starts `code:load_binary/3` |
+| 3641.3 | 1 | worker receives the caller's `consumed` call |
+| 3660.6 | 1 | caller's `run/2` returns: request 1 is 2,718 ms |
+| 3661.0 | 1 | load ends |
+
+The gate held: the load never began before the answer. But the preload had
+been compacted onto scheduler 1 with the worker and the caller, and
+`prepare_loading` does not yield, so the `consumed` call that `run/2` makes
+after the answer waited out the load. In another run the three were on
+scheduler 2 and request 1 took 64 ms, and request 6 took 2.54 s once they
+came back to scheduler 1.
+
+**Fix.** `wasm_jit` binds the loading process to the last online scheduler
+for the length of `code:load_binary/3` (`process_flag(scheduler, N)`, not
+documented), which compaction empties first. The same probe with the binding:
+0 stalls in 6 starts, the load on scheduler 10 every time. Module loads and
+`persistent_term:put/2` elsewhere still wait for a load, as above.
+
+`combined/cmb.erl` lat mode, five interleaved fresh-VM rounds, `+S 10:10`,
+warm caches, HEAD (`head`) against the fix. One-minute load 3.2 to 12.0.
+Per round, in ms; `worst` is the slowest request before the first compiled
+one, `first` its number:
+
+| guest | preload | build | start | req 1 | worst | first |
+| --- | --- | --- | --- | --- | --- | --- |
+| CPython | async | head | 872 to 908 | 57.5 71.4 **2702 2716** 60.7 | **2611 2676 2702 2716** 60.7 | 3 3 2 2 94 |
+| CPython | async | fix | 895 to 977 | 65.7 62.0 60.2 61.2 60.8 | 65.7 62.0 60.2 75.2 60.8 | 90 93 92 92 90 |
+| CPython | wait | head | 3532 to 3595 | 24.9 to 27.5 | same | 1 |
+| CPython | wait | fix | 3499 to 3609 | 24.8 to 27.5 | same | 1 |
+| QuickJS | async | head | 151 to 166 | 25.1 to 29.7 | 28.5 **936 980** 29.7 25.4 | 84 8 3 84 84 |
+| QuickJS | async | fix | 151 to 166 | 24.6 to 26.9 | 24.6 to 35.8 | 83 to 85 |
+| QuickJS | wait | head | 1146 to 1166 | 8.5 to 9.1 | same | 1 |
+| QuickJS | wait | fix | 1140 to 1188 | 8.5 to 10.8 | same | 1 |
+| Lua | async | head | 37.1 to 42.6 | 12.9 to 15.6 | 13.3 15.6 **166 180** 12.9 | 28 28 7 4 26 |
+| Lua | async | fix | 37.8 to 39.2 | 12.7 to 13.1 | 13.1 to 13.6 | 27 or 28 |
+| Lua | wait | head | 221 to 233 | 5.1 to 5.3 | same | 1 |
+| Lua | wait | fix | 224 to 242 | 5.4 to 7.6 | same | 1 |
+
+A small `first` under head is the stall: requests queued behind the load and
+the next one found it done. Under the fix they interpret through it, about
+90 CPython requests in the 2.7 s, and the load lands at the same time.
+
+**Withdrawn.** The binding and `async` went, and a compiled worker now loads at
+start, as `wait` did. The binding relied on `process_flag(scheduler, N)`,
+which OTP does not document, and `async` kept clear of requests only because
+of it: without it, `async` was 0.7.0's behaviour, a load that can stall
+whichever requests share its scheduler, only later. Loading at start gives the
+guarantee with public calls only: no request waits for the load, request 1 is
+compiled, and the first worker on a node pays for it.
+
+The same `cmb.erl` lat mode with a second worker started after the first
+one's steady requests: five interleaved fresh-VM rounds, `+S 10:10`, head
+(`async` with the binding) against loading at start (`new`), with 0.7.0
+(`base`) for the second worker. Head and new share one warm cache. One-minute
+load 5.0 to 15.7. In ms, per round, or the range of five:
+
+| guest | tier | build | start | req 1 | first compiled | 2nd start | steady p50 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| CPython | compiled | base | 961 to 1079 | 155 to 172 | 3 to 21 | 40.2 to 41.2 | 23.4 to 25.6 |
+| CPython | compiled | head | 957 to 1053 | 60.9 to 70.0 | 88 to 92 | 23.2 to 24.1 | 17.2 to 17.9 |
+| CPython | compiled | new | 3670 to 3864 | 25.3 to 28.8 | 1 | 22.9 to 24.5 | 16.8 to 17.9 |
+| CPython | interp | head | 954 to 1075 | 58.4 to 63.6 | | 22.6 to 23.5 | 26.7 to 28.2 |
+| CPython | interp | new | 956 to 1011 | 59.1 to 61.3 | | 22.2 to 23.2 | 26.9 to 28.4 |
+| QuickJS | compiled | base | 211 to 220 | 56.3 to 64.4 | 21 or 22 | 2.1 or 2.2 | 8.6 to 9.4 |
+| QuickJS | compiled | head | 173 to 188 | 25.8 to 29.4 | 69 to 81 | 2.0 or 2.1 | 7.6 to 8.2 |
+| QuickJS | compiled | new | 1188 to 1232 | 9.2 to 10.2 | 1 | 2.1 to 2.9 | 7.5 to 8.2 |
+| QuickJS | interp | head | 176 to 187 | 26.1 to 29.7 | | 2.0 or 2.1 | 12.1 to 13.9 |
+| QuickJS | interp | new | 178 to 193 | 25.8 to 29.4 | | 2.1 to 2.4 | 12.2 to 13.1 |
+| Lua | compiled | base | 44.1 to 48.0 | 28.6 to 35.3 | 3 to 10 | 1.0 or 1.1 | 4.9 to 5.6 |
+| Lua | compiled | head | 40.5 to 45.9 | 14.0 to 15.3 | 24 to 27 | 1.0 to 1.2 | 3.9 to 4.2 |
+| Lua | compiled | new | 232 to 244 | 5.3 to 6.9 | 1 | 1.1 to 1.3 | 4.1 to 4.6 |
+| Lua | interp | head | 40.8 to 81.6 | 12.8 to 14.3 | | 1.1 or 1.2 | 7.1 to 7.8 |
+| Lua | interp | new | 40.3 to 44.7 | 13.1 to 14.2 | | 1.0 to 1.7 | 7.3 to 8.1 |
+
+Request 1 of a compiled worker enters generated code in every round, inside
+the gates set before the run (30, 11 and 8 ms). The first worker's start grows
+by the load, as `wait` measured it; the second worker's start, a worker that
+does not compile, and the steady request are where head has them.
+
+## What a decoded module keeps of its input
+
+The decoder matched custom sections, data segments and names longer than 64
+bytes out of the input as sub-binaries, and a sub-binary keeps the whole input
+alive off heap. So a module, and the `persistent_term` entry the cache made of
+it, pinned the entire `.wasm`: for the CPython reactor, 31 MB, 23 MB of which
+is DWARF nothing reads. The decoder now copies what it keeps and drops
+`.debug_*` sections.
+
+`bench/paths/retainbench.erl`, one fresh VM per file, 0.7.0 and the branch
+interleaved three times in both orders, load 10 to 25. "Held" is the binary
+memory given back when the only process holding the module exits;
+`wasm:compile/1` is decode and validate, minimum of three:
+
+| module | size | held, 0.7.0 | held, branch | compile, 0.7.0 | compile, branch |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `py_reactor.wasm` | 30.9 MB | 30.9 MB | 3.40 MB | 464 ms | 485 ms |
+| `qjs_reactor.wasm` | 1.35 MB | 1.35 MB | 105 KB | 119 ms | 118 ms |
+| `qjs.wasm` | 1.84 MB | 1.84 MB | 552 KB | 142 ms | 146 ms |
+
+What is held now is the data segments (3.17 MB of the CPython reactor's,
+488 KB of QuickJS's) and the name section. Compile time moves within the run
+to run spread of each arm (464 to 507 ms and 486 to 495 ms on CPython).
+
+## A precompiled CPython standard library
+
+The reactor's standard library shipped as 554 `.py` files and no `.pyc`, so a
+module a request imported that was not in the image was compiled in that
+request. The build now compiles the library with its own host interpreter,
+strips the DWARF from the artifact (30.9 MB to 7.4), and the shim ends its
+start with a throwaway `compile()` and `gc.collect(); gc.freeze()`.
+
+Each of the three parts is needed. A trivial request, interpreted, on the
+precompiled library: 1,430 ms with neither, 237 ms with the `compile()` alone,
+138 ms with both, against 134 ms for the build that compiled its library at
+start. The `compile()` is 1.24 s of the first: the first call after start pays
+a one-time setup, and a start that loads every module from a `.pyc` compiles
+nothing through it. The rest is a cyclic collection due just after the
+capture and so due in every request.
+
+Old fixture against new, `psplit.erl` from the investigation (one fresh VM
+per fixture, tier and variant, fixtures alternating, `+S 10:10`, 1M-word
+runner floor, 2M-word capture floor, 30 requests after warm-up unless noted),
+three rounds, per-round medians of the whole request:
+
+| request | tier | old | new | old / new |
+| --- | --- | ---: | ---: | ---: |
+| trivial `main` | compiled | 23.4 / 23.4 / 26.6 ms | 23.1 / 22.0 / 24.5 ms | 1.01 |
+| trivial `main` | interpreted | 130.5 / 131.2 / 151.0 ms | 130.4 / 131.1 / 134.7 ms | 1.00 |
+| entry, `call()` | compiled | 10.9 / 10.7 / 11.4 ms | 10.0 / 9.4 / 10.3 ms | 1.08 |
+| entry, `call()` | interpreted | 32.9 / 31.2 / 32.6 ms | 32.5 / 29.4 / 30.0 ms | 1.09 |
+| imports `datetime` | compiled | 49.5 / 48.9 / 49.7 ms | 41.3 / 40.2 / 42.3 ms | 1.20 |
+| imports `datetime` | interpreted | 464 / 469 / 467 ms | 394 / 396 / 397 ms | 1.18 |
+| six heavy imports | compiled | 12.9 / 12.5 / 14.6 s | 2.04 / 0.93 / 1.11 s | 11.3 |
+| six heavy imports | interpreted | 207 / 203 / 204 s | 17.0 / 18.0 / 19.6 s | 11.3 |
+
+The heavy imports are `dataclasses, typing, urllib.parse, base64, hashlib,
+decimal`: 5 requests compiled and 3 interpreted for the old fixture, 10 for
+the new. The old one takes over 200 s a request interpreted, past the
+adapter's 120 s default `timeout`, so those runs raise it.
+
+The capture, a fresh image directory each time:
+
+| capture | old | new | old / new |
+| --- | ---: | ---: | ---: |
+| plain, 2M floor | 18.7 / 18.3 / 18.4 s | 4.9 / 4.5 / 5.0 s | 3.8 |
+| entry, 2M floor | 18.6 / 18.4 / 18.3 s | 4.7 / 4.4 / 4.7 s | 3.9 |
+| plain, no floor, once | 104.3 s | 13.6 s | 7.7 |
+
+The image is 2,747,289 bytes old and 2,032,933 new for a plain worker,
+2,746,838 and 2,030,826 with an entry. One-minute load average 5.7 to 43
+across the three rounds; the heavy-import rows' first round ran at 20 to 39.
+
+## Shared pages: the page table against the mmap NIF
+
+Restored memory had two candidate shapes, both built, and a rule written before
+either was measured decided between them. The rule chose A4, the pure-Erlang
+page table with a two-entry translation cache. B, the mmap NIF, was faster on
+every request but fit a third fewer CPython instances in the page budget.
+
+| arm | tree | what it is |
+| --- | --- | --- |
+| base | `a2bda33` | before shared pages: a restore copies the image |
+| A3 | `9fcf3a8` | 4 KiB page table over a shared image, one-entry cache |
+| A4 | `9230dbf` | A3 with a two-entry cache |
+| B | `435bace` (`mmap-pages`) | linear memory in an mmap region, copied on write by the kernel |
+
+### The rule and how it came out
+
+A4 replaces A3 only if both hold, A4 against A3:
+
+| clause | py | qjs | lua | |
+| --- | ---: | ---: | ---: | --- |
+| compiled guest time (`split` call) below 1 | 0.983 | 0.969 | 0.939 | pass |
+| compiled whole request p50 at most 1 | 0.965 | 0.964 | 0.997 | pass |
+
+B replaces A, now A4, only if every clause holds, B against A4:
+
+| clause | py | qjs | lua | |
+| --- | ---: | ---: | ---: | --- |
+| compiled guest time at most 0.90 | 0.343 | 0.350 | 0.516 | pass |
+| compiled whole request p50 below 1 | 0.394 | 0.431 | 0.594 | pass |
+| interpreted whole request p50 at most 1.05 | 0.873 | 0.844 | 0.880 | pass |
+| budget density at least 1 | **0.669** | 1.000 | 1.000 | **fail** |
+| physical footprint per instance at most 1.25 | 1.246 | 0.936 | 0.944 | pass |
+| full ct on `mmap-pages` | | | | pass |
+
+So A4 ships first and B is deferred. `ATTEMPTS.md` has why B lost density
+and what would bring it back.
+
+### Per guest, against base
+
+Each figure is the median of the per-round medians; each ratio is the median
+of the per-round ratios, the reference arm named in its column. Requests are
+`requestbench`, a stock script worker with `restore_ahead` off.
+
+Whole request p50, ms:
+
+| guest, tier | base | A3 | A4 | B | A4 / base | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| py compiled | 16.93 | 18.35 | 17.66 | 7.15 | 1.034 | 0.394 |
+| py interpreted | 26.87 | 24.96 | 24.90 | 21.35 | 0.923 | 0.873 |
+| qjs compiled | 6.53 | 8.12 | 7.72 | 3.39 | 1.190 | 0.431 |
+| qjs interpreted | 11.62 | 12.48 | 12.42 | 10.46 | 1.061 | 0.844 |
+| lua compiled | 3.64 | 3.90 | 3.88 | 2.27 | 1.083 | 0.594 |
+| lua interpreted | 6.94 | 7.42 | 7.34 | 6.42 | 1.066 | 0.880 |
+
+Compiled guest time, the `split` call phase, ms:
+
+| guest | base | A3 | A4 | B | A4 / base | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| py | 10.39 | 15.90 | 15.43 | 5.49 | 1.485 | 0.343 |
+| qjs | 4.99 | 6.97 | 6.75 | 2.32 | 1.343 | 0.350 |
+| lua | 2.38 | 2.80 | 2.68 | 1.36 | 1.123 | 0.516 |
+
+The page table makes the restore cheap and every compiled access dearer: A4's
+compiled request is slower than base on all three guests, by 3% to 19%, and
+its guest time by 12% to 49%. Gate 1 of the next part holds A4 as the
+reference, not base.
+
+`restorebench`, `wasm:restore/3` and `wasm:load_snapshot/2`, median us:
+
+| guest | restore base | A4 | B | A4 / base | B / A4 | load base | A4 | B | A4 / base | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| py | 11955 | 792 | 740 | 0.067 | 0.904 | 24359 | 24591 | 28161 | 1.021 | 1.152 |
+| qjs | 419 | 118 | 171 | 0.283 | 1.442 | 1036 | 1257 | 1634 | 1.230 | 1.312 |
+| lua | 167 | 60 | 111 | 0.366 | 1.845 | 318 | 306 | 573 | 1.024 | 1.894 |
+| plain | 11.0 | 9.5 | 19.6 | 0.877 | 2.088 | 29 | 36 | 216 | 1.305 | 6.043 |
+
+Density, `densitybench density`, instances under `page_limit` 4096, identical
+in all eight rounds:
+
+| guest | base | A3 | A4 | B |
+| --- | ---: | ---: | ---: | ---: |
+| py | 6 | 124 | 124 | 83 |
+| qjs | 682 | 1024 | 1024 | 1024 |
+| lua | 1365 | 2048 | 2048 | 2048 |
+
+Per held instance, `optbshare` with K = 50, KiB:
+
+| guest | `erlang:memory` base | A4 | B | B / A4 | footprint base | A4 | B | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| py | 42930 | 4050 | 3266 | 0.807 | 43049 | 3502 | 4342 | 1.246 |
+| qjs | 914 | 939 | 714 | 0.759 | 1403 | 1301 | 1188 | 0.936 |
+| lua | 780 | 539 | 461 | 0.856 | 942 | 707 | 666 | 0.944 |
+
+`erlang:memory/0` cannot see B's mmap regions, so B's own column there is
+low by construction; the footprint (`footprint -p`) is the comparable one.
+
+### realbench QuickJS is a collector mode, not a speedup
+
+`realbench qjs`, median ms over the three runs of each VM: base 12437, A3
+12230, A4 12279, B 1722 (B / A4 0.140). The 7x is not the engine. Rerun of
+one VM per tree, realbench's shape with `msacc` around each run, load 11 to
+13:
+
+| | A4 | B |
+| --- | ---: | ---: |
+| wall | 11.9 s | 1.65 s |
+| dirty scheduler time in `gc` | about 9.5 s | about 0.03 s |
+| scheduler time in `emulator` | about 2.4 s | about 1.6 s |
+| reductions | 822 M | 776 M |
+| collections | 772 | 1439 |
+| words reclaimed | 1.434 G | 1.431 G |
+
+The same work, within 6% of reductions and with the same words reclaimed;
+the 10 s between them is collection, A4's runs falling in the mode where
+QuickJS's 10-million-word heap is collected expensively on the dirty
+schedulers (the bimodality in "The measurement protocol" in
+`bench/paths/README.md`). The equality is checked, not inferred: both print
+`864318946`, and the smallest fuel with which `_start` completes, found by
+bisection, is 805062 on both trees. Spawned without realbench's warm-up and
+`+S 10:10`, the same run takes 1.80 s on A4 and 1.78 s on B. Realbench on qjs
+compares A against A; between a heap-backed and an mmap-backed memory it
+compares collector modes.
+
+### The hornbeam path: CPython with an entry
+
+`py_entry` captures an entry into the image, so a request is one function
+call. Arms base, A4 and B; three arms in all six orderings, one round each:
+
+| | base | A4 | B | A4 / base | B / A4 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| whole request p50 compiled, ms | 5.44 | 3.01 | 1.91 | 0.549 | 0.633 |
+| whole request p50 interpreted, ms | 7.83 | 5.08 | 4.64 | 0.638 | 0.913 |
+| compiled call phase, ms | 1.00 | 1.71 | 0.64 | 1.675 | 0.367 |
+| compiled restore phase, ms | 3.18 | 0.39 | 0.38 | 0.121 | 0.965 |
+| compiled destroy phase, us | 79 | 18 | 55 | 0.218 | 3.078 |
+| density at `page_limit` 4096 | 6 | 455 | 124 | 75.8 | **0.273** |
+| `erlang:memory` per held instance, KiB | 42322 | 2620 | 2645 | 0.062 | 1.010 |
+
+455 instances is about 9 pages each, 124 about 33. The footprint and RSS
+deltas per instance came out negative for A4 and B (A4 -4.4 MB), so the OS
+numbers for `py_entry` are not used. The decision block `analyze.escript`
+prints for this pass is empty: it reads only py, qjs and lua.
+
+### First writes
+
+What a request pays to make image pages private, from `requestbench
+firstwrite` on scratch builds with counters (`arb_inst`), never timed arms.
+Mean per request; A's `fault` copies a 4 KiB page, B's `buy` is a budget
+purchase through the keeper and a new bit is a host page first written:
+
+| guest, tier | A3 faults | A3 us | A4 faults | A4 us | B buys | B buy us | B pages | B page us |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| py compiled | 255 | 1321 | 256 | 1314 | 6 | 50 | 140 | 315 |
+| py interpreted | 255 | 1485 | 256 | 1366 | 6 | 55 | 140 | 356 |
+| qjs compiled | 41 | 209 | 41 | 214 | 2 | 14 | 12 | 29 |
+| qjs interpreted | 41 | 172 | 41 | 168 | 2 | 16 | 12 | 33 |
+| lua compiled | 12 | 58 | 12 | 56 | 1 | 8 | 4 | 11 |
+| lua interpreted | 12 | 53 | 12 | 54 | 1 | 6 | 4 | 10 |
+| py_entry compiled | | | 90 | 456 | | | | |
+| py_entry interpreted | | | 90 | 461 | | | | |
+
+A CPython request makes 1 MiB private under A (256 pages of 4 KiB) and 2.2
+MiB under B (140 host pages of 16 KiB on this machine), in about a quarter
+of the time.
+
+### Protocol
+
+- Four arms, each in its own fresh VM with `+S 10:10`, run from inside its
+  own tree, with its own code cache primed before the rounds.
+- Eight rounds in Williams order: rounds 1 to 4 have every arm precede every
+  other once, rounds 5 to 8 repeat them.
+- A cell, one metric for one guest and tier on all four arms, starts at a
+  one-minute load below 8 and is redone when the load at the end of its last
+  arm is 8 or more; the discarded files are kept under `redone/`.
+- 732 arm runs, 23 cells redone, 0 void. The `py_entry` pass: 117 arm runs, 3
+  cells redone, 0 void.
+- Every arm carried byte-identical harness sources, checked by sha256 in
+  `manifest.txt`; B's NIF was checked to be built without sanitizers.
+- Samples: 200 timed requests after warm-up (interpreted 20; compiled, until
+  a request enters generated code), 200 restores and 20 loads, K = 50 held
+  instances, three realbench runs per VM.
+
+Scripts, raw terms, logs and both `analysis.txt` are in
+`test/audit/raw/shared-pages/arbitration/`; the harnesses are in
+`bench/paths/`. One machine: 14 cores (10 performance), Darwin 27, OTP 29.

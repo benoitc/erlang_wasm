@@ -37,6 +37,60 @@ Generated code reads the memory record by literal field index, so
 to `wasm_memory:field_indices/0`. Adding a field to `#mem{}` fails there rather
 than corrupting memory quietly.
 
+## A restored memory shares its image
+
+A memory restored from a snapshot is two regions. Below `img_bytes` it is a
+page table over the image; above it, the ordinary chunks a growth appends.
+Read this before you change `wasm_memory`, `wasm_snapshot` or the keeper's
+memory rows.
+
+- **The image** is a tuple of immutable 64 KiB binaries, or `zero` for an
+  all-zero page, built once at capture or load and shared by every memory
+  restored from it. A read of an untouched page matches its bytes out of the
+  binary.
+- **The page table** is an `atomics` array with one entry per 4 KiB page: 0
+  while the page is the image's, else the arena chunk and slot of its private
+  copy. An entry goes from 0 to a slot once, by `compare_exchange`, and never
+  changes again.
+- **The first write** to a page copies it into a slot of the memory's arena and
+  publishes the entry. Arena chunks grow 64, 128, 256, 512 KiB, then 1 MiB, so
+  a CPython request's 256 written pages cost about four keeper transactions.
+- **Nothing is invalidated.** A translation to a slot or a growth chunk never
+  moves, which is what lets the compiled tier cache one without coordinating
+  with other holders (see "The translation cache" below).
+
+The constants are fixed, not options; `test/audit/ATTEMPTS.md`, "Shared image
+pages: what was left out, and the constants", has why each is what it is.
+
+This replaced restore recycling, which kept a destroyed instance's chunks per
+process and marked every store to know which to rewrite. A page table shares
+one image across every restore in the node and copies only what a request
+writes, with no mark on the store path.
+
+### What the keeper records
+
+`wasm_keeper` holds one row per memory, and every change to it is one
+`ets:insert` carrying the transaction in flight: a growth or an arena
+extension, named by an operation id the caller made. A keeper killed between
+two steps leaves the old row or the new one, and the restart finishes or undoes
+the transaction from the row. The node page counter and the snapshot byte
+counter are caches rebuilt from the rows at every start.
+
+A row keeps two numbers apart:
+
+| | what it is | what bounds it |
+| --- | --- | --- |
+| logical pages | what the guest sees | `max_memory_pages`, the declared maximum |
+| charged pages | page table, growth chunks, arena | the node page budget |
+
+An image is a keeper record too, held by its snapshot and by every memory
+restored from it, and its bytes stay charged to `max_snapshot_bytes` until the
+last of them is gone.
+
+A native backend that maps the image and lets the kernel copy on write was
+built and measured, and deferred: `test/audit/ATTEMPTS.md`, "Restored memory in
+an mmap region: B, deferred", has the numbers and what would reopen it.
+
 ## The interpreter keeps its own control stack
 
 `#st.frames` and `#st.ctrl` are explicit lists rather than the Erlang call
@@ -252,9 +306,9 @@ worker kernel is built.
 ## A snapshot is a copy of state, not of an instance
 
 `wasm:snapshot/1` does not freeze an instance. It copies the guest-visible
-state -- the non-zero runs of each memory, the table contents, the globals --
-and `restore/3` lays that over a **fresh** instance built from the same module
-with **fresh imports**. Nothing of the host side travels: file descriptors,
+state -- the 64 KiB pages of each memory that hold data, the table contents,
+the globals -- and `restore/3` lays that over a **fresh** instance built from
+the same module with **fresh imports**. Nothing of the host side travels: file descriptors,
 sockets, clocks and random providers are the embedder's to supply again.
 
 That is what makes a restored instance safe to hand a different tenant. It is
@@ -263,9 +317,9 @@ any `externref`: those name something on this node that a restore has no way to
 recreate, so the refusal is at capture, where it can still be explained.
 
 Two consequences worth knowing before changing the restore path. A restore
-writes only the runs, onto memory that is zero because the instance was built
-without its active data segments applied -- they would be overwritten anyway,
-and applying them made a restore pay twice. And the module is taken from the
+writes nothing into memory: it lays a page table over the image, onto an
+instance built without its active data segments applied, because the image
+already holds what they wrote. And the module is taken from the
 handle the image retained rather than passed in, so there is no argument that
 could lay one module's bytes over another's layout.
 
@@ -838,3 +892,55 @@ reached 33 GB resident on a 48 GB machine in eleven minutes, published nothing,
 and spent that time paging rather than compiling. The ceiling bounds the names a
 unit can use; it is not a promise that everything under it will compile.
 
+
+### The translation cache
+
+Generated code reaches memory 0 through a two-entry cache carried through every
+continuation, because a restored memory's low addresses resolve through a page
+table and resolving one on every access is what made the page table expensive.
+Read `wasm_core`'s private `cached/8` before you change how an access is lowered.
+
+- An entry is a 4 KiB page number, the array that page lives in and the word
+  index of its first word. Only translations to an array are cached: a private
+  slot or a growth chunk. An untouched image page is read from its binary and
+  never cached.
+- A hit is one compare per entry, with no bounds test: a page that was in
+  bounds stays in bounds. A hit on the second entry swaps the two, so the
+  pair stays in least-recently-used order. Two entries, not one, because guests
+  alternate between two pages often enough that one entry missed on nearly
+  half their array accesses.
+- A miss is the ordinary access, which puts its translation first when it ends
+  on an array.
+- Nothing invalidates an entry. A page table entry goes from 0 to a slot once
+  and growth only appends chunks, so a cached translation is right whatever
+  another holder does.
+
+A write that can publish arena chunks, from the host, a bulk or vector
+instruction or `wasm:write_memory/3`, answers a refreshed memory handle, so the
+code after it reads the new pages inline rather than through the helper.
+
+### Values a multi-value `let` must not leave unused
+
+An access answers its result and the cache after it. As a Core value list that
+is seven values, and as a tuple it is an allocation on every access, about 5 ns
+a store. The value list is used only where it is safe, because of a defect in
+the OTP compiler: under `no_ssa_opt`, which is the `baseline` quality and so
+what `compiled => true` asks for, a value of a multi-value `let` that nothing
+uses gets a zero-length live interval and can share a register with a value
+that is used. At the join, the unused copy can overwrite the used one. Real
+guests crashed on it, the instance state replaced by a cache word.
+
+So `wasm_core`'s private `answer/3` orders every list so that no unused value
+follows a used one, and falls back to a tuple where a load's paths disagree
+about what they use. The comment above it lists why each ordering holds. Present on OTP 29.0.3
+through 29.1.1 and on OTP master as of October 2026, and reported upstream;
+recheck it when you move to a newer OTP, before simplifying the ordering.
+
+### Bump the ABI when generated code changes shape
+
+`wasm_jit`'s `ABI` is part of every cache key, so a node never enters an
+artifact built against a different memory handle or frame shape. Bump it in the
+same commit as any change to what generated code reads, how many values a
+continuation carries, or which helper it calls, and add a line to the history
+above the define saying what an older artifact would do wrong. ABI 14 is the
+two-entry cache; 13 belonged to the deferred mmap prototype and is skipped.

@@ -18,6 +18,8 @@ testing the artifact rather than the mechanism.
 -include_lib("stdlib/include/assert.hrl").
 -include("wasm.hrl").
 -include("wasm_snapshot_budget.hrl").
+-include("wasm_exec.hrl").
+-include("wasm_memory.hrl").
 
 suite() -> [{timetrap, {seconds, 60}}].
 
@@ -25,6 +27,7 @@ all() ->
     [every_atom_an_image_holds_exists_once_the_decoder_is_loaded,
      a_restored_instance_matches_one_that_ran_init,
      restore_does_not_run_the_start_function,
+     a_restore_expands_a_profile,
      a_restored_instance_is_isolated_from_the_image,
      self_referencing_funcrefs_are_relocated,
      an_inline_module_cannot_be_captured,
@@ -50,8 +53,9 @@ all() ->
      a_restore_hook_that_fails_leaves_no_instance,
      a_grown_unexported_memory_restores,
      an_exported_global_is_not_shared_between_restores,
-     a_recycled_restore_is_the_image,
-     a_recycled_restore_is_the_image_in_generated_code,
+     a_repeated_restore_is_the_image,
+     a_repeated_restore_is_the_image_in_generated_code,
+     a_destroyed_restore_leaves_nothing_for_the_next,
      a_grown_table_restores,
      a_data_segment_the_guest_zeroed_stays_zero,
      a_zeroed_gap_between_runs_stays_zero,
@@ -131,6 +135,26 @@ a_restored_instance_matches_one_that_ran_init(_Config) ->
     ?assertEqual(wasm:call(Init, ~"handle", []), wasm:call(Fresh, ~"handle", [])),
     ok = wasm:destroy(Init),
     ok = wasm:destroy(Fresh).
+
+%% `profile' is a set of options, and a restore takes the same options an
+%% instantiation does. It was ignored here, so a worker restoring one instance
+%% per request under `profile => script' kept the default threshold of 32 and
+%% never compiled anything. What you set yourself still wins, and an unknown
+%% profile is a value rather than a crash, as it is for `instantiate/3'.
+a_restore_expands_a_profile(_Config) ->
+    Handle = fixture(reactor),
+    Init = init(Handle, #{}),
+    {ok, Image} = wasm:snapshot(Init),
+    {ok, Script} = wasm:restore(Image, #{}, #{profile => script}),
+    ?assertMatch(#{compile := true, compile_after := 1,
+                   compile_quality := baseline}, Script#inst.limits),
+    {ok, Mine} = wasm:restore(Image, #{}, #{profile => script,
+                                            compile_after => 7}),
+    ?assertMatch(#{compile_after := 7}, Mine#inst.limits),
+    ?assertMatch({error, #{kind := unknown_profile}},
+                 wasm:restore(Image, #{}, #{profile => nonsense})),
+    [ok = wasm:destroy(I) || I <- [Init, Script, Mine]],
+    ok.
 
 restore_does_not_run_the_start_function(_Config) ->
     Handle = fixture(started),
@@ -269,13 +293,11 @@ restore_reports_what_it_holds(_Config) ->
     {ok, Image} = wasm:snapshot(Init, #{version => ~"7"}),
     ok = wasm:destroy(Init),
     Info = wasm:snapshot_info(Image),
-    %% What the image **retains**, not the address space it covers: an image
-    %% keeps the non-zero runs, so a page holding one number is a few bytes
-    %% rather than 65,536. Asserting the page size here was asserting that the
-    %% whole memory was kept, which is the thing that changed.
+    %% What the image **retains**: every page that is not zero, whole, and a
+    %% word per page for the tuple that maps them. The reactor's one page holds
+    %% data, so it is kept, and that is all.
     Bytes = maps:get(bytes, Info),
-    ?assert(Bytes > 0),
-    ?assert(Bytes < 65536),
+    ?assertEqual(65536 + 8, Bytes),
     %% And it is the number the budget charges, which is the only reading of
     %% `bytes` a host can act on.
     ?assertEqual(Bytes, wasm_snapshot_owner:charged()),
@@ -801,37 +823,44 @@ concurrent_charges_are_all_counted(_Config) ->
     N = 200,
     Self = self(),
     Pids = [spawn(fun() ->
-                          ok = wasm_snapshot_owner:charge(1),
-                          Self ! {done, self()}
+                          {ok, _} = wasm_keeper:image_reserve(1, self(),
+                                                              make_ref()),
+                          Self ! {done, self()},
+                          receive stop -> ok end
                   end) || _ <- lists:seq(1, N)],
     [receive {done, P} -> ok after 5000 -> ct:fail(timeout) end || P <- Pids],
     ?assertEqual(Base + N, wasm_snapshot_owner:charged()),
-    _ = wasm_snapshot_owner:refund(N),
-    ?assertEqual(Base, wasm_snapshot_owner:charged()).
+    %% Each image's only holder goes, and with it the charge.
+    [P ! stop || P <- Pids],
+    ?assertEqual(Base, until_charged(Base, 100)).
 
 %% A counter an older, racy build left is not trusted after an upgrade: a new
 %% charge fails closed by name, and the diagnostics never raise.
 charge_fails_closed_on_a_legacy_counter(_Config) ->
+    Handle = fixture(reactor),
+    Init = init(Handle, #{}),
     with_counter({legacy_bare_ref, atomics:new(1, [])},
                  fun() ->
                          ?assertMatch({error, #{kind := snapshot_counter_untrusted}},
-                                      wasm_snapshot_owner:charge(1)),
-                         ?assertEqual(0, wasm_snapshot_owner:charged()),
-                         ?assertEqual(0, wasm_snapshot_owner:refund(1))
-                 end).
+                                      wasm:snapshot(Init)),
+                         ?assertEqual(0, wasm_snapshot_owner:charged())
+                 end),
+    ok = wasm:destroy(Init).
 
 %% Reachable on a hot upgrade where the old build never created its lazy
 %% counter: the application is up but the counter is absent.
 charge_fails_closed_when_the_counter_is_missing(_Config) ->
+    Handle = fixture(reactor),
+    Init = init(Handle, #{}),
     Saved = persistent_term:get(?SNAPSHOT_BUDGET_KEY),
     _ = persistent_term:erase(?SNAPSHOT_BUDGET_KEY),
     try
         ?assertMatch({error, #{kind := snapshot_counter_uninitialised}},
-                     wasm_snapshot_owner:charge(1)),
-        ?assertEqual(0, wasm_snapshot_owner:charged()),
-        ?assertEqual(0, wasm_snapshot_owner:refund(1))
+                     wasm:snapshot(Init)),
+        ?assertEqual(0, wasm_snapshot_owner:charged())
     after
-        persistent_term:put(?SNAPSHOT_BUDGET_KEY, Saved)
+        persistent_term:put(?SNAPSHOT_BUDGET_KEY, Saved),
+        ok = wasm:destroy(Init)
     end.
 
 %% Swap the counter for a given value, run F, and restore the real one so the
@@ -1088,43 +1117,75 @@ every_atom_an_image_holds_exists_once_the_decoder_is_loaded(_Config) ->
         peer:stop(Peer)
     end.
 
-%%% -------------------------------------------------------------- recycling ---
+%%% ------------------------------------------------------ repeated restores ---
 %%
-%% A recycling restore keeps every chunk the last instance did not write, so
-%% the claim is only as good as the marking. Each cycle below writes through
-%% every path a guest or a host has -- a plain store, a wide store, fill, copy,
-%% init, an atomic read-modify-write, a vector store, growth and a host write --
-%% at addresses spread over the whole memory, and the next restore must hand
-%% back exactly the bytes of a restore that recycled nothing.
+%% One image restored over and over in one process, each instance written and
+%% destroyed before the next. Each cycle below writes through every path a
+%% guest or a host has -- a plain store, a wide store, fill, copy, init, an
+%% atomic read-modify-write, a vector store, growth and a host write -- at
+%% addresses spread over the whole memory, and the next restore must hand back
+%% exactly the bytes of the first.
 
-a_recycled_restore_is_the_image(_Config) ->
-    recycled_cycles(#{}, 30).
+a_repeated_restore_is_the_image(_Config) ->
+    restore_cycles(#{}, 30).
 
-%% The same through generated code, whose stores are inlined and mark the chunk
-%% themselves rather than through `wasm_memory`. `store` compiles; the other
-%% writes are in a function the generator refuses and stay interpreted.
-a_recycled_restore_is_the_image_in_generated_code(_Config) ->
+%% The same through generated code, whose stores are inlined rather than going
+%% through `wasm_memory`. `store` compiles; the other writes are in a function
+%% the generator refuses and stay interpreted.
+a_repeated_restore_is_the_image_in_generated_code(_Config) ->
     ct:timetrap({minutes, 3}),
     Before = maps:get(entered, wasm_jit:counts()),
-    recycled_cycles(#{compile => true, compile_after => 1, compile_force => true},
-                    60),
+    restore_cycles(#{compile => true, compile_after => 1, compile_force => true},
+                   60),
     ?assert(maps:get(entered, wasm_jit:counts()) > Before).
 
-recycled_cycles(Tier, Cycles) ->
+%% A destroyed instance leaves nothing behind for the next restore of its
+%% image: no memory kept in this process, no reservation held for it, and not
+%% one array shared with the instance that follows. `recycle' is passed to show
+%% that asking for the old reuse no longer gets it.
+a_destroyed_restore_leaves_nothing_for_the_next(_Config) ->
+    {ok, H} = wasm:load(scribbler()),
+    Run = #{fuel => infinity},
+    {ok, I0} = wasm:instantiate(H, #{}, Run#{snapshotable => true}),
+    {ok, Image} = wasm:snapshot(I0, #{version => ~"nothing kept"}),
+    ok = wasm:destroy(I0),
+    {ok, I1} = wasm:restore(Image, #{}, Run#{recycle => true}),
+    First = chunks_of(I1),
+    ok = wasm:destroy(I1),
+    ?assertEqual([], [K || {{wasm_snapshot, recycle, _} = K, _} <- get()]),
+    ?assertEqual([], [T || Row <- ets:tab2list(wasm_holders),
+                           tuple_size(Row) >= 4, Hs <- [element(4, Row)],
+                           is_map(Hs),
+                           {recycle, _} = T <- maps:keys(Hs)]),
+    {ok, I2} = wasm:restore(Image, #{}, Run#{recycle => true}),
+    Second = chunks_of(I2),
+    ?assertEqual([], [C || C <- Second, lists:member(C, First)]),
+    ok = wasm:destroy(I2),
+    ok = wasm:release(Image).
+
+%% The arrays a memory is made of: its chunks, past any image placeholder,
+%% and its page table.
+chunks_of(I) ->
+    #mut{mems = {Mem}} = wasm_instance:mut(I),
+    [C || C <- [element(?MEM_IMG_BYTES + 2, Mem)
+                | tuple_to_list(element(?MEM_CHUNKS, Mem))],
+          not is_atom(C)].
+
+restore_cycles(Tier, Cycles) ->
     rand:seed(exsss, {7, 11, 13}),
     {ok, H} = wasm:load(scribbler()),
     Run = Tier#{fuel => infinity},
     {ok, I0} = wasm:instantiate(H, #{}, Run#{snapshotable => true}),
     %% Something worth keeping in the image, in some chunks and not others.
     [ok = scribble(I0, Run) || _ <- lists:seq(1, 40)],
-    {ok, Image} = wasm:snapshot(I0, #{version => ~"recycle"}),
+    {ok, Image} = wasm:snapshot(I0, #{version => ~"cycles"}),
     ok = wasm:destroy(I0),
     {ok, Ref} = wasm:restore(Image, #{}, Run),
     Pristine = memory_of(Ref),
     ok = wasm:destroy(Ref),
     lists:foreach(
       fun(N) ->
-          {ok, I} = wasm:restore(Image, #{}, Run#{recycle => true}),
+          {ok, I} = wasm:restore(Image, #{}, Run),
           ?assertEqual({cycle, N, true}, {cycle, N, memory_of(I) =:= Pristine}),
           [ok = scribble(I, Run) || _ <- lists:seq(1, 8)],
           ok = wasm:destroy(I)

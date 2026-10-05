@@ -288,6 +288,11 @@ and accepting a request, which is a fixed 1.2 to 2.0 ms and therefore a quarter
 of a Lua request and 5% of a CPython one. `test/audit/PERF.md` has the full phase
 tables and what is in each interval.
 
+Those phases were measured when a restore copied the image. A restore now lays
+a page table over a shared image instead: a CPython restore is 0.79 ms rather
+than 12.0, and the request pays about 1.3 ms of first-write copies inside the
+invocation. [Snapshots](snapshots.md) has the table.
+
 **Budget for the cold node, because that is where the cost now is.** The tier
 arrives after a fixed amount of compiling, and a reactor request is roughly ten
 times faster than a command one, so it takes ten times as many requests to get
@@ -428,5 +433,19 @@ An unrecognised profile is `{error, #{kind := unknown_profile}}`, not a crash.
 - Turning the tier on by default is a decision that has not been made. Every
   gate passes; the recommendation is still no, because it is 8.4x on one real
   workload and flat on another.
+- **A restored memory costs compiled code a lookup.** Memory 0 is reached
+  through a two-entry translation cache, and a miss resolves the page through
+  the memory's page table. A compiled request's guest time is 12% to 49%
+  higher than when a restore copied the image. The cheaper restore pays that
+  back for CPython with an `entry` (5.4 ms to 3.0 ms a request) but not for a
+  compiled script request, 3% to 19% slower; `test/audit/PERF.md`, "Shared
+  pages", has the arms. A memory not restored from an image pays one compare.
+- **Generated code is ABI 14**, so a code cache written by an earlier release is
+  ignored and rebuilt once. Nothing to set.
+- **`baseline` works around an OTP compiler defect.** Under `no_ssa_opt` an
+  unused value of a multi-value `let` can overwrite a used one, on OTP 29.0.3
+  through 29.1.1 at least. The generator orders what an access answers so that
+  it cannot happen; [Design notes](design-notes.md) has the detail to recheck
+  when you upgrade OTP.
 - The measurement record for all of this is `test/audit/PERF.md`, and the list
   of what was tried and reverted is `test/audit/ATTEMPTS.md`.

@@ -76,7 +76,35 @@ moved, because even with all three a refusal still interprets.
 %% 5: an inlined store marks its chunk in the memory's `dirty' slots. An
 %% artifact built by 4 writes without marking, and a memory recycled for the
 %% next restore would keep one request's bytes for the next.
--define(ABI, 5).
+%%
+%% 6: the dirty marking is gone with recycling, and the memory handle lost its
+%% `dirty' field, so every index generated code reads past it moved.
+%%
+%% 7: a store answers the state to go on with, and the fast path is refused
+%% below a memory's image region. An artifact built by 6 would index a
+%% placeholder as an array.
+%%
+%% 8: the image region is read inline: a page table entry now names the arena
+%% chunk and slot of a private page, and an artifact built by 7 would read it as
+%% a slot number.
+%%
+%% 9: memory 0 is reached through a translation cache carried through every
+%% continuation, which changes every frame's arity.
+%%
+%% 10: a load answers only the values its continuation uses, as a value list
+%% or a tuple. An artifact built by 9 allocates a tuple at every access.
+%%
+%% 11: a bulk or vector write answers the state to go on with, whose memory
+%% handle may have seen arena chunks the write published. An artifact built by
+%% 10 drops it and goes on reading through the stale one.
+%%
+%% 12: a load from an untouched image page matches its own bytes out of the
+%% page binary, and `wasm_memory:image_word_at/2', which an artifact built by
+%% 11 calls, is gone.
+%%
+%% 14: memory 0's translation cache holds two entries, which changes every
+%% frame's arity again. 13 is the mmap prototype's, kept apart from this line.
+-define(ABI, 14).
 
 -define(DEFAULT_AFTER, 32).
 

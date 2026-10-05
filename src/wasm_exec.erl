@@ -69,11 +69,13 @@ to, so the interpreted and compiled paths cannot disagree; `%%% exceptions`,
 %% Read by `wasm_core` at generation time, so the width and signedness of an
 %% access are decided once and in one place.
 -export([load_spec/1, store_spec/1]).
--export([call_out/7, shard_call/8, check_depth/2, indirect_out/9]).
+-export([call_out/7, shard_call/8, check_depth/2, indirect_out/9,
+         unreachable_at/7]).
 -export([memory_size_at/2, memory_grow_at/5, memory_fill_at/6, memory_copy_at/8,
          memory_init_at/8, data_drop_at/3]).
 -export([simd_load_at/7, simd_store_at/6, simd_load_lane_at/9,
          simd_store_lane_at/8]).
+-export([fresh_mems/1]).
 
 %% One budget per outermost invocation, carrying what must not start again when
 %% a host function calls back in: the fuel left, how many host calls have been
@@ -409,8 +411,10 @@ run([{lg_lg_store, I, J, {_A, Offset, M}} | Rest], Ctrl,
     #st{locals = L, mut = Mu} = St) ->
     Mem = element(M + 1, Mu#mut.mems),
     Addr = wasm_num:to_u32(element(I, L)) + Offset,
-    ok = wasm_memory:store(Mem, Addr, 4, element(J, L)),
-    run(Rest, Ctrl, St);
+    case wasm_memory:store_r(Mem, Addr, 4, element(J, L)) of
+        ok -> run(Rest, Ctrl, St);
+        {refresh, Mem1} -> run(Rest, Ctrl, St#st{mut = refreshed(Mu, M, Mem1)})
+    end;
 run([{lg_load_tee, I, {_A, Offset, M}, T} | Rest], Ctrl,
     #st{stack = S, locals = L, mut = Mu} = St) ->
     Mem = element(M + 1, Mu#mut.mems),
@@ -583,8 +587,8 @@ run([{simd_load, Op, Offset, M, W, N} | Rest], Ctrl,
         St#st{stack = [simd_load_at(Mu, M, Op, Offset, W, N, Base) | S]});
 run([{simd_store, Offset, M, W} | Rest], Ctrl,
     #st{stack = [V, Base | S], mut = Mu} = St) ->
-    ok = simd_store_at(Mu, M, Offset, W, Base, V),
-    run(Rest, Ctrl, St#st{stack = S});
+    run(Rest, Ctrl,
+        St#st{stack = S, mut = simd_store_at(Mu, M, Offset, W, Base, V)});
 run([{simd_load_lane, Op, Offset, M, W, N, Lane} | Rest], Ctrl,
     #st{stack = [V, Base | S], mut = Mu} = St) ->
     run(Rest, Ctrl,
@@ -592,8 +596,9 @@ run([{simd_load_lane, Op, Offset, M, W, N, Lane} | Rest], Ctrl,
                        | S]});
 run([{simd_store_lane, Op, Offset, M, W, Lane} | Rest], Ctrl,
     #st{stack = [V, Base | S], mut = Mu} = St) ->
-    ok = simd_store_lane_at(Mu, M, Op, Offset, W, Lane, Base, V),
-    run(Rest, Ctrl, St#st{stack = S});
+    run(Rest, Ctrl,
+        St#st{stack = S,
+              mut = simd_store_lane_at(Mu, M, Op, Offset, W, Lane, Base, V)});
 run([{simd_binary, Op} | Rest], Ctrl, #st{stack = [B, A | S]} = St) ->
     run(Rest, Ctrl, St#st{stack = [wasm_simd:binary_op(Op, A, B) | S]});
 run([{simd_unary, Op} | Rest], Ctrl, #st{stack = [A | S]} = St) ->
@@ -965,8 +970,10 @@ run2([Op | Rest] = Is, Ctrl, St, A, B) when is_atom(Op) ->
 %% the record not at all.
 run2([{i32_store, {_A, Off, M}} | Rest], Ctrl, #st{mut = Mu} = St, A, B) ->
     Mem = element(M + 1, Mu#mut.mems),
-    ok = wasm_memory:store(Mem, wasm_num:to_u32(B) + Off, 4, A),
-    run(Rest, Ctrl, St);
+    case wasm_memory:store_r(Mem, wasm_num:to_u32(B) + Off, 4, A) of
+        ok -> run(Rest, Ctrl, St);
+        {refresh, Mem1} -> run(Rest, Ctrl, St#st{mut = refreshed(Mu, M, Mem1)})
+    end;
 run2([{local_set, I} | Rest], Ctrl, #st{locals = L} = St, A, B) ->
     run1(Rest, Ctrl, St#st{locals = setelement(I + 1, L, A)}, B);
 run2([{local_tee, I} | Rest], Ctrl, #st{locals = L} = St, A, B) ->
@@ -1097,6 +1104,18 @@ check_depth(Inst, Depth) ->
 max_depth(#inst{limits = L}) -> maps:get(max_depth, L, 1024).
 
 -doc """
+Trap `unreachable` from compiled code.
+
+The arguments are the state and memory 0's translation cache, and are not read.
+Passing them makes the trap a use of them, which the generator's ordering of an
+access's results depends on: see `wasm_core`'s private `answer/3`.
+""".
+-spec unreachable_at(#mut{}, term(), term(), term(), term(), term(),
+                     term()) -> no_return().
+unreachable_at(_Mut, _P1, _A1, _B1, _P2, _A2, _B2) ->
+    wasm_error:trap(unreachable).
+
+-doc """
 An indirect call out of compiled code.
 
 `indirect_target/4` already does the whole resolution -- bounds, null, and the
@@ -1162,12 +1181,18 @@ load_at(Mu, M, N, Kind, Addr) ->
     Mem = element(M + 1, Mu#mut.mems),
     decode_loaded(Kind, N, wasm_memory:load(Mem, Addr, N)).
 
--doc "A memory store. Writes into `atomics` in place, so `#mut{}` does not change.".
+-doc """
+A memory store, answering the state to go on with: the same one, or one whose
+memory handle has seen arena chunks this store published.
+""".
 -spec store_at(#mut{}, non_neg_integer(), pos_integer(), atom(), non_neg_integer(),
-               term()) -> ok.
+               term()) -> #mut{}.
 store_at(Mu, M, N, Kind, Addr, Value) ->
     Mem = element(M + 1, Mu#mut.mems),
-    wasm_memory:store(Mem, Addr, N, encode_stored(Kind, Value)).
+    case wasm_memory:store_r(Mem, Addr, N, encode_stored(Kind, Value)) of
+        ok -> Mu;
+        {refresh, Mem1} -> refreshed(Mu, M, Mem1)
+    end.
 
 %%% ------------------------------------------------------------ simd memory ---
 %%
@@ -1183,13 +1208,14 @@ simd_load_at(Mu, M, Op, Offset, W, N, Base) ->
     Mem = element(M + 1, Mu#mut.mems),
     wasm_simd:load(Op, wasm_memory:load_bytes(Mem, unsigned(Base, W) + Offset, N)).
 
--doc "A vector store. Writes bytes in place, so `#mut{}` does not change.".
+-doc "A vector store, answering the state to go on with as `store_at/6` does.".
 -spec simd_store_at(#mut{}, non_neg_integer(), non_neg_integer(), 32 | 64,
-                    term(), term()) -> ok.
+                    term(), term()) -> #mut{}.
 simd_store_at(Mu, M, Offset, W, Base, V) ->
     Mem = element(M + 1, Mu#mut.mems),
-    wasm_memory:store_bytes(Mem, unsigned(Base, W) + Offset,
-                            wasm_simd:store_bytes(V)).
+    ok = wasm_memory:store_bytes(Mem, unsigned(Base, W) + Offset,
+                                 wasm_simd:store_bytes(V)),
+    fresh(Mu, M).
 
 -doc "A vector load into one lane of an existing vector.".
 -spec simd_load_lane_at(#mut{}, non_neg_integer(), atom(), non_neg_integer(),
@@ -1200,13 +1226,14 @@ simd_load_lane_at(Mu, M, Op, Offset, W, N, Lane, Base, V) ->
     wasm_simd:load_lane(Op, Lane, V,
                         wasm_memory:load_bytes(Mem, unsigned(Base, W) + Offset, N)).
 
--doc "A store of one lane of a vector.".
+-doc "A store of one lane of a vector, answering the state to go on with.".
 -spec simd_store_lane_at(#mut{}, non_neg_integer(), atom(), non_neg_integer(),
-                         32 | 64, non_neg_integer(), term(), term()) -> ok.
+                         32 | 64, non_neg_integer(), term(), term()) -> #mut{}.
 simd_store_lane_at(Mu, M, Op, Offset, W, Lane, Base, V) ->
     Mem = element(M + 1, Mu#mut.mems),
-    wasm_memory:store_bytes(Mem, unsigned(Base, W) + Offset,
-                            wasm_simd:store_lane_bytes(Op, Lane, V)).
+    ok = wasm_memory:store_bytes(Mem, unsigned(Base, W) + Offset,
+                                 wasm_simd:store_lane_bytes(Op, Lane, V)),
+    fresh(Mu, M).
 
 -doc "Read a global that is an inline value rather than a shared cell.".
 -spec global_at(#mut{}, non_neg_integer()) -> term().
@@ -1235,8 +1262,10 @@ set_global_at(#inst{ckpt = Key}, Mu, I, V) ->
 %% `wasm_core:supported/1'
 %% refuses the memory64 forms.
 %%
-%% `fill', `copy' and `init' write into `atomics' in place and so leave `#mut{}'
-%% alone. `grow' and `data.drop' change it, and therefore checkpoint, for the
+%% `fill', `copy' and `init' write into `atomics' in place, and answer the
+%% state to go on with only because a write into an image can publish arena
+%% chunks the handle has not seen; that is not checkpointed, as `refreshed/3'
+%% says. `grow' and `data.drop' change it, and therefore checkpoint, for the
 %% same reason `set_global_at/4' does: what a later trap unwinds past has still
 %% happened.
 
@@ -1261,36 +1290,40 @@ memory_grow_at(#inst{ckpt = Key}, Mu, M, Delta, W) ->
 
 -doc "Fill a range of a memory with one byte.".
 -spec memory_fill_at(#mut{}, non_neg_integer(), term(), term(), term(),
-                     32 | 64) -> ok.
+                     32 | 64) -> #mut{}.
 %% The fill byte stays i32 whatever the memory's index type is; only the
 %% destination and the length follow the memory.
 memory_fill_at(Mu, M, D, B, N, W) ->
-    wasm_memory:fill(element(M + 1, Mu#mut.mems), unsigned(D, W),
-                     B band 16#FF, unsigned(N, W)).
+    ok = wasm_memory:fill(element(M + 1, Mu#mut.mems), unsigned(D, W),
+                          B band 16#FF, unsigned(N, W)),
+    fresh(Mu, M).
 
 -doc "Copy a range between two memories, or within one.".
 -spec memory_copy_at(#mut{}, non_neg_integer(), non_neg_integer(), term(),
-                     term(), term(), 32 | 64, 32 | 64) -> ok.
+                     term(), term(), 32 | 64, 32 | 64) -> #mut{}.
 %% The destination is counted in the destination memory's index type, the source
 %% in the source memory's, and the length in the narrower of the two, since it
 %% has to be a valid count in both.
 memory_copy_at(Mu, Dm, Sm, Da, Sa, N, DW, SW) when Dm =:= Sm ->
-    wasm_memory:copy(element(Dm + 1, Mu#mut.mems), unsigned(Da, DW),
-                     unsigned(Sa, SW), unsigned(N, min(DW, SW)));
+    ok = wasm_memory:copy(element(Dm + 1, Mu#mut.mems), unsigned(Da, DW),
+                          unsigned(Sa, SW), unsigned(N, min(DW, SW))),
+    fresh(Mu, Dm);
 memory_copy_at(Mu, Dm, Sm, Da, Sa, N, DW, SW) ->
-    wasm_memory:copy(element(Dm + 1, Mu#mut.mems), unsigned(Da, DW),
-                     element(Sm + 1, Mu#mut.mems), unsigned(Sa, SW),
-                     unsigned(N, min(DW, SW))).
+    ok = wasm_memory:copy(element(Dm + 1, Mu#mut.mems), unsigned(Da, DW),
+                          element(Sm + 1, Mu#mut.mems), unsigned(Sa, SW),
+                          unsigned(N, min(DW, SW))),
+    fresh(Mu, Dm).
 
 -doc "Copy from a passive data segment into a memory.".
 -spec memory_init_at(#inst{}, #mut{}, non_neg_integer(), non_neg_integer(),
-                     term(), term(), term(), 32 | 64) -> ok.
+                     term(), term(), term(), 32 | 64) -> #mut{}.
 %% The segment's offset and length are i32 whatever the memory is, since they
 %% index the segment rather than the memory.
 memory_init_at(Inst, Mu, D, M, Da, So, N, W) ->
-    wasm_memory:init(element(M + 1, Mu#mut.mems), unsigned(Da, W),
-                     data_segment(Inst, Mu, D), unsigned(So, 32),
-                     unsigned(N, 32)).
+    ok = wasm_memory:init(element(M + 1, Mu#mut.mems), unsigned(Da, W),
+                          data_segment(Inst, Mu, D), unsigned(So, 32),
+                          unsigned(N, 32)),
+    fresh(Mu, M).
 
 -doc "Drop a passive data segment, answering the new state.".
 -spec data_drop_at(#inst{}, #mut{}, non_neg_integer()) -> #mut{}.
@@ -1625,7 +1658,7 @@ call_host(#hostfn{fun_ = Fun, nresults = NRes, name = Name}, Args, St) ->
     ok = charge_host_call(St),
     try Fun(Ctx, Args) of
         {ok, Results} when length(Results) =:= NRes ->
-            {Results, adopt_fuel(adopt(Inst, Mut, St))};
+            {Results, adopt_fuel(fresh_host(adopt(Inst, Mut, St)))};
         {ok, Results} ->
             wasm_error:trap({host_error, result_arity},
                             #{host => Name, expected => NRes,
@@ -1653,6 +1686,10 @@ adopt(Inst, Mine, St) ->
         Mine -> St;
         Newer -> St#st{mut = Newer}
     end.
+
+%% Whichever state is adopted, the host may have written into an image through
+%% a handle of its own, so it is brought up to date after the choice.
+fresh_host(#st{mut = Mu} = St) -> St#st{mut = fresh_mems(Mu)}.
 
 %% `max_host_calls' was listed as a limit and enforced nowhere. A module in a
 %% loop over an import did unbounded work for free, because a host call burns
@@ -1837,16 +1874,16 @@ memory_grow(M, W, Rest, Ctrl, #st{stack = [Delta | S], mut = Mu} = St) ->
     run(Rest, Ctrl, St#st{stack = [Old | S], mut = Mu1}).
 
 memory_fill(M, W, Rest, Ctrl, #st{stack = [N, B, D | S], mut = Mu} = St) ->
-    ok = memory_fill_at(Mu, M, D, B, N, W),
-    run(Rest, Ctrl, St#st{stack = S}).
+    run(Rest, Ctrl, St#st{stack = S, mut = memory_fill_at(Mu, M, D, B, N, W)}).
 
 memory_copy(Dm, Sm, DW, SW, Rest, Ctrl, #st{stack = [N, Sa, Da | S], mut = Mu} = St) ->
-    ok = memory_copy_at(Mu, Dm, Sm, Da, Sa, N, DW, SW),
-    run(Rest, Ctrl, St#st{stack = S}).
+    run(Rest, Ctrl,
+        St#st{stack = S, mut = memory_copy_at(Mu, Dm, Sm, Da, Sa, N, DW, SW)}).
 
 memory_init(D, M, W, Rest, Ctrl, #st{stack = [N, So, Da | S], mut = Mu} = St) ->
-    ok = memory_init_at(St#st.inst, Mu, D, M, Da, So, N, W),
-    run(Rest, Ctrl, St#st{stack = S}).
+    run(Rest, Ctrl,
+        St#st{stack = S,
+              mut = memory_init_at(St#st.inst, Mu, D, M, Da, So, N, W)}).
 
 %% A passive data segment, or the empty one it becomes after `data.drop'.
 data_segment(#inst{datas = Datas}, #mut{dropped_datas = Dropped}, D) ->
@@ -2089,9 +2126,40 @@ mem_op(Op, Offset, M, Width, #st{mut = Mu} = St) ->
             {store, N, Kind} = store_spec(Op),
             [Value, Base | S] = St#st.stack,
             Addr = unsigned(Base, Width) + Offset,
-            wasm_memory:store(Mem, Addr, N, encode_stored(Kind, Value)),
-            St#st{stack = S}
+            case wasm_memory:store_r(Mem, Addr, N, encode_stored(Kind, Value)) of
+                ok -> St#st{stack = S};
+                {refresh, Mem1} ->
+                    St#st{stack = S, mut = refreshed(Mu, M, Mem1)}
+            end
     end.
+
+%% A store that published arena chunks hands back a handle that has seen them.
+%% Keeping it only saves a lookup, so it is not checkpointed: a state that
+%% loses it is still correct.
+refreshed(Mu, M, Mem) ->
+    Mu#mut{mems = setelement(M + 1, Mu#mut.mems, Mem)}.
+
+%% The state with memory `M''s handle brought up to date, after a write that
+%% did not go through `store_r/4' and so could not say.
+fresh(Mu, M) ->
+    case wasm_memory:refresh(element(M + 1, Mu#mut.mems)) of
+        ok -> Mu;
+        {refresh, Mem1} -> refreshed(Mu, M, Mem1)
+    end.
+
+-doc """
+The state with every memory handle brought up to date with the arena chunks
+published since it was taken.
+
+For where a state is picked up after writes it did not make: the return from
+a host function, and the start of an invocation, which follows whatever
+`wasm:write_memory/3` did in between.
+""".
+-spec fresh_mems(#mut{}) -> #mut{}.
+fresh_mems(#mut{mems = Mems} = Mu) -> fresh_mems(Mu, tuple_size(Mems) - 1).
+
+fresh_mems(Mu, -1) -> Mu;
+fresh_mems(Mu, M) -> fresh_mems(fresh(Mu, M), M - 1).
 
 %% Also generated inline by `wasm_core:decode/3`, which cannot share this code
 %% because it builds Core rather than running. The two are pinned together by

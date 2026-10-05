@@ -812,9 +812,17 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %%   tsigs  type index -> {NParams, NResults}. An indirect call is typed by the
 %%          *type* it names rather than by any function, since which function it
 %%          reaches is not known until it runs.
+%%   tlb    memory 0's translation cache, two entries of `Page, Array, Base',
+%%          the most recently used first, as a tuple of six Core expressions,
+%%          or `undefined' in a pure function. Carried through
+%%          every continuation as the locals are, and handed on by every access
+%%          to memory 0. See `access/8'.
+%% The translation cache's Core values: two entries of three.
+-define(TLB_SIZE, 6).
+
 -record(g, {env = #{}, stack = [], frames = [], depth = 0, n = 0,
             nlocals = 0, nres = 0, inst, mut, d, unit = #{}, sigs = #{},
-            tsigs = #{}, mod, elsewhere = #{}, gen = 0}).
+            tsigs = #{}, mod, elsewhere = #{}, gen = 0, tlb}).
 
 %% Two shapes, not three. `pure' keeps what the spike measured -- locals as Core
 %% variables, nothing threaded, a loop that carries no state. Anything touching
@@ -842,10 +850,17 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
     %% name crashes `sys_core_fold'. Integers, so no atom is created for a
     %% variable; only *function* identifiers have to be atoms, which is what the
     %% pools in this module exist for.
+    %% The cache starts empty: no page is -1.
+    Tlb = case Shape of
+              pure -> undefined;
+              stateful -> {cerl:abstract(-1), cerl:abstract(none),
+                           cerl:abstract(0), cerl:abstract(-1),
+                           cerl:abstract(none), cerl:abstract(0)}
+          end,
     G = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
            inst = Inst, mut = Mut, d = D, unit = Unit, sigs = Sigs,
            tsigs = TSigs, mod = Mod, elsewhere = Elsewhere,
-           gen = Stamp},
+           gen = Stamp, tlb = Tlb},
     %% Parameters arrive in the interpreter's representation, which holds
     %% integers *signed*, and `wasm_exec:op1/2' and `op2/3' expect exactly that.
     %%
@@ -874,7 +889,8 @@ go({K, NArgs}, #g{stack = S} = G) ->
 %% is any. Both change as a body runs, which is exactly why they are parameters
 %% where an operand below the frame's base is closed over instead.
 carried(#g{mut = undefined} = G) -> locals(G);
-carried(#g{mut = Mut, d = D} = G) -> locals(G) ++ [Mut, D].
+carried(#g{mut = Mut, d = D, tlb = Tlb} = G) ->
+    locals(G) ++ [Mut, D | tuple_to_list(Tlb)].
 
 locals(#g{env = Env, nlocals = N}) -> [maps:get(I, Env) || I <- lists:seq(0, N - 1)].
 
@@ -886,27 +902,29 @@ var(#g{n = N} = G) -> {cerl:c_var(N), G#g{n = N + 1}}.
 %% scoping puts a sibling's name out of scope and only a nesting path has to be
 %% unique.
 frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
-    NCarried = case Mut of undefined -> NL; _ -> NL + 2 end,
+    NCarried = case Mut of undefined -> NL; _ -> NL + 2 + ?TLB_SIZE end,
     Total = NCarried + NRes,
     Name = cerl:c_fname(frame_name(Depth), Total),
     Vars = [cerl:c_var(N) || N <- lists:seq(N0, N0 + Total - 1)],
     Env = maps:from_list(lists:zip(lists:seq(0, NL - 1),
                                    lists:sublist(Vars, NL))),
-    {NewMut, NewD} =
+    {NewMut, NewD, NewTlb} =
         case Mut of
-            undefined -> {undefined, undefined};
-            _ -> {lists:nth(NL + 1, Vars), lists:nth(NL + 2, Vars)}
+            undefined -> {undefined, undefined, undefined};
+            _ -> {lists:nth(NL + 1, Vars), lists:nth(NL + 2, Vars),
+                  list_to_tuple(lists:sublist(Vars, NL + 3, ?TLB_SIZE))}
         end,
-    {Name, Vars, Env, NewMut, NewD, lists:nthtail(NCarried, Vars),
+    {Name, Vars, Env, {NewMut, NewTlb}, NewD, lists:nthtail(NCarried, Vars),
      G#g{n = N0 + Total}}.
 
 %%% -------------------------------------------------------------- control ---
 
 instr({block, NPar, NRes, Body}, Rest, G, Exit) ->
-    {K, KVars, KEnv, KMut, KD, KRes, G1} = frame(NRes, G),
+    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
                       seq(Rest, G1#g{env = KEnv, mut = KMut, d = KD,
+                                     tlb = KTlb,
                                      stack = lists:reverse(KRes) ++ Below},
                           Exit)),
     Inner = G1#g{stack = Top, frames = [{K, NRes} | G#g.frames],
@@ -917,15 +935,17 @@ instr({block, NPar, NRes, Body}, Rest, G, Exit) ->
 %% takes its *parameters* where a block's takes its results, and falling off the
 %% end goes to the continuation instead.
 instr({loop, NPar, NRes, Body}, Rest, G, Exit) ->
-    {K, KVars, KEnv, KMut, KD, KRes, G1} = frame(NRes, G),
+    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
                       seq(Rest, G1#g{env = KEnv, mut = KMut, d = KD,
+                                     tlb = KTlb,
                                      stack = lists:reverse(KRes) ++ Below},
                           Exit)),
     G2 = G1#g{depth = G#g.depth + 1},
-    {Lp, LpVars, LpEnv, LpMut, LpD, LpPar, G3} = frame(NPar, G2),
+    {Lp, LpVars, LpEnv, {LpMut, LpTlb}, LpD, LpPar, G3} = frame(NPar, G2),
     Inner = G3#g{env = LpEnv, mut = LpMut, d = LpD,
+                 tlb = LpTlb,
                  stack = lists:reverse(LpPar),
                  frames = [{Lp, NPar} | G#g.frames],
                  depth = G2#g.depth + 1},
@@ -937,10 +957,11 @@ instr({loop, NPar, NRes, Body}, Rest, G, Exit) ->
 
 instr({if_, NPar, NRes, Then, Else}, Rest, G0, Exit) ->
     {C, G} = pop(G0),
-    {K, KVars, KEnv, KMut, KD, KRes, G1} = frame(NRes, G),
+    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
                       seq(Rest, G1#g{env = KEnv, mut = KMut, d = KD,
+                                     tlb = KTlb,
                                      stack = lists:reverse(KRes) ++ Below},
                           Exit)),
     Inner = G1#g{stack = Top, frames = [{K, NRes} | G#g.frames],
@@ -973,6 +994,12 @@ instr({br_table, Labels, Default}, _Rest, G0, _Exit) ->
 instr(return, _Rest, G, _Exit) ->
     go(return, G);
 
+%% With the cache handed to the trap, so that a trap is a use of it: see
+%% `answer/3' and `cache_use/3'. The state goes too, because a use of the cache
+%% has to be a use of the state.
+instr(unreachable, _Rest, #g{mut = Mut, tlb = {_, _, _, _, _, _} = Tlb},
+      _Exit) ->
+    call_op(unreachable_at, [Mut | tuple_to_list(Tlb)]);
 instr(unreachable, _Rest, _G, _Exit) ->
     cerl:c_call(cerl:c_atom(wasm_error), cerl:c_atom(trap),
                 [cerl:c_atom(unreachable)]);
@@ -1017,6 +1044,43 @@ instr({f64_const, C}, Rest, G, Exit) ->
 %% it. A store writes into `atomics' in place and does not change `#mut{}',
 %% which is why only `global.set' rebinds it.
 
+instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _, _, _, _}} = G0,
+      Exit)
+  when is_atom(Op), is_integer(Offset) ->
+    %% Memory 0, through the translation cache: the access answers its result
+    %% and the cache to go on with, in the form `join/4' explains.
+    {P, G1} = var(G0), {Ar, G2} = var(G1), {B, G2a} = var(G2),
+    {P2, G2b} = var(G2a), {Ar2, G2c} = var(G2b), {B2, G3} = var(G2c),
+    Tlb = G0#g.tlb,
+    New = {P, Ar, B, P2, Ar2, B2},
+    case lists:member(Op, ?LOADS) of
+        true ->
+            {Base, G4} = pop(G3),
+            {V, G5} = var(G4),
+            {load, N, Kind} = wasm_exec:load_spec(Op),
+            {Form, Next} =
+                case cache_use(Rest, Exit, length(G0#g.frames)) of
+                    must -> {first, New};
+                    %% Nothing after this access reads the cache it would
+                    %% answer, so what it answers is never referenced and the
+                    %% cache it was given goes on.
+                    none -> {last, Tlb};
+                    mixed -> {tuple, New}
+                end,
+            join(Form, cached(load, G0#g.mut, N, Kind, address(Base, Offset),
+                              undefined, Tlb, Form),
+                 [V | tuple_to_list(New)],
+                 seq(Rest, push(V, G5#g{tlb = Next}), Exit));
+        false ->
+            true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
+            {Val, G4} = pop(G3), {Base, G5} = pop(G4),
+            {Mut1, G6} = var(G5),
+            {store, N, Kind} = wasm_exec:store_spec(Op),
+            join(last, cached(store, G0#g.mut, N, Kind, address(Base, Offset),
+                              Val, Tlb, last),
+                 [Mut1 | tuple_to_list(New)],
+                 seq(Rest, G6#g{mut = Mut1, tlb = New}, Exit))
+    end;
 instr({Op, {_Align, Offset, M}}, Rest, G0, Exit) when is_atom(Op), is_integer(Offset) ->
     case lists:member(Op, ?LOADS) of
         true ->
@@ -1029,10 +1093,11 @@ instr({Op, {_Align, Offset, M}}, Rest, G0, Exit) when is_atom(Op), is_integer(Of
         false ->
             true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
             {Val, G1} = pop(G0), {Base, G2} = pop(G1),
+            {Mut1, G3} = var(G2),
             {store, N, Kind} = wasm_exec:store_spec(Op),
-            cerl:c_seq(access(store, G0#g.mut, M, N, Kind,
-                              address(Base, Offset), Val),
-                       seq(Rest, G2, Exit))
+            cerl:c_let([Mut1], access(store, G0#g.mut, M, N, Kind,
+                                      address(Base, Offset), Val),
+                       seq(Rest, G3#g{mut = Mut1}, Exit))
     end;
 
 %%% ------------------------------------------------------------------ simd ---
@@ -1089,10 +1154,11 @@ instr({simd_load, Op, Offset, M, W, N}, Rest, G0, Exit) ->
 
 instr({simd_store, Offset, M, W}, Rest, G0, Exit) ->
     {V, G1} = pop(G0), {Base, G2} = pop(G1),
-    cerl:c_seq(call_op(simd_store_at,
-                       [G0#g.mut, cerl:abstract(M), cerl:abstract(Offset),
-                        cerl:abstract(W), Base, V]),
-               seq(Rest, G2, Exit));
+    {M1, G3} = var(G2),
+    cerl:c_let([M1], call_op(simd_store_at,
+                             [G0#g.mut, cerl:abstract(M), cerl:abstract(Offset),
+                              cerl:abstract(W), Base, V]),
+               seq(Rest, G3#g{mut = M1}, Exit));
 
 instr({simd_load_lane, Op, Offset, M, W, N, Lane}, Rest, G0, Exit) ->
     {V, G1} = pop(G0), {Base, G2} = pop(G1),
@@ -1105,16 +1171,18 @@ instr({simd_load_lane, Op, Offset, M, W, N, Lane}, Rest, G0, Exit) ->
 
 instr({simd_store_lane, Op, Offset, M, W, Lane}, Rest, G0, Exit) ->
     {V, G1} = pop(G0), {Base, G2} = pop(G1),
-    cerl:c_seq(call_op(simd_store_lane_at,
-                       [G0#g.mut, cerl:abstract(M), cerl:c_atom(Op),
-                        cerl:abstract(Offset), cerl:abstract(W),
-                        cerl:abstract(Lane), Base, V]),
-               seq(Rest, G2, Exit));
+    {M1, G3} = var(G2),
+    cerl:c_let([M1], call_op(simd_store_lane_at,
+                             [G0#g.mut, cerl:abstract(M), cerl:c_atom(Op),
+                              cerl:abstract(Offset), cerl:abstract(W),
+                              cerl:abstract(Lane), Base, V]),
+               seq(Rest, G3#g{mut = M1}, Exit));
 
 %% Bulk memory. Each is the operand shuffle and a call to the helper the
 %% interpreter's own clause calls, so a bound or a width cannot be restated
-%% differently here. The two that change `#mut{}' rebind it; the three that
-%% write into `atomics' in place do not.
+%% differently here. Every one but `memory.size' rebinds `#mut{}': the three
+%% that write into `atomics' in place answer a handle that has seen the arena
+%% chunks a write into an image published.
 
 instr({memory_size, M}, Rest, G0, Exit) ->
     {V, G} = var(G0),
@@ -1133,23 +1201,27 @@ instr({memory_grow, M}, Rest, G0, Exit) ->
 
 instr({memory_fill, M}, Rest, G0, Exit) ->
     {N, G1} = pop(G0), {B, G2} = pop(G1), {D, G3} = pop(G2),
-    cerl:c_seq(call_op(memory_fill_at,
-                       [G0#g.mut, cerl:abstract(M), D, B, N, cerl:abstract(32)]),
-               seq(Rest, G3, Exit));
+    {M1, G4} = var(G3),
+    cerl:c_let([M1], call_op(memory_fill_at,
+                             [G0#g.mut, cerl:abstract(M), D, B, N,
+                              cerl:abstract(32)]),
+               seq(Rest, G4#g{mut = M1}, Exit));
 
 instr({memory_copy, Dm, Sm}, Rest, G0, Exit) ->
     {N, G1} = pop(G0), {Sa, G2} = pop(G1), {Da, G3} = pop(G2),
-    cerl:c_seq(call_op(memory_copy_at,
-                       [G0#g.mut, cerl:abstract(Dm), cerl:abstract(Sm), Da, Sa,
-                        N, cerl:abstract(32), cerl:abstract(32)]),
-               seq(Rest, G3, Exit));
+    {M1, G4} = var(G3),
+    cerl:c_let([M1], call_op(memory_copy_at,
+                             [G0#g.mut, cerl:abstract(Dm), cerl:abstract(Sm),
+                              Da, Sa, N, cerl:abstract(32), cerl:abstract(32)]),
+               seq(Rest, G4#g{mut = M1}, Exit));
 
 instr({memory_init, D, M}, Rest, G0, Exit) ->
     {N, G1} = pop(G0), {So, G2} = pop(G1), {Da, G3} = pop(G2),
-    cerl:c_seq(call_op(memory_init_at,
-                       [G0#g.inst, G0#g.mut, cerl:abstract(D), cerl:abstract(M),
-                        Da, So, N, cerl:abstract(32)]),
-               seq(Rest, G3, Exit));
+    {M1, G4} = var(G3),
+    cerl:c_let([M1], call_op(memory_init_at,
+                             [G0#g.inst, G0#g.mut, cerl:abstract(D),
+                              cerl:abstract(M), Da, So, N, cerl:abstract(32)]),
+               seq(Rest, G4#g{mut = M1}, Exit));
 
 instr({data_drop, D}, Rest, G0, Exit) ->
     {M1, G1} = var(G0),
@@ -1553,46 +1625,305 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
                store -> call_op(store_at, [Mut, cerl:abstract(M), cerl:abstract(N),
                                            cerl:c_atom(Kind), A, Val])
            end,
+    %% A store answers the state to go on with, which the slow path may have
+    %% refreshed and the inline one never changes.
     Fast = case Dir of
                load -> inline_load(N, Kind, A, Sh, Ix, Ck, Bit);
-               store -> inline_store(N, Kind, A, Sh, Ix, Ck, Bit, Val)
+               store -> cerl:c_seq(inline_store(N, Kind, A, Sh, Ix, Ck, Bit, Val),
+                                   Mut)
            end,
     %% `Bit' is the bit offset of the access within its word, and the straddle
     %% test is on it, so it is computed once and shared by the guard and the
     %% body.
+    Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
+               cerl:c_let([Ci], bif('bsr', [A, Sh]),
+                 cerl:c_let([Ck], chunk_at(Mem, Ci),
+                   cerl:c_let([Ix], word_index(A, Sh), Fast)))),
     cerl:c_let([Mem], mem_at(Mut, M),
       cerl:c_let([A], Addr,
         cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
                                     cerl:abstract(8)]),
           ordinary(Mem, A, N, Bit,
-                   cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
-                     cerl:c_let([Ci], bif('bsr', [A, Sh]),
-                       cerl:c_let([Ck], chunk_at(Mem, Ci),
-                         cerl:c_let([Ix], word_index(A, Sh),
-                                    marked(Dir, Mem, Ci, Fast))))),
+                   cerl:c_case(bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)]),
+                               [cerl:c_clause([cerl:abstract(true)], Growth),
+                                cerl:c_clause([cerl:c_var('_Img')],
+                                              image_region(Dir, Mut, Mem, A, N,
+                                                           Kind, Bit, Val,
+                                                           Slow))]),
                    Slow)))).
 
-%% A store sets its chunk's slot in the memory's `dirty' array first, when the
-%% memory has one: `wasm_memory:wchunk/2' is the same rule for every write the
-%% interpreter makes. A memory that does not track costs a field read and a
-%% compare.
-marked(load, _Mem, _Ci, Fast) ->
-    Fast;
-marked(store, Mem, Ci, Fast) ->
-    D = cerl:c_var('Dy'), Slot = cerl:c_var('Sl'),
-    cerl:c_seq(
-      cerl:c_case(field(Mem, ?MEM_DIRTY),
-                  [cerl:c_clause([cerl:abstract(undefined)], cerl:abstract(ok)),
-                   cerl:c_clause(
-                     [D],
-                     cerl:c_let([Slot], bif('+', [Ci, cerl:abstract(1)]),
-                       cerl:c_case(atomic(get, [D, Slot]),
-                                   [cerl:c_clause([cerl:abstract(0)],
-                                                  atomic(put, [D, Slot,
-                                                               cerl:abstract(1)])),
-                                    cerl:c_clause([cerl:c_var('_Set')],
-                                                  cerl:abstract(ok))])))]),
-      Fast).
+%% An access to memory 0 through its translation cache.
+%%
+%% The cache holds two translations, the most recently used first: each a
+%% 4 KiB page and the array and word index its first word is at. Only
+%% translations to an array are ever put in it, a private slot or a growth
+%% chunk, and both are set once and never move: a page table entry goes from 0
+%% to a slot once, and growth only appends chunks. So a cached translation can
+%% never go stale, whatever any other process or holder does, and nothing ever
+%% has to invalidate one.
+%%
+%% A hit is the straddle test every fast access makes and one compare against
+%% each cached page until one matches; the bounds test is not needed, because a
+%% page that was in bounds stays in bounds and a word inside it is inside the
+%% memory. A hit on the second entry swaps the two. A miss is the ordinary
+%% access, which, when it ends on an array, puts that translation first and
+%% the old first entry second. An untouched image page is read from the binary
+%% and never cached. An access that straddles a word goes straight to the
+%% helper, as the ordinary access would send it.
+cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
+    {TP, TA, TB, TP2, TA2, TB2} = Tlb,
+    Mem = cerl:c_var('Mem'), A = cerl:c_var('A'), Sh = cerl:c_var('Sh'),
+    Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
+    Ci = cerl:c_var('Ci'), Pg = cerl:c_var('Pg'),
+    Off = bif('bsr', [bif('band', [A, cerl:abstract(4095)]), cerl:abstract(3)]),
+    %% What an access answers: its own result, and the cache after it.
+    Done = fun(R, Cache) -> answer(Form, R, Cache) end,
+    Keep = fun(R) -> Done(R, Tlb) end,
+    Refill = fun(R, C, I) ->
+                     Done(R, {Pg, C, bif('-', [I, Off]), TP, TA, TB})
+             end,
+    Do = fun(C, I) ->
+                 case Dir of
+                     load -> inline_load(N, Kind, A, undefined, I, C, Bit);
+                     store -> cerl:c_seq(inline_store(N, Kind, A, undefined,
+                                                      I, C, Bit, Val), Mut)
+                 end
+         end,
+    Slow = Keep(case Dir of
+                    load -> call_op(load_at, [Mut, cerl:abstract(0),
+                                              cerl:abstract(N),
+                                              cerl:c_atom(Kind), A]);
+                    store -> call_op(store_at, [Mut, cerl:abstract(0),
+                                                cerl:abstract(N),
+                                                cerl:c_atom(Kind), A, Val])
+                end),
+    Hit = cerl:c_let([Ix], bif('+', [TB, Off]), Keep(Do(TA, Ix))),
+    Hit2 = cerl:c_let([Ix], bif('+', [TB2, Off]),
+                      Done(Do(TA2, Ix), {TP2, TA2, TB2, TP, TA, TB})),
+    Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
+               cerl:c_let([Ci], bif('bsr', [A, Sh]),
+                 cerl:c_let([Ck], chunk_at(Mem, Ci),
+                   cerl:c_let([Ix], word_index(A, Sh),
+                              Refill(Do(Ck, Ix), Ck, Ix))))),
+    Image = image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val,
+                         Slow, {Keep, Refill}),
+    Miss = ordinary(Mem, A, N, Bit,
+                    cerl:c_case(bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)]),
+                                [cerl:c_clause([cerl:abstract(true)], Growth),
+                                 cerl:c_clause([cerl:c_var('_Img')], Image)]),
+                    Slow),
+    cerl:c_let([Mem], mem_at(Mut, 0),
+      cerl:c_let([A], Addr,
+        cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+                                    cerl:abstract(8)]),
+          cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
+            all([bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
+                            cerl:abstract(64)])],
+                all([bif('=:=', [Pg, TP])], Hit,
+                    all([bif('=:=', [Pg, TP2])], Hit2, Miss)),
+                Slow))))).
+
+%% How an access to memory 0 hands back its result and the cache after it.
+%%
+%% Seven values, as a Core value list, unless that is not safe. OTP 29 with
+%% `no_ssa_opt', which is the `baseline' quality, gives a value of a
+%% multi-value `let' that nothing uses a zero-length live interval, so it can
+%% be given the register of a value bound alongside it that is used. The values
+%% become one parallel copy at the join, and `beam_ssa_codegen' keeps only the
+%% *last* copy into a register: an unused value copied after a used one
+%% overwrites it, and one copied before it is overwritten. Real guests crashed
+%% on that, the instance state replaced by a cache word.
+%%
+%% So every list is ordered so that a value is used whenever one before it is:
+%% then no unused value comes after a used one, and none can clobber one.
+%%
+%%   last   the cache, then the result: `<A2, B2, A1, B1, P2, P1, R>', the
+%%          second entry's array and base, the first's, then the pages. Within
+%%          the cache this order holds by construction:
+%%          - The next access tests the straddle once and then both hits sit
+%%            under it, so a hit on the second entry exists only where one on
+%%            the first does; every other use (the slow path, a refill, a
+%%            continuation, a trap) hands on the first entry with the second.
+%%            A use of `A2' or `B2' is therefore a use of `A1' and `B1'.
+%%          - A hit uses both its array and its base, and a hand-on both.
+%%          - Every use of an array or a base uses its page: a hit compares it
+%%            first, a hand-on carries it.
+%%          - The second page is compared only after the first missed, and
+%%            handed on only with it, so a use of `P2' is a use of `P1'.
+%%          - Every use of a page uses the instance state, read first.
+%%          A store answers the state, so a store is always `last'. A load is
+%%          `last' only when `cache_use/3' finds no use of its cache at all,
+%%          and then the cache it answers is not handed on, so nothing can
+%%          refer to it.
+%%   first  the result, then the cache in the same order. For a load whose
+%%          cache is used on every path, which leaves the result as the one
+%%          value that may be unused, as it is after `drop'.
+%%   tuple  `{R, P1, A1, B1, P2, A2, B2}', for a load whose cache is used on
+%%          some paths and not others: either the result or the cache may then
+%%          be the unused one, and the tuple is one value. It costs eight
+%%          words.
+answer(tuple, R, Cache) ->
+    Vs = [cerl:c_var(V) || V <- ['Tr', 'Tp', 'Ta', 'Tb', 'Tp2', 'Ta2', 'Tb2']],
+    lists:foldr(fun({V, E}, Body) -> cerl:c_let([V], E, Body) end,
+                cerl:c_tuple(Vs),
+                lists:zip(Vs, [R | tuple_to_list(Cache)]));
+answer(Form, R, Cache) ->
+    cerl:c_values(order(Form, [R | tuple_to_list(Cache)])).
+
+order(first, [R, P, Ar, B, P2, Ar2, B2]) -> [R, Ar2, B2, Ar, B, P2, P];
+order(last, [R, P, Ar, B, P2, Ar2, B2]) -> [Ar2, B2, Ar, B, P2, P, R].
+
+%% Binding what `answer/3' builds, in the same order.
+join(tuple, Access, Vars, Body) ->
+    cerl:c_case(Access, [cerl:c_clause([cerl:c_tuple(Vars)], Body)]);
+join(Form, Access, Vars, Body) ->
+    cerl:c_let(order(Form, Vars), Access, Body).
+
+%% Whether the cache an access answers is used after it: `must' when every
+%% path from the access reaches a use before leaving the function, `none' when
+%% none does, `mixed' otherwise. It follows `seq/3': a use is another access to
+%% memory 0, a continuation (which is handed the cache by `carried/1'), or an
+%% `unreachable' (which passes it to the trap); leaving is a `return' or a
+%% branch to the function's own label. A block's `Rest' is not looked at,
+%% because it runs in a continuation that takes the cache as a parameter.
+%% `Depth' is how many labels are in scope, as `target/2' counts them.
+cache_use(Is, Exit, Depth) ->
+    case paths(Is, Exit, Depth) of
+        {true, false} -> must;
+        {false, _} -> none;
+        {true, true} -> mixed
+    end.
+
+%% `{SomePathUses, SomePathLeaves}'.
+paths([], return, _D) -> {false, true};
+paths([], _K, _D) -> {true, false};
+paths([{block, _, _, Body} | _], _Exit, D) -> paths(Body, cont, D + 1);
+paths([{loop, _, _, _} | _], _Exit, _D) -> {true, false};
+paths([{if_, _, _, Then, Else} | _], _Exit, D) ->
+    either(paths(Then, cont, D + 1), paths(Else, cont, D + 1));
+paths([{br, N} | _], _Exit, D) -> branch(N, D);
+paths([{br_if, N} | Rest], Exit, D) ->
+    either(branch(N, D), paths(Rest, Exit, D));
+paths([{br_table, Labels, Default} | _], _Exit, D) ->
+    lists:foldl(fun(L, Acc) -> either(branch(L, D), Acc) end,
+                branch(Default, D), tuple_to_list(Labels));
+paths([return | _], _Exit, _D) -> {false, true};
+paths([unreachable | _], _Exit, _D) -> {true, false};
+paths([{Op, {_, Offset, 0}} | Rest], Exit, D)
+  when is_atom(Op), is_integer(Offset) ->
+    case lists:member(Op, ?LOADS) orelse lists:member(Op, ?STORES) of
+        true -> {true, false};
+        false -> paths(Rest, Exit, D)
+    end;
+paths([_ | Rest], Exit, D) -> paths(Rest, Exit, D).
+
+branch(N, D) when N < D -> {true, false};
+branch(_N, _D) -> {false, true}.
+
+either({U1, L1}, {U2, L2}) -> {U1 orelse U2, L1 orelse L2}.
+
+%% Below the image region's end the page table decides. A page no write has
+%% reached is read from the image's binary; a private one is a word in an arena
+%% chunk, found from the table entry by a shift and a mask exactly as
+%% `wasm_memory:slot_word/3' finds it. A store to a page still the image's has
+%% to copy it first, and an arena chunk this handle has not seen is looked up
+%% in the published cell: both are the helper's.
+image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow) ->
+    image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow,
+                 {fun(R) -> R end, fun(R, _C, _I) -> R end}).
+
+%% `Keep' wraps a result that leaves the cache as it was, `Refill' one that ends
+%% on an array the cache can take.
+image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow, {Keep, Refill}) ->
+    E = cerl:c_var('E'), K = cerl:c_var('K'), Ar = cerl:c_var('Ar'),
+    Ck = cerl:c_var('Ck'), Ix = cerl:c_var('Ix'),
+    Entry = atomic(get, [field(Mem, ?MEM_TAB),
+                         bif('+', [bif('bsr', [A, cerl:abstract(12)]),
+                                   cerl:abstract(1)])]),
+    Private =
+        cerl:c_let([K], bif('bsr', [E, cerl:abstract(16)]),
+          cerl:c_let([Ar], field(Mem, ?MEM_ARENA),
+            cerl:c_case(
+              bif('=<', [K, bif(tuple_size, [Ar])]),
+              [cerl:c_clause(
+                 [cerl:abstract(true)],
+                 cerl:c_let([Ck], bif(element, [K, Ar]),
+                   cerl:c_let([Ix], slot_index(E, A),
+                     Refill(case Dir of
+                                load -> inline_load(N, Kind, A, undefined, Ix,
+                                                    Ck, Bit);
+                                store -> cerl:c_seq(inline_store(N, Kind, A,
+                                                                 undefined, Ix,
+                                                                 Ck, Bit, Val),
+                                                    Mut)
+                            end, Ck, Ix)))),
+               cerl:c_clause([cerl:c_var('_Unseen')], Slow)]))),
+    Untouched = case Dir of
+                    load -> image_load(Mem, A, N, Kind, Slow, Keep);
+                    store -> Slow
+                end,
+    cerl:c_let([E], Entry,
+               cerl:c_case(E, [cerl:c_clause([cerl:abstract(0)], Untouched),
+                               cerl:c_clause([cerl:c_var('_Slot')], Private)])).
+
+%% A load from a page no write has reached: exactly its `N' bytes, matched out
+%% of the image's binary at the page offset, never the word around them.
+%%
+%% The word was a remote call and, for a word with its top bits set, a bignum,
+%% built to be shifted and masked down to the few bytes wanted. The match is
+%% the width and the signedness the result is held in, so nothing is left to
+%% decode for an integer: signed for a `_s' kind and for a full-width load,
+%% whose `wrap/2' is the signed reading, unsigned otherwise. A float is decoded
+%% from its bits, as everywhere.
+%%
+%% The guard before this has already refused an access that straddles a word,
+%% so the bytes are inside one page. The last clause cannot be reached and
+%% hands an image that broke that to the helper rather than raising.
+image_load(Mem, A, N, Kind, Slow, Keep) ->
+    Pb = cerl:c_var('Pb'), Po = cerl:c_var('Po'), X = cerl:c_var('Px'),
+    Page = bif(element, [bif('+', [bif('bsr', [A, cerl:abstract(16)]),
+                                   cerl:abstract(1)]),
+                         field(Mem, ?MEM_IMAGE)]),
+    Bytes = cerl:c_binary(
+              [cerl:c_bitstr(cerl:c_var('_Pre'), Po, cerl:abstract(8),
+                             cerl:abstract(binary),
+                             cerl:abstract([unsigned, big])),
+               cerl:c_bitstr(X, cerl:abstract(N * 8), cerl:abstract(1),
+                             cerl:abstract(integer),
+                             cerl:abstract([image_sign(Kind, N), little])),
+               cerl:c_bitstr(cerl:c_var('_Post'), cerl:c_atom(all),
+                             cerl:abstract(8), cerl:abstract(binary),
+                             cerl:abstract([unsigned, big]))]),
+    cerl:c_let([Pb], Page,
+      cerl:c_case(Pb,
+        [cerl:c_clause([cerl:abstract(zero)], Keep(image_zero(Kind))),
+         cerl:c_clause([cerl:c_var('_Bin')],
+           cerl:c_let([Po], bif('band', [A, cerl:abstract(16#FFFF)]),
+             cerl:c_case(Pb,
+               [cerl:c_clause([Bytes], Keep(image_value(Kind, X))),
+                cerl:c_clause([cerl:c_var('_Short')], Slow)])))])).
+
+image_sign(i32_s, _N) -> signed;
+image_sign(i64_s, _N) -> signed;
+image_sign(i32_u, 4) -> signed;
+image_sign(i64_u, 8) -> signed;
+image_sign(_Kind, _N) -> unsigned.
+
+image_value(f32, X) -> decode(f32, 4, X);
+image_value(f64, X) -> decode(f64, 8, X);
+image_value(_Int, X) -> X.
+
+%% What a page of zeros answers, settled here rather than decoded per access.
+image_zero(f32) -> cerl:abstract(wasm_num:f32_from_bits(0));
+image_zero(f64) -> cerl:abstract(wasm_num:f64_from_bits(0));
+image_zero(_Int) -> cerl:abstract(0).
+
+slot_index(E, A) ->
+    bif('+', [bif('+', [bif('*', [bif('band', [E, cerl:abstract(16#FFFF)]),
+                                  cerl:abstract(512)]),
+                        bif('bsr', [bif('band', [A, cerl:abstract(4095)]),
+                                    cerl:abstract(3)])]),
+              cerl:abstract(1)]).
 
 mem_at(Mut, M) ->
     bif(element, [cerl:abstract(M + 1),
@@ -1664,11 +1995,14 @@ atomic(F, Args) -> cerl:c_call(cerl:c_atom(atomics), cerl:c_atom(F), Args).
 %% bignum arithmetic on a value that is usually small. `i64.load` measured
 %% 39.81 nanoseconds against `i32.load`'s 9.35, which is backwards: an aligned
 %% eight-byte load is one `atomics:get` and should be the cheapest of the two.
-inline_load(8, Kind, _A, _Sh, Ix, Ck, _Bit) ->
-    decode_word(Kind, atomic(get, [Ck, Ix]));
 inline_load(N, Kind, _A, _Sh, Ix, Ck, Bit) ->
-    Raw = bif('band', [bif('bsr', [atomic(get, [Ck, Ix]), Bit]),
-                       cerl:abstract(mask(N))]),
+    load_word(N, Kind, atomic(get, [Ck, Ix]), Bit).
+
+%% A load given the word it is in, wherever that word came from.
+load_word(8, Kind, Word, _Bit) ->
+    decode_word(Kind, Word);
+load_word(N, Kind, Word, Bit) ->
+    Raw = bif('band', [bif('bsr', [Word, Bit]), cerl:abstract(mask(N))]),
     decode(Kind, N, Raw).
 
 %% The word as `atomics` hands it over: unsigned, `[0, 2^64)`.

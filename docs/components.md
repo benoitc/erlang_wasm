@@ -14,7 +14,10 @@ component (`cargo-component`, `wit-bindgen`, `componentize-py`, `jco`, or a
 [Embedding](embedding.md) instead.
 
 The entry points are `wasm_component` (decode, instantiate, call) and, for the
-WASI 0.2 host a component imports, `wasi_preview2`. Only the synchronous
+WASI 0.2 host a component imports, `wasi_preview2`. Components work with or
+without the `wasm` application started: when it runs, each core module goes
+through its module cache, so the same bytes compile once per node; when it does
+not, they are compiled inline, as `wasm:compile/1` does. Only the synchronous
 Component Model is implemented; the async ABI (`stream`, `future`, WASI 0.3) is
 not, and a 0.2 component never needs it.
 
@@ -106,27 +109,48 @@ ok = wasm_component:destroy(Inst).
 ## Resources
 
 A component may hand out a *resource*: an opaque handle to state it owns, as an
-`own<T>` (you hold it) or a `borrow<T>` (lent for one call). Handles cross the
-boundary as the integers the component mints; you pass them back to call a
-method, and `wasm_component:destroy/1` tears down what an instance still holds.
-A resource type appears in a signature as `{own, TypeIndex}` or
-`{borrow, TypeIndex}`, which marshal as a handle integer:
+`own<T>` (you hold it) or a `borrow<T>` (lent for one call). You construct one,
+pass the handle back to call its methods, and drop it when you are done.
+
+The handle you get is a small integer, an index into the instance's handle
+table, not anything inside the guest. In a signature a resource type is
+`{own, TypeIndex}` or `{borrow, TypeIndex}`; a plain `u32` works the same,
+because the runtime checks every handle against the export's own signature:
 
 ```erlang
 {ok, Handle} = wasm_component:call(Inst, ~"[constructor]counter", {[u32], {own, 0}}, [41]),
 {ok, 42} = wasm_component:call(Inst, ~"[method]counter.increment", {[{borrow, 0}], u32}, [Handle]).
 ```
 
-Each component instance has its own handle table and the handles in it are
-checked, so resource misuse is caught rather than silently accepted:
+Drop a handle with `drop_resource/3`, naming the resource's destructor export.
+It runs the destructor once and answers `ok`:
 
-- Dropping a handle runs the resource's destructor, once, and frees the handle.
-- Dropping a handle twice, or calling a method on one after it was dropped,
-  traps.
-- A handle of one resource type passed where another type is expected traps.
-- When a resource is passed between composed components, ownership moves with it:
-  it is live in one component at a time, and using one a component has handed away
-  traps. A borrowed handle is reachable in the callee only for that call.
+```erlang
+ok = wasm_component:drop_resource(Inst, ~"[dtor]counter", Handle).
+```
+
+Every handle is checked before the guest runs. A check that fails answers
+`{error, #{class := trap, kind := Kind, ctx := Ctx}}`, and the guest is not
+called:
+
+| What you passed | `kind` | `ctx` |
+| --- | --- | --- |
+| a handle already dropped, dropped twice, or never handed out | `resource_not_live` | `handle`, `operation` |
+| a handle of one resource type where another is expected | `resource_wrong_type` | `handle`, `expected`, `actual` |
+
+```erlang
+{error, #{class := trap, kind := resource_not_live}} =
+    wasm_component:drop_resource(Inst, ~"[dtor]counter", Handle).
+```
+
+- Each instance has its own table: a handle from one instance means nothing to
+  another.
+- `destroy/1` discards every handle the instance still holds. No destructor
+  runs, because the guest's memory goes with the instance.
+- When a resource passes between composed components, the component that
+  receives an `own` gets a handle of its own. It can use the resource while it
+  holds the handle, and dropping it runs the destructor in the component that
+  defined the resource.
 
 For a runnable version, see [Use a component resource](examples/use-a-component-resource.md).
 

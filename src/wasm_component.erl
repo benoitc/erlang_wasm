@@ -197,6 +197,11 @@ Instantiate a component, providing host functions for the interfaces it imports.
 the host supplies a WASI 0.2 world. It is merged over the resource intrinsics the
 component needs, so a component that both imports an interface and exports a
 resource gets both.
+
+You do not need the `wasm` application started. When it runs, each core module
+is loaded through its module cache, so the same bytes compile once per node and
+are shared; when it does not, they are compiled inline, as `wasm:compile/1`
+does.
 """.
 -spec instantiate(binary(), #{{binary(), binary()} => function()}) ->
           {ok, instance()} | {error, term()}.
@@ -207,6 +212,10 @@ instantiate(Bin, Imports) ->
 As `instantiate/2`, passing `Limits` (memory and fuel bounds) to the inner core
 instance, so a component honours the same limits a core module does. This is what
 the worker uses per request.
+
+`loader` picks how core modules are built: `load` through the module cache
+(rate-limited, and it needs the `wasm` application), or `compile` inline. Left
+out, it is `load` while the cache runs and `compile` when it does not.
 """.
 -spec instantiate(binary(), #{{binary(), binary()} => function()}, map()) ->
           {ok, instance()} | {error, term()}.

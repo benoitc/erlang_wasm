@@ -34,7 +34,8 @@ all() ->
      the_host_drop_runs_the_destructor_once,
      a_guest_drop_runs_the_destructor,
      destroy_discards_live_handles,
-     handles_stay_small_across_composed_components].
+     handles_stay_small_across_composed_components,
+     a_component_runs_without_the_application].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -218,6 +219,22 @@ handles_stay_small_across_composed_components(_Config) ->
             end;
         {error, enoent} ->
             {skip, "composed_counter fixture not built"}
+    end.
+
+%% With the `wasm` application stopped there is no module cache; the component
+%% is compiled inline, as `wasm:compile/1` is, and runs. Was
+%% `{error, cache_unavailable}`.
+a_component_runs_without_the_application(Config) ->
+    ok = application:stop(wasm),
+    try
+        ?assertEqual(undefined, whereis(wasm_module_cache)),
+        {ok, C} = wasm_component:instantiate(?config(component, Config)),
+        ?assertEqual({ok, 1}, make(C, 5)),
+        ?assertEqual({ok, 5}, get(C, 1)),
+        ok = drop(C, 1),
+        ok = wasm_component:destroy(C)
+    after
+        {ok, _} = application:ensure_all_started(wasm)
     end.
 
 %%% -------------------------------------------------------------- helpers ---

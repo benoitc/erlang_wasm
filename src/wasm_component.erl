@@ -210,12 +210,16 @@ the worker uses per request.
 """.
 -spec instantiate(binary(), #{{binary(), binary()} => function()}, map()) ->
           {ok, instance()} | {error, term()}.
-instantiate(Bin, Imports, Opts) ->
+instantiate(Bin, Imports, Opts0) ->
     %% `loader => compile` builds an inline module with `wasm:compile` instead of
     %% `wasm:load`, whose node cache is rate-limited to 50/s; a runner that
     %% instantiates many single-use components (the wasi-testsuite) needs it to
-    %% avoid `load_rate_exceeded`. An unresolved import is a link-time error, never a
-    %% trap-if-called placeholder. Everything else in Opts is instance limits.
+    %% avoid `load_rate_exceeded`. With no loader given, the cache is used while
+    %% it runs and the module is compiled inline when it does not (the `wasm`
+    %% application is not started), as `wasm:compile/1` needs no application. An
+    %% unresolved import is a link-time error, never a trap-if-called
+    %% placeholder. Everything else in Opts is instance limits.
+    Opts = Opts0#{loader => maps:get(loader, Opts0, default_loader())},
     Limits = maps:without([loader, resource_closer, resource_predrop,
                            resource_limit], Opts),
     %% Cap the live host resources for this run, if the caller set one.
@@ -232,6 +236,13 @@ instantiate(Bin, Imports, Opts) ->
                   E
           end
       end).
+
+%% The node module cache when it runs, inline compilation otherwise.
+default_loader() ->
+    case whereis(wasm_module_cache) of
+        undefined -> compile;
+        _Pid      -> load
+    end.
 
 instantiate_decoded(#{composed := true} = Decoded, Imports, Opts, _Limits) ->
     instantiate_composed(Decoded, Imports, Opts);

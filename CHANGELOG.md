@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
 
 A restore shares its snapshot's image instead of copying it, script requests
 are faster by default, a worker can run compiled with one option, a loaded

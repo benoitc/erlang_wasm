@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.9.1
+
+Component resource handles the host holds are checked, and components run
+without the `wasm` application. One breaking change: a host-held handle is now
+an index, not the guest's representation.
 
 - **Breaking: a resource handle the host holds is a small index.**
   `wasm_component:call/4` hands back an `own` as an index into the instance's

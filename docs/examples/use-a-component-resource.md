@@ -23,11 +23,14 @@ method. The export names are interface-qualified, so bind a small prefix:
 {ok, CounterBytes} = file:read_file("test/fixtures/component/counter.component.wasm"),
 {ok, C} = wasm_component:instantiate(CounterBytes),
 Q = fun(Name) -> <<"example:counter/counters#", Name/binary>> end,
-{ok, H} = wasm_component:call(C, Q(~"make-counter"), {[u32], u32}, [5]).
+{ok, H} = wasm_component:call(C, Q(~"make-counter"), {[u32], u32}, [5]),
+H.
+%% => 1
 ```
 
-`H` is the handle. Increment the counter by 3 and read it back; the handle is live,
-so both calls succeed:
+`H` is the handle: an index into the instance's handle table, not anything
+inside the guest. Increment the counter by 3 and read it back; the handle is
+live, so both calls succeed:
 
 ```erlang
 {ok, 8} = wasm_component:call(C, Q(~"[method]counter.increment"), {[u32, u32], u32}, [H, 3]),
@@ -35,26 +38,38 @@ wasm_component:call(C, Q(~"[method]counter.get"), {[u32], u32}, [H]).
 %% => {ok, 8}
 ```
 
-Drop the handle to free the resource, which runs its destructor. The handle is now
-spent; keep it only as long as you need it:
+Drop the handle to free the resource, which runs its destructor:
 
 ```erlang
-ok = wasm_component:drop_resource(C, Q(~"[dtor]counter"), H),
+wasm_component:drop_resource(C, Q(~"[dtor]counter"), H).
+%% => ok
+```
+
+The handle is now spent. Dropping it again, or calling a method with it, is
+refused before the guest runs, as a trap you can match on:
+
+```erlang
+{error, #{class := trap, kind := resource_not_live}} =
+    wasm_component:call(C, Q(~"[method]counter.get"), {[u32], u32}, [H]),
+wasm_component:drop_resource(C, Q(~"[dtor]counter"), H).
+%% => {error, #{class := trap, kind := resource_not_live, ctx := #{handle := 1, operation := drop}}}
+```
+
+A handle of one resource type passed where another is expected answers
+`resource_wrong_type` the same way. Destroy the instance when you are done:
+
+```erlang
 wasm_component:destroy(C).
 %% => ok
 ```
 
-The handle table is per instance and checked: dropping a handle a second time, or
-reading one after it was dropped, is a trap, not a silent no-op, and a handle of
-one resource type passed where another is expected traps too.
-
 ## A resource across composed components
 
 `composed_counter` is two components wired together with `wac`: one defines the
-`counter` resource, the other uses it. Calling `run` creates a counter in the first
-and increments it from the second, so the handle crosses the component boundary.
-The resource is live in one component at a time; using one that was handed away
-would trap.
+`counter` resource, the other uses it. Calling `run` creates a counter in the
+first and increments it from the second, so the resource crosses the component
+boundary. Each component has its own handle table: the second gets a handle of
+its own, and dropping it runs the destructor in the first.
 
 ```erlang
 {ok, Composed} = file:read_file("test/fixtures/component/composed_counter.component.wasm"),
@@ -68,10 +83,11 @@ wasm_component:destroy(CC).
 %% => ok
 ```
 
-**What happened.** The first component owned a resource and handed you a handle to
-it; you called methods with the handle and dropped it, and the runtime ran the
-destructor and freed the handle. The composed pair moved a handle from one
-component to another, and each instance kept its own handle table, so a dropped,
-reused or wrong-type handle is caught rather than quietly accepted.
+**What happened.** The first component owned a resource and handed you a handle
+to it, an index into its handle table. You called methods with the handle and
+dropped it; the runtime ran the destructor, and refused the spent handle after
+that. The composed pair passed a resource from one component to another, each
+with its own handle table, so a dropped, reused or wrong-type handle is caught
+rather than quietly accepted.
 
 **Next:** [Components](../components.md).

@@ -13,13 +13,14 @@ Erlang terms into the guest, calls the export, lifts the result and runs the
 post-return.
 
 **Resources.** A component that exports a resource imports the resource
-intrinsics `[resource-new]`/`[resource-drop]` from its own canon, and the host
-must provide them: they are the handle table. This module keeps a per-process
-table (the instance is process-scoped, and the intrinsics run in that process),
-minting a handle for each resource the guest exports and tracking which are live.
-The guest here uses identity handles (it imports no `[resource-rep]`), so a handle
-is its representation; a resource value crosses the Canonical ABI as a `u32`
-handle. `drop_resource/3` runs the guest destructor for a handle the host owns.
+built-ins `[resource-new]`/`[resource-rep]`/`[resource-drop]` from its own
+canon, and the host provides them: they are the instance's handle table
+(`wasm_resources`). A handle is a small index the table mints, not the guest's
+representation. `call/4` checks and translates handles by the export's real
+signature, read from the component's type space: an `own` result passes to the
+host, a `borrow` argument is lent and the guest gets the representation, an
+`own` argument passes back to the guest. `drop_resource/3` checks a host-held
+handle and runs the guest destructor with its representation.
 
 A component whose entry core imports only WASI (every program we build) stays on
 this single-core path. When the entry core imports from *another* core,
@@ -47,7 +48,11 @@ lower/lift, and the async Canonical ABI.
 -opaque instance() :: #{core := wasm:instance(), exports := [binary()],
                         cores := [wasm:instance()],
                         export_map => #{binary() => binary()},
-                        str_enc => #{binary() => utf16 | latin1_utf16}}
+                        str_enc => #{binary() => utf16 | latin1_utf16},
+                        res_id => wasm_resources:id(),
+                        res_sigs => #{binary() => wasm_component_types:sig()},
+                        res_defined => [non_neg_integer()],
+                        res_dtors => #{binary() => non_neg_integer()}}
                      | #{composed := true, exports := [binary()],
                          insts := #{non_neg_integer() =>
                                         {instance, instance()} |
@@ -65,6 +70,8 @@ lower/lift, and the async Canonical ABI.
 %% creates and never drops (forgets) them cannot exhaust host memory. `infinity`
 %% (the default) is no cap; a caller sets it through `instantiate` opts.
 -define(HOST_LIMIT, {?MODULE, host_limit}).
+%% The handles a call has lent to the guest as borrows, given back when it ends.
+-define(LOANS, {?MODULE, loans}).
 
 %% Max total callback turns `call_async` drives before giving up (a runaway guard, not
 %% a progress check): a legitimate stream takes one turn per read round.
@@ -190,6 +197,11 @@ Instantiate a component, providing host functions for the interfaces it imports.
 the host supplies a WASI 0.2 world. It is merged over the resource intrinsics the
 component needs, so a component that both imports an interface and exports a
 resource gets both.
+
+You do not need the `wasm` application started. When it runs, each core module
+is loaded through its module cache, so the same bytes compile once per node and
+are shared; when it does not, they are compiled inline, as `wasm:compile/1`
+does.
 """.
 -spec instantiate(binary(), #{{binary(), binary()} => function()}) ->
           {ok, instance()} | {error, term()}.
@@ -200,15 +212,23 @@ instantiate(Bin, Imports) ->
 As `instantiate/2`, passing `Limits` (memory and fuel bounds) to the inner core
 instance, so a component honours the same limits a core module does. This is what
 the worker uses per request.
+
+`loader` picks how core modules are built: `load` through the module cache
+(rate-limited, and it needs the `wasm` application), or `compile` inline. Left
+out, it is `load` while the cache runs and `compile` when it does not.
 """.
 -spec instantiate(binary(), #{{binary(), binary()} => function()}, map()) ->
           {ok, instance()} | {error, term()}.
-instantiate(Bin, Imports, Opts) ->
+instantiate(Bin, Imports, Opts0) ->
     %% `loader => compile` builds an inline module with `wasm:compile` instead of
     %% `wasm:load`, whose node cache is rate-limited to 50/s; a runner that
     %% instantiates many single-use components (the wasi-testsuite) needs it to
-    %% avoid `load_rate_exceeded`. An unresolved import is a link-time error, never a
-    %% trap-if-called placeholder. Everything else in Opts is instance limits.
+    %% avoid `load_rate_exceeded`. With no loader given, the cache is used while
+    %% it runs and the module is compiled inline when it does not (the `wasm`
+    %% application is not started), as `wasm:compile/1` needs no application. An
+    %% unresolved import is a link-time error, never a trap-if-called
+    %% placeholder. Everything else in Opts is instance limits.
+    Opts = Opts0#{loader => maps:get(loader, Opts0, default_loader())},
     Limits = maps:without([loader, resource_closer, resource_predrop,
                            resource_limit], Opts),
     %% Cap the live host resources for this run, if the caller set one.
@@ -226,6 +246,13 @@ instantiate(Bin, Imports, Opts) ->
           end
       end).
 
+%% The node module cache when it runs, inline compilation otherwise.
+default_loader() ->
+    case whereis(wasm_module_cache) of
+        undefined -> compile;
+        _Pid      -> load
+    end.
+
 instantiate_decoded(#{composed := true} = Decoded, Imports, Opts, _Limits) ->
     instantiate_composed(Decoded, Imports, Opts);
 instantiate_decoded(#{core := Core, sec := Sec} = Decoded, Imports, Opts, Limits) ->
@@ -240,8 +267,14 @@ instantiate_decoded(#{core := Core, sec := Sec} = Decoded, Imports, Opts, Limits
 instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
                   Imports, Opts, Limits) ->
     Loader = maps:get(loader, Opts, load),
+    EntryIdx = maps:get(entry_idx, Decoded, 0),
+    %% What the resource built-ins and the host boundary check handles by: each
+    %% export's real signature, the types this component defines, and the type
+    %% of each built-in the entry core imports.
+    Res = wasm_component_link:resource_info(Sec, EntryIdx),
     EntryImports = wasm_component_link:core_imports(Core),
-    Host = resolve_imports(EntryImports, Imports, resource_imports(EntryImports)),
+    Host = resolve_imports(EntryImports, Imports,
+                           resource_imports(EntryImports, Res)),
     %% The export map lets `call/4` reach a core function whose name differs from the
     %% component export name; where they coincide it is the identity and the same-name
     %% fallback in `call/4` covers exports it does not resolve.
@@ -253,29 +286,37 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% rather than the largest by size. A lone core, or one whose exports all resolve
     %% on the entry, stays on the single-core path unchanged.
     Cores = maps:get(cores, Decoded, [Core]),
-    EntryIdx = maps:get(entry_idx, Decoded, 0),
     Leftovers = [K || K <- EntryImports, not maps:is_key(K, Host)],
     UseSimple = Leftovers =:= []
         andalso (length(Cores) =:= 1
                  orelse wasm_component_link:exports_resolve_on_entry(Sec, EntryIdx)),
-    Result = case UseSimple of
-                 true  -> start(Loader, Core, Host, Limits, Exports, []);
-                 false -> link_in(Decoded, Imports, Opts)
-             end,
+    %% This instance's own resource handle table (see wasm_resources). It is
+    %% current while the cores are built, so a start function that mints a
+    %% handle mints it here; guest calls run with it current, and destroy frees
+    %% it.
+    ResId = wasm_resources:new_instance(),
+    Result = wasm_resources:with_instance(
+               ResId,
+               fun() ->
+                   case UseSimple of
+                       true  -> start(Loader, Core, Host, Limits, Exports, []);
+                       false -> link_in(Decoded, Imports, Opts)
+                   end
+               end),
     %% Each export's string encoding (only the non-UTF-8 ones are recorded) and its
     %% declared realloc/post-return, so `call/4` marshals strings and allocates/cleans up
     %% the way the component's canon lift asks, rather than by name.
     StrEnc = wasm_component_link:export_encodings(Sec),
     Bindings = wasm_component_link:export_bindings(Sec),
-    with_export_map(Result, ExportMap, StrEnc, Bindings).
+    with_export_map(Result, ExportMap, StrEnc, Bindings, ResId, Res).
 
-with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings) ->
+with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings, ResId, Res) ->
+    #{sigs := Sigs, defined := Defined, dtors := Dtors} = Res,
     {ok, Inst#{export_map => ExportMap, str_enc => StrEnc,
-               export_bindings => Bindings,
-               %% This instance's own resource handle table (see wasm_resources);
-               %% guest calls run with it current, and destroy frees it.
-               res_id => wasm_resources:new_instance()}};
-with_export_map(Other, _ExportMap, _StrEnc, _Bindings) ->
+               export_bindings => Bindings, res_id => ResId,
+               res_sigs => Sigs, res_defined => Defined, res_dtors => Dtors}};
+with_export_map(Other, _ExportMap, _StrEnc, _Bindings, ResId, _Res) ->
+    wasm_resources:destroy_instance(ResId),
     Other.
 
 %% The core function that implements a component export. A core export of the same
@@ -294,7 +335,7 @@ resolve_export(#{core := Inst} = I, Export) ->
 %% to the host set, and returns the entry instance plus every built core.
 link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts) ->
     Resolve = fun(Imps) ->
-                  resolve_imports(Imps, Imports, resource_imports(Imps))
+                  resolve_imports(Imps, Imports, resource_imports(Imps, #{}))
               end,
     LinkOpts = Opts#{drop_fun => drop_fun(Opts),
                      resource_dtors => wasm_component_types:resource_dtors(Sec)},
@@ -408,63 +449,89 @@ bridge_imports(Args, Bytes, Insts) ->
 
 %% One cross-component call, as a host function the consumer's core imports. This
 %% function runs in the consumer's instance context; `call/4` switches to the
-%% provider for the call and back. Resource handles move between the two instances'
-%% tables around the call: a `borrow` argument is lent to the provider for the call
-%% and reclaimed after, an `own` argument is moved into the provider, and an `own`
-%% result is moved out of the provider into the consumer. So a resource is live in
-%% exactly one instance at a time and using it after it was transferred traps.
+%% provider for the call and back. Each instance keeps its own handle table, so
+%% a handle is translated as it crosses. An own the provider returns stays in
+%% the provider's table, held from outside it, and the consumer gets a handle of
+%% its own that stands for it. Passing that handle back (a borrow, or an own)
+%% gives the provider its own handle, which `call/4` checks against the
+%% provider's table like any host-held one. The consumer dropping it releases it
+%% in the provider and runs the provider's destructor. So a resource is usable
+%% only by the side that holds it, and using it after it was handed away or
+%% dropped traps.
 bridge(Provider, FuncName, {Params, Result} = Sig) ->
     ProviderId = maps:get(res_id, Provider, undefined),
     import_fun(Sig,
                fun(Terms) ->
-                   Lent = lend_to_provider(Params, Terms, ProviderId),
-                   case call(Provider, FuncName, Sig, Terms) of
+                   Args = to_provider(Params, Terms, ProviderId),
+                   case call(Provider, FuncName, Sig, Args) of
                        {ok, Value} ->
-                           reclaim_borrows(Lent, ProviderId),
-                           adopt_result(Result, Value, ProviderId);
+                           from_provider(Result, Value, Provider, ProviderId);
                        {error, _} = E ->
-                           reclaim_borrows(Lent, ProviderId),
                            throw({wasm_bridge_failed, FuncName, E})
                    end
                end).
 
-%% Make the handle arguments reachable in the provider for the duration of the
-%% call: a borrow becomes a scoped entry in the provider's table (returned so it
-%% can be reclaimed after), and an own is moved out of the consumer into the
-%% provider. Non-handle arguments are left alone.
-lend_to_provider(_Params, _Terms, undefined) ->
-    [];
-lend_to_provider(Params, Terms, ProviderId) ->
-    lists:foldl(
-      fun({{borrow, Rt}, Rep}, Acc) when is_integer(Rep) ->
-              wasm_resources:add(ProviderId, Rep, Rt, borrow),
-              [Rep | Acc];
-         ({{own, Rt}, Rep}, Acc) when is_integer(Rep) ->
-              _ = wasm_resources:untrack(Rep),
-              wasm_resources:add(ProviderId, Rep, Rt, own),
-              Acc;
-         (_Other, Acc) ->
-              Acc
-      end, [], lists:zip(Params, Terms)).
+%% A consumer handle that stands for one of this provider's resources becomes
+%% the provider's handle; an own leaves the consumer's table as it goes.
+%% Anything else passes through.
+to_provider(_Params, Terms, undefined) ->
+    Terms;
+to_provider(Params, Terms, ProviderId) when length(Params) =:= length(Terms) ->
+    Fun = fun(Kind, _Rt, H) ->
+              case wasm_resources:lookup(H) of
+                  {ok, {imported, {remote, ProviderId, Hp, _Release}}} ->
+                      ok = moved(Kind, H),
+                      Hp;
+                  _ ->
+                      H
+              end
+          end,
+    [walk(P, T, Fun) || {P, T} <- lists:zip(Params, Terms)];
+to_provider(_Params, Terms, _ProviderId) ->
+    Terms.
 
-reclaim_borrows(_Lent, undefined) ->
-    ok;
-reclaim_borrows(Lent, ProviderId) ->
-    lists:foreach(fun(Rep) -> _ = wasm_resources:take(ProviderId, Rep) end, Lent),
-    ok.
+%% An own goes with the call: the consumer no longer holds it. A borrow stays.
+moved(own, H)     -> wasm_resources:take(H);
+moved(borrow, _H) -> ok.
 
-%% A cross-component call that returns an `own<T>` transfers the resource to the
-%% consumer: take it out of the provider's table (so the provider can no longer use
-%% it) and record it live in the consumer's. Any other result shape passes through.
-adopt_result({own, Rt}, Handle, ProviderId) when is_integer(Handle) ->
-    _ = case ProviderId of
-            undefined -> ok;
-            _         -> wasm_resources:take(ProviderId, Handle)
-        end,
-    wasm_resources:track(Handle, Rt),
-    Handle;
-adopt_result(_Result, Value, _ProviderId) ->
-    Value.
+%% An own the provider returned, held there from outside, gets a consumer handle
+%% that stands for it.
+from_provider(none, Value, _Provider, _ProviderId) ->
+    Value;
+from_provider(_Result, Value, _Provider, undefined) ->
+    Value;
+from_provider(Result, Value, Provider, ProviderId) ->
+    Fun = fun(own, _Rt, Hp) ->
+                  case wasm_resources:host_lookup(ProviderId, Hp) of
+                      {ok, _} ->
+                          Release = fun() -> release(Provider, Hp) end,
+                          wasm_resources:new(imported,
+                                             {remote, ProviderId, Hp, Release});
+                      error ->
+                          Hp
+                  end;
+             (borrow, _Rt, H) ->
+                  H
+          end,
+    walk(Result, Value, Fun).
+
+%% The consumer dropped its handle: drop the provider's, running the provider's
+%% destructor for it when one is known. Never raises into the consumer's drop.
+release(#{res_id := Id} = Provider, Hp) ->
+    Dtors = maps:get(res_dtors, Provider, #{}),
+    case wasm_resources:host_lookup(Id, Hp) of
+        {ok, {Rt, _Rep}} ->
+            case [D || {D, T} <- maps:to_list(Dtors), T =:= Rt] of
+                [Dtor | _] ->
+                    _ = drop_resource(Provider, Dtor, Hp);
+                [] ->
+                    _ = wasm_error:capture(
+                          fun() -> wasm_resources:host_drop(Id, Rt, Hp) end)
+            end,
+            ok;
+        error ->
+            ok
+    end.
 
 %% The drop function `canon resource.drop` runs, returning `ok` or `{trap, Reason}`.
 %% A caller that owns OS resources supplies `resource_closer` (the same closer
@@ -510,6 +577,11 @@ Destroy a component instance, freeing every core it built and sweeping the host
 resource tables. A resource may own an OS handle (a file descriptor, a socket)
 that GC does not reclaim, so `destroy/2` takes a closer the host layer supplies to
 close each one; `destroy/1` closes nothing, for pure components with no OS state.
+
+The instance's resource handle table goes with it: every handle still live is
+discarded and no guest destructor runs, since the guest memory the
+representations point into is freed with the instance. A handle used afterwards
+answers what the destroyed instance answers.
 
 The host resource tables are per-process, not per-instance, so `destroy` sweeps
 every live host resource in the calling process. The contract is therefore one
@@ -615,26 +687,156 @@ do_call_1(I, Export, {Params, Result}, Args) ->
     %% export map / same-name fallback decide.
     {Inst, CoreName} = target_for(I, Export),
     Binding = maps:get(Export, maps:get(export_bindings, I, #{}), #{}),
+    %% Resource handles cross by the export's real signature: checked against
+    %% the instance's table before the guest runs, the guest given the
+    %% representation for a borrow and the handle for an own, and an own result
+    %% handed to the host.
+    HSig = handle_sig(I, Export, CoreName, {Params, Result}),
     %% Allocate the arguments through the allocator the lift declares (not `cabi_realloc`
     %% by name); `undefined` keeps the default `cabi_realloc` path for a lift that names
     %% none. The override only affects the by-memory lowering `wasm_canon:realloc` reads.
     Realloc = realloc_fun(Inst, maps:get(realloc, Binding, none)),
-    wasm_canon:with_realloc(
-      Realloc,
+    with_loans(
+      I,
       fun() ->
-          CoreArgs = wasm_canon:lower_params(Inst, Params, Args),
-          case wasm:call(Inst, CoreName, CoreArgs) of
-              {ok, CoreResults} ->
-                  Value = lift_call_result(Inst, Result, CoreResults),
-                  %% Run the declared post-return; a trap in cleanup fails the call
-                  %% rather than being swallowed.
-                  ok = run_post_return(Inst, maps:get(post_return, Binding, none),
-                                       CoreResults),
-                  {ok, Value};
-              {error, _} = E ->
-                  E
-          end
+          Args1 = lower_handles(I, HSig, Args),
+          wasm_canon:with_realloc(
+            Realloc,
+            fun() ->
+                CoreArgs = wasm_canon:lower_params(Inst, Params, Args1),
+                case wasm:call(Inst, CoreName, CoreArgs) of
+                    {ok, CoreResults} ->
+                        Value = lift_call_result(Inst, Result, CoreResults),
+                        %% Run the declared post-return; a trap in cleanup fails
+                        %% the call rather than being swallowed.
+                        PostReturn = maps:get(post_return, Binding, none),
+                        ok = run_post_return(Inst, PostReturn, CoreResults),
+                        {ok, lift_handles(I, HSig, Value)};
+                    {error, _} = E ->
+                        E
+                end
+            end)
       end).
+
+%%% ------------------------------------------------------- host boundary ---
+
+%% The signature a call's handles cross by. The export's real signature, from
+%% the component's type space, is authoritative, so `{[u32], u32}` for a method
+%% is checked exactly like `{[{borrow, 0}], u32}`. Only when the type space does
+%% not give it are the caller's descriptors used, and then only for a component
+%% that defines a resource, typed loosely (liveness, not type).
+handle_sig(#{res_id := Id} = I, Export, CoreName, CallerSig) ->
+    case wasm_resources:exists(Id) of
+        true  -> handle_sig_1(I, Export, CoreName, CallerSig);
+        %% A destroyed instance (or one this process does not own) has no table;
+        %% the call answers what such an instance answers.
+        false -> none
+    end;
+handle_sig(_I, _Export, _CoreName, _CallerSig) ->
+    none.
+
+handle_sig_1(I, Export, CoreName, CallerSig) ->
+    Sigs = maps:get(res_sigs, I, #{}),
+    Defined = maps:get(res_defined, I, []),
+    case maps:find(Export, Sigs) of
+        {ok, Sig} -> {strict, Sig, Defined};
+        error ->
+            case maps:find(CoreName, Sigs) of
+                {ok, Sig}                 -> {strict, Sig, Defined};
+                error when Defined =:= [] -> none;
+                error                     -> {loose, CallerSig, Defined}
+            end
+    end.
+
+%% Arguments from the host: an own passes from the host to the guest, which gets
+%% the handle; a borrow is lent for the call, and the guest gets the
+%% representation. A handle the host does not hold, or of another type, traps.
+lower_handles(_I, none, Args) ->
+    Args;
+lower_handles(#{res_id := Id}, {_Mode, {Params, _Res}, _Def} = HSig, Args)
+  when length(Params) =:= length(Args) ->
+    Fun = fun(own, Rt, H)    -> wasm_resources:host_give(Id, Rt, H);
+             (borrow, Rt, H) -> lend(Id, Rt, H)
+          end,
+    [walk(P, A, handle_fun(HSig, Fun)) || {P, A} <- lists:zip(Params, Args)];
+lower_handles(_I, _HSig, Args) ->
+    Args.
+
+%% A result to the host: an own the guest returns passes to the host.
+lift_handles(_I, none, Value) ->
+    Value;
+lift_handles(_I, {_Mode, {_Params, none}, _Defined}, Value) ->
+    Value;
+lift_handles(#{res_id := Id}, {_Mode, {_Params, Result}, _Def} = HSig, Value) ->
+    Fun = fun(own, Rt, H)     -> wasm_resources:host_receive(Id, Rt, H);
+             (borrow, _Rt, H) -> H
+          end,
+    walk(Result, Value, handle_fun(HSig, Fun));
+lift_handles(_I, _HSig, Value) ->
+    Value.
+
+%% Apply `Fun` to the handles of a type this component defines (strict), or to
+%% every handle untyped (loose); another component's handles pass through.
+handle_fun({strict, _Sig, Defined}, Fun) ->
+    fun(Kind, Rt, H) ->
+        case lists:member(Rt, Defined) of
+            true  -> Fun(Kind, Rt, H);
+            false -> H
+        end
+    end;
+handle_fun({loose, _Sig, _Defined}, Fun) ->
+    fun(Kind, _Rt, H) -> Fun(Kind, undefined, H) end.
+
+%% The loans a call takes are given back when it returns, traps or fails a check
+%% part way through lowering.
+with_loans(#{res_id := Id}, Fun) ->
+    Prev = get(?LOANS),
+    put(?LOANS, []),
+    try Fun()
+    after
+        Loans = get(?LOANS),
+        case Prev of
+            undefined -> erase(?LOANS);
+            _         -> put(?LOANS, Prev)
+        end,
+        lists:foreach(fun(H) -> wasm_resources:host_unlend(Id, H) end, Loans)
+    end;
+with_loans(_I, Fun) ->
+    Fun().
+
+lend(Id, Rt, H) ->
+    Rep = wasm_resources:host_lend(Id, Rt, H),
+    put(?LOANS, [H | get(?LOANS)]),
+    Rep.
+
+%% Walk a value by its descriptor, applying `Fun(own | borrow, Rt, Handle)` at
+%% each resource handle. A value whose shape does not match its descriptor is
+%% left alone (marshalling reports it).
+walk({own, Rt}, H, Fun) when is_integer(H) -> Fun(own, Rt, H);
+walk({borrow, Rt}, H, Fun) when is_integer(H) -> Fun(borrow, Rt, H);
+walk({option, D}, {some, V}, Fun) -> {some, walk(D, V, Fun)};
+walk({result, Ok, _Err}, {ok, V}, Fun) when Ok =/= none ->
+    {ok, walk(Ok, V, Fun)};
+walk({result, _Ok, Err}, {error, V}, Fun) when Err =/= none ->
+    {error, walk(Err, V, Fun)};
+walk({list, D}, L, Fun) when is_list(L) -> [walk(D, V, Fun) || V <- L];
+walk({tuple, Ds}, T, Fun) when is_tuple(T), tuple_size(T) =:= length(Ds) ->
+    Pairs = lists:zip(Ds, tuple_to_list(T)),
+    list_to_tuple([walk(D, V, Fun) || {D, V} <- Pairs]);
+walk({record, Fields}, M, Fun) when is_map(M) ->
+    lists:foldl(fun({Name, D}, Acc) ->
+                    case maps:find(Name, Acc) of
+                        {ok, V} -> Acc#{Name => walk(D, V, Fun)};
+                        error   -> Acc
+                    end
+                end, M, Fields);
+walk({variant, Cases}, {Name, V}, Fun) ->
+    case lists:keyfind(Name, 1, Cases) of
+        {Name, D} when D =/= none -> {Name, walk(D, V, Fun)};
+        _                         -> {Name, V}
+    end;
+walk(_Desc, V, _Fun) ->
+    V.
 
 %% The instance and core-function name implementing a component export. The linker's
 %% declared-lift target wins when present (authoritative across cores sharing a
@@ -868,20 +1070,63 @@ lower_import_result(Inst, Result, Rest, Value) ->
     end.
 
 -doc """
-Run a resource's destructor for a handle the host owns.
+Drop a resource handle the host holds, running the resource's destructor.
 
-`Prefix` is the resource's interface-qualified name, e.g.
-`example:counter/counters#`; the destructor export is `<Prefix>[dtor]<Res>`.
+`DtorExport` is the destructor's export, the resource's interface-qualified
+prefix followed by `[dtor]<res>`, e.g. `example:counter/counters#[dtor]counter`.
+The handle must be live, held by the host, and of the type that destructor
+destroys; otherwise the answer is a `resource_not_live` or `resource_wrong_type`
+trap and the destructor is not called. On success the handle is removed from
+the instance's table, the destructor runs with the guest's representation, and
+its result is answered: `ok`, or the trap it raised.
 """.
--spec drop_resource(instance(), binary(), non_neg_integer()) -> ok.
-drop_resource(#{core := Inst} = I, DtorExport, Handle) ->
-    wasm_resources:with_instance(
-      maps:get(res_id, I, wasm_resources:new_instance()),
+-spec drop_resource(instance(), binary(), non_neg_integer()) ->
+          ok | {error, term()}.
+drop_resource(#{composed := true, insts := Insts}, DtorExport, Handle) ->
+    case [Sub || {instance, Sub} <- maps:values(Insts),
+                 provides(Sub, DtorExport)] of
+        [Sub | _] -> drop_resource(Sub, DtorExport, Handle);
+        []        -> {error, {unknown_export, DtorExport}}
+    end;
+drop_resource(#{core := _} = I, DtorExport, Handle) ->
+    wasm_error:capture(
       fun() ->
-          _ = wasm:call(Inst, DtorExport, [Handle]),
-          _ = wasm_resources:untrack(Handle),
-          ok
+          case provides(I, DtorExport) of
+              true  -> drop_checked(I, DtorExport, Handle);
+              false -> {error, {unknown_export, DtorExport}}
+          end
       end).
+
+drop_checked(#{res_id := Id} = I, DtorExport, Handle) ->
+    {Inst, CoreName} = target_for(I, DtorExport),
+    Rt = maps:get(DtorExport, maps:get(res_dtors, I, #{}), undefined),
+    case wasm_resources:exists(Id) of
+        true  -> drop_live(Id, Rt, Inst, CoreName, Handle);
+        %% No table: answer what the destroyed (or unowned) instance answers.
+        false -> run_dtor(Inst, CoreName, Handle)
+    end.
+
+drop_live(Id, Rt, Inst, CoreName, Handle) ->
+    wasm_resources:with_instance(
+      Id,
+      fun() ->
+          run_dtor(Inst, CoreName, wasm_resources:host_drop(Id, Rt, Handle))
+      end).
+
+run_dtor(Inst, CoreName, Rep) ->
+    case wasm:call(Inst, CoreName, [Rep]) of
+        {ok, _}        -> ok;
+        {error, _} = E -> E
+    end.
+
+%% Whether an instance has a core function for `Export`.
+provides(#{composed := true, insts := Insts}, Export) ->
+    lists:any(fun({instance, Sub}) -> provides(Sub, Export);
+                 (_Other)          -> false
+              end, maps:values(Insts));
+provides(#{core := _} = I, Export) ->
+    {Inst, CoreName} = target_for(I, Export),
+    maps:is_key(CoreName, wasm:exports(Inst)).
 
 %%% ------------------------------------------------------ import resolution ---
 
@@ -916,41 +1161,65 @@ strip_version(Id) ->
 
 %%% -------------------------------------------------------- resource table ---
 
-%% For each resource intrinsic the core module imports, a host function backed by
-%% the per-process handle table. `[resource-new]` mints a handle for a resource
-%% the guest exports (identity here: the handle is the representation) and tracks
-%% it live; `[resource-drop]` and `[resource-rep]` serve a guest that manages its
-%% own owns.
-resource_imports(Imports) ->
-    maps:from_list([{{Mod, Field}, intrinsic(Field)}
-                    || {Mod, Field} <- Imports, is_intrinsic(Field)]).
+%% For each resource built-in the core module imports, a host function backed by
+%% the instance's handle table (see wasm_resources). `[resource-new]` mints a
+%% handle for the representation the guest gives it, `[resource-rep]` answers
+%% the representation behind a live handle of its type, and `[resource-drop]`
+%% removes the handle and runs the destructor. `Res` gives each built-in's
+%% resource type, read from the graph; one it does not cover is checked for
+%% liveness only.
+resource_imports(Imports, Res) ->
+    Types = maps:get(intrinsics, Res, #{}),
+    maps:from_list([{Key, intrinsic(Key, maps:get(Key, Types, none))}
+                    || {_Mod, Field} = Key <- Imports, is_intrinsic(Field)]).
 
 is_intrinsic(Field) ->
     lists:any(fun(P) -> binary:match(Field, P) =/= nomatch end,
               [<<"[resource-new]">>, <<"[resource-drop]">>,
                <<"[resource-rep]">>]).
 
-intrinsic(Field) ->
+intrinsic({_Mod, Field} = Key, Typed) ->
+    Rt = case Typed of
+             {_Kind, T} -> T;
+             none       -> undefined
+         end,
     case intrinsic_kind(Field) of
-        new  -> fun(_Ctx, [Rep])    -> wasm_resources:track(Rep, undefined), {ok, [Rep]} end;
-        drop -> fun(_Ctx, [Handle]) -> intrinsic_drop(Handle) end;
-        rep  -> fun(_Ctx, [Handle]) -> intrinsic_rep(Handle) end
+        new  -> fun(_Ctx, [Rep]) -> {ok, [wasm_resources:new(Rt, Rep)]} end;
+        rep  -> fun(_Ctx, [H])   -> {ok, [wasm_resources:rep(Rt, H)]} end;
+        drop -> Dtor = dtor_name(Key, Rt),
+                fun(Ctx, [H]) -> intrinsic_drop(Ctx, Rt, Dtor, H) end
     end.
 
-%% A guest that manages its own owns: dropping or reading a handle that is not
-%% live in this instance (a double drop, a use-after-drop, a never-minted handle)
-%% traps rather than silently passing. Lenient when no instance is current.
-intrinsic_drop(Handle) ->
-    case wasm_resources:drop(Handle) of
-        {ok, _Kind} -> {ok, []};
-        error       -> wasm_error:trap(resource_not_live, #{handle => Handle, operation => drop})
+%% A guest drop of a handle it holds: a double drop, a use-after-drop or a
+%% never-minted handle traps. The destructor of a resource defined here runs
+%% with the representation; one that stands for another component's resource is
+%% released there.
+intrinsic_drop(Ctx, Rt, Dtor, H) ->
+    case wasm_resources:drop(Rt, H) of
+        remote -> {ok, []};
+        Rep    -> run_named_dtor(Ctx, Dtor, Rep), {ok, []}
     end.
 
-intrinsic_rep(Handle) ->
-    case wasm_resources:lookup(Handle) of
-        {ok, _Rt} -> {ok, [Handle]};
-        error     -> wasm_error:trap(resource_not_live, #{handle => Handle, operation => rep})
-    end.
+%% The destructor the toolchain exports for a resource the component defines:
+%% `[resource-drop]<res>` imported from `[export]<iface>` is destroyed by the
+%% core export `<iface>#[dtor]<res>`. `none` for a type defined elsewhere.
+dtor_name(_Key, undefined) ->
+    none;
+dtor_name({<<"[export]", Iface/binary>>, <<"[resource-drop]", Res/binary>>},
+          _Rt) ->
+    <<Iface/binary, "#[dtor]", Res/binary>>;
+dtor_name(_Key, _Rt) ->
+    none.
+
+run_named_dtor(_Ctx, none, _Rep) ->
+    ok;
+run_named_dtor(#{instance := Inst}, Dtor, Rep) ->
+    case maps:is_key(Dtor, wasm:exports(Inst)) of
+        true  -> _ = wasm:call(Inst, Dtor, [Rep]), ok;
+        false -> ok
+    end;
+run_named_dtor(_Ctx, _Dtor, _Rep) ->
+    ok.
 
 intrinsic_kind(Field) ->
     case binary:match(Field, <<"[resource-new]">>) of

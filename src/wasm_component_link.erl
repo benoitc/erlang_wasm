@@ -28,7 +28,8 @@ an atom.
 """.
 
 -export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
-         export_bindings/1, exports_resolve_on_entry/2, validate_lifts/2]).
+         export_bindings/1, exports_resolve_on_entry/2, validate_lifts/2,
+         resource_info/2]).
 
 -export_type([graph/0, item/0]).
 
@@ -63,6 +64,9 @@ an atom.
 -type async_mark() :: sync | {async, non_neg_integer() | none}.
 
 -type graph() :: [item()].
+
+%% A resource built-in an entry core imports, and the type it acts on.
+-type intrinsic() :: {new | drop | rep, non_neg_integer() | undefined}.
 
 -define(SEC_CORE_MODULE, 1).
 -define(SEC_CORE_INSTANCE, 2).
@@ -429,6 +433,148 @@ binding_of({RlIdx, PIdx}, CoreNames) ->
 name_of(none, _CoreNames) -> none;
 name_of(Idx, CoreNames)   -> maps:get(Idx, CoreNames, none).
 
+-doc """
+What the host boundary needs to check resource handles, read from the graph.
+
+- `sigs`: each lifted function's real signature, from the component's type
+  space, keyed by its component export name and by the core function name it
+  lifts (the name `call/4` reaches it by). A handle crosses the boundary by
+  these, whatever descriptor a caller passed.
+- `defined`: the resource types this component defines: those its type space
+  defines, and those a `canon resource.new` or `resource.rep` names. Only their
+  handles are this component's to check; an imported resource (a WASI stream)
+  passes through as before.
+- `intrinsics`: for each resource built-in the entry core imports,
+  `{new | drop | rep, Rt}`, with `Rt` `undefined` for a type defined elsewhere.
+- `dtors`: each destructor's export name (`<prefix>[dtor]<res>`) to its type,
+  from the constructors and methods named after the same resource.
+
+Tolerant: what it cannot read is left out, never raised.
+""".
+-spec resource_info(binary(), non_neg_integer()) ->
+          #{sigs := #{binary() => wasm_component_types:sig()},
+            defined := [non_neg_integer()],
+            intrinsics := #{{binary(), binary()} => intrinsic()},
+            dtors := #{binary() => non_neg_integer()}}.
+resource_info(Sec, EntryModIdx) ->
+    Empty = #{sigs => #{}, defined => [], intrinsics => #{}, dtors => #{}},
+    try parse(Sec) of
+        {ok, Graph} ->
+            Types = wasm_component_types:type_space(Sec),
+            Defined = lists:usort(
+                        [Rt || {canon_resource, K, Rt} <- Graph, K =/= drop] ++
+                        [Rt || {Rt, {resource, _}} <- maps:to_list(Types)]),
+            Sigs = lift_sigs(Graph, Types),
+            #{sigs => Sigs, defined => Defined,
+              intrinsics => intrinsic_types(Graph, EntryModIdx, Defined),
+              dtors => dtor_types(Sigs, Defined)};
+        {error, _} ->
+            Empty
+    catch
+        _:_ -> Empty
+    end.
+
+%% Each lift's resolved signature under its export name and its core name.
+lift_sigs(Graph, Types) ->
+    {CompFuncs, CoreNames} = index_spaces(Graph),
+    Fts = maps:from_list(lift_types(Graph)),
+    ByCore = [{CoreName, Sig}
+              || {PF, {lift, CFI}} <- maps:to_list(CompFuncs),
+                 CoreName <- [maps:get(CFI, CoreNames, undefined)],
+                 is_binary(CoreName),
+                 {ok, Sig} <- [wasm_component_types:func_sig(
+                                 maps:get(PF, Fts), Types)]],
+    ByExport = [{Name, Sig}
+                || {comp_export, Name, 1, Idx} <- Graph,
+                   maps:is_key(Idx, Fts),
+                   {ok, Sig} <- [wasm_component_types:func_sig(
+                                   maps:get(Idx, Fts), Types)]],
+    maps:from_list(ByCore ++ ByExport).
+
+%% Component-func index -> the function type its lift declares.
+lift_types(Graph) ->
+    {_PF, Acc} = lists:foldl(
+                   fun({comp_import_func, _}, {PF, A})   -> {PF + 1, A};
+                      ({comp_func_alias, _, _}, {PF, A}) -> {PF + 1, A};
+                      ({canon_lift, _, _, _, _, _, Ft}, {PF, A}) ->
+                           {PF + 1, [{PF, Ft} | A]};
+                      (_Other, Acc0) -> Acc0
+                   end, {0, []}, Graph),
+    Acc.
+
+%% The resource built-ins the entry core imports: the entry module's instantiate
+%% args name a core instance per import namespace, whose exports name core
+%% functions, some of which are `canon resource.*`.
+intrinsic_types(Graph, EntryModIdx, Defined) ->
+    {Canon, Insts} = core_spaces(Graph),
+    case [Args || {core_instance, {instantiate, M, Args}} <- Graph,
+                  M =:= EntryModIdx] of
+        [Args | _] ->
+            maps:from_list(
+              [{{NS, Name}, {Kind, intrinsic_rt(Kind, Rt, Defined)}}
+               || {NS, InstIdx} <- Args,
+                  {exports, Entries} <- [maps:get(InstIdx, Insts, none)],
+                  {Name, func, CFI} <- Entries,
+                  {Kind, Rt} <- [maps:get(CFI, Canon, none)]]);
+        [] ->
+            #{}
+    end.
+
+%% `new` and `rep` always name a type defined here; a `drop` may name an
+%% imported one, whose handles this component's table does not type.
+intrinsic_rt(drop, Rt, Defined) ->
+    case lists:member(Rt, Defined) of
+        true  -> Rt;
+        false -> undefined
+    end;
+intrinsic_rt(_Kind, Rt, _Defined) ->
+    Rt.
+
+%% The core-func index space's resource built-ins, and the core-instance space.
+core_spaces(Graph) ->
+    {_CF, Canon, _CI, Insts} =
+        lists:foldl(fun core_space_step/2, {0, #{}, 0, #{}}, Graph),
+    {Canon, Insts}.
+
+core_space_step({canon_resource, Kind, Rt}, {CF, Canon, CI, Insts}) ->
+    {CF + 1, Canon#{CF => {Kind, Rt}}, CI, Insts};
+core_space_step({canon_lower, _, _, _, _}, {CF, Canon, CI, Insts}) ->
+    {CF + 1, Canon, CI, Insts};
+core_space_step({canon_async, _, _}, {CF, Canon, CI, Insts}) ->
+    {CF + 1, Canon, CI, Insts};
+core_space_step({core_alias, func, _, _}, {CF, Canon, CI, Insts}) ->
+    {CF + 1, Canon, CI, Insts};
+core_space_step({core_instance, Inst}, {CF, Canon, CI, Insts}) ->
+    {CF, Canon, CI + 1, Insts#{CI => Inst}};
+core_space_step(_Other, Acc) ->
+    Acc.
+
+%% `<prefix>[dtor]<res>` for every resource a constructor or method names,
+%% mapped to the defined type its handle has in that function's signature.
+dtor_types(Sigs, Defined) ->
+    maps:from_list(
+      [{<<Prefix/binary, "[dtor]", Res/binary>>, Rt}
+       || {Name, Sig} <- maps:to_list(Sigs),
+          {Prefix, Res, Rt} <- [named_resource(Name, Sig)],
+          lists:member(Rt, Defined)]).
+
+named_resource(Name, {Params, Result}) ->
+    case binary:split(Name, [<<"[constructor]">>, <<"[method]">>]) of
+        [Prefix, Rest] ->
+            case {Rest, Params, Result} of
+                {_, _, {own, Rt}} when binary_part(Name, byte_size(Prefix), 13)
+                                       =:= <<"[constructor]">> ->
+                    {Prefix, Rest, Rt};
+                {_, [{borrow, Rt} | _], _} ->
+                    [Res | _] = binary:split(Rest, <<".">>),
+                    {Prefix, Res, Rt};
+                _ ->
+                    none
+            end;
+        _ ->
+            none
+    end.
+
 %% Fold the graph into the component-func index space (index -> what implements it)
 %% and the core-func index space (index -> the core export name it aliases), in the
 %% same order `step/2` assigns them.
@@ -629,29 +775,31 @@ step({canon_async, Which, Meta}, S) ->
     %% `wasm_async` runtime (a task is a BEAM process, a wait a selective receive).
     {ok, bump(S, n_cf, core_funcs, wasm_async:builtin(Which, Meta))};
 step({canon_resource, drop, Rt}, S) ->
-    %% `canon resource.drop` runs the drop function the caller supplied (which closes
-    %% a host resource and forgets its handle), so a guest that drops a socket or file
-    %% frees it at once instead of leaking until the instance is destroyed. With no
-    %% drop function it stays a no-op (the destroy-time sweep still frees everything).
-    %% For a resource this component DEFINES, the handle's liveness is checked first,
-    %% so dropping one twice or dropping a never-minted handle traps.
+    %% For a resource this component DEFINES, `canon resource.drop` removes the
+    %% handle from the instance's table (a double drop, or a handle never minted
+    %% or not the guest's, traps) and runs the type's destructor with the
+    %% representation. A handle of a type defined elsewhere (a WASI stream or
+    %% file) is not in this table: its drop runs the drop function the caller
+    %% supplied, which closes the host resource at once instead of leaking it
+    %% until destroy.
     Drop = maps:get(drop_fun, maps:get(opts, S), fun(_H) -> ok end),
     Defined = lists:member(Rt, maps:get(defined_rts, S, [])),
     %% The resource type's destructor (a core function already built, since it is
     %% aliased before the drop in graph order), run when an owned handle is dropped.
     Dtor = resource_dtor(Rt, S),
-    Fun = fun(_Ctx, [H]) -> resource_drop(Defined, Dtor, H, Drop) end,
+    Fun = fun(_Ctx, [H]) -> resource_drop(Defined, Rt, Dtor, H, Drop) end,
     {ok, bump(S, n_cf, core_funcs, Fun)};
 step({canon_resource, new, Rt}, S) ->
-    %% A defined resource: record the handle live in the current instance so a later
-    %% drop or rep can tell a live handle from a dropped or bogus one.
-    Fun = fun(_Ctx, [Rep]) -> wasm_resources:track(Rep, Rt), {ok, [Rep]} end,
+    %% A defined resource: mint a handle for the representation in the current
+    %% instance's table; the guest gets the handle, never its own
+    %% representation.
+    Fun = fun(_Ctx, [Rep]) -> {ok, [wasm_resources:new(Rt, Rep)]} end,
     {ok, bump(S, n_cf, core_funcs, Fun)};
 step({canon_resource, rep, Rt}, S) ->
     %% `canon resource.rep Rt` is always on a type this component defines, so the
-    %% handle must be live and of that type: a dropped or bogus handle, or one of a
-    %% different resource type, traps.
-    Fun = fun(_Ctx, [H]) -> resource_rep(Rt, H) end,
+    %% handle must be live, the guest's and of that type: a dropped or bogus
+    %% handle, or one of a different resource type, traps.
+    Fun = fun(_Ctx, [H]) -> {ok, [wasm_resources:rep(Rt, H)]} end,
     {ok, bump(S, n_cf, core_funcs, Fun)};
 step({core_alias, func, InstIdx, Name}, S) ->
     case export_val(S, InstIdx, Name) of
@@ -758,23 +906,17 @@ realloc_callable(Idx, S) ->
 missing(Key, _S) ->
     {error, {unresolved_import, Key}}.
 
-%% `canon resource.drop`. For a defined resource the handle must be live in the
-%% current instance; a double drop or a drop of a never-minted handle traps.
-%% Dropping a live one forgets it and runs the host drop (which closes a socket or
-%% file). A handle of a type this component does not define (an imported or host
-%% resource) is not tracked here, so it passes straight to the host drop as before.
-resource_drop(true, Dtor, H, Drop) ->
-    case wasm_resources:drop(H) of
-        error ->
-            wasm_error:trap(resource_not_live, #{handle => H, operation => drop});
-        {ok, own} ->
-            run_dtor(Dtor, H),
-            host_drop_result(Drop, H);
-        {ok, borrow} ->
-            %% Dropping a borrow ends the loan; it never runs the destructor.
-            host_drop_result(Drop, H)
+%% `canon resource.drop`. A defined resource's handle leaves the current
+%% instance's table (a trap if it is not the guest's to drop) and its destructor
+%% runs with the representation. A handle that stands for another component's
+%% resource is released there instead. A type defined elsewhere passes straight
+%% to the host drop, as before.
+resource_drop(true, Rt, Dtor, H, _Drop) ->
+    case wasm_resources:drop(Rt, H) of
+        remote -> {ok, []};
+        Rep    -> run_dtor(Dtor, Rep), {ok, []}
     end;
-resource_drop(false, _Dtor, H, Drop) ->
+resource_drop(false, _Rt, _Dtor, H, Drop) ->
     host_drop_result(Drop, H).
 
 host_drop_result(Drop, H) ->
@@ -796,27 +938,10 @@ resource_dtor(Rt, S) ->
 %% Run a resource's destructor with its representation. The destructor is a core
 %% function (an extern `{wasm_func, Fun, _}` or a bare host fun); its result is
 %% ignored, and a trap in it unwinds the drop.
-run_dtor(none, _H) -> ok;
-run_dtor({wasm_func, Fun, _Type}, H) -> _ = Fun(#{}, [H]), ok;
-run_dtor(Fun, H) when is_function(Fun, 2) -> _ = Fun(#{}, [H]), ok;
-run_dtor(_Other, _H) -> ok.
-
-%% `canon resource.rep`. For a defined resource the handle must be live, so reading
-%% the representation of a dropped or bogus handle traps; otherwise it passes
-%% through (the representation is the handle in the identity model).
-resource_rep(Expected, H) ->
-    case wasm_resources:lookup(H) of
-        error ->
-            wasm_error:trap(resource_not_live, #{handle => H, operation => rep});
-        {ok, undefined} ->
-            %% Tracked without a type (the identity-intrinsic path): liveness only.
-            {ok, [H]};
-        {ok, Expected} ->
-            {ok, [H]};
-        {ok, Actual} ->
-            wasm_error:trap(resource_wrong_type,
-                            #{handle => H, expected => Expected, actual => Actual})
-    end.
+run_dtor(none, _Rep) -> ok;
+run_dtor({wasm_func, Fun, _Type}, Rep) -> _ = Fun(#{}, [Rep]), ok;
+run_dtor(Fun, Rep) when is_function(Fun, 2) -> _ = Fun(#{}, [Rep]), ok;
+run_dtor(_Other, _Rep) -> ok.
 
 %% The value of core instance `InstIdx`'s export `Name`: an `extern()` from a real
 %% instance, or the stored value of a synthetic one.

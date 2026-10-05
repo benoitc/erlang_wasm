@@ -79,8 +79,10 @@ done
 # `composed` is a composed component (the shape `wac` produces): it defines a nested
 # component, instantiates it, and re-exports the instance's `run`, so the runtime must
 # instantiate the nested component and dispatch the outer export to it.
+# `tworesources` exports two resource types, `a` and `b`, in the toolchain's
+# shape, so a handle of one passed where the other is expected must trap.
 for name in twocore twocore_trap statecore renamedexport composed composedcall \
-            strutf16 strlatin1; do
+            strutf16 strlatin1 tworesources; do
   wat="$here/test/fixtures/component/$name/$name.wat"
   out="$here/test/fixtures/component/$name.component.wasm"
   wasm-tools parse "$wat" -o "$out"

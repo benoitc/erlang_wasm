@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking: a resource handle the host holds is a small index.**
+  `wasm_component:call/4` hands back an `own` as an index into the instance's
+  handle table, starting at 1, instead of the guest's representation, and checks
+  every handle it is given against the export's signature. A handle that was
+  dropped, dropped twice, never handed out, or is of another resource type
+  answers a `resource_not_live` or `resource_wrong_type` trap, and the guest is
+  not called. `drop_resource/3` answers the destructor's result or that trap
+  instead of always `ok`. Drop any code that treats a handle as the guest's
+  representation.
+- **Components run without the `wasm` application.**
+  `wasm_component:instantiate/2,3` compiles inline when the module cache is not
+  running, instead of answering `cache_unavailable`. With the application
+  started nothing changes.
+
 ## 0.9.0
 
 A restore shares its snapshot's image instead of copying it, script requests

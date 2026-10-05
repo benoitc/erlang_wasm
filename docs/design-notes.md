@@ -898,7 +898,7 @@ unit can use; it is not a promise that everything under it will compile.
 Generated code reaches memory 0 through a two-entry cache carried through every
 continuation, because a restored memory's low addresses resolve through a page
 table and resolving one on every access is what made the page table expensive.
-Read `wasm_core:cached/8` before you change how an access is lowered.
+Read `wasm_core`'s private `cached/8` before you change how an access is lowered.
 
 - An entry is a 4 KiB page number, the array that page lives in and the word
   index of its first word. Only translations to an array are cached: a private
@@ -930,9 +930,9 @@ uses gets a zero-length live interval and can share a register with a value
 that is used. At the join, the unused copy can overwrite the used one. Real
 guests crashed on it, the instance state replaced by a cache word.
 
-So `wasm_core:answer/3` orders every list so that no unused value follows a used
-one, and falls back to a tuple where a load's paths disagree about what they
-use. The comment above it lists why each ordering holds. Present on OTP 29.0.3
+So `wasm_core`'s private `answer/3` orders every list so that no unused value
+follows a used one, and falls back to a tuple where a load's paths disagree
+about what they use. The comment above it lists why each ordering holds. Present on OTP 29.0.3
 through 29.1.1 and on OTP master as of October 2026, and reported upstream;
 recheck it when you move to a newer OTP, before simplifying the ordering.
 

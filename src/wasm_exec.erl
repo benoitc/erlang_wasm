@@ -1108,7 +1108,7 @@ Trap `unreachable` from compiled code.
 
 The arguments are the state and memory 0's translation cache, and are not read.
 Passing them makes the trap a use of them, which the generator's ordering of an
-access's results depends on: see `wasm_core:answer/3`.
+access's results depends on: see `wasm_core`'s private `answer/3`.
 """.
 -spec unreachable_at(#mut{}, term(), term(), term(), term(), term(),
                      term()) -> no_return().

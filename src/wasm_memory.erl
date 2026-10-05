@@ -818,7 +818,23 @@ scatter_byte(M, Addr, <<B:8, Rest/binary>>) ->
     write(M, Addr, 1, B),
     scatter(M, Addr + 1, Rest).
 
+%% Eight words a clause, so the match and the call are paid once per eight
+%% puts rather than once per put. A 4 KiB page filled one word a clause spent
+%% about 400 us of a CPython request's 458 us of first-write copying in the
+%% match and the recursion, not in the puts.
 scatter_run(_C, _I, <<>>) -> ok;
+scatter_run(C, I, <<W1:64/little, W2:64/little, W3:64/little, W4:64/little,
+                    W5:64/little, W6:64/little, W7:64/little, W8:64/little,
+                    Rest/binary>>) ->
+    atomics:put(C, I, W1),
+    atomics:put(C, I + 1, W2),
+    atomics:put(C, I + 2, W3),
+    atomics:put(C, I + 3, W4),
+    atomics:put(C, I + 4, W5),
+    atomics:put(C, I + 5, W6),
+    atomics:put(C, I + 6, W7),
+    atomics:put(C, I + 7, W8),
+    scatter_run(C, I + 8, Rest);
 scatter_run(C, I, <<W:64/little, Rest/binary>>) ->
     atomics:put(C, I, W),
     scatter_run(C, I + 1, Rest).

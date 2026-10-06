@@ -1301,7 +1301,7 @@ new_memory(#memtype{limits = #limits{min = Min} = Limits}, Observable,
 memory_extra(Extra) -> Extra.
 -else.
 memory_extra(#{image_res := Img} = Extra) when Img =/= undefined -> Extra;
-memory_extra(Extra) -> maps:without([image, image_res], Extra).
+memory_extra(Extra) -> maps:without([image, image_res, image_hint], Extra).
 -endif.
 
 build_tables(#module{imports = Imports, tables = Tables}, Provided, Globals,

@@ -112,6 +112,7 @@ never captured.
 %% disk, before the image is built, the runs the file carried.
 -type captured_mem() :: #{pages := non_neg_integer(),
                           image => tuple(),
+                          hint => atomics:atomics_ref(),
                           runs => [{non_neg_integer(), binary()}]}.
 
 -doc "An immutable image. Copyable between processes; see `wasm:acquire/1`.".
@@ -506,8 +507,9 @@ restore(#snapshot{handle = Handle, key = Key} = S, M, Bindings, Opts) ->
             %% bounds decision, so a module that could not be instantiated is
             %% refused here exactly as it was.
             MemOpts = maps:from_list(
-                        [{I, #{image => Image, image_res => S#snapshot.img_res}}
-                         || {I, #{image := Image}}
+                        [{I, #{image => Image, image_res => S#snapshot.img_res,
+                               image_hint => maps:get(hint, Mem, undefined)}}
+                         || {I, #{image := Image} = Mem}
                                 <- lists:enumerate(0, S#snapshot.mems)]),
             case wasm_instance:new(M, Bindings,
                                    maps:without([compatibility_key],
@@ -863,15 +865,19 @@ nothing in the image refers to the file it came from.
 build(#snapshot{mems = Ms} = S, ImgRes) ->
     S#snapshot{mems = [built_mem(M) || M <- Ms], img_res = ImgRes}.
 
+%% Each memory gets its hint here, captured or read from a file: one word,
+%% shared by every memory restored from this image, saying how many private
+%% pages the last of them claimed (`wasm_memory:note_claimed/1').
 built_mem(#{image := _} = M) ->
-    M;
+    M#{hint => atomics:new(1, [{signed, false}])};
 built_mem(#{pages := Pages, runs := Runs}) ->
     ByPage = lists:foldl(fun({Off, Bin}, Acc) -> by_page(Off, Bin, Acc) end,
                          #{}, Runs),
     ok = build_hook(page),
     #{pages => Pages,
       image => list_to_tuple([page(maps:get(P, ByPage, [])) ||
-                                 P <- lists:seq(0, Pages - 1)])}.
+                                 P <- lists:seq(0, Pages - 1)]),
+      hint => atomics:new(1, [{signed, false}])}.
 
 %% A run cut at page boundaries, each piece filed under its page.
 by_page(_Off, <<>>, Acc) ->

@@ -20,6 +20,6 @@
 -define(MEM_IMAGE, 13).
 -define(MEM_TAB, 14).
 -define(MEM_ARENA, 15).
--define(MEM_SIZE, 16).
+-define(MEM_SIZE, 17).
 
 -endif.

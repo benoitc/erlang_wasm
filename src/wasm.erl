@@ -821,6 +821,10 @@ do_destroy(Inst) ->
               #mut{mems = Mems, tables = Tables, globals = Globals} =
                   wasm_instance:mut(Inst),
               Token = {instance, Inst#inst.id},
+              %% What each memory restored from an image claimed, left on the
+              %% image for the next restore to size its arena by.
+              _ = [ok = wasm_memory:note_claimed(Mem)
+                   || Mem <- tuple_to_list(Mems)],
               %% One keeper call for all of them rather than one each: a
               %% worker destroys an instance per request.
               Ids = [wasm_memory:resource(Mem) || Mem <- tuple_to_list(Mems)]

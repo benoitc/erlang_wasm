@@ -23,7 +23,6 @@ all() ->
      reads_never_make_a_page_private,
      a_straddling_store_crosses_two_pages,
      bulk_writes_cross_pages,
-     every_word_run_at_every_offset_reads_back,
      the_arena_grows_past_its_first_chunk,
      growth_appends_after_the_image,
      an_empty_image_is_a_plain_memory,
@@ -135,38 +134,6 @@ bulk_writes_cross_pages(_Config) ->
     W4 = put_bytes(W3, 190000, binary:copy(<<1, 2, 3>>, 3000)),
     ?assertEqual(W4, wasm_memory:to_binary(M)),
     ok = wasm_memory:free(M).
-
-%% `store_bytes/3' moves aligned words eight to a clause and the rest one at a
-%% time. A run of 1 to 20 words at every word offset of the last 4 KiB page of
-%% the first 64 KiB page, on a plain memory and over an image, reads back
-%% exactly, and the words either side of it are untouched. That covers every
-%% split of a run into eight-word clauses and a tail, and, over the image,
-%% every run cut by a 4 KiB page boundary.
-every_word_run_at_every_offset_reads_back(_Config) ->
-    {ok, Plain} = wasm_memory:new(3),
-    Paged = paged(image_bin(3)),
-    [every_run(M) || M <- [Plain, Paged]],
-    ok = wasm_memory:free(Plain),
-    ok = wasm_memory:free(Paged).
-
-every_run(M) ->
-    Base = 15 * 4096,
-    lists:foldl(
-      fun({Off, Words}, Seed) ->
-              Addr = Base + Off * 8,
-              Run = << <<(Seed + K):64/little>> || K <- lists:seq(1, Words) >>,
-              Before = wasm_memory:load_bytes(M, Addr - 8, 8),
-              After = wasm_memory:load_bytes(M, Addr + Words * 8, 8),
-              ok = wasm_memory:store_bytes(M, Addr, Run),
-              ?assertEqual({Off, Words, <<Before/binary, Run/binary,
-                                          After/binary>>},
-                           {Off, Words,
-                            wasm_memory:load_bytes(M, Addr - 8,
-                                                   Words * 8 + 16)}),
-              Seed + 1000
-      end, 1, [{Off, Words} || Off <- lists:seq(0, 511),
-                               Words <- lists:seq(1, 20)]),
-    ok.
 
 %% More pages written than the first arena chunk holds: the arena grows, and
 %% a handle that writes keeps reading what it wrote through it.

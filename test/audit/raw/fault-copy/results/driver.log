@@ -1,0 +1,115 @@
+r1 split py_entry compiled ok (attempt 1, end load 6.76) 03:05
+r1 split py_entry interp ok (attempt 1, end load 6.62) 03:06
+r1 steady py_entry compiled ok (attempt 1, end load 6.99) 03:06
+r1 steady py_entry interp ok (attempt 1, end load 6.59) 03:06
+r1 steady py compiled ok (attempt 1, end load 6.89) 03:08
+redo r1 steady py interp: end load 8.08
+r1 steady py interp ok (attempt 2, end load 7.62) 03:09
+redo r1 steady qjs compiled: end load 8.36
+r1 steady qjs compiled ok (attempt 2, end load 6.26) 03:10
+r1 steady qjs interp ok (attempt 1, end load 5.98) 03:11
+r1 steady lua compiled ok (attempt 1, end load 5.82) 03:11
+r1 steady lua interp ok (attempt 1, end load 5.68) 03:11
+r1 density py_entry - ok (attempt 1, end load 4.51) 03:12
+r1 density py - ok (attempt 1, end load 4.64) 03:14
+r1 density qjs - ok (attempt 1, end load 5.54) 03:15
+r1 density lua - ok (attempt 1, end load 4.65) 03:16
+r1 real qjs - ok (attempt 1, end load 4.31) 03:18
+round 1 done Tue Oct  6 03:18:19 CEST 2026
+r2 split py_entry compiled ok (attempt 1, end load 4.08) 03:18
+r2 split py_entry interp ok (attempt 1, end load 4.28) 03:18
+r2 steady py_entry compiled ok (attempt 1, end load 4.46) 03:18
+r2 steady py_entry interp ok (attempt 1, end load 4.39) 03:19
+r2 steady py compiled ok (attempt 1, end load 6.02) 03:20
+r2 steady py interp ok (attempt 1, end load 5.40) 03:20
+r2 steady qjs compiled ok (attempt 1, end load 4.76) 03:21
+r2 steady qjs interp ok (attempt 1, end load 4.89) 03:21
+r2 steady lua compiled ok (attempt 1, end load 4.57) 03:21
+r2 steady lua interp ok (attempt 1, end load 4.37) 03:21
+r2 density py_entry - ok (attempt 1, end load 3.86) 03:22
+r2 density py - ok (attempt 1, end load 4.04) 03:22
+redo r2 density qjs -: end load 32.25
+redo r2 density qjs -: end load 8.10
+r2 density qjs - ok (attempt 3, end load 6.93) 03:53
+r2 density lua - ok (attempt 1, end load 5.35) 03:54
+redo r2 real qjs -: end load 13.62
+r2 real qjs - ok (attempt 2, end load 3.52) 04:05
+round 2 done Tue Oct  6 04:05:08 CEST 2026
+r3 split py_entry compiled ok (attempt 1, end load 3.36) 04:05
+r3 split py_entry interp ok (attempt 1, end load 3.88) 04:05
+r3 steady py_entry compiled ok (attempt 1, end load 3.81) 04:05
+r3 steady py_entry interp ok (attempt 1, end load 3.38) 04:05
+redo r3 steady py compiled: end load 38.80
+r3 steady py compiled ok (attempt 2, end load 3.94) 04:19
+r3 steady py interp ok (attempt 1, end load 4.29) 04:20
+r3 steady qjs compiled ok (attempt 1, end load 5.02) 04:20
+r3 steady qjs interp ok (attempt 1, end load 5.42) 04:20
+r3 steady lua compiled ok (attempt 1, end load 7.39) 04:20
+redo r3 steady lua interp: end load 9.20
+r3 steady lua interp ok (attempt 2, end load 6.62) 04:34
+r3 density py_entry - ok (attempt 1, end load 6.01) 04:34
+r3 density py - ok (attempt 1, end load 4.33) 04:35
+r3 density qjs - ok (attempt 1, end load 6.64) 04:36
+redo r3 density lua -: end load 14.10
+r3 density lua - ok (attempt 2, end load 6.36) 04:45
+r3 real qjs - ok (attempt 1, end load 5.48) 04:47
+round 3 done Tue Oct  6 04:47:47 CEST 2026
+redo r4 split py_entry compiled: end load 10.72
+r4 split py_entry compiled ok (attempt 2, end load 7.19) 04:55
+r4 split py_entry interp ok (attempt 1, end load 6.55) 04:55
+r4 steady py_entry compiled ok (attempt 1, end load 6.93) 04:55
+r4 steady py_entry interp ok (attempt 1, end load 6.88) 04:55
+r4 steady py compiled ok (attempt 1, end load 4.46) 04:57
+r4 steady py interp ok (attempt 1, end load 5.80) 04:57
+r4 steady qjs compiled ok (attempt 1, end load 6.14) 04:57
+redo r4 steady qjs interp: end load 8.26
+redo r4 steady qjs interp: end load 8.02
+r4 steady qjs interp ok (attempt 3, end load 7.24) 05:13
+redo r4 steady lua compiled: end load 8.02
+r4 steady lua compiled ok (attempt 2, end load 7.81) 05:16
+r4 steady lua interp ok (attempt 1, end load 7.79) 05:16
+redo r4 density py_entry -: end load 9.68
+r4 density py_entry - ok (attempt 2, end load 6.68) 05:19
+r4 density py - ok (attempt 1, end load 6.31) 05:19
+r4 density qjs - ok (attempt 1, end load 5.38) 05:20
+r4 density lua - ok (attempt 1, end load 5.60) 05:21
+r4 real qjs - ok (attempt 1, end load 6.52) 05:23
+round 4 done Tue Oct  6 05:23:51 CEST 2026
+r5 split py_entry compiled ok (attempt 1, end load 7.11) 05:24
+r5 split py_entry interp ok (attempt 1, end load 6.70) 05:24
+r5 steady py_entry compiled ok (attempt 1, end load 6.74) 05:24
+r5 steady py_entry interp ok (attempt 1, end load 6.94) 05:24
+redo r5 steady py compiled: end load 8.28
+r5 steady py compiled ok (attempt 2, end load 4.32) 05:30
+r5 steady py interp ok (attempt 1, end load 4.59) 05:30
+r5 steady qjs compiled ok (attempt 1, end load 5.39) 05:31
+r5 steady qjs interp ok (attempt 1, end load 5.57) 05:31
+r5 steady lua compiled ok (attempt 1, end load 6.19) 05:31
+r5 steady lua interp ok (attempt 1, end load 6.34) 05:31
+r5 density py_entry - ok (attempt 1, end load 6.64) 05:32
+r5 density py - ok (attempt 1, end load 5.57) 05:32
+redo r5 density qjs -: end load 9.68
+r5 density qjs - ok (attempt 2, end load 5.96) 05:42
+redo r5 density lua -: end load 14.59
+r5 density lua - ok (attempt 2, end load 5.68) 06:01
+r5 real qjs - ok (attempt 1, end load 5.25) 06:02
+round 5 done Tue Oct  6 06:02:55 CEST 2026
+r6 split py_entry compiled ok (attempt 1, end load 5.71) 06:03
+r6 split py_entry interp ok (attempt 1, end load 5.65) 06:03
+r6 steady py_entry compiled ok (attempt 1, end load 5.50) 06:03
+redo r6 steady py_entry interp: end load 8.58
+r6 steady py_entry interp ok (attempt 2, end load 7.42) 06:06
+r6 steady py compiled ok (attempt 1, end load 4.72) 06:08
+r6 steady py interp ok (attempt 1, end load 3.90) 06:08
+r6 steady qjs compiled ok (attempt 1, end load 3.25) 06:08
+r6 steady qjs interp ok (attempt 1, end load 3.60) 06:09
+r6 steady lua compiled ok (attempt 1, end load 3.71) 06:09
+r6 steady lua interp ok (attempt 1, end load 3.67) 06:09
+r6 density py_entry - ok (attempt 1, end load 3.24) 06:09
+r6 density py - ok (attempt 1, end load 3.47) 06:10
+r6 density qjs - ok (attempt 1, end load 7.62) 06:11
+redo r6 density lua -: end load 15.12
+r6 density lua - ok (attempt 2, end load 4.76) 06:29
+r6 real qjs - ok (attempt 1, end load 3.25) 06:30
+round 6 done Tue Oct  6 06:30:57 CEST 2026
+ROUNDS_DONE

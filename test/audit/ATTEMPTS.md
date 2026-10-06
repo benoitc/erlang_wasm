@@ -990,3 +990,58 @@ B's almost none, the bimodal collector mode `bench/paths/README.md` describes.
 Spawned outside realbench's shape both take 1.8 s. Between a heap-backed and
 an mmap-backed memory, check `msacc`, reductions and the output before reading
 a realbench ratio as speed.
+
+## Copying only a page's non-zero runs on a first write
+
+**A first write to an image page copies its 4 KiB word by word into an
+`atomics` slot. Skipping the words that are zero, since a fresh slot is
+already zero, was measured and is slower.** Not built beyond the measurement.
+
+The pages a request writes are mostly not zero. For CPython with an entry
+(`py_entry`), 81% of the words of the pages it makes private are non-zero,
+in about 37 separate runs per page. Copy time for one request's faulted
+pages, us:
+
+| guest | pages | copy every word | skip zero words | one split per run |
+| --- | ---: | ---: | ---: | ---: |
+| py_entry | 90 | 389 | 486 | 666 |
+| py | 256 | 1103 | 1354 | 1995 |
+| qjs | 41 | 148 | 140 | 208 |
+
+- Testing a word costs more than the `atomics:put` it saves when four words
+  in five are written anyway.
+- Splitting the page into its runs and copying each costs a sub-binary and a
+  call per run; at 37 runs a page that is the slowest of the three.
+- Only qjs, whose pages are sparser, gains, and by 8 us a request.
+
+Source: harness counter diffs from the A4 profiling session, on scratch builds
+of `main` at 0.9.1. Making the copy itself cheaper did not help either; see the
+next entry.
+
+## Eight words a clause, and an arena sized by the last restore
+
+**Two changes to a first write's cost, each correct and each tested, reverted
+on gates fixed before measuring.** Branch `fault-copy` (`f9d3eb4`, `5b6d016`,
+reverted by `c42e879` and `ef7efab`).
+
+- **Eight words a clause in `wasm_memory:scatter_run/3`**, one binary match,
+  eight `atomics:put` and one call per eight words, instead of one of each per
+  word. A py_entry compiled call came out at **0.983x** of `main` (median of
+  six per-round ratios, one round per ordering of main, this change and both)
+  against the gate's 0.95x. A direct measure of what it can save: copying
+  py_entry's 90 pages with `store_bytes/3` took 372 to 402 us on `main` and
+  326 to 328 us with the change. The 512 puts a page are the cost, about 4 to
+  5 us a page, not the matching and recursion around them; the profile that
+  suggested half the per-word work could go counted calls, not time.
+- **The first claim sized by the last restore's**: an `atomics` hint per
+  image, written when a restored memory is released, read on its first claim
+  to extend the arena in one keeper transaction instead of three. It added a
+  median **11.9 us** to a py_entry call's saving against the 20 us its gate
+  asked for, and lost 15 to 20 us in two of the six rounds. Together the two
+  changes made **0.967x**, still short of 0.95x.
+
+Nothing else moved: steady p50 within 0.969 to 1.013x for py, py_entry, qjs
+and lua, compiled and interpreted; realbench qjs 0.998x; density identical.
+So a first write in pure Erlang costs what 512 puts cost. What remains is to
+make fewer of them in a request, or to make them before it arrives.
+Raw records: `test/audit/raw/fault-copy/`.

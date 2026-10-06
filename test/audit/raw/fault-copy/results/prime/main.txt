@@ -1,0 +1,55 @@
+# start 23:35  up 11 days, 15:48, 43 users, load averages: 5.15 5.57 8.03
+#{mode => steady,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 22170,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12557.25,min_us => 7142.333}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-fc/main",
+  guest => py_entry,ahead => false,start_ms => 97,tier => compiled,
+  verdict => ok,warm_requests => 2093,entry_ms => 248315,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5533.06,min_us => 4669.349}
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 20540,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 27921.166,min_us => 26940.791}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-fc/main",guest => py,
+  ahead => false,start_ms => 50,tier => compiled,verdict => ok,
+  warm_requests => 5741,entry_ms => 541411,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 22313.362,min_us => 19997.521}
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 124,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 14299.167,min_us => 13287.75}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-fc/main",guest => qjs,
+  ahead => false,start_ms => 11,tier => compiled,verdict => ok,
+  warm_requests => 5204,entry_ms => 318518,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 202,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11710.453,min_us => 10406.366}
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 91,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10103.708,min_us => 8753.542}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-fc/main",guest => lua,
+  ahead => false,start_ms => 10,tier => compiled,verdict => ok,
+  warm_requests => 2330,entry_ms => 114230,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 1005},
+  median_us => 6329.979,min_us => 4955.015}
+# cache        4 files 113M
+PRIME_DONE 23:57  up 11 days, 16:10, 43 users, load averages: 24.05 23.97 28.18

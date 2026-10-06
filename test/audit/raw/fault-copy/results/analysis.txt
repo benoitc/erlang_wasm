@@ -1,0 +1,307 @@
+
+density lua - count
+  r1  main=2048  c1=2048  c2=2048
+  r2  main=2048  c1=2048  c2=2048
+  r3  main=2048  c1=2048  c2=2048
+  r4  main=2048  c1=2048  c2=2048
+  r5  main=2048  c1=2048  c2=2048
+  r6  main=2048  c1=2048  c2=2048
+  med main=2048.0  c1=2048.0  c2=2048.0
+  c1/main per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+  c2/main per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+  c2/c1 per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+density py - count
+  r1  main=124  c1=124  c2=124
+  r2  main=124  c1=124  c2=124
+  r3  main=124  c1=124  c2=124
+  r4  main=124  c1=124  c2=124
+  r5  main=124  c1=124  c2=124
+  r6  main=124  c1=124  c2=124
+  med main=124.0  c1=124.0  c2=124.0
+  c1/main per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+  c2/main per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+  c2/c1 per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+density py_entry - count
+  r1  main=455  c1=455  c2=455
+  r2  main=455  c1=455  c2=455
+  r3  main=455  c1=455  c2=455
+  r4  main=455  c1=455  c2=455
+  r5  main=455  c1=455  c2=455
+  r6  main=455  c1=455  c2=455
+  med main=455.0  c1=455.0  c2=455.0
+  c1/main per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+  c2/main per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+  c2/c1 per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+density qjs - count
+  r1  main=1024  c1=1024  c2=1024
+  r2  main=1024  c1=1024  c2=1024
+  r3  main=1024  c1=1024  c2=1024
+  r4  main=1024  c1=1024  c2=1024
+  r5  main=1024  c1=1024  c2=1024
+  r6  main=1024  c1=1024  c2=1024
+  med main=1024.0  c1=1024.0  c2=1024.0
+  c1/main per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+  c2/main per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+  c2/c1 per round [1.000 1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+real qjs - ms
+  r1  main=12130.3  c1=12126.5  c2=12122.9
+  r2  main=11482.1  c1=11174.2  c2=11294.5
+  r3  main=11434.4  c1=11501.4  c2=11413.5
+  r4  main=11507.7  c1=11642.0  c2=12560.0
+  r5  main=11328.5  c1=11255.4  c2=11455.8
+  r6  main=11358.0  c1=11318.4  c2=11260.1
+  med main=11458.3  c1=11409.9  c2=11434.6
+  c1/main per round [1.000 0.973 1.006 1.012 0.994 0.997]  median 0.9981
+  c2/main per round [0.999 0.984 0.998 1.091 1.011 0.991]  median 0.9988
+  c2/c1 per round [1.000 1.011 0.992 1.079 1.018 0.995]  median 1.0052
+
+split py_entry compiled call
+  r1  main=2800.8  c1=3643.7  c2=2977.5
+  r2  main=1809.2  c1=1770.5  c2=1729.0
+  r3  main=1527.3  c1=1507.5  c2=1490.6
+  r4  main=1466.2  c1=1490.9  c2=1484.0
+  r5  main=1576.7  c1=1491.0  c2=1511.0
+  r6  main=1603.5  c1=1506.8  c2=1522.2
+  med main=1590.1  c1=1507.1  c2=1516.6
+  c1/main per round [1.301 0.979 0.987 1.017 0.946 0.940]  median 0.9828
+  c2/main per round [1.063 0.956 0.976 1.012 0.958 0.949]  median 0.9671
+  c2/c1 per round [0.817 0.977 0.989 0.995 1.013 1.010]  median 0.9921
+
+split py_entry compiled destroy
+  r1  main=30.5  c1=45.4  c2=35.2
+  r2  main=18.1  c1=17.9  c2=19.9
+  r3  main=15.7  c1=15.4  c2=17.3
+  r4  main=15.0  c1=15.6  c2=17.8
+  r5  main=15.8  c1=15.5  c2=17.3
+  r6  main=16.4  c1=15.1  c2=17.8
+  med main=16.1  c1=15.6  c2=17.8
+  c1/main per round [1.487 0.986 0.981 1.042 0.984 0.919]  median 0.9852
+  c2/main per round [1.151 1.099 1.106 1.186 1.098 1.081]  median 1.1026
+  c2/c1 per round [0.774 1.114 1.127 1.139 1.116 1.177]  median 1.1215
+
+split py_entry compiled post
+  r1  main=0.6  c1=0.9  c2=0.8
+  r2  main=0.2  c1=0.2  c2=0.3
+  r3  main=0.1  c1=0.1  c2=0.2
+  r4  main=0.1  c1=0.1  c2=0.2
+  r5  main=0.2  c1=0.2  c2=0.1
+  r6  main=0.2  c1=0.1  c2=0.2
+  med main=0.2  c1=0.1  c2=0.2
+  c1/main per round [1.400 1.006 1.000 1.488 1.000 0.601]  median 1.0030
+  c2/main per round [1.266 1.506 1.328 1.988 0.749 0.803]  median 1.2968
+  c2/c1 per round [0.904 1.497 1.328 1.336 0.749 1.336]  median 1.3320
+
+split py_entry compiled restore
+  r1  main=435.3  c1=450.4  c2=442.8
+  r2  main=390.2  c1=391.0  c2=387.8
+  r3  main=366.5  c1=363.5  c2=366.8
+  r4  main=356.1  c1=358.3  c2=363.2
+  r5  main=371.9  c1=367.8  c2=374.7
+  r6  main=368.0  c1=361.1  c2=369.9
+  med main=370.0  c1=365.6  c2=372.3
+  c1/main per round [1.035 1.002 0.992 1.006 0.989 0.981]  median 0.9969
+  c2/main per round [1.017 0.994 1.001 1.020 1.008 1.005]  median 1.0064
+  c2/c1 per round [0.983 0.992 1.009 1.014 1.019 1.024]  median 1.0113
+
+split py_entry compiled total
+  r1  main=3264.3  c1=4169.0  c2=3466.9
+  r2  main=2223.0  c1=2175.7  c2=2133.2
+  r3  main=1917.6  c1=1887.4  c2=1878.4
+  r4  main=1828.9  c1=1869.8  c2=1871.4
+  r5  main=1966.0  c1=1871.8  c2=1897.8
+  r6  main=1986.3  c1=1882.7  c2=1906.5
+  med main=1976.2  c1=1885.0  c2=1902.2
+  c1/main per round [1.277 0.979 0.984 1.022 0.952 0.948]  median 0.9815
+  c2/main per round [1.062 0.960 0.980 1.023 0.965 0.960]  median 0.9725
+  c2/c1 per round [0.832 0.980 0.995 1.001 1.014 1.013]  median 0.9981
+
+split py_entry interp call
+  r1  main=4682.1  c1=4604.8  c2=4254.8
+  r2  main=3915.9  c1=3821.2  c2=3799.1
+  r3  main=3672.7  c1=3966.5  c2=3571.9
+  r4  main=3435.3  c1=3447.6  c2=3433.1
+  r5  main=3838.4  c1=3698.4  c2=3653.9
+  r6  main=3636.7  c1=3652.0  c2=3648.7
+  med main=3755.5  c1=3759.8  c2=3651.3
+  c1/main per round [0.984 0.976 1.080 1.004 0.964 1.004]  median 0.9935
+  c2/main per round [0.909 0.970 0.973 0.999 0.952 1.003]  median 0.9714
+  c2/c1 per round [0.924 0.994 0.901 0.996 0.988 0.999]  median 0.9911
+
+split py_entry interp destroy
+  r1  main=50.8  c1=51.0  c2=44.4
+  r2  main=25.7  c1=27.1  c2=36.0
+  r3  main=23.4  c1=30.5  c2=23.0
+  r4  main=20.4  c1=27.5  c2=27.6
+  r5  main=26.3  c1=23.4  c2=23.5
+  r6  main=21.9  c1=23.1  c2=25.0
+  med main=24.5  c1=27.3  c2=26.3
+  c1/main per round [1.003 1.053 1.305 1.350 0.889 1.055]  median 1.0543
+  c2/main per round [0.874 1.402 0.984 1.354 0.892 1.143]  median 1.0632
+  c2/c1 per round [0.872 1.331 0.754 1.003 1.004 1.083]  median 1.0033
+
+split py_entry interp post
+  r1  main=0.7  c1=0.6  c2=0.4
+  r2  main=0.1  c1=0.1  c2=0.2
+  r3  main=0.1  c1=0.2  c2=0.1
+  r4  main=0.0  c1=0.1  c2=0.0
+  r5  main=0.1  c1=0.1  c2=0.1
+  r6  main=0.1  c1=0.1  c2=0.1
+  med main=0.1  c1=0.1  c2=0.1
+  c1/main per round [0.937 1.488 2.012 1.976 0.672 1.000]  median 1.2440
+  c2/main per round [0.624 1.976 1.000 1.000 0.672 1.506]  median 1.0000
+  c2/c1 per round [0.666 1.328 0.497 0.506 1.000 1.506]  median 0.8328
+
+split py_entry interp restore
+  r1  main=434.0  c1=437.4  c2=413.5
+  r2  main=374.7  c1=375.5  c2=397.2
+  r3  main=360.4  c1=399.7  c2=352.4
+  r4  main=345.8  c1=344.0  c2=361.0
+  r5  main=366.8  c1=361.7  c2=358.3
+  r6  main=347.9  c1=353.3  c2=357.5
+  med main=363.6  c1=368.6  c2=359.7
+  c1/main per round [1.008 1.002 1.109 0.995 0.986 1.016]  median 1.0050
+  c2/main per round [0.953 1.060 0.978 1.044 0.977 1.028]  median 1.0028
+  c2/c1 per round [0.945 1.058 0.882 1.049 0.991 1.012]  median 1.0014
+
+split py_entry interp total
+  r1  main=5162.9  c1=5094.4  c2=4721.2
+  r2  main=4314.3  c1=4225.5  c2=4224.5
+  r3  main=4054.8  c1=4380.3  c2=3944.3
+  r4  main=3804.0  c1=3820.1  c2=3817.1
+  r5  main=4225.3  c1=4084.2  c2=4033.8
+  r6  main=4005.4  c1=4026.9  c2=4035.7
+  med main=4140.1  c1=4154.9  c2=4034.7
+  c1/main per round [0.987 0.979 1.080 1.004 0.967 1.005]  median 0.9955
+  c2/main per round [0.914 0.979 0.973 1.003 0.955 1.008]  median 0.9760
+  c2/c1 per round [0.927 1.000 0.900 0.999 0.988 1.002]  median 0.9934
+
+steady lua compiled p50
+  r1  main=3944.0  c1=4033.8  c2=3881.8
+  r2  main=3749.5  c1=3765.4  c2=3763.0
+  r3  main=3614.7  c1=3560.5  c2=3526.1
+  r4  main=3535.1  c1=3512.7  c2=3467.5
+  r5  main=3634.6  c1=3607.8  c2=3449.1
+  r6  main=3484.3  c1=3520.3  c2=3642.2
+  med main=3624.6  c1=3584.1  c2=3584.1
+  c1/main per round [1.023 1.004 0.985 0.994 0.993 1.010]  median 0.9989
+  c2/main per round [0.984 1.004 0.976 0.981 0.949 1.045]  median 0.9825
+  c2/c1 per round [0.962 0.999 0.990 0.987 0.956 1.035]  median 0.9887
+
+steady lua interp p50
+  r1  main=7467.7  c1=7363.4  c2=7816.1
+  r2  main=7416.1  c1=7397.8  c2=7343.7
+  r3  main=7197.2  c1=7165.6  c2=7236.0
+  r4  main=7067.5  c1=6972.3  c2=6858.5
+  r5  main=7004.9  c1=7406.2  c2=7018.1
+  r6  main=7035.0  c1=6966.0  c2=6983.5
+  med main=7132.4  c1=7264.5  c2=7127.0
+  c1/main per round [0.986 0.998 0.996 0.987 1.057 0.990]  median 0.9929
+  c2/main per round [1.047 0.990 1.005 0.970 1.002 0.993]  median 0.9973
+  c2/c1 per round [1.061 0.993 1.010 0.984 0.948 1.003]  median 0.9976
+
+steady py compiled p50
+  r1  main=19836.1  c1=20000.5  c2=18559.5
+  r2  main=18156.4  c1=17663.9  c2=17742.1
+  r3  main=17096.8  c1=16400.1  c2=16426.5
+  r4  main=16565.9  c1=16318.4  c2=15905.6
+  r5  main=16284.2  c1=16108.2  c2=16281.0
+  r6  main=16614.8  c1=16054.3  c2=16741.2
+  med main=16855.8  c1=16359.2  c2=16583.8
+  c1/main per round [1.008 0.973 0.959 0.985 0.989 0.966]  median 0.9790
+  c2/main per round [0.936 0.977 0.961 0.960 1.000 1.008]  median 0.9690
+  c2/c1 per round [0.928 1.004 1.002 0.975 1.011 1.043]  median 1.0030
+
+steady py interp p50
+  r1  main=25095.1  c1=24864.9  c2=24998.5
+  r2  main=25002.6  c1=24716.7  c2=24772.1
+  r3  main=23069.2  c1=23115.9  c2=22765.1
+  r4  main=22761.3  c1=22771.6  c2=22648.1
+  r5  main=22729.8  c1=22624.8  c2=22626.7
+  r6  main=22695.1  c1=22455.7  c2=22285.9
+  med main=22915.2  c1=22943.8  c2=22706.6
+  c1/main per round [0.991 0.989 1.002 1.000 0.995 0.989]  median 0.9931
+  c2/main per round [0.996 0.991 0.987 0.995 0.995 0.982]  median 0.9929
+  c2/c1 per round [1.005 1.002 0.985 0.995 1.000 0.992]  median 0.9973
+
+steady py_entry compiled p50
+  r1  main=3606.3  c1=3479.3  c2=3385.4
+  r2  main=3206.8  c1=3303.3  c2=3206.8
+  r3  main=2933.5  c1=2903.4  c2=2808.9
+  r4  main=2818.3  c1=2841.8  c2=2893.8
+  r5  main=2945.0  c1=2860.5  c2=2912.3
+  r6  main=2933.6  c1=2932.4  c2=3003.6
+  med main=2939.3  c1=2917.9  c2=2957.9
+  c1/main per round [0.965 1.030 0.990 1.008 0.971 1.000]  median 0.9947
+  c2/main per round [0.939 1.000 0.958 1.027 0.989 1.024]  median 0.9944
+  c2/c1 per round [0.973 0.971 0.967 1.018 1.018 1.024]  median 0.9956
+
+steady py_entry interp p50
+  r1  main=5368.1  c1=5368.1  c2=5375.6
+  r2  main=5151.7  c1=5096.0  c2=5099.9
+  r3  main=4895.1  c1=4814.5  c2=4816.6
+  r4  main=4760.7  c1=4738.1  c2=4826.7
+  r5  main=4877.6  c1=4863.4  c2=4841.0
+  r6  main=4704.0  c1=4667.3  c2=5223.8
+  med main=4886.3  c1=4839.0  c2=4970.5
+  c1/main per round [1.000 0.989 0.984 0.995 0.997 0.992]  median 0.9937
+  c2/main per round [1.001 0.990 0.984 1.014 0.992 1.111]  median 0.9970
+  c2/c1 per round [1.001 1.001 1.000 1.019 0.995 1.119]  median 1.0011
+
+steady qjs compiled p50
+  r1  main=8980.5  c1=8522.0  c2=8543.1
+  r2  main=8112.2  c1=8402.1  c2=8245.8
+  r3  main=6828.9  c1=7311.8  c2=7036.3
+  r4  main=7118.6  c1=6940.0  c2=6802.5
+  r5  main=7141.6  c1=7942.6  c2=6925.3
+  r6  main=6671.0  c1=6598.8  c2=6787.9
+  med main=7130.1  c1=7627.2  c2=6980.8
+  c1/main per round [0.949 1.036 1.071 0.975 1.112 0.989]  median 1.0125
+  c2/main per round [0.951 1.016 1.030 0.956 0.970 1.018]  median 0.9931
+  c2/c1 per round [1.002 0.981 0.962 0.980 0.872 1.029]  median 0.9808
+
+steady qjs interp p50
+  r1  main=12565.9  c1=12396.2  c2=12491.6
+  r2  main=12542.0  c1=12462.3  c2=12369.6
+  r3  main=11776.1  c1=11745.5  c2=11558.5
+  r4  main=11474.8  c1=12017.8  c2=11376.9
+  r5  main=12487.7  c1=12602.9  c2=11661.1
+  r6  main=11596.6  c1=11539.2  c2=11500.4
+  med main=12131.9  c1=12207.0  c2=11609.8
+  c1/main per round [0.986 0.994 0.997 1.047 1.009 0.995]  median 0.9962
+  c2/main per round [0.994 0.986 0.982 0.991 0.934 0.992]  median 0.9889
+  c2/c1 per round [1.008 0.993 0.984 0.947 0.925 0.997]  median 0.9883
+
+== gates (median of per-round ratios)
+gate 1 c1/main py_entry compiled call: 0.9828 (need =< 0.95) FAIL
+gate 1 c2/main py_entry compiled call: 0.9671 (need =< 0.95) FAIL
+gate 2 c1/main py compiled p50: 0.9790 PASS
+gate 2 c2/main py compiled p50: 0.9690 PASS
+gate 2 c1/main py interp p50: 0.9931 PASS
+gate 2 c2/main py interp p50: 0.9929 PASS
+gate 2 c1/main py_entry compiled p50: 0.9947 PASS
+gate 2 c2/main py_entry compiled p50: 0.9944 PASS
+gate 2 c1/main py_entry interp p50: 0.9937 PASS
+gate 2 c2/main py_entry interp p50: 0.9970 PASS
+gate 2 c1/main qjs compiled p50: 1.0125 PASS
+gate 2 c2/main qjs compiled p50: 0.9931 PASS
+gate 2 c1/main qjs interp p50: 0.9962 PASS
+gate 2 c2/main qjs interp p50: 0.9889 PASS
+gate 2 c1/main lua compiled p50: 0.9989 PASS
+gate 2 c2/main lua compiled p50: 0.9825 PASS
+gate 2 c1/main lua interp p50: 0.9929 PASS
+gate 2 c2/main lua interp p50: 0.9973 PASS
+gate 2 c1/main realbench qjs: 0.9981 PASS
+gate 2 c2/main realbench qjs: 0.9988 PASS
+gate 3 c1 py density per round [124,124,124,124,124,124] vs main [124,124,124,124,124,124] PASS
+gate 3 c2 py density per round [124,124,124,124,124,124] vs main [124,124,124,124,124,124] PASS
+gate 3 c1 py_entry density per round [455,455,455,455,455,455] vs main [455,455,455,455,455,455] PASS
+gate 3 c2 py_entry density per round [455,455,455,455,455,455] vs main [455,455,455,455,455,455] PASS
+gate 3 c1 qjs density per round [1024,1024,1024,1024,1024,1024] vs main [1024,1024,1024,1024,1024,1024] PASS
+gate 3 c2 qjs density per round [1024,1024,1024,1024,1024,1024] vs main [1024,1024,1024,1024,1024,1024] PASS
+gate 3 c1 lua density per round [2048,2048,2048,2048,2048,2048] vs main [2048,2048,2048,2048,2048,2048] PASS
+gate 3 c2 lua density per round [2048,2048,2048,2048,2048,2048] vs main [2048,2048,2048,2048,2048,2048] PASS
+gate 4 c1 - c2 py_entry compiled call, us, per round [666.168 41.542 16.959 6.917 -20.000 -15.417] median 11.9 (need >= 20) FAIL

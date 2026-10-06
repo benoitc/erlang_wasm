@@ -1,0 +1,11 @@
+main tree 9e243cb0becd19935da06abc6810c6ed7d3e6e6e clean=0
+c1 tree f9d3eb404bf24aa22942a920681ffd6079c0e764 clean=0
+c2 tree 5b6d01693cea396cb0688ced96857d2f51edfdba clean=0
+# harness sources, compiled into each tree's bench/arb from fc-main
+80222c2505530f8634cbb01dcd578f68375eeab05664978e3519d05a6172c717  benchlib.erl
+6e230df932b57641fd4f7c0e5d6d07e217139e09b8989860a43587ed71e0953c  reactorlib.erl
+308395f7c527abf6c6d931382823accf8319c3df0394085eb417f9f620a00d44  requestbench.erl
+f714a8d33b7a871eab6e8135056c368588cd85726903d3acd7a4a132c8b17154  barrier_adapter.erl
+00df59f9f20195642b29179e7d19f048e508fa2e0b2f4d50602d1c6aa027e0ad  densitybench.erl
+97c3302e1ff6164600090ce9bbcf1e9dd5d684fe8f3307ea2c044dc4bc632691  realbench.erl
+# cache: $HOME/.cache/wasm-fc/<arm>, primed by prime.sh

@@ -50,7 +50,7 @@ who holds the memory and releases it when they are all gone.
 -export([field_indices/0, mask/1]).
 -export([grow/2, fill/4, copy/4, copy/5, init/5]).
 -export([to_binary/1]).
--export([store_r/4, refresh/1, image/1, note_claimed/1]).
+-export([store_r/4, refresh/1, image/1]).
 -ifdef(TEST).
 -export([image_of/1, faults/1, fault_hook/1]).
 -endif.
@@ -147,13 +147,7 @@ who holds the memory and releases it when they are all gone.
     %% The arena chunks this handle has seen. Chunks are only ever appended,
     %% so a slot past this tuple is found in the published cell.
     arena = {} :: tuple(),
-    arena_ref :: undefined | reference(),
-    %% The image's hint: one `atomics' word, shared by every memory restored
-    %% from the image, holding how many slots the last of them to be freed had
-    %% claimed. The first claim sizes the arena to it in one keeper
-    %% transaction rather than growing it chunk by chunk. Last, so that adding
-    %% it moved no index generated code reads.
-    hint      :: undefined | atomics:atomics_ref()
+    arena_ref :: undefined | reference()
 }).
 
 -opaque mem() :: #mem{}.
@@ -257,8 +251,7 @@ create(#limits{max = Max, index_type = IdxType, shared = Shared}, Opts, Pages,
                          index_type = IdxType, shift = Shift, token = Held,
                          pages_ref = PagesRef, chunks_ref = CRef,
                          shared = Shared},
-                {ok, with_image(M, Image, Img, ARef,
-                                maps:get(image_hint, Opts, undefined))}
+                {ok, with_image(M, Image, Img, ARef)}
             catch
                 %% The reservation is already recorded, and the caller may well
                 %% catch what running out of `atomics' arrays throws. Dying is
@@ -272,12 +265,12 @@ create(#limits{max = Max, index_type = IdxType, shared = Shared}, Opts, Pages,
 %% The image region, laid over a memory whose chunk tuple already holds a
 %% placeholder for every chunk the image covers. No page is copied here: a
 %% restore costs the table, whatever the image's size.
-with_image(M, _Image, 0, _ARef, _Hint) ->
+with_image(M, _Image, 0, _ARef) ->
     M;
-with_image(M, Image, Img, ARef, Hint) ->
+with_image(M, Image, Img, ARef) ->
     M#mem{img_bytes = Img * ?PAGE_SIZE, image = Image,
           tab = atomics:new(Img * 16 + 2, [{signed, false}]),
-          arena = {}, arena_ref = ARef, hint = Hint}.
+          arena = {}, arena_ref = ARef}.
 
 %% The largest chunk, up to 1 MiB, that the image's size is a multiple of, so
 %% the region ends exactly on a chunk boundary and growth appends whole chunks
@@ -338,22 +331,7 @@ only its original pages and leave the rest charged for the life of the node.
 """.
 -spec free(mem()) -> ok.
 free(#mem{token = none}) -> ok;
-free(#mem{id = Res, token = Token} = M) ->
-    ok = note_claimed(M),
-    wasm_keeper:release(Res, Token).
-
--doc """
-Leave on the memory's image how many private pages this memory claimed, for
-the next memory restored from it to size its arena by.
-
-Called as a memory restored from an image is let go, by `free/1` and by
-`wasm:destroy/1`. The last memory to go sets it, so the hint follows the most
-recent request in both directions. Does nothing for any other memory.
-""".
--spec note_claimed(mem()) -> ok.
-note_claimed(#mem{hint = undefined}) -> ok;
-note_claimed(#mem{hint = Hint, tab = Tab} = M) ->
-    atomics:put(Hint, 1, atomics:get(Tab, next_ix(M))).
+free(#mem{id = Res, token = Token}) -> wasm_keeper:release(Res, Token).
 
 -doc """
 Add a holder to this memory, for an instance importing it.
@@ -1119,30 +1097,9 @@ claim(#mem{tab = Tab} = M) ->
                 ok -> N + 1;
                 _  -> claim(M)
             end;
-        false when N =:= 0 ->
-            ok = first_arena(M),
-            claim(M);
         false ->
             ok = extend_arena(M, chunk_of(N + 1)),
             claim(M)
-    end.
-
-%% The first arena, sized to what the last memory restored from the same image
-%% claimed, in one keeper transaction rather than one per chunk: a CPython
-%% request writing 90 pages made three, at about 16 us each. The charge is
-%% still taken at the first write. A budget that refuses the whole of it gets
-%% the one chunk it would have been asked for without the hint, and refuses
-%% or grants that exactly as it would have.
-first_arena(#mem{hint = undefined} = M) ->
-    extend_arena(M, 1);
-first_arena(#mem{hint = Hint} = M) ->
-    case chunk_of(max(1, atomics:get(Hint, 1))) of
-        1 -> extend_arena(M, 1);
-        K ->
-            case grow_arena(M, K) of
-                ok -> ok;
-                {refused, _Pages} -> extend_arena(M, 1)
-            end
     end.
 
 next_ix(#mem{img_bytes = IB}) -> (IB bsr ?SLOT_SHIFT) + 1.
@@ -1202,14 +1159,7 @@ slot_word(#mem{arena = Arena, arena_ref = Ref}, E, Addr) ->
 %% Arena chunks up to `Target', charged to the node budget before any array
 %% exists, unless another writer already published them. The count in the
 %% table moves only after the cell holds the chunks, and only up.
-extend_arena(M, Target) ->
-    case grow_arena(M, Target) of
-        ok -> ok;
-        {refused, Pages} ->
-            wasm_error:exhaustion(memory_limit, #{requested => Pages})
-    end.
-
-grow_arena(#mem{id = Res, arena_ref = Ref, tab = Tab} = M, Target) ->
+extend_arena(#mem{id = Res, arena_ref = Ref, tab = Tab} = M, Target) ->
     Have = tuple_size(wasm_engine:cell_get(Ref)),
     case Have >= Target of
         true ->
@@ -1223,21 +1173,21 @@ grow_arena(#mem{id = Res, arena_ref = Ref, tab = Tab} = M, Target) ->
                                                         {Have, Pages})
                         end) of
                 covered ->
-                    grow_arena(M, Target);
+                    extend_arena(M, Target);
                 {changed, _} ->
-                    grow_arena(M, Target);
+                    extend_arena(M, Target);
                 {done, _} ->
                     ok = wasm_keeper:ack(Res, OpId),
-                    grow_arena(M, Target);
+                    extend_arena(M, Target);
                 {error, _Why} ->
-                    {refused, Pages};
+                    wasm_error:exhaustion(memory_limit, #{requested => Pages});
                 {ok, Have} ->
                     New = arena_tuple(Ref, Have, Target, Res, OpId),
                     _ = keeper(fun() ->
                                        wasm_keeper:arena_commit(Res, OpId, New)
                                end),
                     ok = wasm_keeper:ack(Res, OpId),
-                    grow_arena(M, Target)
+                    extend_arena(M, Target)
             end
     end.
 

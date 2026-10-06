@@ -39,10 +39,6 @@ all() ->
      two_writers_wanting_one_chunk_make_one_reservation,
      a_late_claimant_gets_every_missing_chunk,
      a_refused_extension_consumes_no_slot,
-     the_hint_makes_one_keeper_transaction,
-     the_hint_follows_a_smaller_request,
-     a_refused_presized_arena_changes_nothing,
-     a_restore_sizes_its_arena_by_the_last_one,
      the_keeper_dies_at_every_step_of_a_growth,
      the_keeper_dies_at_every_step_of_an_extension,
      a_lost_begin_reply_is_resumed,
@@ -152,30 +148,7 @@ paged(Bin, Max) ->
                                    observable => true}),
     M.
 
-%% The same, carrying an image's hint as a restore would.
-hinted(Bin, Hint) ->
-    {ok, M} = wasm_memory:create(#limits{min = byte_size(Bin) div ?PAGE,
-                                         max = byte_size(Bin) div ?PAGE},
-                                 #{image => wasm_memory:image_of(Bin),
-                                   image_hint => Hint, observable => true}),
-    M.
-
-hint() -> atomics:new(1, [{signed, false}]).
-
 ones(Pages) -> binary:copy(<<1>>, Pages * ?PAGE).
-
-%% One byte written in each of the first `N' 4 KiB pages, answering how many
-%% arena extensions the keeper was asked to begin, and the arena pages charged.
-write_pages(M, N) ->
-    MFA = {wasm_keeper, arena_begin, 4},
-    1 = erlang:trace_pattern(MFA, true, [call_count]),
-    try
-        [ok = wasm_memory:store(M, P * 4096, 1, 2) || P <- lists:seq(0, N - 1)],
-        {call_count, Calls} = erlang:trace_info(MFA, call_count),
-        {Calls, maps:get(arena, phys(wasm_memory:resource(M)))}
-    after
-        erlang:trace_pattern(MFA, false, [call_count])
-    end.
 
 caught(F) ->
     try F() catch C:R -> {'EXIT', {C, R}} end.
@@ -525,90 +498,6 @@ a_refused_extension_consumes_no_slot(_Config) ->
      || _ <- lists:seq(1, 100)],
     ?assertEqual({16, 16}, wasm_memory:faults(M)),
     ok = wasm_memory:free(M).
-
-%% 90 pages written, as a CPython request writes, take three arena chunks of
-%% 16, 32 and 64 slots, one keeper transaction each. Restored again from the
-%% same image, the same 90 pages take one transaction for all three, and are
-%% charged exactly the same seven pages a memory without a hint is.
-the_hint_makes_one_keeper_transaction(_Config) ->
-    Bin = ones(8),
-    {Unhinted, Charge} = write_pages(paged(Bin, 8), 90),
-    Hint = hint(),
-    M1 = hinted(Bin, Hint),
-    ?assertEqual({Unhinted, Charge}, write_pages(M1, 90)),
-    ok = wasm_memory:free(M1),
-    ?assertEqual(90, atomics:get(Hint, 1)),
-    M2 = hinted(Bin, Hint),
-    ?assertEqual({{3, 7}, {1, 7}}, {{Unhinted, Charge}, write_pages(M2, 90)}),
-    ?assertEqual({90, 90}, wasm_memory:faults(M2)),
-    ok = wasm_memory:free(M2).
-
-%% After a request that wrote 90 pages, one that writes two is charged the
-%% hint's chunks and no more, and leaves a hint of two: the next restore asks
-%% for one chunk again.
-the_hint_follows_a_smaller_request(_Config) ->
-    Bin = ones(8),
-    Hint = hint(),
-    M1 = hinted(Bin, Hint),
-    _ = write_pages(M1, 90),
-    ok = wasm_memory:free(M1),
-    M2 = hinted(Bin, Hint),
-    ?assertEqual({1, 7}, write_pages(M2, 2)),
-    ok = wasm_memory:free(M2),
-    ?assertEqual(2, atomics:get(Hint, 1)),
-    M3 = hinted(Bin, Hint),
-    ?assertEqual({1, 1}, write_pages(M3, 1)),
-    ok = wasm_memory:free(M3).
-
-%% A budget with no room at all refuses the pre-sized arena and then the one
-%% chunk it would have granted without the hint: the write traps as it would
-%% have, and nothing changed. A budget with room for one chunk but not the
-%% hint's three grants the one chunk, as it would have without the hint.
-a_refused_presized_arena_changes_nothing(_Config) ->
-    Bin = ones(8),
-    Hint = hint(),
-    M1 = hinted(Bin, Hint),
-    _ = write_pages(M1, 90),
-    ok = wasm_memory:free(M1),
-    M2 = hinted(Bin, Hint),
-    Res = wasm_memory:resource(M2),
-    Base = pages(),
-    ok = wasm_engine:set_page_limit(Base),
-    ?assertMatch({'EXIT', {throw, {wasm_error, #{class := exhaustion,
-                                                 kind := memory_limit}}}},
-                 caught(fun() -> wasm_memory:store(M2, 0, 1, 2) end)),
-    ?assertEqual({{0, 0}, 0, Base, Bin},
-                 {wasm_memory:faults(M2), maps:get(arena, phys(Res)), pages(),
-                  wasm_memory:to_binary(M2)}),
-    ok = wasm_engine:set_page_limit(Base + 1),
-    ok = wasm_memory:store(M2, 0, 1, 2),
-    ?assertEqual({{1, 1}, 1}, {wasm_memory:faults(M2),
-                               maps:get(arena, phys(Res))}),
-    ok = wasm_memory:free(M2).
-
-%% The hint through a real restore: `wasm:destroy/1' leaves it on the image,
-%% and the next instance restored from it extends its arena once.
-a_restore_sizes_its_arena_by_the_last_one(_Config) ->
-    Image = image(8, 8, [0]),
-    Write = fun(I) ->
-                    [{ok, []} = call(I, ~"st", [P * 4096 + 1, 9])
-                     || P <- lists:seq(0, 89)],
-                    ok
-            end,
-    MFA = {wasm_keeper, arena_begin, 4},
-    Count = fun(I) ->
-                    1 = erlang:trace_pattern(MFA, true, [call_count]),
-                    ok = Write(I),
-                    {call_count, N} = erlang:trace_info(MFA, call_count),
-                    erlang:trace_pattern(MFA, false, [call_count]),
-                    {N, maps:get(arena, phys(wasm_memory:resource(mem(I))))}
-            end,
-    I1 = restore(Image),
-    First = Count(I1),
-    ok = wasm:destroy(I1),
-    I2 = restore(Image),
-    ?assertEqual({{3, 7}, {1, 7}}, {First, Count(I2)}),
-    ok = wasm:destroy(I2).
 
 %%% --------------------------------------------------------- crash points ---
 

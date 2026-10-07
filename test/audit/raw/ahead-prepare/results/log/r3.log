@@ -1,0 +1,680 @@
+== r3 paced_py_entry_compiled_on main attempt 1 21:08  up 1 day, 11:20, 16 users, load averages: 5.96 4.64 5.16
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/main",
+  guest => py_entry,ahead => true,start_ms => 46,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 2782,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 202,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 5061.25,min_us => 2810.292}
+== r3 paced_py_entry_compiled_on cand attempt 1 21:08  up 1 day, 11:20, 16 users, load averages: 5.43 4.57 5.13
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/cand",
+  guest => py_entry,ahead => true,start_ms => 45,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 2690,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 4527.458,min_us => 3165.125}
+== r3 paced_py_entry_interp_on main attempt 1 21:09  up 1 day, 11:20, 16 users, load averages: 6.01 4.73 5.18
+#{mode => paced,cache => "none",guest => py_entry,ahead => true,
+  start_ms => 44,tier => interp,verdict => ok,warm_requests => 20,
+  pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7404.709,min_us => 5134.833}
+== r3 paced_py_entry_interp_on cand attempt 1 21:09  up 1 day, 11:20, 16 users, load averages: 5.85 4.74 5.18
+#{mode => paced,cache => "none",guest => py_entry,ahead => true,
+  start_ms => 44,tier => interp,verdict => ok,warm_requests => 20,
+  pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7212.459,min_us => 5282.75}
+== r3 paced_py_compiled_on main attempt 1 21:09  up 1 day, 11:20, 16 users, load averages: 5.38 4.66 5.15
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => py,
+  ahead => true,start_ms => 46,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 25151,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 16207.625,min_us => 15224.0}
+== r3 paced_py_compiled_on cand attempt 1 21:09  up 1 day, 11:21, 16 users, load averages: 4.63 4.55 5.09
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => py,
+  ahead => true,start_ms => 45,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 24419,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 15219.917,min_us => 14186.083}
+== r3 paced_py_interp_on main attempt 1 21:10  up 1 day, 11:21, 16 users, load averages: 4.68 4.57 5.07
+#{mode => paced,cache => "none",guest => py,ahead => true,start_ms => 42,
+  tier => interp,verdict => ok,warm_requests => 20,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 26054.542,min_us => 22344.208}
+== r3 paced_py_interp_on cand attempt 1 21:10  up 1 day, 11:21, 16 users, load averages: 4.43 4.52 5.04
+#{mode => paced,cache => "none",guest => py,ahead => true,start_ms => 46,
+  tier => interp,verdict => ok,warm_requests => 20,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 24750.792,min_us => 22609.125}
+== r3 paced_qjs_compiled_on main attempt 1 21:10  up 1 day, 11:22, 16 users, load averages: 4.52 4.53 5.04
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => qjs,
+  ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 7688,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 10701.167,min_us => 8871.417}
+== r3 paced_qjs_compiled_on cand attempt 1 21:11  up 1 day, 11:22, 16 users, load averages: 4.24 4.47 5.01
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => qjs,
+  ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 7721,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 10410.666,min_us => 8870.084}
+== r3 paced_qjs_interp_on main attempt 1 21:11  up 1 day, 11:22, 16 users, load averages: 4.04 4.42 4.98
+#{mode => paced,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,warm_requests => 20,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 15169.875,min_us => 13873.125}
+== r3 paced_qjs_interp_on cand attempt 1 21:11  up 1 day, 11:22, 16 users, load averages: 4.45 4.49 5.00
+#{mode => paced,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,warm_requests => 20,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 15064.125,min_us => 13052.458}
+== r3 paced_lua_compiled_on main attempt 1 21:11  up 1 day, 11:22, 17 users, load averages: 4.82 4.56 5.02
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => lua,
+  ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 2,entry_ms => 1218,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 6091.25,min_us => 3908.417}
+== r3 paced_lua_compiled_on cand attempt 1 21:11  up 1 day, 11:22, 17 users, load averages: 4.53 4.51 5.00
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => lua,
+  ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 2,entry_ms => 1249,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 5680.541,min_us => 4167.959}
+== r3 paced_lua_interp_on main attempt 1 21:11  up 1 day, 11:23, 17 users, load averages: 4.41 4.48 4.99
+#{mode => paced,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,warm_requests => 20,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 9631.041,min_us => 7282.958}
+== r3 paced_lua_interp_on cand attempt 1 21:11  up 1 day, 11:23, 17 users, load averages: 4.13 4.42 4.96
+#{mode => paced,cache => "none",guest => lua,ahead => true,start_ms => 5,
+  tier => interp,verdict => ok,warm_requests => 20,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 9768.375,min_us => 8321.125}
+== r3 steady_py_entry_compiled_on main attempt 1 21:12  up 1 day, 11:23, 17 users, load averages: 4.04 4.40 4.95
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/main",
+  guest => py_entry,ahead => true,start_ms => 53,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2795,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 2481.792,min_us => 2112.542}
+== r3 steady_py_entry_compiled_on cand attempt 1 21:12  up 1 day, 11:23, 17 users, load averages: 4.60 4.50 4.98
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/cand",
+  guest => py_entry,ahead => true,start_ms => 46,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2745,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 3130.833,min_us => 2440.083}
+== r3 steady_py_entry_interp_on main attempt 1 21:12  up 1 day, 11:23, 17 users, load averages: 4.31 4.45 4.96
+#{mode => steady,cache => "none",guest => py_entry,ahead => true,
+  start_ms => 45,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4715.125,min_us => 4480.083}
+== r3 steady_py_entry_interp_on cand attempt 1 21:12  up 1 day, 11:23, 17 users, load averages: 4.31 4.45 4.96
+#{mode => steady,cache => "none",guest => py_entry,ahead => true,
+  start_ms => 46,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4751.208,min_us => 4553.542}
+== r3 steady_py_compiled_on main attempt 1 21:12  up 1 day, 11:23, 17 users, load averages: 4.28 4.44 4.95
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => py,
+  ahead => true,start_ms => 46,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 25459,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 16489.959,min_us => 15468.875}
+== r3 steady_py_compiled_on cand attempt 1 21:12  up 1 day, 11:24, 17 users, load averages: 3.83 4.30 4.88
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => py,
+  ahead => true,start_ms => 46,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 25355,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 19110.667,min_us => 16731.25}
+== r3 steady_py_interp_on main attempt 1 21:13  up 1 day, 11:24, 17 users, load averages: 3.82 4.26 4.85
+#{mode => steady,cache => "none",guest => py,ahead => true,start_ms => 49,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 27834.667,min_us => 24617.208}
+== r3 steady_py_interp_on cand attempt 1 21:13  up 1 day, 11:24, 17 users, load averages: 3.67 4.22 4.83
+#{mode => steady,cache => "none",guest => py,ahead => true,start_ms => 49,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 27760.292,min_us => 25128.917}
+== r3 steady_qjs_compiled_on main attempt 1 21:13  up 1 day, 11:24, 17 users, load averages: 3.64 4.19 4.81
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => qjs,
+  ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 8089,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 9112.667,min_us => 8003.041}
+== r3 steady_qjs_compiled_on cand attempt 1 21:13  up 1 day, 11:25, 17 users, load averages: 3.61 4.17 4.80
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => qjs,
+  ahead => true,start_ms => 9,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 8078,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8803.125,min_us => 7706.667}
+== r3 steady_qjs_interp_on main attempt 1 21:13  up 1 day, 11:25, 17 users, load averages: 3.52 4.13 4.78
+#{mode => steady,cache => "none",guest => qjs,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 14147.958,min_us => 13472.792}
+== r3 steady_qjs_interp_on cand attempt 1 21:13  up 1 day, 11:25, 17 users, load averages: 3.88 4.19 4.79
+#{mode => steady,cache => "none",guest => qjs,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13925.459,min_us => 12638.125}
+== r3 steady_lua_compiled_on main attempt 1 21:14  up 1 day, 11:25, 17 users, load averages: 3.97 4.21 4.79
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => lua,
+  ahead => true,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1243,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4628.417,min_us => 3962.708}
+== r3 steady_lua_compiled_on cand attempt 1 21:14  up 1 day, 11:25, 17 users, load averages: 3.97 4.21 4.79
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => lua,
+  ahead => true,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1247,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4891.958,min_us => 4015.291}
+== r3 steady_lua_interp_on main attempt 1 21:14  up 1 day, 11:25, 17 users, load averages: 3.89 4.19 4.78
+#{mode => steady,cache => "none",guest => lua,ahead => true,start_ms => 7,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7878.5,min_us => 7339.458}
+== r3 steady_lua_interp_on cand attempt 1 21:14  up 1 day, 11:25, 17 users, load averages: 3.89 4.19 4.78
+#{mode => steady,cache => "none",guest => lua,ahead => true,start_ms => 8,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8105.125,min_us => 7247.208}
+== r3 steady_py_entry_compiled_off main attempt 1 21:14  up 1 day, 11:25, 17 users, load averages: 3.89 4.19 4.78
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/main",
+  guest => py_entry,ahead => false,start_ms => 49,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2907,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 3903.083,min_us => 2786.667}
+== r3 steady_py_entry_compiled_off cand attempt 1 21:14  up 1 day, 11:25, 17 users, load averages: 3.82 4.17 4.77
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/cand",
+  guest => py_entry,ahead => false,start_ms => 49,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2927,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 4025.833,min_us => 2941.958}
+== r3 steady_py_entry_interp_off main attempt 1 21:14  up 1 day, 11:25, 17 users, load averages: 3.59 4.11 4.75
+#{mode => steady,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 47,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5493.583,min_us => 5163.5}
+== r3 steady_py_entry_interp_off cand attempt 1 21:14  up 1 day, 11:25, 17 users, load averages: 3.38 4.06 4.73
+#{mode => steady,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 48,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5534.291,min_us => 4970.084}
+== r3 steady_py_compiled_off main attempt 1 21:14  up 1 day, 11:25, 17 users, load averages: 3.38 4.06 4.73
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => py,
+  ahead => false,start_ms => 64,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 27187,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 19677.125,min_us => 17632.917}
+== r3 steady_py_compiled_off cand attempt 1 21:14  up 1 day, 11:26, 17 users, load averages: 3.63 4.05 4.70
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => py,
+  ahead => false,start_ms => 49,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 26759,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 19194.167,min_us => 17608.083}
+== r3 steady_py_interp_off main attempt 1 21:15  up 1 day, 11:26, 17 users, load averages: 3.79 4.05 4.67
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 48,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 25920.166,min_us => 23610.333}
+== r3 steady_py_interp_off cand attempt 1 21:15  up 1 day, 11:26, 17 users, load averages: 4.30 4.15 4.70
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 47,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 26266.667,min_us => 24819.042}
+== r3 steady_qjs_compiled_off main attempt 1 21:15  up 1 day, 11:27, 17 users, load averages: 4.36 4.16 4.70
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => qjs,
+  ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 8216,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 202,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8449.875,min_us => 7807.292}
+== r3 steady_qjs_compiled_off cand attempt 1 21:15  up 1 day, 11:27, 17 users, load averages: 3.92 4.07 4.66
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => qjs,
+  ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 8209,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8363.792,min_us => 7059.292}
+== r3 steady_qjs_interp_off main attempt 1 21:16  up 1 day, 11:27, 17 users, load averages: 3.71 4.02 4.64
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 7,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12672.0,min_us => 12163.667}
+== r3 steady_qjs_interp_off cand attempt 1 21:16  up 1 day, 11:27, 17 users, load averages: 3.49 3.97 4.61
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 8,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12635.375,min_us => 12264.083}
+== r3 steady_lua_compiled_off main attempt 1 21:16  up 1 day, 11:27, 17 users, load averages: 3.49 3.97 4.61
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1314,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4058.042,min_us => 3265.5}
+== r3 steady_lua_compiled_off cand attempt 1 21:16  up 1 day, 11:27, 17 users, load averages: 3.53 3.97 4.61
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1278,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 3774.083,min_us => 3152.541}
+== r3 steady_lua_interp_off main attempt 1 21:16  up 1 day, 11:27, 17 users, load averages: 3.53 3.97 4.61
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7300.958,min_us => 7013.375}
+== r3 steady_lua_interp_off cand attempt 1 21:16  up 1 day, 11:27, 17 users, load averages: 3.81 4.02 4.62
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 6,
+  tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7247.792,min_us => 7000.083}
+== r3 workers_py_entry_-_on main attempt 1 21:16  up 1 day, 11:27, 17 users, load averages: 3.81 4.02 4.62
+# 21:16  up 1 day, 11:27, 17 users, load averages: 3.81 4.02 4.62
+#{mode => busy,idle => ahead_ready,guest => py_entry,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1665365719},
+  pages_idle => 100,busy_increment_per_worker => 13805407.68,
+  charged_pages_per_worker => 7.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2355636103},
+  pages_busy => 450}
+== r3 workers_py_entry_-_on cand attempt 1 21:16  up 1 day, 11:27, 17 users, load averages: 4.75 4.22 4.69
+# 21:16  up 1 day, 11:27, 17 users, load averages: 4.75 4.22 4.69
+#{mode => busy,idle => ahead_ready,guest => py_entry,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1665254177},
+  pages_idle => 100,busy_increment_per_worker => 13209431.52,
+  charged_pages_per_worker => 7.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2325725753},
+  pages_busy => 450}
+== r3 learned_py_entry_-_on main attempt 1 21:16  up 1 day, 11:28, 17 users, load averages: 4.77 4.25 4.69
+# 21:16  up 1 day, 11:28, 17 users, load averages: 4.77 4.25 4.69
+#{mode => busy,idle => ahead_ready,guest => py_entry,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1666096943},
+  pages_idle => 100,busy_increment_per_worker => 14359941.76,
+  charged_pages_per_worker => 7.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2384094031},
+  pages_busy => 450}
+== r3 learned_py_entry_-_on cand attempt 1 21:16  up 1 day, 11:28, 17 users, load averages: 4.49 4.21 4.67
+# 21:16  up 1 day, 11:28, 17 users, load averages: 4.49 4.21 4.67
+#{mode => busy,idle => ahead_ready,guest => py_entry,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1684919833},
+  pages_idle => 254,busy_increment_per_worker => 792751.68,
+  charged_pages_per_worker => 3.92,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,1724557417},
+  pages_busy => 450}
+== r3 density_py_entry_-_- main attempt 1 21:17  up 1 day, 11:28, 17 users, load averages: 4.50 4.22 4.66
+# 21:17  up 1 day, 11:28, 17 users, load averages: 4.50 4.22 4.66
+#{count => 455,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => py_entry,pages_in_use => 4095,arm => density,
+  image_bytes => 8328192,verdict => ok,
+  refusals =>
+      [#{seq => 2276,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 2}],
+  shape => memory_limit}
+== r3 density_py_entry_-_- cand attempt 1 21:17  up 1 day, 11:28, 17 users, load averages: 4.30 4.18 4.65
+# 21:17  up 1 day, 11:28, 17 users, load averages: 4.30 4.18 4.65
+#{count => 455,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => py_entry,pages_in_use => 4095,arm => density,
+  image_bytes => 8328192,verdict => ok,
+  refusals =>
+      [#{seq => 2276,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 2}],
+  shape => memory_limit}
+== r3 workers_py_-_on main attempt 1 21:17  up 1 day, 11:28, 17 users, load averages: 4.25 4.17 4.64
+# 21:17  up 1 day, 11:28, 17 users, load averages: 4.25 4.17 4.64
+#{mode => busy,idle => ahead_ready,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1660923492},
+  pages_idle => 100,busy_increment_per_worker => 6669636.64,
+  charged_pages_per_worker => 31.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,1994405324},
+  pages_busy => 1650}
+== r3 workers_py_-_on cand attempt 1 21:17  up 1 day, 11:28, 17 users, load averages: 4.05 4.13 4.62
+# 21:17  up 1 day, 11:28, 17 users, load averages: 4.05 4.13 4.62
+#{mode => busy,idle => ahead_ready,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1663499054},
+  pages_idle => 100,busy_increment_per_worker => 5709739.36,
+  charged_pages_per_worker => 31.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,1948986022},
+  pages_busy => 1650}
+== r3 learned_py_-_on main attempt 1 21:17  up 1 day, 11:29, 17 users, load averages: 4.36 4.21 4.64
+# 21:17  up 1 day, 11:29, 17 users, load averages: 4.36 4.21 4.64
+#{mode => busy,idle => ahead_ready,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1664550492},
+  pages_idle => 100,busy_increment_per_worker => 14838381.44,
+  charged_pages_per_worker => 31.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2406469564},
+  pages_busy => 1650}
+== r3 learned_py_-_on cand attempt 1 21:18  up 1 day, 11:29, 17 users, load averages: 6.06 4.59 4.77
+# 21:18  up 1 day, 11:29, 17 users, load averages: 6.06 4.59 4.77
+#{mode => busy,idle => ahead_ready,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1747534934},
+  pages_idle => 850,busy_increment_per_worker => 13388314.56,
+  charged_pages_per_worker => 16.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2416950662},
+  pages_busy => 1650}
+== r3 density_py_-_- main attempt 1 21:18  up 1 day, 11:29, 17 users, load averages: 6.37 4.74 4.82
+# 21:18  up 1 day, 11:29, 17 users, load averages: 6.37 4.74 4.82
+#{count => 124,
+  failure =>
+      {error,decode,
+             {error,#{msg => <<"memory limit exceeded">>,
+                      kind => runtime_failure,class => runtime,
+                      ctx =>
+                          #{error =>
+                                #{msg => <<"memory limit exceeded">>,
+                                  kind => memory_limit,class => exhaustion,
+                                  ctx => #{func => 50,requested => 2}}}}}},
+  page_limit => 4096,guest => py,pages_in_use => 4092,arm => density,
+  image_bytes => 8328192,verdict => ok,
+  refusals =>
+      [#{seq => 872,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 2}],
+  shape => memory_limit_in_call}
+== r3 density_py_-_- cand attempt 1 21:18  up 1 day, 11:29, 17 users, load averages: 6.57 4.86 4.86
+# 21:18  up 1 day, 11:29, 17 users, load averages: 6.57 4.86 4.86
+#{count => 124,
+  failure =>
+      {error,decode,
+             {error,#{msg => <<"memory limit exceeded">>,
+                      kind => runtime_failure,class => runtime,
+                      ctx =>
+                          #{error =>
+                                #{msg => <<"memory limit exceeded">>,
+                                  kind => memory_limit,class => exhaustion,
+                                  ctx => #{func => 50,requested => 2}}}}}},
+  page_limit => 4096,guest => py,pages_in_use => 4092,arm => density,
+  image_bytes => 8328192,verdict => ok,
+  refusals =>
+      [#{seq => 872,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4095,n => 2}],
+  shape => memory_limit_in_call}
+== r3 workers_qjs_-_on main attempt 1 21:18  up 1 day, 11:29, 17 users, load averages: 5.84 4.79 4.84
+# 21:18  up 1 day, 11:29, 17 users, load averages: 5.84 4.79 4.84
+#{mode => busy,idle => ahead_ready,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,264780953},
+  pages_idle => 50,busy_increment_per_worker => 4805943.2,
+  charged_pages_per_worker => 3.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,505078113},
+  pages_busy => 200}
+== r3 workers_qjs_-_on cand attempt 1 21:18  up 1 day, 11:30, 17 users, load averages: 5.84 4.79 4.84
+# 21:18  up 1 day, 11:30, 17 users, load averages: 5.84 4.79 4.84
+#{mode => busy,idle => ahead_ready,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,265103307},
+  pages_idle => 50,busy_increment_per_worker => 4657914.72,
+  charged_pages_per_worker => 3.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,497999043},
+  pages_busy => 200}
+== r3 learned_qjs_-_on main attempt 1 21:18  up 1 day, 11:30, 17 users, load averages: 5.46 4.73 4.81
+# 21:18  up 1 day, 11:30, 17 users, load averages: 5.46 4.73 4.81
+#{mode => busy,idle => ahead_ready,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,266383537},
+  pages_idle => 50,busy_increment_per_worker => 4709690.88,
+  charged_pages_per_worker => 3.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,501868081},
+  pages_busy => 200}
+== r3 learned_qjs_-_on cand attempt 1 21:18  up 1 day, 11:30, 17 users, load averages: 5.42 4.73 4.81
+# 21:18  up 1 day, 11:30, 17 users, load averages: 5.42 4.73 4.81
+#{mode => busy,idle => ahead_ready,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,311638011},
+  pages_idle => 200,busy_increment_per_worker => 3748180.32,
+  charged_pages_per_worker => 0.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,499047027},
+  pages_busy => 200}
+== r3 density_qjs_-_- main attempt 1 21:18  up 1 day, 11:30, 17 users, load averages: 5.22 4.70 4.80
+# 21:18  up 1 day, 11:30, 17 users, load averages: 5.22 4.70 4.80
+#{count => 1024,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => qjs,pages_in_use => 4096,arm => density,
+  image_bytes => 393264,verdict => ok,
+  refusals =>
+      [#{seq => 4097,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4096,n => 1}],
+  shape => memory_limit}
+== r3 density_qjs_-_- cand attempt 1 21:19  up 1 day, 11:30, 17 users, load averages: 5.41 4.80 4.84
+# 21:19  up 1 day, 11:30, 17 users, load averages: 5.41 4.80 4.84
+#{count => 1024,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => qjs,pages_in_use => 4096,arm => density,
+  image_bytes => 393264,verdict => ok,
+  refusals =>
+      [#{seq => 4097,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4096,n => 1}],
+  shape => memory_limit}
+== r3 workers_lua_-_on main attempt 1 21:19  up 1 day, 11:31, 17 users, load averages: 4.65 4.67 4.79
+# 21:19  up 1 day, 11:31, 17 users, load averages: 4.65 4.67 4.79
+#{mode => busy,idle => ahead_ready,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,210832236},
+  pages_idle => 50,busy_increment_per_worker => 2940544.64,
+  charged_pages_per_worker => 1.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,357859468},
+  pages_busy => 100}
+== r3 workers_lua_-_on cand attempt 1 21:19  up 1 day, 11:31, 17 users, load averages: 5.88 4.92 4.88
+# 21:19  up 1 day, 11:31, 17 users, load averages: 5.88 4.92 4.88
+#{mode => busy,idle => ahead_ready,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,210748654},
+  pages_idle => 50,busy_increment_per_worker => 1852689.12,
+  charged_pages_per_worker => 1.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,303383110},
+  pages_busy => 100}
+== r3 learned_lua_-_on main attempt 1 21:19  up 1 day, 11:31, 17 users, load averages: 5.88 4.92 4.88
+# 21:19  up 1 day, 11:31, 17 users, load averages: 5.88 4.92 4.88
+#{mode => busy,idle => ahead_ready,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,210847516},
+  pages_idle => 50,busy_increment_per_worker => 3058457.76,
+  charged_pages_per_worker => 1.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,363770404},
+  pages_busy => 100}
+== r3 learned_lua_-_on cand attempt 1 21:19  up 1 day, 11:31, 17 users, load averages: 5.88 4.92 4.88
+# 21:19  up 1 day, 11:31, 17 users, load averages: 5.88 4.92 4.88
+#{mode => busy,idle => ahead_ready,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => true,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,217668326},
+  pages_idle => 100,busy_increment_per_worker => 2906581.76,
+  charged_pages_per_worker => 0.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,362997414},
+  pages_busy => 100}
+== r3 density_lua_-_- main attempt 1 21:19  up 1 day, 11:31, 17 users, load averages: 5.88 4.92 4.88
+# 21:19  up 1 day, 11:31, 17 users, load averages: 5.88 4.92 4.88
+#{count => 2048,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => lua,pages_in_use => 4096,arm => density,
+  image_bytes => 196632,verdict => ok,
+  refusals =>
+      [#{seq => 6145,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4096,n => 1}],
+  shape => memory_limit}
+== r3 density_lua_-_- cand attempt 1 21:20  up 1 day, 11:31, 17 users, load averages: 4.54 4.68 4.79
+# 21:20  up 1 day, 11:31, 17 users, load averages: 4.54 4.68 4.79
+#{count => 2048,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => lua,pages_in_use => 4096,arm => density,
+  image_bytes => 196632,verdict => ok,
+  refusals =>
+      [#{seq => 6145,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4096,n => 1}],
+  shape => memory_limit}
+== r3 density_lua_-_- main attempt 2 21:21  up 1 day, 11:32, 17 users, load averages: 6.07 5.68 5.20
+# 21:21  up 1 day, 11:32, 17 users, load averages: 6.07 5.68 5.20
+#{count => 2048,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => lua,pages_in_use => 4096,arm => density,
+  image_bytes => 196632,verdict => ok,
+  refusals =>
+      [#{seq => 6145,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4096,n => 1}],
+  shape => memory_limit}
+== r3 density_lua_-_- cand attempt 2 21:21  up 1 day, 11:33, 17 users, load averages: 5.18 5.51 5.15
+# 21:21  up 1 day, 11:33, 17 users, load averages: 5.18 5.51 5.15
+#{count => 2048,
+  failure => {restore,exhaustion,memory_limit,none},
+  page_limit => 4096,guest => lua,pages_in_use => 4096,arm => density,
+  image_bytes => 196632,verdict => ok,
+  refusals =>
+      [#{seq => 6145,
+         result => {error,limit},
+         limit => 4096,pages_in_use => 4096,n => 1}],
+  shape => memory_limit}

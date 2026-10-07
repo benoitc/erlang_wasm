@@ -1045,3 +1045,58 @@ and lua, compiled and interpreted; realbench qjs 0.998x; density identical.
 So a first write in pure Erlang costs what 512 puts cost. What remains is to
 make fewer of them in a request, or to make them before it arrives.
 Raw records: `test/audit/raw/fault-copy/`.
+
+## Preparing a request's write set while the worker is idle
+
+**With `restore_ahead` on, the ahead runner learned which image pages
+requests write and copied them into the next instance before the request
+arrived. It made a paced CPython request faster and a back-to-back one
+slower, and was reverted on the back-to-back gate.** Commit `3ec0153`,
+reverted by `c37ed85`.
+
+What it did: after each reply the runner read the restored memory's page
+table, kept the last 8 samples, and took the pages written in at least 7 as
+the set; after restoring the next instance it made each page of the set
+private with `ensure_private/2`, stopping when a request was queued, when free
+budget fell under twice the set, or on a refused copy. No option, no ABI
+change.
+
+Gates fixed before measuring, `main` (`4cba5fe`) against it, five rounds
+alternating which arm went first, fresh VMs at `+S 10:10`, load 2.1 to 9.4
+(one cell redone at 9.43):
+
+| gate | result | per-round cand/main |
+| --- | --- | --- |
+| 1: paced (20 ms after each reply), py_entry compiled, p50 =< 0.90x | 0.894x, pass | 0.902 0.855 0.895 0.908 0.833 |
+| 2: back to back, ahead on, every guest =< 1.03x | **fail** | py_entry compiled 1.046 (0.991 1.036 1.262 1.046 1.440); py_entry interp 1.042; py compiled 1.159 (1.055 1.037 1.159 1.190 1.179) |
+| 3: ahead off, every guest =< 1.03x | pass, 0.979 to 1.013 | |
+| 4: charged pages per worker, idle plus busy, =< 1.05x; density counts | pass, 1.000; counts identical | |
+| 5: prepared pages the request never wrote =< 5% | pass, 0 to 0.52% | |
+
+The other guests, paced: py compiled 0.939x, py interp 0.951x, py_entry
+interp 0.939x, qjs 0.973x and 0.988x, lua 0.987x and 1.013x. Back to back
+qjs and lua stayed within 0.966 to 0.988x and py interp at 0.995x.
+
+Two things were learned that a next attempt needs:
+
+- **A prepared page cannot be told apart from a written one by the page
+  table**, so the set would never shrink. The sample counted a prepared page
+  only if its bytes differed from the image. CPython writes about a fifth of
+  its pages and leaves them as they were (reference counts up and back down),
+  so those drop out of the sample whenever they are prepared and come back
+  when they fault: py_entry's prepared set alternated between 41 and 90 of
+  its 90 pages, 52 on average. Knowing that a request wrote a page needs the
+  first write to be seen, for example a slot filled ahead but published by the
+  fault, not a page made private ahead.
+- **The work after the reply competes with the next request.** Back to back,
+  the next request reaches the runner after several message hops, so the
+  scan, the byte comparison and the first copies of the next preparation had
+  started; py, which writes 255 pages, lost the most. The cost scales with the
+  set, the gain only exists with idle time.
+
+`densitybench workers` serves one warm request per worker, which is too few
+to learn a set, so gate 4 as written could not see the change: with
+`DENSITY_WARM=9` (a diagnostic added for this) py_entry moved 3 budget pages
+from busy to idle (busy 7 to 4, idle 2 to 5) and the total stayed 9.
+Raw records, scripts and the failing-before log of the six new tests:
+`test/audit/raw/ahead-prepare/`.

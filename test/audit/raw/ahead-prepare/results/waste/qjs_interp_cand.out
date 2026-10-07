@@ -1,0 +1,6 @@
+#{mode => paced,cache => "none",guest => qjs,ahead => true,start_ms => 131,
+  tier => interp,verdict => ok,warm_requests => 20,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 16024.0,min_us => 14096.292}

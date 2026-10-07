@@ -1,0 +1,11 @@
+main tree 4cba5fe (erlang_wasm-ap-main)
+cand tree 3ec0153 (erlang_wasm-ap-cand)
+inst trees: inst.py over 4cba5fe and 3ec0153, never timed
+# harness sources, from 3ec0153's bench/paths, compiled into each tree's bench/arb
+1c83b83ffd9722ce874519a94698c40b3b4e3f85eb9cf4fc3add780e841da995  requestbench.erl
+1495097ed0271c5adcfda18c7e042ff7e3ef59f6f6ffec860549c2d767ff3f9e  densitybench.erl
+80222c2505530f8634cbb01dcd578f68375eeab05664978e3519d05a6172c717  bench/paths/benchlib.erl
+6e230df932b57641fd4f7c0e5d6d07e217139e09b8989860a43587ed71e0953c  bench/paths/reactorlib.erl
+f714a8d33b7a871eab6e8135056c368588cd85726903d3acd7a4a132c8b17154  bench/paths/barrier_adapter.erl
+# cache: $HOME/.cache/wasm-ap/<arm>, primed by prime.sh
+# fixtures: test/fixtures/lang copied from erlang_wasm-shared-pages

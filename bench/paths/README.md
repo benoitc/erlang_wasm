@@ -961,9 +961,6 @@ erlc -o bench/paths -I include -pa _build/default/lib/wasm/ebin \
 - `first`: the first request of a fresh node;
 - `steady`: 20 warm-up requests interpreted, or requests until one enters
   generated code when compiled, then 200 timed;
-- `paced`: `steady` with every request sent 20 ms after the previous reply,
-  so the worker is idle between requests. Use it for what `restore_ahead`
-  does while the worker waits; `steady` is back to back and gives it no time;
 - `split`: the worker's per-request sequence replayed through the public
   `wasm` API, each phase timed apart (`restore`, `post`, `call`, `destroy`);
 - `firstwrite`: `split` on a tree built with the `arb_inst` counters, reading
@@ -975,9 +972,6 @@ erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
         "$PWD/_build/cache-a" raw/steady.terms
 erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
     -run requestbench main split py interp off none raw/split.terms
-erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \
-    -run requestbench main paced py_entry compiled on \
-        "$PWD/_build/cache-a" raw/paced.terms
 ```
 
 `split` and `firstwrite` need `restore_ahead` off and say `VOID` otherwise.

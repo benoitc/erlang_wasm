@@ -14,7 +14,7 @@ and run a first-request sample per VM.
     erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
         -run requestbench main steady py interp on none raw/steady.terms
 
-Arguments: the mode (`first`, `steady`, `paced`, `split`, `firstwrite`), the guest
+Arguments: the mode (`first`, `steady`, `split`, `firstwrite`), the guest
 (`py`, `py_entry`, `qjs`, `lua`), the tier (`interp`, `compiled`),
 `restore_ahead` (`on`, `off`), the code cache directory (`none` for none;
 compiled arms need one) and the raw file (`none` for none).
@@ -40,12 +40,6 @@ entering generated code, by a call trace on every `wasm_code_slots:slots/0`
 module seeing a `wasm_f_` function during the request (as
 `wasm_worker_lang_SUITE:compiled_requests`), within 25 minutes, then 200
 timed. The median and the samples go to the raw file.
-
-## `paced`
-
-As `steady`, but every request, warm-up and timed, is sent 20 ms after the
-previous reply, so the worker is idle between requests. `steady` is back to
-back. Use it for what `restore_ahead` does while the worker waits.
 
 ## `split`
 
@@ -91,7 +85,6 @@ Every answer is checked against the expected value.
 -define(TIMEOUT, 120_000).
 -define(IMAGES, "_build/requestbench/images").
 -define(ENTRY_DEADLINE_S, 25 * 60).
--define(PAUSE_MS, 20).
 
 %% 200 timed and 20 interpreted warm-up requests. `ARB_SMOKE` set to anything
 %% makes them 3 and 2, for a smoke run that proves a harness works and is
@@ -161,9 +154,6 @@ measure(first, _Tier, W, Request, Expected, Base) ->
     Us = timed(W, Request, Expected),
     Base#{verdict => ok, first_us => Us, resident_before => Resident,
           counts_before => Counts0, counts_after => wasm_jit:counts()};
-measure(paced, Tier, W, Request, Expected, Base) ->
-    put(pause_ms, ?PAUSE_MS),
-    measure(steady, Tier, W, Request, Expected, Base#{pause_ms => ?PAUSE_MS});
 measure(steady, interp, W, Request, Expected, Base) ->
     _ = [timed(W, Request, Expected) || _ <- lists:seq(1, warm())],
     steady(W, Request, Expected, Base#{warm_requests => warm()});
@@ -186,7 +176,6 @@ steady(W, Request, Expected, Base) ->
           counts => wasm_jit:counts()}.
 
 timed(W, Request, Expected) ->
-    ok = pause(),
     T0 = erlang:monotonic_time(nanosecond),
     R = wasm_script_worker:run(W, Request),
     T1 = erlang:monotonic_time(nanosecond),
@@ -207,7 +196,6 @@ traced(W, R, E, Deadline, N) ->
     Self = self(),
     Tracer = spawn_link(fun() -> generated_calls(Self, false) end),
     Mods = wasm_code_slots:slots(),
-    ok = pause(),
     [erlang:trace_pattern({Mod, '_', '_'}, true, [local]) || Mod <- Mods],
     _ = erlang:trace(all, true, [call, {tracer, Tracer}]),
     Got = wasm_script_worker:run(W, R),
@@ -222,13 +210,6 @@ traced(W, R, E, Deadline, N) ->
     case Seen of
         true -> {entered, N + 1};
         false -> until_generated(W, R, E, Deadline, N + 1)
-    end.
-
-%% `paced' only: the wait after the previous reply.
-pause() ->
-    case get(pause_ms) of
-        undefined -> ok;
-        Ms -> timer:sleep(Ms)
     end.
 
 generated_calls(Owner, Seen) ->

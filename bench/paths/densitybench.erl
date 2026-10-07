@@ -46,11 +46,7 @@ ahead runner holds its instance (`restore_ahead` on), the worker's
 request completed (off, on a build that does not). Then each worker takes one
 request, and with all N held at the barrier total is sampled again: the
 increment over N is the result. All N must then succeed with the expected
-value. `DENSITY_WARM=N` in the environment makes the warm phase N requests
-per worker rather than one: with `restore_ahead` on, eight or more let each
-runner learn the pages its requests write and prepare them while idle. With
-`restore_ahead` on, idle also waits until each runner is back in its loop
-with nothing queued.
+value.
 
 On a build that recycles, with `restore_ahead` off, the handoff is checked in
 two stages: the rows exist immediately before the busy requests go, within
@@ -250,9 +246,8 @@ workers(Name, N, Ahead, Mode) ->
 
 workers_1(Ws, Request, Expected, Ahead, Recycles, Mode, Base) ->
     N = length(Ws),
-    %% Warm: one request each, released at once, `DENSITY_WARM' times.
-    Warm = lists:last([serve(Ws, Request, release)
-                       || _ <- lists:seq(1, warm())]),
+    %% Warm: one request each, released at once.
+    Warm = serve(Ws, Request, release),
     ok = all_expected(warm, Warm, Expected),
     %% The first to finish bounds the handoff window, the last the expiry.
     Times = [T || {_, T, _} <- Warm],
@@ -399,8 +394,6 @@ recycles() ->
 idle_check(Ws, true, _Recycles) ->
     Missing = [W || W <- Ws, not inspect(fun() -> ahead_ready(W, 6000) end)],
     Missing =:= [] orelse throw({void, {ahead_not_ready, length(Missing)}}),
-    Busy = [W || W <- Ws, not inspect(fun() -> settled(W, 6000) end)],
-    Busy =:= [] orelse throw({void, {ahead_not_settled, length(Busy)}}),
     ahead_ready;
 idle_check(Ws, false, true) ->
     Missing = [W || W <- Ws,
@@ -433,25 +426,6 @@ ahead_ready(W, N) ->
                     false
             end,
     Ready orelse begin timer:sleep(10), ahead_ready(W, N - 1) end.
-
-%% The runner back in its loop with nothing queued: whatever it does between
-%% requests after the restore is done.
-settled(_W, 0) -> false;
-settled(W, N) ->
-    {monitors, [{process, Runner}]} = process_info(W, monitors),
-    Idle = process_info(Runner, [status, current_function, message_queue_len])
-        =:= [{status, waiting},
-             {current_function, {wasm_script_worker, ahead_loop, 2}},
-             {message_queue_len, 0}],
-    Idle orelse begin timer:sleep(10), settled(W, N - 1) end.
-
-%% Warm requests per worker before the idle sample: one unless
-%% `DENSITY_WARM' says otherwise.
-warm() ->
-    case os:getenv("DENSITY_WARM") of
-        false -> 1;
-        N -> list_to_integer(N)
-    end.
 
 poll(_F, 0) -> false;
 poll(F, N) -> F() orelse begin timer:sleep(10), poll(F, N - 1) end.

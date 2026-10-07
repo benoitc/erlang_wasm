@@ -51,7 +51,7 @@ restore twice. The bounds are still checked, because they trap.
 -export([new/2, new/3, exports/1, export_kind/2, func_type/2, global_type/2]).
 -export([params_of/2, value_matches/2]).
 -export([tag/2, default_value/1]).
--export([mut/1, set_mut/2, memory/2, memories/1, heap/1]).
+-export([mut/1, set_mut/2, memory/2, heap/1]).
 -export([root_view/1, mut_of/1, elems_of/1, release/1]).
 -export([remember/1, lookup/1, body_of/2]).
 -export([identity/1, module_handle/1, code_slot/1, set_code_slot/2,
@@ -1618,12 +1618,6 @@ params_of(Inst, Name) ->
 memory(Inst, Idx) ->
     #mut{mems = Mems} = mut(Inst),
     element(Idx + 1, Mems).
-
--doc "Every memory of the instance, in index order.".
--spec memories(#inst{}) -> [wasm_memory:mem()].
-memories(Inst) ->
-    #mut{mems = Mems} = mut(Inst),
-    tuple_to_list(Mems).
 
 %%% ------------------------------------------------------ mutable-state holder ---
 %%

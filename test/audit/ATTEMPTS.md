@@ -1100,3 +1100,34 @@ to learn a set, so gate 4 as written could not see the change: with
 from busy to idle (busy 7 to 4, idle 2 to 5) and the total stayed 9.
 Raw records, scripts and the failing-before log of the six new tests:
 `test/audit/raw/ahead-prepare/`.
+
+## Caching image pages for loads
+
+**Letting memory 0's translation cache also hold an untouched image page, so
+a repeated load from it skips the page-table lookup. Not built: estimated
+inside the noise band once made correct.**
+
+- **It has to check the table on every hit.** A restored memory can be
+  exported, and another process can call the instance or write its memory
+  (`wasm:write_memory/3`) during a call; its first write faults the page
+  through the shared table. The cache's correctness today rests on holding
+  only array translations, which never go stale whatever another process does.
+  An image entry would go stale exactly when another process privatises the
+  page, and no point in the generated code regains control to notice. So a hit
+  must re-read `atomics:get(Tab, Pg + 1) =:= 0`, which keeps the lookup's main
+  cost and saves only the bounds test, the image-size compare and two
+  `element/2` calls: about 5 to 10 ns a hit.
+- **Fewer hits than the repeat counts suggest.** Image reads that repeat one of
+  the last two image pages were 1,595 of 2,923 for py_entry and 6,072 of 6,654
+  for qjs, but array accesses between them evict the two shared entries.
+- **Estimate:** 10 to 50 us a request, about 1% of a compiled QuickJS request,
+  under the 1.03x tolerance every gate here uses.
+
+**The A4 list is closed with this.** What remains on it, resolving a page once
+for a group of accesses (at most 0.05 ms py_entry, 0.2 ms qjs), carrying the
+cache less (at most 0.1 ms py_entry, about none qjs) and cheaper table
+descriptors, is estimated at or below the same size. The larger cost is the
+first-write copy, which is the cost of 512 `atomics:put` a page (the entry on
+eight words a clause above) and moves off a request only when the worker is
+idle (the entry on preparing the write set). Reopen this list only with a
+trace showing a per-access cost larger than these estimates.

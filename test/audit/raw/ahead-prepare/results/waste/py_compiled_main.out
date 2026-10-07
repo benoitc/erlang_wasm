@@ -1,0 +1,7 @@
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/main",guest => py,
+  ahead => true,start_ms => 51,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 30628,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 22366.209,min_us => 20073.542}

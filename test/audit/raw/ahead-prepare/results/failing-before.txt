@@ -1,0 +1,31 @@
+# Each new case run with its guarded line reverted (revert.py), on 3ec0153's tree.
+== revert 1
+%%% wasm_worker_kernel_SUITE ==> ahead_prepare.prepared_pages_do_not_fault: FAILED
+Failure/Error: ?assertEqual([3,10,20,40], prepared ( W ))
+  expected: [3,10,20,40]
+       got: []
+== revert 2
+%%% wasm_worker_kernel_SUITE ==> ahead_prepare.a_page_no_longer_written_leaves_the_set: FAILED
+Failure/Error: ?assertEqual([3,10,20,40], prepared ( W ))
+  expected: [3,10,20,40]
+       got: [3,10,20,40,50]
+== revert 3
+%%% wasm_worker_kernel_SUITE ==> ahead_prepare.a_request_during_preparation_stops_it: FAILED
+Failure/Error: ?assertMatch({ ok , # { values := [ 1 ] , private_at_start := [ 3 ] , faults := 3 } }, Answer)
+  expected: = { ok , # { values := [ 1 ] , private_at_start := [ 3 ] , faults := 3 } }
+       got: {ok,#{values => [1],faults => 0,private_at_start => [3,10,20,40]}}
+== revert 4
+%%% wasm_worker_kernel_SUITE ==> ahead_prepare.with_little_budget_nothing_is_prepared: FAILED
+Failure/Error: ?assertEqual([], prepared ( W ))
+  expected: []
+       got: [3,10,20,40]
+== revert 5
+%%% wasm_worker_kernel_SUITE ==> ahead_prepare.a_refused_preparation_leaves_the_runner_alive: FAILED
+Failure/Error: ?assertEqual([0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15], prepared ( W ))
+  expected: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+       got: []
+== revert 6
+%%% wasm_worker_kernel_SUITE ==> ahead_prepare.a_shared_memory_is_never_learned: FAILED
+Failure/Error: ?assertEqual([{1,{mem,#Ref<0.4142268813.666632193.26701>,{image},1,undefined,undefined,1,false,i32,16,{process,<0.927.0>},65536,{<<1,0,0,0,0,0,0,
+  expected: [{1,
+       got: [{0,

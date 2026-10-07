@@ -1,0 +1,578 @@
+
+density lua - ahead=- count
+  r1  main=2048  cand=2048
+  r2  main=2048  cand=2048
+  r3  main=2048  cand=2048
+  r4  main=2048  cand=2048
+  r5  main=2048  cand=2048
+  med main=2048  cand=2048
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+density py - ahead=- count
+  r1  main=124  cand=124
+  r2  main=124  cand=124
+  r3  main=124  cand=124
+  r4  main=124  cand=124
+  r5  main=124  cand=124
+  med main=124  cand=124
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+density py_entry - ahead=- count
+  r1  main=455  cand=455
+  r2  main=455  cand=455
+  r3  main=455  cand=455
+  r4  main=455  cand=455
+  r5  main=455  cand=455
+  med main=455  cand=455
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+density qjs - ahead=- count
+  r1  main=1024  cand=1024
+  r2  main=1024  cand=1024
+  r3  main=1024  cand=1024
+  r4  main=1024  cand=1024
+  r5  main=1024  cand=1024
+  med main=1024  cand=1024
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+learned lua - ahead=on busy_increment_bytes
+  r1  main=2525332.1600  cand=3403168.3200
+  r2  main=2206906.0800  cand=3018056.3200
+  r3  main=3058457.7600  cand=2906581.7600
+  r4  main=2809264.8000  cand=3286596.1600
+  r5  main=2156541.2800  cand=2933625.6000
+  med main=2525332.1600  cand=3018056.3200
+  cand/main per round [1.348 1.368 0.950 1.170 1.360]  median 1.3476
+
+learned lua - ahead=on busy_pages_per_worker
+  r1  main=1.0000  cand=0.0000
+  r2  main=1.0000  cand=0.0000
+  r3  main=1.0000  cand=0.0000
+  r4  main=1.0000  cand=0.0000
+  r5  main=1.0000  cand=0.0000
+  med main=1.0000  cand=0.0000
+  cand/main per round [0.000 0.000 0.000 0.000 0.000]  median 0.0000
+
+learned lua - ahead=on idle_pages_per_worker
+  r1  main=1.0000  cand=2.0000
+  r2  main=1.0000  cand=2.0000
+  r3  main=1.0000  cand=2.0000
+  r4  main=1.0000  cand=2.0000
+  r5  main=1.0000  cand=2.0000
+  med main=1.0000  cand=2.0000
+  cand/main per round [2.000 2.000 2.000 2.000 2.000]  median 2.0000
+
+learned lua - ahead=on total_pages_per_worker
+  r1  main=2.0000  cand=2.0000
+  r2  main=2.0000  cand=2.0000
+  r3  main=2.0000  cand=2.0000
+  r4  main=2.0000  cand=2.0000
+  r5  main=2.0000  cand=2.0000
+  med main=2.0000  cand=2.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+learned py - ahead=on busy_increment_bytes
+  r1  main=14747131.3600  cand=13755649.4400
+  r2  main=14930958.0800  cand=13796093.4400
+  r3  main=14838381.4400  cand=13388314.5600
+  r4  main=14289014.0800  cand=14029662.2400
+  r5  main=15297926.7200  cand=14141948.9600
+  med main=14838381.4400  cand=13796093.4400
+  cand/main per round [0.933 0.924 0.902 0.982 0.924]  median 0.9244
+
+learned py - ahead=on busy_pages_per_worker
+  r1  main=31.0000  cand=16.0000
+  r2  main=31.0000  cand=16.0000
+  r3  main=31.0000  cand=16.0000
+  r4  main=31.0000  cand=16.0000
+  r5  main=31.0000  cand=15.6800
+  med main=31.0000  cand=16.0000
+  cand/main per round [0.516 0.516 0.516 0.516 0.506]  median 0.5161
+
+learned py - ahead=on idle_pages_per_worker
+  r1  main=2.0000  cand=17.0000
+  r2  main=2.0000  cand=17.0000
+  r3  main=2.0000  cand=17.0000
+  r4  main=2.0000  cand=17.0000
+  r5  main=2.0000  cand=17.3200
+  med main=2.0000  cand=17.0000
+  cand/main per round [8.500 8.500 8.500 8.500 8.660]  median 8.5000
+
+learned py - ahead=on total_pages_per_worker
+  r1  main=33.0000  cand=33.0000
+  r2  main=33.0000  cand=33.0000
+  r3  main=33.0000  cand=33.0000
+  r4  main=33.0000  cand=33.0000
+  r5  main=33.0000  cand=33.0000
+  med main=33.0000  cand=33.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+learned py_entry - ahead=on busy_increment_bytes
+  r1  main=13668473.4400  cand=800918.8800
+  r2  main=14177392.0000  cand=804787.3600
+  r3  main=14359941.7600  cand=792751.6800
+  r4  main=14407447.2000  cand=803064.6400
+  r5  main=14176636.9600  cand=796416.4800
+  med main=14177392.0000  cand=800918.8800
+  cand/main per round [0.059 0.057 0.055 0.056 0.056]  median 0.0562
+
+learned py_entry - ahead=on busy_pages_per_worker
+  r1  main=7.0000  cand=4.0000
+  r2  main=7.0000  cand=4.0000
+  r3  main=7.0000  cand=3.9200
+  r4  main=7.0000  cand=4.0000
+  r5  main=7.0000  cand=3.9200
+  med main=7.0000  cand=4.0000
+  cand/main per round [0.571 0.571 0.560 0.571 0.560]  median 0.5714
+
+learned py_entry - ahead=on idle_pages_per_worker
+  r1  main=2.0000  cand=5.0000
+  r2  main=2.0000  cand=5.0000
+  r3  main=2.0000  cand=5.0800
+  r4  main=2.0000  cand=5.0000
+  r5  main=2.0000  cand=5.0800
+  med main=2.0000  cand=5.0000
+  cand/main per round [2.500 2.500 2.540 2.500 2.540]  median 2.5000
+
+learned py_entry - ahead=on total_pages_per_worker
+  r1  main=9.0000  cand=9.0000
+  r2  main=9.0000  cand=9.0000
+  r3  main=9.0000  cand=9.0000
+  r4  main=9.0000  cand=9.0000
+  r5  main=9.0000  cand=9.0000
+  med main=9.0000  cand=9.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+learned qjs - ahead=on busy_increment_bytes
+  r1  main=4547648.8000  cand=3749282.7200
+  r2  main=4657218.5600  cand=3750758.7200
+  r3  main=4709690.8800  cand=3748180.3200
+  r4  main=4604802.2400  cand=3890151.6800
+  r5  main=4708320.9600  cand=3850860.3200
+  med main=4657218.5600  cand=3750758.7200
+  cand/main per round [0.824 0.805 0.796 0.845 0.818]  median 0.8179
+
+learned qjs - ahead=on busy_pages_per_worker
+  r1  main=3.0000  cand=0.0000
+  r2  main=3.0000  cand=0.0000
+  r3  main=3.0000  cand=0.0000
+  r4  main=3.0000  cand=0.0000
+  r5  main=3.0000  cand=0.0000
+  med main=3.0000  cand=0.0000
+  cand/main per round [0.000 0.000 0.000 0.000 0.000]  median 0.0000
+
+learned qjs - ahead=on idle_pages_per_worker
+  r1  main=1.0000  cand=4.0000
+  r2  main=1.0000  cand=4.0000
+  r3  main=1.0000  cand=4.0000
+  r4  main=1.0000  cand=4.0000
+  r5  main=1.0000  cand=4.0000
+  med main=1.0000  cand=4.0000
+  cand/main per round [4.000 4.000 4.000 4.000 4.000]  median 4.0000
+
+learned qjs - ahead=on total_pages_per_worker
+  r1  main=4.0000  cand=4.0000
+  r2  main=4.0000  cand=4.0000
+  r3  main=4.0000  cand=4.0000
+  r4  main=4.0000  cand=4.0000
+  r5  main=4.0000  cand=4.0000
+  med main=4.0000  cand=4.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+paced lua compiled ahead=on p50
+  r1  main=9272.3750  cand=9249.2500
+  r2  main=7922.1250  cand=7650.9160
+  r3  main=6091.2500  cand=5680.5410
+  r4  main=10238.5000  cand=10108.0830
+  r5  main=5880.6250  cand=5917.3750
+  med main=7922.1250  cand=7650.9160
+  cand/main per round [0.998 0.966 0.933 0.987 1.006]  median 0.9873
+
+paced lua interp ahead=on p50
+  r1  main=10249.4170  cand=10747.0830
+  r2  main=10364.8750  cand=10414.1250
+  r3  main=9631.0410  cand=9768.3750
+  r4  main=11456.4580  cand=11606.3750
+  r5  main=10458.8340  cand=9823.5000
+  med main=10364.8750  cand=10414.1250
+  cand/main per round [1.049 1.005 1.014 1.013 0.939]  median 1.0131
+
+paced py compiled ahead=on p50
+  r1  main=19519.7500  cand=18696.9580
+  r2  main=20329.3750  cand=18687.1670
+  r3  main=16207.6250  cand=15219.9170
+  r4  main=19107.6250  cand=16938.4170
+  r5  main=18247.4170  cand=17397.3750
+  med main=19107.6250  cand=17397.3750
+  cand/main per round [0.958 0.919 0.939 0.886 0.953]  median 0.9391
+
+paced py interp ahead=on p50
+  r1  main=27563.6250  cand=26202.6250
+  r2  main=27483.4170  cand=26535.3340
+  r3  main=26054.5420  cand=24750.7920
+  r4  main=27241.9590  cand=26202.9590
+  r5  main=26525.9170  cand=24849.5830
+  med main=27241.9590  cand=26202.6250
+  cand/main per round [0.951 0.966 0.950 0.962 0.937]  median 0.9506
+
+paced py_entry compiled ahead=on p50
+  r1  main=9292.2090  cand=8384.6670
+  r2  main=9460.1670  cand=8091.5000
+  r3  main=5061.2500  cand=4527.4580
+  r4  main=5212.0000  cand=4733.4580
+  r5  main=5307.1660  cand=4420.7080
+  med main=5307.1660  cand=4733.4580
+  cand/main per round [0.902 0.855 0.895 0.908 0.833]  median 0.8945
+
+paced py_entry interp ahead=on p50
+  r1  main=9542.7090  cand=8604.7500
+  r2  main=9303.3330  cand=8895.3340
+  r3  main=7404.7090  cand=7212.4590
+  r4  main=7392.4170  cand=6943.4160
+  r5  main=7351.7910  cand=6818.7500
+  med main=7404.7090  cand=7212.4590
+  cand/main per round [0.902 0.956 0.974 0.939 0.927]  median 0.9393
+
+paced qjs compiled ahead=on p50
+  r1  main=10358.2500  cand=10383.8750
+  r2  main=11865.4160  cand=11072.0420
+  r3  main=10701.1670  cand=10410.6660
+  r4  main=11714.7080  cand=11598.7910
+  r5  main=9737.5000  cand=9346.7920
+  med main=10701.1670  cand=10410.6660
+  cand/main per round [1.002 0.933 0.973 0.990 0.960]  median 0.9729
+
+paced qjs interp ahead=on p50
+  r1  main=19017.7500  cand=14013.2500
+  r2  main=15949.9580  cand=15762.3330
+  r3  main=15169.8750  cand=15064.1250
+  r4  main=13921.1670  cand=13723.7500
+  r5  main=15132.0000  cand=14974.8750
+  med main=15169.8750  cand=14974.8750
+  cand/main per round [0.737 0.988 0.993 0.986 0.990]  median 0.9882
+
+steady lua compiled ahead=off p50
+  r1  main=4476.7920  cand=4487.1670
+  r2  main=3358.6250  cand=3187.7910
+  r3  main=4058.0420  cand=3774.0830
+  r4  main=3339.5000  cand=3360.3750
+  r5  main=3322.0000  cand=3341.1670
+  med main=3358.6250  cand=3360.3750
+  cand/main per round [1.002 0.949 0.930 1.006 1.006]  median 1.0023
+
+steady lua compiled ahead=on p50
+  r1  main=4411.5840  cand=4357.4170
+  r2  main=3371.6670  cand=3891.9160
+  r3  main=4628.4170  cand=4891.9580
+  r4  main=3442.6670  cand=3370.9170
+  r5  main=4289.7080  cand=3820.9580
+  med main=4289.7080  cand=3891.9160
+  cand/main per round [0.988 1.154 1.057 0.979 0.891]  median 0.9877
+
+steady lua interp ahead=off p50
+  r1  main=7699.7500  cand=7689.8750
+  r2  main=7397.8750  cand=7288.2080
+  r3  main=7300.9580  cand=7247.7920
+  r4  main=7040.2080  cand=6993.5000
+  r5  main=7000.2090  cand=7020.8750
+  med main=7300.9580  cand=7247.7920
+  cand/main per round [0.999 0.985 0.993 0.993 1.003]  median 0.9934
+
+steady lua interp ahead=on p50
+  r1  main=7775.7080  cand=7677.0000
+  r2  main=7298.2500  cand=7259.3330
+  r3  main=7878.5000  cand=8105.1250
+  r4  main=7214.2500  cand=7108.2090
+  r5  main=7849.0830  cand=7577.0420
+  med main=7775.7080  cand=7577.0420
+  cand/main per round [0.987 0.995 1.029 0.985 0.965]  median 0.9873
+
+steady py compiled ahead=off p50
+  r1  main=19061.7500  cand=19146.8330
+  r2  main=16549.7090  cand=16577.4580
+  r3  main=19677.1250  cand=19194.1670
+  r4  main=18706.2920  cand=19074.4590
+  r5  main=16787.4170  cand=16855.0000
+  med main=18706.2920  cand=19074.4590
+  cand/main per round [1.004 1.002 0.975 1.020 1.004]  median 1.0040
+
+steady py compiled ahead=on p50
+  r1  main=19188.5410  cand=20249.6250
+  r2  main=16286.0420  cand=16883.7920
+  r3  main=16489.9590  cand=19110.6670
+  r4  main=16191.0000  cand=19273.8330
+  r5  main=16603.1660  cand=19581.3750
+  med main=16489.9590  cand=19273.8330
+  cand/main per round [1.055 1.037 1.159 1.190 1.179]  median 1.1589
+
+steady py interp ahead=off p50
+  r1  main=25698.7090  cand=26131.9590
+  r2  main=25090.5830  cand=25050.4580
+  r3  main=25920.1660  cand=26266.6670
+  r4  main=23585.2910  cand=25722.0840
+  r5  main=23524.1670  cand=23006.0830
+  med main=25090.5830  cand=25722.0840
+  cand/main per round [1.017 0.998 1.013 1.091 0.978]  median 1.0134
+
+steady py interp ahead=on p50
+  r1  main=28384.8750  cand=28575.6250
+  r2  main=25548.5420  cand=25408.9170
+  r3  main=27834.6670  cand=27760.2920
+  r4  main=24951.7910  cand=24829.0830
+  r5  main=27125.3330  cand=26429.0420
+  med main=27125.3330  cand=26429.0420
+  cand/main per round [1.007 0.995 0.997 0.995 0.974]  median 0.9951
+
+steady py_entry compiled ahead=off p50
+  r1  main=3876.7090  cand=3703.2500
+  r2  main=2840.2910  cand=2805.6670
+  r3  main=3903.0830  cand=4025.8330
+  r4  main=2836.1660  cand=2776.8340
+  r5  main=3965.6250  cand=2873.3750
+  med main=3876.7090  cand=2873.3750
+  cand/main per round [0.955 0.988 1.031 0.979 0.725]  median 0.9791
+
+steady py_entry compiled ahead=on p50
+  r1  main=3398.8750  cand=3368.6250
+  r2  main=3020.6250  cand=3130.1250
+  r3  main=2481.7920  cand=3130.8330
+  r4  main=2886.7920  cand=3020.8330
+  r5  main=2436.7920  cand=3508.3330
+  med main=2886.7920  cand=3130.8330
+  cand/main per round [0.991 1.036 1.262 1.046 1.440]  median 1.0464
+
+steady py_entry interp ahead=off p50
+  r1  main=5473.8330  cand=5410.6250
+  r2  main=4920.9580  cand=4905.0000
+  r3  main=5493.5830  cand=5534.2910
+  r4  main=4876.2500  cand=4876.8750
+  r5  main=4963.5830  cand=4953.4580
+  med main=4963.5830  cand=4953.4580
+  cand/main per round [0.988 0.997 1.007 1.000 0.998]  median 0.9980
+
+steady py_entry interp ahead=on p50
+  r1  main=5332.5000  cand=5556.0830
+  r2  main=4758.4580  cand=5149.5830
+  r3  main=4715.1250  cand=4751.2080
+  r4  main=4960.9160  cand=5168.2080
+  r5  main=5078.5830  cand=5030.5420
+  med main=4960.9160  cand=5149.5830
+  cand/main per round [1.042 1.082 1.008 1.042 0.991]  median 1.0418
+
+steady qjs compiled ahead=off p50
+  r1  main=9268.5420  cand=9278.1250
+  r2  main=6528.0830  cand=6555.0000
+  r3  main=8449.8750  cand=8363.7920
+  r4  main=8696.5830  cand=6652.3330
+  r5  main=6467.4580  cand=6431.5000
+  med main=8449.8750  cand=6652.3330
+  cand/main per round [1.001 1.004 0.990 0.765 0.994]  median 0.9944
+
+steady qjs compiled ahead=on p50
+  r1  main=9947.2920  cand=9066.7910
+  r2  main=8176.3750  cand=8109.1670
+  r3  main=9112.6670  cand=8803.1250
+  r4  main=6444.2080  cand=6492.7090
+  r5  main=8910.3750  cand=8425.0420
+  med main=8910.3750  cand=8425.0420
+  cand/main per round [0.911 0.992 0.966 1.008 0.946]  median 0.9660
+
+steady qjs interp ahead=off p50
+  r1  main=13073.7910  cand=13172.3750
+  r2  main=11820.9590  cand=11734.0000
+  r3  main=12672.0000  cand=12635.3750
+  r4  main=12097.9170  cand=12456.5000
+  r5  main=11720.9170  cand=11608.6250
+  med main=12097.9170  cand=12456.5000
+  cand/main per round [1.008 0.993 0.997 1.030 0.990]  median 0.9971
+
+steady qjs interp ahead=on p50
+  r1  main=13993.7080  cand=13626.1250
+  r2  main=14315.6250  cand=13430.9580
+  r3  main=14147.9580  cand=13925.4590
+  r4  main=12498.3750  cand=12376.0420
+  r5  main=13698.2090  cand=13574.8750
+  med main=13993.7080  cand=13574.8750
+  cand/main per round [0.974 0.938 0.984 0.990 0.991]  median 0.9843
+
+workers lua - ahead=on busy_increment_bytes
+  r1  main=1634380.0000  cand=2350376.1600
+  r2  main=2197609.9200  cand=1799030.2400
+  r3  main=2940544.6400  cand=1852689.1200
+  r4  main=2135173.1200  cand=1609896.4800
+  r5  main=2681720.6400  cand=2169690.7200
+  med main=2197609.9200  cand=1852689.1200
+  cand/main per round [1.438 0.819 0.630 0.754 0.809]  median 0.8091
+
+workers lua - ahead=on busy_pages_per_worker
+  r1  main=1.0000  cand=1.0000
+  r2  main=1.0000  cand=1.0000
+  r3  main=1.0000  cand=1.0000
+  r4  main=1.0000  cand=1.0000
+  r5  main=1.0000  cand=1.0000
+  med main=1.0000  cand=1.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers lua - ahead=on idle_pages_per_worker
+  r1  main=1.0000  cand=1.0000
+  r2  main=1.0000  cand=1.0000
+  r3  main=1.0000  cand=1.0000
+  r4  main=1.0000  cand=1.0000
+  r5  main=1.0000  cand=1.0000
+  med main=1.0000  cand=1.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers lua - ahead=on total_pages_per_worker
+  r1  main=2.0000  cand=2.0000
+  r2  main=2.0000  cand=2.0000
+  r3  main=2.0000  cand=2.0000
+  r4  main=2.0000  cand=2.0000
+  r5  main=2.0000  cand=2.0000
+  med main=2.0000  cand=2.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers py - ahead=on busy_increment_bytes
+  r1  main=6029291.6800  cand=6164368.8000
+  r2  main=5615733.6000  cand=5110092.4800
+  r3  main=6669636.6400  cand=5709739.3600
+  r4  main=6302688.8000  cand=7357761.6000
+  r5  main=5243085.2800  cand=7681557.7600
+  med main=6029291.6800  cand=6164368.8000
+  cand/main per round [1.022 0.910 0.856 1.167 1.465]  median 1.0224
+
+workers py - ahead=on busy_pages_per_worker
+  r1  main=31.0000  cand=31.0000
+  r2  main=31.0000  cand=31.0000
+  r3  main=31.0000  cand=31.0000
+  r4  main=31.0000  cand=31.0000
+  r5  main=31.0000  cand=31.0000
+  med main=31.0000  cand=31.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers py - ahead=on idle_pages_per_worker
+  r1  main=2.0000  cand=2.0000
+  r2  main=2.0000  cand=2.0000
+  r3  main=2.0000  cand=2.0000
+  r4  main=2.0000  cand=2.0000
+  r5  main=2.0000  cand=2.0000
+  med main=2.0000  cand=2.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers py - ahead=on total_pages_per_worker
+  r1  main=33.0000  cand=33.0000
+  r2  main=33.0000  cand=33.0000
+  r3  main=33.0000  cand=33.0000
+  r4  main=33.0000  cand=33.0000
+  r5  main=33.0000  cand=33.0000
+  med main=33.0000  cand=33.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers py_entry - ahead=on busy_increment_bytes
+  r1  main=11823297.4400  cand=9146009.1200
+  r2  main=12611916.0000  cand=12936230.4000
+  r3  main=13805407.6800  cand=13209431.5200
+  r4  main=13425089.4400  cand=11455485.1200
+  r5  main=11453619.8400  cand=13030724.3200
+  med main=12611916.0000  cand=12936230.4000
+  cand/main per round [0.774 1.026 0.957 0.853 1.138]  median 0.9568
+
+workers py_entry - ahead=on busy_pages_per_worker
+  r1  main=7.0000  cand=7.0000
+  r2  main=7.0000  cand=7.0000
+  r3  main=7.0000  cand=7.0000
+  r4  main=7.0000  cand=7.0000
+  r5  main=7.0000  cand=7.0000
+  med main=7.0000  cand=7.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers py_entry - ahead=on idle_pages_per_worker
+  r1  main=2.0000  cand=2.0000
+  r2  main=2.0000  cand=2.0000
+  r3  main=2.0000  cand=2.0000
+  r4  main=2.0000  cand=2.0000
+  r5  main=2.0000  cand=2.0000
+  med main=2.0000  cand=2.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers py_entry - ahead=on total_pages_per_worker
+  r1  main=9.0000  cand=9.0000
+  r2  main=9.0000  cand=9.0000
+  r3  main=9.0000  cand=9.0000
+  r4  main=9.0000  cand=9.0000
+  r5  main=9.0000  cand=9.0000
+  med main=9.0000  cand=9.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers qjs - ahead=on busy_increment_bytes
+  r1  main=4699513.4400  cand=4844133.2800
+  r2  main=4381844.0000  cand=4555806.4000
+  r3  main=4805943.2000  cand=4657914.7200
+  r4  main=5118325.2800  cand=4750815.2000
+  r5  main=4605678.7200  cand=4709179.5200
+  med main=4699513.4400  cand=4709179.5200
+  cand/main per round [1.031 1.040 0.969 0.928 1.022]  median 1.0225
+
+workers qjs - ahead=on busy_pages_per_worker
+  r1  main=3.0000  cand=3.0000
+  r2  main=3.0000  cand=3.0000
+  r3  main=3.0000  cand=3.0000
+  r4  main=3.0000  cand=3.0000
+  r5  main=3.0000  cand=3.0000
+  med main=3.0000  cand=3.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers qjs - ahead=on idle_pages_per_worker
+  r1  main=1.0000  cand=1.0000
+  r2  main=1.0000  cand=1.0000
+  r3  main=1.0000  cand=1.0000
+  r4  main=1.0000  cand=1.0000
+  r5  main=1.0000  cand=1.0000
+  med main=1.0000  cand=1.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+workers qjs - ahead=on total_pages_per_worker
+  r1  main=4.0000  cand=4.0000
+  r2  main=4.0000  cand=4.0000
+  r3  main=4.0000  cand=4.0000
+  r4  main=4.0000  cand=4.0000
+  r5  main=4.0000  cand=4.0000
+  med main=4.0000  cand=4.0000
+  cand/main per round [1.000 1.000 1.000 1.000 1.000]  median 1.0000
+
+== gates (median of per-round cand/main ratios)
+gate 1 paced on py_entry compiled p50: 0.8945 (need =< 0.90) PASS
+  reported: paced on py_entry interp p50: 0.9393
+  reported: paced on py compiled p50: 0.9391
+  reported: paced on py interp p50: 0.9506
+  reported: paced on qjs compiled p50: 0.9729
+  reported: paced on qjs interp p50: 0.9882
+  reported: paced on lua compiled p50: 0.9873
+  reported: paced on lua interp p50: 1.0131
+gate 2 steady ahead=on py_entry compiled p50: 1.0464 FAIL
+gate 2 steady ahead=on py_entry interp p50: 1.0418 FAIL
+gate 2 steady ahead=on py compiled p50: 1.1589 FAIL
+gate 2 steady ahead=on py interp p50: 0.9951 PASS
+gate 2 steady ahead=on qjs compiled p50: 0.9660 PASS
+gate 2 steady ahead=on qjs interp p50: 0.9843 PASS
+gate 2 steady ahead=on lua compiled p50: 0.9877 PASS
+gate 2 steady ahead=on lua interp p50: 0.9873 PASS
+gate 3 steady ahead=off py_entry compiled p50: 0.9791 PASS
+gate 3 steady ahead=off py_entry interp p50: 0.9980 PASS
+gate 3 steady ahead=off py compiled p50: 1.0040 PASS
+gate 3 steady ahead=off py interp p50: 1.0134 PASS
+gate 3 steady ahead=off qjs compiled p50: 0.9944 PASS
+gate 3 steady ahead=off qjs interp p50: 0.9971 PASS
+gate 3 steady ahead=off lua compiled p50: 1.0023 PASS
+gate 3 steady ahead=off lua interp p50: 0.9934 PASS
+gate 4 py_entry workers on, idle+busy pages per worker: 1.0000 PASS
+gate 4 py workers on, idle+busy pages per worker: 1.0000 PASS
+gate 4 qjs workers on, idle+busy pages per worker: 1.0000 PASS
+gate 4 lua workers on, idle+busy pages per worker: 1.0000 PASS
+gate 4 (DENSITY_WARM=9) py_entry workers on, idle+busy pages per worker: 1.0000 PASS
+gate 4 (DENSITY_WARM=9) py workers on, idle+busy pages per worker: 1.0000 PASS
+gate 4 (DENSITY_WARM=9) qjs workers on, idle+busy pages per worker: 1.0000 PASS
+gate 4 (DENSITY_WARM=9) lua workers on, idle+busy pages per worker: 1.0000 PASS
+gate 4 py_entry density counts per round cand [455,455,455,455,455] main [455,455,455,455,455] PASS
+gate 4 py density counts per round cand [124,124,124,124,124] main [124,124,124,124,124] PASS
+gate 4 qjs density counts per round cand [1024,1024,1024,1024,1024] main [1024,1024,1024,1024,1024] PASS
+gate 4 lua density counts per round cand [2048,2048,2048,2048,2048] main [2048,2048,2048,2048,2048] PASS

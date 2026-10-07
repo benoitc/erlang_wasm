@@ -1,0 +1,6 @@
+#{mode => paced,cache => "none",guest => py,ahead => true,start_ms => 19226,
+  tier => interp,verdict => ok,warm_requests => 20,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 31167.833,min_us => 27725.25}

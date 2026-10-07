@@ -1,0 +1,8 @@
+lua_compiled: requests 202, prepared 2340 (mean 11.6), unwritten vs main 0 = 0.00%, unwritten vs content 0 of 2340 = 0.00%, main writes mean 12.0; PASS
+lua_interp: requests 220, prepared 2556 (mean 11.6), unwritten vs main 0 = 0.00%, unwritten vs content 0 of 2556 = 0.00%, main writes mean 12.0; PASS
+py_compiled: requests 203, prepared 39089 (mean 192.6), unwritten vs main 203 = 0.52%, unwritten vs content 80514 of 862939 = 9.33%, main writes mean 255.0; PASS
+py_entry_compiled: requests 202, prepared 10487 (mean 51.9), unwritten vs main 0 = 0.00%, unwritten vs content 29351 of 139723 = 21.01%, main writes mean 90.0; PASS
+py_entry_interp: requests 220, prepared 11085 (mean 50.4), unwritten vs main 0 = 0.00%, unwritten vs content 2352 of 11085 = 21.22%, main writes mean 90.0; PASS
+py_interp: requests 220, prepared 41163 (mean 187.1), unwritten vs main 213 = 0.52%, unwritten vs content 3888 of 41163 = 9.45%, main writes mean 255.0; PASS
+qjs_compiled: requests 203, prepared 8323 (mean 41.0), unwritten vs main 0 = 0.00%, unwritten vs content 0 of 156374 = 0.00%, main writes mean 41.0; PASS
+qjs_interp: requests 220, prepared 8733 (mean 39.7), unwritten vs main 0 = 0.00%, unwritten vs content 0 of 8733 = 0.00%, main writes mean 41.0; PASS

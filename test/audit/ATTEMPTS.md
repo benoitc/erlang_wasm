@@ -1045,3 +1045,89 @@ and lua, compiled and interpreted; realbench qjs 0.998x; density identical.
 So a first write in pure Erlang costs what 512 puts cost. What remains is to
 make fewer of them in a request, or to make them before it arrives.
 Raw records: `test/audit/raw/fault-copy/`.
+
+## Preparing a request's write set while the worker is idle
+
+**With `restore_ahead` on, the ahead runner learned which image pages
+requests write and copied them into the next instance before the request
+arrived. It made a paced CPython request faster and a back-to-back one
+slower, and was reverted on the back-to-back gate.** Commit `3ec0153`,
+reverted by `c37ed85`.
+
+What it did: after each reply the runner read the restored memory's page
+table, kept the last 8 samples, and took the pages written in at least 7 as
+the set; after restoring the next instance it made each page of the set
+private with `ensure_private/2`, stopping when a request was queued, when free
+budget fell under twice the set, or on a refused copy. No option, no ABI
+change.
+
+Gates fixed before measuring, `main` (`4cba5fe`) against it, five rounds
+alternating which arm went first, fresh VMs at `+S 10:10`, load 2.1 to 9.4
+(one cell redone at 9.43):
+
+| gate | result | per-round cand/main |
+| --- | --- | --- |
+| 1: paced (20 ms after each reply), py_entry compiled, p50 =< 0.90x | 0.894x, pass | 0.902 0.855 0.895 0.908 0.833 |
+| 2: back to back, ahead on, every guest =< 1.03x | **fail** | py_entry compiled 1.046 (0.991 1.036 1.262 1.046 1.440); py_entry interp 1.042; py compiled 1.159 (1.055 1.037 1.159 1.190 1.179) |
+| 3: ahead off, every guest =< 1.03x | pass, 0.979 to 1.013 | |
+| 4: charged pages per worker, idle plus busy, =< 1.05x; density counts | pass, 1.000; counts identical | |
+| 5: prepared pages the request never wrote =< 5% | pass, 0 to 0.52% | |
+
+The other guests, paced: py compiled 0.939x, py interp 0.951x, py_entry
+interp 0.939x, qjs 0.973x and 0.988x, lua 0.987x and 1.013x. Back to back
+qjs and lua stayed within 0.966 to 0.988x and py interp at 0.995x.
+
+Two things were learned that a next attempt needs:
+
+- **A prepared page cannot be told apart from a written one by the page
+  table**, so the set would never shrink. The sample counted a prepared page
+  only if its bytes differed from the image. CPython writes about a fifth of
+  its pages and leaves them as they were (reference counts up and back down),
+  so those drop out of the sample whenever they are prepared and come back
+  when they fault: py_entry's prepared set alternated between 41 and 90 of
+  its 90 pages, 52 on average. Knowing that a request wrote a page needs the
+  first write to be seen, for example a slot filled ahead but published by the
+  fault, not a page made private ahead.
+- **The work after the reply competes with the next request.** Back to back,
+  the next request reaches the runner after several message hops, so the
+  scan, the byte comparison and the first copies of the next preparation had
+  started; py, which writes 255 pages, lost the most. The cost scales with the
+  set, the gain only exists with idle time.
+
+`densitybench workers` serves one warm request per worker, which is too few
+to learn a set, so gate 4 as written could not see the change: with
+`DENSITY_WARM=9` (a diagnostic added for this) py_entry moved 3 budget pages
+from busy to idle (busy 7 to 4, idle 2 to 5) and the total stayed 9.
+Raw records, scripts and the failing-before log of the six new tests:
+`test/audit/raw/ahead-prepare/`.
+
+## Caching image pages for loads
+
+**Letting memory 0's translation cache also hold an untouched image page, so
+a repeated load from it skips the page-table lookup. Not built: estimated
+inside the noise band once made correct.**
+
+- **It has to check the table on every hit.** A restored memory can be
+  exported, and another process can call the instance or write its memory
+  (`wasm:write_memory/3`) during a call; its first write faults the page
+  through the shared table. The cache's correctness today rests on holding
+  only array translations, which never go stale whatever another process does.
+  An image entry would go stale exactly when another process privatises the
+  page, and no point in the generated code regains control to notice. So a hit
+  must re-read `atomics:get(Tab, Pg + 1) =:= 0`, which keeps the lookup's main
+  cost and saves only the bounds test, the image-size compare and two
+  `element/2` calls: about 5 to 10 ns a hit.
+- **Fewer hits than the repeat counts suggest.** Image reads that repeat one of
+  the last two image pages were 1,595 of 2,923 for py_entry and 6,072 of 6,654
+  for qjs, but array accesses between them evict the two shared entries.
+- **Estimate:** 10 to 50 us a request, about 1% of a compiled QuickJS request,
+  under the 1.03x tolerance every gate here uses.
+
+**The A4 list is closed with this.** What remains on it, resolving a page once
+for a group of accesses (at most 0.05 ms py_entry, 0.2 ms qjs), carrying the
+cache less (at most 0.1 ms py_entry, about none qjs) and cheaper table
+descriptors, is estimated at or below the same size. The larger cost is the
+first-write copy, which is the cost of 512 `atomics:put` a page (the entry on
+eight words a clause above) and moves off a request only when the worker is
+idle (the entry on preparing the write set). Reopen this list only with a
+trace showing a per-access cost larger than these estimates.

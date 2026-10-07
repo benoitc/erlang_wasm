@@ -1,0 +1,7 @@
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-ap/cand",guest => lua,
+  ahead => true,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 2,entry_ms => 1291,pause_ms => 20,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 6209.292,min_us => 5441.375}

@@ -22,6 +22,7 @@ the only signal there is.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("wasm/include/wasm.hrl").
 -include_lib("wasm/include/wasm_exec.hrl").
 -include_lib("wasm/include/wasm_memory.hrl").
 
@@ -38,7 +39,7 @@ all() ->
      stopping_the_reaper_stops_its_journal_writers,
      {group, typed}, {group, command}, {group, script_v1},
      {group, script_v1_channel}, {group, reactor}, {group, reactor_ahead},
-     {group, wrappers}].
+     {group, ahead_prepare}, {group, wrappers}].
 
 groups() ->
     [{typed, [], cases(fake_typed_adapter)},
@@ -66,6 +67,9 @@ groups() ->
      %% waiting instance is as fresh as one restored on demand.
      {reactor_ahead, [],
       cases(fake_reactor_adapter) ++ snapshot_cases() ++ ahead_cases()},
+     %% What `restore_ahead' prepares while the worker is idle, through a guest
+     %% whose request names the pages it writes.
+     {ahead_prepare, [], prepare_cases()},
      %% `run/3' and `submit/3', through an adapter that records the request
      %% it is handed, since the kernel never looks inside one.
      {wrappers, [], [run_3_hands_the_adapter_source_and_context,
@@ -101,6 +105,9 @@ init_per_group(script_v1_channel, Config) ->
 init_per_group(reactor, Config) -> [{adapter, fake_reactor_adapter} | Config];
 init_per_group(reactor_ahead, Config) ->
     [{adapter, fake_reactor_adapter},
+     {worker_opts, #{restore_ahead => true}} | Config];
+init_per_group(ahead_prepare, Config) ->
+    [{adapter, fake_pages_adapter},
      {worker_opts, #{restore_ahead => true}} | Config].
 
 %% Three things the kernel does only on this path, each of which would
@@ -135,6 +142,8 @@ init_per_testcase(a_runner_heap_floor_is_resolved_and_reported, Config) ->
     Config;
 init_per_testcase(the_shipped_defaults_follow_the_tier, Config) ->
     Config;
+init_per_testcase(a_shared_memory_is_never_learned, Config) ->
+    Config;
 init_per_testcase(stopping_the_reaper_stops_its_journal_writers = TC, Config) ->
     start_case(TC, [{adapter, fake_typed_adapter} | Config]);
 init_per_testcase(TC, Config) ->
@@ -153,6 +162,8 @@ end_per_testcase(every_setting_is_documented, _Config) ->
 end_per_testcase(a_runner_heap_floor_is_resolved_and_reported, _Config) ->
     ok;
 end_per_testcase(the_shipped_defaults_follow_the_tier, _Config) ->
+    ok;
+end_per_testcase(a_shared_memory_is_never_learned, _Config) ->
     ok;
 end_per_testcase(_TC, Config) ->
     try wasm_script_worker:stop(?config(worker, Config)) catch _:_ -> ok end,
@@ -260,6 +271,162 @@ stopping_the_worker_stops_its_runner(Config) ->
     ok = wasm_script_worker:stop(W),
     receive {'DOWN', Mon, process, Runner, _} -> ok
     after 5_000 -> ct:fail(runner_outlived_its_worker)
+    end.
+
+%%% ------------------------------------------------ preparing the write set ---
+
+prepare_cases() ->
+    [prepared_pages_do_not_fault,
+     a_page_no_longer_written_leaves_the_set,
+     a_request_during_preparation_stops_it,
+     with_little_budget_nothing_is_prepared,
+     a_refused_preparation_leaves_the_runner_alive,
+     a_shared_memory_is_never_learned].
+
+-define(SET, [3, 10, 20, 40]).
+
+%% Seven requests of eight writing a page put it in the set, so after eight
+%% the waiting instance has every page of it, and the request writing them
+%% takes no fault at all.
+prepared_pages_do_not_fault(Config) ->
+    W = ?config(worker, Config),
+    ok = pages(W, ?SET, 8),
+    ?assertEqual(?SET, prepared(W)),
+    {ok, R} = wasm_script_worker:run(W, #{pages => ?SET, count => true}),
+    ?assertMatch(#{values := [1], private_at_start := ?SET, faults := 0}, R).
+
+%% A prepared page is private whether the request wrote it or not, so it would
+%% stay in the set for ever if being private were what counted. Two requests
+%% not writing it leave it in six of the last eight, which is out.
+a_page_no_longer_written_leaves_the_set(Config) ->
+    W = ?config(worker, Config),
+    ok = pages(W, [50 | ?SET], 8),
+    ?assertEqual(lists:sort([50 | ?SET]), prepared(W)),
+    ok = pages(W, ?SET, 1),
+    ?assertEqual(lists:sort([50 | ?SET]), prepared(W)),
+    ok = pages(W, ?SET, 1),
+    ?assertEqual(?SET, prepared(W)).
+
+%% The preparation is held before its first page while a request arrives; let
+%% go, it prepares that page and stops. The request is answered, and the pages
+%% it then writes for the first time are the ones not prepared.
+a_request_during_preparation_stops_it(Config) ->
+    W = ?config(worker, Config),
+    ok = pages(W, ?SET, 7),
+    {ok, _} = wasm_script_worker:run(W, #{pages => ?SET,
+                                          hold => {self(), 1}}),
+    Runner = receive {preparing, R} -> R after 10_000 -> ct:fail(no_hold) end,
+    Self = self(),
+    spawn_link(fun() ->
+                       Self ! {answer, wasm_script_worker:run(
+                                         W, #{pages => ?SET, count => true})}
+               end),
+    ok = queued(Runner, 500),
+    Runner ! go,
+    Answer = receive {answer, A} -> A after 10_000 -> ct:fail(no_answer) end,
+    ?assertMatch({ok, #{values := [1], private_at_start := [3], faults := 3}},
+                 Answer).
+
+%% Free budget under twice the set's size, in budget pages: the request has
+%% room, the preparation does not take it.
+with_little_budget_nothing_is_prepared(Config) ->
+    W = ?config(worker, Config),
+    ok = pages(W, ?SET, 6),
+    Old = wasm_engine:page_limit(),
+    try
+        %% The set is one budget page, so this leaves one free of the two
+        %% that preparing asks for.
+        ok = wasm_engine:set_page_limit(wasm_engine:pages_in_use() + 1),
+        ok = pages(W, ?SET, 1),
+        ?assertEqual([], prepared(W)),
+        ?assertMatch({ok, #{values := [1], private_at_start := []}},
+                     wasm_script_worker:run(W, #{pages => ?SET}))
+    after
+        wasm_engine:set_page_limit(Old)
+    end.
+
+%% Sixteen pages fill the first arena chunk and the seventeenth needs a
+%% second. Held at the seventeenth, the budget goes, and the copy is refused:
+%% the runner keeps the sixteen, stays alive, and serves the next request.
+a_refused_preparation_leaves_the_runner_alive(Config) ->
+    W = ?config(worker, Config),
+    Set = lists:seq(0, 19),
+    ok = pages(W, Set, 7),
+    Runner = waiting(W),
+    Old = wasm_engine:page_limit(),
+    try
+        {ok, _} = wasm_script_worker:run(W, #{pages => Set,
+                                              hold => {self(), 17}}),
+        receive {preparing, Runner} -> ok after 10_000 -> ct:fail(no_hold) end,
+        ok = wasm_engine:set_page_limit(wasm_engine:pages_in_use()),
+        Runner ! go,
+        ?assertEqual(lists:seq(0, 15), prepared(W)),
+        ?assertEqual(Runner, waiting(W))
+    after
+        wasm_engine:set_page_limit(Old)
+    end,
+    ?assertMatch({ok, #{values := [1], private_at_start := [_ | _]}},
+                 wasm_script_worker:run(W, #{pages => Set})),
+    ?assertEqual(Runner, waiting(W)).
+
+%% A restored memory that is also shared is not learned, so nothing is
+%% prepared in it either. No restore makes one today, which is why it is
+%% built here rather than through a worker.
+a_shared_memory_is_never_learned(_Config) ->
+    {ok, _} = application:ensure_all_started(wasm),
+    Image = wasm_memory:image_of(<<1, 0:(65536 * 8 - 8)>>),
+    {ok, Shared} = wasm_memory:create(
+                     #limits{min = 1, max = 1, shared = true},
+                     #{image => Image}),
+    {ok, Private} = wasm_memory:create(#limits{min = 1, max = 1},
+                                       #{image => Image}),
+    try
+        ?assertEqual([{1, Private}],
+                     wasm_script_worker:learnable([Shared, Private]))
+    after
+        wasm_memory:free(Shared),
+        wasm_memory:free(Private)
+    end.
+
+%% `N' requests writing `Pages', each answered from a fresh instance, and the
+%% runner idle again after the last.
+pages(W, _Pages, 0) ->
+    _ = idle(W),
+    ok;
+pages(W, Pages, N) ->
+    {ok, #{values := [1]}} = wasm_script_worker:run(W, #{pages => Pages}),
+    pages(W, Pages, N - 1).
+
+%% The pages prepared in the waiting instance's memory, once the runner is
+%% back in its loop with nothing to do.
+prepared(W) ->
+    Runner = idle(W),
+    {dictionary, D} = process_info(Runner, dictionary),
+    case proplists:get_value(wasm_worker_prepared, D) of
+        {_Inst, [{0, _Mem, Done}]} -> lists:sort(Done);
+        Other -> ct:fail({nothing_prepared, Other})
+    end.
+
+idle(W) -> idle(W, 500).
+
+idle(W, 0) -> ct:fail({runner_not_idle, W});
+idle(W, N) ->
+    Runner = waiting(W),
+    case {process_info(Runner, status), process_info(Runner, current_function),
+          process_info(Runner, message_queue_len)} of
+        {{status, waiting}, {current_function, {wasm_script_worker,
+                                                ahead_loop, 2}},
+         {message_queue_len, 0}} ->
+            Runner;
+        _ ->
+            timer:sleep(10), idle(W, N - 1)
+    end.
+
+queued(_Runner, 0) -> ct:fail(no_request_queued);
+queued(Runner, N) ->
+    case process_info(Runner, message_queue_len) of
+        {message_queue_len, L} when L > 0 -> ok;
+        _ -> timer:sleep(10), queued(Runner, N - 1)
     end.
 
 %% The worker's runner, once it has an instance waiting. Between requests the

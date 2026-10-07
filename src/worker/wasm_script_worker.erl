@@ -131,6 +131,9 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 -export([default_limits/0, runner_heap_words/2, capture_heap_words/2]).
 -export([cleanup_stats/0, cleanup_requests/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-ifdef(TEST).
+-export([learnable/1]).
+-endif.
 
 -include_lib("kernel/include/logger.hrl").
 -include_lib("kernel/include/file.hrl").
@@ -1720,6 +1723,7 @@ execute(G, Spec, AState) ->
             {trapped, [], undefined, E};
         {ok, Inst} ->
             R = invoke_loop(Invoke, Inst, Limits, G#g.adapter, AState),
+            ok = keep_used(Inst),
             ok = destroy_instance(Runtime, Inst),
             R
     end.
@@ -1853,6 +1857,16 @@ error_of(_) -> undefined.
 %% preopens and stdio sinks are the request's and never the capture's.
 -define(AHEAD, wasm_worker_ahead).
 -define(BINDINGS, wasm_worker_bindings).
+%% `?PREPARED' is the waiting instance and the pages made private in each of
+%% its memories; `?USED' is the same for the instance the request ran on, once
+%% it has; `?SAMPLES' the last requests' written pages, newest first.
+-define(PREPARED, wasm_worker_prepared).
+-define(USED, wasm_worker_used).
+-define(SAMPLES, wasm_worker_samples).
+-define(WRITE_SET, wasm_worker_write_set).
+%% A page is in the set when at least 7 of the last 8 requests wrote it.
+-define(SAMPLE_COUNT, 8).
+-define(SAMPLE_QUORUM, 7).
 
 start_ahead(#w{image = undefined} = W) ->
     W;
@@ -1909,6 +1923,7 @@ ahead_loop(WMon, Base) ->
         {run, Guardian, G} ->
             Guardian ! {result, self(), request(Guardian, G)},
             _ = erase(?BINDINGS),
+            ok = learn(erase(?USED)),
             case get(?AHEAD) of
                 undefined ->
                     %% The request's terms are garbage now; collecting before
@@ -1930,7 +1945,7 @@ ahead_loop(WMon, Base) ->
 restore_next(#{image := Image, keys := Keys, opts := Opts}) ->
     Forward = maps:from_list([{K, forward(K)} || K <- Keys]),
     case wasm:restore(Image, Forward, Opts) of
-        {ok, Inst}  -> put(?AHEAD, {Inst, Keys, Opts}), ok;
+        {ok, Inst}  -> put(?AHEAD, {Inst, Keys, Opts}), prepare_ahead(Inst);
         {error, _}  -> ok
     end.
 
@@ -1962,6 +1977,136 @@ take_ahead(Opts, Bindings) ->
             ok = wasm:destroy(Inst),
             none
     end.
+
+%%% ------------------------------------------------------ the write set ---
+
+%% Pages nearly every request writes, copied out of the image while the worker
+%% is idle rather than on the request's first write to each. The runner learns
+%% them from the requests it ran, after each reply, and prepares them in the
+%% next instance it restores. A request that arrives meanwhile stops the
+%% preparation and runs with whatever is ready; the rest fault as they would.
+%% The keys it keeps are defined with `?AHEAD'.
+
+prepare_ahead(Inst) ->
+    Mems = learnable(wasm_instance:memories(Inst)),
+    Set = case get(?WRITE_SET) of undefined -> #{}; S -> S end,
+    Total = lists:sum([length(Ps) || Ps <- maps:values(Set)]),
+    %% The set's size in budget pages, twice over: preparing never leaves a
+    %% live request less than the set's own worth of room.
+    Need = 2 * ((Total + 15) div 16),
+    put(?PREPARED, {Inst, prepare_mems(Mems, Set, Need, go)}),
+    ok.
+
+%% Only a memory nothing else can reach is learned. A shared one can be
+%% written by another agent at any time, so what one request wrote says nothing
+%% about the next.
+learnable(Mems) ->
+    [{Ix, M} || {Ix, M} <- lists:enumerate(0, Mems),
+                not wasm_memory:is_shared(M)].
+
+prepare_mems([], _Set, _Need, _State) ->
+    [];
+prepare_mems([{Ix, M} | Rest], Set, Need, go) ->
+    {State, Done} = prepare_pages(M, maps:get(Ix, Set, []), Need, []),
+    [{Ix, M, Done} | prepare_mems(Rest, Set, Need, State)];
+prepare_mems([{Ix, M} | Rest], Set, Need, stop) ->
+    [{Ix, M, []} | prepare_mems(Rest, Set, Need, stop)].
+
+prepare_pages(_M, [], _Need, Done) ->
+    {go, Done};
+prepare_pages(M, [P | Ps], Need, Done) ->
+    case may_prepare(Need) andalso wasm_memory:prepare_page(M, P) of
+        ok -> prepare_pages(M, Ps, Need, [P | Done]);
+        %% A request is waiting, the budget is short, or it refused this page.
+        _  -> {stop, Done}
+    end.
+
+may_prepare(Need) ->
+    idle() andalso
+        wasm_engine:page_limit() - wasm_engine:pages_in_use() >= Need.
+
+idle() ->
+    {message_queue_len, N} = process_info(self(), message_queue_len),
+    N =:= 0.
+
+%% Before the destroy, so the handles carry every arena chunk the request
+%% published and can still be read once the instance is gone.
+keep_used(Inst) ->
+    case get(?PREPARED) of
+        {Inst, Done} ->
+            _ = erase(?PREPARED),
+            put(?USED, [{Ix, current(M), Ps} || {Ix, M, Ps} <- Done]),
+            ok;
+        _ ->
+            ok
+    end.
+
+current(M) ->
+    case wasm_memory:refresh(M) of
+        ok -> M;
+        {refresh, M1} -> M1
+    end.
+
+%% A prepared page is private whether or not the request wrote it, so it
+%% counts only if its bytes changed. A request arriving meanwhile abandons
+%% the sample: it is the next request's time.
+learn(undefined) ->
+    ok;
+learn(Used) ->
+    case sample(Used, #{}) of
+        interrupted ->
+            ok;
+        Sample ->
+            Old = case get(?SAMPLES) of undefined -> []; L -> L end,
+            Samples = lists:sublist([Sample | Old], ?SAMPLE_COUNT),
+            put(?SAMPLES, Samples),
+            put(?WRITE_SET, write_set(Samples)),
+            ok
+    end.
+
+sample([], Acc) ->
+    Acc;
+sample([{Ix, M, Prepared} | Rest], Acc) ->
+    case idle() andalso unchanged(M, lists:sort(Prepared), []) of
+        false ->
+            interrupted;
+        Unchanged ->
+            Written = ordsets:subtract(wasm_memory:written_pages(M),
+                                       Unchanged),
+            sample(Rest, Acc#{Ix => Written})
+    end.
+
+unchanged(_M, [], Acc) ->
+    lists:reverse(Acc);
+unchanged(M, [P | Ps], Acc) ->
+    case idle() of
+        false ->
+            false;
+        true ->
+            case wasm_memory:same_as_image(M, P) of
+                true -> unchanged(M, Ps, [P | Acc]);
+                false -> unchanged(M, Ps, Acc)
+            end
+    end.
+
+write_set(Samples) when length(Samples) < ?SAMPLE_QUORUM ->
+    #{};
+write_set(Samples) ->
+    Counts = lists:foldl(
+               fun(Sample, Acc0) ->
+                       maps:fold(
+                         fun(Ix, Ps, Acc1) ->
+                                 lists:foldl(
+                                   fun(P, Acc2) ->
+                                           maps:update_with({Ix, P},
+                                                            fun(C) -> C + 1 end,
+                                                            1, Acc2)
+                                   end, Acc1, Ps)
+                         end, Acc0, Sample)
+               end, #{}, Samples),
+    maps:groups_from_list(
+      fun({Ix, _P}) -> Ix end, fun({_Ix, P}) -> P end,
+      lists:sort([K || K := C <- Counts, C >= ?SAMPLE_QUORUM])).
 
 %%% ----------------------------------------------------------------- policy ---
 

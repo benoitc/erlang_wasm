@@ -51,6 +51,7 @@ who holds the memory and releases it when they are all gone.
 -export([grow/2, fill/4, copy/4, copy/5, init/5]).
 -export([to_binary/1]).
 -export([store_r/4, refresh/1, image/1]).
+-export([written_pages/1, prepare_page/2, same_as_image/2]).
 -ifdef(TEST).
 -export([image_of/1, faults/1, fault_hook/1]).
 -endif.
@@ -1235,6 +1236,79 @@ refresh(#mem{tab = Tab, arena = Arena, arena_ref = Ref} = M) ->
     end.
 
 -doc """
+The 4 KiB pages of the image region that are private now, in ascending order:
+the pages a write made private, and those `prepare_page/2` did. `[]` for a
+memory that was not restored.
+
+The page table is read and nothing else, so this answers on a handle whose
+instance has been destroyed.
+""".
+-spec written_pages(mem()) -> [non_neg_integer()].
+written_pages(#mem{img_bytes = 0}) ->
+    [];
+written_pages(#mem{tab = Tab, img_bytes = IB}) ->
+    written_pages(Tab, IB bsr ?SLOT_SHIFT, []).
+
+written_pages(_Tab, 0, Acc) ->
+    Acc;
+written_pages(Tab, N, Acc) ->
+    case atomics:get(Tab, N) of
+        0 -> written_pages(Tab, N - 1, Acc);
+        _ -> written_pages(Tab, N - 1, [N - 1 | Acc])
+    end.
+
+-doc """
+Make 4 KiB page `P` of the image region private now, before anything writes
+it, as the first write would: the page is charged and copied. `ok` for a page
+already private and for one outside the region.
+
+`{error, Error}` when the budget refuses the copy; nothing has changed then.
+""".
+-spec prepare_page(mem(), non_neg_integer()) -> ok | {error, wasm_error:error()}.
+prepare_page(#mem{img_bytes = IB} = M, P)
+  when is_integer(P), P >= 0, P < IB bsr ?SLOT_SHIFT ->
+    ok = fault_hook(prepare),
+    wasm_error:capture(fun() -> _ = ensure_private(M, P), ok end);
+prepare_page(_M, _P) ->
+    ok.
+
+-doc """
+Whether 4 KiB page `P` of the image region still holds exactly the image's
+bytes: true for a page nothing made private, and for one `prepare_page/2`
+copied and nothing has written since.
+
+The handle must have seen every arena chunk, which `refresh/1` gives it, for
+this to answer on a destroyed instance.
+""".
+-spec same_as_image(mem(), non_neg_integer()) -> boolean().
+same_as_image(#mem{img_bytes = IB, tab = Tab, image = Image} = M, P)
+  when is_integer(P), P >= 0, P < IB bsr ?SLOT_SHIFT ->
+    case atomics:get(Tab, P + 1) of
+        0 ->
+            true;
+        E ->
+            {C, I} = slot_word(M, E, P bsl ?SLOT_SHIFT),
+            case element((P bsr 4) + 1, Image) of
+                zero ->
+                    same_words(C, I, ?ZERO_SLOT);
+                Bin ->
+                    same_words(C, I, binary:part(Bin,
+                                                 (P band 15) * ?SLOT_BYTES,
+                                                 ?SLOT_BYTES))
+            end
+    end;
+same_as_image(_M, _P) ->
+    false.
+
+same_words(_C, _I, <<>>) ->
+    true;
+same_words(C, I, <<W:64/little, Rest/binary>>) ->
+    case atomics:get(C, I) of
+        W -> same_words(C, I + 1, Rest);
+        _ -> false
+    end.
+
+-doc """
 The memory as an image: one immutable binary per 64 KiB page, or `zero`.
 
 A page of the image no write reached is the image's own binary, shared rather
@@ -1281,11 +1355,11 @@ faults(#mem{tab = Tab} = M) ->
      length([P || P <- lists:seq(1, Pages), atomics:get(Tab, P) =/= 0])}.
 
 -doc """
-A test's way into a fault between filling the slot and publishing it. The
-process dictionary key `{wasm_memory, fault_hook}` holds a fun, called with
-`fault`.
+A test's way into a fault between filling the slot and publishing it, and
+into `prepare_page/2` before it looks at the page. The process dictionary key
+`{wasm_memory, fault_hook}` holds a fun, called with `fault` or `prepare`.
 """.
--spec fault_hook(fault) -> ok.
+-spec fault_hook(fault | prepare) -> ok.
 fault_hook(Point) ->
     case get({?MODULE, fault_hook}) of
         undefined -> ok;

@@ -1038,20 +1038,23 @@ reverted by `c42e879` and `ef7efab`).
   to extend the arena in one keeper transaction instead of three. It added a
   median **11.9 us** to a py_entry call's saving against the 20 us its gate
   asked for, and lost 15 to 20 us in two of the six rounds. Together the two
-  changes made **0.967x**, still short of 0.95x.
+  changes made **0.967x**, a real saving of about 3% that still missed the
+  0.95x the gate asked for.
 
 Nothing else moved: steady p50 within 0.969 to 1.013x for py, py_entry, qjs
 and lua, compiled and interpreted; realbench qjs 0.998x; density identical.
-So a first write in pure Erlang costs what 512 puts cost. What remains is to
-make fewer of them in a request, or to make them before it arrives.
+So with 4 KiB pages of 64-bit words, a first write costs what its 512 puts
+cost, and tuning the loop around them gains little. A different copy-on-write
+unit, or making fewer copies, changes that arithmetic; neither was tried.
 Raw records: `test/audit/raw/fault-copy/`.
 
 ## Preparing a request's write set while the worker is idle
 
 **With `restore_ahead` on, the ahead runner learned which image pages
 requests write and copied them into the next instance before the request
-arrived. It made a paced CPython request faster and a back-to-back one
-slower, and was reverted on the back-to-back gate.** Commit `3ec0153`,
+arrived. It made a paced CPython request 10.6% faster and a back-to-back one
+up to 16% slower, and was reverted on the back-to-back gate. What failed is
+this implementation's trade-off, not the mechanism.** Commit `3ec0153`,
 reverted by `c37ed85`.
 
 What it did: after each reply the runner read the restored memory's page
@@ -1105,7 +1108,7 @@ Raw records, scripts and the failing-before log of the six new tests:
 
 **Letting memory 0's translation cache also hold an untouched image page, so
 a repeated load from it skips the page-table lookup. Not built: estimated
-inside the noise band once made correct.**
+below the gates' 1.03x acceptance rule once made correct.**
 
 - **It has to check the table on every hit.** A restored memory can be
   exported, and another process can call the instance or write its memory
@@ -1123,11 +1126,15 @@ inside the noise band once made correct.**
 - **Estimate:** 10 to 50 us a request, about 1% of a compiled QuickJS request,
   under the 1.03x tolerance every gate here uses.
 
-**The A4 list is closed with this.** What remains on it, resolving a page once
-for a group of accesses (at most 0.05 ms py_entry, 0.2 ms qjs), carrying the
-cache less (at most 0.1 ms py_entry, about none qjs) and cheaper table
-descriptors, is estimated at or below the same size. The larger cost is the
-first-write copy, which is the cost of 512 `atomics:put` a page (the entry on
-eight words a clause above) and moves off a request only when the worker is
-idle (the entry on preparing the write set). Reopen this list only with a
-trace showing a per-access cost larger than these estimates.
+**The experiments above are rejected; A4's cost is not yet attributed.**
+First writes are about 27% of a compiled py_entry call, 9% of a CPython script
+call and 3% of a QuickJS call (`PERF.md`, the shared-pages call phases and
+first-write costs), so most of the gap between 0.8 and A4 on py and qjs lies
+elsewhere, and the only detailed engine profile predates shared pages. The
+screening estimates here (resolving a page once for a group of accesses,
+carrying the cache less, cheaper descriptors) are not an attribution. Still
+open, behind a current measurement of where A4's time goes: the generator's
+allocation and redundant work, the copy-on-write unit size, skipping the old
+copy when a bulk write covers a whole page, an idle preparation that records
+pages at fault time and starts only after observed idle, and sharing one loaded
+image across workers.

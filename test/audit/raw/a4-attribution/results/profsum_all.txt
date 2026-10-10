@@ -1,0 +1,320 @@
+scripts/profsum.escript:32:34: Warning: the result of calling map_get/2 is ignored (suppress the warning by assigning the expression to the _ variable)
+%   32|     M = maps:get(msacc, T), Hz = maps:get(perf_per_s, T),
+%     |                                  ^
+
+
+### bigword_lua_base  n=3 call_p50=33.262 ms total_p50=34.270 ms reds/req=249123.7
+atomics:get per req: small=55290.0 big=5751.0
+
+### bigword_lua_main  n=3 call_p50=34.878 ms total_p50=35.236 ms reds/req=242021.3
+atomics:get per req: small=55796.0 big=4182.0
+
+### bigword_py_base  n=3 call_p50=83.913 ms total_p50=94.258 ms reds/req=1707804.7
+atomics:get per req: small=140646.0 big=7657.0
+
+### bigword_py_entry_base  n=3 call_p50=9.608 ms total_p50=18.425 ms reds/req=875415.3
+atomics:get per req: small=24197.0 big=1229.0
+
+### bigword_py_entry_main  n=3 call_p50=10.909 ms total_p50=11.551 ms reds/req=256224.0
+atomics:get per req: small=16652.0 big=648.0
+
+### bigword_py_main  n=3 call_p50=94.491 ms total_p50=95.453 ms reds/req=1044747.3
+atomics:get per req: small=147747.0 big=4638.0
+
+### bigword_qjs_base  n=3 call_p50=60.738 ms total_p50=61.767 ms reds/req=481157.0
+atomics:get per req: small=103420.0 big=10079.0
+
+### bigword_qjs_main  n=3 call_p50=69.127 ms total_p50=69.554 ms reds/req=516813.3
+atomics:get per req: small=114450.0 big=6700.0
+
+### count_lua_inst  n=100 call_p50=5.956 ms total_p50=6.123 ms reds/req=688519.4
+counters mean/req: 1=24352.0 2=7611.0 4=10933.0 5=3227.0 6=12.0 8=31.0 13=46166.0 21=43.0 30=12.0 31=68644.0 32=50966.4 33=10.0 34=1.0 35=14792.1 42=118.0 43=6368.0 
+
+### count_py_entry_inst  n=100 call_p50=3.097 ms total_p50=3.536 ms reds/req=371012.0
+counters mean/req: 1=4224.0 2=2084.0 4=3258.0 5=2940.0 6=90.0 8=39.0 13=12635.0 20=12.0 21=117.0 30=90.0 31=469579.4 32=418496.8 33=90.0 34=3.0 35=38310.5 42=17.0 43=633.0 
+
+### count_py_inst  n=100 call_p50=22.222 ms total_p50=22.762 ms reds/req=1972992.6
+counters mean/req: 1=40995.0 2=14567.0 4=35525.0 5=12822.0 6=252.0 8=242.0 13=104403.0 20=46.0 21=448.0 30=255.0 31=1334306.6 32=1147594.6 33=254.0 34=5.0 35=144788.9 40=3.0 42=295.0 43=43006.0 
+
+### count_qjs_inst  n=100 call_p50=12.223 ms total_p50=12.445 ms reds/req=1291547.5
+counters mean/req: 1=42052.0 2=10818.0 4=21889.0 5=6654.0 6=39.0 8=838.0 13=82290.0 20=386.0 21=491.0 30=41.0 31=231816.1 32=163189.9 33=37.0 34=2.0 35=59997.9 41=2.0 42=481.0 43=21944.0 
+
+### prof_lua_base  n=200 call_p50=2.194 ms total_p50=2.378 ms reds/req=188526.3
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=14.4
+msacc us/req: sched emu=2378.1 gc=24.8 other=1362.5 aux=35.3 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=683.7 other=368.9 | wall/req=3214.5
+
+### prof_lua_main  n=200 call_p50=2.663 ms total_p50=2.774 ms reds/req=183388.0
+gc/req: n=0.00 major=0.00 words=0.0 gc_us=0.0
+msacc us/req: sched emu=2725.7 gc=8.3 other=1553.7 aux=43.1 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=738.4 other=412.2 | wall/req=3618.7
+
+### prof_lua_null  n=200 call_p50=2.435 ms total_p50=2.543 ms reds/req=183388.6
+gc/req: n=0.00 major=0.00 words=0.0 gc_us=0.0
+msacc us/req: sched emu=2687.4 gc=7.9 other=1510.4 aux=40.7 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=712.1 other=398.0 | wall/req=3542.0
+
+### prof_py_base  n=200 call_p50=10.312 ms total_p50=14.876 ms reds/req=1518631.0
+gc/req: n=1.99 major=0.99 words=0.0 gc_us=110.4
+msacc us/req: sched emu=14853.9 gc=128.8 other=1603.0 aux=45.7 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=1108.6 other=506.6 | wall/req=16339.8
+
+### prof_py_entry_base  n=200 call_p50=1.636 ms total_p50=5.029 ms reds/req=848302.0
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=112.1
+msacc us/req: sched emu=5238.4 gc=123.2 other=1013.1 aux=23.8 | dcpu emu=0.0 gc=1.4 other=0.1 | dio emu=456.3 other=158.2 | wall/req=5941.8
+
+### prof_py_entry_main  n=200 call_p50=1.987 ms total_p50=2.408 ms reds/req=229992.0
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=81.2
+msacc us/req: sched emu=2682.5 gc=91.1 other=984.6 aux=22.5 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=396.7 other=170.0 | wall/req=3272.9
+
+### prof_py_entry_null  n=200 call_p50=2.027 ms total_p50=2.447 ms reds/req=229992.0
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=83.7
+msacc us/req: sched emu=2722.6 gc=94.3 other=997.6 aux=32.5 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=396.9 other=162.6 | wall/req=3326.5
+
+### prof_py_main  n=200 call_p50=16.822 ms total_p50=17.329 ms reds/req=818975.1
+gc/req: n=1.99 major=0.99 words=0.0 gc_us=84.4
+msacc us/req: sched emu=17111.8 gc=107.5 other=1765.6 aux=51.0 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=1303.7 other=587.6 | wall/req=18805.7
+
+### prof_py_null  n=200 call_p50=16.744 ms total_p50=17.300 ms reds/req=818974.1
+gc/req: n=1.99 major=0.99 words=0.0 gc_us=85.0
+msacc us/req: sched emu=17471.9 gc=109.1 other=1757.5 aux=52.3 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=1290.9 other=593.4 | wall/req=19174.1
+
+### prof_qjs_base  n=200 call_p50=5.574 ms total_p50=5.948 ms reds/req=353139.0
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=27.3
+msacc us/req: sched emu=5890.9 gc=40.5 other=1432.3 aux=42.6 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=900.5 other=353.2 | wall/req=7024.2
+
+### prof_qjs_main  n=200 call_p50=7.570 ms total_p50=7.767 ms reds/req=372846.9
+gc/req: n=3.00 major=1.00 words=51522.5 gc_us=50.9
+msacc us/req: sched emu=7589.3 gc=69.7 other=1540.5 aux=41.7 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=991.1 other=387.7 | wall/req=8840.2
+
+### prof_qjs_null  n=200 call_p50=6.214 ms total_p50=6.375 ms reds/req=372844.1
+gc/req: n=3.00 major=1.00 words=51510.8 gc_us=49.1
+msacc us/req: sched emu=6413.4 gc=66.1 other=1360.8 aux=39.8 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=855.5 other=336.5 | wall/req=7526.4
+
+### regions_lua_inst  n=30 call_p50=5.989 ms total_p50=6.136 ms reds/req=729196.8
+counters mean/req: 1=24352.0 2=7611.0 4=10933.0 5=3227.0 6=12.0 8=31.0 13=46166.0 21=43.0 30=12.0 31=66817.0 32=49324.5 33=10.0 34=1.0 35=15055.5 42=118.0 43=6368.0 
+regions mean/req: 512=40.0 1024=26.0 2048=18.0 4096=12.0 8192=7.0 
+
+### regions_py_entry_inst  n=30 call_p50=3.548 ms total_p50=4.036 ms reds/req=382246.1
+counters mean/req: 1=4224.0 2=2084.0 4=3258.0 5=2940.0 6=90.0 8=39.0 13=12635.0 20=12.0 21=117.0 30=90.0 31=452004.0 32=399234.3 33=90.0 34=3.0 35=40439.0 42=17.0 43=633.0 
+regions mean/req: 512=121.0 1024=108.0 2048=101.0 4096=90.0 8192=77.0 
+
+### regions_py_inst  n=30 call_p50=22.708 ms total_p50=23.204 ms reds/req=2068270.1
+counters mean/req: 1=40995.0 2=14567.0 4=35525.0 5=12822.0 6=252.0 8=242.0 13=104403.0 20=46.0 21=448.0 30=255.0 31=1303810.0 32=1123952.9 33=254.0 34=5.0 35=143308.1 40=3.0 42=295.0 43=43006.0 
+regions mean/req: 512=484.0 1024=393.0 2048=322.0 4096=255.0 8192=193.0 
+
+### regions_qjs_inst  n=30 call_p50=12.260 ms total_p50=12.466 ms reds/req=1372701.6
+counters mean/req: 1=42052.0 2=10818.0 4=21889.0 5=6654.0 6=39.0 8=838.0 13=82290.0 20=386.0 21=491.0 30=41.0 31=233847.7 32=164912.9 33=37.0 34=2.0 35=61914.0 41=2.0 42=481.0 43=21944.0 
+regions mean/req: 512=135.0 1024=97.0 2048=67.0 4096=41.0 8192=23.0 
+
+### tprof_lua_base  n=30 call_p50=10.739 ms total_p50=12.193 ms reds/req=222772.2
+call_time us/req by bucket (traced total 12359.9):
+  atomics          3349 us 84607 calls
+  generated        4874 us 24930 calls
+  wasm_exec        1129 us 18464 calls
+  wasm_memory      949 us 13852 calls
+  erlang_bif       398 us 8276 calls
+  other            1200 us 7262 calls
+  instance         181 us 3001 calls
+  wasm_other       111 us 1805 calls
+  wasm_num         45 us 1328 calls
+  snapshot         31 us 514 calls
+  wasi             89 us 299 calls
+  exec_mem_helper  2 us 31 calls
+  top atomics:get/2 2432.6 us 61041.0 calls
+  top atomics:put/3 915.3 us 23529.0 calls
+  top wasm_memory:scatter_run/3 553.4 us 8836.0 calls
+  top wasm_exec:set_global_at/4 336.1 us 3474.0 calls
+  top wasm_exec:check_depth/2 306.9 us 4589.0 calls
+  top wasm_code_4:'-wasm_f_118/5-wasm_k_18/14-21-'/15 271.9 us 394.0 calls
+  top prim_file:read_info_nif/2 205.3 us 12.0 calls
+  top erlang:put/2 166.1 us 3571.0 calls
+  top wasm_exec:max_depth/1 158.0 us 4589.0 calls
+  top erlang:setelement/3 146.0 us 3780.0 calls
+  top wasm_memory:copy_fwd/4 100.8 us 471.0 calls
+  top prim_file:del_dir_nif/1 100.2 us 2.0 calls
+
+### tprof_lua_main  n=30 call_p50=12.501 ms total_p50=13.011 ms reds/req=220076.9
+call_time us/req by bucket (traced total 13145.3):
+  atomics          3210 us 79284 calls
+  generated        5629 us 24930 calls
+  wasm_exec        1163 us 18657 calls
+  wasm_memory      863 us 11775 calls
+  erlang_bif       417 us 8268 calls
+  other            1354 us 7028 calls
+  instance         184 us 3001 calls
+  wasm_other       131 us 1901 calls
+  wasm_num         46 us 1328 calls
+  snapshot         28 us 420 calls
+  wasi             117 us 299 calls
+  exec_mem_helper  4 us 43 calls
+  top atomics:get/2 2434.1 us 59978.0 calls
+  top atomics:put/3 773.2 us 19249.0 calls
+  top wasm_exec:set_global_at/4 338.0 us 3474.0 calls
+  top wasm_memory:scatter_run/3 328.6 us 5229.0 calls
+  top wasm_exec:check_depth/2 309.0 us 4589.0 calls
+  top wasm_code_2:'-wasm_f_118/5-wasm_k_18/20-21-'/21 232.5 us 394.0 calls
+  top prim_file:read_info_nif/2 226.2 us 12.0 calls
+  top erlang:put/2 169.7 us 3570.0 calls
+  top wasm_exec:max_depth/1 158.8 us 4589.0 calls
+  top erlang:setelement/3 152.0 us 3781.0 calls
+  top prim_file:del_file_nif/1 119.8 us 2.0 calls
+  top wasm_memory:image_word/2 118.6 us 950.0 calls
+
+### tprof_py_base  n=30 call_p50=33.790 ms total_p50=87.909 ms reds/req=1657695.3
+call_time us/req by bucket (traced total 85951.9):
+  atomics          25239 us 651790 calls
+  wasm_memory      32100 us 496200 calls
+  generated        16415 us 71912 calls
+  wasm_exec        3566 us 54616 calls
+  other            4273 us 50560 calls
+  erlang_bif       1283 us 24943 calls
+  snapshot         1427 us 20621 calls
+  wasm_other       779 us 13453 calls
+  instance         425 us 6714 calls
+  wasm_num         112 us 3348 calls
+  wasi             313 us 386 calls
+  exec_mem_helper  20 us 242 calls
+  top wasm_memory:scatter_run/3 29931.7 us 466104.0 calls
+  top atomics:put/3 19082.9 us 503267.0 calls
+  top atomics:get/2 6143.9 us 148303.0 calls
+  top wasm_exec:check_depth/2 982.5 us 14233.0 calls
+  top wasm_exec:set_global_at/4 713.3 us 7169.0 calls
+  top erlang:setelement/3 570.3 us 14281.0 calls
+  top wasm_snapshot:'-restore_tables/4-lc$^0/1-0-'/3 564.8 us 5961.0 calls
+  top wasm_memory:'-dirty_chunks/1-lc$^0/1-0-'/2 512.3 us 8193.0 calls
+  top wasm_exec:max_depth/1 498.5 us 14233.0 calls
+  top lists:enumerate_1/3 440.6 us 6635.0 calls
+  top array:set/3 424.6 us 5960.0 calls
+  top wasm_exec:indirect_target/5 410.6 us 1742.0 calls
+
+### tprof_py_entry_base  n=30 call_p50=4.292 ms total_p50=43.250 ms reds/req=902993.0
+call_time us/req by bucket (traced total 43328.8):
+  atomics          13346 us 358276 calls
+  wasm_memory      22018 us 344103 calls
+  other            2917 us 34669 calls
+  snapshot         1377 us 20342 calls
+  erlang_bif       667 us 11579 calls
+  generated        1964 us 8614 calls
+  wasm_other       276 us 6912 calls
+  instance         413 us 6636 calls
+  wasm_exec        334 us 5064 calls
+  wasm_num         7 us 257 calls
+  wasi             7 us 63 calls
+  exec_mem_helper  3 us 39 calls
+  top wasm_memory:scatter_run/3 21063.7 us 329517.0 calls
+  top atomics:put/3 12307.2 us 332690.0 calls
+  top atomics:get/2 1029.9 us 25426.0 calls
+  top wasm_snapshot:'-restore_tables/4-lc$^0/1-0-'/3 556.4 us 5961.0 calls
+  top wasm_memory:'-dirty_chunks/1-lc$^0/1-0-'/2 517.7 us 8193.0 calls
+  top lists:enumerate_1/3 436.0 us 6635.0 calls
+  top array:set/3 422.3 us 5960.0 calls
+  top wasm_instance:'-elem_values/4-lc$^1/1-0-'/1 380.9 us 5960.0 calls
+  top lists:foldl_1/3 375.8 us 5972.0 calls
+  top erlang:setelement/3 309.9 us 7833.0 calls
+  top wasm_snapshot:reloc/3 207.9 us 5962.0 calls
+  top wasm_table:'-init/3-fun-0-'/3 193.2 us 5960.0 calls
+
+### tprof_py_entry_main  n=30 call_p50=8.917 ms total_p50=12.190 ms reds/req=272960.0
+call_time us/req by bucket (traced total 12171.5):
+  atomics          2540 us 67282 calls
+  wasm_memory      3203 us 49063 calls
+  other            2128 us 24605 calls
+  snapshot         772 us 11951 calls
+  erlang_bif       519 us 9376 calls
+  generated        1972 us 8601 calls
+  wasm_other       277 us 7108 calls
+  instance         409 us 6636 calls
+  wasm_exec        326 us 5192 calls
+  wasm_num         7 us 257 calls
+  exec_mem_helper  13 us 129 calls
+  wasi             6 us 63 calls
+  top wasm_memory:scatter_run/3 2932.9 us 46172.0 calls
+  top atomics:put/3 1825.6 us 49759.0 calls
+  top atomics:get/2 704.7 us 17300.0 calls
+  top wasm_snapshot:'-restore_tables/4-lc$^0/1-0-'/3 551.8 us 5961.0 calls
+  top array:set/3 418.3 us 5960.0 calls
+  top lists:enumerate_1/3 390.3 us 5990.0 calls
+  top wasm_instance:'-elem_values/4-lc$^1/1-0-'/1 377.2 us 5960.0 calls
+  top lists:foldl_1/3 376.6 us 5970.0 calls
+  top erlang:setelement/3 304.6 us 7836.0 calls
+  top wasm_snapshot:reloc/3 210.2 us 5962.0 calls
+  top wasm_table:'-init/3-fun-0-'/3 192.4 us 5960.0 calls
+  top ets:insert/2 123.1 us 32.0 calls
+
+### tprof_py_main  n=30 call_p50=53.657 ms total_p50=57.047 ms reds/req=952772.1
+call_time us/req by bucket (traced total 55182.2):
+  atomics          12467 us 319155 calls
+  wasm_memory      10509 us 155640 calls
+  generated        21198 us 71957 calls
+  wasm_exec        3610 us 55246 calls
+  other            3764 us 39612 calls
+  erlang_bif       1157 us 22481 calls
+  wasm_other       828 us 13749 calls
+  snapshot         774 us 11951 calls
+  instance         410 us 6714 calls
+  wasm_num         112 us 3348 calls
+  exec_mem_helper  54 us 494 calls
+  wasi             300 us 386 calls
+  top wasm_memory:scatter_run/3 8314.3 us 130354.0 calls
+  top atomics:put/3 6239.0 us 166207.0 calls
+  top atomics:get/2 6183.5 us 152385.0 calls
+  top wasm_exec:check_depth/2 962.8 us 14233.0 calls
+  top wasm_exec:set_global_at/4 717.4 us 7169.0 calls
+  top erlang:setelement/3 572.8 us 14286.0 calls
+  top wasm_snapshot:'-restore_tables/4-lc$^0/1-0-'/3 551.4 us 5961.0 calls
+  top wasm_exec:max_depth/1 483.7 us 14233.0 calls
+  top array:set/3 431.1 us 5960.0 calls
+  top wasm_exec:indirect_target/5 421.6 us 1742.0 calls
+  top lists:enumerate_1/3 393.4 us 5990.0 calls
+  top lists:foldl_1/3 385.5 us 5972.0 calls
+
+### tprof_qjs_base  n=30 call_p50=22.248 ms total_p50=25.658 ms reds/req=408880.5
+call_time us/req by bucket (traced total 25221.4):
+  atomics          6659 us 163162 calls
+  generated        10754 us 47664 calls
+  wasm_memory      2963 us 38847 calls
+  wasm_exec        1381 us 22374 calls
+  other            1945 us 12350 calls
+  erlang_bif       519 us 9402 calls
+  instance         251 us 3898 calls
+  snapshot         253 us 3416 calls
+  wasm_num         93 us 2555 calls
+  wasm_other       158 us 2319 calls
+  exec_mem_helper  59 us 838 calls
+  wasi             186 us 301 calls
+  top atomics:get/2 4648.8 us 113499.0 calls
+  top atomics:put/3 2007.6 us 49620.0 calls
+  top wasm_memory:scatter_run/3 1191.4 us 18656.0 calls
+  top wasm_memory:copy_fwd/4 459.9 us 2244.0 calls
+  top wasm_exec:check_depth/2 399.4 us 5857.0 calls
+  top wasm_exec:set_global_at/4 340.7 us 3405.0 calls
+  top prim_file:read_info_nif/2 310.8 us 12.0 calls
+  top wasm_code_7:'-wasm_f_159/4-wasm_k_5/11-6-'/12 266.4 us 380.0 calls
+  top wasm_code_7:'-wasm_f_22/5-wasm_k_1/7-3-'/7 219.8 us 363.0 calls
+  top wasm_memory:wchunk/2 210.7 us 3260.0 calls
+  top wasm_exec:max_depth/1 206.6 us 5857.0 calls
+  top wasm_memory:chunk/2 183.9 us 5026.0 calls
+
+### tprof_qjs_main  n=30 call_p50=26.599 ms total_p50=27.437 ms reds/req=436341.6
+call_time us/req by bucket (traced total 26916.3):
+  atomics          6840 us 168803 calls
+  wasm_memory      3812 us 49282 calls
+  generated        11817 us 47664 calls
+  wasm_exec        1435 us 22958 calls
+  other            1706 us 9435 calls
+  erlang_bif       458 us 8561 calls
+  instance         249 us 3898 calls
+  wasm_num         95 us 2555 calls
+  wasm_other       170 us 2465 calls
+  snapshot         79 us 1188 calls
+  exec_mem_helper  78 us 877 calls
+  wasi             178 us 301 calls
+  top atomics:get/2 4930.2 us 121150.0 calls
+  top atomics:put/3 1903.7 us 47533.0 calls
+  top wasm_memory:scatter_run/3 1213.0 us 19000.0 calls
+  top wasm_memory:image_word/2 636.2 us 5063.0 calls
+  top wasm_exec:check_depth/2 402.7 us 5857.0 calls
+  top wasm_memory:copy_fwd/4 398.8 us 2246.0 calls
+  top wasm_exec:set_global_at/4 337.9 us 3405.0 calls
+  top wasm_memory:slot_word/3 291.7 us 7871.0 calls
+  top prim_file:read_info_nif/2 277.0 us 12.0 calls
+  top wasm_memory:ensure_private/2 254.8 us 3800.0 calls
+  top wasm_code_7:'-wasm_f_22/5-wasm_k_1/13-3-'/13 225.9 us 363.0 calls
+  top wasm_code_7:'-wasm_f_159/4-wasm_k_5/17-6-'/18 215.7 us 380.0 calls

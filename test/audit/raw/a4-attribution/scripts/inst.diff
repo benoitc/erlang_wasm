@@ -1,0 +1,221 @@
+diff --git a/src/wasm_core.erl b/src/wasm_core.erl
+index 45e383b..8448d10 100644
+--- a/src/wasm_core.erl
++++ b/src/wasm_core.erl
+@@ -1640,17 +1640,17 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
+                  cerl:c_let([Ck], chunk_at(Mem, Ci),
+                    cerl:c_let([Ix], word_index(A, Sh), Fast)))),
+     cerl:c_let([Mem], mem_at(Mut, M),
+-      cerl:c_let([A], Addr,
++      cerl:c_let([A], Addr, prof_store(Dir, A, N, Mem, 14,
+         cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+                                     cerl:abstract(8)]),
+           ordinary(Mem, A, N, Bit,
+                    cerl:c_case(bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)]),
+-                               [cerl:c_clause([cerl:abstract(true)], Growth),
++                               [cerl:c_clause([cerl:abstract(true)], prof_seq(9, Growth)),
+                                 cerl:c_clause([cerl:c_var('_Img')],
+                                               image_region(Dir, Mut, Mem, A, N,
+                                                            Kind, Bit, Val,
+                                                            Slow))]),
+-                   Slow)))).
++                   prof_seq(12, Slow)))))).
+ 
+ %% An access to memory 0 through its translation cache.
+ %%
+@@ -1709,19 +1709,19 @@ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
+                          Slow, {Keep, Refill}),
+     Miss = ordinary(Mem, A, N, Bit,
+                     cerl:c_case(bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)]),
+-                                [cerl:c_clause([cerl:abstract(true)], Growth),
++                                [cerl:c_clause([cerl:abstract(true)], prof_seq(3, Growth)),
+                                  cerl:c_clause([cerl:c_var('_Img')], Image)]),
+-                    Slow),
++                    prof_seq(11, Slow)),
+     cerl:c_let([Mem], mem_at(Mut, 0),
+-      cerl:c_let([A], Addr,
++      cerl:c_let([A], Addr, prof_store(Dir, A, N, Mem, 13,
+         cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+                                     cerl:abstract(8)]),
+           cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
+             all([bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
+                             cerl:abstract(64)])],
+-                all([bif('=:=', [Pg, TP])], Hit,
+-                    all([bif('=:=', [Pg, TP2])], Hit2, Miss)),
+-                Slow))))).
++                all([bif('=:=', [Pg, TP])], prof_seq(1, Hit),
++                    all([bif('=:=', [Pg, TP2])], prof_seq(2, Hit2), Miss)),
++                prof_seq(8, Slow))))))).
+ 
+ %% How an access to memory 0 hands back its result and the cache after it.
+ %%
+@@ -1847,7 +1847,7 @@ image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow, {Keep, Refill}) ->
+               bif('=<', [K, bif(tuple_size, [Ar])]),
+               [cerl:c_clause(
+                  [cerl:abstract(true)],
+-                 cerl:c_let([Ck], bif(element, [K, Ar]),
++                 prof_seq(4, cerl:c_let([Ck], bif(element, [K, Ar]),
+                    cerl:c_let([Ix], slot_index(E, A),
+                      Refill(case Dir of
+                                 load -> inline_load(N, Kind, A, undefined, Ix,
+@@ -1856,11 +1856,11 @@ image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val, Slow, {Keep, Refill}) ->
+                                                                  undefined, Ix,
+                                                                  Ck, Bit, Val),
+                                                     Mut)
+-                            end, Ck, Ix)))),
+-               cerl:c_clause([cerl:c_var('_Unseen')], Slow)]))),
++                            end, Ck, Ix))))),
++               cerl:c_clause([cerl:c_var('_Unseen')], prof_seq(7, Slow))]))),
+     Untouched = case Dir of
+-                    load -> image_load(Mem, A, N, Kind, Slow, Keep);
+-                    store -> Slow
++                    load -> prof_seq(5, image_load(Mem, A, N, Kind, prof_seq(10, Slow), Keep));
++                    store -> prof_seq(6, Slow)
+                 end,
+     cerl:c_let([E], Entry,
+                cerl:c_case(E, [cerl:c_clause([cerl:abstract(0)], Untouched),
+@@ -2167,3 +2167,13 @@ simd(F, Args, Rest, G0, Exit) ->
+     cerl:c_let([V], cerl:c_call(cerl:c_atom(wasm_simd), cerl:c_atom(F), Args),
+                seq(Rest, push(V, G), Exit)).
+ 
++
++prof_seq(I, E) ->
++    cerl:c_seq(cerl:c_call(cerl:c_atom(wasm_prof_c), cerl:c_atom(hit),
++                           [cerl:abstract(I)]), E).
++
++prof_store(load, _A, _N, _Mem, I, E) -> prof_seq(I, E);
++prof_store(store, A, N, Mem, I, E) ->
++    prof_seq(I, cerl:c_seq(cerl:c_call(cerl:c_atom(wasm_prof_c), cerl:c_atom(st),
++                                      [A, cerl:abstract(N),
++                                       field(Mem, ?MEM_IMG_BYTES)]), E)).
+diff --git a/src/wasm_exec.erl b/src/wasm_exec.erl
+index d36e0d0..defdff8 100644
+--- a/src/wasm_exec.erl
++++ b/src/wasm_exec.erl
+@@ -1178,6 +1178,7 @@ indirect_out(Inst, Mut, TypeIdx, TableIdx, I, Args, Depth, Mod, Gen) ->
+ %% generator to read rather than copied into it, so a width can still only be
+ %% wrong in one place.
+ load_at(Mu, M, N, Kind, Addr) ->
++    wasm_prof_c:hit(20),
+     Mem = element(M + 1, Mu#mut.mems),
+     decode_loaded(Kind, N, wasm_memory:load(Mem, Addr, N)).
+ 
+@@ -1188,6 +1189,7 @@ memory handle has seen arena chunks this store published.
+ -spec store_at(#mut{}, non_neg_integer(), pos_integer(), atom(), non_neg_integer(),
+                term()) -> #mut{}.
+ store_at(Mu, M, N, Kind, Addr, Value) ->
++    wasm_prof_c:hit(21),
+     Mem = element(M + 1, Mu#mut.mems),
+     case wasm_memory:store_r(Mem, Addr, N, encode_stored(Kind, Value)) of
+         ok -> Mu;
+diff --git a/src/wasm_memory.erl b/src/wasm_memory.erl
+index 6e8bbd3..cef2f4e 100644
+--- a/src/wasm_memory.erl
++++ b/src/wasm_memory.erl
+@@ -597,6 +597,7 @@ cas_loop(M, Base, Shift, Mask, Nbytes, Fun) ->
+     end.
+ 
+ cas_word(#mem{img_bytes = IB} = M, Addr, Expected, Desired) when Addr < IB ->
++    wasm_prof_c:st(Addr, 8, IB),
+     {C, I} = slot_word(M, ensure_private(M, Addr bsr ?SLOT_SHIFT), Addr),
+     atomics:compare_exchange(C, I, Expected, Desired band 16#FFFFFFFFFFFFFFFF);
+ cas_word(#mem{shift = Shift} = M, Addr, Expected, Desired) ->
+@@ -709,6 +710,7 @@ word(#mem{shift = Shift} = M, Addr) ->
+     atomics:get(Chunk, ((Addr band ((1 bsl Shift) - 1)) bsr 3) + 1).
+ 
+ put_word(#mem{img_bytes = IB} = M, Addr, Value) when Addr < IB ->
++    wasm_prof_c:st(Addr, 8, IB),
+     {C, I} = slot_word(M, ensure_private(M, Addr bsr ?SLOT_SHIFT), Addr),
+     atomics:put(C, I, Value band 16#FFFFFFFFFFFFFFFF);
+ put_word(#mem{shift = Shift} = M, Addr, Value) ->
+@@ -786,7 +788,7 @@ collect(M, Addr, Len, Acc) ->
+ store_bytes(M, Addr, Bin) ->
+     Pages = size_pages(M),
+     check_bounds(Addr, byte_size(Bin), Pages),
+-    ok = prepare(M, Addr, byte_size(Bin)),
++    ok = bulk_prepare(M, Addr, byte_size(Bin)),
+     scatter(M, Addr, Bin).
+ 
+ scatter(_M, _Addr, <<>>) -> ok;
+@@ -841,7 +843,7 @@ to_binary(M) -> load_bytes(M, 0, size_pages(M) * ?PAGE_SIZE).
+ %% valid.
+ fill(M, Addr, Byte, Len) ->
+     check_bounds(Addr, Len, size_pages(M)),
+-    ok = prepare(M, Addr, Len),
++    ok = bulk_prepare(M, Addr, Len),
+     fill_at(M, Addr, Byte, Len).
+ 
+ fill_at(_M, _Addr, _Byte, 0) -> ok;
+@@ -873,7 +875,7 @@ copy(M, Dst, Src, Len) ->
+         true -> wasm_error:trap(out_of_bounds_memory_access,
+                                 #{dst => Dst, src => Src, size => Len,
+                                   limit => Pages * ?PAGE_SIZE});
+-        false -> ok = prepare(M, Dst, Len), copy_at(M, Dst, Src, Len)
++        false -> ok = bulk_prepare(M, Dst, Len), copy_at(M, Dst, Src, Len)
+     end.
+ 
+ copy_at(_M, _Dst, _Src, 0) -> ok;
+@@ -1059,9 +1061,18 @@ ensure_private(#mem{tab = Tab} = M, P) ->
+         S -> S
+     end.
+ 
+-fault(#mem{tab = Tab} = M, P) ->
++fault(M, P) ->
++    T0 = erlang:monotonic_time(nanosecond),
++    R = fault_0(M, P),
++    wasm_prof_c:hit(30),
++    wasm_prof_c:add(31, erlang:monotonic_time(nanosecond) - T0),
++    R.
++
++fault_0(#mem{tab = Tab} = M, P) ->
+     E = located(claim(M)),
++    T1 = erlang:monotonic_time(nanosecond),
+     ok = fill_slot(M, E, P),
++    wasm_prof_c:add(32, erlang:monotonic_time(nanosecond) - T1),
+     ok = fault_hook(fault),
+     case atomics:compare_exchange(Tab, P + 1, 0, E) of
+         ok -> E;
+@@ -1082,7 +1093,10 @@ claim(#mem{tab = Tab} = M) ->
+                 _  -> claim(M)
+             end;
+         false ->
++            T0 = erlang:monotonic_time(nanosecond),
+             ok = extend_arena(M, chunk_of(N + 1)),
++            wasm_prof_c:hit(34),
++            wasm_prof_c:add(35, erlang:monotonic_time(nanosecond) - T0),
+             claim(M)
+     end.
+ 
+@@ -1100,6 +1114,7 @@ fill_slot(#mem{image = Image} = M, S, P) ->
+                 true ->
+                     ok;
+                 false ->
++                    wasm_prof_c:hit(33),
+                     {C, I} = slot_word(M, S, P bsl ?SLOT_SHIFT),
+                     scatter_run(C, I, Page)
+             end
+@@ -1309,3 +1324,24 @@ field_indices() ->
+       chunks_ref => #mem.chunks_ref, shift => #mem.shift,
+       img_bytes => #mem.img_bytes, image => #mem.image, tab => #mem.tab,
+       arena => #mem.arena, size => record_info(size, mem)}.
++
++%% attr: a bulk write's prepare, with its first-write faults classified by
++%% whether the write covers the whole 4 KiB page: 40 full, 41 partial; 42 bulk
++%% ops, 43 bulk bytes in the image region.
++bulk_prepare(#mem{img_bytes = IB, tab = Tab} = M, Addr, Len) when Addr < IB, Len > 0 ->
++    wasm_prof_c:st_range(Addr, Len, IB),
++    wasm_prof_c:hit(42),
++    wasm_prof_c:add(43, min(Addr + Len, IB) - Addr),
++    Last = (min(Addr + Len, IB) - 1) bsr ?SLOT_SHIFT,
++    [case atomics:get(Tab, P + 1) of
++         0 ->
++             case Addr =< P bsl ?SLOT_SHIFT
++                 andalso Addr + Len >= (P + 1) bsl ?SLOT_SHIFT of
++                 true -> wasm_prof_c:hit(40);
++                 false -> wasm_prof_c:hit(41)
++             end;
++         _ -> ok
++     end || P <- lists:seq(Addr bsr ?SLOT_SHIFT, Last)],
++    prepare(M, Addr, Len);
++bulk_prepare(M, Addr, Len) ->
++    prepare(M, Addr, Len).

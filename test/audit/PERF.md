@@ -7514,3 +7514,264 @@ of the time.
 Scripts, raw terms, logs and both `analysis.txt` are in
 `test/audit/raw/shared-pages/arbitration/`; the harnesses are in
 `bench/paths/`. One machine: 14 cores (10 performance), Darwin 27, OTP 29.
+
+## Where A4's time goes: the 0.8-to-A4 attribution
+
+What a request costs on `main` (A4, `a67a4b2`) against the 0.8 baseline
+(`a2bda33`), split into categories so the next change targets a measured
+cost. Measurement only; nothing in `src/` changed.
+
+### Arms and protocol
+
+| arm | tree | what it is |
+| --- | --- | --- |
+| base | `a2bda33` | 0.8: a restore copies the image, memory recycled |
+| main | `a67a4b2` | A4: shared image pages, two-entry translation cache |
+| null | `a67a4b2` | main again, same tree and cache, for the null comparison |
+| inst | `a67a4b2` + `inst.diff` | counters only, never timed against the others |
+
+- Each arm in its own fresh VM, `+S 10:10`, its own primed code cache.
+- Three arms in all six orderings, one per round. `split` and `steady`: six
+  rounds; paced: six; saturated: four.
+- A cell starts at a one-minute load below 8 and is redone when the load at
+  the end of its last arm is 8 or more (1 of 72 gated cells redone). Saturated cells
+  push the load up themselves: they were not redone, and the two lua cells
+  that ended at 8 or more are void.
+- Every figure below is the median over VMs of the per-VM p50 (p95, p99). main
+  and null are pooled, so 12 VMs against base's 6. The uncertainty is the
+  null comparison: the median of |null - main| per round, then the largest.
+- `requestbench split` and `steady` unchanged. `attrbench` (a scratch copy)
+  adds paced, saturated, prof (msacc and a per-runner GC trace), tprof
+  (`call_time`), bigword and the counting modes.
+
+### Compiled call phase, steady back to back
+
+| guest | base | main | gap | null \|d\| med / max | gap / base |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| py_entry | 1.44 ms | 2.00 ms | 0.56 ms | 0.21 / 1.03 | 1.39 |
+| qjs | 5.40 ms | 7.38 ms | 1.98 ms | 0.08 / 0.59 | 1.37 |
+| lua | 2.44 ms | 3.37 ms | 0.93 ms | 0.83 / 1.25 | 1.38 |
+| py | 11.34 ms | 16.80 ms | 5.46 ms | 0.84 / 1.60 | 1.48 |
+
+These gaps are larger than in "Shared pages: the page table against the mmap
+NIF" (qjs 1.75 then, 1.98 now; lua 0.30 then, 0.93 now). Lua's per-VM p50 on
+the main tree is two-moded, 2.7 to 2.9 ms or 3.4 to 4.1 ms, with the same
+code, the same compiled set and the same reductions. qjs shows it in the prof
+pass: main 7.57 ms against null 6.21 ms, both 372,846 reductions, msacc
+emulator time 7.6 ms against 6.4 ms. Equal work done in 18% more time. A
+scheduler placed on an efficiency core would explain it; that is not checked.
+
+Tails and whole requests, ms (main column; null within the stated noise):
+
+| guest | call p95 base / main | call p99 base / main | steady p50 base / main | steady p95 base / main | steady p99 base / main |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| py_entry | 1.95 / 2.85 | 2.11 / 3.27 | 6.08 / 3.65 | 6.76 / 4.27 | 7.10 / 4.73 |
+| qjs | 6.53 / 8.65 | 7.10 / 9.19 | 7.59 / 8.82 | 8.68 / 9.98 | 9.45 / 10.99 |
+| lua | 3.01 / 4.33 | 3.59 / 5.12 | 3.89 / 4.39 | 4.69 / 5.76 | 5.35 / 6.44 |
+| py | 13.17 / 18.43 | 13.67 / 19.55 | 17.93 / 18.85 | 19.96 / 21.05 | 21.62 / 23.01 |
+
+Other phases, p50 ms, base / main: restore py_entry 3.30 / 0.40, py 4.47 /
+0.42, qjs 0.31 / 0.12, lua 0.16 / 0.09. Worker overhead outside the four
+phases (steady minus split total): py_entry 1.22 / 1.23, qjs 1.82 / 1.25,
+lua 1.26 / 0.90, py 1.93 / 1.53. A4 does not cost anything outside the call.
+
+### Per request, compiled steady
+
+Memory-0 accesses from `inst`, mean per request (every one went through the
+translation cache; the uncached path saw none):
+
+| guest | accesses | hit 1st | hit 2nd | miss to private slot | untouched image read | store to untouched page | straddle | `load_at` + `store_at` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| py_entry | 12,635 | 4,224 | 2,084 | 3,258 | 2,940 | 90 | 39 | 129 |
+| qjs | 82,290 | 42,052 | 10,818 | 21,889 | 6,654 | 39 | 838 | 877 |
+| lua | 46,166 | 24,352 | 7,611 | 10,933 | 3,227 | 12 | 31 | 43 |
+| py | 104,403 | 40,995 | 14,567 | 35,525 | 12,822 | 252 | 242 | 494 |
+
+No growth-region access and no unseen-chunk slow path in any guest. The cache
+hit rate is 50% (py_entry), 64% (qjs), 69% (lua), 53% (py).
+
+First writes, `inst`, mean per request (two VMs agree within 4%):
+
+| guest | faults | fault total | page copy | arena extensions | arena time | rest |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| py_entry | 90 | 470 us | 418 us | 3 | 38 us | 13 us |
+| qjs | 41 | 232 us | 163 us | 2 | 60 us | 9 us |
+| lua | 12 | 69 us | 51 us | 1 | 15 us | 3 us |
+| py | 255 | 1334 us | 1148 us | 5 | 145 us | 41 us |
+
+A 4 KiB copy costs 4.5 us (1.1 ns a byte, 512 `atomics:put`). An arena
+extension is a keeper round trip and costs 15 to 30 us each.
+
+Collections, reductions, bignums and time, per request, base / main:
+
+| guest | GC count | GC time | msacc GC | reductions | `atomics:get` bignums | generated self time (tprof) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| py_entry | 2 / 2 | 112 / 81 us | 0.12 / 0.09 ms | 848 k / 230 k | 1,229 / 648 | 1.96 / 1.97 ms |
+| qjs | 2 / 3 | 27 / 51 us | 0.04 / 0.07 ms | 353 k / 373 k | 10,079 / 6,700 | 10.75 / 11.82 ms |
+| lua | 2 / 0 | 14 / 0 us | 0.02 / 0.01 ms | 189 k / 183 k | 5,751 / 4,182 | 4.87 / 5.63 ms |
+| py | 2 / 2 | 110 / 84 us | 0.13 / 0.11 ms | 1,519 k / 819 k | 7,657 / 4,638 | 16.42 / 21.20 ms |
+
+The reductions include the restore, which is why base's py and py_entry are
+higher. The tprof times are traced (`call_time` on every function, one VM per
+arm, about 3x slower than untraced). The generated-code functions are called
+the same number of times on both trees, so the per-call overhead cancels in
+their difference, but the absolute values do not. Bignums were counted from
+`atomics:get` return values only; arithmetic and decode bignums were not
+separated.
+
+Unit cost of an inline access, `accbench` (a scratch kernel on a restored 1
+MiB memory), ns per loop iteration, median of three VMs per tree:
+
+| access | base | main | main - base |
+| --- | ---: | ---: | ---: |
+| load, cache hit | 20.0 | 19.2 | -0.8 |
+| load, miss to a private slot | 19.9 | 25.8 | +5.9 |
+| load, untouched image page | 20.4 | 27.7 | +7.4 |
+| store, cache hit | 24.9 | 23.6 | -1.3 |
+| store, miss to a private slot | 24.9 | 30.0 | +5.2 |
+
+### Attribution of the call-phase gap, compiled steady, ms per request
+
+| category | py_entry | qjs | lua | py | how |
+| --- | ---: | ---: | ---: | ---: | --- |
+| gap | 0.56 ± 0.21 | 1.98 ± 0.08 | 0.93 ± 0.83 | 5.46 ± 0.84 | split rounds |
+| first-write page copy | 0.42 | 0.16 | 0.05 | 1.15 | `inst` |
+| arena extension (keeper) | 0.04 | 0.06 | 0.02 | 0.15 | `inst` |
+| fault bookkeeping | 0.01 | 0.01 | 0.00 | 0.04 | `inst` |
+| inline access operations | 0.04 | 0.14 | 0.06 | 0.26 | counts x unit cost |
+| rest of generated code | 0.00 | 0.92 | 0.69 | 4.52 | tprof generated delta minus the row above |
+| garbage collection | -0.03 | +0.02 | -0.01 | -0.03 | GC trace |
+| bignum allocation | < 0 | < 0 | < 0 | < 0 | fewer on main |
+| **unexplained** | **0.08** | **0.67** | **0.12** | **-0.63** | gap minus the rows |
+
+± is the null comparison's median |d|; its largest is in the first table.
+The "rest of generated code" row comes from one traced VM per arm with no
+null, so treat it as uncertain to at least the gap's own ± (0.8 ms for lua
+and py). The unexplained row for qjs (0.67) is about the size of the
+two-mode effect (1.36 ms between main and null in the prof pass), and py's
+-0.63 is inside its ±0.84.
+
+What this says:
+- **py_entry's gap is first writes.** 0.47 of 0.56 ms.
+- **For qjs, lua and py most of the gap is generated code, outside the
+  memory operations themselves.** The inline accesses explain 0.04 to 0.26
+  ms. The rest of the generated functions' self time grew by 0.7 to 4.5 ms
+  with the same calls on both trees. The translation cache is carried
+  through every call and continuation: in qjs, `wasm_k_1/7` became
+  `wasm_k_1/13` and `wasm_k_5/11` became `wasm_k_5/17`, and loads whose
+  cache is used on some paths only return an eight-word tuple. That shape is
+  the leading suspect, not a measured cause.
+- **Garbage collection, bignums and worker overhead are not the
+  regression.** Each is equal or lower on main.
+
+### Other regimes
+
+Whole request p50 ms, base / main, gap with null |d| median:
+
+| guest | paced 20 ms idle | gap | saturated (pool 10) | gap | saturated rps base / main |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| py_entry | 11.86 / 11.59 | -0.27 ± 0.13 | 7.71 / 5.38 | -2.33 ± 0.08 | 1276 / 1811 |
+| qjs | 11.78 / 11.88 | +0.10 ± 0.11 | 11.09 / 12.71 | +1.61 ± 0.31 | 883 / 772 |
+| lua | 11.63 / 11.61 | -0.02 ± 0.19 | 7.48 / 8.41 | +0.94 ± 0.47 | 1314 / 1176 |
+| py | 18.01 / 19.78 | +1.77 ± 0.34 | 21.18 / 22.08 | +0.90 ± 0.54 | 457 / 430 |
+
+Paced requests for py_entry, qjs and lua are around 11.7 ms on both trees,
+against 3.6 to 8.8 ms back to back: waking after 20 ms idle costs some 6 to
+8 ms that A4 neither causes nor removes. One py_entry VM did not pay it
+(5.2 ms). The cause is not measured. In that regime A4 costs nothing on
+those three guests, and 1.8 ms on py. Saturated lua: two of four rounds
+void.
+
+Cold compile, time from a worker's start with an empty code cache to the
+first request that enters generated code (`requestbench steady`, one VM per
+tree, load below 8; priming runs at load 7 to 13 agree within 7%):
+
+| guest | functions compiled | base | main | main / base |
+| --- | ---: | ---: | ---: | ---: |
+| py_entry | 233 | 44 s | 160 s | 3.7 |
+| qjs | 264 | 71 s | 273 s | 3.8 |
+| lua | 223 | 24 s | 103 s | 4.2 |
+| py | 896 | 109 s | 413 s | 3.8 |
+
+The same functions in both, and main served three to four times more
+interpreted requests before getting there. Compiling the same set takes
+about four times as long on main. That points at the same generated-code
+shape as the steady residual.
+
+Footprint, `optbshare` K = 50, per held instance, two rounds:
+
+| guest | `erlang:memory` base / main | footprint base / main | instances in 1 GiB base / main |
+| --- | ---: | ---: | ---: |
+| py_entry | 42.4 / 1.9 MB | 43.2 MB / not usable | 24 / about 530 |
+| qjs | 0.89 / 0.94 MB | 1.48 / 1.19 MB | 700 / 860 |
+
+py_entry's footprint deltas on main came out negative in three of four runs,
+as in the shared-pages pass, so its count uses `erlang:memory`. At 1 GiB both
+trees hold more instances than the 10 schedulers can run, so throughput is
+the saturated rps: py_entry 1.42x on main, qjs 0.87x. Below about 400 MiB
+base holds fewer than 10 py_entry instances, and main's advantage grows.
+
+### Counting studies
+
+**Copy-on-write granularity.** Distinct written regions of the image per
+request, from every store to memory 0 (inline, helper and bulk), at each
+size. 4 KiB matches the fault count exactly (90, 41, 12, 255). Estimated cost
+= regions x (size x 1.1 ns + 0.2 us per fault), the measured copy rate and
+bookkeeping, without arena extensions:
+
+| guest | 512 B | 1 KiB | 2 KiB | 4 KiB | 8 KiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| py_entry regions | 121 | 108 | 101 | 90 | 77 |
+| py_entry bytes copied | 61 KiB | 108 KiB | 202 KiB | 360 KiB | 616 KiB |
+| py_entry cost | 0.09 ms | 0.14 ms | 0.25 ms | 0.42 ms | 0.71 ms |
+| qjs regions | 135 | 97 | 67 | 41 | 23 |
+| qjs bytes copied | 68 KiB | 97 KiB | 134 KiB | 164 KiB | 184 KiB |
+| qjs cost | 0.10 ms | 0.13 ms | 0.16 ms | 0.19 ms | 0.21 ms |
+| lua regions | 40 | 26 | 18 | 12 | 7 |
+| lua cost | 0.03 ms | 0.03 ms | 0.04 ms | 0.06 ms | 0.06 ms |
+| py regions | 484 | 393 | 322 | 255 | 193 |
+| py bytes copied | 242 KiB | 393 KiB | 644 KiB | 1020 KiB | 1544 KiB |
+| py cost | 0.37 ms | 0.52 ms | 0.79 ms | 1.20 ms | 1.78 ms |
+
+Not included: a table eight times larger at 512 B (one entry per slot, so
+restore allocates and zeroes more) and more translation-cache misses with
+smaller pages, which were not measured.
+
+**Full-page bulk overwrites.** First-write faults raised by a bulk write
+(`memory.fill`, `memory.copy`, `store_bytes`) that covers the whole 4 KiB
+page: py 3 of 255 per request, qjs 0 of 41 (2 partial), py_entry 0 of 90,
+lua 0 of 12. Almost every fault comes from a scalar store.
+
+### Candidates, ranked by addressable cost
+
+Compiled steady call phase per request unless stated.
+
+| rank | candidate | py_entry | qjs | lua | py | note |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1 | cold compile | 116 s | 202 s | 79 s | 304 s | time to compiled code; main / base 3.7 to 4.2 |
+| 2 | generated code outside the access operations (carried cache, tuple returns) | 0.00 | 0.92 | 0.69 | 4.52 | traced, one VM; at least ± the gap's null |
+| 3 | copy-on-write granularity, 4 KiB to 1 KiB | 0.28 | 0.06 | 0.03 | 0.68 | to 512 B: 0.33 / 0.09 / 0.03 / 0.83; table and miss cost not counted |
+| 4 | arena extension per request | 0.04 | 0.06 | 0.02 | 0.15 | keeper round trips; sizing the arena from the last restore is already in `ATTEMPTS.md` |
+| 5 | inline access operations (cache misses, untouched reads) | 0.04 | 0.14 | 0.06 | 0.26 | counts x `accbench` unit cost |
+| 6 | idle-preparation redesign | 0.47 | 0.23 | 0.07 | 1.33 | the most it can take off a paced request is the first-write cost; the paced A4 gap is 0 for three guests and 1.8 ms for py |
+| 7 | full-page bulk skip | 0 | 0 | 0 | 0.01 | 3 faults per py request |
+| 8 | 32-bit slots | < 0.1 | < 0.1 | < 0.1 | < 0.1 | 650 to 6,700 bignums a request, fewer than base; not part of the gap |
+
+The candidates are ordered by their cost on qjs and py, where the gap is
+largest. Rows 1 and 2 probably share a cause, the code the generator emits
+for the translation cache. A test of that would be to compile one hot module
+with and without the carried cache and compare its compile time and self
+time. That has not been run.
+
+### Not done
+
+- No null arm for tprof, bigword or the cold compile; `inst` counters from one
+  VM per guest (two for first writes, which agree within 4%).
+- Arithmetic and decode bignums were not counted, only `atomics:get` returns.
+- Saturated: four rounds, lua two valid. Paced idle wake-up cost unexplained.
+- Footprint for py and lua not measured; py_entry's OS footprint unusable.
+- The efficiency-core explanation of the two-mode VMs was not checked.
+
+Raw terms, scripts, the instrumentation diff and logs are in
+`test/audit/raw/a4-attribution/`. One machine: 14 cores (10 performance),
+Darwin 27, OTP 29.

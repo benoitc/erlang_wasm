@@ -1,0 +1,22 @@
+count py_entry done 00:33
+count qjs done 00:33
+count lua done 00:33
+count py done 00:34
+regions py_entry done 00:34
+regions qjs done 00:34
+regions lua done 00:34
+regions py done 00:35
+prof py_entry done 00:35
+prof qjs done 00:35
+prof lua done 00:35
+prof py done 00:37
+bigword py_entry done 00:37
+bigword qjs done 00:37
+bigword lua done 00:37
+bigword py done 00:38
+tprof py_entry done 00:38
+tprof qjs done 00:38
+tprof lua done 00:38
+tprof py done 00:39
+./prof.sh: line 38: syntax error near unexpected token `)'
+./prof.sh: line 38: `)    for t in base main; do one cold $g $t 0; done;;'

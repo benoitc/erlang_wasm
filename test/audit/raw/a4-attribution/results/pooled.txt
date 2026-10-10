@@ -1,0 +1,35 @@
+-- split call
+py_entry  base 1.441 [1.268..1.573] pooled 2.004 [1.755..2.815] gap 0.563 null|d| med 0.210 max 1.034 nvm 6/12
+py        base 11.339 [11.241..11.995] pooled 16.800 [15.664..17.904] gap 5.462 null|d| med 0.842 max 1.602 nvm 6/12
+qjs       base 5.402 [4.874..6.450] pooled 7.380 [6.694..8.414] gap 1.978 null|d| med 0.083 max 0.586 nvm 6/12
+lua       base 2.442 [2.267..2.727] pooled 3.367 [2.720..4.094] gap 0.925 null|d| med 0.831 max 1.249 nvm 6/12
+-- split restore
+py_entry  base 3.300 [3.259..4.032] pooled 0.395 [0.385..0.430] gap -2.905 null|d| med 0.011 max 0.045 nvm 6/12
+py        base 4.472 [4.442..4.599] pooled 0.417 [0.401..0.438] gap -4.056 null|d| med 0.014 max 0.037 nvm 6/12
+qjs       base 0.313 [0.302..0.332] pooled 0.123 [0.117..0.133] gap -0.190 null|d| med 0.002 max 0.006 nvm 6/12
+lua       base 0.155 [0.150..0.166] pooled 0.085 [0.073..0.096] gap -0.070 null|d| med 0.013 max 0.020 nvm 6/12
+-- split destroy
+py_entry  base 0.087 [0.081..0.104] pooled 0.020 [0.018..0.027] gap -0.067 null|d| med 0.002 max 0.010 nvm 6/12
+py        base 0.155 [0.153..0.163] pooled 0.072 [0.068..0.075] gap -0.083 null|d| med 0.002 max 0.004 nvm 6/12
+qjs       base 0.052 [0.044..0.066] pooled 0.058 [0.053..0.069] gap 0.007 null|d| med 0.002 max 0.005 nvm 6/12
+lua       base 0.034 [0.030..0.042] pooled 0.041 [0.029..0.051] gap 0.007 null|d| med 0.014 max 0.016 nvm 6/12
+-- split total
+py_entry  base 4.856 [4.602..5.408] pooled 2.418 [2.157..3.273] gap -2.438 null|d| med 0.222 max 1.097 nvm 6/12
+py        base 16.002 [15.839..16.700] pooled 17.318 [16.157..18.418] gap 1.316 null|d| med 0.827 max 1.606 nvm 6/12
+qjs       base 5.770 [5.232..6.849] pooled 7.565 [6.867..8.600] gap 1.795 null|d| med 0.080 max 0.604 nvm 6/12
+lua       base 2.628 [2.446..2.945] pooled 3.494 [2.826..4.253] gap 0.866 null|d| med 0.866 max 1.294 nvm 6/12
+-- steady total
+py_entry  base 6.080 [5.548..6.247] pooled 3.649 [3.262..4.448] gap -2.431 null|d| med 0.175 max 0.443 nvm 6/12
+py        base 17.929 [16.975..18.573] pooled 18.850 [17.967..20.672] gap 0.921 null|d| med 1.261 max 2.457 nvm 6/12
+qjs       base 7.594 [7.229..8.173] pooled 8.819 [7.873..9.177] gap 1.225 null|d| med 0.271 max 0.919 nvm 6/12
+lua       base 3.886 [3.561..4.295] pooled 4.390 [3.428..5.344] gap 0.504 null|d| med 0.360 max 0.698 nvm 6/12
+-- paced total
+py_entry  base 11.859 [11.353..12.005] pooled 11.592 [5.207..11.771] gap -0.267 null|d| med 0.131 max 6.505 nvm 6/12
+py        base 18.007 [16.617..18.529] pooled 19.780 [17.607..20.703] gap 1.773 null|d| med 0.344 max 3.096 nvm 6/12
+qjs       base 11.780 [11.245..11.931] pooled 11.879 [11.197..12.041] gap 0.099 null|d| med 0.114 max 0.402 nvm 6/12
+lua       base 11.633 [11.252..12.013] pooled 11.612 [10.849..12.137] gap -0.020 null|d| med 0.192 max 0.690 nvm 6/12
+-- sat total
+py_entry  base 7.714 [7.502..7.986] pooled 5.381 [5.220..5.442] gap -2.333 null|d| med 0.081 max 0.099 nvm 4/8
+py        base 21.177 [20.932..22.781] pooled 22.079 [21.551..22.709] gap 0.901 null|d| med 0.535 max 0.686 nvm 4/8
+qjs       base 11.092 [10.294..12.206] pooled 12.707 [12.271..12.982] gap 1.614 null|d| med 0.310 max 0.598 nvm 4/8
+lua       base 7.475 [7.315..7.636] pooled 8.414 [8.195..8.995] gap 0.939 null|d| med 0.473 max 0.654 nvm 2/4

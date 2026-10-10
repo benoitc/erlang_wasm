@@ -1,0 +1,60 @@
+== r1 main  1:13  up 11:39, 4 users, load averages: 5.50 6.93 6.80
+[{ld_hit,19.298333333333332},
+ {ld_miss_private,25.119666666666667},
+ {ld_untouched,27.468},
+ {ld_untouched3,27.457666666666668},
+ {st_hit,24.06},
+ {st_miss_private,29.842666666666666},
+ {img_bytes,1048576},
+ {counts,#{failed => 0,entered => 6,crashed => 0,refused => 0,cached => 0,
+           compiled => 4,reentered => 0}}]
+== r1 base  1:13  up 11:39, 4 users, load averages: 5.38 6.88 6.78
+[{ld_hit,20.459},
+ {ld_miss_private,20.284333333333333},
+ {ld_untouched,20.349},
+ {ld_untouched3,20.58},
+ {st_hit,24.924333333333333},
+ {st_miss_private,24.894},
+ {img_bytes,no_image},
+ {counts,#{failed => 0,entered => 6,crashed => 0,refused => 0,cached => 0,
+           compiled => 4,reentered => 0}}]
+== r2 base  1:14  up 11:39, 4 users, load averages: 5.11 6.80 6.75
+[{ld_hit,19.965},
+ {ld_miss_private,19.873},
+ {ld_untouched,19.882},
+ {ld_untouched3,19.904666666666667},
+ {st_hit,24.402666666666665},
+ {st_miss_private,24.39966666666667},
+ {img_bytes,no_image},
+ {counts,#{failed => 0,entered => 6,crashed => 0,refused => 0,cached => 0,
+           compiled => 4,reentered => 0}}]
+== r2 main  1:14  up 11:39, 4 users, load averages: 5.11 6.80 6.75
+[{ld_hit,18.959333333333333},
+ {ld_miss_private,25.82133333333333},
+ {ld_untouched,27.712},
+ {ld_untouched3,26.964333333333332},
+ {st_hit,23.607},
+ {st_miss_private,30.89},
+ {img_bytes,1048576},
+ {counts,#{failed => 0,entered => 6,crashed => 0,refused => 0,cached => 0,
+           compiled => 4,reentered => 0}}]
+== r3 main  1:14  up 11:39, 4 users, load averages: 5.50 6.85 6.77
+[{ld_hit,19.217},
+ {ld_miss_private,26.594666666666665},
+ {ld_untouched,27.807333333333332},
+ {ld_untouched3,28.250666666666667},
+ {st_hit,23.084},
+ {st_miss_private,30.038},
+ {img_bytes,1048576},
+ {counts,#{failed => 0,entered => 6,crashed => 0,refused => 0,cached => 0,
+           compiled => 4,reentered => 0}}]
+== r3 base  1:14  up 11:39, 4 users, load averages: 5.22 6.77 6.74
+[{ld_hit,19.964666666666666},
+ {ld_miss_private,19.922666666666668},
+ {ld_untouched,27.278333333333332},
+ {ld_untouched3,35.861},
+ {st_hit,39.789},
+ {st_miss_private,39.639},
+ {img_bytes,no_image},
+ {counts,#{failed => 0,entered => 6,crashed => 0,refused => 0,cached => 0,
+           compiled => 4,reentered => 0}}]

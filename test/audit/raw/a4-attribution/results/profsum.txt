@@ -1,0 +1,102 @@
+### bigword_lua_base  n=3 call_p50=33.262 ms total_p50=34.270 ms reds/req=249123.7
+atomics:get per req: small=55290.0 big=5751.0
+
+### bigword_lua_main  n=3 call_p50=34.878 ms total_p50=35.236 ms reds/req=242021.3
+atomics:get per req: small=55796.0 big=4182.0
+
+### bigword_py_base  n=3 call_p50=83.913 ms total_p50=94.258 ms reds/req=1707804.7
+atomics:get per req: small=140646.0 big=7657.0
+
+### bigword_py_entry_base  n=3 call_p50=9.608 ms total_p50=18.425 ms reds/req=875415.3
+atomics:get per req: small=24197.0 big=1229.0
+
+### bigword_py_entry_main  n=3 call_p50=10.909 ms total_p50=11.551 ms reds/req=256224.0
+atomics:get per req: small=16652.0 big=648.0
+
+### bigword_py_main  n=3 call_p50=94.491 ms total_p50=95.453 ms reds/req=1044747.3
+atomics:get per req: small=147747.0 big=4638.0
+
+### bigword_qjs_base  n=3 call_p50=60.738 ms total_p50=61.767 ms reds/req=481157.0
+atomics:get per req: small=103420.0 big=10079.0
+
+### bigword_qjs_main  n=3 call_p50=69.127 ms total_p50=69.554 ms reds/req=516813.3
+atomics:get per req: small=114450.0 big=6700.0
+
+### count_lua_inst  n=100 call_p50=5.956 ms total_p50=6.123 ms reds/req=688519.4
+
+### count_py_entry_inst  n=100 call_p50=3.097 ms total_p50=3.536 ms reds/req=371012.0
+
+### count_py_inst  n=100 call_p50=22.222 ms total_p50=22.762 ms reds/req=1972992.6
+
+### count_qjs_inst  n=100 call_p50=12.223 ms total_p50=12.445 ms reds/req=1291547.5
+
+### prof_lua_base  n=200 call_p50=2.194 ms total_p50=2.378 ms reds/req=188526.3
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=14.4
+msacc us/req: sched emu=2378.1 gc=24.8 other=1362.5 aux=35.3 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=683.7 other=368.9 | wall/req=3214.5
+
+### prof_lua_main  n=200 call_p50=2.663 ms total_p50=2.774 ms reds/req=183388.0
+gc/req: n=0.00 major=0.00 words=0.0 gc_us=0.0
+msacc us/req: sched emu=2725.7 gc=8.3 other=1553.7 aux=43.1 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=738.4 other=412.2 | wall/req=3618.7
+
+### prof_lua_null  n=200 call_p50=2.435 ms total_p50=2.543 ms reds/req=183388.6
+gc/req: n=0.00 major=0.00 words=0.0 gc_us=0.0
+msacc us/req: sched emu=2687.4 gc=7.9 other=1510.4 aux=40.7 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=712.1 other=398.0 | wall/req=3542.0
+
+### prof_py_base  n=200 call_p50=10.312 ms total_p50=14.876 ms reds/req=1518631.0
+gc/req: n=1.99 major=0.99 words=0.0 gc_us=110.4
+msacc us/req: sched emu=14853.9 gc=128.8 other=1603.0 aux=45.7 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=1108.6 other=506.6 | wall/req=16339.8
+
+### prof_py_entry_base  n=200 call_p50=1.636 ms total_p50=5.029 ms reds/req=848302.0
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=112.1
+msacc us/req: sched emu=5238.4 gc=123.2 other=1013.1 aux=23.8 | dcpu emu=0.0 gc=1.4 other=0.1 | dio emu=456.3 other=158.2 | wall/req=5941.8
+
+### prof_py_entry_main  n=200 call_p50=1.987 ms total_p50=2.408 ms reds/req=229992.0
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=81.2
+msacc us/req: sched emu=2682.5 gc=91.1 other=984.6 aux=22.5 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=396.7 other=170.0 | wall/req=3272.9
+
+### prof_py_entry_null  n=200 call_p50=2.027 ms total_p50=2.447 ms reds/req=229992.0
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=83.7
+msacc us/req: sched emu=2722.6 gc=94.3 other=997.6 aux=32.5 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=396.9 other=162.6 | wall/req=3326.5
+
+### prof_py_main  n=200 call_p50=16.822 ms total_p50=17.329 ms reds/req=818975.1
+gc/req: n=1.99 major=0.99 words=0.0 gc_us=84.4
+msacc us/req: sched emu=17111.8 gc=107.5 other=1765.6 aux=51.0 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=1303.7 other=587.6 | wall/req=18805.7
+
+### prof_py_null  n=200 call_p50=16.744 ms total_p50=17.300 ms reds/req=818974.1
+gc/req: n=1.99 major=0.99 words=0.0 gc_us=85.0
+msacc us/req: sched emu=17471.9 gc=109.1 other=1757.5 aux=52.3 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=1290.9 other=593.4 | wall/req=19174.1
+
+### prof_qjs_base  n=200 call_p50=5.574 ms total_p50=5.948 ms reds/req=353139.0
+gc/req: n=2.00 major=1.00 words=0.0 gc_us=27.3
+msacc us/req: sched emu=5890.9 gc=40.5 other=1432.3 aux=42.6 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=900.5 other=353.2 | wall/req=7024.2
+
+### prof_qjs_main  n=200 call_p50=7.570 ms total_p50=7.767 ms reds/req=372846.9
+gc/req: n=3.00 major=1.00 words=51522.5 gc_us=50.9
+msacc us/req: sched emu=7589.3 gc=69.7 other=1540.5 aux=41.7 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=991.1 other=387.7 | wall/req=8840.2
+
+### prof_qjs_null  n=200 call_p50=6.214 ms total_p50=6.375 ms reds/req=372844.1
+gc/req: n=3.00 major=1.00 words=51510.8 gc_us=49.1
+msacc us/req: sched emu=6413.4 gc=66.1 other=1360.8 aux=39.8 | dcpu emu=0.0 gc=0.0 other=0.0 | dio emu=855.5 other=336.5 | wall/req=7526.4
+
+### regions_lua_inst  n=30 call_p50=5.989 ms total_p50=6.136 ms reds/req=729196.8
+
+### regions_py_entry_inst  n=30 call_p50=3.548 ms total_p50=4.036 ms reds/req=382246.1
+
+### regions_py_inst  n=30 call_p50=22.708 ms total_p50=23.204 ms reds/req=2068270.1
+
+### regions_qjs_inst  n=30 call_p50=12.260 ms total_p50=12.466 ms reds/req=1372701.6
+
+### tprof_lua_base  n=30 call_p50=10.739 ms total_p50=12.193 ms reds/req=222772.2
+call_time us/req by bucket (traced total 12359.9):
+escript: exception error: bad argument
+  in function  io:format/2
+     called as io:format("  ~-16s ~10.0f us ~9.0f calls~n",
+                         [atomics,3349.3,84607.0])
+     *** argument 1: failed to format string
+  in call from profsum_escript__escript__1791__585984__711036__2306:'-step/4-lc$^10/1-14-'/2 (scripts/profsum.escript:71)
+  in call from profsum_escript__escript__1791__585984__711036__2306:step/4 (scripts/profsum.escript:72)
+  in call from profsum_escript__escript__1791__585984__711036__2306:'-main/1-lc$^0/1-0-'/1 (scripts/profsum.escript:5)
+  in call from profsum_escript__escript__1791__585984__711036__2306:main/1 (scripts/profsum.escript:5)
+  in call from escript:run/2 (escript.erl:908)
+  in call from escript:start/1 (escript.erl:422)
+  in call from init:start_it/1 

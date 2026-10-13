@@ -435,12 +435,18 @@ An unrecognised profile is `{error, #{kind := unknown_profile}}`, not a crash.
   workload and flat on another.
 - **A restored memory costs compiled code a lookup.** Memory 0 is reached
   through a two-entry translation cache, and a miss resolves the page through
-  the memory's page table. A compiled request's guest time is 12% to 49%
-  higher than when a restore copied the image. The cheaper restore pays that
-  back for CPython with an `entry` (5.4 ms to 3.0 ms a request) but not for a
-  compiled script request, 3% to 19% slower; `test/audit/PERF.md`, "Shared
-  pages", has the arms. A memory not restored from an image pays one compare.
-- **Generated code is ABI 14**, so a code cache written by an earlier release is
+  the memory's page table. A memory not restored from an image pays one
+  compare. `test/audit/PERF.md`, "Shared pages", has what the lookup cost
+  when it was introduced.
+- **A memory access compiles to one compare and a call.** The access tests
+  the first cache entry inline and, when that fails, applies a function of the
+  generated module that holds the second entry and the page table lookup. In
+  0.9.0 and 0.9.1 all of it was emitted at every access. Out of line, compiled
+  code is 41 to 43% of that size, a cold compile takes a quarter of the time
+  (CPython 104 s against 415 s, QuickJS 69 s against 271 s), and a compiled
+  request's guest time is 12 to 35% lower. `test/audit/PERF.md`, "The miss
+  path out of line", has the gates.
+- **Generated code is ABI 15**, so a code cache written by an earlier release is
   ignored and rebuilt once. Nothing to set.
 - **`baseline` works around an OTP compiler defect.** Under `no_ssa_opt` an
   unused value of a multi-value `let` can overwrite a used one, on OTP 29.0.3

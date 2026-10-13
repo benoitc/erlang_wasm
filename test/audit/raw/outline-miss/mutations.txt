@@ -1,0 +1,158 @@
+Each new case run with one line of the generator broken (src/wasm_core.erl at 9b53543), then restored.
+Cases: an_access_past_the_first_entry_agrees_with_the_interpreter (A), the_miss_path_is_one_function_per_access_shape (S),
+and the existing an_unused_access_result_never_clobbers_a_used_one (C).
+
+swap:      Hit2 answers {TP2, TA, TB, TP, TA2, TB2} (pages swapped, arrays not)        A fails, C fails
+refill:    Refill keeps the word index, not the page's base ({Pg, C, I, ...})          A fails, C fails
+evict:     Refill hands on {.., TP, TA2, TB2} as the second entry                      A fails, C fails
+order:     from_tuple reverses the cache when it takes the tuple apart                 A fails, C fails
+allshapes: miss_shapes adds a shape the module does not use                            S fails
+main:      src/wasm_core.erl of 14d3d81 (the miss path inline)                         S fails (no wasm_m_ function)
+
+Leaving the swap out altogether (Hit2 answering the cache unchanged) is still correct, only slower: no case can fail on it.
+
+--- log
+=== mutation swap
+===> Verifying dependencies...
+===> Analyzing applications...
+===> Compiling wasm
+===> Running Common Test suites...
+%%% wasm_paged_memory_SUITE ==> an_access_past_the_first_entry_agrees_with_the_interpreter: FAILED
+%%% wasm_paged_memory_SUITE ==> 
+Failure/Error: ?assertEqual({full,[{<<105,51,50,46,115,116,111,114,101>>,[64,5]},{<<105,51,50,46,115,116,111,114,101>>,[4104,6]},{<<97,108,116>>,[64,4104]}],{[{<<105,51,50,46,115,116,111,114,101>>,[64,5],{ok,[]}},{<<105,51,50,46,115,116,111
+  expected: {full,[{<<"i32.store">>,[64,5]},
+       got: {full,[{<<"i32.store">>,[64,5]},
+      line: 969
+%%% wasm_paged_memory_SUITE ==> an_unused_access_result_never_clobbers_a_used_one: FAILED
+%%% wasm_paged_memory_SUITE ==> 
+Failure/Error: ?assertEqual({full,[{[{<<115,116>>,[64,305419896],{ok,[]}},{<<108,100>>,[64],{ok,[305419896]}}],{ok,<<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  expected: {full,[{[{<<"st">>,[64,305419896],{ok,[]}},
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                   {[{<<"ldtrap">>,[68,1],{error,trap,unreachable}}],
+                   {[{<<"sttrap">>,[80,5],{error,trap,unreachable}},
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                   {[{<<"filltrap">>,"@",{error,trap,unreachable}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                     {<<"alttrap">>,[64,65544,1],{error,trap,unreachable}}],
+       got: {full,[{[{<<"st">>,[64,305419896],{ok,[]}},
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                   {[{<<"ldtrap">>,[68,1],{error,trap,unreachable}}],
+=== mutation refill
+===> Verifying dependencies...
+===> Analyzing applications...
+===> Compiling wasm
+===> Running Common Test suites...
+%%% wasm_paged_memory_SUITE ==> an_access_past_the_first_entry_agrees_with_the_interpreter: FAILED
+%%% wasm_paged_memory_SUITE ==> 
+Failure/Error: ?assertEqual({full,[{<<114,119>>,[12536,19088743]}],{[{<<114,119>>,[12536,19088743],{ok,[69551719]}}],<<203,204,111,109,47,119,71,165,238,231,143,135,178,79,227,65>>}}, { Q , Seq , G })
+  expected: {full,[{<<"rw">>,[12536,19088743]}],
+       got: {full,[{<<"rw">>,[12536,19088743]}],
+      line: 969
+%%% wasm_paged_memory_SUITE ==> an_unused_access_result_never_clobbers_a_used_one: FAILED
+%%% wasm_paged_memory_SUITE ==> 
+Failure/Error: ?assertEqual({full,[{[{<<115,116>>,[64,305419896],{ok,[]}},{<<108,100>>,[64],{ok,[305419896]}}],{ok,<<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  expected: {full,[{[{<<"st">>,[64,305419896],{ok,[]}},
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                   {[{<<"ldtrap">>,[68,1],{error,trap,unreachable}}],
+                   {[{<<"sttrap">>,[80,5],{error,trap,unreachable}},
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                   {[{<<"filltrap">>,"@",{error,trap,unreachable}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                     {<<"alttrap">>,[64,65544,1],{error,trap,unreachable}}],
+       got: {full,[{[{<<"st">>,[64,305419896],{ok,[]}},
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                   {[{<<"ldtrap">>,[68,1],{error,trap,unreachable}}],
+=== mutation order
+===> Verifying dependencies...
+===> Analyzing applications...
+===> Compiling wasm
+===> [1mCompiling src/wasm_core.erl failed
+=== mutation evict
+===> Verifying dependencies...
+===> Analyzing applications...
+===> Compiling wasm
+===> Running Common Test suites...
+%%% wasm_paged_memory_SUITE ==> an_access_past_the_first_entry_agrees_with_the_interpreter: FAILED
+%%% wasm_paged_memory_SUITE ==> 
+Failure/Error: ?assertEqual({full,[{<<105,51,50,46,115,116,111,114,101>>,[64,5]},{<<105,51,50,46,115,116,111,114,101>>,[4104,6]},{<<97,108,116>>,[64,4104]}],{[{<<105,51,50,46,115,116,111,114,101>>,[64,5],{ok,[]}},{<<105,51,50,46,115,116,111
+  expected: {full,[{<<"i32.store">>,[64,5]},
+       got: {full,[{<<"i32.store">>,[64,5]},
+                    {<<"alt">>,[64,4104],{error,malformed,internal}}],
+      line: 969
+%%% wasm_paged_memory_SUITE ==> an_unused_access_result_never_clobbers_a_used_one: FAILED
+%%% wasm_paged_memory_SUITE ==> 
+Failure/Error: ?assertEqual({full,[{[{<<115,116>>,[64,305419896],{ok,[]}},{<<108,100>>,[64],{ok,[305419896]}}],{ok,<<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  expected: {full,[{[{<<"st">>,[64,305419896],{ok,[]}},
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                   {[{<<"ldtrap">>,[68,1],{error,trap,unreachable}}],
+                   {[{<<"sttrap">>,[80,5],{error,trap,unreachable}},
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                   {[{<<"filltrap">>,"@",{error,trap,unreachable}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                     {<<"alttrap">>,[64,65544,1],{error,trap,unreachable}}],
+       got: {full,[{[{<<"st">>,[64,305419896],{ok,[]}},
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+                      {error,trap,out_of_bounds_memory_access}}],
+=== mutation allshapes
+===> Verifying dependencies...
+===> Analyzing applications...
+===> Compiling wasm
+===> Running Common Test suites...
+    exception error: {compile_failed,
+    errorContext: child_terminated
+%%% wasm_paged_memory_SUITE ==> an_access_past_the_first_entry_agrees_with_the_interpreter: FAILED
+%%% wasm_paged_memory_SUITE ==> {{badmatch,timeout},
+%%% wasm_paged_memory_SUITE ==> the_miss_path_is_one_function_per_access_shape: FAILED
+%%% wasm_paged_memory_SUITE ==> 
+Failure/Error: ?assertEqual([[39,119,97,115,109,95,109,95,108,111,97,100,95,49,95,105,51,50,95,115,39,47,56],[39,119,97,115,109,95,109,95,108,111,97,100,95,52,95,105,51,50,95,117,39,47,56],[39,119,97,115,109,95,109,95,115,116,111,114,101,95
+  expected: ["'wasm_m_load_1_i32_s'/8","'wasm_m_load_4_i32_u'/8",
+       got: ["'wasm_m_load_1_i32_s'/8","'wasm_m_load_2_i32_u'/8",
+      line: 1168
+    exception error: {compile_failed,
+    errorContext: child_terminated
+%%% wasm_paged_memory_SUITE ==> an_unused_access_result_never_clobbers_a_used_one: FAILED
+%%% wasm_paged_memory_SUITE ==> {{badmatch,timeout},
+Failed 3 tests. Passed 0 tests. 
+===> [1mFailures occurred running tests: 3
+=== main's generator
+===> Verifying dependencies...
+===> Analyzing applications...
+===> Compiling wasm
+===> Running Common Test suites...
+%%% wasm_paged_memory_SUITE ==> the_miss_path_is_one_function_per_access_shape: FAILED
+%%% wasm_paged_memory_SUITE ==> 
+  expected: ["'wasm_m_load_1_i32_s'/8","'wasm_m_load_4_i32_u'/8",
+       got: []
+      line: 1168
+Failed 1 tests. Passed 0 tests. 
+===> [1mFailures occurred running tests: 1
+=== mutation order (cache reversed when the tuple is taken apart)
+===> Verifying dependencies...
+===> Analyzing applications...
+===> Compiling wasm
+===> Running Common Test suites...
+%%% wasm_paged_memory_SUITE ==> an_access_past_the_first_entry_agrees_with_the_interpreter: FAILED
+%%% wasm_paged_memory_SUITE ==> 
+Failure/Error: ?assertEqual({full,[{<<105,51,50,46,115,116,111,114,101>>,[64,5]},{<<105,51,50,46,115,116,111,114,101>>,[4104,6]},{<<97,108,116>>,[64,4104]}],{[{<<105,51,50,46,115,116,111,114,101>>,[64,5],{ok,[]}},{<<105,51,50,46,115,116,111
+  expected: {full,[{<<"i32.store">>,[64,5]},
+       got: {full,[{<<"i32.store">>,[64,5]},
+      line: 969
+%%% wasm_paged_memory_SUITE ==> an_unused_access_result_never_clobbers_a_used_one: FAILED
+%%% wasm_paged_memory_SUITE ==> 

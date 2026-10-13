@@ -1,0 +1,12 @@
+codecache/cand-lua	modules=1	beam_bytes=4767556	instrs=828515	ymoves=351558	funs=3793	conts=3551	k_arity_med=21	k_arity_max=52	k_arity_mean=25.11
+codecache/cand-py	modules=1	beam_bytes=21484748	instrs=3680133	ymoves=1658323	funs=16090	conts=15176	k_arity_med=23	k_arity_max=55	k_arity_mean=26.17
+codecache/cand-py_entry	modules=1	beam_bytes=7750404	instrs=1321749	ymoves=624547	funs=5292	conts=5042	k_arity_med=28	k_arity_max=55	k_arity_mean=31.71
+codecache/cand-qjs	modules=1	beam_bytes=13834652	instrs=2383768	ymoves=1142425	funs=9275	conts=8992	k_arity_med=29	k_arity_max=68	k_arity_mean=32.67
+codecache/main-lua	modules=1	beam_bytes=12578880	instrs=2030445	ymoves=792635	funs=3775	conts=3551	k_arity_med=21	k_arity_max=52	k_arity_mean=25.11
+codecache/main-py	modules=1	beam_bytes=52618236	instrs=8524540	ymoves=3503122	funs=16073	conts=15176	k_arity_med=23	k_arity_max=55	k_arity_mean=26.17
+codecache/main-py_entry	modules=1	beam_bytes=18971024	instrs=3052154	ymoves=1281149	funs=5276	conts=5042	k_arity_med=28	k_arity_max=55	k_arity_mean=31.71
+codecache/main-qjs	modules=1	beam_bytes=34375432	instrs=5539020	ymoves=2325443	funs=9257	conts=8992	k_arity_med=29	k_arity_max=68	k_arity_mean=32.67
+codecache/one-lua	modules=1	beam_bytes=4240948	instrs=704111	ymoves=275126	funs=3793	conts=3551	k_arity_med=18	k_arity_max=49	k_arity_mean=22.11
+codecache/one-py	modules=1	beam_bytes=19238248	instrs=3150799	ymoves=1324944	funs=16090	conts=15176	k_arity_med=20	k_arity_max=52	k_arity_mean=23.18
+codecache/one-py_entry	modules=1	beam_bytes=6971364	instrs=1140562	ymoves=511688	funs=5292	conts=5042	k_arity_med=25	k_arity_max=52	k_arity_mean=28.71
+codecache/one-qjs	modules=1	beam_bytes=12389776	instrs=2050724	ymoves=933235	funs=9275	conts=8992	k_arity_med=26	k_arity_max=65	k_arity_mean=29.67

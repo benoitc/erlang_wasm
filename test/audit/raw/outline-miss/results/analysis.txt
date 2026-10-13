@@ -1,0 +1,195 @@
+cold py_entry  main  entry_ms [157445,157217,157942] compiled [233]
+cold py_entry  cand  entry_ms [41521,41138,41294] compiled [233]
+cold py_entry  one   entry_ms [37934,37334,37462] compiled [233]
+cold qjs       main  entry_ms [270986,269745,270586] compiled [264]
+cold qjs       cand  entry_ms [69022,68597,68905] compiled [264]
+cold qjs       one   entry_ms [61909,61568,62079] compiled [264]
+cold lua       main  entry_ms [102316,100889,101552] compiled [223]
+cold lua       cand  entry_ms [23284,23098,22917] compiled [223]
+cold lua       one   entry_ms [20950,20714,20595] compiled [223]
+cold py        main  entry_ms [412675,414648,434209] compiled [896]
+cold py        cand  entry_ms [103999,104167,107320] compiled [896]
+cold py        one   entry_ms [94676,95246,97017] compiled [896]
+# Gate 1: cold compile, entry_ms, median of three, at most 0.5x main
+py_entry  main 157.4 s cand 41.3 s one 37.5 s  cand/main 0.262 one/main 0.238 one/cand 0.907
+qjs       main 270.6 s cand 68.9 s one 61.9 s  cand/main 0.255 one/main 0.229 one/cand 0.898
+lua       main 101.6 s cand 23.1 s one 20.7 s  cand/main 0.227 one/main 0.204 one/cand 0.897
+py        main 414.6 s cand 104.2 s one 95.2 s  cand/main 0.251 one/main 0.230 one/cand 0.914
+
+# Gate 2: compiled call phase (split), p50 ms, at most 0.95x main
+py_entry  main 1.457 null 1.567 cand 1.012 one 1.032  cand/main 0.695 one/main 0.725 null/main 1.040  null |d| med 0.064 max 0.245
+          main  per round 1.519 1.812 1.457 1.382 1.343
+          null  per round 1.579 1.567 1.614 1.446 1.335
+          cand  per round 1.022 1.015 1.012 0.984 0.949
+          one   per round 1.272 1.001 1.032 1.044 0.973
+qjs       main 5.191 null 5.309 cand 3.797 one 3.689  cand/main 0.711 one/main 0.707 null/main 1.018  null |d| med 0.170 max 0.664
+          main  per round 5.361 5.191 5.214 5.145 5.136
+          null  per round 5.932 5.855 5.309 5.079 4.966
+          cand  per round 3.797 3.960 3.662 3.891 3.651
+          one   per round 3.788 4.482 3.689 3.604 3.524
+lua       main 2.171 null 2.106 cand 1.860 one 1.867  cand/main 0.884 one/main 0.877 null/main 1.007  null |d| med 0.065 max 0.375
+          main  per round 2.172 2.329 2.165 2.171 2.004
+          null  per round 2.220 2.705 2.077 2.106 2.017
+          cand  per round 1.958 2.058 1.860 1.802 1.824
+          one   per round 1.867 2.062 1.900 1.804 1.806
+py        main 12.775 null 13.220 cand 8.451 one 7.716  cand/main 0.653 one/main 0.606 null/main 1.011  null |d| med 0.445 max 1.510
+          main  per round 13.730 12.775 14.281 12.732 11.992
+          null  per round 13.569 13.220 12.770 13.621 12.128
+          cand  per round 8.451 9.683 8.347 8.311 8.542
+          one   per round 8.082 8.081 7.709 7.716 7.325
+
+# Gate 3a: compiled whole request (steady), p50 ms, no higher than main
+py_entry  main 2.721 null 2.762 cand 2.090 one 2.128  cand/main 0.766 one/main 0.785 null/main 0.991  null |d| med 0.041 max 0.306
+          main  per round 2.794 2.721 3.061 2.665 2.657
+          null  per round 2.782 3.026 2.762 2.624 2.634
+          cand  per round 2.139 2.614 2.090 2.086 2.031
+          one   per round 2.128 2.274 2.495 2.093 2.038
+qjs       main 6.620 null 6.500 cand 4.763 one 4.619  cand/main 0.758 one/main 0.713 null/main 0.995  null |d| med 0.032 max 2.514
+          main  per round 6.620 7.694 9.014 6.028 5.976
+          null  per round 6.588 7.556 6.500 6.039 5.975
+          cand  per round 5.388 4.763 6.437 4.616 4.529
+          one   per round 4.718 4.619 4.672 4.582 4.516
+lua       main 3.015 null 3.070 cand 2.687 one 2.612  cand/main 0.884 one/main 0.873 null/main 1.005  null |d| med 0.055 max 0.244
+          main  per round 3.147 3.015 3.385 2.852 2.881
+          null  per round 3.208 3.070 3.142 2.866 2.881
+          cand  per round 2.687 2.692 2.733 2.570 2.547
+          one   per round 2.612 2.632 3.034 2.525 2.506
+py        main 15.259 null 15.498 cand 10.468 one 9.817  cand/main 0.672 one/main 0.645 null/main 1.022  null |d| med 0.564 max 3.166
+          main  per round 15.259 18.551 15.576 15.168 14.745
+          null  per round 15.823 15.385 16.806 15.498 14.984
+          cand  per round 10.576 11.030 10.468 10.348 9.457
+          one   per round 10.206 9.817 10.113 9.781 9.177
+
+# Gate 3b: interpreted whole request (steady), p50 ms, within 1.03x
+py_entry  main 4.750 null 4.807 cand 4.742 one 4.769  cand/main 0.998 one/main 0.996 null/main 1.009  null |d| med 0.043 max 0.213
+          main  per round 4.750 4.823 5.950 4.559 4.560
+          null  per round 4.962 4.807 6.077 4.602 4.534
+          cand  per round 4.742 4.792 5.007 4.684 4.549
+          one   per round 4.783 4.769 4.991 4.601 4.542
+qjs       main 11.540 null 11.484 cand 11.559 one 11.525  cand/main 0.997 one/main 0.993 null/main 0.997  null |d| med 0.056 max 0.668
+          main  per round 11.596 11.540 12.731 11.185 11.110
+          null  per round 11.576 11.484 12.063 11.292 11.079
+          cand  per round 11.567 11.559 11.991 11.130 11.072
+          one   per round 11.588 11.525 12.161 11.111 11.029
+lua       main 6.865 null 6.873 cand 6.924 one 6.850  cand/main 1.009 one/main 1.007 null/main 1.002  null |d| med 0.030 max 0.328
+          main  per round 6.865 6.941 7.043 6.706 6.691
+          null  per round 6.878 6.873 7.372 6.736 6.671
+          cand  per round 6.924 7.087 7.113 6.567 6.694
+          one   per round 6.949 6.850 8.757 6.751 6.566
+py        main 22.401 null 22.712 cand 22.384 one 22.389  cand/main 0.996 one/main 1.003 null/main 0.999  null |d| med 0.147 max 1.898
+          main  per round 22.637 22.401 25.355 21.582 21.876
+          null  per round 22.712 23.383 23.457 21.556 21.729
+          cand  per round 22.551 22.384 23.033 21.513 21.456
+          one   per round 23.019 22.389 25.545 21.654 21.411
+
+# Gate 4a: density counts, identical
+py_entry  [[455,455,455,455],[455,455,455,455],[455,455,455,455],[455,455,455,455],[455,455,455,455]] (main null cand one per round)
+qjs       [[1024,1024,1024,1024],[1024,1024,1024,1024],[1024,1024,1024,1024],[1024,1024,1024,1024],[1024,1024,1024,1024]] (main null cand one per round)
+lua       [[2048,2048,2048,2048],[2048,2048,2048,2048],[2048,2048,2048,2048],[2048,2048,2048,2048],[2048,2048,2048,2048]] (main null cand one per round)
+py        [[124,124,124,124],[124,124,124,124],[124,124,124,124],[124,124,124,124],[124,124,124,124]] (main null cand one per round)
+
+# Gate 4b: restore median, us, within 1.03x
+py        main 707.708 null 717.271 cand 703.458 one 711.063  cand/main 1.004 one/main 0.999 null/main 1.032  null |d| med 24.625 max 139.458
+          main  per round 775.021 707.708 692.646 677.583 802.500
+          null  per round 781.771 763.854 717.271 699.167 663.042
+          cand  per round 701.333 710.230 717.229 691.354 703.458
+          one   per round 728.979 711.063 691.854 710.604 723.667
+qjs       main 110.313 null 114.125 cand 111.354 one 112.958  cand/main 1.004 one/main 1.006 null/main 1.016  null |d| med 1.834 max 9.624
+          main  per round 110.938 112.291 110.313 110.146 108.708
+          null  per round 120.562 114.125 118.500 110.250 108.854
+          cand  per round 111.354 110.896 113.313 107.645 114.167
+          one   per round 118.667 112.958 117.125 109.459 107.604
+lua       main 56.791 null 56.667 cand 56.959 one 56.313  cand/main 1.007 one/main 1.001 null/main 1.002  null |d| med 0.124 max 4.334
+          main  per round 57.521 57.146 56.167 56.791 56.230
+          null  per round 57.438 61.480 56.521 56.667 56.334
+          cand  per round 57.209 63.688 56.959 55.666 56.624
+          one   per round 58.980 58.375 55.999 55.938 56.313
+plain     main 8.958 null 9.021 cand 8.667 one 8.792  cand/main 0.979 one/main 1.023 null/main 1.007  null |d| med 0.125 max 0.625
+          main  per round 9.000 9.000 8.854 8.958 8.417
+          null  per round 9.125 9.625 8.625 9.021 8.459
+          cand  per round 9.188 8.791 8.667 8.500 8.584
+          one   per round 9.479 9.208 8.625 8.458 8.792
+
+# Gate 4c: realbench qjs interpreted, ms, within 1.03x
+qjs       main 12044.100 null 11386.000 cand 11257.200 one 11298.500  cand/main 0.950 one/main 0.960 null/main 0.991  null |d| med 106.000 max 1327.900
+          main  per round 12903.800 12044.100 12713.900 11020.200 11086.300
+          null  per round 11762.700 11938.100 11386.000 11077.800 11140.000
+          cand  per round 11779.700 11445.300 11257.200 11036.000 11129.800
+          one   per round 12059.500 11565.000 11298.500 11139.000 11051.600
+
+# Reported: p95 and p99, ms, median over rounds of the per-VM figure
+split py_entry compiled call95: main 2.065 cand 1.200 one 1.459
+split py_entry compiled call99: main 2.799 cand 1.391 one 1.812
+split qjs compiled call95: main 6.506 cand 4.443 one 4.454
+split qjs compiled call99: main 6.892 cand 5.088 one 5.123
+split lua compiled call95: main 2.907 cand 2.265 one 2.123
+split lua compiled call99: main 3.849 cand 2.435 one 2.332
+split py compiled call95: main 15.859 cand 10.095 one 9.437
+split py compiled call99: main 16.404 cand 10.955 one 10.183
+steady py_entry compiled p95: main 2.944 cand 2.480 one 2.422
+steady py_entry compiled p99: main 3.374 cand 2.829 one 2.943
+steady qjs compiled p95: main 8.652 cand 5.751 one 5.174
+steady qjs compiled p99: main 9.300 cand 6.645 one 5.651
+steady lua compiled p95: main 3.717 cand 3.239 one 3.191
+steady lua compiled p99: main 4.020 cand 3.670 one 3.336
+steady py compiled p95: main 16.815 cand 12.317 one 11.321
+steady py compiled p99: main 17.978 cand 13.936 one 11.856
+steady py_entry interp p95: main 5.108 cand 5.083 one 5.128
+steady py_entry interp p99: main 5.395 cand 5.205 one 5.443
+steady qjs interp p95: main 14.198 cand 13.388 one 12.430
+steady qjs interp p99: main 16.493 cand 15.007 one 15.954
+steady lua interp p95: main 7.374 cand 7.396 one 7.556
+steady lua interp p99: main 7.825 cand 7.967 one 7.973
+steady py interp p95: main 23.521 cand 23.461 one 23.640
+steady py interp p99: main 24.932 cand 24.170 one 25.492
+
+# Reported: saturated throughput, pool of 10, requests/s
+py_entry  main 1908.039 null 1898.264 cand 2497.043 one 2554.473  cand/main 1.309 one/main 1.339 null/main 0.995  null |d| med 24.404 max 34.179
+          main  per round 1892.194 1923.884
+          null  per round 1906.822 1889.705
+          cand  per round 2542.857 2451.229
+          one   per round 2550.262 2558.684
+qjs       main 731.840 null 795.224 cand 988.016 one 984.229  cand/main 1.362 one/main 1.355 null/main 1.094  null |d| med 63.384 max 117.108
+          main  per round 667.888 795.791
+          null  per round 784.996 805.451
+          cand  per round 998.376 977.656
+          one   per round 984.286 984.172
+lua       main 1361.119 null 1323.636 cand 1494.559 one 1504.068  cand/main 1.098 one/main 1.105 null/main 0.972  null |d| med 37.483 max 63.307
+          main  per round 1363.077 1359.161
+          null  per round 1299.770 1347.501
+          cand  per round 1479.781 1509.338
+          one   per round 1485.270 1522.865
+py        main 446.949 null 447.842 cand 585.728 one 600.026  cand/main 1.310 one/main 1.343 null/main 1.002  null |d| med 14.709 max 15.602
+          main  per round 444.208 449.690
+          null  per round 459.810 435.874
+          cand  per round 581.715 589.741
+          one   per round 598.171 601.882
+
+# Reported: compile memory peak, erlang:memory(total), MB, median of three
+py_entry  main 3613.990 cand 1857.425 one 2011.652
+qjs       main 7442.308 cand 2098.739 one 1741.819
+lua       main 1989.198 cand 730.620 one 739.406
+py        main 10126.197 cand 3180.275 one 3842.740
+
+# Decisions (cand against main)
+gate 1 cold compile: pass
+gate 2 call phase: pass
+gate 3 compiled request: pass
+gate 3 interpreted request: pass
+gate 4 density: pass
+gate 4 restore: pass
+gate 4 realbench: pass
+
+# One-entry rule (one against cand)
+py_entry  one - cand median 0.024 ms, null median 0.064 max 0.245
+qjs       one - cand median -0.009 ms, null median 0.170 max 0.664
+lua       one - cand median 0.002 ms, null median 0.065 max 0.375
+py        one - cand median -0.639 ms, null median 0.445 max 1.510
+call p50 no higher on any guest: pass
+cold compile at least 10% lower on every guest: FAIL
+one entry ships: FAIL
+
+# loads cold/loads.tsv: 42 arm runs, start load max 9.61, end load median 6.02 max 9.61, runs ending >= 8: 7
+
+# loads loads.tsv: 400 arm runs, start load max 14.55, end load median 3.67 max 19.23, runs ending >= 8: 10
+cells redone: 4, void: none

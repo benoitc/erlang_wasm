@@ -1687,8 +1687,11 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
 %% cache starts empty in every function, so 31 to 50% of a real guest's
 %% accesses miss. Inlined, the miss path made generated code three times the
 %% size it had been before the page table and four times as slow to compile,
-%% and made the calls slower as well. See `test/audit/PERF.md', "What makes
-%% A4's generated code large: two diagnostics".
+%% and made the calls slower as well. Out of line the code is 41 to 43% of
+%% that size, compiles in a quarter of the time and its calls are 12 to 35%
+%% faster. See `test/audit/PERF.md', "What makes A4's generated code large:
+%% two diagnostics" for the cause and "The miss path out of line" for the
+%% gates.
 cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
     {TP, TA, TB, _TP2, _TA2, _TB2} = Tlb,
     A = cerl:c_var('A'), Ix = cerl:c_var('Ix'), Bit = cerl:c_var('Bit'),

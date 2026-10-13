@@ -915,6 +915,40 @@ Read `wasm_core`'s private `cached/8` before you change how an access is lowered
   and growth only appends chunks, so a cached translation is right whatever
   another holder does.
 
+Only the first entry's hit is emitted at the access. A site is the straddle
+test with its call to the helper, one compare against the first cached page
+with the load or store under it, and an `apply` for everything else. What it
+applies is a function of the generated module, one per access shape the
+module uses, built by `wasm_core`'s private `miss_fn/1`:
+
+- It holds the second entry's hit with its swap, the bounds test, the page
+  table, the growth chunks, the read of an untouched image page and the call
+  to the helper.
+- It takes the state, the address, the value for a store and the six cache
+  values, and answers `{Result, P1, A1, B1, P2, A2, B2}` on every path.
+- A shape is a direction, a width and a kind, twenty at most, and each has a
+  literal name: `wasm_m_load_4_i32_u`, `wasm_m_store_8_int`. Nothing a guest
+  supplies names one.
+
+To see it, dump a module with one load and look for the `apply`:
+
+```erlang
+{ok, M} = wasm:compile({wat, ~"(module (memory 1)
+  (func (export \"f\") (param i32) (result i32) local.get 0 i32.load))"}),
+{ok, I} = wasm:instantiate(M, #{}, #{}),
+io:format("~s~n", [wasm_jit:dump(I)]).
+```
+
+Keep the miss path out of line. The cache starts empty in every function, so
+31 to 50% of a real guest's accesses miss, and the miss path is hot code and
+not a rare branch. Emitted at every access it made generated code 2.3 to 2.5
+times as large, four times as slow to compile and 1.1 to 1.5 times as slow to
+run.
+`wasm_paged_memory_SUITE` has a case that fails if a site grows back, and
+`test/audit/PERF.md`, "The miss path out of line", has the gates it was held
+to. A cache of one entry was measured beside it: no slower to call, but under
+the 10% of compile time the rule written beforehand asked for, so two stay.
+
 A write that can publish arena chunks, from the host, a bulk or vector
 instruction or `wasm:write_memory/3`, answers a refreshed memory handle, so the
 code after it reads the new pages inline rather than through the helper.
@@ -923,7 +957,9 @@ code after it reads the new pages inline rather than through the helper.
 
 An access answers its result and the cache after it. As a Core value list that
 is seven values, and as a tuple it is an allocation on every access, about 5 ns
-a store. The value list is used only where it is safe, because of a defect in
+a store. The out-of-line function always answers the tuple, and the site takes
+it apart into the list; the first entry's hit, inline, builds the list
+directly. The value list is used only where it is safe, because of a defect in
 the OTP compiler: under `no_ssa_opt`, which is the `baseline` quality and so
 what `compiled => true` asks for, a value of a multi-value `let` that nothing
 uses gets a zero-length live interval and can share a register with a value
@@ -944,3 +980,5 @@ same commit as any change to what generated code reads, how many values a
 continuation carries, or which helper it calls, and add a line to the history
 above the define saying what an older artifact would do wrong. ABI 14 is the
 two-entry cache; 13 belonged to the deferred mmap prototype and is skipped.
+ABI 15 is the miss path out of line: an older artifact would still be right,
+and the number moved so that its larger code is rebuilt and not loaded.

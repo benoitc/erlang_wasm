@@ -1,0 +1,45 @@
+arms: main 14d3d81 (the plan names d1c4820; src/ is identical, checked below), cand 9b53543 (branch outline-miss), one = cand + scripts/one_entry.diff (scratch, ABI 115), null = main's tree and cache again
+git diff --stat d1c4820 14d3d81 -- src include c_src: 0 lines
+harness: bench/paths at 14d3d81 copied into each tree's bench/om, with memwatch.erl (here) and attrbench.erl (test/audit/raw/a4-attribution/scripts, sat mode); erl 29, +S 10:10
+generated BEAM files (the code caches) are not kept; results/codesize.txt is their instruction count
+== main /Users/benoitc/Projects/erlang_wasm-om-main
+head 14d3d81be60e2d972b16a8e5bf5aeab840affd1f
+src_sha d9bcf502f59cf031
+abi -define(ABI, 14).
+129db6138096826728af0548817eefe44f49e711c2fc0abcd05babf0abc6c395  attrbench.erl
+f714a8d33b7a871eab6e8135056c368588cd85726903d3acd7a4a132c8b17154  barrier_adapter.erl
+80222c2505530f8634cbb01dcd578f68375eeab05664978e3519d05a6172c717  benchlib.erl
+00df59f9f20195642b29179e7d19f048e508fa2e0b2f4d50602d1c6aa027e0ad  densitybench.erl
+d2d205e095c1aa3b2fdacfb0c9941dbaaa85d3fde2438d232d21a631218fc9df  memwatch.erl
+6e230df932b57641fd4f7c0e5d6d07e217139e09b8989860a43587ed71e0953c  reactorlib.erl
+97c3302e1ff6164600090ce9bbcf1e9dd5d684fe8f3307ea2c044dc4bc632691  realbench.erl
+308395f7c527abf6c6d931382823accf8319c3df0394085eb417f9f620a00d44  requestbench.erl
+3a1d38418fa86756b97adaed9dfcabc335b78dfceb3be9169691297644faa836  restorebench.erl
+== cand /Users/benoitc/Projects/erlang_wasm-om-cand
+head 9b5354341593c8f370fb6e0aefdd4424a2e07fa3
+src_sha 82900cc521cfe759
+abi -define(ABI, 15).
+129db6138096826728af0548817eefe44f49e711c2fc0abcd05babf0abc6c395  attrbench.erl
+f714a8d33b7a871eab6e8135056c368588cd85726903d3acd7a4a132c8b17154  barrier_adapter.erl
+80222c2505530f8634cbb01dcd578f68375eeab05664978e3519d05a6172c717  benchlib.erl
+00df59f9f20195642b29179e7d19f048e508fa2e0b2f4d50602d1c6aa027e0ad  densitybench.erl
+d2d205e095c1aa3b2fdacfb0c9941dbaaa85d3fde2438d232d21a631218fc9df  memwatch.erl
+6e230df932b57641fd4f7c0e5d6d07e217139e09b8989860a43587ed71e0953c  reactorlib.erl
+97c3302e1ff6164600090ce9bbcf1e9dd5d684fe8f3307ea2c044dc4bc632691  realbench.erl
+308395f7c527abf6c6d931382823accf8319c3df0394085eb417f9f620a00d44  requestbench.erl
+3a1d38418fa86756b97adaed9dfcabc335b78dfceb3be9169691297644faa836  restorebench.erl
+== one /Users/benoitc/Projects/erlang_wasm-om-one
+head 9b5354341593c8f370fb6e0aefdd4424a2e07fa3
+dirty  M src/wasm_core.erl
+dirty  M src/wasm_jit.erl
+src_sha eaf336b3343c2f6a
+abi -define(ABI, 115).
+129db6138096826728af0548817eefe44f49e711c2fc0abcd05babf0abc6c395  attrbench.erl
+f714a8d33b7a871eab6e8135056c368588cd85726903d3acd7a4a132c8b17154  barrier_adapter.erl
+80222c2505530f8634cbb01dcd578f68375eeab05664978e3519d05a6172c717  benchlib.erl
+00df59f9f20195642b29179e7d19f048e508fa2e0b2f4d50602d1c6aa027e0ad  densitybench.erl
+d2d205e095c1aa3b2fdacfb0c9941dbaaa85d3fde2438d232d21a631218fc9df  memwatch.erl
+6e230df932b57641fd4f7c0e5d6d07e217139e09b8989860a43587ed71e0953c  reactorlib.erl
+97c3302e1ff6164600090ce9bbcf1e9dd5d684fe8f3307ea2c044dc4bc632691  realbench.erl
+308395f7c527abf6c6d931382823accf8319c3df0394085eb417f9f620a00d44  requestbench.erl
+3a1d38418fa86756b97adaed9dfcabc335b78dfceb3be9169691297644faa836  restorebench.erl

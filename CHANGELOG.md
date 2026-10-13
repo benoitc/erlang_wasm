@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+Compiled code is smaller, compiles faster and runs faster. Nothing to set; the
+code cache is rebuilt once.
+
+- **Compiled code is less than half the size and compiles four times faster.**
+  A memory access in generated code now keeps one compare inline and calls a
+  shared function for the rest, where 0.9.0 and 0.9.1 repeated the whole page
+  lookup at every access. A cold compile of the hot set takes about a quarter
+  of the time: CPython 104 s against 415 s, QuickJS 69 s against 271 s, Lua
+  23 s against 102 s. Peak memory during the compile is 28 to 51% of what it
+  was.
+- **Compiled requests are faster.** A compiled script request's p50 is 12 to
+  33% lower: CPython 10.5 ms against 15.3 ms, QuickJS 4.8 ms against 6.6 ms,
+  Lua 2.7 ms against 3.0 ms, CPython with an `entry` 2.1 ms against 2.7 ms.
+  Interpreted requests, restore time and how many instances fit in a page
+  budget are unchanged.
+- **Generated code is ABI 15.** A code cache written by an earlier release is
+  ignored and rebuilt on the first compile. Nothing to set.
+
 ## 0.9.1
 
 Component resource handles the host holds are checked, and components run

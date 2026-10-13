@@ -104,7 +104,12 @@ moved, because even with all three a refusal still interprets.
 %%
 %% 14: memory 0's translation cache holds two entries, which changes every
 %% frame's arity again. 13 is the mmap prototype's, kept apart from this line.
--define(ABI, 14).
+%%
+%% 15: an access to memory 0 keeps only the first entry's hit inline and
+%% applies a function local to the module for everything else. An artifact
+%% built by 14 is still correct; the number moves so that its larger code is
+%% rebuilt and not loaded.
+-define(ABI, 15).
 
 -define(DEFAULT_AFTER, 32).
 

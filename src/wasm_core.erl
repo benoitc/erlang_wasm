@@ -668,7 +668,11 @@ forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) ->
                 || {{Pos, _Idx, F, IR}, {Pos, S}} <- lists:zip(Unit, Shapes)],
         Invoke = invoke_fn(Unit, maps:from_list(Shapes), Stamp, Next),
         Exports = [cerl:c_fname(invoke, 6)],
-        {ok, cerl:c_module(cerl:c_atom(Name), Exports, [], [Invoke | Defs])}
+        %% The out-of-line half of every memory-0 access the unit makes: see
+        %% `cached/8'.
+        Misses = [miss_fn(Sp) || Sp <- miss_shapes(Unit)],
+        {ok, cerl:c_module(cerl:c_atom(Name), Exports, [],
+                           [Invoke | Defs] ++ Misses)}
     catch
         %% `error:`, not `throw:`. `fun_name/1` and `frame_name/1` raise with
         %% `erlang:error/1`, and this clause spelled `throw:` for long enough
@@ -1670,35 +1674,101 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
 %% the old first entry second. An untouched image page is read from the binary
 %% and never cached. An access that straddles a word goes straight to the
 %% helper, as the ordinary access would send it.
+%%
+%% **Only the first entry's hit is emitted at the access.** The site is the
+%% straddle test with its call to the helper, one compare against the first
+%% cached page with the load or store under it, and for everything else an
+%% `apply' of a function local to the generated module, one per access shape
+%% the module uses: `miss_fn/1'. That function holds the second entry's hit
+%% with its swap, the bounds test, the page table, the growth chunks, the read
+%% of an untouched image page and the call to the helper.
+%%
+%% All of it used to be emitted at every site, and it is not rare code: the
+%% cache starts empty in every function, so 31 to 50% of a real guest's
+%% accesses miss. Inlined, the miss path made generated code three times the
+%% size it had been before the page table and four times as slow to compile,
+%% and made the calls slower as well. Out of line the code is 41 to 43% of
+%% that size, compiles in a quarter of the time and its calls are 12 to 35%
+%% faster. See `test/audit/PERF.md', "What makes A4's generated code large:
+%% two diagnostics" for the cause and "The miss path out of line" for the
+%% gates.
 cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
-    {TP, TA, TB, TP2, TA2, TB2} = Tlb,
-    Mem = cerl:c_var('Mem'), A = cerl:c_var('A'), Sh = cerl:c_var('Sh'),
-    Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
-    Ci = cerl:c_var('Ci'), Pg = cerl:c_var('Pg'),
-    Off = bif('bsr', [bif('band', [A, cerl:abstract(4095)]), cerl:abstract(3)]),
-    %% What an access answers: its own result, and the cache after it.
-    Done = fun(R, Cache) -> answer(Form, R, Cache) end,
+    {TP, TA, TB, _TP2, _TA2, _TB2} = Tlb,
+    A = cerl:c_var('A'), Ix = cerl:c_var('Ix'), Bit = cerl:c_var('Bit'),
+    Pg = cerl:c_var('Pg'),
+    %% Either leaves the cache as it was.
+    Keep = fun(R) -> answer(Form, R, Tlb) end,
+    Hit = cerl:c_let([Ix], bif('+', [TB, page_word(A)]),
+                     Keep(perform(Dir, Mut, N, Kind, A, TA, Ix, Bit, Val))),
+    Slow = Keep(helper(Dir, Mut, N, Kind, A, Val)),
+    Vals = case Dir of load -> []; store -> [Val] end,
+    Out = from_tuple(Form,
+                     cerl:c_apply(miss_fname(Dir, N, Kind),
+                                  [Mut, A | Vals] ++ tuple_to_list(Tlb))),
+    cerl:c_let([A], Addr,
+      cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+                                  cerl:abstract(8)]),
+        cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
+          all([bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
+                          cerl:abstract(64)])],
+              all([bif('=:=', [Pg, TP])], Hit, Out),
+              Slow)))).
+
+%% The word of its page an address is in, counting from zero.
+page_word(A) ->
+    bif('bsr', [bif('band', [A, cerl:abstract(4095)]), cerl:abstract(3)]).
+
+%% The load or the store itself, on a word already found. A store answers the
+%% state to go on with, which the inline one never changes.
+perform(load, _Mut, N, Kind, A, C, I, Bit, _Val) ->
+    inline_load(N, Kind, A, undefined, I, C, Bit);
+perform(store, Mut, N, Kind, A, C, I, Bit, Val) ->
+    cerl:c_seq(inline_store(N, Kind, A, undefined, I, C, Bit, Val), Mut).
+
+%% The tested implementation, for whatever the inline paths exclude.
+helper(load, Mut, N, Kind, A, _Val) ->
+    call_op(load_at, [Mut, cerl:abstract(0), cerl:abstract(N),
+                      cerl:c_atom(Kind), A]);
+helper(store, Mut, N, Kind, A, Val) ->
+    call_op(store_at, [Mut, cerl:abstract(0), cerl:abstract(N),
+                       cerl:c_atom(Kind), A, Val]).
+
+%% The out-of-line function always answers the tuple, which is one value and
+%% so has nothing an unused neighbour can clobber. A site whose continuation
+%% wants a value list takes the tuple apart, in a `case' of one clause: that
+%% is a match and not a join, so it adds no parallel copy of its own.
+from_tuple(tuple, Call) -> Call;
+from_tuple(Form, Call) ->
+    Vs = [cerl:c_var(V) || V <- ['Or', 'Op', 'Oa', 'Ob', 'Op2', 'Oa2', 'Ob2']],
+    cerl:c_case(Call, [cerl:c_clause([cerl:c_tuple(Vs)],
+                                     cerl:c_values(order(Form, Vs)))]).
+
+%% What `cached/8' leaves to a function: an access that passed the straddle
+%% test and missed the first entry.
+%%
+%% It takes the state, the address, the value for a store and the six cache
+%% values, and answers `{Result, P1, A1, B1, P2, A2, B2}' on every path, where
+%% the result of a store is the state to go on with. The body is the access as
+%% it was emitted at every site before: a hit on the second entry, which swaps
+%% the two; otherwise the ordinary access, which refills the cache when it ends
+%% on an array and leaves it alone when it reads an untouched image page or
+%% calls the helper.
+miss_fn({Dir, N, Kind}) ->
+    Mut = cerl:c_var('Mu'), A = cerl:c_var('A'), Val = cerl:c_var('Val'),
+    Tlb = {TP, TA, TB, TP2, TA2, TB2} =
+        list_to_tuple([cerl:c_var(V)
+                       || V <- ['P1', 'A1', 'B1', 'P2', 'A2', 'B2']]),
+    Mem = cerl:c_var('Mem'), Sh = cerl:c_var('Sh'), Ix = cerl:c_var('Ix'),
+    Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'), Ci = cerl:c_var('Ci'),
+    Pg = cerl:c_var('Pg'),
+    Done = fun(R, Cache) -> answer(tuple, R, Cache) end,
     Keep = fun(R) -> Done(R, Tlb) end,
     Refill = fun(R, C, I) ->
-                     Done(R, {Pg, C, bif('-', [I, Off]), TP, TA, TB})
+                     Done(R, {Pg, C, bif('-', [I, page_word(A)]), TP, TA, TB})
              end,
-    Do = fun(C, I) ->
-                 case Dir of
-                     load -> inline_load(N, Kind, A, undefined, I, C, Bit);
-                     store -> cerl:c_seq(inline_store(N, Kind, A, undefined,
-                                                      I, C, Bit, Val), Mut)
-                 end
-         end,
-    Slow = Keep(case Dir of
-                    load -> call_op(load_at, [Mut, cerl:abstract(0),
-                                              cerl:abstract(N),
-                                              cerl:c_atom(Kind), A]);
-                    store -> call_op(store_at, [Mut, cerl:abstract(0),
-                                                cerl:abstract(N),
-                                                cerl:c_atom(Kind), A, Val])
-                end),
-    Hit = cerl:c_let([Ix], bif('+', [TB, Off]), Keep(Do(TA, Ix))),
-    Hit2 = cerl:c_let([Ix], bif('+', [TB2, Off]),
+    Do = fun(C, I) -> perform(Dir, Mut, N, Kind, A, C, I, Bit, Val) end,
+    Slow = Keep(helper(Dir, Mut, N, Kind, A, Val)),
+    Hit2 = cerl:c_let([Ix], bif('+', [TB2, page_word(A)]),
                       Done(Do(TA2, Ix), {TP2, TA2, TB2, TP, TA, TB})),
     Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
                cerl:c_let([Ci], bif('bsr', [A, Sh]),
@@ -1707,21 +1777,68 @@ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
                               Refill(Do(Ck, Ix), Ck, Ix))))),
     Image = image_region(Dir, Mut, Mem, A, N, Kind, Bit, Val,
                          Slow, {Keep, Refill}),
-    Miss = ordinary(Mem, A, N, Bit,
-                    cerl:c_case(bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)]),
-                                [cerl:c_clause([cerl:abstract(true)], Growth),
-                                 cerl:c_clause([cerl:c_var('_Img')], Image)]),
-                    Slow),
-    cerl:c_let([Mem], mem_at(Mut, 0),
-      cerl:c_let([A], Addr,
-        cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
-                                    cerl:abstract(8)]),
-          cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
-            all([bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
-                            cerl:abstract(64)])],
-                all([bif('=:=', [Pg, TP])], Hit,
-                    all([bif('=:=', [Pg, TP2])], Hit2, Miss)),
-                Slow))))).
+    Miss = cerl:c_let([Mem], mem_at(Mut, 0),
+             ordinary(Mem, A, N, Bit,
+                      cerl:c_case(bif('>=', [A, field(Mem, ?MEM_IMG_BYTES)]),
+                                  [cerl:c_clause([cerl:abstract(true)], Growth),
+                                   cerl:c_clause([cerl:c_var('_Img')], Image)]),
+                      Slow)),
+    Vals = case Dir of load -> []; store -> [Val] end,
+    {miss_fname(Dir, N, Kind),
+     cerl:c_fun([Mut, A | Vals] ++ tuple_to_list(Tlb),
+       cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+                                   cerl:abstract(8)]),
+         cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
+                    all([bif('=:=', [Pg, TP2])], Hit2, Miss))))}.
+
+miss_fname(Dir, N, Kind) ->
+    cerl:c_fname(miss_name(Dir, N, Kind),
+                 case Dir of load -> 8; store -> 9 end).
+
+%% The name of the function for an access shape: a direction, a width in bytes
+%% and a kind, as `wasm_exec:load_spec/1' and `store_spec/1' answer them. Each
+%% is written out, so the set is fixed and nothing a guest supplies can add to
+%% it.
+miss_name(load, 1, i32_s) -> wasm_m_load_1_i32_s;
+miss_name(load, 1, i32_u) -> wasm_m_load_1_i32_u;
+miss_name(load, 2, i32_s) -> wasm_m_load_2_i32_s;
+miss_name(load, 2, i32_u) -> wasm_m_load_2_i32_u;
+miss_name(load, 4, i32_u) -> wasm_m_load_4_i32_u;
+miss_name(load, 1, i64_s) -> wasm_m_load_1_i64_s;
+miss_name(load, 1, i64_u) -> wasm_m_load_1_i64_u;
+miss_name(load, 2, i64_s) -> wasm_m_load_2_i64_s;
+miss_name(load, 2, i64_u) -> wasm_m_load_2_i64_u;
+miss_name(load, 4, i64_s) -> wasm_m_load_4_i64_s;
+miss_name(load, 4, i64_u) -> wasm_m_load_4_i64_u;
+miss_name(load, 8, i64_u) -> wasm_m_load_8_i64_u;
+miss_name(load, 4, f32) -> wasm_m_load_4_f32;
+miss_name(load, 8, f64) -> wasm_m_load_8_f64;
+miss_name(store, 1, int) -> wasm_m_store_1_int;
+miss_name(store, 2, int) -> wasm_m_store_2_int;
+miss_name(store, 4, int) -> wasm_m_store_4_int;
+miss_name(store, 8, int) -> wasm_m_store_8_int;
+miss_name(store, 4, f32) -> wasm_m_store_4_f32;
+miss_name(store, 8, f64) -> wasm_m_store_8_f64.
+
+%% Every shape of access to memory 0 in a unit, each once: the functions the
+%% module needs and no others. Read off the bodies, as `shape/1' is, so an
+%% access `seq/3' never reaches because it follows a `return' still counts; the
+%% function it asks for is then unused, and the compiler drops it.
+miss_shapes(Unit) ->
+    lists:usort(
+      fold([IR || {_Pos, _Idx, _F, IR} <- Unit],
+           fun({Op, {_Align, Offset, 0}}, Acc)
+                 when is_atom(Op), is_integer(Offset) ->
+                   case wasm_exec:load_spec(Op) of
+                       false ->
+                           case lists:member(Op, ?STORES) of
+                               true -> [wasm_exec:store_spec(Op) | Acc];
+                               false -> Acc
+                           end;
+                       Spec -> [Spec | Acc]
+                   end;
+              (_, Acc) -> Acc
+           end, [])).
 
 %% How an access to memory 0 hands back its result and the cache after it.
 %%
@@ -1740,17 +1857,18 @@ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
 %%   last   the cache, then the result: `<A2, B2, A1, B1, P2, P1, R>', the
 %%          second entry's array and base, the first's, then the pages. Within
 %%          the cache this order holds by construction:
-%%          - The next access tests the straddle once and then both hits sit
-%%            under it, so a hit on the second entry exists only where one on
-%%            the first does; every other use (the slow path, a refill, a
-%%            continuation, a trap) hands on the first entry with the second.
-%%            A use of `A2' or `B2' is therefore a use of `A1' and `B1'.
+%%          - The next access never reads the second entry: its hit is in
+%%            the out-of-line function, `miss_fn/1'. Every use of it at a
+%%            site (the slow path, the `apply' of that function, a
+%%            continuation, a trap) hands on all six values together. A use
+%%            of `A2' or `B2' is therefore a use of `A1' and `B1'.
 %%          - A hit uses both its array and its base, and a hand-on both.
 %%          - Every use of an array or a base uses its page: a hit compares it
 %%            first, a hand-on carries it.
-%%          - The second page is compared only after the first missed, and
-%%            handed on only with it, so a use of `P2' is a use of `P1'.
-%%          - Every use of a page uses the instance state, read first.
+%%          - The second page is only ever handed on, with the first, so a
+%%            use of `P2' is a use of `P1'.
+%%          - Every site that uses a page uses the instance state: the slow
+%%            path and the `apply' both take it.
 %%          A store answers the state, so a store is always `last'. A load is
 %%          `last' only when `cache_use/3' finds no use of its cache at all,
 %%          and then the cache it answers is not handed on, so nothing can

@@ -37,7 +37,9 @@ all() ->
      a_cached_translation_never_hides_a_later_write,
      an_unused_access_result_never_clobbers_a_used_one,
      writes_outside_generated_code_keep_its_reads_inline,
-     an_untouched_page_reads_every_width_in_place].
+     an_untouched_page_reads_every_width_in_place,
+     an_access_past_the_first_entry_agrees_with_the_interpreter,
+     the_miss_path_is_one_function_per_access_shape].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -910,3 +912,273 @@ width_wat(Q) ->
            end || Op <- width_loads()],
     iolist_to_binary(["(module (memory 3)\n", Fns,
                       "(func (export \"", atom_to_binary(Q), "\")))"]).
+
+%%% ------------------------------------------------ the out-of-line path ---
+
+%% Generated code keeps one compare at an access and applies a function of the
+%% module for the rest: the second entry's hit and its swap, the page table,
+%% growth, the untouched image and the helper. Every one of those is reached
+%% here, over an image so that the three regions all exist, under either
+%% quality and against the interpreter, with the whole memory compared after
+%% each sequence. A function's first access always takes this path, because
+%% its cache starts empty.
+an_access_past_the_first_entry_agrees_with_the_interpreter(_Config) ->
+    ct:timetrap({minutes, 5}),
+    Bin = image_bin(3),
+    Seqs = miss_seqs(),
+    Run = fun(Q, Extra) ->
+                  {ok, M} = wasm:compile({wat, miss_wat(Q)}),
+                  Opts = Extra#{fuel => infinity,
+                                memory_opts =>
+                                    #{0 => #{image =>
+                                                 wasm_memory:image_of(Bin)}}},
+                  Compiled = maps:is_key(compile, Extra),
+                  case Compiled of
+                      true ->
+                          {ok, I} = wasm:instantiate(M, #{}, Opts),
+                          _ = [wasm:call(I, F, A, Opts)
+                               || Seq <- Seqs, {F, A} <- Seq],
+                          ok = wasm_jit:await(I, 120_000),
+                          ok = wasm:destroy(I);
+                      false ->
+                          ok
+                  end,
+                  [begin
+                       {ok, I0} = wasm:instantiate(M, #{}, Opts),
+                       ok = settle(Compiled, I0),
+                       Rs = [{F, A, entered(Compiled, I0,
+                                            fun() ->
+                                                    outcome(wasm:call(I0, F, A,
+                                                                      Opts))
+                                            end)}
+                             || {F, A} <- Seq],
+                       {ok, Pages} = wasm:memory_size(I0),
+                       {ok, All} = wasm:read_memory(I0, 0, Pages * ?PAGE),
+                       ok = wasm:destroy(I0),
+                       {Rs, erlang:md5(All)}
+                   end || Seq <- Seqs]
+          end,
+    Want = Run(interpreted, #{}),
+    %% The sequences mean what they say only if the interpreter serves them
+    %% without a trap, the one deliberate trap apart.
+    ?assertEqual([{~"i32.load", [-16]}],
+                 [{F, A} || {Rs, _} <- Want, {F, A, {error, _, _}} <- Rs]),
+    [begin
+         Got = Run(Q, #{compile => true, compile_after => 1,
+                        compile_force => true, compile_quality => Q}),
+         [?assertEqual({Q, Seq, W}, {Q, Seq, G})
+          || {Seq, W, G} <- lists:zip3(Seqs, Want, Got)]
+     end || Q <- [full, baseline]],
+    ok.
+
+%% Addresses: `Hi' is in page 0 of the image, where the pattern's bytes have
+%% their top bit set, so a signed load differs from an unsigned one; `Zero' in
+%% the image's zero page; `Far' in its last page; `G0' and `G1' in the two
+%% pages `grow' adds, past the image. `+ 5' makes a load of four bytes or more
+%% straddle a word.
+miss_seqs() ->
+    Hi = 12536, Zero = ?PAGE + 8, Far = 2 * ?PAGE + 80,
+    G0 = 3 * ?PAGE + 64, G1 = 4 * ?PAGE + 72,
+    Grow = {~"grow", []},
+    %% An untouched image page, a zero one, a page a write made private, a
+    %% growth page and a straddle, for every load.
+    [[{Op, [A]}] || Op <- width_loads(), A <- [Hi, Zero, Hi + 5]]
+        ++ [[{~"i32.store8", [Hi + 16, 16#80]}, {Op, [Hi]}]
+            || Op <- width_loads()]
+        ++ [[Grow, {~"i64.store", [G0, -2]}, {Op, [G0]}]
+            || Op <- width_loads()]
+        %% A first write through the function, for every store: to an image
+        %% page, which the helper copies, and to a growth page.
+        ++ [[{Op, [A, V]}, {~"i64.load", [A]}, {~"i64.load", [A + 8]}]
+            || {Op, V} <- miss_stores(), A <- [Hi, Zero]]
+        ++ [[Grow, {Op, [G1, V]}, {~"i64.load", [G1]}]
+            || {Op, V} <- miss_stores()]
+        ++ [%% Written, then read back through a refill and a first-entry hit.
+            [{~"rw", [Hi, 16#1234567]}],
+            [{~"rw", [Zero, -7]}],
+            [Grow, {~"rw", [G0, 99]}],
+            %% Two pages taking turns: every access after the second is a hit
+            %% on the second entry and swaps. In one array, in two arrays of
+            %% one region, and across the regions.
+            [{~"i32.store", [64, 5]}, {~"i32.store", [4104, 6]},
+             {~"alt", [64, 4104]}],
+            [Grow, {~"i32.store", [G0, 5]}, {~"i32.store", [G1, 6]},
+             {~"alt", [G0, G1]}],
+            [Grow, {~"i32.store", [64, 5]}, {~"i32.store", [G1, 6]},
+             {~"alt", [64, G1]}],
+            [{~"i32.store", [64, 5]}, {~"alt", [64, Far]}],
+            [{~"alt", [Hi, Far]}],
+            [{~"altst", [64, Zero, 40]}],
+            [Grow, {~"altst", [Far, G0, 50]}],
+            %% A third page evicting the older of two.
+            [{~"i32.store", [64, 5]}, {~"i32.store", [4104, 6]},
+             {~"i32.store", [8208, 7]}, {~"evict", [64, 4104, 8208]}],
+            [Grow, {~"i32.store", [64, 5]}, {~"i32.store", [G0, 6]},
+             {~"i32.store", [G1, 7]}, {~"evict", [64, G0, G1]}],
+            [Grow, {~"i32.store", [G1, 7]}, {~"evict", [G1, Hi, G1]}],
+            %% An untouched image page read between two accesses to a cached
+            %% one leaves the cache as it was.
+            [{~"imgkeep", [64, Hi, 77]}],
+            [Grow, {~"imgkeep", [G0, Zero, 78]}],
+            %% A straddling load and a straddling store between two hits.
+            [{~"i32.store", [64, 5]}, {~"strad", [64, Hi + 5]}],
+            [{~"i32.store", [64, 5]}, {~"strad", [64, 4093]}],
+            [{~"stradst", [64, 4093, 16#1020304]}],
+            [Grow, {~"stradst", [G0, 3 * ?PAGE - 3, 16#5060708]}],
+            %% A result nothing uses at a function's end, and a store there.
+            [{~"i32.store", [64, 5]}, {~"dead", [64, 4104]}],
+            [{~"dead", [Hi, Far]}],
+            [Grow, {~"dead", [G0, Hi]}],
+            [{~"deadst", [Hi, 64]}, {~"i32.load", [64]}],
+            [Grow, {~"deadst", [G0, G1]}, {~"i32.load", [G1]}],
+            %% A cache used on one path and not on the other: the tuple form.
+            [{~"i32.store", [64, 5]}, {~"mixed", [64, Hi, 0]}],
+            [{~"i32.store", [64, 5]}, {~"mixed", [64, Hi, 1]}],
+            [Grow, {~"mixed", [G0, G1, 1]}],
+            %% Three pages in a loop.
+            [Grow, {~"i32.store", [64, 5]}, {~"turns", [64, G0, Hi, 9]}],
+            %% Out of bounds: the function's own call to the helper traps.
+            [{~"i32.load", [-16]}]].
+
+miss_stores() ->
+    [{~"i32.store", 16#1234567}, {~"i32.store8", 16#9C}, {~"i32.store16", -2},
+     {~"i64.store", -16#123456789ABCDE}, {~"i64.store8", 16#F1},
+     {~"i64.store16", 16#E2E3}, {~"i64.store32", -3},
+     {~"f32.store", 1.5}, {~"f64.store", -2.25}].
+
+miss_wat(Q) ->
+    Loads = [begin
+                 [T | _] = binary:split(Op, ~"."),
+                 <<"(func (export \"", Op/binary, "\") (param i32) (result ",
+                   T/binary, ") local.get 0 ", Op/binary, ")\n">>
+             end || Op <- width_loads()],
+    Stores = [begin
+                  [T | _] = binary:split(Op, ~"."),
+                  <<"(func (export \"", Op/binary, "\") (param i32 ", T/binary,
+                    ") local.get 0 local.get 1 ", Op/binary, ")\n">>
+              end || {Op, _} <- miss_stores()],
+    iolist_to_binary(
+      ["(module (memory 3 8)\n", Loads, Stores,
+       ~"(func (export \"grow\") (result i32) i32.const 2 memory.grow)
+       (func (export \"rw\") (param i32 i32) (result i32)
+         local.get 0 local.get 1 i32.store
+         local.get 0 i32.load
+         local.get 0 i32.const 8 i32.add i32.load i32.add)
+       (func (export \"alt\") (param i32 i32) (result i32)
+         local.get 0 i32.load
+         local.get 1 i32.load i32.add
+         local.get 0 i32.const 4 i32.add i32.load i32.add
+         local.get 1 i32.const 4 i32.add i32.load16_s i32.add
+         local.get 0 i32.load8_u i32.add
+         local.get 1 i64.load i32.wrap_i64 i32.add)
+       (func (export \"altst\") (param i32 i32 i32) (result i32)
+         local.get 0 local.get 2 i32.store
+         local.get 1 local.get 2 i32.const 1 i32.add i32.store
+         local.get 0 local.get 2 i32.const 2 i32.add i32.store16
+         local.get 1 i32.const 16 i32.add local.get 2 i64.extend_i32_s
+         i64.store
+         local.get 0 i32.load
+         local.get 1 i32.load i32.add
+         local.get 0 i32.const 16 i32.add i32.load i32.add)
+       (func (export \"evict\") (param i32 i32 i32) (result i32)
+         local.get 0 i32.load
+         local.get 1 i32.load i32.sub
+         local.get 2 i32.load i32.add
+         local.get 0 i32.load8_u i32.sub
+         local.get 1 i32.load16_u i32.add
+         local.get 2 i32.load8_s i32.add
+         local.get 1 i32.const 8 i32.add i32.load i32.add)
+       (func (export \"imgkeep\") (param i32 i32 i32) (result i32)
+         local.get 0 local.get 2 i32.store
+         local.get 1 i32.load
+         local.get 0 i32.load i32.add
+         local.get 1 i32.const 4 i32.add i32.load16_s i32.add
+         local.get 0 i32.const 8 i32.add i32.load8_u i32.add)
+       (func (export \"strad\") (param i32 i32) (result i32)
+         local.get 0 i32.load
+         local.get 1 i64.load i32.wrap_i64 i32.add
+         local.get 0 i32.const 8 i32.add i32.load i32.add)
+       (func (export \"stradst\") (param i32 i32 i32) (result i32)
+         local.get 0 local.get 2 i32.store
+         local.get 1 local.get 2 i32.store
+         local.get 0 i32.load
+         local.get 1 i32.load i32.add)
+       (func (export \"dead\") (param i32 i32) (result i32)
+         local.get 0 i32.load
+         local.get 1 i32.load drop)
+       (func (export \"deadst\") (param i32 i32)
+         local.get 0 i32.load8_s drop
+         local.get 1 i32.const 9 i32.store)
+       (func (export \"mixed\") (param i32 i32 i32) (result i32) (local i32)
+         local.get 0 i32.load
+         local.get 1 i32.load i32.add local.set 3
+         local.get 2 i32.eqz if local.get 3 return end
+         local.get 3 local.get 0 i32.const 8 i32.add i32.load i32.add)
+       (func (export \"turns\") (param i32 i32 i32 i32) (result i32)
+         (local i32)
+         loop
+           local.get 4
+           local.get 0 i32.load i32.add
+           local.get 1 i32.load i32.add
+           local.get 2 i32.load8_s i32.add
+           local.set 4
+           local.get 0 local.get 4 i32.store
+           local.get 1 local.get 4 i32.store16
+           local.get 3 i32.const 1 i32.sub local.tee 3
+           br_if 0
+         end
+         local.get 4 local.get 1 i32.load i32.add)
+       (func (export \"", atom_to_binary(Q), "\")))"]).
+
+%% The shape of what the generator emits, read off `wasm_jit:dump/1': a
+%% function of the module for each access shape the module uses and for no
+%% other, and at each access one `apply' of it and one call to the helper,
+%% the straddle's. The miss path inlined again puts the page table, and with
+%% it more calls to the helper, back at every access.
+the_miss_path_is_one_function_per_access_shape(_Config) ->
+    {ok, M} = wasm:compile({wat, ~"(module (memory 1)
+      (func (export \"f\") (param i32) (result i32)
+        local.get 0 i32.load
+        local.get 0 i32.load offset=4 i32.add
+        local.get 0 i32.load8_s offset=9 i32.add)
+      (func (export \"g\") (param i32 i64)
+        local.get 0 local.get 1 i64.store
+        local.get 0 local.get 1 i64.store32 offset=8
+        local.get 0 i32.const 1 i32.store offset=12)
+      (func (export \"h\") (param i32) (result i32)
+        local.get 0 i32.const 1 i32.add))"}),
+    {ok, I} = wasm:instantiate(M, #{}, #{}),
+    Text = unicode:characters_to_list(wasm_jit:dump(I)),
+    ok = wasm:destroy(I),
+    %% The dump, one string per function definition, by name.
+    [_Head | Parts] = re:split(Text, "^('[a-z0-9_]+'/[0-9]+) =\n",
+                               [multiline, {return, list}]),
+    Fns = pairs(Parts),
+    Count = fun(Prefix, Sub) ->
+                    lists:sum([length(string:split(Body, Sub, all)) - 1
+                               || {Name, Body} <- Fns,
+                                  lists:prefix(Prefix, Name)])
+            end,
+    %% Defined: these four and nothing else named `wasm_m_'. `i64.store32' and
+    %% `i32.store' are one shape, four bytes of an integer.
+    Defs = [{"'wasm_m_load_1_i32_s'/8", 1}, {"'wasm_m_load_4_i32_u'/8", 2},
+            {"'wasm_m_store_4_int'/9", 2}, {"'wasm_m_store_8_int'/9", 1}],
+    ?assertEqual([Name || {Name, _} <- Defs],
+                 lists:sort([Name || {Name, _} <- Fns,
+                                     lists:prefix("'wasm_m_", Name)])),
+    %% Applied: once at each access of its shape, and never by one another.
+    [?assertEqual({Name, Sites, 0},
+                  {Name, Count("'wasm_f_", "apply " ++ Name),
+                   Count("'wasm_m_", "apply " ++ Name)})
+     || {Name, Sites} <- Defs],
+    %% The helper at an access: one call, the straddle's. The miss path back
+    %% at the site brings three more with it.
+    ?assertEqual({3, 3}, {Count("'wasm_f_", "'load_at'"),
+                          Count("'wasm_f_", "'store_at'")}),
+    %% And the functions hold what the sites no longer do.
+    ?assert(Count("'wasm_m_load", "'load_at'") >= 2),
+    ?assert(Count("'wasm_m_store", "'store_at'") >= 2),
+    ok.
+
+pairs([Name, Body | Rest]) -> [{Name, Body} | pairs(Rest)];
+pairs([]) -> [].

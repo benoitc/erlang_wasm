@@ -1,0 +1,336 @@
+== cold r1 lua one attempt 1 13:21  up 3 days, 23:46, 18 users, load averages: 7.19 8.05 6.07
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-lua",
+  guest => lua,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 680,entry_ms => 20950,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 3117.083,min_us => 3099.625}
+== cold r1 lua main attempt 1 13:21  up 3 days, 23:46, 18 users, load averages: 6.03 7.72 6.01
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-lua",
+  guest => lua,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 2963,entry_ms => 102316,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 3845.928,min_us => 3843.51}
+== cold r1 lua cand attempt 1 13:23  up 3 days, 23:48, 18 users, load averages: 6.46 7.30 6.02
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-lua",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 733,entry_ms => 23284,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 3333.792,min_us => 3024.708}
+== cold r1 py_entry main attempt 1 13:23  up 3 days, 23:48, 18 users, load averages: 6.36 7.19 6.02
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-py_entry",
+  guest => py_entry,ahead => false,start_ms => 47,tier => compiled,
+  verdict => ok,warm_requests => 5039,entry_ms => 157445,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4058.26,min_us => 3289.343}
+== cold r1 py_entry cand attempt 1 13:26  up 3 days, 23:51, 18 users, load averages: 6.69 7.08 6.17
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-py_entry",
+  guest => py_entry,ahead => false,start_ms => 49,tier => compiled,
+  verdict => ok,warm_requests => 1453,entry_ms => 41521,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 2929.333,min_us => 2914.5}
+== cold r1 py_entry one attempt 1 13:27  up 3 days, 23:52, 18 users, load averages: 6.39 7.03 6.20
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-py_entry",
+  guest => py_entry,ahead => false,start_ms => 47,tier => compiled,
+  verdict => ok,warm_requests => 1327,entry_ms => 37934,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 5,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 2956.084,min_us => 2655.791}
+== cold r1 qjs cand attempt 1 13:27  up 3 days, 23:52, 18 users, load averages: 6.43 6.94 6.20
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-qjs",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  warm_requests => 1739,entry_ms => 69022,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5481.791,min_us => 4961.75}
+== cold r1 qjs one attempt 1 13:28  up 3 days, 23:53, 18 users, load averages: 5.14 6.45 6.08
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-qjs",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  warm_requests => 1585,entry_ms => 61909,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5695.875,min_us => 5471.375}
+== cold r1 qjs main attempt 1 13:29  up 3 days, 23:55, 18 users, load averages: 5.27 6.28 6.04
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-qjs",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 6386,entry_ms => 270986,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7617.896,min_us => 7562.353}
+== cold r1 py one attempt 1 13:34  up 3 days, 23:59, 18 users, load averages: 5.60 5.89 5.91
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-py",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 1617,entry_ms => 94676,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11644.239,min_us => 10788.029}
+== cold r1 py main attempt 1 13:36  up 4 days, 1 min, 18 users, load averages: 4.29 5.36 5.69
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-py",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 6696,entry_ms => 412675,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 17418.506,min_us => 16863.754}
+== cold r1 py cand attempt 1 13:42  up 4 days, 8 mins, 18 users, load averages: 4.31 4.98 5.40
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-py",
+  guest => py,ahead => false,start_ms => 45,tier => compiled,verdict => ok,
+  warm_requests => 1791,entry_ms => 103999,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12031.132,min_us => 11748.38}
+== cold r2 lua cand attempt 1 13:44  up 4 days, 9 mins, 18 users, load averages: 5.14 5.03 5.36
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-lua",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 737,entry_ms => 23098,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 3669.875,min_us => 3298.625}
+== cold r2 lua one attempt 1 13:45  up 4 days, 10 mins, 18 users, load averages: 4.80 4.96 5.32
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-lua",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 667,entry_ms => 20714,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 3226.708,min_us => 3222.333}
+== cold r2 lua main attempt 1 13:45  up 4 days, 10 mins, 18 users, load averages: 4.59 4.90 5.29
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-lua",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 2949,entry_ms => 100889,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 3904.513,min_us => 3801.596}
+== cold r2 py_entry one attempt 1 13:47  up 4 days, 12 mins, 18 users, load averages: 6.80 5.55 5.50
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-py_entry",
+  guest => py_entry,ahead => false,start_ms => 46,tier => compiled,
+  verdict => ok,warm_requests => 1320,entry_ms => 37334,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 2865.667,min_us => 2317.5}
+== cold r2 py_entry main attempt 1 13:47  up 4 days, 12 mins, 18 users, load averages: 6.09 5.53 5.49
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-py_entry",
+  guest => py_entry,ahead => false,start_ms => 46,tier => compiled,
+  verdict => ok,warm_requests => 5050,entry_ms => 157217,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 3218.261,min_us => 3106.385}
+== cold r2 py_entry cand attempt 1 13:50  up 4 days, 15 mins, 18 users, load averages: 6.02 5.93 5.67
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-py_entry",
+  guest => py_entry,ahead => false,start_ms => 46,tier => compiled,
+  verdict => ok,warm_requests => 1464,entry_ms => 41138,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 2744.416,min_us => 2594.833}
+== cold r2 qjs main attempt 1 13:51  up 4 days, 16 mins, 18 users, load averages: 5.37 5.74 5.61
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-qjs",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 6403,entry_ms => 269745,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8155.026,min_us => 7618.025}
+== cold r2 qjs cand attempt 1 13:55  up 4 days, 20 mins, 18 users, load averages: 4.95 5.83 5.70
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-qjs",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  warm_requests => 1757,entry_ms => 68597,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5841.5,min_us => 5066.875}
+== cold r2 qjs one attempt 1 13:56  up 4 days, 21 mins, 18 users, load averages: 4.25 5.50 5.59
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-qjs",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 1575,entry_ms => 61568,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5289.083,min_us => 5239.875}
+== cold r2 py cand attempt 1 13:57  up 4 days, 22 mins, 18 users, load averages: 4.93 5.45 5.56
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-py",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 1779,entry_ms => 104167,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12521.458,min_us => 11705.996}
+== cold r2 py one attempt 1 13:59  up 4 days, 24 mins, 18 users, load averages: 4.48 5.26 5.48
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-py",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 1609,entry_ms => 95246,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12061.206,min_us => 11606.122}
+== cold r2 py main attempt 1 14:01  up 4 days, 26 mins, 18 users, load averages: 5.14 5.17 5.41
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-py",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 6702,entry_ms => 414648,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 17937.975,min_us => 16902.722}
+== cold r3 lua main attempt 1 14:08  up 4 days, 33 mins, 18 users, load averages: 6.02 5.73 5.54
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-lua",
+  guest => lua,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 2952,entry_ms => 102352,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 4284.014,min_us => 3604.637}
+== cold r3 lua cand attempt 1 14:09  up 4 days, 34 mins, 18 users, load averages: 8.84 6.53 5.85
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-lua",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 734,entry_ms => 23141,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 5,crashed => 0,refused => 0,
+        cached => 0,reentered => 25},
+  median_us => 3239.583,min_us => 2986.792}
+== cold r3 lua one attempt 1 14:10  up 4 days, 35 mins, 18 users, load averages: 8.85 6.72 5.94
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-lua",
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 666,entry_ms => 20719,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 3620.0,min_us => 3468.208}
+== cold r3 lua main attempt 2 14:10  up 4 days, 35 mins, 18 users, load averages: 6.76 6.46 5.88
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-lua",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 2906,entry_ms => 101552,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 4307.764,min_us => 3662.428}
+== cold r3 lua cand attempt 2 14:12  up 4 days, 37 mins, 18 users, load averages: 6.95 6.77 6.08
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-lua",
+  guest => lua,ahead => false,start_ms => 5,tier => compiled,verdict => ok,
+  warm_requests => 726,entry_ms => 22917,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 5,crashed => 0,refused => 0,
+        cached => 0,reentered => 25},
+  median_us => 3122.541,min_us => 3058.083}
+== cold r3 lua one attempt 2 14:12  up 4 days, 38 mins, 18 users, load averages: 6.01 6.56 6.02
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-lua",
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 663,entry_ms => 20595,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 3754.209,min_us => 3050.625}
+== cold r3 py_entry cand attempt 1 14:13  up 4 days, 38 mins, 18 users, load averages: 5.95 6.51 6.01
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-py_entry",
+  guest => py_entry,ahead => false,start_ms => 46,tier => compiled,
+  verdict => ok,warm_requests => 1464,entry_ms => 41294,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 3128.292,min_us => 2922.958}
+== cold r3 py_entry one attempt 1 14:13  up 4 days, 39 mins, 18 users, load averages: 8.56 7.11 6.26
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-py_entry",
+  guest => py_entry,ahead => false,start_ms => 46,tier => compiled,
+  verdict => ok,warm_requests => 1321,entry_ms => 37462,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 3183.333,min_us => 2450.667}
+== cold r3 py_entry main attempt 1 14:14  up 4 days, 39 mins, 18 users, load averages: 8.14 7.16 6.31
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-py_entry",
+  guest => py_entry,ahead => false,start_ms => 51,tier => compiled,
+  verdict => ok,warm_requests => 5065,entry_ms => 157942,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 3759.512,min_us => 3208.593}
+== cold r3 qjs one attempt 1 14:17  up 4 days, 42 mins, 18 users, load averages: 6.40 6.80 6.30
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-qjs",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  warm_requests => 1586,entry_ms => 62079,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5319.709,min_us => 5161.542}
+== cold r3 qjs main attempt 1 14:18  up 4 days, 43 mins, 18 users, load averages: 5.11 6.37 6.17
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-qjs",
+  guest => qjs,ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  warm_requests => 6419,entry_ms => 270586,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8016.818,min_us => 7066.898}
+== cold r3 qjs cand attempt 1 14:22  up 4 days, 47 mins, 18 users, load averages: 5.01 5.76 5.97
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-qjs",
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 1730,entry_ms => 68905,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5615.958,min_us => 5374.25}
+== cold r3 py main attempt 1 14:24  up 4 days, 49 mins, 18 users, load averages: 6.47 6.07 6.07
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-py",
+  guest => py,ahead => false,start_ms => 48,tier => compiled,verdict => ok,
+  warm_requests => 6708,entry_ms => 415430,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 17362.758,min_us => 16634.464}
+== cold r3 py cand attempt 1 14:30  up 4 days, 56 mins, 18 users, load averages: 5.36 5.51 5.78
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-py",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 1784,entry_ms => 104672,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12737.163,min_us => 12363.161}
+== cold r3 py one attempt 1 14:32  up 4 days, 57 mins, 18 users, load averages: 6.61 5.85 5.88
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-py",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 1551,entry_ms => 98525,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13396.457,min_us => 13305.165}
+== cold r3 py main attempt 2 14:34  up 4 days, 59 mins, 18 users, load averages: 7.76 7.07 6.38
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/main-py",
+  guest => py,ahead => false,start_ms => 50,tier => compiled,verdict => ok,
+  warm_requests => 6560,entry_ms => 434209,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 17066.509,min_us => 16833.009}
+== cold r3 py cand attempt 2 14:41  up 4 days,  1:07, 18 users, load averages: 6.92 8.50 7.50
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/cand-py",
+  guest => py,ahead => false,start_ms => 46,tier => compiled,verdict => ok,
+  warm_requests => 1737,entry_ms => 107320,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 5,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12057.911,min_us => 11741.994}
+== cold r3 py one attempt 2 14:43  up 4 days,  1:08, 18 users, load averages: 9.61 8.83 7.74
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-om/cold/one-py",
+  guest => py,ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 1578,entry_ms => 97017,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 14209.793,min_us => 13482.373}

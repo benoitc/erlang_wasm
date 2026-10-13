@@ -7835,3 +7835,139 @@ changed.
 
 Raw results and the variant patches: `test/audit/raw/a4-attribution/cache-diag/`
 (the generated BEAM files are not kept).
+
+## The miss path out of line
+
+The fix for "What makes A4's generated code large", built on `main` and held
+to gates written before it was measured. An access to memory 0 now emits the
+straddle test and the first cache entry's hit, and applies one function of the
+generated module per access shape for the rest: the second entry's hit, the
+page table, growth, the untouched image and the helper. Generated code is ABI
+15. Every gate passed.
+
+### Arms and protocol
+
+| arm | tree | what it is |
+| --- | --- | --- |
+| main | `14d3d81` | the miss path inline at every access, ABI 14 |
+| cand | `9b53543` | the miss path out of line, two cache entries, ABI 15 |
+| one | `9b53543` + `one_entry.diff` | cand with a cache of one entry; scratch, never committed |
+| null | `14d3d81` | main again, same tree and code cache, for the null comparison |
+
+- Each arm in its own fresh VM at `+S 10:10`, from its own tree, with its own
+  code cache. The harness is `bench/paths` at `14d3d81`, byte-identical in
+  every tree.
+- Guests: `py_entry` (CPython with an entry), `py`, `qjs`, `lua`, as
+  `requestbench` names them.
+- Five rounds. A cell is one metric and guest on all four arms; round r
+  rotates the arms by r and reverses them on even rounds. A cell starts at a
+  one-minute load below 8 and is redone when the load at the end of its last
+  arm is 8 or more: 2 of 90 cells redone, 0 void. Cold compile: three reps on
+  main, cand and one, same rule, 2 of 12 cells redone.
+- A VM's figure is the p50 of its 200 samples. An arm's figure is the median
+  of its five VMs. A ratio is the median of the five per-round ratios against
+  main. The uncertainty is |null - main| per round: its median, then its
+  largest.
+
+### Gate 1: cold compile at most 0.5x main
+
+Seconds from a worker's first request to the first request that enters
+generated code, with an empty code cache: median of three. The same functions
+were compiled on every arm (233, 264, 223 and 896).
+
+| guest | main | cand | cand / main | |
+| --- | ---: | ---: | ---: | --- |
+| py_entry | 157.4 | 41.3 | 0.262 | pass |
+| qjs | 270.6 | 68.9 | 0.255 | pass |
+| lua | 101.6 | 23.1 | 0.227 | pass |
+| py | 414.6 | 104.2 | 0.251 | pass |
+
+### Gate 2: compiled call phase at most 0.95x main
+
+`requestbench split`, the call phase, p50 in ms.
+
+| guest | main | cand | cand / main | null \|d\| med / max | |
+| --- | ---: | ---: | ---: | ---: | --- |
+| py_entry | 1.457 | 1.012 | 0.695 | 0.064 / 0.245 | pass |
+| qjs | 5.191 | 3.797 | 0.711 | 0.170 / 0.664 | pass |
+| lua | 2.171 | 1.860 | 0.884 | 0.065 / 0.375 | pass |
+| py | 12.775 | 8.451 | 0.653 | 0.445 / 1.510 | pass |
+
+### Gate 3: whole request
+
+`requestbench steady`, p50 in ms. Compiled must be no higher than main;
+interpreted, which this change does not touch, within 1.03x.
+
+| guest | compiled main | compiled cand | ratio | interpreted main | interpreted cand | ratio | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| py_entry | 2.721 | 2.090 | 0.766 | 4.750 | 4.742 | 0.998 | pass |
+| qjs | 6.620 | 4.763 | 0.758 | 11.540 | 11.559 | 0.997 | pass |
+| lua | 3.015 | 2.687 | 0.884 | 6.865 | 6.924 | 1.009 | pass |
+| py | 15.259 | 10.468 | 0.672 | 22.401 | 22.384 | 0.996 | pass |
+
+### Gate 4: nothing given up
+
+| what | main | cand | ratio | |
+| --- | ---: | ---: | ---: | --- |
+| `densitybench density`, instances: py_entry / qjs / lua / py | 455 / 1024 / 2048 / 124 | 455 / 1024 / 2048 / 124 | identical in all five rounds | pass |
+| restore median, py | 707.7 us | 703.5 us | 1.004 | pass |
+| restore median, qjs | 110.3 us | 111.4 us | 1.004 | pass |
+| restore median, lua | 56.8 us | 57.0 us | 1.007 | pass |
+| restore median, one-page module | 9.0 us | 8.7 us | 0.979 | pass |
+| `realbench qjs`, interpreted | 12044 ms | 11257 ms | 0.950 | pass |
+
+The realbench ratio is not a speedup: main ran slow in the first three rounds
+and null, the same build, did not (null / main 0.991, |null - main| up to
+1328 ms). The interpreter is the same code on both arms.
+
+### Reported, not gated
+
+| guest | BEAM instructions, main | cand | ratio | compile memory peak, main | cand |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| py_entry | 3,052,154 | 1,321,749 | 0.433 | 3.6 GB | 1.9 GB |
+| qjs | 5,539,020 | 2,383,768 | 0.430 | 7.4 GB | 2.1 GB |
+| lua | 2,030,445 | 828,515 | 0.408 | 2.0 GB | 0.7 GB |
+| py | 8,524,540 | 3,680,133 | 0.432 | 10.1 GB | 3.2 GB |
+
+The memory peak is the largest `erlang:memory(total)` sampled every 100 ms
+through the cold run, median of three.
+
+| guest | call p95 main | cand | call p99 main | cand | request p95 main | cand | request p99 main | cand |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| py_entry | 2.07 | 1.20 | 2.80 | 1.39 | 2.94 | 2.48 | 3.37 | 2.83 |
+| qjs | 6.51 | 4.44 | 6.89 | 5.09 | 8.65 | 5.75 | 9.30 | 6.65 |
+| lua | 2.91 | 2.27 | 3.85 | 2.44 | 3.72 | 3.24 | 4.02 | 3.67 |
+| py | 15.86 | 10.10 | 16.40 | 10.96 | 16.82 | 12.32 | 17.98 | 13.94 |
+
+Compiled, in ms. Saturated, ten compiled workers each serving 200 requests
+back to back, requests a second, two rounds, cells not redone because they
+raise the load themselves:
+
+| guest | main | cand | cand / main | null \|d\| med |
+| --- | ---: | ---: | ---: | ---: |
+| py_entry | 1908 | 2497 | 1.31 | 24 |
+| qjs | 732 | 988 | 1.36 | 63 |
+| lua | 1361 | 1495 | 1.10 | 37 |
+| py | 447 | 586 | 1.31 | 15 |
+
+### One entry or two
+
+With the miss cheap, the second entry might not earn its three carried values.
+The rule, fixed with the gates: one entry ships only if its call p50 is no
+higher than two entries' on any guest beyond the null uncertainty, and its
+cold compile is at least 10% lower on every guest.
+
+| guest | call p50, one - cand | null \|d\| med | cold compile, one / cand | |
+| --- | ---: | ---: | ---: | --- |
+| py_entry | +0.024 ms | 0.064 ms | 0.907 | compile fails |
+| qjs | -0.009 ms | 0.170 ms | 0.898 | pass |
+| lua | +0.002 ms | 0.065 ms | 0.897 | pass |
+| py | -0.639 ms | 0.445 ms | 0.914 | compile fails |
+
+Two entries stay. One entry is no slower to call on any guest, and faster on
+py, which is not what the diagnostic's V1 showed when the miss was inline; but
+it compiles 8.6 to 10.3% faster, short of the 10% the rule asks on two guests.
+Its code is 85 to 86% of cand's instructions.
+
+Raw terms, logs, scripts, the one-entry patch and what each new test fails on:
+`test/audit/raw/outline-miss/` (the generated BEAM files are not kept).

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.2
 
 Compiled code is smaller, compiles faster and runs faster. Nothing to set; the
 code cache is rebuilt once.

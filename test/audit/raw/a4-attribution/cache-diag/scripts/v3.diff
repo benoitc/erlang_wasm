@@ -1,0 +1,102 @@
+diff --git a/src/wasm_core.erl b/src/wasm_core.erl
+index 45e383b..6068b8e 100644
+--- a/src/wasm_core.erl
++++ b/src/wasm_core.erl
+@@ -889,8 +889,12 @@ go({K, NArgs}, #g{stack = S} = G) ->
+ %% is any. Both change as a body runs, which is exactly why they are parameters
+ %% where an operand below the frame's base is closed over instead.
+ carried(#g{mut = undefined} = G) -> locals(G);
+-carried(#g{mut = Mut, d = D, tlb = Tlb} = G) ->
+-    locals(G) ++ [Mut, D | tuple_to_list(Tlb)].
++carried(#g{mut = Mut, d = D} = G) ->
++    locals(G) ++ [Mut, D].
++
++empty_tlb() -> {cerl:abstract(-1), cerl:abstract(none),
++              cerl:abstract(0), cerl:abstract(-1),
++              cerl:abstract(none), cerl:abstract(0)}.
+ 
+ locals(#g{env = Env, nlocals = N}) -> [maps:get(I, Env) || I <- lists:seq(0, N - 1)].
+ 
+@@ -902,7 +906,7 @@ var(#g{n = N} = G) -> {cerl:c_var(N), G#g{n = N + 1}}.
+ %% scoping puts a sibling's name out of scope and only a nesting path has to be
+ %% unique.
+ frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
+-    NCarried = case Mut of undefined -> NL; _ -> NL + 2 + ?TLB_SIZE end,
++    NCarried = case Mut of undefined -> NL; _ -> NL + 2 end,
+     Total = NCarried + NRes,
+     Name = cerl:c_fname(frame_name(Depth), Total),
+     Vars = [cerl:c_var(N) || N <- lists:seq(N0, N0 + Total - 1)],
+@@ -912,7 +916,7 @@ frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
+         case Mut of
+             undefined -> {undefined, undefined, undefined};
+             _ -> {lists:nth(NL + 1, Vars), lists:nth(NL + 2, Vars),
+-                  list_to_tuple(lists:sublist(Vars, NL + 3, ?TLB_SIZE))}
++                  empty_tlb()}
+         end,
+     {Name, Vars, Env, {NewMut, NewTlb}, NewD, lists:nthtail(NCarried, Vars),
+      G#g{n = N0 + Total}}.
+@@ -1270,8 +1274,8 @@ instr({call, F}, Rest, #g{unit = Unit, sigs = Sigs} = G0, Exit) ->
+     {Rs, G2} = vars(NR, G1),
+     {M1, G3} = var(G2),
+     Clause = cerl:c_clause([cerl:c_tuple([list_pat(Rs), M1])],
+-                           seq(Rest, G3#g{mut = M1,
+-                                          stack = lists:reverse(Rs) ++ G1#g.stack},
++                           seq(Rest, reset_tlb(G3#g{mut = M1,
++                                          stack = lists:reverse(Rs) ++ G1#g.stack}),
+                                Exit)),
+     %% The depth check is this frame's own, so a runaway recursion raises what
+     %% `enter/5' raises instead of growing the Erlang stack until the process
+@@ -1302,8 +1306,8 @@ instr({call_indirect, TypeIdx, TableIdx}, Rest,
+     {Rs, G3} = vars(NR, G2),
+     {M1, G4} = var(G3),
+     Clause = cerl:c_clause([cerl:c_tuple([list_pat(Rs), M1])],
+-                           seq(Rest, G4#g{mut = M1,
+-                                          stack = lists:reverse(Rs) ++ G2#g.stack},
++                           seq(Rest, reset_tlb(G4#g{mut = M1,
++                                          stack = lists:reverse(Rs) ++ G2#g.stack}),
+                                Exit)),
+     cerl:c_seq(call_op(check_depth, [G0#g.inst, deeper(G0)]),
+                cerl:c_case(Call, [Clause]));
+@@ -1796,9 +1800,11 @@ cache_use(Is, Exit, Depth) ->
+ 
+ %% `{SomePathUses, SomePathLeaves}'.
+ paths([], return, _D) -> {false, true};
+-paths([], _K, _D) -> {true, false};
++paths([], _K, _D) -> {false, true};
+ paths([{block, _, _, Body} | _], _Exit, D) -> paths(Body, cont, D + 1);
+-paths([{loop, _, _, _} | _], _Exit, _D) -> {true, false};
++paths([{loop, _, _, _} | _], _Exit, _D) -> {false, true};
++paths([{call, _} | _], _Exit, _D) -> {false, true};
++paths([{call_indirect, _, _} | _], _Exit, _D) -> {false, true};
+ paths([{if_, _, _, Then, Else} | _], _Exit, D) ->
+     either(paths(Then, cont, D + 1), paths(Else, cont, D + 1));
+ paths([{br, N} | _], _Exit, D) -> branch(N, D);
+@@ -1817,7 +1823,7 @@ paths([{Op, {_, Offset, 0}} | Rest], Exit, D)
+     end;
+ paths([_ | Rest], Exit, D) -> paths(Rest, Exit, D).
+ 
+-branch(N, D) when N < D -> {true, false};
++branch(N, D) when N < D -> {false, true};
+ branch(_N, _D) -> {false, true}.
+ 
+ either({U1, L1}, {U2, L2}) -> {U1 orelse U2, L1 orelse L2}.
+@@ -2167,3 +2173,6 @@ simd(F, Args, Rest, G0, Exit) ->
+     cerl:c_let([V], cerl:c_call(cerl:c_atom(wasm_simd), cerl:c_atom(F), Args),
+                seq(Rest, push(V, G), Exit)).
+ 
++
++reset_tlb(#g{tlb = undefined} = G) -> G;
++reset_tlb(G) -> G#g{tlb = empty_tlb()}.
+diff --git a/src/wasm_jit.erl b/src/wasm_jit.erl
+index cd75d8d..eaca01f 100644
+--- a/src/wasm_jit.erl
++++ b/src/wasm_jit.erl
+@@ -104,7 +104,7 @@ moved, because even with all three a refusal still interprets.
+ %%
+ %% 14: memory 0's translation cache holds two entries, which changes every
+ %% frame's arity again. 13 is the mmap prototype's, kept apart from this line.
+--define(ABI, 14).
++-define(ABI, 103).
+ 
+ -define(DEFAULT_AFTER, 32).
+ 

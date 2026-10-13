@@ -1,0 +1,14 @@
+CDIAG 200 {40961,14562,48603} {8233161,2926962,9769203}
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v4c",guest => py,
+  ahead => false,start_ms => 44,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 9994,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 11745.291,total => 12187.416,restore => 389.0,destroy => 56.5,
+        post => 0.625},
+  min_us =>
+      #{call => 11239.417,total => 11673.041,restore => 346.834,
+        destroy => 46.0,post => 0.0},
+  recycled_in => 0}

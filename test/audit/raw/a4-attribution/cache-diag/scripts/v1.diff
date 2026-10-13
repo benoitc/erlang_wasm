@@ -1,0 +1,123 @@
+diff --git a/src/wasm_core.erl b/src/wasm_core.erl
+index 45e383b..37e5d80 100644
+--- a/src/wasm_core.erl
++++ b/src/wasm_core.erl
+@@ -818,7 +818,7 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
+ %%          every continuation as the locals are, and handed on by every access
+ %%          to memory 0. See `access/8'.
+ %% The translation cache's Core values: two entries of three.
+--define(TLB_SIZE, 6).
++-define(TLB_SIZE, 3).
+ 
+ -record(g, {env = #{}, stack = [], frames = [], depth = 0, n = 0,
+             nlocals = 0, nres = 0, inst, mut, d, unit = #{}, sigs = #{},
+@@ -854,8 +854,7 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
+     Tlb = case Shape of
+               pure -> undefined;
+               stateful -> {cerl:abstract(-1), cerl:abstract(none),
+-                           cerl:abstract(0), cerl:abstract(-1),
+-                           cerl:abstract(none), cerl:abstract(0)}
++                           cerl:abstract(0)}
+           end,
+     G = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
+            inst = Inst, mut = Mut, d = D, unit = Unit, sigs = Sigs,
+@@ -997,9 +996,9 @@ instr(return, _Rest, G, _Exit) ->
+ %% With the cache handed to the trap, so that a trap is a use of it: see
+ %% `answer/3' and `cache_use/3'. The state goes too, because a use of the cache
+ %% has to be a use of the state.
+-instr(unreachable, _Rest, #g{mut = Mut, tlb = {_, _, _, _, _, _} = Tlb},
++instr(unreachable, _Rest, #g{mut = Mut, tlb = {_, _, _} = Tlb},
+       _Exit) ->
+-    call_op(unreachable_at, [Mut | tuple_to_list(Tlb)]);
++    call_op(unreachable_at, [Mut | tuple_to_list(Tlb) ++ tuple_to_list(Tlb)]);
+ instr(unreachable, _Rest, _G, _Exit) ->
+     cerl:c_call(cerl:c_atom(wasm_error), cerl:c_atom(trap),
+                 [cerl:c_atom(unreachable)]);
+@@ -1044,15 +1043,14 @@ instr({f64_const, C}, Rest, G, Exit) ->
+ %% it. A store writes into `atomics' in place and does not change `#mut{}',
+ %% which is why only `global.set' rebinds it.
+ 
+-instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _, _, _, _}} = G0,
++instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _}} = G0,
+       Exit)
+   when is_atom(Op), is_integer(Offset) ->
+     %% Memory 0, through the translation cache: the access answers its result
+     %% and the cache to go on with, in the form `join/4' explains.
+-    {P, G1} = var(G0), {Ar, G2} = var(G1), {B, G2a} = var(G2),
+-    {P2, G2b} = var(G2a), {Ar2, G2c} = var(G2b), {B2, G3} = var(G2c),
++    {P, G1} = var(G0), {Ar, G2} = var(G1), {B, G3} = var(G2),
+     Tlb = G0#g.tlb,
+-    New = {P, Ar, B, P2, Ar2, B2},
++    New = {P, Ar, B},
+     case lists:member(Op, ?LOADS) of
+         true ->
+             {Base, G4} = pop(G3),
+@@ -1671,7 +1669,7 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
+ %% and never cached. An access that straddles a word goes straight to the
+ %% helper, as the ordinary access would send it.
+ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
+-    {TP, TA, TB, TP2, TA2, TB2} = Tlb,
++    {TP, TA, TB} = Tlb,
+     Mem = cerl:c_var('Mem'), A = cerl:c_var('A'), Sh = cerl:c_var('Sh'),
+     Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
+     Ci = cerl:c_var('Ci'), Pg = cerl:c_var('Pg'),
+@@ -1680,7 +1678,7 @@ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
+     Done = fun(R, Cache) -> answer(Form, R, Cache) end,
+     Keep = fun(R) -> Done(R, Tlb) end,
+     Refill = fun(R, C, I) ->
+-                     Done(R, {Pg, C, bif('-', [I, Off]), TP, TA, TB})
++                     Done(R, {Pg, C, bif('-', [I, Off])})
+              end,
+     Do = fun(C, I) ->
+                  case Dir of
+@@ -1698,8 +1696,6 @@ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
+                                                 cerl:c_atom(Kind), A, Val])
+                 end),
+     Hit = cerl:c_let([Ix], bif('+', [TB, Off]), Keep(Do(TA, Ix))),
+-    Hit2 = cerl:c_let([Ix], bif('+', [TB2, Off]),
+-                      Done(Do(TA2, Ix), {TP2, TA2, TB2, TP, TA, TB})),
+     Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
+                cerl:c_let([Ci], bif('bsr', [A, Sh]),
+                  cerl:c_let([Ck], chunk_at(Mem, Ci),
+@@ -1719,8 +1715,7 @@ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
+           cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
+             all([bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
+                             cerl:abstract(64)])],
+-                all([bif('=:=', [Pg, TP])], Hit,
+-                    all([bif('=:=', [Pg, TP2])], Hit2, Miss)),
++                all([bif('=:=', [Pg, TP])], Hit, Miss),
+                 Slow))))).
+ 
+ %% How an access to memory 0 hands back its result and the cache after it.
+@@ -1763,15 +1758,15 @@ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
+ %%          be the unused one, and the tuple is one value. It costs eight
+ %%          words.
+ answer(tuple, R, Cache) ->
+-    Vs = [cerl:c_var(V) || V <- ['Tr', 'Tp', 'Ta', 'Tb', 'Tp2', 'Ta2', 'Tb2']],
++    Vs = [cerl:c_var(V) || V <- ['Tr', 'Tp', 'Ta', 'Tb']],
+     lists:foldr(fun({V, E}, Body) -> cerl:c_let([V], E, Body) end,
+                 cerl:c_tuple(Vs),
+                 lists:zip(Vs, [R | tuple_to_list(Cache)]));
+ answer(Form, R, Cache) ->
+     cerl:c_values(order(Form, [R | tuple_to_list(Cache)])).
+ 
+-order(first, [R, P, Ar, B, P2, Ar2, B2]) -> [R, Ar2, B2, Ar, B, P2, P];
+-order(last, [R, P, Ar, B, P2, Ar2, B2]) -> [Ar2, B2, Ar, B, P2, P, R].
++order(first, [R, P, Ar, B]) -> [R, Ar, B, P];
++order(last, [R, P, Ar, B]) -> [Ar, B, P, R].
+ 
+ %% Binding what `answer/3' builds, in the same order.
+ join(tuple, Access, Vars, Body) ->
+diff --git a/src/wasm_jit.erl b/src/wasm_jit.erl
+index cd75d8d..e73fff1 100644
+--- a/src/wasm_jit.erl
++++ b/src/wasm_jit.erl
+@@ -104,7 +104,7 @@ moved, because even with all three a refusal still interprets.
+ %%
+ %% 14: memory 0's translation cache holds two entries, which changes every
+ %% frame's arity again. 13 is the mmap prototype's, kept apart from this line.
+--define(ABI, 14).
++-define(ABI, 101).
+ 
+ -define(DEFAULT_AFTER, 32).
+ 

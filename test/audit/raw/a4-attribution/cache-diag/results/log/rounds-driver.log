@@ -1,0 +1,26 @@
+r1 py_entry ok (attempt 1, end load 3.35) 17:05
+r1 qjs ok (attempt 1, end load 2.85) 17:06
+r1 lua ok (attempt 1, end load 2.64) 17:06
+r1 py ok (attempt 1, end load 3.71) 17:09
+round 1 done Sat Oct 10 17:09:12 CEST 2026
+r2 py_entry ok (attempt 1, end load 3.30) 17:09
+r2 qjs ok (attempt 1, end load 2.71) 17:10
+r2 lua ok (attempt 1, end load 3.58) 17:10
+r2 py ok (attempt 1, end load 2.02) 17:12
+round 2 done Sat Oct 10 17:12:55 CEST 2026
+r3 py_entry ok (attempt 1, end load 2.06) 17:13
+r3 qjs ok (attempt 1, end load 2.18) 17:14
+r3 lua ok (attempt 1, end load 2.00) 17:14
+r3 py ok (attempt 1, end load 2.41) 17:16
+round 3 done Sat Oct 10 17:16:38 CEST 2026
+r4 py_entry ok (attempt 1, end load 3.13) 17:17
+r4 qjs ok (attempt 1, end load 2.70) 17:17
+r4 lua ok (attempt 1, end load 2.39) 17:17
+r4 py ok (attempt 1, end load 1.75) 17:20
+round 4 done Sat Oct 10 17:20:21 CEST 2026
+r5 py_entry ok (attempt 1, end load 2.09) 17:20
+r5 qjs ok (attempt 1, end load 3.29) 17:21
+r5 lua ok (attempt 1, end load 3.46) 17:21
+r5 py ok (attempt 1, end load 2.38) 17:24
+round 5 done Sat Oct 10 17:24:03 CEST 2026
+ROUNDS_DONE

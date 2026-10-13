@@ -1,0 +1,7 @@
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-cdiag/v4c",guest => qjs,
+  ahead => false,start_ms => 107,tier => compiled,verdict => ok,
+  warm_requests => 2448,entry_ms => 98523,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 8784.194,min_us => 8003.608}

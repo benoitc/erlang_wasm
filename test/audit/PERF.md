@@ -7659,8 +7659,9 @@ What this says:
   with the same calls on both trees. The translation cache is carried
   through every call and continuation: in qjs, `wasm_k_1/7` became
   `wasm_k_1/13` and `wasm_k_5/11` became `wasm_k_5/17`, and loads whose
-  cache is used on some paths only return an eight-word tuple. That shape is
-  the leading suspect, not a measured cause.
+  cache is used on some paths only return an eight-word tuple. That shape was
+  the first suspect and is ruled out below: the cost is what each access site
+  expands into, not what is carried.
 - **Garbage collection, bignums and worker overhead are not the
   regression.** Each is equal or lower on main.
 
@@ -7761,7 +7762,7 @@ The candidates are ordered by their cost on qjs and py, where the gap is
 largest. Rows 1 and 2 probably share a cause, the code the generator emits
 for the translation cache. A test of that would be to compile one hot module
 with and without the carried cache and compare its compile time and self
-time. That has not been run.
+time. The next section does that.
 
 ### Not done
 
@@ -7775,3 +7776,62 @@ time. That has not been run.
 Raw terms, scripts, the instrumentation diff and logs are in
 `test/audit/raw/a4-attribution/`. One machine: 14 cores (10 performance),
 Darwin 27, OTP 29.
+
+## What makes A4's generated code large: two diagnostics
+
+Scratch variants of `main`'s generator, each with its own ABI number and code
+cache, each passing the paged-memory, core, core-prop, bounds, lifetime and
+spec suites, and core, bounds and spec again with the quality forced to
+`baseline`. Same protocol as the attribution: fresh VMs at `+S 10:10`,
+interleaved, five rounds, a null arm (`main` twice), a cell started below load
+8 and redone at 8 or more. Each cell below is cold compile in seconds (median
+of three, empty code cache, same functions compiled) / BEAM instructions in
+millions / compiled call p50 in ms (`requestbench split`). Nothing in `src/`
+changed.
+
+### Is it the carried cache? No
+
+| arm | py_entry | qjs | lua | py |
+| --- | --- | --- | --- | --- |
+| base 0.8 | 43 / 1.08 / 0.64 | 72 / 1.94 / 4.26 | 24 / 0.67 / 2.02 | 110 / 2.99 / 8.82 |
+| V0 `main`, two entries carried | 159 / 3.05 / 1.43 | 272 / 5.54 / 5.12 | 104 / 2.03 / 2.10 | 419 / 8.52 / 13.24 |
+| V1 one entry | 130 / 2.46 / 1.55 | 217 / 4.47 / 5.36 | 82 / 1.62 / 2.40 | 327 / 6.87 / 13.31 |
+| V2 no cache | 89 / 1.71 / 1.59 | 149 / 3.09 / 6.04 | 53 / 1.10 / 2.91 | 223 / 4.74 / 13.85 |
+| V3 two entries, not carried | 157 / 2.81 / 1.67 | 272 / 5.11 / 6.10 | 102 / 1.87 / 2.73 | 408 / 7.79 / 15.39 |
+| null, median / largest, ms | 0.04 / 0.18 | 0.04 / 0.06 | 0.01 / 0.03 | 0.05 / 0.21 |
+
+- **Carrying is not the cause.** V3 resets the cache at every block, loop and
+  function entry, so its continuations have 0.8's arity; it compiles within 1
+  to 3% of `main` and its calls are slower on every guest.
+- **The cache earns its place.** Without it (V2) a call costs 0.12 (py_entry),
+  0.93 (qjs), 0.81 (lua) and 0.62 ms (py) more than `main`.
+- **The compile time is the per-site expansion.** V2 has no cache and 0.8's
+  arities and still compiles 2.0 to 2.2 times as long as 0.8: the page-table
+  path inlined at every access. Each cache entry adds about 30% more.
+
+### Out of line: yes
+
+| guest | base 0.8 | V0 `main` | V4 | V5 | V6 | null ± |
+| --- | --- | --- | --- | --- | --- | --- |
+| py_entry | 43.0 / 1.08 / 0.68 | 159.8 / 3.05 / 1.45 | 58.0 / 1.60 / 1.03 | 41.9 / 1.32 / 0.99 | 57.9 / 1.62 / 1.08 | 0.07 |
+| qjs | 72.1 / 1.94 / 4.35 | 274.6 / 5.54 / 5.57 | 96.9 / 2.88 / 3.97 | 70.4 / 2.38 / 3.69 | 96.6 / 2.91 / 4.14 | 0.06 |
+| lua | 24.4 / 0.67 / 2.04 | 103.5 / 2.03 / 2.10 | 34.1 / 1.02 / 1.86 | 23.5 / 0.83 / 1.86 | 33.7 / 1.04 / 1.94 | 0.03 |
+| py | 111.5 / 2.99 / 9.51 | 419.1 / 8.52 / 14.17 | 144.4 / 4.43 / 9.48 | 106.2 / 3.68 / 8.59 | 145.8 / 4.50 / 9.87 | 0.02 |
+
+- **V4** keeps both hits inline and moves the miss path (page table, image
+  read, growth, slow path) into one module-local function per access shape,
+  answering a tuple. **V5** also moves the second-entry hit there. **V6** is V4
+  with the function in `wasm_exec`, generic over width and kind.
+- **V5 compiles as fast as 0.8 and its calls beat `main` on every guest**, by
+  0.25 to 5.6 ms, and beat 0.8 on qjs, lua and py.
+- **Why:** 31 to 50% of accesses miss (py_entry 6.3k of 12.6k a request, qjs
+  28.6k of 81.5k, lua 14.2k of 46.2k, py 48.6k of 104.2k, from a counting
+  build never timed), because the cache starts empty in every function. The
+  miss path was hot code inlined at every site.
+- **The tuple a miss answers** is eight words, about 3 MB of heap a py request,
+  and V5 is still 5.6 ms faster there.
+- The controls ran about 7% slower on py and qjs than in the first table, so
+  compare within a table.
+
+Raw results and the variant patches: `test/audit/raw/a4-attribution/cache-diag/`
+(the generated BEAM files are not kept).

@@ -1,0 +1,141 @@
+diff --git a/src/wasm_core.erl b/src/wasm_core.erl
+index 45e383b..cab03e3 100644
+--- a/src/wasm_core.erl
++++ b/src/wasm_core.erl
+@@ -83,6 +83,7 @@ every other refusal here: interpret it.
+ %% can put in the on-disk cache, because only a unit that ends the chain is
+ %% cacheable; split in two it is recompiled on every node for ever.
+ -define(MAX_FUNS, 4096).
++outline() -> v4.
+ -define(MAX_FRAMES, 512).     % qjs nests 257 deep at worst
+ -define(MAX_ARITY, 128).      % qjs would generate 71 at worst; the BEAM allows 255
+ 
+@@ -668,7 +669,13 @@ forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) ->
+                 || {{Pos, _Idx, F, IR}, {Pos, S}} <- lists:zip(Unit, Shapes)],
+         Invoke = invoke_fn(Unit, maps:from_list(Shapes), Stamp, Next),
+         Exports = [cerl:c_fname(invoke, 6)],
+-        {ok, cerl:c_module(cerl:c_atom(Name), Exports, [], [Invoke | Defs])}
++        Outs = case lists:any(fun({_, S}) -> S =:= stateful end, Shapes)
++                   andalso outline() =/= v6 of
++                   true -> miss_defs();
++                   false -> []
++               end,
++        {ok, cerl:c_module(cerl:c_atom(Name), Exports, [],
++                           [Invoke | Defs] ++ Outs)}
+     catch
+         %% `error:`, not `throw:`. `fun_name/1` and `frame_name/1` raise with
+         %% `erlang:error/1`, and this clause spelled `throw:` for long enough
+@@ -1671,6 +1678,9 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
+ %% and never cached. An access that straddles a word goes straight to the
+ %% helper, as the ordinary access would send it.
+ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
++    cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form, site).
++
++cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form, Where) ->
+     {TP, TA, TB, TP2, TA2, TB2} = Tlb,
+     Mem = cerl:c_var('Mem'), A = cerl:c_var('A'), Sh = cerl:c_var('Sh'),
+     Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
+@@ -1712,16 +1722,80 @@ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Form) ->
+                                 [cerl:c_clause([cerl:abstract(true)], Growth),
+                                  cerl:c_clause([cerl:c_var('_Img')], Image)]),
+                     Slow),
+-    cerl:c_let([Mem], mem_at(Mut, 0),
+-      cerl:c_let([A], Addr,
+-        cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+-                                    cerl:abstract(8)]),
+-          cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
+-            all([bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
+-                            cerl:abstract(64)])],
+-                all([bif('=:=', [Pg, TP])], Hit,
+-                    all([bif('=:=', [Pg, TP2])], Hit2, Miss)),
+-                Slow))))).
++    Count = fun(I, E) ->
++                    case outline() of
++                        v4c -> cerl:c_seq(call_op(cdiag_count,
++                                                  [cerl:abstract(I)]), E);
++                        _ -> E
++                    end
++            end,
++    Vals = case Dir of load -> []; store -> [Val] end,
++    Out = case outline() of
++              v6 ->
++                  F = case Dir of load -> tlb_load; store -> tlb_store end,
++                  call_op(F, [Mut, cerl:abstract(N), cerl:c_atom(Kind), A
++                              | Vals] ++ tuple_to_list(Tlb));
++              _ ->
++                  cerl:c_apply(cerl:c_fname(miss_name(Dir, N, Kind),
++                                            8 + length(Vals)),
++                               [Mut, A | Vals] ++ tuple_to_list(Tlb))
++          end,
++    case Where of
++        site ->
++            %% The hits, and a call for everything else.
++            Outer = from_tuple(Form, Out),
++            Inner = case outline() of
++                        v5 -> all([bif('=:=', [Pg, TP])], Hit, Outer);
++                        _ -> all([bif('=:=', [Pg, TP])], Count(1, Hit),
++                                 all([bif('=:=', [Pg, TP2])], Count(2, Hit2),
++                                     Outer))
++                    end,
++            cerl:c_let([A], Addr,
++              cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
++                                          cerl:abstract(8)]),
++                cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
++                  all([bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
++                                  cerl:abstract(64)])],
++                      Inner, Slow))));
++        out ->
++            %% The function's body: what the site did not settle.
++            Rest = case outline() of
++                       v5 -> all([bif('=:=', [Pg, TP2])], Hit2, Miss);
++                       _ -> Count(3, Miss)
++                   end,
++            cerl:c_let([Mem], mem_at(Mut, 0),
++              cerl:c_let([A], Addr,
++                cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
++                                            cerl:abstract(8)]),
++                  cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
++                             Rest))))
++    end.
++
++%% What the out-of-line function answers is always the tuple, so a site that
++%% wants a value list takes it apart.
++from_tuple(tuple, Call) -> Call;
++from_tuple(Form, Call) ->
++    Vs = [cerl:c_var(V) || V <- ['Or', 'Op', 'Oa', 'Ob', 'Op2', 'Oa2', 'Ob2']],
++    cerl:c_case(Call, [cerl:c_clause([cerl:c_tuple(Vs)],
++                                     cerl:c_values(order(Form, Vs)))]).
++
++miss_name(Dir, N, Kind) ->
++    list_to_atom("wasm_m_" ++ atom_to_list(Dir) ++ "_" ++ integer_to_list(N)
++                 ++ "_" ++ atom_to_list(Kind)).
++
++miss_defs() ->
++    Ls = lists:usort([wasm_exec:load_spec(Op) || Op <- ?LOADS]),
++    Ss = lists:usort([wasm_exec:store_spec(Op) || Op <- ?STORES]),
++    [miss_def(Dir, N, Kind) || {Dir, N, Kind} <- Ls ++ Ss].
++
++miss_def(Dir, N, Kind) ->
++    Mut = cerl:c_var('Mu'), A0 = cerl:c_var('A0'), Val = cerl:c_var('Val0'),
++    Tlb = list_to_tuple([cerl:c_var(V)
++                         || V <- ['P1', 'A1', 'B1', 'P2', 'A2', 'B2']]),
++    Vals = case Dir of load -> []; store -> [Val] end,
++    {cerl:c_fname(miss_name(Dir, N, Kind), 8 + length(Vals)),
++     cerl:c_fun([Mut, A0 | Vals] ++ tuple_to_list(Tlb),
++                cached(Dir, Mut, N, Kind, A0, Val, Tlb, tuple, out))}.
+ 
+ %% How an access to memory 0 hands back its result and the cache after it.
+ %%
+diff --git a/src/wasm_jit.erl b/src/wasm_jit.erl
+index cd75d8d..737c2c0 100644
+--- a/src/wasm_jit.erl
++++ b/src/wasm_jit.erl
+@@ -104,7 +104,7 @@ moved, because even with all three a refusal still interprets.
+ %%
+ %% 14: memory 0's translation cache holds two entries, which changes every
+ %% frame's arity again. 13 is the mmap prototype's, kept apart from this line.
+--define(ABI, 14).
++-define(ABI, 104).
+ 
+ -define(DEFAULT_AFTER, 32).
+ 

@@ -1,0 +1,37 @@
+diff --git a/src/wasm_core.erl b/src/wasm_core.erl
+index 45e383b..51c547a 100644
+--- a/src/wasm_core.erl
++++ b/src/wasm_core.erl
+@@ -818,7 +818,7 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
+ %%          every continuation as the locals are, and handed on by every access
+ %%          to memory 0. See `access/8'.
+ %% The translation cache's Core values: two entries of three.
+--define(TLB_SIZE, 6).
++-define(TLB_SIZE, 0).
+ 
+ -record(g, {env = #{}, stack = [], frames = [], depth = 0, n = 0,
+             nlocals = 0, nres = 0, inst, mut, d, unit = #{}, sigs = #{},
+@@ -853,9 +853,7 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
+     %% The cache starts empty: no page is -1.
+     Tlb = case Shape of
+               pure -> undefined;
+-              stateful -> {cerl:abstract(-1), cerl:abstract(none),
+-                           cerl:abstract(0), cerl:abstract(-1),
+-                           cerl:abstract(none), cerl:abstract(0)}
++              stateful -> {}
+           end,
+     G = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
+            inst = Inst, mut = Mut, d = D, unit = Unit, sigs = Sigs,
+diff --git a/src/wasm_jit.erl b/src/wasm_jit.erl
+index cd75d8d..9421ddf 100644
+--- a/src/wasm_jit.erl
++++ b/src/wasm_jit.erl
+@@ -104,7 +104,7 @@ moved, because even with all three a refusal still interprets.
+ %%
+ %% 14: memory 0's translation cache holds two entries, which changes every
+ %% frame's arity again. 13 is the mmap prototype's, kept apart from this line.
+--define(ABI, 14).
++-define(ABI, 102).
+ 
+ -define(DEFAULT_AFTER, 32).
+ 

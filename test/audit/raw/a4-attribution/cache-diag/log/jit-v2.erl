@@ -1,0 +1,1487 @@
+-module(wasm_jit).
+-moduledoc """
+When a module gets compiled, and how a call reaches the result.
+
+You get here from `wasm`, on the path an invocation takes. Everything here is a policy
+decision on top of two mechanisms that already exist: `wasm_core` generates and
+compiles, and `wasm_code_slots` decides which module name the result may be
+loaded into and when that name may be reused.
+
+## Off by default
+
+Compiled code is opt-in, `#{compile => true}` in an instance's limits, the way
+`fuse => false` already works. Turning it on by default is a separate decision
+with its own gates: differential trap and side-effect tests, an enforced
+compile-time and code-size limit, and a scheduler-responsiveness measurement
+while a generated loop runs.
+
+## Every failure interprets
+
+A module the generator refuses, a slot pool that is exhausted, another process
+already compiling the same module, a finite fuel budget, a compile error, a
+compiler over `compile_max_heap_words`: all of them mean run the interpreter,
+and none of them is an error. That is what
+makes the tier safe to enable at all, and it is also what makes a green test
+run prove nothing on its own -- see `counts/0` and the `compile_force` option,
+which exist so that a conformance run can say generated code actually ran.
+
+## Fuel
+
+Fuel is charged at every loop back edge, and threading a budget through a
+compiled loop gives back what compiling it bought. So an invocation with finite
+fuel is interpreted, checked once here rather than in the generated code.
+
+## Three options for a conformance run, and none for production
+
+The defaults are what an embedder wants: compile in the background, compile
+only what ran, and interpret anything the generator could not handle. Each of
+those is exactly wrong for a test that means to check generated code, because
+each of them lets the test pass without any generated code having run.
+
+| Option | Default | What it changes |
+| --- | --- | --- |
+| `compile_sync` | `false` | Compile on the calling process, so the next call is already compiled rather than probably compiled. |
+| `compile_whole` | `false` | Compile every eligible function, not only the ones that have run. |
+| `compile_force` | `false` | Raise on a compile error instead of interpreting, so a generator bug fails rather than hides. |
+
+`compile_whole` in particular is a conformance option and not a tuning knob.
+Compiling every function of QuickJS measured 107 s in the run that first
+moved it, against 15.2 s for the 223-function hot set in four units,
+and it spends most of fifteen megabytes of code space on functions the
+workload never calls. Specification modules are a few functions each, which is
+why it is affordable there and nowhere else.
+
+`wasm_spec_SUITE`'s compiled phase sets all three, and then asserts `counts/0`
+moved, because even with all three a refusal still interprets.
+""".
+
+-export([entry/3, after_call/2, counts/0, reset_counts/0, await/2, release/1]).
+-export([diagnostics/0, normalize_reason/1, shard_count/2, shards/1]).
+-export([compile_limits/0, max_heap_words/0, compile_budget_heap_words/0]).
+-export([reentered/0, ensure_counts/0]).
+-export([compiler_loop/0]).
+-export([dump/1, dump/2]).
+
+-include("wasm.hrl").
+-include("wasm_exec.hrl").
+
+%% Bumped whenever the shape of generated code changes, so that code compiled by
+%% an older version of this runtime is never entered by a newer one.
+%%
+%% 4: `check_depth/2` is passed the calling frame's own depth rather than its
+%% caller's. An artifact built by 3 checks one level too shallow, which is
+%% exactly the divergence `every_tier_bounds_recursion_at_the_same_depth`
+%% exists to catch -- and a cached one would reintroduce it silently.
+%%
+%% 5: an inlined store marks its chunk in the memory's `dirty' slots. An
+%% artifact built by 4 writes without marking, and a memory recycled for the
+%% next restore would keep one request's bytes for the next.
+%%
+%% 6: the dirty marking is gone with recycling, and the memory handle lost its
+%% `dirty' field, so every index generated code reads past it moved.
+%%
+%% 7: a store answers the state to go on with, and the fast path is refused
+%% below a memory's image region. An artifact built by 6 would index a
+%% placeholder as an array.
+%%
+%% 8: the image region is read inline: a page table entry now names the arena
+%% chunk and slot of a private page, and an artifact built by 7 would read it as
+%% a slot number.
+%%
+%% 9: memory 0 is reached through a translation cache carried through every
+%% continuation, which changes every frame's arity.
+%%
+%% 10: a load answers only the values its continuation uses, as a value list
+%% or a tuple. An artifact built by 9 allocates a tuple at every access.
+%%
+%% 11: a bulk or vector write answers the state to go on with, whose memory
+%% handle may have seen arena chunks the write published. An artifact built by
+%% 10 drops it and goes on reading through the stale one.
+%%
+%% 12: a load from an untouched image page matches its own bytes out of the
+%% page binary, and `wasm_memory:image_word_at/2', which an artifact built by
+%% 11 calls, is gone.
+%%
+%% 14: memory 0's translation cache holds two entries, which changes every
+%% frame's arity again. 13 is the mmap prototype's, kept apart from this line.
+-define(ABI, 102).
+
+-define(DEFAULT_AFTER, 32).
+
+%% Splitting a compile across units. The unit is what `compile:forms/2` is
+%% handed, and that call is 99.3% of the cost, so several of them run at once
+%% where one cannot.
+%%
+%% A split is not free -- it takes a slot per unit out of a pool of sixteen the
+%% whole node shares, and a call between units is a crossing rather than a call
+%% -- so it happens only when one unit will not fit. See `shard_count/2`.
+-define(MAX_SHARDS, 4).
+
+%% How much work the runtime will accept in one request, which is a different
+%% question from how many names a unit may draw. It was `?MAX_SHARDS *
+%% max_funs`, so raising the name pool from 2048 to 4096 raised this from 8,192
+%% to 16,384 and admitted a CPython whole-module compile measured at 33 GB
+%% resident on a 48 GB box, paging and publishing nothing. A separate constant
+%% because the two answer different questions and moving one should not move the
+%% other.
+%%
+%% Counted over the *requested* set, before anything is lowered.
+%%
+%% Words look like they would predict the cost better, and they do not predict
+%% it well enough to bound it. Peak team memory per IR word is 4.95 to 6.77 KB
+%% on QuickJS alone, and the spread is the *estimator* rather than the guest:
+%% summing each process's own maximum against sampling the maximum of the sum
+%% moves it 37% on the same unit. `test/audit/PERF.md` has the table.
+%%
+%% This comment used to claim "11 to 17 KB of allocated peak per IR word on both
+%% guests" and cited nothing. That figure is a third quantity again, allocation
+%% over a whole compile rather than peak, and no measurement under `test/audit/`
+%% supported it. Memory is bounded by `compile_max_heap_words`, which the VM
+%% enforces, and by the budget that reserves it; not by anything counted here.
+-define(MAX_COMPILE_FUNS, 8192).
+
+%% The largest `max_heap_size` `size` a 64-bit emulator accepts. Undocumented,
+%% and a hard edge rather than a soft one: measured on OTP 29, `1 bsl 59` raises
+%% `badarg` from `spawn_opt` and `(1 bsl 59) - 1` does not. An operator who
+%% writes a plausible-looking very large number gets a warning rather than a
+%% compiler that cannot start.
+-define(MAX_HEAP_WORDS, ((1 bsl 59) - 1)).
+%% Set by `entry_1/3` when this call found the module hot and unbuilt, read by
+%% `after_call/2` once the call has finished. The invocation's own lifetime is
+%% exactly the right one for it, which is the same argument the checkpoint key
+%% makes for living here.
+-define(ASK, wasm_jit_ask).
+
+-define(PT_COUNTS, {?MODULE, counts}).
+%% `entered' and `reentered', apart from the rest. They are bumped on the call
+%% path, from every scheduler at once, so they are a `counters' array with
+%% `write_concurrency': one shared `atomics' word had every scheduler
+%% contending for one cache line on every compiled call.
+-define(PT_HOT, {?MODULE, hot}).
+-define(HOT_ENTERED, 1).
+-define(HOT_REENTERED, 2).
+-define(IX_COMPILED, 1).      % functions compiled
+%% 2 and 3 were `entered' and `reentered', which are `?PT_HOT' now. The slots
+%% stay so `?IX_SEQ' keeps its index across an upgrade.
+-define(IX_CACHED, 4).        % compilations answered from the on-disk cache
+-define(IX_REFUSED, 5).       % compiles this runtime declined to attempt
+-define(IX_FAILED, 6).        % compiles the OTP compiler rejected
+-define(IX_CRASHED, 7).       % compiles that died in an unexpected way
+%% Not a count. A sequence for `wasm_code_diag' keys, so two compilers can each
+%% record without a read-modify-write, and deliberately *not* cleared by
+%% `reset_counts/0': a row that outlived a reset must never collide with a key
+%% handed out afterwards.
+-define(IX_SEQ, 8).
+
+%% Reasons are normalised to a bounded shape before they are stored, so the
+%% ring's memory is fixed whatever a compiler hands back. The ring itself lives
+%% in `wasm_code_slots`, which owns the tier's tables.
+
+%%% ------------------------------------------------------------------ api ---
+
+-doc """
+The entry to run this invocation through: generated code, or the one given.
+
+Called once per outermost invocation. Everything it can answer cheaply it
+answers first -- the tier being off, or fuel being finite -- so a workload that
+does not use this pays one map lookup.
+""".
+-spec entry(#inst{}, map(), fun()) -> fun().
+entry(Inst, Limits, Entry) ->
+    case maps:get(compile, Limits, false) andalso
+         maps:get(fuel, Limits, infinity) =:= infinity andalso
+         %% A per-call `max_depth' does not reach generated code, which reads
+         %% its ceiling from the instance, so an invocation that overrides it
+         %% interprets rather than silently getting the instance's. `wasm.erl'
+         %% merges the call's options over the instance's before calling this,
+         %% so an override shows as a difference between the two maps. The
+         %% alternative -- reading the budget inside `check_depth/2' -- puts a
+         %% process dictionary lookup on the compiled call path.
+         maps:get(max_depth, Limits, undefined) =:=
+             maps:get(max_depth, Inst#inst.limits, undefined) of
+        false -> Entry;
+        true -> entry_1(Inst, Limits, Entry)
+    end.
+
+-doc """
+Called once at the end of an outermost invocation, to decide about compiling.
+
+At the *end*, and that is the whole point. Which functions a workload runs is
+recorded for free by the lowering cache, and at the start of a call that record
+is empty: an instance asking then compiles all 1666 of QuickJS's functions
+because it cannot yet know that 223 of them is the answer. Asking here, when the
+invocation has finished and the record is full, is the difference between
+compiling what exists and compiling what ran.
+
+Adopting a module somebody else compiled happens here too, so `entry/3` on the
+hot path is one `atomics` read and nothing else.
+""".
+-spec after_call(#inst{}, map()) -> ok.
+after_call(Inst, Limits) ->
+    case erase(?ASK) of
+        undefined -> ok;
+        true -> ask(Inst, Limits)
+    end.
+
+entry_1(Inst, Limits, Entry) ->
+    case wasm_instance:code_slot(Inst) of
+        undefined -> maybe_adopt(Inst, Limits, Entry);
+        Slot -> cached_entry(Inst, Slot, Entry)
+    end.
+
+%% The compiled entry, built once per instance rather than once per call.
+%%
+%% `compiled/3` walks the slot list for the module name, builds the slot key,
+%% resolves the lease counter and allocates a closure, and every one of those is
+%% fixed for as long as this instance keeps this slot. They were paid on every
+%% call: the closure alone measured 24.8 nanoseconds of a 373 nanosecond call,
+%% and the counter and index lookups another chunk of the lease's 108.
+%%
+%% Keyed by a bare `reference()` the instance carries, for the reason
+%% `#inst.ckpt` is one: a tuple key has to be built and hashed each time and
+%% costs more than what it keys. `code_slot/1` is one `atomics:get`, so noticing
+%% that the slot changed is cheaper than rebuilding.
+%%
+%% `Entry` is in the key because there are two of them: `wasm_exec:call/5` lets
+%% an escaping exception through and `call_toplevel/5` converts it, and handing
+%% back the wrong one would change what a trap does.
+cached_entry(#inst{entry_key = K} = Inst, Slot, Entry) when K =/= undefined ->
+    case get(K) of
+        {Slot, Entry, Fun} -> Fun;
+        %% First time this process caches anything under this key, so the id it
+        %% belongs to is recorded: nothing else can tell a bare reference from
+        %% any other dictionary key, and without that the sweep that drops a
+        %% destroyed instance's caches leaves this one behind for ever.
+        undefined -> fresh(Inst, Slot, Entry, K, note);
+        _ -> fresh(Inst, Slot, Entry, K, known)
+    end;
+cached_entry(Inst, Slot, Entry) ->
+    compiled(Inst, Slot, Entry).
+
+fresh(#inst{id = Id} = Inst, Slot, Entry, Key, Seen) ->
+    Fun = compiled(Inst, Slot, Entry),
+    Seen =:= note andalso wasm_instance:note_entry(Id, Key),
+    put(Key, {Slot, Entry, Fun}),
+    Fun.
+
+%% Adopting happens here and asking happens at the end of the call, and the
+%% split is the point.
+%%
+%% Adopting is a lease and a compare-exchange against a module somebody already
+%% compiled, and an instance that waited until the end of its first call to do
+%% it would interpret that call for nothing -- which for a workload of one call
+%% per instance means interpreting always. Asking cannot happen here, because
+%% what to compile is read from what this process has run and at the start of a
+%% call it has run nothing.
+maybe_adopt(Inst, Limits, Entry) ->
+    After = maps:get(compile_after, Limits, ?DEFAULT_AFTER),
+    %% Residency first, and **not** behind the threshold. These are two
+    %% decisions and only the second wants pacing: whether to *start compiling*
+    %% needs a profile of what has run, while whether to use code that already
+    %% exists needs nothing but the answer to "is it there".
+    %%
+    %% They were one decision until this, and for an instance that lives across
+    %% many calls it did not matter: adopting sets a `code_slot' and `entry_1/3'
+    %% never comes back here. It mattered enormously for a workload of one call
+    %% per instance, which is what a reactor is. Every request arrived with no
+    %% slot and could only adopt on the call where `hot/2' happened to fire, so
+    %% 31 requests in 32 interpreted with the compiled code resident beside
+    %% them. `test/audit/PERF.md' has the measurement.
+    %%
+    %% Reading first also keeps `claim_loading/3', a manager round trip, off the
+    %% path while a compile is still running: a module that is `loading' costs
+    %% one `ets:select' over sixteen rows per call and nothing more.
+    case wasm_code_slots:resident_module(key(Inst)) of
+        {ok, _Mod} ->
+            case compile(Inst, Limits, [], adopt) of
+                {ok, Slot} -> compiled(Inst, Slot, Entry);
+                %% An adoption never refuses and never fails: there is nothing
+                %% to generate. Anything but a slot is `retry'.
+                _ -> Entry
+            end;
+        error ->
+            %% Nothing to adopt, so the only question left is whether to start
+            %% compiling, which is what the threshold is for. `hot/2' is
+            %% consulted only here, which is the only window in which its count
+            %% means anything.
+            case wasm_code_slots:hot(key(Inst), After) of
+                %% Ask once the call has finished and this process knows which
+                %% functions it needed.
+                true  -> put(?ASK, true), Entry;
+                false -> Entry
+            end
+    end.
+
+-doc """
+Give back the slot lease this instance took, if it took one.
+
+Called from `wasm:destroy/1` beside the memory, table and global releases, and
+for the same reason: the lease names the *instance*, so it has to go when the
+instance does. Until this existed it went only when the owning process died,
+and a long-lived process serving many distinct modules pinned the slots one at
+a time until the pool was gone and every later module interpreted for the life
+of the node. `wasm_code_slots`'s moduledoc describes exactly this shape as the
+usage it expects and nothing called it.
+
+Idempotent, because `destroy/1` is: releasing a lease that is not there is a
+no-op in `wasm_code_slots`, which is the same property that makes a double
+release of a memory harmless.
+""".
+-spec release(#inst{}) -> ok.
+release(Inst) ->
+    ok = wasm_code_slots:release(key(Inst), {instance, Inst#inst.id}),
+    each_shard(Inst, 2, fun(Key) ->
+                            case wasm_code_slots:lookup(Key) of
+                                {ok, _} -> wasm_code_slots:release(
+                                             Key, {instance, Inst#inst.id});
+                                error   -> stop
+                            end
+                        end).
+
+-doc "How much has been compiled, and how often generated code was entered.".
+-spec counts() -> #{atom() => non_neg_integer()}.
+counts() ->
+    R = counters(),
+    H = hot(),
+    #{compiled => atomics:get(R, ?IX_COMPILED),
+      entered => counters:get(H, ?HOT_ENTERED),
+      reentered => counters:get(H, ?HOT_REENTERED),
+      cached => atomics:get(R, ?IX_CACHED),
+      refused => atomics:get(R, ?IX_REFUSED),
+      failed => atomics:get(R, ?IX_FAILED),
+      crashed => atomics:get(R, ?IX_CRASHED)}.
+
+-doc """
+Why the last compiles that did not happen did not happen.
+
+`counts/0` says how many were refused or failed; this says what they were.
+Oldest first, a bounded number of them, and every reason normalised to a
+bounded shape: a `{compile, _}` from the OTP compiler carries its whole
+diagnostic list and an exit reason carries a stacktrace, and neither belongs in
+a table that is read back for diagnosis.
+
+`crashed` compiles are counted and not listed, for the same reason.
+
+Answers `[]` rather than raising when the table is not there, which is what a
+node that loaded these modules without restarting the application has.
+""".
+-spec diagnostics() -> [{refused | failed, term(), term()}].
+diagnostics() -> wasm_code_slots:diagnostics().
+
+-doc "For tests, which need to count what one run did rather than what a node did.".
+-spec reset_counts() -> ok.
+reset_counts() ->
+    R = counters(),
+    atomics:put(R, ?IX_COMPILED, 0),
+    counters:put(hot(), ?HOT_ENTERED, 0),
+    counters:put(hot(), ?HOT_REENTERED, 0),
+    atomics:put(R, ?IX_CACHED, 0),
+    atomics:put(R, ?IX_REFUSED, 0),
+    atomics:put(R, ?IX_FAILED, 0),
+    atomics:put(R, ?IX_CRASHED, 0),
+    %% `?IX_SEQ' is left alone on purpose: see its definition.
+    wasm_code_slots:clear_diagnostics().
+
+%%% -------------------------------------------------------------- entering ---
+
+%% Two shapes, and which one applies is decided here rather than per call.
+%%
+%% A module identified by a content hash has a stamp that does not depend on the
+%% slot generation, so its lease needs no row lookup: `lease_at/2` takes the
+%% counter and nothing else, and generated code left by another module cannot
+%% match this module's hash. That is the ordinary case, and it is every module
+%% loaded from bytes.
+%%
+%% A module identified by a `reference()` -- one built from text, never cached
+%% -- has no stamp but the generation, and only the row carries that. It keeps
+%% `lease_call/2`, which checks the key as well as the slot: a caller that
+%% remembered a slot can be overtaken by a reuse between remembering and
+%% leasing, and would otherwise run somebody else's code.
+compiled(Inst, Slot, Entry) ->
+    Mod = wasm_code_slots:slot_module(Slot),
+    {Ref, SIdx} = wasm_code_slots:lease_ref(Mod),
+    %% Resolved here, once per entry, and carried by the closure.
+    Hot = hot(),
+    case wasm_instance:identity(Inst) of
+        {sha256, Hash} -> hashed_entry(Mod, Ref, SIdx, Hash, Entry, Hot);
+        _ -> generational_entry(Inst, Mod, Entry, Hot)
+    end.
+
+hashed_entry(Mod, Ref, SIdx, Stamp, Entry, Hot) ->
+    fun(I, Mut, Idx, Args, L) ->
+        case wasm_code_slots:lease_at(Ref, SIdx) of
+            stale -> Entry(I, Mut, Idx, Args, L);
+            ok ->
+                try Mod:invoke(I, Mut, Idx, Args, 0, Stamp) of
+                    {error, not_compiled} ->
+                        Entry(I, Mut, Idx, Args, L#{code_module => {Mod, Stamp}});
+                    {error, stale} -> Entry(I, Mut, Idx, Args, L);
+                    Result -> counters:add(Hot, ?HOT_ENTERED, 1), Result
+                catch
+                    Class:Reason:St ->
+                        counters:add(Hot, ?HOT_ENTERED, 1),
+                        erlang:raise(Class, Reason, St)
+                after
+                    wasm_code_slots:release_at(Ref, SIdx)
+                end
+        end
+    end.
+
+generational_entry(Inst, Mod, Entry, Hot) ->
+    Key = key(Inst),
+    fun(I, Mut, Idx, Args, L) ->
+        case wasm_code_slots:lease_call(Mod, Key) of
+            stale -> Entry(I, Mut, Idx, Args, L);
+            {ok, Gen} ->
+                %% Zero: this is the outermost invocation. The interpreter
+                %% re-enters at its own depth, which is why generated code takes
+                %% one at all. The stamp is what the callee refuses on if it is
+                %% not the code this caller meant.
+                Stamp = stamp(I, Gen),
+                try Mod:invoke(I, Mut, Idx, Args, 0, Stamp) of
+                    %% This function of the module was not compiled. Common, and
+                    %% not a failure: most functions of a real module are
+                    %% outside the subset. The interpreter it falls back to is
+                    %% told the module name, so a compiled callee further down
+                    %% is still reached; the lease this holds covers it.
+                    {error, not_compiled} ->
+                        Entry(I, Mut, Idx, Args, L#{code_module => {Mod, Stamp}});
+                    %% The slot was refilled between reading it and calling.
+                    %% Rare, and interpreting is the answer.
+                    {error, stale} -> Entry(I, Mut, Idx, Args, L);
+                    Result -> counters:add(Hot, ?HOT_ENTERED, 1), Result
+                catch
+                    %% A trap is an entry. The generated function ran and did
+                    %% what the specification says it should, and it leaves by
+                    %% throwing rather than returning, so counting only the
+                    %% `of` clauses made `counts/0` report zero for a workload
+                    %% that traps every time. That is the one workload a
+                    %% differential test most wants to be sure ran compiled.
+                    Class:Reason:St ->
+                        counters:add(Hot, ?HOT_ENTERED, 1),
+                        erlang:raise(Class, Reason, St)
+                after
+                    wasm_code_slots:release_call(Mod)
+                end
+        end
+    end.
+
+-doc """
+Wait for this instance's module to finish compiling, or give up.
+
+Compilation is asynchronous, so a caller that wants to measure compiled code, or
+to warm an instance before serving with it, needs to know when it has arrived.
+Answers `ok` as soon as the instance has adopted a slot.
+""".
+-spec await(#inst{}, timeout()) -> ok | timeout.
+await(Inst, Timeout) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    await_1(Inst, Deadline).
+
+await_1(Inst, Deadline) ->
+    case wasm_instance:code_slot(Inst) of
+        undefined ->
+            %% The compilation was asked for by whichever instance went hot
+            %% first, and it adopts the slot for itself. Every other instance of
+            %% the module picks it up on its own next hot call. Waiting has to
+            %% do that adoption rather than watch for it, or an instance that
+            %% never goes hot again waits for ever.
+            %%
+            %% `lookup/1` reads without claiming, which matters: claiming here
+            %% would take a free slot away from the compiler that is filling it.
+            case wasm_code_slots:lookup(key(Inst)) of
+                {ok, _Mod} ->
+                    case compile(Inst, #{}, [], adopt) of
+                        {ok, _Slot} -> ok;
+                        _ -> retry(Inst, Deadline)
+                    end;
+                error -> retry(Inst, Deadline)
+            end;
+        _Slot -> ok
+    end.
+
+retry(Inst, Deadline) ->
+    case erlang:monotonic_time(millisecond) < Deadline of
+        false -> timeout;
+        true -> timer:sleep(20), await_1(Inst, Deadline)
+    end.
+
+%%% ------------------------------------------------------------- compiling ---
+
+%% Counted per module rather than per instance, or a workload of short-lived
+%% instances never gets hot.
+%% Compilation happens somewhere else, and this call interprets.
+%%
+%% A real module takes tens of seconds to compile, and doing that inside the
+%% call that happened to be the hot one makes the tier a latency defect however
+%% fast the code it produces. Interpreting is always correct, so the honest
+%% answer to "this is hot" is to start the work and carry on.
+%%
+%% The process that does the work also *owns* the slot reservation, which is
+%% what makes this safe: if it dies the reservation dies with it, and the
+%% generation token in `publish/1` means a compiler slow enough to be overtaken
+%% cannot publish over whatever replaced it. A caller could not own it, because
+%% a caller returns long before the compile finishes and would take the
+%% reservation with it.
+%%
+%% Nothing bounds the number of compilers except the sixteen slots, which is
+%% the bound that matters: the seventeenth gets `no_slot` and interprets.
+ask(Inst, Limits) ->
+    case maps:get(compile_sync, Limits, false) of
+        %% Synchronous compilation, for callers that would rather wait than
+        %% measure something half compiled. The conformance suite is one.
+        %%
+        %% It does not consult `ask_compile/1`, so a synchronous caller retries
+        %% on every call rather than once per retry interval. That is what
+        %% asking to compile synchronously means, and it is why the pacing in
+        %% `record/3` is described as covering the asynchronous path.
+        true ->
+            record(Inst, Limits, compile(Inst, Limits, wanted(Limits, Inst),
+                                         generate)),
+            ok;
+        false ->
+            _ = wasm_instance:ask_compile(Inst) andalso spawn_compile(Inst, Limits),
+            ok
+    end.
+
+%% Every outcome of a compile is counted here and nowhere else, so nothing can
+%% be counted twice.
+%%
+%% `compiled` is deliberately not among them: it counts *functions*, is bumped
+%% where they are published, and `{ok, Slot}` comes back from adopting somebody
+%% else's module as readily as from generating one.
+%%
+%% Only a `retry` gives the ask back. A refusal leaves the timestamp standing,
+%% because `release_ask/1` sets it to zero and the next hot call would then ask
+%% again immediately; left alone it expires after the retry interval, which is
+%% the pacing a refusal wants and already exists.
+%%
+%% `compile_force` raises *after* the outcome is recorded and outside any
+%% `try`, so a forced failure is one record and not a record plus a crash.
+record(Inst, Limits, Outcome) ->
+    case Outcome of
+        {ok, _Slot} -> ok;
+        retry -> wasm_instance:release_ask(Inst);
+        {refused, Reason} -> note(Inst, refused, ?IX_REFUSED, Reason);
+        {failed, Reason} ->
+            note(Inst, failed, ?IX_FAILED, Reason),
+            wasm_instance:release_ask(Inst)
+    end,
+    case Outcome of
+        {ok, _} -> ok;
+        retry -> ok;
+        {_, Why} -> forced(Limits) andalso erlang:error({compile_failed, Why}),
+                    ok
+    end,
+    Outcome.
+
+note(Inst, Outcome, Index, Reason) ->
+    bump(Index, 1),
+    wasm_code_slots:record_diagnostic(next_seq(), Outcome, key(Inst),
+                                      normalize_reason(Reason)),
+    ok.
+
+next_seq() -> atomics:add_get(counters(), ?IX_SEQ, 1).
+
+-doc """
+The bounded form of a compile failure's reason, as `diagnostics/0` keeps it.
+
+Bounded by structure, not by formatting. `io_lib:format("~P", [R, 8])` bounds
+*depth*: a flat million-character list at depth 8 still formats to a million
+bytes, and truncating afterwards has already built the whole thing. So the two
+shapes that carry unbounded data lose it here -- the OTP compiler's diagnostics
+become their count, an exit reason becomes its tag -- and anything unrecognised
+becomes an atom and nothing else.
+
+Exported because it is the guarantee `diagnostics/0` rests on, and a guarantee
+that cannot be checked directly is not one.
+""".
+-spec normalize_reason(term()) -> term().
+normalize_reason({limit, _} = R) -> R;
+normalize_reason({unsupported, _} = R) -> R;
+normalize_reason({compile, Errors}) when is_list(Errors) ->
+    {compile, length(Errors)};
+normalize_reason({compiler_died, Why}) when is_tuple(Why), tuple_size(Why) > 0 ->
+    case element(1, Why) of
+        Tag when is_atom(Tag) -> {compiler_died, Tag};
+        _ -> {compiler_died, other}
+    end;
+normalize_reason({compiler_died, Why}) when is_atom(Why) ->
+    {compiler_died, Why};
+normalize_reason(_) -> other.
+
+%% Which functions to compile: the ones that ran, or all of them.
+%%
+%% `ran/1` already reads the empty list as "everything eligible", so asking for
+%% the whole module is asking for that list. See `unit/2`.
+wanted(Limits, Inst) ->
+    case maps:get(compile_whole, Limits, false) of
+        true -> [];
+        false -> wasm_instance:executed(Inst)
+    end.
+
+spawn_compile(Inst, Limits) ->
+    %% Read here rather than in the compiler, because the record of what has run
+    %% lives in *this* process's dictionary and the compiler's is empty.
+    %%
+    %% Through `wanted/2`, which is also where `compile_whole` is honoured.
+    %% Reading `wasm_instance:executed/1` directly, as this did, made that
+    %% option work only under `compile_sync`: everything asked for in the
+    %% background compiled what had run, whatever the caller said.
+    Wanted = wanted(Limits, Inst),
+    case start_compiler() of
+        {ok, Pid} ->
+            %% Started empty and then told what to do: passing the instance as a
+            %% start argument would copy it into the supervisor as well, and a
+            %% real instance is 35 MB.
+            Pid ! {compile, Inst, Limits, Wanted},
+            true;
+        %% Every slot is already being filled, so there is nothing for a
+        %% seventeenth compiler to publish into. Give the ask back and let the
+        %% next hot call decide again.
+        {error, _} ->
+            wasm_instance:release_ask(Inst),
+            true
+    end.
+
+%% One more compiler, unless there are already as many as there are slots.
+%%
+%% A soft bound, and deliberately: the hard one is the slots themselves, and a
+%% compiler that cannot claim one gives up immediately. This exists so that the
+%% seventeenth does not copy a 35 MB instance to find that out. Racy against
+%% another caller starting one at the same moment, which costs one extra
+%% compiler and nothing else.
+start_compiler() ->
+    Running = proplists:get_value(workers, supervisor:count_children(wasm_jit_sup)),
+    case Running < length(wasm_code_slots:slots()) of
+        false -> {error, busy};
+        true -> supervisor:start_child(wasm_jit_sup, [])
+    end.
+
+-doc """
+A compiler, waiting to be told what to compile. Started by `wasm_jit_sup`.
+
+This process *owns* the slot reservation for as long as it holds one, which is
+why the work happens here rather than in a long-lived pool worker: the slot is
+released when its owner dies, and that is what makes a compiler that crashes or
+is killed cost nothing but the work it had done.
+
+The wait has a deadline for the same reason: a child whose sender died between
+`start_child` and the message would otherwise sit in the tree for ever.
+""".
+-spec compiler_loop() -> ok.
+compiler_loop() ->
+    receive
+        {compile, Inst, Limits, Executed} ->
+            %% The `try` covers the compile and nothing else. `record/3` runs
+            %% after it, so `compile_force`'s deliberate exception is not caught
+            %% here and counted a second time as a crash.
+            Outcome =
+                try compile(Inst, Limits, Executed, generate)
+                catch
+                    %% A compile that fails must not leave the instance thinking
+                    %% it has one in flight. This does not cover being killed,
+                    %% which is what the ask expiring is for.
+                    C:R ->
+                        bump(?IX_CRASHED, 1),
+                        wasm_instance:release_ask(Inst),
+                        {crashed, {C, R}}
+                end,
+            case Outcome of
+                {crashed, _} -> ok;
+                _ -> _ = record(Inst, Limits, Outcome), ok
+            end
+    after 30000 ->
+        ok
+    end.
+
+%% Every outcome is a value, and there are four of them:
+%%
+%%     {ok, Slot} | retry | {refused, Reason} | {failed, Reason}
+%%
+%% `retry` is nobody's fault -- no slot free, another process got there first,
+%% nothing eligible to compile -- and is retried at the next hot call. A refusal
+%% is this runtime declining, and is paced by the ask's own retry interval. A
+%% failure is the OTP compiler saying no. Nothing here raises for any of them,
+%% which is what let a refusal disappear before: the only exception the caller
+%% now sees is one nobody expected.
+compile(Inst, Limits, Executed, Mode) ->
+    Key = key(Inst),
+    case wasm_code_slots:claim_loading(Key, {instance, Inst#inst.id}, self()) of
+        {resident, Mod} ->
+            %% The rest of the chain as well. Shard one is what `code_slot`
+            %% names and what a call leases, but shard one *calls* the others,
+            %% and a slot nobody holds can be taken while it is idle. Losing a
+            %% later shard is not unsafe -- its replacement carries a different
+            %% stamp and the chain gets `stale`, so the caller interprets -- but
+            %% it is silent and permanent, because shard one is still resident
+            %% and nothing asks for a recompile.
+            ok = lease_rest(Inst, 2),
+            adopt(Inst, Mod);
+        %% Somebody else is compiling this module. Interpreting is always
+        %% correct, and waiting on another process's compilation is not.
+        loading -> retry;
+        {error, no_slot} -> retry;
+        %% Nothing resident and a slot is free. In `adopt` mode that is not what
+        %% was wanted: give the slot straight back rather than generate on a
+        %% caller's process, which is the whole thing this asynchrony exists to
+        %% avoid. Claiming and aborting rather than reading first is what makes
+        %% it race-free.
+        {compile, _Mod, Token} when Mode =:= adopt ->
+            ok = wasm_code_slots:abort(Token),
+            retry;
+        {compile, Mod, Token} -> generate(Inst, Limits, Mod, Token, Executed)
+    end.
+
+generate(Inst, Limits, Mod, Token, Executed) ->
+    %% Counted here, over what was *asked for*, because `unit/2` lowers every
+    %% selected function through `wasm_instance:compiler_ir/2` before
+    %% `can_compile/2` filters it. A refused request would otherwise have built
+    %% and retained its whole IR first, and a module of many unsupported
+    %% functions could lower an arbitrary number of them while never reaching
+    %% the ceiling in *eligible* ones. `unit/2` keeps answering a list, because
+    %% `dump/2` uses it as a list comprehension's generator.
+    N = requested(Inst, Executed),
+    case N > ?MAX_COMPILE_FUNS of
+        true ->
+            ok = wasm_code_slots:abort(Token),
+            {refused, {limit, {too_many_functions, N}}};
+        false ->
+            case unit(Inst, Executed) of
+                [] ->
+                    ok = wasm_code_slots:abort(Token),
+                    retry;
+                Unit ->
+                    generate_1(Inst, Limits, Mod, Token, Unit)
+            end
+    end.
+
+%% `[]` is `wanted/2`'s way of saying every function, so the count is the
+%% module's own.
+requested(Inst, []) ->
+    length([F || F <- tuple_to_list(Inst#inst.funcs), is_record(F, fn)]);
+requested(_Inst, Executed) ->
+    length(Executed).
+
+%% Refused before anything is generated when even `?MAX_SHARDS` units cannot
+%% hold it. `length/1` on the eligible list is the whole cost of finding out,
+%% and the alternative is discovering it inside `wasm_core:fun_name/1` after the
+%% Core Erlang for every function up to the pool's depth has been built.
+generate_1(Inst, Limits, Mod, Token, Unit) ->
+    N = length(Unit),
+    case N > ?MAX_COMPILE_FUNS of
+        true ->
+            ok = wasm_code_slots:abort(Token),
+            {refused, {limit, {too_many_functions, N}}};
+        false ->
+            %% `full` unless the caller asks for `baseline`, and this
+            %% default has now moved three times. It is worth reading why,
+            %% because the reason it moved back is not the reason it moved.
+            %%
+            %% It was `full`, then `baseline`, because the SSA optimiser bought
+            %% *nothing*: QuickJS ran in 141.1 ms against 142.1, a tight
+            %% arithmetic loop was 3.35 ns an iteration either way, and it cost
+            %% 123.1 seconds against 54.8 to compile. That measurement was
+            %% correct and is no longer true.
+            %%
+            %% What changed is the code handed to it. Since OTP 25 the JIT emits
+            %% far better arithmetic when the compiler knows a value's range --
+            %% an addition drops from ten instructions to four, a comparison
+            %% from eleven to four -- and the range comes from the SSA type
+            %% pass, which is exactly what `no_ssa_opt` turns off. The generator
+            %% used to state no ranges, so there was nothing for the pass to
+            %% find and skipping it was free. It states them now, in the guards
+            %% `wrap_sum/2`, `wrap_sum32/2` and `decode_word/2` are written as,
+            %% and QuickJS is **75.0 to 76.8 ms at `full` against 86.1 to 87.7
+            %% at `baseline`**.
+            %%
+            %% It still costs 129.3 seconds against 58.1 to compile the hot set,
+            %% and that is what `compile_shards` is for.
+            Mode = maps:get(compile_quality, Limits, full),
+            %% The one place the ceiling is read, and provably one: `compile/4`
+            %% reaches `generate/5` only in `generate` mode, `generate/5`
+            %% reaches here unconditionally, and the two `adopt`-mode callers
+            %% never generate. The resolved map travels into `pmap/2`'s closure,
+            %% so a shard worker inherits it rather than reading the
+            %% environment on a process that has no business doing so.
+            {Words, Config} = resolve_max_heap_words(),
+            ok = wasm_code_slots:observe_config(Config),
+            COpts = case Words of
+                        0 -> #{};
+                        _ -> #{max_heap_words => Words}
+                    end,
+            %% Weighed and admitted here, which is after the IR exists and
+            %% before any Core does. Admitting later would mean a request that
+            %% is turned away had already built the largest term in the
+            %% compile; admitting earlier would mean guessing its size.
+            {Budget, Complaints} = resolve_budget(),
+            [ok = wasm_code_slots:observe_config(K, V) || {K, V} <- Complaints],
+            %% Cleared as well as set, so a corrected key stops being held and a
+            %% recurrence is news again.
+            [ok = wasm_code_slots:observe_config(K, ok)
+             || K <- [compile_budget_words, compile_budget_heap_words],
+                not lists:keymember(K, 1, Complaints)],
+            {_Name, Gen} = Token,
+            Stamp = stamp(Inst, Gen),
+            case split(Unit, Limits) of
+                %% Unreachable while `shard_count/2` asks for enough bins, and
+                %% still an outcome rather than a crash.
+                full ->
+                    ok = wasm_code_slots:abort(Token),
+                    {refused, {limit, {too_many_functions, N}}};
+                Parts ->
+                    admitted(Inst, Limits, Mode, Stamp, Unit, Parts,
+                             {Mod, Token}, COpts, Budget)
+            end
+    end.
+
+%% The budget is held for the whole build and given back however it ends,
+%% including a trap on the way out. A compiler that is *killed* gives it back
+%% too, through the monitor `wasm_code_slots` took, which is the case an
+%% `after` cannot cover.
+%% A cache hit runs no compiler, so it must neither reserve nor be refused.
+%%
+%% The lookup used to happen two calls further in, inside `artifact/9`, so a
+%% request that was about to adopt an artifact from disk reserved as if it were
+%% about to compile one, and a busy budget turned a cache adoption into
+%% interpreting. That is the 0.2 second path the cache exists for.
+%%
+%% Looked up rather than probed. A cheap "is the file there" check before
+%% admission would leave a window: several distinct modules could each pass it
+%% and then all miss, if the entries were evicted or the directory changed, and
+%% every one of them would compile unreserved. Holding the binary closes it,
+%% and costs one read instead of two because `artifact/9` is handed the result.
+admitted(Inst, Limits, Mode, Stamp, Unit, Parts, {Mod, Token}, COpts, Budget) ->
+    case cached(Inst, Mod, Unit, Mode, Stamp, Parts) of
+        {ok, _Bin} = Hit ->
+            build(Inst, Limits, Mode, Stamp, Unit, Parts, [{Mod, Token}],
+                  COpts, Hit);
+        Miss ->
+            Weight = length(Parts) * reservation(Budget, COpts),
+            case wasm_code_slots:acquire(Weight, Budget) of
+                {error, busy} ->
+                    ok = wasm_code_slots:abort(Token),
+                    {refused, {limit, {compile_budget, Weight}}};
+                ok ->
+                    try build(Inst, Limits, Mode, Stamp, Unit, Parts,
+                              [{Mod, Token}], COpts, Miss)
+                    after
+                        ok = wasm_code_slots:release_budget()
+                    end
+            end
+    end.
+
+%% Only a whole unit is ever cached, so a sharded request never looks. `key/6`
+%% answers `undefined` for anything without a content hash, which is every
+%% module built from text, and `path/2` would hand that to `binary:encode_hex/1`
+%% and raise: it is a miss and must not reach `lookup/1`.
+cached(Inst, Mod, Unit, Mode, Stamp, [_]) ->
+    case wasm_code_cache:key(wasm_instance:identity(Inst), ?ABI, Mod, Mode,
+                             [Idx || {_P, Idx, _F, _IR} <- Unit], Stamp) of
+        undefined -> {miss, undefined};
+        Key ->
+            case wasm_code_cache:lookup(Key) of
+                {ok, _Bin} = Hit -> bump(?IX_CACHED, 1), Hit;
+                _ -> {miss, Key}
+            end
+    end;
+cached(_Inst, _Mod, _Unit, _Mode, _Stamp, _Parts) ->
+    {miss, undefined}.
+
+%% What one compiler may spend, which is what it is bounded at. Reserving a
+%% prediction instead was measured and rejected: peak memory per IR word spans
+%% 4.95 to 6.77 KB on one guest by estimator choice alone, and a bound built on
+%% a constant with that spread is not a bound. See `test/audit/PERF.md`.
+reservation(_Budget, #{max_heap_words := W}) -> W;
+reservation(_Budget, _COpts) -> 0.
+
+%% One unit or several, and the difference is only how many slots are held.
+%%
+%% Splitting exists for wall clock and nothing else: 99.3% of a compile is
+%% `compile:forms/2`, the units are independent BEAM modules, and this box has
+%% fourteen cores. It does not reduce the work and it does not let anything be
+%% used sooner, because the functions worth compiling are the ones expensive to
+%% compile: sixteen of QuickJS's hot functions are already 30 seconds of the 54.
+%% See `test/audit/PERF.md`.
+build(Inst, _Limits, Mode, Stamp, Unit, [_], [{Mod, Token}], COpts, Cached) ->
+    case artifact(Inst, Mod, Unit, Mode, Stamp, undefined, Mod, #{}, COpts,
+                  Cached) of
+        {ok, Bin} ->
+            {module, Mod} = code:load_binary(Mod, "wasm_generated", Bin),
+            ok = wasm_code_slots:publish(Token),
+            bump(?IX_COMPILED, length(Unit)),
+            adopt(Inst, Mod);
+        {error, Reason} ->
+            ok = wasm_code_slots:abort(Token),
+            outcome(Reason)
+    end;
+build(Inst, Limits, Mode, Stamp, _Unit, Parts, [First], COpts, _Cached) ->
+    %% Every slot claimed before anything is generated, because each unit names
+    %% the next as a literal and cannot be built until that name exists. This
+    %% process owns all of them, so a compiler that dies takes every reservation
+    %% with it rather than stranding the ones it had not published yet.
+    case claim_rest(Inst, length(Parts) - 1, [First]) of
+        {error, Held} ->
+            _ = [wasm_code_slots:abort(T) || {_, T} <- Held],
+            retry;
+        Tokens ->
+            Mods = [M || {M, _} <- Tokens],
+            Head = hd(Mods),
+            %% Which unit holds each function, so a call between them is a call
+            %% and not a crossing. Known here because the split happens before
+            %% anything is generated.
+            Where = maps:from_list(
+                      [{Idx, M} || {P, M} <- lists:zip(Parts, Mods),
+                                   {_, Idx, _, _} <- P]),
+            Jobs = lists:zip3(Parts, Mods, tl(Mods) ++ [undefined]),
+            Bins = pmap(fun({U, M, Next}) ->
+                            Mine = [Idx || {_, Idx, _, _} <- U],
+                            %% A shard is never cached, so it never carries a
+                            %% looked-up result: `{miss, undefined}`.
+                            artifact(Inst, M, U, Mode, Stamp, Next, Head,
+                                     maps:without(Mine, Where), COpts,
+                                     {miss, undefined})
+                        end, Jobs),
+            publish_all(Inst, Limits, Tokens, Parts, Bins)
+    end.
+
+%% Which of the two failure outcomes a reason is. A refusal is this runtime
+%% declining to compile something; a failure is the OTP compiler rejecting what
+%% it was given, or a compiler process dying under it.
+outcome({limit, _} = R) -> {refused, R};
+outcome({unsupported, _} = R) -> {refused, R};
+outcome(R) -> {failed, R}.
+
+%% All or nothing. A chain with a hole in it would answer `not_compiled` for
+%% every function past the hole, which is correct but is most of the work thrown
+%% away, and the slots would be held for it.
+publish_all(Inst, _Limits, Tokens, Parts, Bins) ->
+    case [R || {error, _} = R <- Bins] of
+        [{error, Reason} | _] ->
+            _ = [wasm_code_slots:abort(T) || {_, T} <- Tokens],
+            outcome(Reason);
+        [] ->
+            %% Every module loaded before any of them is published, and the two
+            %% must not be interleaved.
+            %%
+            %% Publishing shard one is what makes the whole chain adoptable:
+            %% `await/2` returns on it and the next instance calls straight into
+            %% it. If the rest is still being loaded at that moment, the chain
+            %% reaches a module that does not exist yet and generated code
+            %% raises `undef`, which arrives as an internal error on somebody
+            %% else's first call. That is exactly what happened, and only off
+            %% the calling process, because nothing else was racing the loop.
+            _ = [{module, M} = code:load_binary(M, "wasm_generated", B)
+                 || {{M, _}, {ok, B}} <- lists:zip(Tokens, Bins)],
+            _ = [ok = wasm_code_slots:publish(T) || {_, T} <- Tokens],
+            bump(?IX_COMPILED, lists:sum([length(P) || P <- Parts])),
+            adopt(Inst, element(1, hd(Tokens)))
+    end.
+
+%% Balanced by IR words, largest first into the lightest unit so far.
+%%
+%% Not by function count: one QuickJS function is 98,191 words and 8.4 seconds
+%% on its own, and an even count would put it with fifty others and leave the
+%% other units idle. Longest-processing-time-first is the standard answer and
+%% the critical path here is one function whatever the split, so it is close to
+%% the best available.
+split(Unit, Limits) ->
+    case shard_count(length(Unit), Limits) of
+        1 -> [Unit];
+        N ->
+            Sized = [{erts_debug:flat_size(IR), U} || {_, _, _, IR} = U <- Unit],
+            Cap = map_get(max_funs, wasm_core:limits()),
+            case bins(lists:reverse(lists:sort(Sized)), empty_bins(N), Cap) of
+                full -> full;
+                Parts -> renumber(Parts)
+            end
+    end.
+
+-doc """
+Every bound the compiled tier applies to a *request*, so a caller can ask rather
+than infer it from a refusal. `wasm_core:limits/0` is the same idea for the
+bounds a single unit has.
+""".
+%% `non_neg_integer()`, because `max_heap_words` answers 0 for "no ceiling",
+%% which is `max_heap_size`'s own meaning for a size of zero.
+-spec compile_limits() -> #{atom() => non_neg_integer()}.
+compile_limits() ->
+    Ceiling = max_heap_words(),
+    Budget = compile_budget_heap_words(),
+    #{max_compile_funs => ?MAX_COMPILE_FUNS, max_shards => ?MAX_SHARDS,
+      max_heap_words => Ceiling,
+      budget_heap_words => Budget,
+      max_concurrent_compilers => concurrency(Budget, Ceiling)}.
+
+%% Compiler *workers*, not requests: a sharded request runs one per part.
+%%
+%% Steady-state admission capacity rather than a strict instantaneous maximum.
+%% When a reservation's owner dies, `wasm_code_slots` gives the words back on
+%% its `DOWN` while `wasm_core:reap/2` kills the compiler through a separate
+%% monitor, and nothing orders those two, so a newly admitted compiler can
+%% briefly overlap one that is still dying. Making it strict would mean tracking
+%% descendants on the release path for a window that only opens on a crash.
+%%
+%% Two exceptions are folded in rather than left for a reader to discover. The
+%% `?MAX_SHARDS` floor is the `Spent =:= 0` escape, which admits one request
+%% whatever its size on an idle node, and a request is up to four workers. The
+%% slot count is the ceiling on all of it, and comes from
+%% `wasm_code_slots:slots/0` rather than a second copy of the number.
+concurrency(0, _Ceiling) -> length(wasm_code_slots:slots());
+concurrency(_Budget, 0) -> length(wasm_code_slots:slots());
+concurrency(Budget, Ceiling) ->
+    erlang:min(length(wasm_code_slots:slots()),
+               erlang:max(?MAX_SHARDS, Budget div Ceiling)).
+
+-doc """
+The heap ceiling a compile would be given, in words, or 0 for none.
+
+Reads `compile_max_heap_words` and reports the *effective* value, so a caller is
+told what the tier would actually apply rather than what the code defaults to.
+Asking never reports: it does not log, move a counter, or clear what
+`wasm_code_slots` is holding, because a question must not have the side effects
+of a compile.
+""".
+-spec max_heap_words() -> non_neg_integer().
+max_heap_words() -> element(1, resolve_max_heap_words()).
+
+-doc """
+The node's whole compile budget in heap words, or 0 for none.
+
+A heap ceiling bounds one compiler; sixteen of them under it is not a bound on
+the node. This is what the whole node may have in flight at once. Off by
+default, and like the ceiling it refuses rather than queues: a request that does
+not fit interprets and asks again at the next hot call.
+""".
+-spec compile_budget_heap_words() -> non_neg_integer().
+compile_budget_heap_words() -> element(1, resolve_budget()).
+
+%% The effective budget and everything there is to say about the configuration,
+%% because the two cannot be recovered from one another: unset, malformed, and
+%% set-without-a-ceiling all resolve to 0.
+%%
+%% `compile_budget_words` is the old key and counted IR words. It is read only
+%% to complain about: redefining it in place would have turned a working node
+%% into a serialiser, since 4,000,000 IR words is about 21 GB of memory and
+%% 4,000,000 heap words is 32 MB, and the first compile always succeeds through
+%% the `Spent =:= 0` escape while every later one is refused.
+-spec resolve_budget() -> {non_neg_integer(), [{atom(), term()}]}.
+resolve_budget() ->
+    Old = case application:get_env(wasm, compile_budget_words, undefined) of
+              undefined -> [];
+              Raw -> [{compile_budget_words, {bad, Raw}}]
+          end,
+    case application:get_env(wasm, compile_budget_heap_words, undefined) of
+        undefined ->
+            {0, Old};
+        %% An explicit zero is a clean disabled state, spelled the way
+        %% `max_heap_size` spells it. It says what it means, so it says nothing.
+        0 ->
+            {0, Old};
+        W when is_integer(W), W > 0 ->
+            case max_heap_words() of
+                0 ->
+                    %% Nothing to aggregate: the budget admits compilers each
+                    %% bounded by the ceiling, and there is no ceiling.
+                    {0, [{compile_budget_heap_words, {bad, no_ceiling}} | Old]};
+                _ ->
+                    {W, Old}
+            end;
+        Bad ->
+            {0, [{compile_budget_heap_words, {bad, Bad}} | Old]}
+    end.
+
+%% Answers the effective value *and* what to say about it, because the two
+%% cannot be recovered from one another: a bad value and an absent one both
+%% resolve to 0, and the raw term is what deduplicates the warning.
+%%
+%% `min_heap_size` is a *tuple*, `{min_heap_size, 233}` on OTP 29, so comparing
+%% an integer against it directly rejects every integer there is. The upper
+%% bound is undocumented and just as real: `size` must be a small integer, and
+%% `spawn_opt` raises `badarg` at `1 bsl 59` exactly as it does below the
+%% minimum.
+-spec resolve_max_heap_words() -> {non_neg_integer(), ok | {bad, term()}}.
+resolve_max_heap_words() ->
+    {min_heap_size, Min} = erlang:system_info(min_heap_size),
+    case application:get_env(wasm, compile_max_heap_words, undefined) of
+        undefined -> {0, ok};
+        0 -> {0, ok};
+        W when is_integer(W), W >= Min, W =< ?MAX_HEAP_WORDS -> {W, ok};
+        Bad -> {0, {bad, Bad}}
+    end.
+
+-doc """
+How many units this many functions are split into.
+
+Pure, and exported so the policy can be asserted without running a compile.
+
+`wasm_core` draws every name a unit can use from a pre-generated pool, because
+nothing a guest supplies may become an atom, and that pool is `max_funs` deep.
+A unit past it is refused, so the split exists to keep each unit under it and
+for no other reason: a guest that fits in one unit stays in one unit and its
+generated code is unchanged.
+
+The answer is the number of bins *requested*. `bins/3` drops empty ones, so
+asking for four on a one-function unit gives one actual part; `shards/1` is
+what reports the actual count.
+""".
+-spec shard_count(non_neg_integer(), map()) -> pos_integer().
+shard_count(NFuns, Limits) ->
+    case maps:get(compile_shards, Limits, auto) of
+        auto -> auto_shards(NFuns);
+        N when is_integer(N), N >= 1 -> erlang:min(?MAX_SHARDS, N)
+    end.
+
+auto_shards(NFuns) ->
+    Max = map_get(max_funs, wasm_core:limits()),
+    case NFuns =< Max of
+        true -> 1;
+        false -> erlang:min(?MAX_SHARDS, (NFuns + Max - 1) div Max)
+    end.
+
+empty_bins(N) -> [{0, 0, []} || _ <- lists:seq(1, N)].
+
+%% The lightest bin *that can still take a function*, not the lightest bin.
+%%
+%% Balancing by words alone is right for wall clock and wrong for the bound:
+%% one QuickJS function is 98,191 words, so a word-balanced split will happily
+%% put fifty thousand small ones in the bin beside it and refuse a module that
+%% fits. The count travels in the bin so this stays one comparison rather than a
+%% `length/1` per placement.
+%%
+%% `full` when no bin can accept, which the caller turns into a refusal. It is
+%% unreachable while `shard_count/2` asks for enough bins, and it is here
+%% because a policy that computes a number the binning is free to ignore is not
+%% a bound.
+bins([], Bins, _Cap) ->
+    [lists:reverse(Us) || {_, _, Us} <- Bins, Us =/= []];
+bins([{W, U} | Rest], Bins, Cap) ->
+    case lists:splitwith(fun({_, N, _}) -> N >= Cap end, lists:sort(Bins)) of
+        {_Full, []} -> full;
+        {Full, [{Load, N, Us} | Others]} ->
+            bins(Rest, Full ++ [{Load + W, N + 1, [U | Us]} | Others], Cap)
+    end.
+
+%% `wasm_core` names functions by position in the unit, so each unit needs a
+%% dense range of its own.
+renumber(Parts) ->
+    [[{Pos, Idx, F, IR} || {Pos, {_, Idx, F, IR}} <- lists:enumerate(0, P)]
+     || P <- Parts].
+
+-doc """
+How many units this instance's module is actually resident in.
+
+Zero when nothing is compiled, and otherwise the length of the contiguous chain
+starting at shard one. `shard_count/2` says how many units were *asked* for;
+this says how many there are, which is what an acceptance run has to assert
+rather than infer from a wall time.
+""".
+-spec shards(#inst{}) -> non_neg_integer().
+shards(Inst) ->
+    case wasm_code_slots:lookup(key(Inst)) of
+        {ok, _} -> 1 + rest_shards(Inst, 2, 0);
+        _ -> 0
+    end.
+
+rest_shards(_Inst, N, Acc) when N > ?MAX_SHARDS -> Acc;
+rest_shards(Inst, N, Acc) ->
+    case wasm_code_slots:lookup(shard_key(Inst, N)) of
+        {ok, _} -> rest_shards(Inst, N + 1, Acc + 1);
+        _ -> Acc
+    end.
+
+%% Shard one keeps the module's own key, so `maybe_adopt/3` finds a compiled
+%% module by asking the same question it always did.
+shard_key(Inst, N) -> {wasm_instance:identity(Inst), ?ABI, N}.
+
+%% Take an instance lease on shards two and up, stopping at the first gap: the
+%% chain is contiguous by construction, so a gap means there is nothing further.
+%%
+%% Each shard is looked for before it is claimed. A module compiled as one unit
+%% has no shard two, and claiming a key only to give it straight back was two
+%% manager round trips on every instance of it, with the matching releases for
+%% every possible shard at destroy. A shard absent at the read and present just
+%% after is a shard still being published, which the claim would have answered
+%% `loading' for and not leased either.
+lease_rest(Inst, N) ->
+    each_shard(Inst, N, fun(Key) ->
+                            case wasm_code_slots:lookup(Key) of
+                                {ok, _} -> lease_one(Inst, Key);
+                                error   -> stop
+                            end
+                        end).
+
+lease_one(Inst, Key) ->
+    case wasm_code_slots:claim_loading(Key, {instance, Inst#inst.id}, self()) of
+        {resident, _} ->
+            ok;
+        %% Nothing there. Reading first would race; claiming and giving it
+        %% straight back is what `maybe_adopt/3` does for the same reason.
+        {compile, _, Token} ->
+            ok = wasm_code_slots:abort(Token),
+            stop;
+        _ ->
+            stop
+    end.
+
+each_shard(_Inst, N, _F) when N > ?MAX_SHARDS ->
+    ok;
+each_shard(Inst, N, F) ->
+    case F(shard_key(Inst, N)) of
+        stop -> ok;
+        _ -> each_shard(Inst, N + 1, F)
+    end.
+
+claim_rest(_Inst, 0, Acc) ->
+    lists:reverse(Acc);
+claim_rest(Inst, N, Acc) ->
+    case wasm_code_slots:claim_loading(shard_key(Inst, length(Acc) + 1),
+                                       {instance, Inst#inst.id}, self()) of
+        {compile, Mod, Token} -> claim_rest(Inst, N - 1, [{Mod, Token} | Acc]);
+        %% No slot, or somebody else holds this shard's key. Give back what this
+        %% call took and compile as one unit next time round.
+        _ -> {error, Acc}
+    end.
+
+%% Run the units at once. `compile:forms/2` is the whole of the cost and the
+%% units share nothing, so this is the wall clock the split is for.
+%% Each worker reaps against this process, for the same reason `wasm_core` does
+%% one rung further down: `spawn_monitor/1` does not link, so a coordinator that
+%% is killed leaves its shard workers running, holding their copied units and
+%% compiling toward slots nobody owns. A link would be the ordinary answer and
+%% cannot be used, because a worker killed by the heap ceiling exits `killed`
+%% and would take this untrapping process with it before `collect/1` could
+%% record anything.
+pmap(F, Xs) ->
+    Parent = self(),
+    Pids = [element(1, spawn_monitor(fun() -> reaped(Parent, F, X) end))
+            || X <- Xs],
+    [collect(P) || P <- Pids].
+
+reaped(Parent, F, X) ->
+    Me = self(),
+    _ = spawn(fun() -> wasm_core:reap(Parent, Me) end),
+    Parent ! {Me, F(X)}.
+
+collect(Pid) ->
+    receive
+        {Pid, R} -> receive {'DOWN', _, process, Pid, _} -> R after 5000 -> R end;
+        {'DOWN', _, process, Pid, Why} -> {error, {compiler_died, Why}}
+    end.
+
+%% The compiled module: from the cache when it is there, and compiled and kept
+%% when it is not.
+%%
+%% Nothing about the artifact depends on which compilation produced it. That is
+%% what the stamp change bought: generated code is built for the module's content
+%% hash rather than for a slot generation, so yesterday's artifact answers for
+%% today's instance. What it *does* depend on is the slot, because a module's
+%% name is part of its BEAM file, which is why the slot is in the key and why
+%% `wasm_code_slots` prefers a module's own slot when one is free.
+artifact(Inst, Mod, Unit, Mode, Stamp, Next, Head, Elsewhere, COpts, Cached) ->
+    %% The lookup already happened, in `admitted/9`, above admission: a request
+    %% that will adopt an artifact must not reserve a compiler's budget, and
+    %% must never be refused for it. What arrives here is the answer, so the
+    %% file is read once and not twice.
+    case Cached of
+        {ok, Bin} ->
+            {ok, Bin};
+        {miss, Key} ->
+            case wasm_core:module(Mod, Unit, sigs(Inst), tsigs(Inst), Mode,
+                                  Stamp, Next, Head, Elsewhere, COpts) of
+                {ok, Bin} = Ok ->
+                    Key =:= undefined orelse wasm_code_cache:store(Key, Bin),
+                    Ok;
+                Error -> Error
+            end
+    end.
+
+%%% ------------------------------------------------------------ inspection ---
+
+-doc """
+The Core Erlang this instance's module would compile to, as text.
+
+Read it when you have changed the generator and want to see what came out. A
+differential test tells you a lowering is wrong; this tells you how. Nothing in
+the tier depends on it and it compiles nothing: it builds the same unit
+`generate/5` builds and stops one step earlier.
+
+```erlang
+{ok, I} = wasm:instantiate(M, #{}, #{}),
+io:format("~s~n", [wasm_jit:dump(I)]).
+```
+
+Answers `{error, nothing_to_compile}` when the generator refuses every function
+of the module, which is the same condition that makes the tier decline it.
+""".
+-spec dump(#inst{}) -> iodata() | {error, term()}.
+dump(Inst) -> dump(Inst, all).
+
+-doc """
+As `dump/1`, for one function index.
+
+Real modules are large and a maintainer is usually looking at one function.
+`wasm_core` names functions by position in the unit rather than by module
+index, so a whole-module dump means counting; this takes the index the module
+uses.
+""".
+-spec dump(#inst{}, all | non_neg_integer()) -> iodata() | {error, term()}.
+dump(Inst, Which) ->
+    case [U || {_P, Idx, _F, _IR} = U <- unit(Inst, []),
+               Which =:= all orelse Idx =:= Which] of
+        [] -> {error, nothing_to_compile};
+        Some ->
+            %% Renumbered, because `unit/2` numbers by position and filtering
+            %% one function out of the middle would leave a hole where
+            %% `fun_name/1` expects a dense range.
+            Unit = [{Pos, Idx, F, IR}
+                    || {Pos, {_, Idx, F, IR}} <- lists:enumerate(0, Some)],
+            %% Zero for the stamp: a dump is read, not entered, so there is no
+            %% caller whose generation has to match.
+            case wasm_core:forms(dump, Unit, sigs(Inst), tsigs(Inst), 0) of
+                {ok, Core} -> core_pp:format(Core);
+                {error, _} = E -> E
+            end
+    end.
+
+%%% --------------------------------------------------------------- helpers ---
+
+%% Every function of the instance, compiled or not, host or guest: a call has to
+%% know how many operands to take and how many to put back whichever side it
+%% lands on.
+sigs(Inst) ->
+    maps:from_list(
+      [{Idx, sig(F)}
+       || {Idx, F} <- lists:enumerate(0, tuple_to_list(Inst#inst.funcs))]).
+
+%% An indirect call is typed by the type it names, not by any function, since
+%% which function it reaches is not known until it runs.
+tsigs(Inst) ->
+    maps:from_list(
+      [{Idx, S} || {Idx, T} <- lists:enumerate(0, tuple_to_list(Inst#inst.types)),
+                   S <- [tsig(T)], S =/= undefined]).
+
+%% The type table holds whichever shape the module put there, so both are
+%% matched rather than one assumed: a struct or array type simply has no
+%% signature and no indirect call can name it.
+tsig(#functype{params = P, results = R}) -> {length(P), length(R)};
+tsig(#subtype{body = #functype{params = P, results = R}}) -> {length(P), length(R)};
+tsig(_) -> undefined.
+
+
+sig(#fn{nparams = NP, nresults = NR}) -> {NP, NR};
+sig(#hostfn{nparams = NP, nresults = NR}) -> {NP, NR}.
+
+%% Every function the oracle accepts, numbered by position in the unit so that
+%% names are drawn from the pool by how many are compiled and not by how many
+%% the module has.
+unit(Inst, Executed) ->
+    Fns = [F || F <- tuple_to_list(Inst#inst.funcs), is_record(F, fn)],
+    Ran = ran(Executed),
+    Ok = [{F, wasm_instance:compiler_ir(F, Inst)} || F <- Fns, Ran(F#fn.idx)],
+    Eligible = [{F, IR} || {F, IR} <- Ok,
+                           element(1, wasm_core:can_compile(F, IR)) =:= ok],
+    [{Pos, F#fn.idx, F, IR}
+     || {Pos, {F, IR}} <- lists:enumerate(0, Eligible)].
+
+%% Compile what ran, not what exists.
+%%
+%% QuickJS is 1666 functions and a workload reaches about 223 of them, so
+%% compiling all of them is most of the time and most of the fifteen megabytes
+%% spent on code nothing will execute. A function left out is not a correctness
+%% question: `invoke/5` answers `not_compiled` and it is interpreted, and since
+%% the boundary became two-way it can still call back into compiled code.
+%%
+%% One shot, and honestly so. A function that becomes hot after this runs is
+%% never compiled, because there is only one slot per module and no mapping from
+%% a function to a shard. That is the next change and it is not this one.
+ran([]) -> fun(_) -> true end;
+ran(Executed) ->
+    Set = maps:from_keys(Executed, []),
+    fun(Idx) -> is_map_key(Idx, Set) end.
+
+%% Record the slot on the instance. The compare-exchange answers whether this
+%% caller was the one that set it, and only that one takes the instance lease,
+%% because two processes can reach a hot call together.
+adopt(Inst, Mod) ->
+    Slot = slot_of(Mod),
+    case wasm_instance:set_code_slot(Inst, Slot) of
+        true -> {ok, Slot};
+        false -> {ok, wasm_instance:code_slot(Inst)}
+    end.
+
+slot_of(Mod) ->
+    {Slot, _} = hd([X || {_, N} = X <- lists:enumerate(wasm_code_slots:slots()),
+                         N =:= Mod]),
+    Slot.
+
+forced(Limits) -> maps:get(compile_force, Limits, false).
+
+key(Inst) -> {wasm_instance:identity(Inst), ?ABI}.
+
+%% What generated code is built for and what a caller must present to enter it.
+%%
+%% The content hash where the module has one, because that is stable across
+%% loads and across nodes and so lets a compiled artifact be cached. The slot
+%% generation otherwise: a module built from text is identified by a
+%% `reference()`, which cannot be a literal in generated code, and is never
+%% cached, so the generation is enough for it.
+stamp(Inst, Gen) ->
+    case wasm_instance:identity(Inst) of
+        {sha256, Hash} -> Hash;
+        _Ref -> Gen
+    end.
+
+%%% ------------------------------------------------------------- counters ---
+
+bump(Ix, N) -> atomics:add(counters(), Ix, N).
+
+-doc """
+Record one call the interpreter made into generated code.
+
+A diagnostic on a hot path, and it is here rather than inlined so that its cost
+is one place to look when it is time to decide whether to keep it. Without it a
+green run says nothing: re-entry that silently never happens looks exactly like
+re-entry that happens and does not pay.
+""".
+-spec reentered() -> ok.
+reentered() -> counters:add(hot(), ?HOT_REENTERED, 1).
+
+-doc """
+Make the call-path counters now, at application start, rather than on the first
+compiled call. Two processes making them at once would each keep an array and
+one of them would count into the one `counts/0` does not read.
+""".
+-spec ensure_counts() -> ok.
+ensure_counts() -> _ = hot(), ok.
+
+%% Created once per node and never replaced, so a closure holding it counts
+%% into the same array `counts/0' reads.
+hot() ->
+    case persistent_term:get(?PT_HOT, undefined) of
+        undefined ->
+            H = counters:new(2, [write_concurrency]),
+            persistent_term:put(?PT_HOT, H),
+            H;
+        H ->
+            H
+    end.
+
+%% Rebuilt when what is there is too small, which is what a node that was hot
+%% upgraded from a version with fewer counters has. Reading past the end of an
+%% `atomics` array raises `badarg`, and counting is a diagnostic: it may not be
+%% the thing that brings a node down.
+counters() ->
+    case persistent_term:get(?PT_COUNTS, undefined) of
+        undefined -> fresh_counters();
+        R ->
+            case maps:get(size, atomics:info(R)) >= ?IX_SEQ of
+                true -> R;
+                false -> fresh_counters()
+            end
+    end.
+
+fresh_counters() ->
+    R = atomics:new(?IX_SEQ, [{signed, false}]),
+    persistent_term:put(?PT_COUNTS, R),
+    R.

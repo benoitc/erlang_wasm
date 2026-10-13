@@ -1,0 +1,462 @@
+== r3 split py_entry null attempt 1 23:34  up  9:59, 4 users, load averages: 6.87 7.13 8.37
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",
+  guest => py_entry,ahead => false,start_ms => 56,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 3264,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 3041.334,total => 3560.708,restore => 462.75,destroy => 33.25,
+        post => 0.583},
+  min_us =>
+      #{call => 1828.042,total => 2317.834,restore => 392.416,
+        destroy => 15.375,post => 0.083},
+  recycled_in => 0}
+== r3 split py_entry base attempt 1 23:34  up  9:59, 4 users, load averages: 8.88 7.54 8.51
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/base",
+  guest => py_entry,ahead => false,start_ms => 45,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 1290,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1847.125,total => 5788.083,restore => 3926.334,
+        destroy => 118.0,post => 0.708},
+  min_us =>
+      #{call => 1172.833,total => 4619.042,restore => 3205.292,
+        destroy => 76.334,post => 0.0},
+  recycled_in => 200}
+== r3 split py_entry main attempt 1 23:34  up  9:59, 4 users, load averages: 8.49 7.48 8.48
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",
+  guest => py_entry,ahead => false,start_ms => 49,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 3054,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1949.0,total => 2372.125,restore => 402.333,destroy => 19.292,
+        post => 0.25},
+  min_us =>
+      #{call => 1481.083,total => 1893.375,restore => 371.792,
+        destroy => 12.292,post => 0.0},
+  recycled_in => 0}
+== r3 split py_entry null attempt 2 23:35  up 10 hrs, 4 users, load averages: 6.27 7.05 8.28
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",
+  guest => py_entry,ahead => false,start_ms => 50,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2860,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1866.25,total => 2278.791,restore => 384.541,
+        destroy => 18.667,post => 0.25},
+  min_us =>
+      #{call => 1397.792,total => 1779.084,restore => 338.583,
+        destroy => 11.75,post => 0.0},
+  recycled_in => 0}
+== r3 split py_entry base attempt 2 23:35  up 10 hrs, 4 users, load averages: 6.65 7.11 8.30
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/base",
+  guest => py_entry,ahead => false,start_ms => 44,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 1278,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1324.375,total => 4691.209,restore => 3289.25,
+        destroy => 81.25,post => 0.375},
+  min_us =>
+      #{call => 634.333,total => 3930.834,restore => 3157.459,
+        destroy => 60.833,post => 0.0},
+  recycled_in => 200}
+== r3 split py_entry main attempt 2 23:35  up 10 hrs, 4 users, load averages: 6.65 7.11 8.30
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",
+  guest => py_entry,ahead => false,start_ms => 46,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2827,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1947.916,total => 2364.208,restore => 394.75,
+        destroy => 19.625,post => 0.25},
+  min_us =>
+      #{call => 1417.583,total => 1809.916,restore => 356.916,
+        destroy => 11.833,post => 0.0},
+  recycled_in => 0}
+== r3 split qjs null attempt 1 23:35  up 10 hrs, 4 users, load averages: 6.36 7.04 8.27
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => qjs,
+  ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 8215,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 6694.167,total => 6867.167,restore => 118.625,
+        destroy => 54.541,post => 0.375},
+  min_us =>
+      #{call => 5678.041,total => 5830.542,restore => 98.542,
+        destroy => 32.666,post => 0.0},
+  recycled_in => 0}
+== r3 split qjs base attempt 1 23:35  up 10 hrs, 4 users, load averages: 6.56 7.06 8.26
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/base",guest => qjs,
+  ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1992,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 4874.334,total => 5232.125,restore => 301.833,
+        destroy => 44.084,post => 0.292},
+  min_us =>
+      #{call => 4214.583,total => 4562.709,restore => 272.083,
+        destroy => 29.292,post => 0.083},
+  recycled_in => 200}
+== r3 split qjs main attempt 1 23:35  up 10:01, 4 users, load averages: 6.11 6.96 8.22
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => qjs,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 8385,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 6780.167,total => 6957.417,restore => 119.209,
+        destroy => 55.25,post => 0.458},
+  min_us =>
+      #{call => 5604.917,total => 5763.208,restore => 98.917,
+        destroy => 31.708,post => 0.042},
+  recycled_in => 0}
+== r3 split lua null attempt 1 23:36  up 10:01, 4 users, load averages: 5.95 6.89 8.18
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1346,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us =>
+      #{call => 3410.209,total => 3549.583,restore => 85.125,
+        destroy => 41.541,post => 0.417},
+  min_us =>
+      #{call => 2362.458,total => 2461.791,restore => 58.125,destroy => 22.75,
+        post => 0.042},
+  recycled_in => 0}
+== r3 split lua base attempt 1 23:36  up 10:01, 4 users, load averages: 5.79 6.85 8.15
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/base",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 614,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us =>
+      #{call => 2449.708,total => 2635.875,restore => 152.167,destroy => 33.0,
+        post => 0.208},
+  min_us =>
+      #{call => 2024.458,total => 2187.459,restore => 119.208,
+        destroy => 23.334,post => 0.0},
+  recycled_in => 200}
+== r3 split lua main attempt 1 23:36  up 10:01, 4 users, load averages: 5.79 6.85 8.15
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1370,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us =>
+      #{call => 2725.208,total => 2826.541,restore => 73.375,
+        destroy => 29.042,post => 0.208},
+  min_us =>
+      #{call => 2171.459,total => 2253.333,restore => 58.709,
+        destroy => 16.333,post => 0.0},
+  recycled_in => 0}
+== r3 split py null attempt 1 23:36  up 10:01, 4 users, load averages: 5.79 6.85 8.15
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => py,
+  ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 26532,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 15777.75,total => 16271.833,restore => 401.166,
+        destroy => 70.0,post => 0.625},
+  min_us =>
+      #{call => 14626.417,total => 15107.375,restore => 359.709,
+        destroy => 58.041,post => 0.0},
+  recycled_in => 0}
+== r3 split py base attempt 1 23:36  up 10:01, 4 users, load averages: 4.60 6.42 7.94
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/base",guest => py,
+  ahead => false,start_ms => 49,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 9634,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 11311.667,total => 16040.167,restore => 4598.625,
+        destroy => 153.417,post => 0.708},
+  min_us =>
+      #{call => 10461.917,total => 15221.417,restore => 4266.792,
+        destroy => 112.167,post => 0.041},
+  recycled_in => 200}
+== r3 split py main attempt 1 23:36  up 10:02, 4 users, load averages: 4.36 6.31 7.89
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => py,
+  ahead => false,start_ms => 51,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 28693,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 16981.208,total => 17482.292,restore => 437.792,
+        destroy => 68.25,post => 0.625},
+  min_us =>
+      #{call => 15491.375,total => 15990.417,restore => 371.167,
+        destroy => 42.292,post => 0.25},
+  recycled_in => 0}
+== r3 steady py_entry null attempt 1 23:37  up 10:02, 4 users, load averages: 4.64 6.17 7.77
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/main",
+  guest => py_entry,ahead => false,start_ms => 50,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 3028,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 3489.5,min_us => 2913.416}
+== r3 steady py_entry base attempt 1 23:37  up 10:02, 4 users, load averages: 5.07 6.24 7.79
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/base",
+  guest => py_entry,ahead => false,start_ms => 47,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 1261,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 6166.417,min_us => 5212.25}
+== r3 steady py_entry main attempt 1 23:37  up 10:02, 4 users, load averages: 5.06 6.22 7.77
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/main",
+  guest => py_entry,ahead => false,start_ms => 49,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 3115,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 3690.667,min_us => 2836.792}
+== r3 steady qjs null attempt 1 23:37  up 10:02, 4 users, load averages: 4.90 6.16 7.74
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => qjs,
+  ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 8805,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 8811.666,min_us => 7940.042}
+== r3 steady qjs base attempt 1 23:37  up 10:03, 4 users, load averages: 4.61 6.06 7.69
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/base",guest => qjs,
+  ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1914,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 7996.5,min_us => 6491.375}
+== r3 steady qjs main attempt 1 23:37  up 10:03, 4 users, load averages: 4.56 6.02 7.66
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => qjs,
+  ahead => false,start_ms => 9,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 8698,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 9176.792,min_us => 7928.25}
+== r3 steady lua null attempt 1 23:38  up 10:03, 4 users, load averages: 4.39 5.94 7.62
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1350,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4122.375,min_us => 3258.083}
+== r3 steady lua base attempt 1 23:38  up 10:03, 4 users, load averages: 4.52 5.94 7.61
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/base",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 535,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 3968.209,min_us => 3334.833}
+== r3 steady lua main attempt 1 23:38  up 10:03, 4 users, load averages: 4.52 5.94 7.61
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => lua,
+  ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1389,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 4544.75,min_us => 3787.334}
+== r3 steady py null attempt 1 23:38  up 10:03, 4 users, load averages: 4.96 6.01 7.62
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => py,
+  ahead => false,start_ms => 48,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 28444,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 20649.458,min_us => 18278.541}
+== r3 steady py base attempt 1 23:38  up 10:03, 4 users, load averages: 4.45 5.78 7.48
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/base",guest => py,
+  ahead => false,start_ms => 48,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 8528,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 16975.042,min_us => 16292.875}
+== r3 steady py main attempt 1 23:39  up 10:04, 4 users, load averages: 4.32 5.69 7.42
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => py,
+  ahead => false,start_ms => 47,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 26395,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us => 18192.5,min_us => 16896.208}
+== r3 paced py_entry null attempt 1 23:58  up 10:23, 4 users, load averages: 4.16 4.05 4.99
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/main",
+  guest => py_entry,ahead => false,start_ms => 47,tier => compiled,
+  median_us => 11712.166,min_us => 5026.375,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  idle_ms => 20,warm_requests => 4}
+== r3 paced py_entry base attempt 1 23:58  up 10:23, 4 users, load averages: 3.89 4.00 4.96
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/base",
+  guest => py_entry,ahead => false,start_ms => 43,tier => compiled,
+  median_us => 11499.334,min_us => 6388.834,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  idle_ms => 20,warm_requests => 3}
+== r3 paced py_entry main attempt 1 23:58  up 10:23, 4 users, load averages: 3.85 3.99 4.94
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/main",
+  guest => py_entry,ahead => false,start_ms => 46,tier => compiled,
+  median_us => 5207.375,min_us => 4244.0,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  idle_ms => 20,warm_requests => 4}
+== r3 paced qjs null attempt 1 23:58  up 10:23, 4 users, load averages: 4.08 4.03 4.95
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => qjs,
+  ahead => false,start_ms => 9,tier => compiled,median_us => 11196.541,
+  min_us => 9208.917,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  idle_ms => 20,warm_requests => 3}
+== r3 paced qjs base attempt 1 23:58  up 10:23, 4 users, load averages: 4.11 4.05 4.93
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/base",guest => qjs,
+  ahead => false,start_ms => 10,tier => compiled,median_us => 11245.25,
+  min_us => 8602.125,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  idle_ms => 20,warm_requests => 3}
+== r3 paced qjs main attempt 1 23:58  up 10:24, 4 users, load averages: 3.95 4.01 4.91
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => qjs,
+  ahead => false,start_ms => 9,tier => compiled,median_us => 11598.166,
+  min_us => 9129.167,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  idle_ms => 20,warm_requests => 4}
+== r3 paced lua null attempt 1 23:59  up 10:24, 4 users, load averages: 4.38 4.11 4.93
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => lua,
+  ahead => false,start_ms => 8,tier => compiled,median_us => 11589.75,
+  min_us => 5832.625,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  idle_ms => 20,warm_requests => 3}
+== r3 paced lua base attempt 1 23:59  up 10:24, 4 users, load averages: 4.03 4.04 4.90
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/base",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,median_us => 11801.209,
+  min_us => 5261.792,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  idle_ms => 20,warm_requests => 3}
+== r3 paced lua main attempt 1 23:59  up 10:24, 4 users, load averages: 4.09 4.05 4.90
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => lua,
+  ahead => false,start_ms => 6,tier => compiled,median_us => 11662.833,
+  min_us => 6079.708,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  idle_ms => 20,warm_requests => 3}
+== r3 paced py null attempt 1 23:59  up 10:24, 4 users, load averages: 4.01 4.04 4.88
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => py,
+  ahead => false,start_ms => 52,tier => compiled,median_us => 19396.541,
+  min_us => 16283.833,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  idle_ms => 20,warm_requests => 4}
+== r3 paced py base attempt 1  0:00  up 10:25, 4 users, load averages: 4.60 4.20 4.90
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/base",guest => py,
+  ahead => false,start_ms => 45,tier => compiled,median_us => 18528.875,
+  min_us => 15509.417,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  idle_ms => 20,warm_requests => 3}
+== r3 paced py main attempt 1  0:00  up 10:25, 4 users, load averages: 4.42 4.17 4.88
+#{mode => paced,cache => "/Users/benoitc/.cache/wasm-attr/main",guest => py,
+  ahead => false,start_ms => 48,tier => compiled,median_us => 18317.084,
+  min_us => 16085.708,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  idle_ms => 20,warm_requests => 4}
+== r3 sat py_entry null attempt 1  0:21  up 10:46, 4 users, load averages: 5.83 5.95 5.35
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/main",pool => 10,
+  guest => py_entry,ahead => false,start_ms => 52,tier => compiled,
+  median_us => 5406.75,min_us => 3571.709,per_worker => 100,
+  rps => 1811.1840615802582,verdict => ok,wall_ms => 552.125}
+== r3 sat py_entry base attempt 1  0:21  up 10:46, 4 users, load averages: 7.19 6.22 5.45
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/base",pool => 10,
+  guest => py_entry,ahead => false,start_ms => 47,tier => compiled,
+  median_us => 7985.917,min_us => 5895.333,per_worker => 100,
+  rps => 1196.3872693627054,verdict => ok,wall_ms => 835.84975}
+== r3 sat py_entry main attempt 1  0:21  up 10:46, 4 users, load averages: 7.01 6.22 5.46
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/main",pool => 10,
+  guest => py_entry,ahead => false,start_ms => 49,tier => compiled,
+  median_us => 5441.833,min_us => 3653.041,per_worker => 100,
+  rps => 1729.4495267479838,verdict => ok,wall_ms => 578.218667}
+== r3 sat qjs null attempt 1  0:22  up 10:47, 4 users, load averages: 6.62 6.16 5.45
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/main",pool => 10,
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,
+  median_us => 12270.667,min_us => 8960.959,per_worker => 100,
+  rps => 781.0832314074391,verdict => ok,wall_ms => 1280.273292}
+== r3 sat qjs base attempt 1  0:22  up 10:47, 4 users, load averages: 6.87 6.23 5.49
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/base",pool => 10,
+  guest => qjs,ahead => false,start_ms => 10,tier => compiled,
+  median_us => 12206.417,min_us => 8444.958,per_worker => 100,
+  rps => 810.4507895135633,verdict => ok,wall_ms => 1233.881209}
+== r3 sat qjs main attempt 1  0:22  up 10:47, 4 users, load averages: 6.26 6.12 5.46
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/main",pool => 10,
+  guest => qjs,ahead => false,start_ms => 8,tier => compiled,
+  median_us => 12559.333,min_us => 8180.5,per_worker => 100,
+  rps => 764.3865675531754,verdict => ok,wall_ms => 1308.238583}
+== r3 sat lua null attempt 1  0:22  up 10:47, 4 users, load averages: 6.06 6.07 5.45
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/main",pool => 10,
+  guest => lua,ahead => false,start_ms => 7,tier => compiled,
+  median_us => 8340.916,min_us => 5789.5,per_worker => 100,
+  rps => 1170.8690693355047,verdict => ok,wall_ms => 854.066459}
+== r3 sat lua base attempt 1  0:22  up 10:47, 4 users, load averages: 5.89 6.04 5.44
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/base",pool => 10,
+  guest => lua,ahead => false,start_ms => 6,tier => compiled,
+  median_us => 7635.542,min_us => 5162.0,per_worker => 100,
+  rps => 1291.326691286886,verdict => ok,wall_ms => 774.397375}
+== r3 sat lua main attempt 1  0:22  up 10:48, 4 users, load averages: 5.98 6.05 5.45
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/main",pool => 10,
+  guest => lua,ahead => false,start_ms => 8,tier => compiled,
+  median_us => 8994.959,min_us => 6239.292,per_worker => 100,
+  rps => 1105.565828768054,verdict => ok,wall_ms => 904.514208}
+== r3 sat py null attempt 1  0:23  up 10:48, 4 users, load averages: 5.66 5.98 5.43
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/main",pool => 10,
+  guest => py,ahead => false,start_ms => 49,tier => compiled,
+  median_us => 22106.0,min_us => 17873.291,per_worker => 100,
+  rps => 425.8512353651566,verdict => ok,wall_ms => 2348.237875}
+== r3 sat py base attempt 1  0:24  up 10:49, 4 users, load averages: 7.06 6.12 5.52
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/base",pool => 10,
+  guest => py,ahead => false,start_ms => 46,tier => compiled,
+  median_us => 22780.958,min_us => 18408.25,per_worker => 100,
+  rps => 429.71296868479806,verdict => ok,wall_ms => 2327.134792}
+== r3 sat py main attempt 1  0:25  up 10:50, 4 users, load averages: 8.73 6.48 5.67
+#{mode => sat,cache => "/Users/benoitc/.cache/wasm-attr/main",pool => 10,
+  guest => py,ahead => false,start_ms => 47,tier => compiled,
+  median_us => 22518.666,min_us => 17687.917,per_worker => 100,
+  rps => 422.0892235305863,verdict => ok,wall_ms => 2369.167333}

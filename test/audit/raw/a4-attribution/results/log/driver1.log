@@ -1,0 +1,56 @@
+r1 split py_entry ok (attempt 1, end load 6.41) 23:26
+r1 split qjs ok (attempt 1, end load 5.81) 23:27
+r1 split lua ok (attempt 1, end load 5.83) 23:27
+r1 split py ok (attempt 1, end load 6.52) 23:28
+r1 steady py_entry ok (attempt 1, end load 7.13) 23:28
+r1 steady qjs ok (attempt 1, end load 7.07) 23:29
+r1 steady lua ok (attempt 1, end load 6.82) 23:29
+r1 steady py ok (attempt 1, end load 6.94) 23:30
+round 1 done Fri Oct  9 23:30:36 CEST 2026
+r2 split py_entry ok (attempt 1, end load 6.38) 23:30
+r2 split qjs ok (attempt 1, end load 5.97) 23:31
+r2 split lua ok (attempt 1, end load 5.81) 23:31
+r2 split py ok (attempt 1, end load 5.96) 23:32
+r2 steady py_entry ok (attempt 1, end load 6.05) 23:32
+r2 steady qjs ok (attempt 1, end load 7.15) 23:33
+r2 steady lua ok (attempt 1, end load 6.89) 23:33
+r2 steady py ok (attempt 1, end load 6.87) 23:34
+round 2 done Fri Oct  9 23:34:42 CEST 2026
+redo r3 split py_entry: end load 8.29
+r3 split py_entry ok (attempt 2, end load 6.36) 23:35
+r3 split qjs ok (attempt 1, end load 5.95) 23:36
+r3 split lua ok (attempt 1, end load 5.79) 23:36
+r3 split py ok (attempt 1, end load 4.64) 23:37
+r3 steady py_entry ok (attempt 1, end load 4.90) 23:37
+r3 steady qjs ok (attempt 1, end load 4.39) 23:38
+r3 steady lua ok (attempt 1, end load 4.96) 23:38
+r3 steady py ok (attempt 1, end load 3.89) 23:39
+round 3 done Fri Oct  9 23:39:35 CEST 2026
+r4 split py_entry ok (attempt 1, end load 4.56) 23:39
+r4 split qjs ok (attempt 1, end load 4.11) 23:40
+r4 split lua ok (attempt 1, end load 4.99) 23:40
+r4 split py ok (attempt 1, end load 3.89) 23:41
+r4 steady py_entry ok (attempt 1, end load 4.48) 23:41
+r4 steady qjs ok (attempt 1, end load 4.32) 23:42
+r4 steady lua ok (attempt 1, end load 4.14) 23:42
+r4 steady py ok (attempt 1, end load 4.68) 23:43
+round 4 done Fri Oct  9 23:43:40 CEST 2026
+r5 split py_entry ok (attempt 1, end load 4.45) 23:43
+r5 split qjs ok (attempt 1, end load 5.08) 23:44
+r5 split lua ok (attempt 1, end load 5.24) 23:44
+r5 split py ok (attempt 1, end load 5.44) 23:45
+r5 steady py_entry ok (attempt 1, end load 5.26) 23:45
+r5 steady qjs ok (attempt 1, end load 4.28) 23:46
+r5 steady lua ok (attempt 1, end load 4.09) 23:46
+r5 steady py ok (attempt 1, end load 3.71) 23:47
+round 5 done Fri Oct  9 23:47:45 CEST 2026
+r6 split py_entry ok (attempt 1, end load 3.74) 23:47
+r6 split qjs ok (attempt 1, end load 4.63) 23:48
+r6 split lua ok (attempt 1, end load 4.50) 23:48
+r6 split py ok (attempt 1, end load 4.52) 23:49
+r6 steady py_entry ok (attempt 1, end load 4.61) 23:50
+r6 steady qjs ok (attempt 1, end load 4.71) 23:50
+r6 steady lua ok (attempt 1, end load 4.75) 23:50
+r6 steady py ok (attempt 1, end load 4.22) 23:51
+round 6 done Fri Oct  9 23:51:51 CEST 2026
+ROUNDS_DONE

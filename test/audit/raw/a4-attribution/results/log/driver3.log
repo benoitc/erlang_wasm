@@ -1,0 +1,23 @@
+r1 sat py_entry ok (attempt 1, end load 5.43) 00:10
+r1 sat qjs ok (attempt 1, end load 6.05) 00:11
+r1 sat lua ok (attempt 1, end load 5.77) 00:11
+r1 sat py ok (attempt 1, end load 5.32) 00:15
+round 1 done Sat Oct 10 00:15:15 CEST 2026
+r2 sat py_entry ok (attempt 1, end load 5.01) 00:15
+r2 sat qjs ok (attempt 1, end load 7.35) 00:16
+redo r2 sat lua: end load 12.75
+r2 sat lua VOID
+r2 sat py ok (attempt 1, end load 5.83) 00:21
+round 2 done Sat Oct 10 00:21:27 CEST 2026
+r3 sat py_entry ok (attempt 1, end load 6.62) 00:22
+r3 sat qjs ok (attempt 1, end load 6.06) 00:22
+r3 sat lua ok (attempt 1, end load 5.66) 00:23
+r3 sat py ok (attempt 1, end load 6.46) 00:26
+round 3 done Sat Oct 10 00:26:45 CEST 2026
+r4 sat py_entry ok (attempt 1, end load 6.78) 00:27
+r4 sat qjs ok (attempt 1, end load 5.76) 00:28
+redo r4 sat lua: end load 11.64
+r4 sat lua VOID
+r4 sat py ok (attempt 1, end load 6.32) 00:33
+round 4 done Sat Oct 10 00:33:01 CEST 2026
+ROUNDS_DONE

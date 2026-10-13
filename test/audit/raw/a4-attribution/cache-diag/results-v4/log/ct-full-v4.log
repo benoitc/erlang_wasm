@@ -1,0 +1,67 @@
+[0;32m===> Verifying dependencies...
+[0m[0;32m===> Fetching proper v1.4.0
+[0m[0;32m===> Fetching covertool v2.0.7
+[0m[0;32m===> Analyzing applications...
+[0m[0;32m===> Compiling covertool
+[0m[0;32m===> Analyzing applications...
+[0m[0;32m===> Compiling proper
+[0m/Users/benoitc/Projects/erlang_wasm-cdiag-v4/_build/test/lib/proper/src/proper_statem.erl:770:46: Warning: 'catch ...' is deprecated; please use 'try ... catch ... end' instead.
+Compile directive 'nowarn_deprecated_catch' can be used to suppress
+warnings in selected modules.
+%  770|     [spawn_link_cp(fun() -> Parent ! {self(),catch {ok,F(X)}} end) || X <- L].
+%     |                                              ^
+
+     ┌─ _build/test/lib/proper/src/proper_statem.erl:
+     │
+ 770 │      [spawn_link_cp(fun() -> Parent ! {self(),[1;31mcatch[0m {ok,F(X)}} end) || X <- L].[0m
+     │                                               [1;31m╰──[0m[0m Warning: 'catch ...' is deprecated; please use 'try ... catch ... end' instead.
+Compile directive 'nowarn_deprecated_catch' can be used to suppress
+warnings in selected modules.
+
+
+/Users/benoitc/Projects/erlang_wasm-cdiag-v4/_build/test/lib/proper/src/proper.erl:2406:10: Warning: slave:start_link/2 is deprecated and will be removed in OTP 31; use the 'peer' module instead
+% 2406|     case slave:start_link(HostName, SlaveName) of
+%     |          ^
+
+/Users/benoitc/Projects/erlang_wasm-cdiag-v4/_build/test/lib/proper/src/proper.erl:2478:64: Warning: slave:stop/1 is deprecated and will be removed in OTP 31; use the 'peer' module instead
+% 2478|             StopFun = fun({Node, {already_running, false}}) -> slave:stop(Node);
+%     |                                                                ^
+
+      ┌─ _build/test/lib/proper/src/proper.erl:
+      │
+ 2406 │      case [1;31mslave[0m:start_link(HostName, SlaveName) of[0m
+      │           [1;31m╰──[0m[0m Warning: slave:start_link/2 is deprecated and will be removed in OTP 31; use the 'peer' module instead
+
+      ┌─ _build/test/lib/proper/src/proper.erl:
+      │
+ 2478 │              StopFun = fun({Node, {already_running, false}}) -> [1;31mslave[0m:stop(Node);[0m
+      │                                                                 [1;31m╰──[0m[0m Warning: slave:stop/1 is deprecated and will be removed in OTP 31; use the 'peer' module instead
+
+
+/Users/benoitc/Projects/erlang_wasm-cdiag-v4/_build/test/lib/proper/src/proper_erlang_abstract_code.erl:2138:29: Warning: ambiguous call of overridden auto-imported BIF is_record/1 --
+use erlang:is_record/1 or "-compile({no_auto_import,[is_record/1]})." to resolve name clash
+% 2138|         lists:all(fun(R) -> is_record(R) end, Term)
+%     |                             ^
+
+      ┌─ _build/test/lib/proper/src/proper_erlang_abstract_code.erl:
+      │
+ 2138 │          lists:all(fun(R) -> [1;31mis_record[0m(R) end, Term)[0m
+      │                              [1;31m╰──[0m[0m Warning: ambiguous call of overridden auto-imported BIF is_record/1 --
+use erlang:is_record/1 or "-compile({no_auto_import,[is_record/1]})." to resolve name clash
+
+
+wasm: built /Users/benoitc/Projects/erlang_wasm-cdiag-v4/priv/wasi_file_nif.so
+[0;32m===> Analyzing applications...
+[0m[0;32m===> Compiling wasm
+[0m[0;32m===> Running Common Test suites...
+[0m%%% wasm_paged_memory_SUITE: [0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m
+%%% wasm_core_SUITE: [0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m
+%%% wasm_core_prop_SUITE: [0;32m.[0m[0m........................................................................................................................................................................................................
+[01;32mOK: Passed 200 test(s).
+[00m[0;32m.[0m[0m........................................................................................................................................................................................................
+[01;32mOK: Passed 200 test(s).
+[00m[0;32m.[0m[0m[0;32m.[0m[0m
+%%% wasm_jit_bounds_SUITE: [0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m
+%%% wasm_jit_lifetime_SUITE: [0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m
+%%% wasm_spec_SUITE: [0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m[0;32m.[0m[0m
+All 122 tests passed.

@@ -1,0 +1,4 @@
+291a292
+>             C0 = wasm_exec:cdiag_read(),
+293a295
+>             io:format("CDIAG ~p ~p ~p~n", [samples(), C0, wasm_exec:cdiag_read()]),

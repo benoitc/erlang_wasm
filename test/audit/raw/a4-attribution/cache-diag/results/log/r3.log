@@ -1,0 +1,336 @@
+== r3 py_entry v1 attempt 1 17:12  up 1 day,  3:38, 5 users, load averages: 2.02 2.99 3.88
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v1",
+  guest => py_entry,ahead => false,start_ms => 43,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2185,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1545.916,total => 1930.708,restore => 367.625,
+        destroy => 15.083,post => 0.125},
+  min_us =>
+      #{call => 1298.25,total => 1662.208,restore => 325.0,destroy => 9.958,
+        post => 0.0},
+  recycled_in => 0}
+== r3 py_entry v2 attempt 1 17:12  up 1 day,  3:38, 5 users, load averages: 2.10 2.99 3.87
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v2",
+  guest => py_entry,ahead => false,start_ms => 43,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 1606,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1586.125,total => 1969.792,restore => 365.25,
+        destroy => 14.917,post => 0.125},
+  min_us =>
+      #{call => 1333.167,total => 1696.416,restore => 325.625,
+        destroy => 9.458,post => 0.0},
+  recycled_in => 0}
+== r3 py_entry v3 attempt 1 17:13  up 1 day,  3:38, 5 users, load averages: 2.17 2.99 3.87
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v3",
+  guest => py_entry,ahead => false,start_ms => 43,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2837,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1672.583,total => 2051.791,restore => 367.166,
+        destroy => 15.458,post => 0.125},
+  min_us =>
+      #{call => 1434.042,total => 1793.125,restore => 329.291,
+        destroy => 11.042,post => 0.0},
+  recycled_in => 0}
+== r3 py_entry base attempt 1 17:13  up 1 day,  3:38, 5 users, load averages: 2.08 2.96 3.85
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/base",
+  guest => py_entry,ahead => false,start_ms => 42,tier => compiled,
+  verdict => ok,warm_requests => 3,entry_ms => 1185,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 648.959,total => 3847.541,restore => 3109.5,destroy => 65.417,
+        post => 0.083},
+  min_us =>
+      #{call => 559.042,total => 3571.041,restore => 2950.625,
+        destroy => 57.791,post => 0.0},
+  recycled_in => 200}
+== r3 py_entry v0 attempt 1 17:13  up 1 day,  3:38, 5 users, load averages: 2.08 2.96 3.85
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v0",
+  guest => py_entry,ahead => false,start_ms => 44,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2728,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1428.833,total => 1814.0,restore => 367.167,destroy => 14.208,
+        post => 0.125},
+  min_us =>
+      #{call => 1220.417,total => 1605.792,restore => 335.166,
+        destroy => 9.291,post => 0.0},
+  recycled_in => 0}
+== r3 py_entry null attempt 1 17:13  up 1 day,  3:38, 5 users, load averages: 2.15 2.96 3.85
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v0",
+  guest => py_entry,ahead => false,start_ms => 43,tier => compiled,
+  verdict => ok,warm_requests => 4,entry_ms => 2719,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 1387.958,total => 1761.792,restore => 362.875,
+        destroy => 13.792,post => 0.125},
+  min_us =>
+      #{call => 1117.417,total => 1472.959,restore => 325.583,
+        destroy => 8.583,post => 0.0},
+  recycled_in => 0}
+== r3 qjs v1 attempt 1 17:13  up 1 day,  3:38, 5 users, load averages: 2.06 2.93 3.83
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v1",guest => qjs,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 5678,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 5354.792,total => 5507.75,restore => 105.208,
+        destroy => 41.167,post => 0.25},
+  min_us =>
+      #{call => 5051.792,total => 5198.583,restore => 89.25,destroy => 28.333,
+        post => 0.0},
+  recycled_in => 0}
+== r3 qjs v2 attempt 1 17:13  up 1 day,  3:38, 5 users, load averages: 2.42 2.98 3.84
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v2",guest => qjs,
+  ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 3585,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 6005.708,total => 6147.0,restore => 103.083,destroy => 42.125,
+        post => 0.167},
+  min_us =>
+      #{call => 5661.208,total => 5813.084,restore => 90.625,
+        destroy => 29.625,post => 0.0},
+  recycled_in => 0}
+== r3 qjs v3 attempt 1 17:13  up 1 day,  3:38, 5 users, load averages: 2.39 2.96 3.83
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v3",guest => qjs,
+  ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 8482,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 6010.625,total => 6158.458,restore => 105.875,
+        destroy => 38.209,post => 0.208},
+  min_us =>
+      #{call => 5496.417,total => 5636.25,restore => 94.833,destroy => 24.375,
+        post => 0.0},
+  recycled_in => 0}
+== r3 qjs base attempt 1 17:13  up 1 day,  3:38, 5 users, load averages: 2.55 2.98 3.82
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/base",guest => qjs,
+  ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1868,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 4252.709,total => 4589.625,restore => 295.125,
+        destroy => 38.041,post => 0.208},
+  min_us =>
+      #{call => 3837.917,total => 4165.0,restore => 270.166,destroy => 25.75,
+        post => 0.0},
+  recycled_in => 200}
+== r3 qjs v0 attempt 1 17:13  up 1 day,  3:38, 5 users, load averages: 2.55 2.98 3.82
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v0",guest => qjs,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 7838,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 5121.125,total => 5267.042,restore => 104.125,
+        destroy => 40.334,post => 0.209},
+  min_us =>
+      #{call => 4807.542,total => 4950.375,restore => 91.25,destroy => 27.125,
+        post => 0.0},
+  recycled_in => 0}
+== r3 qjs null attempt 1 17:13  up 1 day,  3:39, 5 users, load averages: 2.31 2.91 3.79
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v0",guest => qjs,
+  ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 7820,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 5109.958,total => 5250.625,restore => 104.375,
+        destroy => 41.125,post => 0.208},
+  min_us =>
+      #{call => 4672.375,total => 4809.958,restore => 91.167,
+        destroy => 28.959,post => 0.0},
+  recycled_in => 0}
+== r3 lua v1 attempt 1 17:14  up 1 day,  3:39, 5 users, load averages: 2.18 2.86 3.76
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v1",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1046,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us =>
+      #{call => 2324.541,total => 2417.042,restore => 65.75,destroy => 26.166,
+        post => 0.125},
+  min_us =>
+      #{call => 2016.708,total => 2093.042,restore => 53.5,destroy => 14.333,
+        post => 0.0},
+  recycled_in => 0}
+== r3 lua v2 attempt 1 17:14  up 1 day,  3:39, 5 users, load averages: 2.18 2.86 3.76
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v2",guest => lua,
+  ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 785,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us =>
+      #{call => 2878.375,total => 2979.917,restore => 68.166,
+        destroy => 31.334,post => 0.125},
+  min_us =>
+      #{call => 2398.5,total => 2497.958,restore => 55.042,destroy => 16.5,
+        post => 0.0},
+  recycled_in => 0}
+== r3 lua v3 attempt 1 17:14  up 1 day,  3:39, 5 users, load averages: 2.09 2.83 3.74
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v3",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1332,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us =>
+      #{call => 2798.833,total => 2894.417,restore => 69.708,
+        destroy => 25.417,post => 0.125},
+  min_us =>
+      #{call => 2395.917,total => 2485.625,restore => 56.25,destroy => 16.5,
+        post => 0.0},
+  recycled_in => 0}
+== r3 lua base attempt 1 17:14  up 1 day,  3:39, 5 users, load averages: 2.09 2.83 3.74
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/base",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 557,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us =>
+      #{call => 1973.583,total => 2146.125,restore => 141.25,
+        destroy => 26.417,post => 0.084},
+  min_us =>
+      #{call => 1770.958,total => 1925.292,restore => 128.541,
+        destroy => 18.417,post => 0.0},
+  recycled_in => 200}
+== r3 lua v0 attempt 1 17:14  up 1 day,  3:39, 5 users, load averages: 2.09 2.83 3.74
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v0",guest => lua,
+  ahead => false,start_ms => 5,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1271,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us =>
+      #{call => 2136.625,total => 2218.834,restore => 62.209,
+        destroy => 19.708,post => 0.083},
+  min_us =>
+      #{call => 1894.0,total => 1965.625,restore => 52.625,destroy => 13.583,
+        post => 0.0},
+  recycled_in => 0}
+== r3 lua null attempt 1 17:14  up 1 day,  3:39, 5 users, load averages: 2.00 2.80 3.73
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v0",guest => lua,
+  ahead => false,start_ms => 6,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 1270,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us =>
+      #{call => 2129.834,total => 2210.667,restore => 61.833,
+        destroy => 18.833,post => 0.083},
+  min_us =>
+      #{call => 1957.459,total => 2028.958,restore => 53.583,
+        destroy => 14.541,post => 0.0},
+  recycled_in => 0}
+== r3 py v1 attempt 1 17:14  up 1 day,  3:39, 5 users, load averages: 2.00 2.80 3.73
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v1",guest => py,
+  ahead => false,start_ms => 42,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 19280,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 14168.25,total => 14767.375,restore => 516.5,
+        destroy => 71.125,post => 0.375},
+  min_us =>
+      #{call => 12778.333,total => 13238.458,restore => 359.959,
+        destroy => 48.958,post => 0.0},
+  recycled_in => 0}
+== r3 py v2 attempt 1 17:14  up 1 day,  3:39, 5 users, load averages: 1.94 2.72 3.67
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v2",guest => py,
+  ahead => false,start_ms => 42,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 13226,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 13852.417,total => 14298.083,restore => 387.0,
+        destroy => 57.167,post => 0.5},
+  min_us =>
+      #{call => 13012.625,total => 13472.791,restore => 355.834,
+        destroy => 47.791,post => 0.0},
+  recycled_in => 0}
+== r3 py v3 attempt 1 17:14  up 1 day,  3:40, 5 users, load averages: 1.80 2.65 3.63
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v3",guest => py,
+  ahead => false,start_ms => 43,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 27067,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 15387.75,total => 15843.5,restore => 386.584,
+        destroy => 61.958,post => 0.541},
+  min_us =>
+      #{call => 14761.125,total => 15215.709,restore => 347.5,
+        destroy => 50.583,post => 0.0},
+  recycled_in => 0}
+== r3 py base attempt 1 17:15  up 1 day,  3:40, 5 users, load averages: 1.89 2.58 3.56
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/base",guest => py,
+  ahead => false,start_ms => 42,tier => compiled,verdict => ok,
+  warm_requests => 3,entry_ms => 8429,recycles => true,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 8821.125,total => 13171.125,restore => 4206.375,
+        destroy => 112.417,post => 0.459},
+  min_us =>
+      #{call => 8327.333,total => 12606.5,restore => 3813.959,
+        destroy => 93.584,post => 0.0},
+  recycled_in => 200}
+== r3 py v0 attempt 1 17:15  up 1 day,  3:40, 5 users, load averages: 1.91 2.56 3.54
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v0",guest => py,
+  ahead => false,start_ms => 42,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 24865,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 13235.416,total => 13682.708,restore => 388.167,
+        destroy => 58.167,post => 0.542},
+  min_us =>
+      #{call => 12506.791,total => 12948.916,restore => 350.25,
+        destroy => 44.208,post => 0.0},
+  recycled_in => 0}
+== r3 py null attempt 1 17:16  up 1 day,  3:41, 5 users, load averages: 2.11 2.54 3.50
+#{mode => split,cache => "/Users/benoitc/.cache/wasm-cdiag/v0",guest => py,
+  ahead => false,start_ms => 43,tier => compiled,verdict => ok,
+  warm_requests => 4,entry_ms => 25124,recycles => false,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  median_us =>
+      #{call => 13251.583,total => 13692.291,restore => 382.125,
+        destroy => 58.333,post => 0.459},
+  min_us =>
+      #{call => 12442.125,total => 12865.5,restore => 346.209,
+        destroy => 46.333,post => 0.0},
+  recycled_in => 0}

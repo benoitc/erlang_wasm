@@ -1,0 +1,28 @@
+redo r1 py_entry: end load 9.04
+r1 py_entry ok (attempt 2, end load 6.64) 20:02
+r1 qjs ok (attempt 1, end load 5.27) 20:03
+r1 lua ok (attempt 1, end load 6.17) 20:03
+r1 py ok (attempt 1, end load 2.90) 20:05
+round 1 done Sat Oct 10 20:05:05 CEST 2026
+r2 py_entry ok (attempt 1, end load 2.63) 20:05
+r2 qjs ok (attempt 1, end load 2.99) 20:05
+r2 lua ok (attempt 1, end load 2.77) 20:06
+redo r2 py: end load 17.31
+r2 py ok (attempt 2, end load 3.26) 20:11
+round 2 done Sat Oct 10 20:11:04 CEST 2026
+r3 py_entry ok (attempt 1, end load 2.85) 20:11
+r3 qjs ok (attempt 1, end load 2.54) 20:11
+r3 lua ok (attempt 1, end load 2.98) 20:12
+r3 py ok (attempt 1, end load 1.77) 20:13
+round 3 done Sat Oct 10 20:13:53 CEST 2026
+r4 py_entry ok (attempt 1, end load 2.49) 20:14
+r4 qjs ok (attempt 1, end load 2.26) 20:14
+r4 lua ok (attempt 1, end load 2.14) 20:14
+r4 py ok (attempt 1, end load 3.05) 20:16
+round 4 done Sat Oct 10 20:16:43 CEST 2026
+r5 py_entry ok (attempt 1, end load 3.32) 20:17
+r5 qjs ok (attempt 1, end load 3.23) 20:17
+r5 lua ok (attempt 1, end load 3.60) 20:17
+r5 py ok (attempt 1, end load 2.39) 20:19
+round 5 done Sat Oct 10 20:19:32 CEST 2026
+ROUNDS_DONE

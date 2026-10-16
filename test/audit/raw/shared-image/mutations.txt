@@ -1,0 +1,256 @@
+What each new test fails on.
+
+Every new case was run with the line it guards reverted (a mutation applied
+to the working tree, the case run alone, the tree restored). A case listed
+twice was re-run after the case itself was changed: the first runs of
+four_workers_on_a_missing_image_capture_once, workers_on_a_filed_image_share_
+one_generation, a_capture_that_returns_an_error_leaves_no_task (single-line
+mutation) and an_owner_killed_after_a_registry_restart_ends_its_generation
+(registry-side mutation) passed, so those cases or their mutation were changed
+until the mutation failed them. The final result for every case is
+'FAILED (mutation caught)'.
+
+== Mutations
+-- M1 src/wasm_snapshot_owner.erl
+   -             {Mod, Img, Id, Live} = Handle,
+   -             ok = atomics:put(Live, 1, 0),
+   -             ok = wasm_module_cache:unclaim_for(Mod, self()),
+   -             ok = wasm_keeper:release(Img, {snapshot, Id}),
+   -             ok
+   +             {Mod, Img, Id, _Live} = Handle,
+   +             ok = wasm_module_cache:unclaim_for(Mod, self()),
+   +             ok = wasm_keeper:release(Img, {snapshot, Id}),
+   +             ok
+-- M2 src/wasm_keeper.erl
+   -                     ok = case map_size(Rest) of
+   -                              0 -> end_image(Res, Meta, Ledger);
+   -                              _ -> ok
+   -                          end,
+   +                     _ = Ledger,
+-- M3 src/wasm_keeper.erl
+   -         {_, {image, _}, _, _, #{state := live} = Ledger} -> flag_set(Ledger);
+   +         {_, {image, _}, _, _, #{state := live}} -> true;
+-- M4 src/wasm_keeper.erl
+   - handle_call({publish, Img, Image}, _From, State) ->
+   -     case lookup(Img) of
+   + handle_call({publish, Img, Image}, _From, State) ->
+   +     ok = persistent_term:put(?SNAPSHOT_PUB(Img), Image),
+   +     case lookup(Img) of
+-- M5 src/wasm_keeper.erl
+   -     ok = sweep_publications(lost),
+   + (removed)
+-- M6 src/wasm_app.erl
+   -     wasm_keeper:sweep_publications(all).
+   +     ok.
+-- M7 src/wasm_snapshot_owner.erl
+   -             ok = release(Owner, Holder),
+   -             gone
+   +             gone
+-- N1 src/wasm_snapshot_registry.erl
+   -             Mon = erlang:monitor(process, Pid),
+   -             Keys1 = Keys#{Key := {loading, L, T, LMon,
+   -                                   Waiters ++ [{From, Deadline, Mon}]}},
+   -             {noreply, watch(Mon, {waiter, Key}, S#{keys := Keys1})};
+   +             _ = {L, T, LMon, Waiters, From, Deadline},
+   +             become_loader(Key, Pid, S);
+-- N10 src/worker/wasm_script_worker.erl
+   -     receive
+   -         done -> ok;
+   -         {'EXIT', Parent, _} -> ok
+   +     receive
+   +         {'EXIT', Parent, _} -> ok
+-- N11 src/worker/wasm_script_worker.erl
+   -         {'EXIT', Load, _} ->
+   -             kill_tasks(Tasks);
+   +         {'EXIT', Load, _} ->
+   +             guard_loop(Load, WMon, Tasks);
+-- N11 src/worker/wasm_script_worker.erl
+   -         {'DOWN', WMon, process, _, _} ->
+   -             kill_tasks(Tasks)
+   +         {'DOWN', WMon, process, _, _} ->
+   +             guard_loop(Load, WMon, Tasks)
+-- N12 src/worker/wasm_script_worker.erl
+   -         {'DOWN', Mon, process, Pid, Reason} ->
+   -             {error, wasm_worker_error:worker(crashed, ~"the capture died",
+   -                                              died_why(Reason, Words, Floor))}
+   -     after left(D) ->
+   +         {'DOWN', Mon, process, Pid, Reason} when Reason =:= never ->
+   +             {error, wasm_worker_error:worker(crashed, ~"the capture died",
+   +                                              died_why(Reason, Words, Floor))}
+   +     after left(D) ->
+-- N13 src/worker/wasm_script_worker.erl
+   -         {'DOWN', LMon, process, Load, Why} ->
+   -             ok = wasm_snapshot_registry:failed(Key, Token),
+   -             %% The guard
+   +         {'DOWN', LMon, process, Load, Why} when Why =:= never ->
+   +             ok = wasm_snapshot_registry:failed(Key, Token),
+   +             %% The guard
+-- N14 src/worker/wasm_script_worker.erl
+   -         {'DOWN', WMon, process, _, _} ->
+   -             kill_tasks(Tasks)
+   +         {'DOWN', WMon, process, _, _} ->
+   +             guard_loop(Load, WMon, Tasks)
+-- N16 src/worker/wasm_script_worker.erl
+   - shared(Key, Cap, #{timeout := Timeout} = Budget) ->
+   -     acquire_image(Key, Cap, Budget#{deadline => deadline(Timeout)}, none, none).
+   + shared(Key, Cap, #{timeout := Timeout} = Budget) ->
+   +     acquire_image(Key, Cap, Budget#{deadline => get(t0) + Timeout}, none, none).
+-- N16 src/worker/wasm_script_worker.erl
+   - init({Adapter, Opts}) ->
+   + init({Adapter, Opts}) ->
+   +     put(t0, erlang:monotonic_time(millisecond)),
+   +     _ = fun deadline/1,
+-- N17 src/worker/wasm_script_worker.erl
+   -     after left(D) ->
+   -         give_up(Key, Token, L),
+   +     after infinity ->
+   +         give_up(Key, Token, L),
+-- N17 src/worker/wasm_script_worker.erl
+   -         {timeout, _TRef, deadline} ->
+   -             kill_tasks(Tasks);
+   +         {timeout, _TRef, deadline} ->
+   +             guard_loop(Load, WMon, Tasks);
+-- N18 src/worker/wasm_script_worker.erl
+   -     ok = task_hook({handoff, G, Owner}),
+   -     case wasm_snapshot_owner:acquire(Owner, self(), left(D)) of
+   +     ok = task_hook({handoff, G, Owner}),
+   +     case wasm_snapshot_owner:acquire(Owner, self(), infinity) of
+-- N19 src/wasm_snapshot_registry.erl
+   - failed(Key, Token) -> gen_server:cast(?SERVER, {failed, Key, Token}).
+   + failed(Key, Token) ->
+   +     _ = gen_server:call(?SERVER, {failed, Key, Token}, infinity), ok.
+-- N2 src/wasm_snapshot_registry.erl
+   -                 true  -> {reply, {ok, G, Owner}, S};
+   +                 true  -> _ = Owner, become_loader(Key, Pid, forget(Key, S));
+-- N20 src/wasm_snapshot_registry.erl
+   -         Left -> ask({acquire, Key, Deadline, Stale}, Left)
+   +         _Left -> ask({acquire, Key, Deadline, Stale}, infinity)
+-- N21 src/wasm_snapshot_registry.erl
+   -         #{Key := {loading, _L, Token, _LMon, _Ws}} ->
+   -             case published(G) of
+   +         #{Key := {loading, _L, _AnyToken, _LMon, _Ws}} ->
+   +             _ = Token,
+   +             case published(G) of
+-- N22 src/worker/wasm_script_worker.erl
+   -         {load, Token} ->
+   -             offer(Key, Token, Own, Cap, B);
+   +         {load, Token} ->
+   +             ok = let_go(Own, none),
+   +             _ = fun offer/5,
+   +             load(Key, Token, Cap, B);
+-- N24 src/worker/wasm_script_worker.erl
+   - hold(G, Owner, D) ->
+   -     case wasm_snapshot_owner:acquire(Owner, self(), left(D)) of
+   + hold(G, Owner, D) ->
+   +     _ = D,
+   +     case ok of
+-- N26 src/worker/wasm_script_worker.erl
+   -         undefined -> from_store_or_capture(undefined, Cap, Budget);
+   +         undefined -> shared(undefined, Cap, Budget);
+-- N27 src/wasm.erl
+   -             atomics:get(Live, 1) =:= 1 andalso is_process_alive(Owner);
+   +             _ = {Live, Owner}, true;
+-- N27 src/wasm_keeper.erl
+   - image_ok({memory, _, _, _, Img, _}) when Img =/= undefined -> image_live(Img);
+   + image_ok({memory, _, _, _, Img, _}) when Img =/= undefined -> _ = Img, true;
+-- N28 src/worker/wasm_script_worker.erl
+   -                 Image ->
+   -                     {ok, Image}
+   -             end;
+   -         gone ->
+   -             stale
+   +                 Image ->
+   +                     {ok, binary_to_term(term_to_binary(Image))}
+   +             end;
+   +         gone ->
+   +             stale
+-- N29 test/support/fake_reactor_adapter.erl
+   -     Shaping = maps:with([init_call, validate, on_restore, key], Opts),
+   +     Shaping = maps:with([init_call, validate, on_restore], Opts),
+-- N3 src/wasm_snapshot_registry.erl
+   -         #{Key := {loaded, G, _, _}} -> S#{keys := maps:remove(Key, Keys)};
+   +         #{Key := {loaded, G, _, _}} -> S;
+-- N3b src/wasm_keeper.erl
+   -                     ok = case map_size(Rest) of
+   -                              0 -> end_image(Res, Meta, Ledger);
+   -                              _ -> ok
+   -                          end,
+   +                     _ = Ledger,
+-- N4 src/worker/wasm_script_worker.erl
+   -                 stale ->
+   -                     acquire_image(Key, Cap, B, G, Own)
+   +                 stale ->
+   +                     {error, timed_out(B)}
+-- N5 src/wasm_app.erl
+   -     wasm_keeper:sweep_publications(all).
+   +     ok.
+-- N5 src/wasm_keeper.erl
+   -     ok = sweep_publications(lost),
+   + (removed)
+-- N6 src/wasm_keeper.erl
+   - handle_call({publish, Img, Image}, _From, State) ->
+   -     case lookup(Img) of
+   + handle_call({publish, Img, Image}, _From, State) ->
+   +     ok = persistent_term:put(?SNAPSHOT_PUB(Img), Image),
+   +     case lookup(Img) of
+-- N7 src/wasm_snapshot_registry.erl
+   - published(G) -> image(G) =/= undefined.
+   + published(_G) -> true.
+-- N8 src/worker/wasm_script_worker.erl
+   -          || T <- Tasks, is_process_alive(T)],
+   +          || T <- [lists:last(Tasks)], is_process_alive(T)],
+
+== Results
+M1 wasm_snapshot_registry_SUITE:the_flag_clears_when_the_last_holder_goes: FAILED (mutation caught)
+M2 wasm_snapshot_registry_SUITE:a_killed_owner_clears_the_flag_and_the_publication: FAILED (mutation caught)
+M3 wasm_snapshot_registry_SUITE:the_keeper_refuses_a_memory_once_the_flag_is_clear: FAILED (mutation caught)
+M4 wasm_snapshot_registry_SUITE:the_keeper_publishes_only_a_live_generation: FAILED (mutation caught)
+M5 wasm_snapshot_registry_SUITE:the_keeper_erases_a_publication_it_has_no_row_for: FAILED (mutation caught)
+M6 wasm_snapshot_registry_SUITE:an_application_stop_leaves_no_publication: FAILED (mutation caught)
+M7 wasm_snapshot_registry_SUITE:an_acquire_that_times_out_leaves_no_hold: FAILED (mutation caught)
+N1 wasm_snapshot_registry_SUITE:four_workers_on_a_missing_image_capture_once: PASSED (mutation NOT caught)
+N2 wasm_snapshot_registry_SUITE:workers_on_a_filed_image_share_one_generation: PASSED (mutation NOT caught)
+N3 wasm_snapshot_registry_SUITE:an_owner_killed_outright_ends_its_generation: FAILED (mutation caught)
+N3 wasm_snapshot_registry_SUITE:an_owner_killed_after_a_registry_restart_ends_its_generation: PASSED (mutation NOT caught)
+N3 wasm_snapshot_registry_SUITE:an_owner_killed_while_the_keeper_is_suspended_ends_its_generation: FAILED (mutation caught)
+N4 wasm_snapshot_registry_SUITE:an_owner_retiring_while_acquired_gives_a_new_generation: FAILED (mutation caught)
+N5 wasm_snapshot_registry_SUITE:a_whole_application_restart_ends_a_held_generation: FAILED (mutation caught)
+N6 wasm_snapshot_registry_SUITE:a_generation_lost_with_an_earlier_keeper_is_never_published: FAILED (mutation caught)
+N7 wasm_snapshot_registry_SUITE:a_report_of_an_unpublished_generation_is_refused: FAILED (mutation caught)
+N8 wasm_snapshot_registry_SUITE:a_spinning_init_ends_every_task_at_the_deadline: FAILED (mutation caught)
+N8 wasm_snapshot_registry_SUITE:the_guard_kills_a_capturer_the_load_left_behind: FAILED (mutation caught)
+N10 wasm_snapshot_registry_SUITE:a_successful_capture_ends_without_a_kill: FAILED (mutation caught)
+N11 wasm_snapshot_registry_SUITE:a_capture_that_returns_an_error_leaves_no_task: PASSED (mutation NOT caught)
+N12 wasm_snapshot_registry_SUITE:a_capturer_over_its_heap_fails_at_once: FAILED (mutation caught)
+N13 wasm_snapshot_registry_SUITE:a_load_process_that_dies_fails_at_once: FAILED (mutation caught)
+N14 wasm_snapshot_registry_SUITE:a_worker_killed_mid_load_ends_every_task: FAILED (mutation caught)
+N14 wasm_snapshot_registry_SUITE:a_worker_killed_with_the_keeper_suspended_ends_every_task: FAILED (mutation caught)
+N16 wasm_snapshot_registry_SUITE:time_before_image_acquisition_is_not_counted: COMPILE ERROR
+N17 wasm_snapshot_registry_SUITE:a_suspended_keeper_fails_a_filed_load_at_its_deadline: FAILED (mutation caught)
+N18 wasm_snapshot_registry_SUITE:a_suspended_owner_fails_the_handoff_and_its_waiters_ask_again: FAILED (mutation caught)
+N19 wasm_snapshot_registry_SUITE:a_suspended_registry_does_not_hold_a_worker_past_its_deadline: FAILED (mutation caught)
+N20 wasm_snapshot_registry_SUITE:waiters_give_up_at_their_own_deadlines: FAILED (mutation caught)
+N21 wasm_snapshot_registry_SUITE:a_loader_from_before_a_registry_restart_is_refused: FAILED (mutation caught)
+N22 wasm_snapshot_registry_SUITE:a_refused_loader_offers_its_own_image_when_none_is_loaded: COMPILE ERROR
+N3 wasm_snapshot_registry_SUITE:the_last_worker_stopping_frees_everything: PASSED (mutation NOT caught)
+N24 wasm_snapshot_registry_SUITE:a_worker_crash_removes_only_its_own_hold: FAILED (mutation caught)
+N2 wasm_snapshot_registry_SUITE:a_file_replaced_while_held_is_read_by_the_next_generation: FAILED (mutation caught)
+N26 wasm_snapshot_registry_SUITE:a_worker_with_no_store_key_keeps_its_own_image: FAILED (mutation caught)
+N27 wasm_snapshot_registry_SUITE:a_request_after_its_generation_ended_is_invalidated: FAILED (mutation caught)
+N29 wasm_worker_kernel_SUITE:a_capture_floor_does_not_stop_a_worker_starting: FAILED (mutation caught)
+N1 wasm_snapshot_registry_SUITE:four_workers_on_a_missing_image_capture_once: FAILED (mutation caught)
+N2 wasm_snapshot_registry_SUITE:workers_on_a_filed_image_share_one_generation: FAILED (mutation caught)
+N3b wasm_snapshot_registry_SUITE:an_owner_killed_after_a_registry_restart_ends_its_generation: FAILED (mutation caught)
+N11 wasm_snapshot_registry_SUITE:a_capture_that_returns_an_error_leaves_no_task: FAILED (mutation caught)
+N16 wasm_snapshot_registry_SUITE:time_before_image_acquisition_is_not_counted: FAILED (mutation caught)
+N22 wasm_snapshot_registry_SUITE:a_refused_loader_offers_its_own_image_when_none_is_loaded: FAILED (mutation caught)
+N3 wasm_snapshot_registry_SUITE:the_last_worker_stopping_frees_everything: FAILED (mutation caught)
+N2 wasm_snapshot_registry_SUITE:a_file_replaced_while_held_is_read_by_the_next_generation: FAILED (mutation caught)
+N28 wasm_worker_lang_SUITE:a_shared_image_is_not_copied: FAILED (mutation caught)
+N3 wasm_snapshot_registry_SUITE:the_last_worker_stopping_frees_everything: FAILED (mutation caught)   (re-run 1)
+N3 wasm_snapshot_registry_SUITE:the_last_worker_stopping_frees_everything: FAILED (mutation caught)   (re-run 2)
+
+The COMPILE ERROR lines were mutations that left a function unused under
+warnings_as_errors; N16 and N22 were rewritten to keep it referenced and
+re-run (mutations_c3b). The one pass of N3 on the_last_worker_stopping_frees_
+everything did not repeat in two re-runs; it is kept here as it came out.

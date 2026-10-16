@@ -918,11 +918,9 @@ owner and a budget tied to the module's lifetime rather than a snapshot's.
 Every worker restores, so no guest needs it to benefit; worth building when a
 host that instantiates per request turns up.
 
-**One image per file rather than per worker.** Not built. A worker loads its
-image from the snapshot store itself, so fifty workers on one file hold fifty
-copies of its pages; `bench/paths/densitybench.erl` reports that as image
-duplication. Sharing them needs the store to hand out one loaded image per
-file, with its own holder.
+**One image per file rather than per worker.** Built and reverted: see "One
+loaded image per store key: built, measured, reverted" below. Two of its five
+gates failed.
 
 **The constants**, each fixed and none an option:
 
@@ -1138,3 +1136,74 @@ allocation and redundant work, the copy-on-write unit size, skipping the old
 copy when a bulk write covers a whole page, an idle preparation that records
 pages at fault time and starts only after observed idle, and sharing one loaded
 image across workers.
+
+## One loaded image per store key: built, measured, reverted
+
+The plan "One loaded snapshot image per node, shared by its workers" (revision
+6), built on `main` at `bd8b7b6` as five commits on `shared-image` and reverted
+by `b17340f`. Workers with the same store key held one generation of their
+image, loaded or captured once by one of them, published by the keeper in
+`persistent_term` and held as that literal; `wasm_snapshot_registry` told a
+starting worker which generation was loaded or who was loading one; a guard
+process killed every task of a load at the worker's deadline or death; restore
+read a live flag in the image instead of asking the owner. Full `rebar3 ct`
+(1,380 cases), the compiled `wasm_worker_lang_SUITE` groups (202 cases) and
+five repeated runs of the snapshot, shared-pages, kernel and registry suites
+(390 cases each) passed. Every new case failed with its guarded line reverted
+(`raw/shared-image/mutations.txt`).
+
+**Protocol.** Arms `main` (`bd8b7b6`), `cand` (`58ea9c5`) and `null` (main's
+tree, its own code cache), fresh VMs at `+S 10:10`, five rounds, the arms
+rotated per round and reversed on even rounds, a cell started at load below 8
+and redone at an end load of 8 or more (2 of 130 redone; saturated and churn
+cells raise the load themselves and are not redone). A ratio is the median of
+the per-round cand / main ratios; the uncertainty is |null - main|, median and
+largest.
+
+| gate | main | cand | ratio | null \|d\| | |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1. 50 workers, distinct images (all four guests) | 50 | 1 | 0.02 | 0 | pass |
+| 1. 50 workers, bytes charged, py | 416,409,600 | 8,328,192 | 0.02 | 0 | pass |
+| 2. 10 workers on a filed image, all idle, py_entry | 71 ms | 52 ms | 0.718 | 2 / 4 ms | **fail, gate 0.5** |
+| 2. the same, py | 70 ms | 51 ms | 0.710 | 5 / 9 ms | **fail, gate 0.5** |
+| 3. 4 workers on a missing image: captures / generations / holders | 4 / 4 / 1 each | 1 / 1 / 4 | | | pass |
+| 4. py_entry compiled steady p50 | 2.462 ms | 2.298 ms | 0.928 | 0.14 / 0.19 ms | pass, gate 0.95 |
+| 4. other steady p50, compiled and interpreted, worst | | | 1.007 (py interp) | | pass |
+| 4. saturated pool of 10, rps, worst | 947 (qjs) | 915 | 0.971 | 12 / 37 | pass, gate 0.97 |
+| 4. restore p50, worst | 722.8 us (py) | 732.8 us | 1.002 | 13.5 / 127 us | pass |
+| 5. churn, serving pool p50 | 4.12 ms | 3.71 ms | 0.946 | 0.10 / 0.42 ms | pass |
+| 5. churn, p99 | 7.30 ms | 6.29 ms | 0.870 | 0.80 / 1.72 ms | pass |
+| 5. churn, rps | 2,332 | 2,589 | 1.058 | 76 / 234 | pass |
+| 5. churn, peak `erlang:memory(total)` | 1.006 GB | 1.663 GB | 1.559 | 0.17 / 0.40 GB | **fail, gate 1.05** |
+
+**Gate 2: the image is no longer most of a start.** One CPython worker started
+from the filed image took about 53 ms on both trees, of which about 36 ms is
+`wasm_python:artifact/1` reading and loading the 30 MB module, before the image
+is acquired (`scripts/probe.erl`, four starts each). Sharing removes the
+roughly 20 ms of the image load from nine of ten parallel starts, which is
+0.71x and not 0.5x. A gate on pool start has to count the artifact, or the
+artifact has to be shared first.
+
+**Gate 5: peak memory under churn is higher, cause not measured.** The serving
+pool started lower on cand (first sample about 220 MB against 407 MB on main,
+one image instead of ten) and peaked higher, 1.66 GB against 1.01 GB, in a
+signal whose null spread is up to 0.40 GB. Each churn cycle erased a published
+generation, and an erase makes every process be checked for references into
+the freed literal area; whether that or the burst's own garbage timing makes
+the peak is not measured. Latency and throughput under churn were better.
+
+**What held.** One image and one charge for a pool; one capture for four
+workers starting together; the request copy gone: a CPython guardian and
+runner held 35,462 words at spawn when the image was shared against 150,226 on
+the private path, for 53,709 words of tables (`wasm_worker_lang_SUITE`,
+`a_shared_image_is_not_copied`); py_entry 7% faster steady and 7% more
+saturated throughput.
+
+**A harness defect, noted.** `densitybench capture` named its fresh directory
+with `erlang:unique_integer/1`, which repeats across VMs, so some runs found an
+earlier run's file and captured nothing (captures 0, four generations on main,
+one on cand). Every run that did capture counted 1 on cand and 4 on main.
+
+Raw terms, logs, loads, scripts, manifests, the mutation log and the flakiness
+runs: `test/audit/raw/shared-image/`.
+

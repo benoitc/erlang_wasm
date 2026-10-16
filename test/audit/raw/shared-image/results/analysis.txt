@@ -1,0 +1,113 @@
+rounds: 5
+workers py_entry - busy_increment_per_worker: main 2.241e+7 cand 1.831e+7 ratio 0.8164 null|d| 9.948e+5/2.127e+6 n=5
+workers py_entry - distinct_images: main 50.00 cand 1.000 ratio 2.000e-2 null|d| 0.000e+0/0.000e+0 n=5
+workers py_entry - images_charged: main 416409600 cand 8328192 ratio 2.000e-2 null|d| 0/0 n=5
+workers qjs - busy_increment_per_worker: main 6.929e+6 cand 7.085e+6 ratio 1.023 null|d| 4.363e+4/1.548e+5 n=5
+workers qjs - distinct_images: main 50.00 cand 1.000 ratio 2.000e-2 null|d| 0.000e+0/0.000e+0 n=5
+workers qjs - images_charged: main 19663200 cand 393264 ratio 2.000e-2 null|d| 0/0 n=5
+workers lua - busy_increment_per_worker: main 7.154e+6 cand 6.772e+6 ratio 0.9335 null|d| 4.220e+5/9.121e+5 n=5
+workers lua - distinct_images: main 50.00 cand 1.000 ratio 2.000e-2 null|d| 0.000e+0/0.000e+0 n=5
+workers lua - images_charged: main 9831600 cand 196632 ratio 2.000e-2 null|d| 0/0 n=5
+workers py - busy_increment_per_worker: main 2.412e+7 cand 2.342e+7 ratio 0.9675 null|d| 3.933e+5/8.958e+5 n=5
+workers py - distinct_images: main 50.00 cand 1.000 ratio 2.000e-2 null|d| 0.000e+0/0.000e+0 n=5
+workers py - images_charged: main 416409600 cand 8328192 ratio 2.000e-2 null|d| 0/0 n=5
+poolstart py_entry - wall_ms: main 71 cand 52 ratio 0.7183 null|d| 2/4 n=5
+poolstart qjs - wall_ms: main 4 cand 4 ratio 0.8000 null|d| 1/1 n=5
+poolstart lua - wall_ms: main 3 cand 2 ratio 0.6667 null|d| 1/2 n=5
+poolstart py - wall_ms: main 70 cand 51 ratio 0.7101 null|d| 5/9 n=5
+capture py_entry - captures: main 4 cand 1 ratio 0.2500 null|d| 0/4 n=5
+capture py_entry - generations: main 4 cand 1 ratio 0.2500 null|d| 0/0 n=5
+capture py_entry - holders: main [[1,1,1,1],
+                                  [1,1,1,1],
+                                  [1,1,1,1],
+                                  [1,1,1,1],
+                                  [1,1,1,1]] null [[1,1,1,1],
+                                                   [1,1,1,1],
+                                                   [1,1,1,1],
+                                                   [1,1,1,1],
+                                                   [1,1,1,1]] cand [[4],
+                                                                    [4],
+                                                                    [4],
+                                                                    [4],
+                                                                    [4]]
+capture qjs - captures: main 4 cand 1 ratio 0.000e+0 null|d| 4/4 n=5
+capture qjs - generations: main 4 cand 1 ratio 0.2500 null|d| 0/0 n=5
+capture qjs - holders: main [[1,1,1,1],
+                             [1,1,1,1],
+                             [1,1,1,1],
+                             [1,1,1,1],
+                             [1,1,1,1]] null [[1,1,1,1],
+                                              [1,1,1,1],
+                                              [1,1,1,1],
+                                              [1,1,1,1],
+                                              [1,1,1,1]] cand [[4],
+                                                               [4],
+                                                               [4],
+                                                               [4],
+                                                               [4]]
+capture lua - captures: main 4 cand 1 ratio 0.2500 null|d| 0/4 n=5
+capture lua - generations: main 4 cand 1 ratio 0.2500 null|d| 0/0 n=5
+capture lua - holders: main [[1,1,1,1],
+                             [1,1,1,1],
+                             [1,1,1,1],
+                             [1,1,1,1],
+                             [1,1,1,1]] null [[1,1,1,1],
+                                              [1,1,1,1],
+                                              [1,1,1,1],
+                                              [1,1,1,1],
+                                              [1,1,1,1]] cand [[4],
+                                                               [4],
+                                                               [4],
+                                                               [4],
+                                                               [4]]
+capture py - captures: main 0 cand 1 ratio 0.2500 null|d| 4/4 n=5
+capture py - generations: main 4 cand 1 ratio 0.2500 null|d| 0/0 n=5
+capture py - holders: main [[1,1,1,1],[1,1,1,1],[1,1,1,1],[1,1,1,1],[1,1,1,1]] null [[1,
+                                                                                      1,
+                                                                                      1,
+                                                                                      1],
+                                                                                     [1,
+                                                                                      1,
+                                                                                      1,
+                                                                                      1],
+                                                                                     [1,
+                                                                                      1,
+                                                                                      1,
+                                                                                      1],
+                                                                                     [1,
+                                                                                      1,
+                                                                                      1,
+                                                                                      1],
+                                                                                     [1,
+                                                                                      1,
+                                                                                      1,
+                                                                                      1]] cand [[4],
+                                                                                                [4],
+                                                                                                [4],
+                                                                                                [4],
+                                                                                                [4]]
+steady py_entry compiled p50_us: main 2.462e+3 cand 2.298e+3 ratio 0.9284 null|d| 142.0/190.9 n=5
+steady qjs compiled p50_us: main 5.745e+3 cand 5.574e+3 ratio 0.9847 null|d| 345.4/733.3 n=5
+steady lua compiled p50_us: main 2.906e+3 cand 2.917e+3 ratio 0.9869 null|d| 106.5/742.9 n=5
+steady py compiled p50_us: main 1.145e+4 cand 1.128e+4 ratio 0.9857 null|d| 384.0/570.1 n=5
+steady py_entry interp p50_us: main 5.076e+3 cand 4.747e+3 ratio 0.9315 null|d| 50.75/244.8 n=5
+steady qjs interp p50_us: main 1.261e+4 cand 1.208e+4 ratio 0.9781 null|d| 293.7/1.110e+3 n=5
+steady lua interp p50_us: main 7.224e+3 cand 7.181e+3 ratio 0.9942 null|d| 38.96/357.1 n=5
+steady py interp p50_us: main 2.418e+4 cand 2.435e+4 ratio 1.007 null|d| 169.0/771.4 n=5
+restore all - restore_lua: main 57.50 cand 56.75 ratio 0.9993 null|d| 0.5410/2.958 n=5
+restore all - restore_plain: main 9.125 cand 8.500 ratio 0.9224 null|d| 0.1250/0.2510 n=5
+restore all - restore_py: main 722.8 cand 732.8 ratio 1.002 null|d| 13.50/127.4 n=5
+restore all - restore_qjs: main 115.0 cand 119.4 ratio 0.9824 null|d| 2.833/8.541 n=5
+sat py_entry compiled p50_us: main 4.018e+3 cand 3.750e+3 ratio 0.9361 null|d| 93.79/113.3 n=5
+sat py_entry compiled rps: main 2.405e+3 cand 2.526e+3 ratio 1.072 null|d| 106.8/149.5 n=5
+sat qjs compiled p50_us: main 1.036e+4 cand 1.082e+4 ratio 1.047 null|d| 194.5/753.4 n=5
+sat qjs compiled rps: main 947.3 cand 915.1 ratio 0.9706 null|d| 12.47/37.07 n=5
+sat lua compiled p50_us: main 6.752e+3 cand 6.735e+3 ratio 0.9972 null|d| 27.67/178.9 n=5
+sat lua compiled rps: main 1.467e+3 cand 1.457e+3 ratio 0.9954 null|d| 17.85/31.36 n=5
+sat py compiled p50_us: main 1.681e+4 cand 1.732e+4 ratio 1.028 null|d| 328.1/357.1 n=5
+sat py compiled rps: main 572.7 cand 567.0 ratio 0.9900 null|d| 15.21/88.41 n=5
+churn py_entry compiled churn_cycles: main 18 cand 16 ratio 0.9412 null|d| 0/2 n=5
+churn py_entry compiled p50_us: main 4.122e+3 cand 3.709e+3 ratio 0.9458 null|d| 102.7/417.6 n=5
+churn py_entry compiled p99_us: main 7.300e+3 cand 6.289e+3 ratio 0.8699 null|d| 800.8/1.717e+3 n=5
+churn py_entry compiled peak_memory: main 1006373945 cand 1662669502 ratio 1.559 null|d| 169588768/400218064 n=5
+churn py_entry compiled rps: main 2.332e+3 cand 2.589e+3 ratio 1.058 null|d| 75.76/234.2 n=5

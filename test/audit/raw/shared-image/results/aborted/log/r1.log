@@ -1,0 +1,199 @@
+== r1 workers py_entry - null attempt 1 13:23  up 6 days, 23:48, 42 users, load averages: 5.76 5.90 5.66
+# 13:23  up 6 days, 23:48, 42 users, load averages: 5.76 5.90 5.66
+#{mode => busy,idle => no_recycling,guest => py_entry,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1269034611},
+  pages_idle => 0,busy_increment_per_worker => 20954213.76,
+  charged_pages_per_worker => 9.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2316745299},
+  pages_busy => 450}
+== r1 workers py_entry - cand attempt 1 13:23  up 6 days, 23:48, 42 users, load averages: 5.41 5.81 5.63
+# 13:23  up 6 days, 23:48, 42 users, load averages: 5.41 5.81 5.63
+#{mode => busy,idle => no_recycling,guest => py_entry,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 1.0,images_charged => 8328192,n => 50,recycling => false,
+  memory_idle => {total,230298704},
+  pages_idle => 0,busy_increment_per_worker => 18283549.92,
+  charged_pages_per_worker => 9.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,1144476200},
+  pages_busy => 450}
+== r1 workers py_entry - main attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+# 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+#{mode => busy,idle => no_recycling,guest => py_entry,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1202262222},
+  pages_idle => 0,busy_increment_per_worker => 22399607.84,
+  charged_pages_per_worker => 9.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2322242614},
+  pages_busy => 450}
+== r1 workers qjs - null attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+# 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+#{mode => busy,idle => no_recycling,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,144536192},
+  pages_idle => 0,busy_increment_per_worker => 7072427.04,
+  charged_pages_per_worker => 4.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,498157544},
+  pages_busy => 200}
+== r1 workers qjs - cand attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+# 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+#{mode => busy,idle => no_recycling,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => false,
+  distinct_images => 1.0,images_charged => 393264,n => 50,recycling => false,
+  memory_idle => {total,98498061},
+  pages_idle => 0,busy_increment_per_worker => 7118532.96,
+  charged_pages_per_worker => 4.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,454424709},
+  pages_busy => 200}
+== r1 workers qjs - main attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+# 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+#{mode => busy,idle => no_recycling,guest => qjs,arm => workers,
+  image_bytes => 393264,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 19663200,n => 50,
+  recycling => false,
+  memory_idle => {total,145462520},
+  pages_idle => 0,busy_increment_per_worker => 6967384.16,
+  charged_pages_per_worker => 4.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,493831728},
+  pages_busy => 200}
+== r1 workers lua - null attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+# 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+#{mode => busy,idle => no_recycling,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,115140539},
+  pages_idle => 0,busy_increment_per_worker => 7175407.84,
+  charged_pages_per_worker => 2.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,473910931},
+  pages_busy => 100}
+== r1 workers lua - cand attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+# 13:24  up 6 days, 23:49, 42 users, load averages: 4.84 5.64 5.58
+#{mode => busy,idle => no_recycling,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => false,
+  distinct_images => 1.0,images_charged => 196632,n => 50,recycling => false,
+  memory_idle => {total,84329440},
+  pages_idle => 0,busy_increment_per_worker => 6837612.0,
+  charged_pages_per_worker => 2.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,426210040},
+  pages_busy => 100}
+== r1 workers lua - main attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 7.26 6.13 5.75
+# 13:24  up 6 days, 23:49, 42 users, load averages: 7.26 6.13 5.75
+#{mode => busy,idle => no_recycling,guest => lua,arm => workers,
+  image_bytes => 196632,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 9831600,n => 50,
+  recycling => false,
+  memory_idle => {total,96834659},
+  pages_idle => 0,busy_increment_per_worker => 7435418.56,
+  charged_pages_per_worker => 2.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,468605587},
+  pages_busy => 100}
+== r1 workers py - null attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 7.26 6.13 5.75
+# 13:24  up 6 days, 23:49, 42 users, load averages: 7.26 6.13 5.75
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1195559627},
+  pages_idle => 0,busy_increment_per_worker => 23930462.88,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2392082771},
+  pages_busy => 1650}
+== r1 workers py - cand attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 7.26 6.13 5.75
+# 13:24  up 6 days, 23:49, 42 users, load averages: 7.26 6.13 5.75
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 1.0,images_charged => 8328192,n => 50,recycling => false,
+  memory_idle => {total,227517688},
+  pages_idle => 0,busy_increment_per_worker => 23436402.56,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,1399337816},
+  pages_busy => 1650}
+== r1 workers py - main attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 7.26 6.13 5.75
+# 13:24  up 6 days, 23:49, 42 users, load averages: 7.26 6.13 5.75
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,images_charged => 416409600,n => 50,
+  recycling => false,
+  memory_idle => {total,1193602899},
+  pages_idle => 0,busy_increment_per_worker => 23966817.44,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2391943771},
+  pages_busy => 1650}
+== r1 poolstart py_entry - null attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.92 6.08 5.73
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.92 6.08 5.73
+#{guest => py_entry,arm => poolstart,verdict => ok,n => 10,
+  start_ms => "8899;<??@F",wall_ms => 70}
+== r1 poolstart py_entry - cand attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.92 6.08 5.73
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.92 6.08 5.73
+#{guest => py_entry,arm => poolstart,verdict => ok,n => 10,
+  start_ms => "7777777777",wall_ms => 55}
+== r1 poolstart py_entry - main attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.92 6.08 5.73
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.92 6.08 5.73
+#{guest => py_entry,arm => poolstart,verdict => ok,n => 10,
+  start_ms => "7779:=>@AJ",wall_ms => 74}
+== r1 poolstart qjs - null attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+#{guest => qjs,arm => poolstart,verdict => ok,n => 10,
+  start_ms => [4,4,4,4,4,4,4,5,5,5],
+  wall_ms => 5}
+== r1 poolstart qjs - cand attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+#{guest => qjs,arm => poolstart,verdict => ok,n => 10,
+  start_ms => [3,3,3,3,3,3,3,3,3,3],
+  wall_ms => 3}
+== r1 poolstart qjs - main attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+#{guest => qjs,arm => poolstart,verdict => ok,n => 10,
+  start_ms => [4,4,4,4,5,5,5,5,5,5],
+  wall_ms => 5}
+== r1 poolstart lua - null attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+#{guest => lua,arm => poolstart,verdict => ok,n => 10,
+  start_ms => [2,3,3,3,3,3,3,3,3,3],
+  wall_ms => 3}
+== r1 poolstart lua - cand attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+#{guest => lua,arm => poolstart,verdict => ok,n => 10,
+  start_ms => [1,1,1,1,1,1,1,1,1,1],
+  wall_ms => 1}
+== r1 poolstart lua - main attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+#{guest => lua,arm => poolstart,verdict => ok,n => 10,
+  start_ms => [2,2,2,2,2,2,2,2,2,2],
+  wall_ms => 2}
+== r1 poolstart py - null attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+#{guest => py,arm => poolstart,verdict => ok,n => 10,start_ms => "444779:=EF",
+  wall_ms => 70}
+== r1 poolstart py - cand attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.60 6.02 5.72
+#{guest => py,arm => poolstart,verdict => ok,n => 10,start_ms => "3333333333",
+  wall_ms => 51}
+== r1 poolstart py - main attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.47 6.01 5.71
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.47 6.01 5.71
+#{guest => py,arm => poolstart,verdict => ok,n => 10,start_ms => "77899:=ABG",
+  wall_ms => 71}
+== r1 capture py_entry - null attempt 1 13:24  up 6 days, 23:49, 42 users, load averages: 6.47 6.01 5.71
+# 13:24  up 6 days, 23:49, 42 users, load averages: 6.47 6.01 5.71
+=INFO REPORT==== 16-Oct-2026::13:24:47.282404 ===
+SIGTERM received - shutting down
+

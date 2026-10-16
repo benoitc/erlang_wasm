@@ -1,0 +1,86 @@
+# start 12:06  up 6 days, 22:31, 42 users, load averages: 6.53 21.04 41.55
+# 12:06  up 6 days, 22:31, 42 users, load averages: 6.53 21.04 41.55
+guest    operation           n       min us    median us
+py       restore             3        759.3        793.8
+py       load_snapshot       1      26804.8      26804.8
+qjs      restore             3        132.4        147.7
+qjs      load_snapshot       1       1235.1       1235.1
+lua      restore             3         62.7         73.0
+lua      load_snapshot       1        455.3        455.3
+plain    restore             3         11.4         11.9
+plain    load_snapshot       1         63.7         63.7
+# 12:06  up 6 days, 22:31, 42 users, load averages: 6.71 20.38 40.96
+#{mode => steady,cache => "none",guest => py_entry,ahead => false,
+  start_ms => 17429,tier => interp,verdict => ok,warm_requests => 2,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5747.375,min_us => 5606.666}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-si/null",
+  guest => py_entry,ahead => false,start_ms => 48,tier => compiled,
+  verdict => ok,warm_requests => 1370,entry_ms => 41894,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 3818.5,min_us => 3475.542}
+# 12:07  up 6 days, 22:33, 42 users, load averages: 6.75 17.63 38.40
+#{guest => py_entry,arm => poolstart,verdict => ok,n => 2,start_ms => ")+",
+  wall_ms => 43}
+#{mode => steady,cache => "none",guest => qjs,ahead => false,start_ms => 115,
+  tier => interp,verdict => ok,warm_requests => 2,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13816.417,min_us => 13476.958}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-si/null",guest => qjs,
+  ahead => false,start_ms => 8,tier => compiled,verdict => ok,
+  warm_requests => 1697,entry_ms => 70019,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 6939.458,min_us => 6437.333}
+# 12:09  up 6 days, 22:34, 42 users, load averages: 13.69 16.69 35.92
+#{guest => qjs,arm => poolstart,verdict => ok,n => 2,
+  start_ms => [2,2],
+  wall_ms => 2}
+#{mode => steady,cache => "none",guest => lua,ahead => false,start_ms => 75,
+  tier => interp,verdict => ok,warm_requests => 2,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7745.75,min_us => 7678.709}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-si/null",guest => lua,
+  ahead => false,start_ms => 7,tier => compiled,verdict => ok,
+  warm_requests => 708,entry_ms => 23556,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 20},
+  median_us => 4871.542,min_us => 3781.666}
+# 12:09  up 6 days, 22:34, 42 users, load averages: 10.82 15.75 35.03
+#{guest => lua,arm => poolstart,verdict => ok,n => 2,
+  start_ms => [1,1],
+  wall_ms => 1}
+#{mode => steady,cache => "none",guest => py,ahead => false,start_ms => 17201,
+  tier => interp,verdict => ok,warm_requests => 2,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 26335.0,min_us => 25656.291}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-si/null",guest => py,
+  ahead => false,start_ms => 48,tier => compiled,verdict => ok,
+  warm_requests => 1721,entry_ms => 107901,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 4,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 14286.252,min_us => 14037.418}
+# 12:11  up 6 days, 22:37, 42 users, load averages: 7.28 12.66 31.15
+#{guest => py,arm => poolstart,verdict => ok,n => 2,start_ms => "*,",
+  wall_ms => 44}
+#{mode => steady,cache => "/Users/benoitc/.cache/wasm-si/null",
+  guest => py_entry,ahead => false,start_ms => 49,tier => compiled,
+  median_us => 3751.917,min_us => 3598.375,verdict => ok,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 5,crashed => 0,refused => 0,
+        cached => 1,reentered => 0},
+  warm_requests => 4,entry_ms => 1112}
+PRIME_DONE 12:12  up 6 days, 22:37, 42 users, load averages: 6.29 12.08 30.51

@@ -44,10 +44,10 @@ requirements(Request, _Artifact) when is_map(Request) ->
 requirements(_Request, _Artifact) ->
     {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
-prepare(Request, #{module := M}, _Env) ->
+prepare(Request, #{module := M, opts := Opts}, _Env) ->
     Export = maps:get(call, Request, ~"handle"),
     ok = hold(Request),
-    {ok, #{mode => reactor, module => M, imports => import_set(),
+    {ok, #{mode => reactor, module => M, imports => import_set(Opts),
            invoke => [{call, Export, []}]},
      %% The adapter state, which `decode/2' is handed back. A request asking
      %% for `probe => heap' gets the runner's own heap flags in its result;
@@ -67,8 +67,21 @@ hold(_Request) ->
 %% No imports at all, so `snapshot_hooks` is empty and every module in the
 %% bindings trivially has one. The key still travels with them, because capture
 %% and restore have to be matched against the same declaration.
-import_set() ->
-    #{bindings => #{}, snapshot_hooks => #{}, compatibility_key => ?VERSION}.
+%%
+%% **The key follows what changes the image.** `init_call`, `validate` and
+%% `on_restore` change what a capture produces or accepts, so two workers with
+%% different ones must not share an image, on disk or in memory; a different
+%% `init` is a different image, which is the rule a real adapter keeps too.
+%% `key` is a case's way to ask for an image of its own.
+import_set(Opts) ->
+    Shaping = maps:with([init_call, validate, on_restore, key], Opts),
+    Key = case map_size(Shaping) of
+              0 -> ?VERSION;
+              _ -> Hash = crypto:hash(sha256, term_to_binary(Shaping)),
+                   <<?VERSION/binary, "+",
+                     (binary:encode_hex(Hash, lowercase))/binary>>
+          end,
+    #{bindings => #{}, snapshot_hooks => #{}, compatibility_key => Key}.
 
 decode(#{outcome := returned, values := Values}, heap) ->
     {ok, #{values => Values, runner_heap => runner_heap()}};
@@ -105,7 +118,7 @@ capabilities(_Artifact) ->
 snapshot_capability(#{module := M, opts := Opts}) ->
     #{version => ?VERSION,
       module => M,
-      imports => import_set(),
+      imports => import_set(Opts),
       init => [{call, maps:get(init_call, Opts, ~"init"), []}],
       validate => validator(Opts),
       post_restore => post_restore(maps:get(on_restore, Opts, undefined))}.

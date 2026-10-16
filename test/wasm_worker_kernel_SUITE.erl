@@ -865,7 +865,12 @@ a_capture_floor_does_not_stop_a_worker_starting(Config) ->
                  wasm_script_worker:capture_heap_words(
                    #{runner_min_heap_words => 200_000}, Limits)),
     Start = maps:get(start, ctx(Config)),
-    {ok, W} = Start(#{capture_min_heap_words => 200_000}),
+    %% A key of its own, so it really captures rather than share the image
+    %% the case's own worker holds.
+    ok = fake_reactor_adapter:reset_captures(),
+    {ok, W} = Start(#{capture_min_heap_words => 200_000,
+                      key => make_ref()}),
+    ?assertEqual(1, fake_reactor_adapter:captures()),
     ?assertMatch({ok, _}, wasm_script_worker:run(W, #{})),
     ok = wasm_script_worker:stop(W).
 

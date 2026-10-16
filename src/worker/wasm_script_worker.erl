@@ -559,14 +559,26 @@ capture_image(Adapter, Artifact, Budget) ->
         Cap         -> from_store_or_capture(Cap, Budget)
     end.
 
+%% **One image per store key on a node.** Workers whose images would be filed
+%% under the same key share one loaded image, held through its owner and read
+%% from its publication, which is a literal: holding it, sending it to a
+%% guardian or capturing it in a runner's closure copies nothing. One worker
+%% loads or captures it while the others starting with it wait. A worker with
+%% no store key, an inline module or no compatibility key, keeps an image of
+%% its own, and so does one started with no registry running.
+from_store_or_capture(#{module := M, imports := ImportSet} = Cap, Budget) ->
+    case image_key(M, Cap, ImportSet) of
+        undefined -> from_store_or_capture(undefined, Cap, Budget);
+        Key       -> shared(Key, Cap, Budget)
+    end.
+
 %% **Look before capturing.** For CPython that is the difference between
 %% reading a file and ninety seconds of interpreter start. A miss for any
 %% reason -- no directory configured, no file, a corrupt one, one written by
 %% another build -- costs exactly the capture that would have happened anyway,
 %% which is why `wasm_snapshot_store:lookup/2` answers `miss` rather than
 %% raising.
-from_store_or_capture(#{module := M, imports := ImportSet} = Cap, Budget) ->
-    Key = image_key(M, Cap, ImportSet),
+from_store_or_capture(Key, #{module := M} = Cap, Budget) ->
     case wasm_snapshot_store:lookup(Key, M) of
         {ok, Image} -> {ok, Image, Cap};
         miss        -> capture_and_file(Key, Cap, Budget)
@@ -652,12 +664,15 @@ died_why(Reason, _Words, _Floor) ->
     #{reason => reason_of(Reason)}.
 
 %% Sends, then holds its own holder open until the parent has one of its own.
-%% `reap/2` is what releases it, and a parent that died instead is covered by
-%% the timeout: this process is not linked, so it would otherwise wait for
-%% ever.
+%% `done` or `reap/2` is what releases it, and a parent that died instead is
+%% covered by the timeout: this process is not linked to it, so it would
+%% otherwise wait for ever. On `done` it exits `normal`, which is how a load's
+%% guard tells a capture that ended from one it has to kill.
 capture_proc(Parent, Cap) ->
     Parent ! {captured, self(), run_capture(Cap)},
-    receive {'EXIT', Parent, _} -> ok
+    receive
+        done -> ok;
+        {'EXIT', Parent, _} -> ok
     after ?CAPTURE_HANDOFF -> ok
     end.
 
@@ -667,6 +682,329 @@ reap(Pid, Mon) ->
     after 5_000 -> erlang:demonitor(Mon, [flush]) end.
 
 reason_of(R) -> iolist_to_binary(io_lib:format(~"~p", [R])).
+
+%%% ------------------------------------------------------- shared image ---
+%%
+%% ```text
+%% worker --acquire(K, Deadline)--> wasm_snapshot_registry
+%%   {ok, G, Owner}  -> wasm_snapshot_owner:acquire/3, read the publication
+%%   parked          -> the same answer, or `retry', when the loader reports
+%%   {load, Token}   -> spawn a guard; the guard spawn_links the load process,
+%%                      and the capturer when the load asks for one
+%%                      load: store lookup, or capture and save; build, owner,
+%%                            wasm_keeper:publish/2, then {loaded, G, Owner}
+%%                      worker: take a hold, report loaded/5, then `done'
+%% ```
+%%
+%% **One deadline for all of it**, `capture_timeout` from the moment the
+%% worker starts acquiring its image: waiting, reading the file, capturing and
+%% saving. The guard kills every task it started at the deadline, or when the
+%% worker dies, and a `kill` takes effect however blocked a task is, in a
+%% keeper call or a file read. Nothing is ever unlinked, so there is no window
+%% in which a task has no canceller. The owner stays outside the guard on
+%% purpose: it must outlive the load, and before the handoff it ends through
+%% its holder monitor when the load process does.
+
+shared(Key, Cap, #{timeout := Timeout} = Budget) ->
+    acquire_image(Key, Cap, Budget#{deadline => deadline(Timeout)}, none, none).
+
+deadline(infinity) -> infinity;
+deadline(Timeout) -> erlang:monotonic_time(millisecond) + Timeout.
+
+left(infinity) -> infinity;
+left(Deadline) -> max(0, Deadline - erlang:monotonic_time(millisecond)).
+
+%% `Stale' is a generation this worker could not hold, so the registry drops
+%% it rather than answer it again. `Own' is a generation this worker loaded
+%% and holds, whose report was refused: it is offered again or given up for
+%% the one the registry names.
+acquire_image(Key, Cap, #{deadline := D} = B, Stale, Own) ->
+    case wasm_snapshot_registry:acquire(Key, D, Stale) of
+        {ok, G, Owner} ->
+            case hold(G, Owner, D) of
+                {ok, Image} ->
+                    ok = let_go(Own, G),
+                    {ok, Image, Cap};
+                stale ->
+                    acquire_image(Key, Cap, B, G, Own)
+            end;
+        {load, Token} when Own =:= none ->
+            load(Key, Token, Cap, B);
+        {load, Token} ->
+            offer(Key, Token, Own, Cap, B);
+        retry ->
+            acquire_image(Key, Cap, B, none, Own);
+        timeout ->
+            ok = let_go(Own, none),
+            {error, timed_out(B)};
+        unavailable when Own =:= none ->
+            from_store_or_capture(Key, Cap, B#{timeout := left(D)});
+        unavailable ->
+            {G, _Owner} = Own,
+            published(G, Cap, Key, B)
+    end.
+
+hold(G, Owner, D) ->
+    case wasm_snapshot_owner:acquire(Owner, self(), left(D)) of
+        ok ->
+            case wasm_snapshot_registry:image(G) of
+                undefined ->
+                    ok = wasm_snapshot_owner:release(Owner, self()),
+                    stale;
+                Image ->
+                    {ok, Image}
+            end;
+        gone ->
+            stale
+    end.
+
+let_go(none, _Keep) -> ok;
+let_go({Keep, _Owner}, Keep) -> ok;
+let_go({_G, Owner}, _Keep) -> wasm_snapshot_owner:release(Owner, self()).
+
+%% The image of a generation this worker holds, as the literal it was
+%% published as, or ask again if it has ended since.
+published(G, Cap, Key, B) ->
+    case wasm_snapshot_registry:image(G) of
+        undefined -> acquire_image(Key, Cap, B, G, none);
+        Image     -> {ok, Image, Cap}
+    end.
+
+%% A loader whose report was refused, made loader again: it reports the image
+%% it already holds, at once. One that has ended since is let go.
+offer(Key, Token, {G, Owner} = Own, Cap, #{deadline := D} = B) ->
+    case wasm_snapshot_registry:loaded(Key, Token, G, Owner, D) of
+        ok ->
+            published(G, Cap, Key, B);
+        timeout ->
+            ok = let_go(Own, none),
+            {error, timed_out(B)};
+        unavailable ->
+            published(G, Cap, Key, B);
+        _Refused ->
+            case wasm_snapshot_registry:image(G) of
+                undefined ->
+                    ok = let_go(Own, none),
+                    acquire_image(Key, Cap, B, none, none);
+                _ ->
+                    acquire_image(Key, Cap, B, none, Own)
+            end
+    end.
+
+load(Key, Token, Cap, #{deadline := D} = B) ->
+    Self = self(),
+    Ref = make_ref(),
+    Job = fun(Guard) -> load_proc(Self, Ref, Guard, Key, Cap, B) end,
+    {Guard, GMon} = spawn_monitor(fun() -> guard(Self, Ref, D, Job) end),
+    receive
+        {Ref, task, Load} ->
+            erlang:demonitor(GMon, [flush]),
+            LMon = erlang:monitor(process, Load),
+            await_load(Key, Token, Cap, B, {Ref, Load, LMon});
+        {'DOWN', GMon, process, Guard, Why} ->
+            ok = wasm_snapshot_registry:failed(Key, Token),
+            {error, load_died(Why)}
+    end.
+
+%% A result, or a death nobody reported, which is `crashed' at once rather
+%% than at the deadline.
+await_load(Key, Token, Cap, #{deadline := D} = B, {Ref, Load, LMon} = L) ->
+    receive
+        {Ref, loaded, G, Owner} ->
+            handoff(Key, Token, Cap, B, L, G, Owner);
+        {Ref, failed, stale} ->
+            %% The keeper refused the publication: the generation belongs to a
+            %% keeper state that is gone. Another load may still succeed.
+            erlang:demonitor(LMon, [flush]),
+            ok = wasm_snapshot_registry:failed(Key, Token),
+            acquire_image(Key, Cap, B, none, none);
+        {Ref, failed, Error} ->
+            erlang:demonitor(LMon, [flush]),
+            ok = wasm_snapshot_registry:failed(Key, Token),
+            {error, Error};
+        {'DOWN', LMon, process, Load, Why} ->
+            ok = wasm_snapshot_registry:failed(Key, Token),
+            %% The guard kills at the same deadline, and may get there first.
+            case left(D) of
+                0 -> {error, timed_out(B)};
+                _ -> {error, load_died(Why)}
+            end
+    after left(D) ->
+        give_up(Key, Token, L),
+        {error, timed_out(B)}
+    end.
+
+%% **The hold before the report, and both before the load process goes.** The
+%% load process is the image's first holder, and its exit would end the image
+%% between the report and the hold.
+handoff(Key, Token, Cap, #{deadline := D} = B, {Ref, Load, LMon} = L, G,
+        Owner) ->
+    ok = task_hook({handoff, G, Owner}),
+    case wasm_snapshot_owner:acquire(Owner, self(), left(D)) of
+        ok ->
+            Report = wasm_snapshot_registry:loaded(Key, Token, G, Owner, D),
+            case Report of
+                timeout ->
+                    give_up(Key, Token, L),
+                    ok = wasm_snapshot_owner:release(Owner, self()),
+                    {error, timed_out(B)};
+                _ ->
+                    Load ! {Ref, done},
+                    erlang:demonitor(LMon, [flush]),
+                    case Report of
+                        refused -> acquire_image(Key, Cap, B, none,
+                                                 {G, Owner});
+                        retry   -> acquire_image(Key, Cap, B, none,
+                                                 {G, Owner});
+                        _Ok     -> published(G, Cap, Key, B)
+                    end
+            end;
+        gone ->
+            give_up(Key, Token, L),
+            acquire_image(Key, Cap, B, none, none)
+    end.
+
+%% The guard has killed, or is about to kill, every task of the load; this is
+%% in case it is slow. `failed/2' is a cast, so a stalled registry cannot hold
+%% a worker past its deadline.
+give_up(Key, Token, {_Ref, Load, LMon}) ->
+    exit(Load, kill),
+    erlang:demonitor(LMon, [flush]),
+    ok = wasm_snapshot_registry:failed(Key, Token).
+
+timed_out(#{timeout := Timeout}) ->
+    wasm_worker_error:worker(timeout, ~"the capture did not finish",
+                             #{capture_timeout => Timeout}).
+
+load_died(Why) ->
+    wasm_worker_error:worker(crashed, ~"the image load died",
+                             #{reason => reason_of(Why)}).
+
+%% Unlinked from the worker, trapping exits, monitoring it, and linked to every
+%% task it starts. It ends when the load process does, killing whatever task
+%% is still alive, and kills them all at the deadline or the worker's death.
+guard(Worker, Ref, Deadline, Job) ->
+    process_flag(trap_exit, true),
+    WMon = erlang:monitor(process, Worker),
+    ok = arm(Deadline),
+    Self = self(),
+    Load = spawn_link(fun() -> Job(Self) end),
+    ok = task_hook({task, load, Load}),
+    Worker ! {Ref, task, Load},
+    guard_loop(Load, WMon, [Load]).
+
+arm(infinity) -> ok;
+arm(Deadline) ->
+    _ = erlang:start_timer(Deadline, self(), deadline, [{abs, true}]),
+    ok.
+
+guard_loop(Load, WMon, Tasks) ->
+    receive
+        {start_capturer, From, Fun, SpawnOpts} ->
+            Pid = spawn_opt(Fun, [link | SpawnOpts]),
+            ok = task_hook({task, capturer, Pid}),
+            From ! {capturer, Pid},
+            guard_loop(Load, WMon, [Pid | Tasks]);
+        {'EXIT', Load, _} ->
+            kill_tasks(Tasks);
+        {'EXIT', Pid, _} ->
+            guard_loop(Load, WMon, lists:delete(Pid, Tasks));
+        {timeout, _TRef, deadline} ->
+            kill_tasks(Tasks);
+        {'DOWN', WMon, process, _, _} ->
+            kill_tasks(Tasks)
+    end.
+
+kill_tasks(Tasks) ->
+    _ = [begin ok = task_hook({kill, T}), exit(T, kill) end
+         || T <- Tasks, is_process_alive(T)],
+    ok.
+
+%% The load: the store lookup and the file read, or the capture and the save,
+%% then the publication. It is the image's first holder until the worker has
+%% its own hold and says `done'.
+load_proc(Worker, Ref, Guard, Key, #{module := M} = Cap, B) ->
+    ok = task_hook({load, Key}),
+    Got = case wasm_snapshot_store:lookup(Key, M) of
+              {ok, Image} ->
+                  {ok, Image};
+              miss ->
+                  case capture_by(Guard, Cap, B) of
+                      {ok, Image, C} ->
+                          ok = wasm_snapshot_store:store(Key, Image, C),
+                          {ok, Image};
+                      {error, _} = E ->
+                          E
+                  end
+          end,
+    case Got of
+        {error, Error} ->
+            Worker ! {Ref, failed, Error};
+        {ok, Img} ->
+            G = wasm_snapshot:generation(Img),
+            Owner = wasm_snapshot:owner(Img),
+            ok = task_hook({publish, G, Owner}),
+            case wasm_keeper:publish(G, Img) of
+                ok ->
+                    Worker ! {Ref, loaded, G, Owner},
+                    receive {Ref, done} -> ok end;
+                stale ->
+                    Worker ! {Ref, failed, stale}
+            end
+    end.
+
+%% A capture in a process the guard starts and owns, monitored here and not
+%% linked: its death is reported with the heap diagnostics, and a load process
+%% that dies first leaves it to the guard.
+capture_by(Guard, Cap, #{deadline := D, words := Words, floor := Floor} = B) ->
+    Self = self(),
+    Guard ! {start_capturer, Self,
+             fun() -> receive go -> capture_proc(Self, Cap) end end,
+             [{max_heap_size, #{size => Words, kill => true,
+                                error_logger => true}}
+              | heap_floor(Floor)]},
+    Pid = receive {capturer, P} -> P end,
+    Mon = erlang:monitor(process, Pid),
+    Pid ! go,
+    receive
+        {captured, Pid, {ok, Image, C}} ->
+            Held = wasm_snapshot_owner:acquire(wasm_snapshot:owner(Image),
+                                               self(), left(D)),
+            ok = capture_done(Pid, Mon),
+            case Held of
+                ok   -> {ok, Image, C};
+                gone -> {error, timed_out(B)}
+            end;
+        {captured, Pid, {error, _} = E} ->
+            ok = capture_done(Pid, Mon),
+            E;
+        {'DOWN', Mon, process, Pid, Reason} ->
+            {error, wasm_worker_error:worker(crashed, ~"the capture died",
+                                             died_why(Reason, Words, Floor))}
+    after left(D) ->
+        ok = task_hook(capture_timed_out),
+        exit(Pid, kill),
+        erlang:demonitor(Mon, [flush]),
+        {error, timed_out(B)}
+    end.
+
+%% The capturer exits `normal' on `done', and the save and the publication
+%% wait for that, so the guard never has a capture left to kill.
+capture_done(Pid, Mon) ->
+    Pid ! done,
+    receive {'DOWN', Mon, process, Pid, _} -> ok end.
+
+-ifdef(TEST).
+%% A test's way into the load: `{wasm, worker_hook}' in the application
+%% environment, a fun called at each named point, in the process at it.
+task_hook(Point) ->
+    case application:get_env(wasm, worker_hook) of
+        {ok, F} when is_function(F, 1) -> _ = F(Point), ok;
+        _ -> ok
+    end.
+-else.
+task_hook(_Point) -> ok.
+-endif.
 
 run_capture(#{module := M, imports := ImportSet, init := Invoke} = Cap) ->
     %% No fuel and no inner deadline: the wall clock is the parent's kill, and

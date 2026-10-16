@@ -27,6 +27,9 @@ the defect.
 %% has none. That is why this fixture is a binary while every other adapter in
 %% this directory is WAT.
 artifact(Opts) ->
+    %% `artifact_delay' is a case's look at where `capture_timeout' starts:
+    %% time spent here, before the image is acquired, is not part of it.
+    _ = timer:sleep(maps:get(artifact_delay, Opts, 0)),
     Path = maps:get(path, Opts, default_path()),
     {ok, Bytes} = file:read_file(Path),
     case wasm:load(Bytes) of
@@ -73,6 +76,9 @@ hold(_Request) ->
 %% different ones must not share an image, on disk or in memory; a different
 %% `init` is a different image, which is the rule a real adapter keeps too.
 %% `key` is a case's way to ask for an image of its own.
+%% `no_key' is a worker with no store key, which keeps an image of its own.
+import_set(#{no_key := true}) ->
+    #{bindings => #{}, snapshot_hooks => #{}};
 import_set(Opts) ->
     Shaping = maps:with([init_call, validate, on_restore, key], Opts),
     Key = case map_size(Shaping) of

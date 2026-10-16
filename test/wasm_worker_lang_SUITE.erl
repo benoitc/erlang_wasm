@@ -16,6 +16,7 @@ than quietly reducing what ran.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("wasm/include/wasm_snapshot.hrl").
 
 -define(KIT, wasm_adapter_conformance).
 
@@ -50,7 +51,9 @@ groups() ->
      %% Not in `all/0` for the same reason the Python groups are not: it starts
      %% with a 90 s capture. Run it deliberately, with
      %% `--group=python_reactor`.
-     {python_reactor, [], python_reactor_cases() ++ [time_monotonic_is_usable]},
+     {python_reactor, [],
+      python_reactor_cases() ++ [time_monotonic_is_usable,
+                                 a_shared_image_is_not_copied]},
      %% The third language, and the one the mechanism was **not** designed
      %% around: it was written after the kernel, the profile and snapshots, and
      %% none of them changed to admit it. It starts in milliseconds, so unlike
@@ -73,7 +76,8 @@ groups() ->
      {qjs_reactor_compiled, [], reactor_cases() ++ [compiled_requests]},
      {lua_reactor_compiled, [], lua_cases() ++ [compiled_requests]},
      {python_reactor_compiled, [],
-      python_reactor_cases() ++ [compiled_requests]},
+      python_reactor_cases() ++ [compiled_requests,
+                                 a_shared_image_is_not_copied]},
      {qjs_reactor_ahead_compiled, [],
       reactor_cases() ++ ahead_cases() ++ [compiled_requests]},
      {lua_reactor_ahead_compiled, [],
@@ -333,6 +337,70 @@ ctx(Config) ->
       root => Root,
       artifact_opts => proplists:get_value(opts, Config, artifact_opts()),
       start => fun(Opts) -> start(Config, Opts) end}.
+
+%%% ------------------------------------------------------ the shared image ---
+
+%% A worker sharing its image holds the published literal, so handing a request
+%% to its guardian and runner copies none of the image's tables. Measured as
+%% what the two processes hold the moment each is spawned, against a worker on
+%% the private path, started while no registry runs, whose image is a term on
+%% its own heap. Both without a runner floor, which would hide the difference
+%% inside a heap allocated anyway.
+a_shared_image_is_not_copied(Config) ->
+    NoFloor = #{runner_min_heap_words => 0},
+    {ok, Shared} = start(Config, NoFloor),
+    ok = supervisor:terminate_child(wasm_registry_sup, wasm_snapshot_registry),
+    Private = try start(Config, NoFloor)
+              after
+                  {ok, _} = supervisor:restart_child(wasm_registry_sup,
+                                                     wasm_snapshot_registry)
+              end,
+    {ok, PW} = Private,
+    #snapshot{} = Image = element(10, sys:get_state(PW)),
+    %% The threshold only: how large the copied part of the image is.
+    Tables = erts_debug:flat_size(Image#snapshot{mems = []}),
+    S = handoff_words(Shared),
+    P = handoff_words(PW),
+    ct:log("tables ~p words; guardian and runner hold ~p shared, ~p private",
+           [Tables, S, P]),
+    ?assert(P - S >= Tables),
+    ok = wasm_script_worker:stop(Shared),
+    ok = wasm_script_worker:stop(PW).
+
+%% The words the guardian and the runner of one request hold when each is
+%% spawned, each held still by a suspension from the tracer the moment it is
+%% seen.
+handoff_words(W) ->
+    Echo = ?KIT:fixture(wasm_python, echo, python_reactor_opts()),
+    1 = erlang:trace(W, true, [procs, set_on_spawn]),
+    try
+        {ok, Ref} = wasm_script_worker:submit(W, Echo),
+        Guardian = spawned_by(W),
+        G = held_words(Guardian),
+        R = held_words(spawned_by(Guardian)),
+        Words = G + R,
+        _ = wasm_script_worker:await(W, Ref, 60_000),
+        Words
+    after
+        _ = erlang:trace(W, false, [procs, set_on_spawn])
+    end.
+
+spawned_by(Parent) ->
+    receive
+        {trace, Parent, spawn, Pid, _MFA} -> Pid
+    after 30_000 ->
+        ct:fail({no_spawn_by, Parent})
+    end.
+
+held_words(Pid) ->
+    try erlang:suspend_process(Pid) of
+        true ->
+            {total_heap_size, T} = process_info(Pid, total_heap_size),
+            true = erlang:resume_process(Pid),
+            T
+    catch
+        error:badarg -> ct:fail({gone_before_measured, Pid})
+    end.
 
 %%% ---------------------------------------------------------- restore ahead ---
 

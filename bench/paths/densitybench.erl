@@ -17,6 +17,12 @@ other tree.
         -run densitybench main expiry py 50 raw/expiry.terms
     erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
         -run densitybench main density py raw/density.terms
+    erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
+        -run densitybench main poolstart py 10 raw/poolstart.terms
+    erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
+        -run densitybench main capture qjs 4 raw/capture.terms
+    erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
+        -run densitybench main churn py_entry 10 lua 200 CACHEDIR raw/churn.terms
 
 Guests are `py`, `py_entry`, `qjs`, `lua` and `plain`; `workers` and
 `expiry` take all but `plain`. The last argument is the raw file, `none` for
@@ -66,6 +72,34 @@ workers added to `wasm_snapshot_owner:charged/0`, over one image's bytes.
 warm requests, after the 30 s `recycle_idle` timer has fired. Reported, never
 the reference for busy.
 
+## `poolstart`: workers started together on a filed image
+
+`snapshot_dir` as `workers`. One worker is started and stopped first, so the
+image is filed, and the harness waits until no image is published. Then N
+workers are started at once, each from its own process, and the result is the
+time from the first start to the last `start_link/2` returning: with
+`restore_ahead` off a started worker is idle. Every worker then serves one
+request, checked.
+
+## `capture`: workers started together on a missing image
+
+`snapshot_dir` a new empty directory. N workers are started at once; every
+call of `wasm_snapshot:capture/3` is counted with `call_count`. Once all are
+up, and their image loads have handed over (the holder counts are stable for
+200 ms), the keeper's image rows made since the start are the generations,
+each reported with its holder count from its owner.
+
+## `churn`: a serving pool while another pool starts and stops
+
+N workers of the serving guest on the compiled tier, `code_cache_dir` as
+given, each warmed until a request enters generated code, then two requests
+each. A churner then starts and stops one worker of the churn guest every
+500 ms, its image filed beforehand, while every serving worker serves `Per`
+requests back to back, each timed. `erlang:memory(total)` is sampled every
+100 ms from just before the burst to its end. Reported: the p50 and p99 of
+all requests, requests a second over the burst's wall time, the peak memory
+and the churn cycles completed.
+
 ## `density`
 
 `page_limit` 4096. Restore and serve, holding each instance in its own
@@ -107,7 +141,14 @@ run("workers", [G, N, Ahead, Raw]) ->
 run("expiry", [G, N, Raw]) ->
     record(Raw, workers(list_to_atom(G), list_to_integer(N), false, expiry));
 run("density", [G, Raw]) ->
-    record(Raw, density(list_to_atom(G))).
+    record(Raw, density(list_to_atom(G)));
+run("poolstart", [G, N, Raw]) ->
+    record(Raw, poolstart(list_to_atom(G), list_to_integer(N)));
+run("capture", [G, N, Raw]) ->
+    record(Raw, capture(list_to_atom(G), list_to_integer(N)));
+run("churn", [G, N, C, Per, Cache, Raw]) ->
+    record(Raw, churn(list_to_atom(G), list_to_integer(N), list_to_atom(C),
+                      list_to_integer(Per), Cache)).
 
 %% What is printed: the full term goes to the raw file, and here every
 %% `erlang:memory/0' list is cut to its total.
@@ -491,6 +532,258 @@ charged() ->
     case erlang:function_exported(wasm_snapshot_owner, charged, 0) of
         true -> wasm_snapshot_owner:charged();
         false -> 0
+    end.
+
+%%% ------------------------------------------------------------ poolstart ---
+
+poolstart(Name, N) ->
+    ok = reactorlib:page_limit(65536),
+    Meta = reactorlib:meta(),
+    io:format("# ~s~n", [maps:get(uptime, Meta)]),
+    ok = filelib:ensure_path(?IMAGES),
+    ok = application:set_env(wasm, snapshot_dir, filename:absname(?IMAGES)),
+    {ok, G} = reactorlib:guest(Name),
+    {Adapter, Opts} = reactorlib:worker_opts(Name, ?WORKER_TIMEOUT),
+    {ok, W0} = wasm_script_worker:start_link(Adapter, Opts),
+    unlink(W0),
+    ok = wasm_script_worker:stop(W0),
+    ok = until_unpublished(30_000),
+    T0 = erlang:monotonic_time(millisecond),
+    Up = start_together(Adapter, Opts, N, T0),
+    Wall = erlang:monotonic_time(millisecond) - T0,
+    Ws = [W || {W, _} <- Up],
+    Rs = [{W, 0, wasm_script_worker:run(W, maps:get(request, G))} || W <- Ws],
+    Base = #{arm => poolstart, guest => Name, n => N, meta => Meta,
+             wall_ms => Wall, start_ms => lists:sort([T || {_, T} <- Up])},
+    R = try ok = all_expected(poolstart, Rs, reactorlib:expected(G)),
+            Base#{verdict => ok}
+        catch throw:{void, Why} -> Base#{verdict => void, why => Why}
+        end,
+    [begin unlink(W), wasm_script_worker:stop(W) end || W <- Ws],
+    R.
+
+%% N workers, each started from its own process at once; each answer is the
+%% worker and the milliseconds from `T0' to its start returning.
+start_together(Adapter, Opts, N, T0) ->
+    Self = self(),
+    Ps = [spawn_link(fun() ->
+                             {ok, W} = wasm_script_worker:start_link(Adapter,
+                                                                     Opts),
+                             unlink(W),
+                             Self ! {up, self(), W,
+                                     erlang:monotonic_time(millisecond) - T0}
+                     end) || _ <- lists:seq(1, N)],
+    [receive {up, P, W, T} -> link(W), {W, T} end || P <- Ps].
+
+publications() ->
+    [K || {{wasm_snapshot, _} = K, _} <- persistent_term:get()].
+
+until_unpublished(Ms) when Ms =< 0 -> throw({void, still_published});
+until_unpublished(Ms) ->
+    case publications() of
+        [] -> ok;
+        _ -> timer:sleep(20), until_unpublished(Ms - 20)
+    end.
+
+%%% -------------------------------------------------------------- capture ---
+
+capture(Name, N) ->
+    ok = reactorlib:page_limit(65536),
+    Meta = reactorlib:meta(),
+    io:format("# ~s~n", [maps:get(uptime, Meta)]),
+    Dir = filename:absname(
+            "_build/densitybench/capture-"
+            ++ integer_to_list(erlang:unique_integer([positive]))),
+    ok = filelib:ensure_path(Dir),
+    ok = application:set_env(wasm, snapshot_dir, Dir),
+    {ok, G} = reactorlib:guest(Name),
+    {Adapter, Opts} = reactorlib:worker_opts(Name, ?WORKER_TIMEOUT),
+    Rows0 = image_rows(),
+    {module, wasm_snapshot} = code:ensure_loaded(wasm_snapshot),
+    1 = erlang:trace_pattern({wasm_snapshot, capture, 3}, true, [call_count]),
+    T0 = erlang:monotonic_time(millisecond),
+    Up = start_together(Adapter, Opts, N, T0),
+    Wall = erlang:monotonic_time(millisecond) - T0,
+    {call_count, Captures} =
+        erlang:trace_info({wasm_snapshot, capture, 3}, call_count),
+    _ = erlang:trace_pattern({wasm_snapshot, capture, 3}, false, [call_count]),
+    Gens = stable_generations(Rows0, 50),
+    Ws = [W || {W, _} <- Up],
+    Rs = [{W, 0, wasm_script_worker:run(W, maps:get(request, G))} || W <- Ws],
+    Base = #{arm => capture, guest => Name, n => N, meta => Meta,
+             wall_ms => Wall, captures => Captures,
+             generations => length(Gens), holders => [H || {_, H} <- Gens]},
+    R = try ok = all_expected(capture, Rs, reactorlib:expected(G)),
+            Base#{verdict => ok}
+        catch throw:{void, Why} -> Base#{verdict => void, why => Why}
+        end,
+    [begin unlink(W), wasm_script_worker:stop(W) end || W <- Ws],
+    R.
+
+%% The image rows made since `Rows0', each with its owner's holder count,
+%% once two reads 200 ms apart agree.
+stable_generations(Rows0, 0) ->
+    generations(Rows0);
+stable_generations(Rows0, N) ->
+    A = generations(Rows0),
+    timer:sleep(200),
+    case generations(Rows0) of
+        A -> A;
+        _ -> stable_generations(Rows0, N - 1)
+    end.
+
+generations(Rows0) ->
+    lists:sort([{Res, holders_of_owner(H)}
+                || {Res, H} <- image_rows(), not lists:keymember(Res, 1, Rows0)]).
+
+image_rows() ->
+    [{element(1, R), element(4, R)}
+     || R <- ets:tab2list(wasm_holders), is_tuple(R), tuple_size(R) >= 4,
+        is_tuple(element(2, R)), element(1, element(2, R)) =:= image,
+        is_map(element(4, R))].
+
+holders_of_owner(Holders) ->
+    case [O || {{snapshot, _}, O} <- maps:to_list(Holders), is_pid(O)] of
+        [Owner] -> wasm_snapshot_owner:holders(Owner);
+        _ -> no_owner
+    end.
+
+%%% ---------------------------------------------------------------- churn ---
+
+-define(CHURN_MS, 500).
+-define(SAMPLE_MS, 100).
+-define(ENTRY_DEADLINE_S, 25 * 60).
+
+churn(Name, N, ChurnName, Per, Cache) ->
+    _ = application:load(wasm),
+    ok = application:set_env(wasm, code_cache_dir, Cache),
+    ok = reactorlib:page_limit(65536),
+    Meta = reactorlib:meta(),
+    io:format("# ~s~n", [maps:get(uptime, Meta)]),
+    ok = filelib:ensure_path(?IMAGES),
+    ok = application:set_env(wasm, snapshot_dir, filename:absname(?IMAGES)),
+    {ok, G} = reactorlib:guest(Name),
+    Request = maps:get(request, G),
+    Expected = reactorlib:expected(G),
+    {Adapter, Opts0} = reactorlib:worker_opts(Name, ?WORKER_TIMEOUT),
+    Limits = maps:get(limits, Opts0),
+    Opts = Opts0#{compiled => true, limits => Limits#{fuel => infinity}},
+    {ok, W1} = wasm_script_worker:start_link(Adapter, Opts),
+    Ws = [W1 | [W || {W, _} <- start_together(
+                                  Adapter, Opts, N - 1,
+                                  erlang:monotonic_time(millisecond))]],
+    Deadline = erlang:monotonic_time(second) + ?ENTRY_DEADLINE_S,
+    Entered = [until_generated(W, Request, Expected, Deadline, 0) || W <- Ws],
+    Base = #{arm => churn, guest => Name, n => N, churn_guest => ChurnName,
+             per_worker => Per, meta => Meta, entered => Entered},
+    R = case [E || {never, _} = E <- Entered] of
+            [] -> churn_1(Ws, Request, Expected, ChurnName, Per, Base);
+            Never -> Base#{verdict => void, why => {never_entered, Never}}
+        end,
+    [begin unlink(W), wasm_script_worker:stop(W) end || W <- Ws],
+    R.
+
+churn_1(Ws, Request, Expected, ChurnName, Per, Base) ->
+    _ = burst(Ws, Request, Expected, 2),
+    {CA, COpts} = reactorlib:worker_opts(ChurnName, ?WORKER_TIMEOUT),
+    {ok, C0} = wasm_script_worker:start_link(CA, COpts),
+    unlink(C0),
+    ok = wasm_script_worker:stop(C0),
+    timer:sleep(1_000),
+    Self = self(),
+    Sampler = spawn_link(fun() -> sample(Self, 0, []) end),
+    Churner = spawn_link(fun() -> churner(Self, CA, COpts, 0) end),
+    T0 = erlang:monotonic_time(nanosecond),
+    Ts = burst(Ws, Request, Expected, Per),
+    Wall = (erlang:monotonic_time(nanosecond) - T0) / 1.0e6,
+    Churner ! {stop, Self},
+    Cycles = receive {cycles, Churner, C} -> C end,
+    Sampler ! {stop, Self},
+    {Peak, Samples} = receive {peak, Sampler, P, S} -> {P, S} end,
+    Sorted = lists:sort(Ts),
+    Base#{verdict => ok, wall_ms => Wall, rps => length(Ts) / (Wall / 1000),
+          p50_us => pct(Sorted, 50), p99_us => pct(Sorted, 99),
+          peak_memory => Peak, memory_samples => Samples,
+          churn_cycles => Cycles, samples => Ts}.
+
+pct(Sorted, P) ->
+    lists:nth(max(1, (length(Sorted) * P + 99) div 100), Sorted).
+
+%% Every worker serves `Per' requests back to back, all at once; the answer
+%% is every request's time in microseconds.
+burst(Ws, Request, Expected, Per) ->
+    Self = self(),
+    _ = [spawn_link(fun() ->
+                            Self ! {burst, self(),
+                                    [timed(W, Request, Expected)
+                                     || _ <- lists:seq(1, Per)]}
+                    end) || W <- Ws],
+    lists:append([receive {burst, _, T} -> T end || _ <- Ws]).
+
+timed(W, Request, Expected) ->
+    T0 = erlang:monotonic_time(nanosecond),
+    R = wasm_script_worker:run(W, Request),
+    T1 = erlang:monotonic_time(nanosecond),
+    case matches(R, Expected) of
+        true -> (T1 - T0) / 1000;
+        false -> exit({wrong_result, R})
+    end.
+
+sample(Owner, Peak, Acc) ->
+    M = erlang:memory(total),
+    receive
+        {stop, Owner} ->
+            Owner ! {peak, self(), max(Peak, M), lists:reverse([M | Acc])}
+    after ?SAMPLE_MS ->
+        sample(Owner, max(Peak, M), [M | Acc])
+    end.
+
+%% One start and stop of a worker of the churn guest every 500 ms.
+churner(Owner, Adapter, Opts, N) ->
+    Next = erlang:monotonic_time(millisecond) + ?CHURN_MS,
+    {ok, W} = wasm_script_worker:start_link(Adapter, Opts),
+    unlink(W),
+    ok = wasm_script_worker:stop(W),
+    Wait = max(0, Next - erlang:monotonic_time(millisecond)),
+    receive
+        {stop, Owner} -> Owner ! {cycles, self(), N + 1}
+    after Wait ->
+        churner(Owner, Adapter, Opts, N + 1)
+    end.
+
+%% As `requestbench': the loop ends at the first request during which a
+%% generated `wasm_f_' function of a slot module was called.
+until_generated(W, R, E, Deadline, N) ->
+    case erlang:monotonic_time(second) >= Deadline of
+        true -> {never, N};
+        false -> traced(W, R, E, Deadline, N)
+    end.
+
+traced(W, R, E, Deadline, N) ->
+    Self = self(),
+    Tracer = spawn_link(fun() -> generated_calls(Self, false) end),
+    Mods = wasm_code_slots:slots(),
+    [erlang:trace_pattern({Mod, '_', '_'}, true, [local]) || Mod <- Mods],
+    _ = erlang:trace(all, true, [call, {tracer, Tracer}]),
+    Got = wasm_script_worker:run(W, R),
+    _ = erlang:trace(all, false, [call]),
+    [erlang:trace_pattern({Mod, '_', '_'}, false, [local]) || Mod <- Mods],
+    Tracer ! {done, Self},
+    Seen = receive {seen, Tracer, S} -> S end,
+    matches(Got, E) orelse exit({wrong_result, Got}),
+    case Seen of
+        true -> {entered, N + 1};
+        false -> until_generated(W, R, E, Deadline, N + 1)
+    end.
+
+generated_calls(Owner, Seen) ->
+    receive
+        {trace, _, call, {Mod, F, _}} ->
+            Generated = lists:prefix("wasm_code_", atom_to_list(Mod))
+                andalso lists:prefix("wasm_f_", atom_to_list(F)),
+            generated_calls(Owner, Seen orelse Generated);
+        {done, Owner} ->
+            Owner ! {seen, self(), Seen}
     end.
 
 %%% -------------------------------------------------------------- density ---

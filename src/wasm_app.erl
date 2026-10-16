@@ -21,5 +21,8 @@ so nothing else would bound them.
 start(_Type, _Args) ->
     wasm_sup:start_link().
 
+%% A shared image is published in `persistent_term', which outlives the
+%% application. A restart would sweep what the new keeper has no row for; a
+%% stop has no restart behind it, so the sweep is done here.
 stop(_State) ->
-    ok.
+    wasm_keeper:sweep_publications(all).

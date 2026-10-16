@@ -27,9 +27,6 @@ the defect.
 %% has none. That is why this fixture is a binary while every other adapter in
 %% this directory is WAT.
 artifact(Opts) ->
-    %% `artifact_delay' is a case's look at where `capture_timeout' starts:
-    %% time spent here, before the image is acquired, is not part of it.
-    _ = timer:sleep(maps:get(artifact_delay, Opts, 0)),
     Path = maps:get(path, Opts, default_path()),
     {ok, Bytes} = file:read_file(Path),
     case wasm:load(Bytes) of
@@ -47,10 +44,10 @@ requirements(Request, _Artifact) when is_map(Request) ->
 requirements(_Request, _Artifact) ->
     {error, wasm_worker_error:adapter(adapter_failure, ~"request is not a map", #{})}.
 
-prepare(Request, #{module := M, opts := Opts}, _Env) ->
+prepare(Request, #{module := M}, _Env) ->
     Export = maps:get(call, Request, ~"handle"),
     ok = hold(Request),
-    {ok, #{mode => reactor, module => M, imports => import_set(Opts),
+    {ok, #{mode => reactor, module => M, imports => import_set(),
            invoke => [{call, Export, []}]},
      %% The adapter state, which `decode/2' is handed back. A request asking
      %% for `probe => heap' gets the runner's own heap flags in its result;
@@ -70,24 +67,8 @@ hold(_Request) ->
 %% No imports at all, so `snapshot_hooks` is empty and every module in the
 %% bindings trivially has one. The key still travels with them, because capture
 %% and restore have to be matched against the same declaration.
-%%
-%% **The key follows what changes the image.** `init_call`, `validate` and
-%% `on_restore` change what a capture produces or accepts, so two workers with
-%% different ones must not share an image, on disk or in memory; a different
-%% `init` is a different image, which is the rule a real adapter keeps too.
-%% `key` is a case's way to ask for an image of its own.
-%% `no_key' is a worker with no store key, which keeps an image of its own.
-import_set(#{no_key := true}) ->
-    #{bindings => #{}, snapshot_hooks => #{}};
-import_set(Opts) ->
-    Shaping = maps:with([init_call, validate, on_restore, key], Opts),
-    Key = case map_size(Shaping) of
-              0 -> ?VERSION;
-              _ -> Hash = crypto:hash(sha256, term_to_binary(Shaping)),
-                   <<?VERSION/binary, "+",
-                     (binary:encode_hex(Hash, lowercase))/binary>>
-          end,
-    #{bindings => #{}, snapshot_hooks => #{}, compatibility_key => Key}.
+import_set() ->
+    #{bindings => #{}, snapshot_hooks => #{}, compatibility_key => ?VERSION}.
 
 decode(#{outcome := returned, values := Values}, heap) ->
     {ok, #{values => Values, runner_heap => runner_heap()}};
@@ -124,7 +105,7 @@ capabilities(_Artifact) ->
 snapshot_capability(#{module := M, opts := Opts}) ->
     #{version => ?VERSION,
       module => M,
-      imports => import_set(Opts),
+      imports => import_set(),
       init => [{call, maps:get(init_call, Opts, ~"init"), []}],
       validate => validator(Opts),
       post_restore => post_restore(maps:get(on_restore, Opts, undefined))}.

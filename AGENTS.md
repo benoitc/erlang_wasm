@@ -21,7 +21,7 @@ src/    Front end: wasm_decode(+_code/_simd/_gc/_atomic), wasm_leb128,
         Runtime: wasm (public facade), wasm_instance, wasm_exec,
         wasm_memory, wasm_table, wasm_global, wasm_heap, wasm_keeper,
         wasm_engine, wasm_error, wasm_wait, wasm_types, wasm_module_cache,
-        wasm_snapshot(+_owner/_file/_store/_registry)
+        wasm_snapshot(+_owner/_file/_store)
         Compiled tier: wasm_jit, wasm_core, wasm_code_slots,
         wasm_code_cache, wasm_jit_sup
         Numerics: wasm_num(+_float/_trunc), wasm_simd
@@ -32,7 +32,7 @@ src/worker/  wasm_instance_worker, wasm_script_worker (the kernel),
         wasm_javascript(_command), wasm_python(_command), wasm_lua, the kit
         wasm_adapter_conformance; internal: wasm_worker_reaper,
         wasm_worker_sup, wasm_script_v1, wasm_worker_fs
-include/    Shared records: wasm.hrl, wasm_exec.hrl, wasi.hrl, wasm_snapshot.hrl
+include/    Shared records: wasm.hrl, wasm_exec.hrl, wasi.hrl
 c_src/      The optional file NIF, built by scripts/build-nif.sh
 test/       Common Test only. test/audit/ is the measurement record.
 bench/      Benchmark arms; bench/paths/README.md has the protocol.

@@ -86,40 +86,7 @@ Two things a change here has to keep:
 - **The image outlives every memory restored from it.** The keeper counts each
   restored memory as a holder of the image, so a worker that stops while a
   runner is still finishing does not free pages the runner reads.
-- **One image per store key, not per worker.** Workers with the same store
-  key share one generation of the image, a load or capture of it, held through
-  its owner and published in `persistent_term`. See "How workers share one
-  image" below.
-
-## How workers share one image
-
-A worker starting on store key K asks `wasm_snapshot_registry` for it:
-
-```text
-worker --acquire(K, Deadline)--> wasm_snapshot_registry
-  {ok, G, Owner}  -> wasm_snapshot_owner:acquire/3, read the publication
-  parked          -> the same answer, or retry, when the loader reports
-  {load, Token}   -> spawn a guard; the guard links the load process, and
-                     the capturer when the load needs one
-                     load: store lookup, or capture and save; owner,
-                           wasm_keeper:publish/2, then {loaded, G, Owner}
-                     worker: take a hold, report loaded/5, then done
-```
-
-What keeps it correct, and what a change here has to keep:
-
-- **The keeper alone puts and erases a publication**, `{wasm_snapshot, G}`,
-  and puts one only for a generation it holds a live row for. It erases it when
-  the owner goes, for any reason, and at its own start erases any it has no row
-  for. `wasm_app:stop/1` erases them all.
-- **A generation stops being restorable through a flag, not a message.** The
-  image carries a one-element `atomics` array its owner sets to 0 when its last
-  holder goes, and the keeper does when the owner dies. `wasm:restore/3` reads
-  it, and the keeper reads it again when it admits the restored memory.
-- **One deadline**, `capture_timeout` from the moment the worker starts
-  acquiring its image. The guard kills every task of the load at it, or when
-  the worker dies, whatever the task is blocked in. The owner is not a task: it
-  must outlive the load, and before the handoff it ends with its first holder.
-- **Reports carry the loader's token**, so a loader from before a registry
-  restart is refused and asks again. The registry never calls an owner; a
-  worker takes its own hold, within its own time.
+- **One image per worker, not per file.** A worker loads its image from the
+  snapshot store itself, so fifty workers on one file hold fifty copies of its
+  pages. `test/audit/ATTEMPTS.md`, "Shared image pages: what was left out, and
+  the constants", says what sharing them would need.

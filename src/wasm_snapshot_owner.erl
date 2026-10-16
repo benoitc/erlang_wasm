@@ -1,8 +1,6 @@
 -module(wasm_snapshot_owner).
 -moduledoc """
-One process per loaded image, holding what an Erlang term cannot hold for
-itself. Every worker on a node that shares the image holds it through this one
-process.
+One process per snapshot, holding what an Erlang term cannot hold for itself.
 
 An image is a term and the BEAM will collect it, but a term cannot say "I am
 gone", and two things have to be given back when it is: the image's claim on
@@ -37,18 +35,9 @@ process is the image's holder of that record.
 It also makes invalidation fall out rather than be enforced. The claim is made
 for this process, so it dies when this process does, and the cache is what
 sees to that.
-
-## The live flag
-
-An image carries a one-element `atomics` array this process makes, 1 while new
-restores are allowed and 0 for ever after. This process clears it when its
-last holder goes, and the keeper clears it again when it sees this process go
-for any reason, `kill` included. `wasm:restore/3` reads it rather than asking
-this process, so a pool of workers sharing one image never queues on one
-mailbox to restore.
 """.
 
--export([start/3, abandon/1, acquire/2, acquire/3, release/2, holders/1]).
+-export([start/3, abandon/1, acquire/2, release/2, holders/1]).
 -export([charged/0]).
 
 -include("wasm_snapshot_budget.hrl").
@@ -68,7 +57,7 @@ and the claim back with it; one that fails to build and lives calls
 into it and back measured up to 0.6 ms of a CPython load.
 """.
 -spec start(wasm_module_cache:handle(), non_neg_integer(), pid()) ->
-          {ok, pid(), wasm_keeper:resource(), atomics:atomics_ref()}
+          {ok, pid(), wasm_keeper:resource()}
         | {error, not_loaded | wasm_error:error()}.
 start(Handle, Bytes, FirstHolder) ->
     Self = self(),
@@ -76,9 +65,9 @@ start(Handle, Bytes, FirstHolder) ->
     Owner = spawn(fun() -> init(Self, Ref, Handle, Bytes, FirstHolder) end),
     Mon = erlang:monitor(process, Owner),
     receive
-        {Ref, {ok, Img, Live}} ->
+        {Ref, {ok, Img}} ->
             erlang:demonitor(Mon, [flush]),
-            {ok, Owner, Img, Live};
+            {ok, Owner, Img};
         {Ref, {error, _} = Error} ->
             erlang:demonitor(Mon, [flush]),
             Error;
@@ -93,8 +82,6 @@ back now, and the owner ends.
 -spec abandon(pid()) -> ok.
 abandon(Owner) ->
     Mon = erlang:monitor(process, Owner),
-    %% The flag is cleared by the owner before it gives anything back, so no
-    %% restore is admitted while the claim and the charge are going.
     Owner ! abandon,
     receive {'DOWN', Mon, process, Owner, _} -> ok end.
 
@@ -105,24 +92,22 @@ init(Caller, Ref, Handle, Bytes, FirstHolder) ->
         ok ->
             Id = make_ref(),
             Mon = erlang:monitor(process, FirstHolder),
-            Live = atomics:new(1, []),
-            ok = atomics:put(Live, 1, 1),
-            case reserve(Bytes, Id, Live) of
+            case reserve(Bytes, Id) of
                 {error, _} = E ->
                     ok = wasm_module_cache:unclaim_for(Handle, self()),
                     Caller ! {Ref, E};
                 {ok, Img} ->
-                    Caller ! {Ref, {ok, Img, Live}},
-                    loop({Handle, Img, Id, Live}, Bytes, #{FirstHolder => Mon})
+                    Caller ! {Ref, {ok, Img}},
+                    loop({Handle, Img, Id}, Bytes, #{FirstHolder => Mon})
             end
     end.
 
 %% A counter left by an older build fails closed rather than metering against a
 %% value that may already be wrong, until the node is restarted.
-reserve(Bytes, Id, Live) ->
+reserve(Bytes, Id) ->
     case counter_state() of
         {trusted, _Ref} ->
-            wasm_keeper:image_reserve(Bytes, self(), Id, Live);
+            wasm_keeper:image_reserve(Bytes, self(), Id);
         legacy ->
             {error, #{class => invalid, kind => snapshot_counter_untrusted,
                       msg => ~"the snapshot budget predates this version and is untrusted; restart the node",
@@ -142,37 +127,6 @@ lifetime at all.
 """.
 -spec acquire(pid(), pid()) -> ok | gone.
 acquire(Owner, Holder) -> ask(Owner, {acquire, Holder}).
-
--doc """
-Add a holder within `Timeout` milliseconds, or answer `gone`.
-
-The reply comes to an alias, so one that arrives after the caller gave up is
-dropped rather than left in its mailbox, and a hold the owner granted after
-that is given back. A worker passes the time left before its own deadline, so
-a stalled owner delays only the workers asking it.
-""".
--spec acquire(pid(), pid(), timeout()) -> ok | gone.
-acquire(Owner, Holder, Timeout) ->
-    Alias = erlang:monitor(process, Owner, [{alias, demonitor}]),
-    Owner ! {{acquire, Holder}, Alias, Alias},
-    receive
-        {Alias, ok} ->
-            erlang:demonitor(Alias, [flush]),
-            ok;
-        {'DOWN', Alias, process, Owner, _} ->
-            gone
-    after Timeout ->
-        erlang:demonitor(Alias, [flush]),
-        receive
-            {Alias, ok} -> ok
-        after 0 ->
-            %% Sent after the acquire, so it is read after it: a hold granted
-            %% to a caller that no longer waits for it does not outlive this
-            %% call.
-            ok = release(Owner, Holder),
-            gone
-        end
-    end.
 
 -doc "Drop a holder. Never blocks, and has one result.".
 -spec release(pid(), pid()) -> ok.
@@ -217,8 +171,7 @@ loop(Handle, Bytes, Holders) ->
         {release, Pid} ->
             drop(Handle, Bytes, Holders, Pid);
         abandon ->
-            {Mod, Img, Id, Live} = Handle,
-            ok = atomics:put(Live, 1, 0),
+            {Mod, Img, Id} = Handle,
             ok = wasm_module_cache:unclaim_for(Mod, self()),
             ok = wasm_keeper:release(Img, {snapshot, Id});
         {'DOWN', _Mon, process, Pid, _Why} ->
@@ -237,12 +190,7 @@ drop(Handle, Bytes, Holders, Pid) ->
             %% The claim would go when this process exits anyway; doing it here
             %% means the claim and the charge are given back together rather
             %% than one of them whenever the cache notices.
-            %% **The flag first**, before anything is given back, so a restore
-            %% that reads it is refused rather than racing the claim. The
-            %% keeper erases the image's publication when it sees the release
-            %% below, which keeps every put and erase in one process.
-            {Mod, Img, Id, Live} = Handle,
-            ok = atomics:put(Live, 1, 0),
+            {Mod, Img, Id} = Handle,
             ok = wasm_module_cache:unclaim_for(Mod, self()),
             ok = wasm_keeper:release(Img, {snapshot, Id}),
             ok

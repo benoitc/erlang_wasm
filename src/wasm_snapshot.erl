@@ -57,14 +57,46 @@ single most important sentence here.
 """.
 
 -export([capture/3, restore/4, info/1, bytes/1, module_of/1]).
--export([owner/1, with_owner/3, build/2, live/1, generation/1]).
+-export([owner/1, with_owner/2, build/2]).
 -export([image_cost/1]).
 -export([to_parts/1, from_parts/3, logical_bytes/1]).
 
 -include("wasm.hrl").
 -include("wasm_exec.hrl").
 
--include("wasm_snapshot.hrl").
+%% Deliberately not a map: a snapshot is matched on, and a record gives the
+%% compiler something to check when a field is added later.
+-record(snapshot, {
+          id            :: reference(),
+          handle        :: wasm_module_cache:handle(),
+          version       :: binary(),
+          key           :: term(),
+          source        :: reference(),
+          globals       :: tuple(),
+          %% The **contents**, not the handles. A table is a handle exactly as
+          %% a memory is, and capturing `#mut.tables` captured the source
+          %% instance's tables: a restored instance then called through a table
+          %% that had been freed with the instance it belonged to. Calling
+          %% through the table is what caught it; comparing the tuples would
+          %% have looked perfectly correct.
+          tables        :: [[term()]],
+          mems          :: [captured_mem()],
+          dropped_elems :: map(),
+          dropped_datas :: map(),
+          %% What each import module's hook said to keep, by module name.
+          hooks         :: #{binary() => portable()},
+          bytes         :: non_neg_integer(),
+          %% The keeper's record of the image's pages, which every memory
+          %% restored from it names, and which keeps them charged for as long
+          %% as one of those memories or a holder of the image remains.
+          img_res       :: undefined | wasm_keeper:resource(),
+          %% The process that holds this image's claim on its module and its
+          %% share of the byte budget, and that knows who still wants it. An
+          %% image is an Erlang term and the BEAM will collect it, but a term
+          %% cannot say "I am gone", and two things have to be given back when
+          %% it is.
+          owner         :: undefined | pid()
+         }).
 
 -doc """
 What a hook may keep: no pid, port, reference or fun.
@@ -302,7 +334,7 @@ do_capture(Inst, M, Handle, Opts) ->
     %% **No owner yet.** Holding an image's claim means calling the module
     %% cache, and the cache calls `wasm:compile/2` on a miss, so anything
     %% long-lived that holds one is inside the facade's cycle. `wasm` attaches
-    %% an owner with `with_owner/3`, which keeps this module -- the mechanism,
+    %% an owner with `with_owner/2`, which keeps this module -- the mechanism,
     %% what a capture copies and a restore lays over -- out of it entirely.
     case run_hooks(Inst, M) of
         {error, _} = HookError -> HookError;
@@ -632,28 +664,9 @@ reloc(V, _From, _To)                -> V.
 
 %%% ----------------------------------------------------------------- info ---
 
--doc """
-Attach the process that holds this image's claim and its charge, and the flag
-that says new restores of it are still allowed.
-""".
--spec with_owner(snapshot(), pid(), atomics:atomics_ref()) -> snapshot().
-with_owner(#snapshot{} = S, Owner, Live) when is_pid(Owner) ->
-    S#snapshot{owner = Owner, live = Live}.
-
--doc """
-The image's live flag, or `undefined` before an owner is attached. Reads 1
-while new restores are allowed and 0 for ever after.
-""".
--spec live(snapshot()) -> undefined | atomics:atomics_ref().
-live(#snapshot{live = Live}) -> Live.
-
--doc """
-Which load or capture of its contents this image is: the keeper's record of
-its pages, or `undefined` before they are built. Two images with the same
-contents are two generations.
-""".
--spec generation(snapshot()) -> undefined | wasm_keeper:resource().
-generation(#snapshot{img_res = ImgRes}) -> ImgRes.
+-doc "Attach the process that holds this image's claim and its charge.".
+-spec with_owner(snapshot(), pid()) -> snapshot().
+with_owner(#snapshot{} = S, Owner) when is_pid(Owner) -> S#snapshot{owner = Owner}.
 
 -doc "The process holding this image, or `undefined` before one is attached.".
 -spec owner(snapshot()) -> undefined | pid().

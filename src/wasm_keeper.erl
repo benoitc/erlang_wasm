@@ -80,14 +80,12 @@ arena of private pages. The node budget counts the second.
 -export([set_limit/2, build_limit/2, total_of/1]).
 -export([grow_begin/4, grow_commit/3, grow_abort/2]).
 -export([arena_begin/4, arena_commit/3, arena_abort/2, ack/2]).
--export([image_reserve/3, image_reserve/4, image_live/1]).
--export([publish/2, sweep_publications/1]).
+-export([image_reserve/3, image_live/1]).
 -export([reconcile/2, reconcile/3]).
 -export([charge_of/1, holders_of/1, resources/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -include("wasm_snapshot_budget.hrl").
--include("wasm_snapshot.hrl").
 
 -define(SERVER, ?MODULE).
 -define(TAB, wasm_holders).
@@ -395,18 +393,7 @@ back, when that holder has gone and no memory restored from it remains.
 -spec image_reserve(non_neg_integer(), pid(), reference()) ->
           {ok, resource()} | {error, wasm_error:error()}.
 image_reserve(Bytes, Owner, Id) ->
-    image_reserve(Bytes, Owner, Id, undefined).
-
--doc """
-`image_reserve/3`, with the image's live flag kept in its row. The keeper
-clears the flag when the owner goes for any reason, and admits a memory laid
-over the image only while it is set.
-""".
--spec image_reserve(non_neg_integer(), pid(), reference(),
-                    undefined | atomics:atomics_ref()) ->
-          {ok, resource()} | {error, wasm_error:error()}.
-image_reserve(Bytes, Owner, Id, Live) ->
-    case call({image_reserve, Bytes, Owner, Id, Live}) of
+    case call({image_reserve, Bytes, Owner, Id}) of
         {error, keeper_unavailable} ->
             {error, #{class => exhaustion, kind => snapshot_budget,
                       msg => ~"the keeper is not available",
@@ -414,61 +401,13 @@ image_reserve(Bytes, Owner, Id, Live) ->
         R -> R
     end.
 
--doc """
-Whether an image is registered, not being reclaimed, and still admits new
-restores.
-""".
+-doc "Whether an image is registered and not being reclaimed.".
 -spec image_live(resource()) -> boolean().
 image_live(ImgRes) ->
     case row(ImgRes) of
-        {_, {image, _}, _, _, #{state := live} = Ledger} -> flag_set(Ledger);
+        {_, {image, _}, _, _, #{state := live}} -> true;
         _ -> false
     end.
-
-flag_set(#{live := Live}) when Live =/= undefined -> atomics:get(Live, 1) =:= 1;
-flag_set(_Ledger) -> true.
-
--doc """
-Publish a shared image under `{wasm_snapshot, Generation}` in
-`persistent_term`, where a reader gets a literal that is not copied when it is
-sent or captured in a closure.
-
-**Done here and only here**, like every erase, so a put and an erase are
-ordered by this process. `stale` means this keeper has no live row for the
-generation, or its flag is clear: the image belongs to a keeper state that is
-gone, and nothing is put.
-""".
--spec publish(resource(), term()) -> ok | stale.
-publish(ImgRes, Image) ->
-    case call({publish, ImgRes, Image}) of
-        ok -> ok;
-        _  -> stale
-    end.
-
--doc """
-Erase the publications this keeper has no row for, `lost`, or every one, `all`,
-clearing each image's live flag first.
-
-`lost` runs when the keeper starts, because a restart of the `wasm` supervisor
-takes the rows and leaves `persistent_term` as it was. `all` is the
-application stopping, when nothing is left to sweep later.
-""".
--spec sweep_publications(lost | all) -> ok.
-sweep_publications(Which) ->
-    Rows = ets:whereis(?TAB),
-    _ = [unpublish(G, Image)
-         || {?SNAPSHOT_PUB(G), Image} <- persistent_term:get(),
-            Which =:= all orelse Rows =:= undefined
-                orelse ets:lookup(Rows, G) =:= []],
-    ok.
-
-unpublish(G, #snapshot{live = Live}) when Live =/= undefined ->
-    ok = atomics:put(Live, 1, 0),
-    _ = persistent_term:erase(?SNAPSHOT_PUB(G)),
-    ok;
-unpublish(G, _Image) ->
-    _ = persistent_term:erase(?SNAPSHOT_PUB(G)),
-    ok.
 
 -doc "Pages currently reserved for a resource, or 0 if it is gone.".
 -spec charge_of(resource()) -> non_neg_integer().
@@ -582,9 +521,6 @@ init([]) ->
     S1 = finish_retiring(S0),
     S2 = recover_transactions(S1),
     S3 = sweep_images(S2),
-    %% After the rows are settled, so a publication whose row the sweep just
-    %% retired is already gone, and one with no row at all is lost.
-    ok = sweep_publications(lost),
     ok = reconcile_pages(),
     ok = reconcile_snapshot_bytes(),
     {ok, S3}.
@@ -756,7 +692,6 @@ handle_call({total_of, Token}, _From, #{totals := Totals} = State) ->
 
 handle_call({reserve, Pages, Meta, Token, Owner, Limit}, _From, State0) ->
     State = pending_cap(Token, Limit, State0),
-    ok = hook(image_ok),
     case {within(Token, Pages, State), image_ok(Meta)} of
         {false, _} ->
             {reply, {error, instance_limit}, State};
@@ -859,22 +794,7 @@ handle_call({reconcile, Res, Ceiling, Extra}, _From, State) ->
             {reply, {error, gone}, State}
     end;
 
-handle_call({publish, Img, Image}, _From, State) ->
-    case lookup(Img) of
-        {Img, {image, _}, _, H, #{state := live} = Ledger}
-          when map_size(H) > 0 ->
-            case flag_set(Ledger) of
-                true ->
-                    ok = persistent_term:put(?SNAPSHOT_PUB(Img), Image),
-                    {reply, ok, State};
-                false ->
-                    {reply, stale, State}
-            end;
-        _ ->
-            {reply, stale, State}
-    end;
-
-handle_call({image_reserve, Bytes, Owner, Id, Live}, _From, State) ->
+handle_call({image_reserve, Bytes, Owner, Id}, _From, State) ->
     case snapshot_counter() of
         undefined ->
             {reply, {error, #{class => invalid,
@@ -898,7 +818,7 @@ handle_call({image_reserve, Bytes, Owner, Id, Live}, _From, State) ->
                     Token = {snapshot, Id},
                     true = ets:insert(?TAB, {Img, {image, Bytes}, 0,
                                              #{Token => Owner},
-                                             #{state => live, live => Live}}),
+                                             #{state => live}}),
                     {reply, {ok, Img}, watch(Owner, Img, Token, State)}
             end
     end;
@@ -1368,14 +1288,6 @@ drop(Res, Token, State) ->
                 error ->
                     State;
                 {Owner, Rest} ->
-                    %% An image's last holder is its owner. Once it is gone,
-                    %% whether it released or was killed, no new restore is
-                    %% admitted and the publication goes, even while memories
-                    %% restored from the image keep its row.
-                    ok = case map_size(Rest) of
-                             0 -> end_image(Res, Meta, Ledger);
-                             _ -> ok
-                         end,
                     S1 = unhold(Owner, Res, Token,
                                 sub_total(Token, counted(Meta, Pages), State)),
                     case map_size(Rest) =:= 0 andalso reclaimable(Meta, Res, S1) of
@@ -1459,7 +1371,6 @@ retire({Res, Meta, Pages, H, Ledger} = Row0, State) ->
           end,
     ok = hook(retiring),
     ok = forget_meta(Res, Meta),
-    ok = end_image(Res, Meta, Ledger),
     ok = hook(forgotten),
     true = ets:delete(?TAB, Res),
     ok = hook(deleted),
@@ -1484,19 +1395,6 @@ after_retire({memory, _, _, _, Img, _} = Meta, State) when Img =/= undefined ->
     end;
 after_retire(_Meta, State) ->
     State.
-
-%% Idempotent, and run both when the owner goes and when the row retires, so a
-%% keeper restarted between the two repeats it from `finish_retiring/1' or
-%% `sweep_images/1'.
-end_image(Res, {image, _}, Ledger) ->
-    case maps:get(live, Ledger, undefined) of
-        undefined -> ok;
-        Live -> atomics:put(Live, 1, 0)
-    end,
-    _ = persistent_term:erase(?SNAPSHOT_PUB(Res)),
-    ok;
-end_image(_Res, _Meta, _Ledger) ->
-    ok.
 
 forget_meta(_Res, {memory, CRef, _, ARef, _, _}) ->
     CRef =:= undefined orelse wasm_engine:cell_forget(CRef),

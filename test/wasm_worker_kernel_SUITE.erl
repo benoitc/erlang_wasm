@@ -610,9 +610,6 @@ a_worker_starts_from_a_filed_image(Config) ->
     Dir = filename:join(?config(priv_dir, Config),
                         "images-" ++ integer_to_list(
                                        erlang:unique_integer([positive]))),
-    %% The case's own worker would lend W1 its image, and nothing would be
-    %% captured or filed: it goes first, with the generation it held.
-    ok = no_worker_on_the_key(Config),
     with_store(Dir, fun() ->
         Start = maps:get(start, ctx(Config)),
         ok = fake_reactor_adapter:reset_captures(),
@@ -621,8 +618,6 @@ a_worker_starts_from_a_filed_image(Config) ->
         ok = wasm_script_worker:stop(W1),
         ?assertEqual(1, fake_reactor_adapter:captures()),
         ?assertMatch([_], filelib:wildcard(filename:join(Dir, "*.img"))),
-        %% And W2 must read the file, not borrow W1's generation.
-        ok = until_unloaded(default_key()),
         {ok, W2} = Start(#{}),
         ?assertEqual(First, wasm_script_worker:run(W2, #{})),
         %% Still one. The second worker read the file.
@@ -635,13 +630,11 @@ a_worker_starts_from_a_filed_image(Config) ->
 %% worked perfectly well.
 a_worker_ignores_an_image_it_cannot_read(Config) ->
     Dir = filename:join(?config(priv_dir, Config), "bad-images"),
-    ok = no_worker_on_the_key(Config),
     with_store(Dir, fun() ->
         Start = maps:get(start, ctx(Config)),
         {ok, W1} = Start(#{}),
         First = wasm_script_worker:run(W1, #{}),
         ok = wasm_script_worker:stop(W1),
-        ok = until_unloaded(default_key()),
         [File] = filelib:wildcard(filename:join(Dir, "*.img")),
         {ok, <<H:40/binary, B, R/binary>>} = file:read_file(File),
         ok = file:write_file(File, <<H/binary, (B bxor 255), R/binary>>),
@@ -872,12 +865,7 @@ a_capture_floor_does_not_stop_a_worker_starting(Config) ->
                  wasm_script_worker:capture_heap_words(
                    #{runner_min_heap_words => 200_000}, Limits)),
     Start = maps:get(start, ctx(Config)),
-    %% A key of its own, so it really captures rather than share the image
-    %% the case's own worker holds.
-    ok = fake_reactor_adapter:reset_captures(),
-    {ok, W} = Start(#{capture_min_heap_words => 200_000,
-                      key => make_ref()}),
-    ?assertEqual(1, fake_reactor_adapter:captures()),
+    {ok, W} = Start(#{capture_min_heap_words => 200_000}),
     ?assertMatch({ok, _}, wasm_script_worker:run(W, #{})),
     ok = wasm_script_worker:stop(W).
 
@@ -984,32 +972,6 @@ said(What) ->
     after 0 ->
         false
     end.
-
-%% Workers on one store key share one image, so a case counting file reads,
-%% writes or captures first stops every worker on the key and waits for the
-%% registry to forget it.
-no_worker_on_the_key(Config) ->
-    ok = wasm_script_worker:stop(?config(worker, Config)),
-    until_unloaded(default_key()).
-
-until_unloaded(Key) ->
-    until_unloaded(Key, 500).
-
-until_unloaded(Key, 0) ->
-    ct:fail({still_loaded, wasm_snapshot_registry:loaded(Key)});
-until_unloaded(Key, N) ->
-    case wasm_snapshot_registry:loaded(Key) of
-        none -> ok;
-        _    -> timer:sleep(10), until_unloaded(Key, N - 1)
-    end.
-
-%% The store key of a default `fake_reactor_adapter' worker.
-default_key() ->
-    {ok, #{module := {wasm_module, Hash}} = A} =
-        fake_reactor_adapter:artifact(#{}),
-    #{version := V, imports := #{compatibility_key := CK}} =
-        fake_reactor_adapter:snapshot_capability(A),
-    wasm_snapshot_store:key(Hash, V, CK, wasm_snapshot_file:image_abi()).
 
 with_store(Dir, F) ->
     ok = filelib:ensure_path(Dir),

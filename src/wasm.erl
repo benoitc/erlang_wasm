@@ -937,15 +937,11 @@ restore(Snapshot, Bindings, Opts0) ->
     %% An image whose last holder has gone has given its module claim back, so
     %% the module may be evicted and the image is no longer restorable. Said
     %% plainly rather than surfacing as a confusing `module_not_loaded`.
-    %% Read from the image's flag rather than asked of its owner, so workers
-    %% sharing one image never queue on one mailbox; the keeper reads the flag
-    %% again when it admits the restored memory, which closes the window
-    %% between this check and that reservation.
-    case restorable(Snapshot) of
-        false ->
+    case wasm_snapshot_owner:holders(wasm_snapshot:owner(Snapshot)) of
+        gone ->
             {error, err(invalid, snapshot_invalidated,
                         ~"this image has been released", #{})};
-        true ->
+        _ ->
             %% Expanded exactly as `instantiate/3' expands it. It was not, so
             %% a restored instance under `profile => script' kept the default
             %% threshold of 32 and a worker restoring one per request never
@@ -954,17 +950,6 @@ restore(Snapshot, Bindings, Opts0) ->
                 {error, _} = E -> E;
                 {ok, Opts}     -> restore_1(Snapshot, Bindings, Opts)
             end
-    end.
-
-%% An image with no owner has nothing holding it, which is the same answer as
-%% one whose owner has gone: a snapshot read from a file before anything
-%% attached one.
-restorable(Snapshot) ->
-    case {wasm_snapshot:owner(Snapshot), wasm_snapshot:live(Snapshot)} of
-        {Owner, Live} when is_pid(Owner), Live =/= undefined ->
-            atomics:get(Live, 1) =:= 1 andalso is_process_alive(Owner);
-        _ ->
-            false
     end.
 
 restore_1(Snapshot, Bindings, Opts) ->
@@ -1016,11 +1001,11 @@ captured(Inst, Handle, Opts) ->
 start_owner(Snapshot, Handle) ->
     case wasm_snapshot_owner:start(Handle, wasm_snapshot:bytes(Snapshot),
                                    self()) of
-        {ok, Owner, Img, Live} ->
+        {ok, Owner, Img} ->
             case wasm_error:capture(
                    fun() -> {ok, wasm_snapshot:build(Snapshot, Img)} end) of
                 {ok, Built} ->
-                    {ok, wasm_snapshot:with_owner(Built, Owner, Live)};
+                    {ok, wasm_snapshot:with_owner(Built, Owner)};
                 {error, _} = E ->
                     ok = wasm_snapshot_owner:abandon(Owner),
                     E

@@ -33,7 +33,7 @@ get it by passing the key.
 | --- | ---: | --- |
 | `root` | `scratch` | which of the reaper's roots the worker's request directories go under |
 | `trusted` | `false` | whether a `mode => write` mount is allowed at all |
-| `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2`. CPython needs about 90 s and so must raise it |
+| `capture_timeout` | 60 s | getting the worker's image at `start_link/2`: waiting for another worker's load of it, reading its file, or one capture and its hooks and the save. It starts once the artifact and module are loaded, which it does not cover. CPython needs about 90 s to capture and so must raise it |
 | `runner_min_heap_words` | the adapter's | a heap floor for each request's runner: 200,000 words for `wasm_lua` and `wasm_javascript`, 1,500,000 for `wasm_python` on the compiled tier and 1,000,000 on the interpreter, none for an adapter without `defaults/1`. `0` turns it off; see [Tuning a worker host](tuning.md) |
 | `capture_min_heap_words` | the adapter's | the same, for the process that captures the snapshot. No shipped adapter sets one |
 | `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and function-only imports, and holds one restored instance per idle worker: its page table, not a copy of the image |

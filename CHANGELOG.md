@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+Script workers on one image share it. Nothing to set.
+
+- **One image per pool.** Workers on a node whose images have the same store
+  key, the module, the adapter's version and its `compatibility_key`, hold
+  one loaded image between them, charged once against `max_snapshot_bytes`.
+  Fifty CPython workers on one file held fifty images before.
+- **One capture.** Workers that start together on a missing image capture it
+  once, and the others wait for it. Workers started together on a filed image
+  read it once.
+- **Smaller requests.** A request no longer copies the image's tables into its
+  guardian and runner.
+- **`capture_timeout` also bounds waiting for another worker's load** of the
+  image, and the file read and save, from the moment the worker starts getting
+  its image. Artifact loading before that is not covered, as before. Raise it
+  if your workers start together and their capture is slow.
+- A worker with no store key, built from an inline module or given no
+  `compatibility_key`, keeps an image of its own, as before.
+
 ## 0.9.2
 
 Compiled code is smaller, compiles faster and runs faster. Nothing to set; the

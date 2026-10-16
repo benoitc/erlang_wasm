@@ -456,6 +456,12 @@ requests. The restored memory reads the image's pages in place, and a request
 copies only the 4 KiB pages it writes, so a node holds one copy of each image
 however many requests run on it. Nothing to set.
 
+Workers share it too. A pool of workers on one store key holds one loaded
+image, charged once against `max_snapshot_bytes`, and a pool started together
+captures or reads it once. Their requests do not copy its tables into the
+guardian and the runner. Give each configuration that captures a different
+image its own `compatibility_key`, which is what keeps two pools apart.
+
 The node page budget counts what is allocated: a restored memory's page table
 and the pages it wrote, and for any memory its growth in whole chunks. A
 memory created at three pages sits in one 256 KiB chunk and counts four.

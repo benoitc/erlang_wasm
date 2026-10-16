@@ -50,7 +50,9 @@ whose requests call `handle` on an instance that never ran `init`. The
 initialisation bindings should be as barren as the guest allows: whatever
 `init()` touches is shared by every request that restores it.
 
-`capture_timeout` bounds the whole thing, 60 s by default:
+`capture_timeout` bounds getting the image, 60 s by default: waiting for
+another worker's load, reading the file, capturing and saving. It starts once
+the worker's artifact and module are loaded, which it does not cover:
 
 <!-- check: modules my_adapter -->
 ```erlang
@@ -68,6 +70,27 @@ Make `validate` ask the runtime whether it came up, rather than asking the
 module what it exports: `init`'s own return value never reaches the kernel, so
 the alternative is capturing a runtime that failed to start and restoring it
 into every request.
+
+## Workers on one image share it
+
+Workers on a node whose images would be filed under the same key share one
+loaded image: one capture or file read, one charge against
+`max_snapshot_bytes`, and one copy of its tables. The key is the module, the
+adapter's version and its `compatibility_key`, so give two configurations that
+capture different images different keys. Nothing to set.
+
+- Workers that start together on a missing image capture it once. The others
+  wait, inside their own `capture_timeout`, and a worker whose wait runs out
+  fails its start with the same `timeout` error a capture that runs out does.
+- The image lives while any worker holds it. When the last one stops, the next
+  worker loads it again, from the file if there is one.
+- A request copies none of the image's tables into its processes: a shared
+  image is held as a `persistent_term` literal.
+- A worker with no key, built from an inline module or given no
+  `compatibility_key`, keeps an image of its own, as before.
+
+`wasm_snapshot_registry` is how a starting worker finds the shared image. You
+never call it.
 
 ## One image, three sizes
 
@@ -323,8 +346,9 @@ when the capture finishes.
 application:set_env(wasm, max_snapshot_bytes, 512 * 1024 * 1024).
 ```
 
-Node-wide, in bytes, charged once at capture or load. The default is
-`infinity`, which means unbounded rather than off.
+Node-wide, in bytes, charged once at capture or load, and once for all the
+workers sharing an image. The default is `infinity`, which means unbounded
+rather than off.
 
 It charges the **retained** size, the middle row of the three above: 64 KiB for
 every page that holds data, and 8 bytes for every page of address space. The

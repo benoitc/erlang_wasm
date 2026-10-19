@@ -39,7 +39,7 @@ exited, and `call_indirect` through it found nothing.
 -include("wasm.hrl").
 
 -export([new/2, new/3, size/1, limits/1, elemtype/1, is_table/1, get/2, set/3,
-         grow/3, fill/4, copy/5, init/3, to_list/1]).
+         grow/3, fill/4, copy/5, init/3, init_funcrefs/3, to_list/1]).
 -export([acquire/3, release/2, resource/1, forget_local/1]).
 
 -doc """
@@ -229,6 +229,31 @@ init(T, Dst, Vals) ->
     Array = lists:foldl(fun({I, V}, Acc) -> array:set(Dst + I, V, Acc) end,
                         array_of(T), lists:enumerate(0, Vals)),
     store(T, Array).
+
+-doc """
+Lay packed function references over the start of a table, in one store.
+
+`Words` holds one 32-bit word per slot, in order: `?NULL_FUNC_WORD` is `null`
+and any other word `F` is `{funcref, Inst, F}`. Slots past the last word keep
+what they hold, and the table must already have a slot for every word.
+
+This is how an image's packed table is restored. The slots are built from the
+binary into the array at once: no list of `{Index, Value}` pairs and no
+`array:set/3` per slot, which was most of a CPython restore's garbage.
+""".
+-spec init_funcrefs(table(), binary(), term()) -> ok.
+init_funcrefs(T, Words, Inst) ->
+    Array = array_of(T),
+    N = byte_size(Words) div 4,
+    Slots = [case W of
+                 ?NULL_FUNC_WORD -> null;
+                 F -> {funcref, Inst, F}
+             end || <<W:32>> <= Words],
+    All = case array:size(Array) of
+              N -> Slots;
+              _ -> Slots ++ lists:nthtail(N, array:to_list(Array))
+          end,
+    store(T, array:from_list(All, array:default(Array))).
 
 -spec to_list(table()) -> [term()].
 to_list(T) -> array:to_list(array_of(T)).

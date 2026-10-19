@@ -62,6 +62,7 @@ all() ->
      a_packed_table_restores_every_slot,
      a_packed_table_survives_a_file,
      a_packed_image_files_as_the_list_did,
+     packed_words_fill_a_table_directly,
      a_data_segment_the_guest_zeroed_stays_zero,
      a_zeroed_gap_between_runs_stays_zero,
      a_global_holding_a_host_term_refuses_the_capture,
@@ -763,6 +764,33 @@ a_packed_table_survives_a_file(Config) ->
                  maps:get(bytes, wasm:snapshot_info(Read))),
     ok = slots_answer(Read, #{}),
     ok = wasm:release(Read).
+
+%% `wasm_table:init_funcrefs/3' builds the slots straight from the words:
+%% every slot, a null in each hole, the largest word that is not null, an
+%% imported function's index, and a table grown past the words, whose slots
+%% beyond them keep what they held. The expected list is written out here.
+packed_words_fill_a_table_directly(_Config) ->
+    Inst = make_ref(),
+    Words = [0, 16#FFFFFFFF, 3, 16#FFFFFFFF, 16#FFFFFFFF, 1, 16#FFFFFFFE, 2,
+             16#FFFFFFFF, 5],
+    Packed = << <<W:32>> || W <- Words >>,
+    Expected = [case W of
+                    16#FFFFFFFF -> null;
+                    F -> {funcref, Inst, F}
+                end || W <- Words],
+    T = wasm_table:new(length(Words), null),
+    ok = wasm_table:set(T, 1, {funcref, other, 9}),
+    ok = wasm_table:init_funcrefs(T, Packed, Inst),
+    ?assertEqual(Expected, wasm_table:to_list(T)),
+    Grown = wasm_table:new(4, null),
+    {ok, 4} = wasm_table:grow(Grown, length(Words) + 3 - 4, null),
+    Kept = {funcref, other, 7},
+    ok = wasm_table:set(Grown, length(Words) + 2, Kept),
+    ok = wasm_table:init_funcrefs(Grown, Packed, Inst),
+    ?assertEqual(Expected ++ [null, null, Kept], wasm_table:to_list(Grown)),
+    Empty = wasm_table:new(2, null),
+    ok = wasm_table:init_funcrefs(Empty, <<>>, Inst),
+    ?assertEqual([null, null], wasm_table:to_list(Empty)).
 
 %% The file format is unchanged: an image with packed tables writes the bytes
 %% the same image wrote with lists, and its shape is the same.

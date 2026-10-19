@@ -121,9 +121,10 @@ never captured.
 %% A table's elements: the list, or packed by `pack_table/3'.
 -type table_image() :: [term()] | binary().
 
-%% A packed entry that is `null'. `func_count/1' is far below it, so no
-%% function index can be mistaken for it, and `pack/4' checks that anyway.
--define(NULL_WORD, 16#FFFFFFFF).
+%% A packed entry that is `null' (`?NULL_FUNC_WORD', in `wasm.hrl').
+%% `func_count/1' is far below it, so no function index can be mistaken for
+%% it, and `pack/4' checks that anyway.
+-define(NULL_WORD, ?NULL_FUNC_WORD).
 
 -doc "An immutable image. Copyable between processes; see `wasm:acquire/1`.".
 %% `portable/0` and `captured_mem/0` go out with `snapshot/0` because the
@@ -653,8 +654,15 @@ restore_tables([T | Ts], [Elems | Es], From, To) ->
     %% array back and bumps a version each time, so a thousand-entry table was
     %% a thousand whole-array writes. `init/3` folds and stores once, which is
     %% what `wasm_instance` already does for element segments.
-    ok = wasm_table:init(T, 0, table_list(Elems, From, To)),
+    ok = laid(T, Elems, From, To),
     restore_tables(Ts, Es, From, To).
+
+%% A packed table is built straight from its words, with no list of slots in
+%% between; a list is relocated and laid as it always was.
+laid(T, Packed, _From, To) when is_binary(Packed) ->
+    wasm_table:init_funcrefs(T, Packed, To);
+laid(T, Elems, From, To) ->
+    wasm_table:init(T, 0, [reloc(V, From, To) || V <- Elems]).
 
 fit(_T, Have, Want) when Have >= Want ->
     ok;

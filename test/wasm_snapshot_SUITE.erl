@@ -57,6 +57,11 @@ all() ->
      a_repeated_restore_is_the_image_in_generated_code,
      a_destroyed_restore_leaves_nothing_for_the_next,
      a_grown_table_restores,
+     a_funcref_table_is_packed,
+     a_table_holding_anything_else_stays_a_list,
+     a_packed_table_restores_every_slot,
+     a_packed_table_survives_a_file,
+     a_packed_image_files_as_the_list_did,
      a_data_segment_the_guest_zeroed_stays_zero,
      a_zeroed_gap_between_runs_stays_zero,
      a_global_holding_a_host_term_refuses_the_capture,
@@ -653,6 +658,130 @@ an_exported_global_is_not_shared_between_restores(_Config) ->
 a_grown_table_restores(_Config) ->
     Image = image_of(plain(grown_table)),
     ?assertEqual({ok, [99]}, handled(Image)).
+
+%%% -------------------------------------------------------- packed tables ---
+%%
+%% A table of nulls and the instance's own functions is kept as one binary, so
+%% sending an image copies a reference rather than a list of tuples. These
+%% read the record's `tables' field, which is the only place packing shows:
+%% everything a guest or a file can observe is meant to be unchanged.
+
+%% Positions in `wasm_snapshot''s private record: id, handle, version, key,
+%% source, globals, tables.
+-define(SOURCE, 6).
+-define(TABLES, 8).
+
+tables_of(Image) ->
+    snapshot = element(1, Image),
+    element(?TABLES, Image).
+
+%% The list a packed table stands for, written out here rather than asked of
+%% the module under test, so the comparison does not trust what it checks.
+as_lists(Image) ->
+    Src = element(?SOURCE, Image),
+    setelement(?TABLES, Image,
+               [case T of
+                    B when is_binary(B) ->
+                        [case W of
+                             16#FFFFFFFF -> null;
+                             F -> {funcref, Src, F}
+                         end || <<W:32>> <= B];
+                    L -> L
+                end || T <- tables_of(Image)]).
+
+packed_init(Imports) ->
+    Handle = fixture(packed_table),
+    init(Handle, Imports).
+
+seven() -> #{{~"env", ~"f"} => fun(_Ctx, []) -> {ok, [7]} end}.
+nine() -> #{{~"env", ~"f"} => fun(_Ctx, []) -> {ok, [9]} end}.
+
+a_funcref_table_is_packed(_Config) ->
+    Init = init(fixture(reactor), #{}),
+    {ok, Image} = wasm:snapshot(Init),
+    ok = wasm:destroy(Init),
+    %% Two slots: the function `init()' stored, and a null.
+    ?assertEqual([<<0:32, 16#FFFFFFFF:32>>], tables_of(Image)),
+    ok = wasm:release(Image).
+
+%% Capture admits a funcref by any integer index and an `i31' anywhere, and
+%% packing must not change what it admits: each is captured as before, as the
+%% list it was.
+a_table_holding_anything_else_stays_a_list(_Config) ->
+    [begin
+         Inst = packed_init(seven()),
+         #mut{tables = {T}} = wasm_instance:mut(Inst),
+         Id = Inst#inst.id,
+         V = case Odd of
+                 {funcref, F} -> {funcref, Id, F};
+                 Other -> Other
+             end,
+         ok = wasm_table:set(T, 1, V),
+         {ok, Image} = wasm:snapshot(Inst),
+         ok = wasm:destroy(Inst),
+         ?assertMatch([[_, V, _, _]], tables_of(Image)),
+         ok = wasm:release(Image)
+     end || Odd <- [{funcref, 5}, {funcref, -1}, {funcref, 1 bsl 32},
+                    {i31, 5}]],
+    ok.
+
+%% A null hole, an imported function and the last function index, each called
+%% through the table of a restored instance.
+a_packed_table_restores_every_slot(_Config) ->
+    Init = packed_init(seven()),
+    {ok, Image} = wasm:snapshot(Init),
+    ok = wasm:destroy(Init),
+    ?assertEqual([<<0:32, 16#FFFFFFFF:32, 3:32, 4:32>>], tables_of(Image)),
+    ok = slots_answer(Image, #{}),
+    ok = wasm:release(Image).
+
+slots_answer(Image, Opts) ->
+    {ok, Fresh} = wasm:restore(Image, nine(),
+                               Opts#{snapshot_hooks => #{~"env" => stateless}}),
+    ?assertEqual({ok, [9]}, wasm:call(Fresh, ~"call_at", [0])),
+    ?assertMatch({error, #{class := trap}}, wasm:call(Fresh, ~"call_at", [1])),
+    ?assertEqual({ok, [11]}, wasm:call(Fresh, ~"call_at", [2])),
+    ?assertEqual({ok, [44]}, wasm:call(Fresh, ~"call_at", [3])),
+    ok = wasm:destroy(Fresh).
+
+a_packed_table_survives_a_file(Config) ->
+    Path = image_file(Config),
+    Handle = fixture(packed_table),
+    Init = init(Handle, seven()),
+    {ok, Image} = wasm:snapshot(Init),
+    ok = wasm:destroy(Init),
+    ok = wasm:save_snapshot(Image, Path),
+    Shape = maps:get(shape, wasm_snapshot:to_parts(Image)),
+    Info = wasm:snapshot_info(Image),
+    ok = wasm:release(Image),
+    {ok, Read} = wasm:load_snapshot(Path, Handle),
+    ?assertEqual([<<0:32, 16#FFFFFFFF:32, 3:32, 4:32>>], tables_of(Read)),
+    %% What the file says and what the loaded image answers agree.
+    ?assertEqual({0, [4], []}, Shape),
+    ?assertEqual(Shape, maps:get(shape, wasm_snapshot:to_parts(Read))),
+    ?assertEqual(maps:get(bytes, Info),
+                 maps:get(bytes, wasm:snapshot_info(Read))),
+    ok = slots_answer(Read, #{}),
+    ok = wasm:release(Read).
+
+%% The file format is unchanged: an image with packed tables writes the bytes
+%% the same image wrote with lists, and its shape is the same.
+a_packed_image_files_as_the_list_did(Config) ->
+    Dir = ?config(priv_dir, Config),
+    Init = packed_init(seven()),
+    {ok, Image} = wasm:snapshot(Init, #{version => ~"v1",
+                                        compatibility_key => ~"k"}),
+    ok = wasm:destroy(Init),
+    Lists = as_lists(Image),
+    ?assertMatch([[_ | _]], tables_of(Lists)),
+    ?assertEqual(maps:get(shape, wasm_snapshot:to_parts(Lists)),
+                 maps:get(shape, wasm_snapshot:to_parts(Image))),
+    A = filename:join(Dir, "packed.img"),
+    B = filename:join(Dir, "lists.img"),
+    ok = wasm:save_snapshot(Image, A),
+    ok = wasm:save_snapshot(Lists, B),
+    ?assertEqual(file:read_file(B), file:read_file(A)),
+    ok = wasm:release(Image).
 
 %% **A fresh instance is not zero.** `wasm_instance:new/3` runs the active data
 %% segments before a restore sees it, so a restore that skipped the regions it

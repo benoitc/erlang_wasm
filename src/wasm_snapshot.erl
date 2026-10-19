@@ -79,7 +79,11 @@ single most important sentence here.
           %% that had been freed with the instance it belonged to. Calling
           %% through the table is what caught it; comparing the tuples would
           %% have looked perfectly correct.
-          tables        :: [[term()]],
+          %% A table of only nulls and this instance's own functions is
+          %% packed, a 32-bit word per entry, so sending an image copies a
+          %% binary reference rather than a list of tuples. Any other table
+          %% stays the list it always was.
+          tables        :: [table_image()],
           mems          :: [captured_mem()],
           dropped_elems :: map(),
           dropped_datas :: map(),
@@ -114,6 +118,13 @@ never captured.
                           image => tuple(),
                           runs => [{non_neg_integer(), binary()}]}.
 
+%% A table's elements: the list, or packed by `pack_table/3'.
+-type table_image() :: [term()] | binary().
+
+%% A packed entry that is `null'. `func_count/1' is far below it, so no
+%% function index can be mistaken for it, and `pack/4' checks that anyway.
+-define(NULL_WORD, 16#FFFFFFFF).
+
 -doc "An immutable image. Copyable between processes; see `wasm:acquire/1`.".
 %% `portable/0` and `captured_mem/0` go out with `snapshot/0` because the
 %% nominal below is over `#snapshot{}`, whose fields are typed with them: a
@@ -122,7 +133,7 @@ never captured.
 %% edoc would read it as that attribute's doc comment and exit.
 -nominal snapshot() :: #snapshot{}.
 
--export_type([snapshot/0, portable/0, captured_mem/0]).
+-export_type([snapshot/0, portable/0, captured_mem/0, table_image/0]).
 
 %%% -------------------------------------------------------------- capture ---
 
@@ -326,7 +337,11 @@ do_capture(Inst, M, Handle, Opts) ->
     %% above records having fixed, left unfixed here.
     Gs = deref(Gs0),
     Captured = [capture_mem(Mem) || Mem <- tuple_to_list(Mems)],
-    Tables = contents(Ts),
+    %% Packed after eligibility, never instead of it: `only_own_refs/1' has
+    %% already admitted every value, and a table `pack_table/3' declines stays
+    %% the list it was.
+    NFuncs = func_count(M),
+    Tables = [pack_table(T, Inst#inst.id, NFuncs) || T <- contents(Ts)],
     %% What is **retained**, which is what the budget charges and what
     %% `snapshot_info/1` answers: every page that is not zero, whole, and a word
     %% per page for the tuple that maps them.
@@ -361,6 +376,44 @@ deref(Globals) ->
 %% that crosses from a handle to values.
 contents(Tables) ->
     [wasm_table:to_list(T) || T <- tuple_to_list(Tables)].
+
+%% **One binary instead of a list of tuples.** An image is copied into every
+%% process it is sent to, and a binary over 64 bytes is copied as a reference
+%% while CPython's tables were 426 KB of heap per send. Only a table holding
+%% nothing but `null' and `{funcref, Id, F}' with `0 =< F < NFuncs' is packed;
+%% anything else, including an index out of range, stays the list.
+pack_table(Elems, Id, NFuncs) ->
+    case pack(Elems, Id, NFuncs, <<>>) of
+        declined -> Elems;
+        Packed   -> Packed
+    end.
+
+pack([], _Id, _NFuncs, Acc) ->
+    Acc;
+pack([null | Rest], Id, NFuncs, Acc) ->
+    pack(Rest, Id, NFuncs, <<Acc/binary, ?NULL_WORD:32>>);
+pack([{funcref, Id, F} | Rest], Id, NFuncs, Acc)
+  when is_integer(F), F >= 0, F < NFuncs, F < ?NULL_WORD ->
+    pack(Rest, Id, NFuncs, <<Acc/binary, F:32>>);
+pack(_Elems, _Id, _NFuncs, _Acc) ->
+    declined.
+
+%% The list a packed table stands for, naming the instance `Id'.
+unpack_table(Packed, Id) ->
+    [case W of
+         ?NULL_WORD -> null;
+         F          -> {funcref, Id, F}
+     end || <<W:32>> <= Packed].
+
+%% A table's elements as a list naming `To': unpacked, or relocated from
+%% `From' as a list always was.
+table_list(Packed, _From, To) when is_binary(Packed) ->
+    unpack_table(Packed, To);
+table_list(Elems, From, To) ->
+    [reloc(V, From, To) || V <- Elems].
+
+table_size(Packed) when is_binary(Packed) -> byte_size(Packed) div 4;
+table_size(Elems)                         -> length(Elems).
 
 %% Reconstructible properties only: size, limits, and the bytes. Not the
 %% resource id, not the holder, not the owner.
@@ -595,12 +648,12 @@ restore_tables([T | Ts], [Elems | Es], From, To) ->
     %% `wasm_table:grow/3` is what respects the ceiling; `array:set` would not,
     %% since `wasm_table:89` creates the array `{fixed, false}` and extending
     %% it silently would walk past every limit `grow/3` enforces.
-    ok = fit(T, wasm_table:size(T), length(Elems)),
+    ok = fit(T, wasm_table:size(T), table_size(Elems)),
     %% **One store, not one per element.** `wasm_table:set/3` writes the whole
     %% array back and bumps a version each time, so a thousand-entry table was
     %% a thousand whole-array writes. `init/3` folds and stores once, which is
     %% what `wasm_instance` already does for element segments.
-    ok = wasm_table:init(T, 0, [reloc(V, From, To) || V <- Elems]),
+    ok = wasm_table:init(T, 0, table_list(Elems, From, To)),
     restore_tables(Ts, Es, From, To).
 
 fit(_T, Have, Want) when Have >= Want ->
@@ -706,7 +759,9 @@ to_parts(#snapshot{handle = {wasm_module, Hash}, source = Src} = S) ->
       key => S#snapshot.key,
       shape => shape(S),
       globals => [reloc(V, Src, self) || V <- tuple_to_list(S#snapshot.globals)],
-      tables => [[reloc(V, Src, self) || V <- T] || T <- S#snapshot.tables],
+      %% The same lists as before tables were packed, so the file format and
+      %% every file already written are unchanged.
+      tables => [table_list(T, Src, self) || T <- S#snapshot.tables],
       mems => [#{pages => P, runs => image_runs(I)}
                || #{pages := P, image := I} <- S#snapshot.mems],
       dropped => {S#snapshot.dropped_elems, S#snapshot.dropped_datas},
@@ -715,7 +770,8 @@ to_parts(#snapshot{handle = {wasm_module, Hash}, source = Src} = S) ->
 %% Cheap, and it turns every mismatch between an image and a module from a
 %% `function_clause` somewhere inside a restore into a refusal by name.
 shape(#snapshot{globals = Gs, tables = Ts, mems = Ms}) ->
-    {tuple_size(Gs), [length(T) || T <- Ts], [maps:get(pages, M) || M <- Ms]}.
+    {tuple_size(Gs), [table_size(T) || T <- Ts],
+     [maps:get(pages, M) || M <- Ms]}.
 
 -doc """
 An image from what a file held, bound to a module the caller resolved.
@@ -733,7 +789,7 @@ from_parts(#{hash := Hash} = P, {wasm_module, Want} = Handle, M) ->
     case Hash of
         Want ->
             case restore_admissible(P, M) of
-                ok             -> built(P, Handle);
+                ok             -> built(P, Handle, func_count(M));
                 {error, _} = E -> E
             end;
         _    -> refuse(snapshot_wrong_module,
@@ -837,7 +893,7 @@ restore_value_ok(V, _NFuncs) ->
 func_count(#module{imports = Imports, funcs = Funcs}) ->
     length([f || #import{desc = {func, _}} <- Imports]) + length(Funcs).
 
-built(P, Handle) ->
+built(P, Handle, NFuncs) ->
     #{version := V, key := K, globals := Gs, tables := Ts, mems := Ms,
       dropped := {DE, DD}, hooks := Hooks} = P,
     %% A fresh identity per load, so two images read from the same file are as
@@ -847,10 +903,18 @@ built(P, Handle) ->
     {ok, #snapshot{id = make_ref(), handle = Handle, version = V, key = K,
                    source = Src,
                    globals = list_to_tuple([reloc(G, self, Src) || G <- Gs]),
-                   tables = [[reloc(E, self, Src) || E <- T] || T <- Ts],
+                   tables = [loaded_table(T, Src, NFuncs) || T <- Ts],
                    mems = Ms, dropped_elems = DE, dropped_datas = DD,
                    hooks = Hooks, bytes = Bytes, img_res = undefined,
                    owner = undefined}}.
+
+%% Packed as a capture packs, from the file's `self' form: every funcref in it
+%% was range-checked by `restore_values_ok/2' before this runs.
+loaded_table(T, Src, NFuncs) ->
+    case pack_table(T, self, NFuncs) of
+        Packed when is_binary(Packed) -> Packed;
+        Elems -> [reloc(E, self, Src) || E <- Elems]
+    end.
 
 -doc """
 The image's pages, built and registered under `ImgRes`.

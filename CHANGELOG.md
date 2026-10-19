@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Sending an image no longer copies its tables.
+
+- **A table of functions travels as one binary.** An image's table holding
+  only `null` and the module's own functions is packed at capture and at load,
+  so handing an image to a request's runner copies a reference instead of the
+  table. The snapshot file format is unchanged.
+
 - **A `wasi:http` request to a host name is checked against the addresses the
   name resolves to.** Before, a name was checked as if it were `127.0.0.1` and
   then connected to by name, so a grant for a loopback port admitted any host

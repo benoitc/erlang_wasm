@@ -167,6 +167,17 @@ Two things a change here has to keep:
   pages. `test/audit/ATTEMPTS.md`, "Shared image pages: what was left out, and
   the constants", says what sharing them would need.
 
+## Why sending an image copies almost nothing
+
+An image is an Erlang term, and a send or a spawn copies it into the receiving
+process: the worker sends it to each request's runner. Its memory pages are
+binaries, which a copy shares by reference. Its tables used to be lists of
+`{funcref, Instance, Index}` tuples, which a copy does not share, so every
+request copied them. A table holding only `null` and the instance's own
+functions is now packed at capture, and at load, into one binary of a 32-bit
+word per entry, and unpacked for the new instance at restore. A table holding
+anything else stays a list, and the file holds lists as it always did.
+
 ## Read this next
 
 [Design notes](design-notes.md), then the adapter recipe in

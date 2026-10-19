@@ -149,6 +149,113 @@ restore. A pool that always hands the next request to the worker that just
 answered (last in, first out) gives it no time; rotate idle workers instead.
 Under full load it adds no throughput, because the restore still has to run.
 
+## Run a pool from one image
+
+This part is about `wasm_script_worker` too. Use it when you start several
+workers on the same adapter and options: started one by one, each worker loads
+or captures its own copy of the image, so a pool of N holds N copies, charges
+`max_snapshot_bytes` N times, and captures up to N times when no image is filed
+yet. Prepare the image once and start every worker from it instead:
+
+<!-- check: modules my_adapter -->
+```erlang
+{ok, P} = wasm_script_worker:prepare(my_adapter, Opts),
+{ok, W} = wasm_script_worker:start_link(my_adapter, Opts#{prepared => P}),
+ok = wasm_script_worker:release_prepared(P).
+```
+
+Put it under a supervisor with a small holder process first, so the pool
+prepares again if the holder restarts. The holder prepares in `init/1` and lets
+go in `terminate/2`:
+
+<!-- check: modules my_pool_sup my_pool_holder -->
+```erlang
+-module(my_pool_holder).
+-behaviour(gen_server).
+-export([start_link/2, start_worker/0]).
+-export([init/1, handle_call/3, handle_cast/2, terminate/2]).
+
+start_link(Adapter, Opts) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, {Adapter, Opts}, []).
+
+%% A worker's start function: fetch the prepared image and start from it.
+start_worker() ->
+    {Adapter, Opts, P} = gen_server:call(?MODULE, prepared),
+    wasm_script_worker:start_link(Adapter, Opts#{prepared => P}).
+
+init({Adapter, Opts}) ->
+    process_flag(trap_exit, true),
+    case wasm_script_worker:prepare(Adapter, Opts) of
+        {ok, P} -> {ok, {Adapter, Opts, P}};
+        {error, Reason} -> {stop, Reason}
+    end.
+
+handle_call(prepared, _From, State) ->
+    {reply, State, State}.
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+terminate(_Reason, {_Adapter, _Opts, P}) ->
+    wasm_script_worker:release_prepared(P).
+```
+
+The supervisor is `rest_for_one`, the holder first and a supervisor of the
+workers after it, so a new image restarts every worker and a crashed worker
+restarts alone:
+
+<!-- check: modules my_pool_sup my_pool_holder -->
+```erlang
+-module(my_pool_sup).
+-behaviour(supervisor).
+-export([start_link/3, init/1]).
+
+start_link(Adapter, Opts, N) ->
+    supervisor:start_link(?MODULE, {pool, Adapter, Opts, N}).
+
+init({pool, Adapter, Opts, N}) ->
+    Holder = #{id => holder,
+               start => {my_pool_holder, start_link, [Adapter, Opts]}},
+    Workers = #{id => workers, type => supervisor,
+                start => {supervisor, start_link, [?MODULE, {workers, N}]}},
+    {ok, {#{strategy => rest_for_one}, [Holder, Workers]}};
+init({workers, N}) ->
+    Children = [#{id => {worker, I},
+                  start => {my_pool_holder, start_worker, []}}
+                || I <- lists:seq(1, N)],
+    {ok, {#{strategy => one_for_one, intensity => 10, period => 10},
+          Children}}.
+```
+
+Start it with the adapter, the options every worker shares, and the pool size:
+
+<!-- check: modules my_pool_sup my_adapter -->
+```erlang
+{ok, Pool} = my_pool_sup:start_link(my_adapter, #{root => scratch}, 8).
+```
+
+What it changes:
+
+- The image is loaded from the snapshot store, or captured and filed, once,
+  in a temporary process. The pool holds one copy, charged once, and it is
+  freed when the holder and the last worker have let go.
+- Each worker still loads its own artifact. It checks that its options, less
+  `prepared`, equal the ones you prepared with, that its adapter is the same,
+  and that the image's store key and module hash are the ones it would have
+  used. Any difference refuses the start with
+  `{error, {bad_option, prepared, Why}}`.
+- Killing the holder restarts every worker on a new image; killing one
+  worker restarts that worker alone, on the image the others hold. A worker
+  started from an image every holder has let go of refuses to start with
+  `snapshot_invalidated`.
+- Isolation is unchanged: every request still gets an instance restored from
+  the image and used once.
+
+`capture_timeout` bounds the capture only, as in a plain start: loading the
+artifact and reading the store are not bounded. An adapter without snapshots
+answers `{error, #{kind := unsupported}}`; start its workers without
+`prepared`.
+
 ## Know what a crash leaves
 
 | what dies | what is left | who cleans it |

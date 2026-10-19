@@ -242,6 +242,11 @@ third of a second to answer. Two different settings do:
 - `code_cache_dir` keeps generated code across restarts. See [the compiled
   tier guide](compiled-tier.md).
 
+A pool started worker by worker captures up to once per worker when no image
+is filed yet, and holds one image per worker after. Prepare the image once
+with `wasm_script_worker:prepare/2` and start the pool from it: "Run a pool
+from one image" in [Using workers](worker.md).
+
 ## How it scales, and what it costs
 
 A floor is paid per concurrent runner, so the question a host actually has is

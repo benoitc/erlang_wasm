@@ -2,8 +2,16 @@
 
 ## Unreleased
 
-Sending an image no longer copies its tables.
+A pool of script workers can share one image, and sending an image no longer
+copies its tables.
 
+- **Prepare one image for a pool.** `wasm_script_worker:prepare/2` loads or
+  captures the image once, and every worker started with
+  `Opts#{prepared => Prepared}` holds that one image instead of its own copy:
+  one capture on a missing image, one charge to `max_snapshot_bytes`. Release
+  the caller's hold with `wasm_script_worker:release_prepared/1`. A worker
+  started without `prepared` is unchanged. "Run a pool from one image" in
+  `docs/worker.md` shows a supervised pool.
 - **A table of functions travels as one binary.** An image's table holding
   only `null` and the module's own functions is packed at capture and at load,
   so handing an image to a request's runner copies a reference instead of the

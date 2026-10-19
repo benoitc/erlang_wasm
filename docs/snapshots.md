@@ -62,7 +62,14 @@ It is a worker option rather than a limit because a `timeout` in a limits map
 is enforced by whoever owns the instance, and an inline call cannot be
 interrupted. The kernel gives the capture a process of its own and kills it at
 the deadline, so a guest whose `init()` never returns costs one timeout instead
-of a `start_link/2` that never comes back.
+of a `start_link/2` that never comes back. It bounds the capture and nothing
+before it: loading the artifact and looking the image up in `snapshot_dir` are
+not bounded by any setting.
+
+Starting several workers on the same options, prepare the image once with
+`wasm_script_worker:prepare/2` and start each worker from it, so the pool holds
+one image, charged once, and captures at most once. "Run a pool from one
+image" in [Using workers](worker.md) shows how.
 
 Make `validate` ask the runtime whether it came up, rather than asking the
 module what it exports: `init`'s own return value never reaches the kernel, so

@@ -162,10 +162,10 @@ Two things a change here has to keep:
 - **The image outlives every memory restored from it.** The keeper counts each
   restored memory as a holder of the image, so a worker that stops while a
   runner is still finishing does not free pages the runner reads.
-- **One image per worker, not per file.** A worker loads its image from the
-  snapshot store itself, so fifty workers on one file hold fifty copies of its
-  pages. `test/audit/ATTEMPTS.md`, "Shared image pages: what was left out, and
-  the constants", says what sharing them would need.
+- **One image per pool, when the pool prepares it.** `prepare/2` loads or
+  captures the image once, in a process of its own, and every worker started
+  with `prepared` takes a hold on that one. A worker started without it loads
+  its own, so fifty such workers on one file hold fifty copies.
 
 ## Why sending an image copies almost nothing
 

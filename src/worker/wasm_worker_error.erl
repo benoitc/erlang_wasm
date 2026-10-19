@@ -80,7 +80,8 @@ A guest or an adapter that needs a vocabulary of its own puts a binary in
               | worker_died
               | exit
               | adapter_failure
-              | runtime_failure.
+              | runtime_failure
+              | unsupported.
 
 -doc "What every worker entry point answers with when it does not answer `ok`.".
 -type worker_error() :: #{class := class(),
@@ -140,7 +141,7 @@ kinds() ->
     [timeout, cancelled, output_limit, result_limit, crashed, insufficient_limit,
      bad_stage_path, busy, no_reaper, cleanup_saturated, unauthorised,
      request_finished, still_running, already_awaited, unknown_ref, no_worker,
-     worker_died, exit, adapter_failure, runtime_failure].
+     worker_died, exit, adapter_failure, runtime_failure, unsupported].
 
 -doc """
 Whether a term is a well-formed worker error.

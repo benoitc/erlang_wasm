@@ -633,7 +633,7 @@ start_steps(Adapter, Opts) ->
 
 %% The artifact, the limits and the runner's heap floor.
 loaded(Adapter, Opts) ->
-    case Adapter:artifact(Opts) of
+    case artifact_elsewhere(Adapter, Opts) of
         {error, E} ->
             {error, E};
         {ok, Artifact} ->
@@ -652,6 +652,60 @@ loaded(Adapter, Opts) ->
                     {ok, Artifact, Limits, Heap}
             end
     end.
+
+%% **The artifact is loaded in a process of its own.** Loading reads the
+%% module file, 30 MB for CPython, and a worker does so little after it starts
+%% that it is never collected: every idle worker kept a dead reference to the
+%% file. The loader hands the module claims it took to this process with
+%% `wasm_module_cache:claim_for/2' while it still holds them, so the module is
+%% never unclaimed in between, then exits and takes the file with it. What
+%% comes back is the artifact alone. A raise in the adapter is raised again
+%% here, so a start fails exactly as it did when it ran here.
+artifact_elsewhere(Adapter, Opts) ->
+    Parent = self(),
+    {Pid, Mon} = spawn_monitor(
+                   fun() -> artifact_proc(Parent, Adapter, Opts) end),
+    receive
+        {artifact, Pid, {raised, C, R, St}} ->
+            reap(Pid, Mon),
+            erlang:raise(C, R, St);
+        {artifact, Pid, Result} ->
+            reap(Pid, Mon),
+            Result;
+        {'DOWN', Mon, process, Pid, Reason} ->
+            {error, wasm_worker_error:worker(crashed, ~"the artifact load died",
+                                             #{reason => reason_of(Reason)})}
+    end.
+
+artifact_proc(Parent, Adapter, Opts) ->
+    Result = try Adapter:artifact(Opts) of
+                 {ok, _} = Ok -> with_claims_handed(Parent, Ok);
+                 Other        -> Other
+             catch C:R:St -> {raised, C, R, St}
+             end,
+    Parent ! {artifact, self(), Result}.
+
+with_claims_handed(Parent, Ok) ->
+    case wasm_module_cache:claims(self()) of
+        {ok, Held} ->
+            hand_claims([H || {H, N} <- Held, _ <- lists:seq(1, N)], Parent,
+                        Ok);
+        {error, E} ->
+            not_handed(E)
+    end.
+
+hand_claims([], _Parent, Ok) ->
+    Ok;
+hand_claims([H | Hs], Parent, Ok) ->
+    case wasm_module_cache:claim_for(H, Parent) of
+        ok         -> hand_claims(Hs, Parent, Ok);
+        {error, E} -> not_handed(E)
+    end.
+
+not_handed(E) ->
+    {error, wasm_worker_error:worker(
+              crashed, ~"the module claim was not handed over",
+              #{reason => reason_of(E)})}.
 
 floors(Adapter, Opts, Limits) ->
     maps:merge(adapter_defaults(Adapter, Limits), Opts).

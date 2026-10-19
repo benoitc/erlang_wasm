@@ -38,7 +38,8 @@ all() ->
      stopping_the_reaper_stops_its_journal_writers,
      {group, typed}, {group, command}, {group, script_v1},
      {group, script_v1_channel}, {group, reactor}, {group, reactor_ahead},
-     {group, wrappers}, {group, pool}, {group, reactor_pooled}].
+     {group, wrappers}, {group, pool}, {group, reactor_pooled},
+     {group, loader}].
 
 groups() ->
     [{typed, [], cases(fake_typed_adapter)},
@@ -76,7 +77,10 @@ groups() ->
      %% Every case the kit has, on workers started from a prepared image:
      %% sharing the image must not share anything a request can see.
      {reactor_pooled, [],
-      cases(fake_reactor_adapter) ++ [a_request_starts_from_the_image]}].
+      cases(fake_reactor_adapter) ++ [a_request_starts_from_the_image]},
+     %% The artifact is loaded in a process of its own, which hands its module
+     %% claims to the worker and takes the module file with it when it exits.
+     {loader, [], loader_cases()}].
 
 %% A declared capability makes its cases mandatory; an undeclared one
 %% contributes none and is reported rather than passed.
@@ -107,6 +111,7 @@ init_per_group(script_v1_channel, Config) ->
     [{adapter, fake_script_v1_channel_adapter} | Config];
 init_per_group(reactor, Config) -> [{adapter, fake_reactor_adapter} | Config];
 init_per_group(pool, Config) -> [{adapter, fake_reactor_adapter} | Config];
+init_per_group(loader, Config) -> [{adapter, fake_reactor_adapter} | Config];
 init_per_group(reactor_pooled, Config) ->
     [{adapter, fake_reactor_adapter}, {pooled, true} | Config];
 init_per_group(reactor_ahead, Config) ->
@@ -880,6 +885,79 @@ the_documented_pool_restarts_as_supervised(_Config) ->
         receive {'DOWN', Mon, process, Sup, _} -> ok end
     end.
 
+%%% ------------------------------------------- the artifact, loaded aside ---
+%%
+%% A worker does little after it starts and is rarely collected, so a module
+%% file read in its own process stayed referenced for the worker's life: 30 MB
+%% per idle CPython worker. The module here is padded with a custom section so
+%% its file is a binary of a size nothing else has.
+
+loader_cases() ->
+    [a_worker_keeps_no_module_file,
+     the_worker_holds_the_module_claim,
+     a_failed_artifact_load_leaves_no_claim].
+
+%% A plain start, a start from a prepared image and a start with no image at
+%% all: none of the workers references the file once it is up.
+a_worker_keeps_no_module_file(Config) ->
+    {Path, Size} = padded_module(Config),
+    Opts = #{path => Path},
+    {ok, Plain} = wasm_script_worker:start_link(fake_reactor_adapter, Opts),
+    {ok, P} = wasm_script_worker:prepare(fake_reactor_adapter, Opts),
+    Pooled = start_from(P, Opts),
+    {ok, Bare} = wasm_script_worker:start_link(fake_recording_adapter, Opts),
+    Ws = [Plain, Pooled, Bare],
+    ?assertEqual([], [W || W <- Ws, references_binary_of(W, Size)]),
+    [?assertMatch({ok, _}, wasm_script_worker:run(W, #{})) || W <- Ws],
+    ok = wasm_script_worker:release_prepared(P),
+    [ok = wasm_script_worker:stop(W) || W <- Ws].
+
+%% With no image to hold the module for it, the worker's own claim is all that
+%% keeps the module resident once the loader is gone: it is the worker's, and
+%% a request still instantiates.
+the_worker_holds_the_module_claim(Config) ->
+    {Path, _Size} = padded_module(Config),
+    {ok, Bytes} = file:read_file(Path),
+    H = {wasm_module, crypto:hash(sha256, Bytes)},
+    {Got, Spawned} = spawned_by(fun() ->
+                         wasm_script_worker:start_link(fake_recording_adapter,
+                                                       #{path => Path})
+                     end, [set_on_spawn]),
+    {ok, W} = Got,
+    Loaders = [Pid || Pid <- Spawned, Pid =/= W],
+    ?assertNotEqual([], Loaders),
+    ?assertEqual([], [Pid || Pid <- Loaders, is_process_alive(Pid)]),
+    ok = no_claims(Loaders),
+    ?assertEqual({ok, [{H, 1}]}, wasm_module_cache:claims(W)),
+    ?assertMatch({ok, _}, wasm_module_cache:get(H)),
+    ?assertMatch({ok, _}, wasm_script_worker:run(W, #{})),
+    ok = wasm_script_worker:stop(W),
+    ok = evicted(H).
+
+%% An artifact that loads its module and then refuses, and one that raises:
+%% each start answers what it answered when the load ran in the worker, and
+%% no claim is left behind on the module.
+a_failed_artifact_load_leaves_no_claim(Config) ->
+    {Path, _Size} = padded_module(Config),
+    {ok, Bytes} = file:read_file(Path),
+    H = {wasm_module, crypto:hash(sha256, Bytes)},
+    {Got, Spawned} = spawned_by(fun() ->
+                         wasm_script_worker:start_link(
+                           fake_reactor_adapter,
+                           #{path => Path, fail_after_load => true})
+                     end, [set_on_spawn]),
+    ?assertEqual({error, wasm_worker_error:adapter(
+                           adapter_failure, ~"refused after load", #{})},
+                 Got),
+    ?assertMatch([_, _ | _], Spawned),
+    ?assertEqual([], [Pid || Pid <- Spawned, is_process_alive(Pid)]),
+    ok = no_claims(Spawned),
+    ok = evicted(H),
+    Missing = filename:join(?config(priv_dir, Config), "missing.wasm"),
+    ?assertMatch({error, {{badmatch, {error, enoent}}, [_ | _]}},
+                 wasm_script_worker:start_link(fake_reactor_adapter,
+                                               #{path => Missing})).
+
 %%% ---------------------------------------------------------- pool helpers ---
 
 start_from(P, Opts) ->
@@ -901,11 +979,14 @@ fresh_dir(Config, Name) ->
 
 %% What `F' answers, and every process the caller spawned while it ran. The
 %% trace goes to a collector: a process tracing itself is sent nothing.
-spawned_by(F) ->
+spawned_by(F) -> spawned_by(F, []).
+
+%% With `[set_on_spawn]', what those processes spawned as well.
+spawned_by(F, Flags) ->
     Self = self(),
     C = spawn_link(fun() -> collect([]) end),
-    1 = erlang:trace(Self, true, [procs, {tracer, C}]),
-    Got = try F() after erlang:trace(Self, false, [procs]) end,
+    1 = erlang:trace(Self, true, [procs, {tracer, C} | Flags]),
+    Got = try F() after erlang:trace(Self, false, [procs | Flags]) end,
     Ref = erlang:trace_delivered(Self),
     receive {trace_delivered, Self, Ref} -> ok end,
     C ! {spawned, Self},
@@ -929,6 +1010,40 @@ no_claims(Pids, N) ->
     case [P || P <- Pids, maps:is_key(P, Claims)] of
         [] -> ok;
         _  -> timer:sleep(10), no_claims(Pids, N - 1)
+    end.
+
+%% The snapshot fixture with a 1 MB custom section after it, under a name of
+%% its own so its hash is new: the same behaviour, a file nothing else holds.
+padded_module(Config) ->
+    {ok, Bytes} = file:read_file(
+                    filename:join([wasm_spec_runner:fixtures_dir(),
+                                   "snapshot", "reactor.wasm"])),
+    Tag = integer_to_binary(erlang:unique_integer([positive])),
+    Payload = <<(byte_size(Tag)), Tag/binary, 0:(1 bsl 23)>>,
+    Padded = <<Bytes/binary, 0, (leb(byte_size(Payload)))/binary,
+               Payload/binary>>,
+    Path = filename:join(?config(priv_dir, Config),
+                         <<"padded-", Tag/binary, ".wasm">>),
+    ok = file:write_file(Path, Padded),
+    {Path, byte_size(Padded)}.
+
+leb(N) when N < 128 -> <<N>>;
+leb(N) -> <<(N band 127 bor 128), (leb(N bsr 7))/binary>>.
+
+references_binary_of(Pid, Size) ->
+    {binary, Bins} = process_info(Pid, binary),
+    lists:keymember(Size, 2, Bins).
+
+%% Resident no more once its last holder is gone; the `DOWN' that drops a
+%% claim reaches the cache after the holder's exit.
+evicted(H) -> evicted(H, 100).
+
+evicted(H, 0) ->
+    ct:fail({still_resident, H, wasm_module_cache:get(H)});
+evicted(H, N) ->
+    case wasm_module_cache:get(H) of
+        {error, not_loaded} -> ok;
+        {ok, _} -> timer:sleep(10), evicted(H, N - 1)
     end.
 
 %% `#state.claims' of `wasm_module_cache', by position.

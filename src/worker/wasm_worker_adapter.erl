@@ -208,7 +208,13 @@ on the request's remaining deadline.
                                   ok | {error, wasm_worker_error:worker_error()})}.
 
 
--doc "Load whatever this adapter runs, once, when the worker starts.".
+-doc """
+Load whatever this adapter runs, once, when the worker starts.
+
+Called in a short-lived process, not in the worker: module claims taken with
+`wasm:load/1` are handed to the worker before it exits, and anything else
+owned by that process does not outlive it.
+""".
 -callback artifact(Opts :: map()) -> {ok, artifact()} | {error, wasm_worker_error:worker_error()}.
 
 -doc """

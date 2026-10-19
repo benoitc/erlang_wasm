@@ -16,6 +16,12 @@ copies its tables.
   only `null` and the module's own functions is packed at capture and at load,
   so handing an image to a request's runner copies a reference instead of the
   table. The snapshot file format is unchanged.
+- **An idle worker no longer keeps its module file.** `Adapter:artifact/1`
+  runs in a short-lived process that hands its module claims to the worker,
+  so the file it read (30 MB for CPython) is freed when that process exits.
+  An adapter whose artifact holds a process-owned resource, such as an ETS
+  table, must return values instead. `wasm_module_cache:claims/1` lists what
+  a process holds.
 
 - **A `wasi:http` request to a host name is checked against the addresses the
   name resolves to.** Before, a name was checked as if it were `127.0.0.1` and

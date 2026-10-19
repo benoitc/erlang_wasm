@@ -47,7 +47,7 @@ compiled artefact, with no coordination. It also means either of you can call
 
 -export([start_link/0]).
 -export([load/1, load/2, unload/1, get/1, resident/0, stats/0]).
--export([claim_for/2, unclaim_for/2]).
+-export([claim_for/2, unclaim_for/2, claims/1]).
 -export([publish_ir/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -261,6 +261,17 @@ claim_for({wasm_module, Hash}, Owner) when is_pid(Owner) ->
 unclaim_for({wasm_module, Hash}, Owner) when is_pid(Owner) ->
     call({unclaim_for, Hash, Owner}).
 
+-doc """
+The modules `Pid` holds claims on, each with how many.
+
+Use it with `claim_for/2` to hand a short-lived process's claims to the one
+that outlives it: claim for the survivor while the claims are still held,
+then let the short-lived process exit.
+""".
+-spec claims(pid()) -> {ok, [{handle(), pos_integer()}]} | {error, term()}.
+claims(Pid) when is_pid(Pid) ->
+    call({claims, Pid}).
+
 -spec resident() -> non_neg_integer().
 resident() -> gen_server:call(?SERVER, resident).
 
@@ -329,6 +340,11 @@ handle_call({claim_for, Hash, Owner}, _From, State) ->
 
 handle_call({unclaim_for, Hash, Owner}, _From, State) ->
     {reply, ok, drop_claim(Owner, Hash, State)};
+
+handle_call({claims, Pid}, _From, State) ->
+    Mine = maps:get(Pid, State#state.claims, #{}),
+    {reply, {ok, [{{wasm_module, H}, N} || {H, N} <- maps:to_list(Mine)]},
+     State};
 
 handle_call({gave_up, Hash}, {Pid, _}, State) ->
     Compiling =

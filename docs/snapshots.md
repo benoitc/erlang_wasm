@@ -86,6 +86,34 @@ only their non-zero runs, compressed.
 
 An unqualified "image" below means the thing itself, not any one of its sizes.
 
+## How an image moves
+
+```text
+  initialisation instance, snapshotable => true
+        |
+        | wasm:snapshot/1
+        v
+  image: memories, globals, tables         wasm:save_snapshot/2
+    a wasm_snapshot_owner process  ----------------------------> file
+    holds the module claim and              wasm:load_snapshot/2
+    the keeper record of its pages <---------------------------- file
+        |
+        | wasm:restore/3, once per request, start function not run
+        v
+  fresh instance; its memory is a page table over the image
+    untouched page   read from the image, shared by every restore
+    written page     copied once into the instance's own arena
+        |
+        | wasm:destroy/1
+        v
+  the private pages are freed; the image stays while anything holds it
+```
+
+The owner process lives as long as some process holds the image, and the
+keeper keeps the image's pages charged until the last memory restored from it
+is freed. A worker does the file half for you through `wasm_snapshot_store`
+when `snapshot_dir` is set.
+
 ## Capture one
 
 The guest must be a **reactor**: something that brings its runtime up in one

@@ -41,6 +41,37 @@ ok = wasm_jit:await(I, 60000).
 wasm_jit:counts().    %% #{compiled => N, entered => M, reentered => K, cached => C}
 ```
 
+## How the pieces fit
+
+```text
+  wasm:call/3,4 at depth 0, the outermost call only
+        |
+        v
+  wasm_jit:entry/3 ---- resident? ----yes----> compiled entry, wasm_code_N
+        | no
+        v
+  interpreted run (wasm_exec), which records the functions that ran
+        |
+        v
+  wasm_jit:after_call/2      policy: what to compile, and when
+        |
+        v
+  wasm_code_cache:lookup     files under code_cache_dir ----hit----+
+        | miss                                                     |
+        v                                                          |
+  wasm_core                  IR to Core Erlang, one unit at a time |
+        |                                                          |
+        v                                                          |
+  compile:forms/2            BEAM binary, stored in the cache      |
+        |                                                          |
+        v                                                          |
+  wasm_code_slots            loaded into a pre-named slot  <-------+
+```
+
+`wasm_jit` decides; `wasm_core` and the OTP compiler do the work in a
+process of their own, so the call that asked never waits for it. The next
+outermost call finds the slot resident and enters the compiled code.
+
 ## Keep what it compiled, or pay for it on every start
 
 Turn this on at the same time. Without it a node recompiles from scratch every
@@ -216,7 +247,7 @@ costs what compiling it bought.
 
 Killing a caller inside compiled code is safe and costs nothing lasting. It does
 leak the call lease, because that is given back in an `after` and an `after`
-does not run for an untrappable kill, but a leaked lease no longer pins its
+does not run for an untrappable kill, but a leaked lease does not pin its
 slot: generated code checks the slot generation it was built for against the one
 its caller was promised, so reuse is safe whatever the counter says.
 `wasm_jit_lifetime_SUITE` covers this, along with a compiler killed mid-flight,
@@ -288,12 +319,12 @@ and accepting a request, which is a fixed 1.2 to 2.0 ms and therefore a quarter
 of a Lua request and 5% of a CPython one. `test/audit/PERF.md` has the full phase
 tables and what is in each interval.
 
-Those phases were measured when a restore copied the image. A restore now lays
-a page table over a shared image instead: a CPython restore is 0.79 ms rather
-than 12.0, and the request pays about 1.3 ms of first-write copies inside the
-invocation. [Snapshots](snapshots.md) has the table.
+Those phases were measured with a restore that copied the image. A restore
+lays a page table over a shared image instead: a CPython restore is 0.79 ms
+rather than 12.0, and the request pays about 1.3 ms of first-write copies
+inside the invocation. [Snapshots](snapshots.md) has the table.
 
-**Budget for the cold node, because that is where the cost now is.** The tier
+**Budget for the cold node, because that is where the cost is.** The tier
 arrives after a fixed amount of compiling, and a reactor request is roughly ten
 times faster than a command one, so it takes ten times as many requests to get
 there: about 150 s and several thousand requests on QuickJS, every one of them
@@ -420,14 +451,43 @@ seconds to save 1.9. See `wasm_code_cache`.
 
 An unrecognised profile is `{error, #{kind := unknown_profile}}`, not a crash.
 
+## What a memory access costs
+
+Compiled code reaches memory 0 through a two-entry translation cache, so a
+restored memory's low addresses do not walk the page table on every access.
+One load, at address `A` in page `P`:
+
+```text
+  the site, inline in the function
+    straddles two words? ------------yes---> wasm_exec:load_at, the helper
+    P is entry one's page? ----------yes---> read the array, done
+        | no
+        v
+  apply wasm_m_load_4_i32_u(State, A, six cache values), module-local
+    P is entry two's page? ----------yes---> read, swap the two entries
+    out of bounds? ------------------yes---> the helper, which traps
+    past the image? -----------------yes---> growth chunk, cached first
+        |
+        v
+  page table entry for P
+    0      untouched image page -----------> read the image binary,
+                                             not cached
+    slot   private page in the arena ------> read the array, cached first
+```
+
+A hit is one compare and no bounds test; nothing invalidates an entry,
+because a slot and a growth chunk never move. A store to an untouched page
+goes to the helper, which makes the page private first. The page table is
+described in [Memory](memory.md), and the cache in
+[Design notes](design-notes.md#the-translation-cache).
+
 ## Short notes
 
-- `full` is the default, which the profile table above says and this note used
-  to contradict. `baseline` skips the OTP compiler's SSA optimiser and was the
-  default while that optimiser bought nothing measurable; it buys something now,
-  because the generator states value ranges the pass can use. QuickJS is **75.0
-  to 76.8 ms at `full` against 86.1 to 87.7 at `baseline`**, and `full` costs
-  129.3 seconds against 58.1 to compile the hot set. Ask for
+- `full` is the default. `baseline` skips the OTP compiler's SSA optimiser,
+  which costs run time, because the generator states value ranges that pass
+  can use. QuickJS is **75.0 to 76.8 ms at `full` against 86.1 to 87.7 at
+  `baseline`**, and `full` costs 129.3 seconds against 58.1 to compile the hot
+  set. Ask for
   `#{compile_quality => baseline}` when the compile time matters more than the
   run. Figures in `test/audit/PERF.md`.
 - Turning the tier on by default is a decision that has not been made. Every
@@ -436,13 +496,13 @@ An unrecognised profile is `{error, #{kind := unknown_profile}}`, not a crash.
 - **A restored memory costs compiled code a lookup.** Memory 0 is reached
   through a two-entry translation cache, and a miss resolves the page through
   the memory's page table. A memory not restored from an image pays one
-  compare. `test/audit/PERF.md`, "Shared pages", has what the lookup cost
-  when it was introduced.
+  compare. `test/audit/PERF.md`, "Shared pages", has what the lookup
+  costs.
 - **A memory access compiles to one compare and a call.** The access tests
   the first cache entry inline and, when that fails, applies a function of the
-  generated module that holds the second entry and the page table lookup. In
-  0.9.0 and 0.9.1 all of it was emitted at every access. Out of line, compiled
-  code is 41 to 43% of that size, a cold compile takes a quarter of the time
+  generated module that holds the second entry and the page table lookup.
+  Against emitting all of it at every access, compiled code is 41 to 43% of
+  the size, a cold compile takes a quarter of the time
   (CPython 104 s against 415 s, QuickJS 69 s against 271 s), and a compiled
   request's guest time is 12 to 35% lower. `test/audit/PERF.md`, "The miss
   path out of line", has the gates.

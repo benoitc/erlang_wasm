@@ -17,6 +17,37 @@ change is usually enough.
 3. Read the module docs of what you are about to touch. Every module opens by
    saying what it is, and the large ones have a table of where things are.
 
+## The shape of a change
+
+```text
+  pick the recipe for your change
+        |
+  read the modules and pages it names
+        |
+  write a test, and watch it fail on the code as it is
+        |
+  make the change
+        |
+  run the required checks
+        |
+  does it claim speed? --no-------------------------------+
+        | yes                                             |
+  write the gate down first, then measure                 |
+        |                                                 |
+  gate passes? --no--> stop: find where and why,          |
+        | yes          report, ask before reverting       |
+        |                                                 |
+  record it in PERF.md, or in ATTEMPTS.md if dropped      |
+        |                                                 |
+  update the page the recipe names  <---------------------+
+        |
+  open the pull request
+```
+
+A gate is fixed before the numbers arrive and is never moved after them. A
+change that measured worse and was dropped still goes in `ATTEMPTS.md`, so the
+next person does not try it again.
+
 ## Run the checks
 
 Every change passes these before it is committed or reviewed:

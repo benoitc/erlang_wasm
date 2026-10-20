@@ -106,15 +106,13 @@ set it per worker, or export `defaults/1` as
 wasm_script_worker:start_link(my_adapter, #{runner_min_heap_words => 200_000}).
 ```
 
-The right value belongs to your guest. [Tuning](tuning.md) is how to find yours.
-The emulator rounds a floor up to a heap-size class, 200,000 becoming 318,187
-words, 2.4 MiB per concurrent runner; and a floor that does not fit under
-`max_heap_words` is refused with a warning.
+The right value belongs to your guest. [Tuning](tuning.md) is how to find yours,
+and [How a heap floor works](tuning.md#how-a-heap-floor-works) explains the
+rounding, the ceiling it must fit under and where the options go.
 
-`capture_min_heap_words` is the same for the process that captures the
-snapshot when the worker starts, and on a slow-starting guest it matters most:
-a CPython worker start goes from 92 s to 17 s. No adapter sets it for you,
-because it needs a larger `max_heap_words` beside it.
+`capture_min_heap_words` does the same for the snapshot capture at worker
+start. On a slow-starting guest it matters most: a CPython worker start goes
+from 92 s to 17 s. No adapter sets it for you.
 
 <!-- check: modules my_adapter -->
 ```erlang

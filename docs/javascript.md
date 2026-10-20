@@ -140,14 +140,11 @@ unfloored request was garbage collection: a restored instance keeps almost
 nothing on the runner's own heap, so the collector gives it 233 words and
 collects 98 times through a call that allocates hundreds of millions.
 
-Note the option sits beside `root` and **not** inside `limits`. A floor is not
-a bound, and one written into the limits map is ignored silently.
-
 200,000 words is QuickJS's knee and it plateaus there; the knee is a property
 of the guest, and [the tuning guide](tuning.md) is how to find one for a
-different build. There is a matching `capture_min_heap_words` for the worker
-start, which is worth little here because QuickJS captures in well under a
-second.
+different build. `capture_min_heap_words` is worth little here, because
+QuickJS captures in well under a second. Where the options go and how a floor
+is rounded is in [How a heap floor works](tuning.md#how-a-heap-floor-works).
 
 ## The bound is wall clock, or work, and not both
 

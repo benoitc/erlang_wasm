@@ -58,13 +58,10 @@ Set the option yourself to change it, or pass `0` to turn it off:
               limits => wasm_lua:limits(),
               runner_min_heap_words => 0}).
 ```
- A restored instance keeps almost nothing on the runner's own heap, so the
-collector gives it the emulator's 233 words and collects constantly through a
-call that allocates far more than that.
 
-Note the option sits beside `root` and **not** inside the map
-`wasm_lua:limits/0` returns. A floor is not a bound, and one written
-into the limits map is ignored silently.
+Pass it beside `root`, not inside the map `wasm_lua:limits/0` returns: [How a
+heap floor works](tuning.md#how-a-heap-floor-works) explains why, and how the
+number is rounded.
 
 200,000 words is where Lua plateaus, and it rounds up to 318,187 words, about
 2.5 MB held only while a request runs. It is a property of the guest, so a

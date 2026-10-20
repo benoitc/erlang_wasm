@@ -6,6 +6,22 @@ You do not call this. It is what makes `wasm:destroy/1`, `wasm_memory:free/1`
 and a process exiting agree with one another about when a memory's pages go
 back to the node.
 
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| reserve pages for a new memory, table or heap | `reserve/4` |
+| add, remove or move holders | `acquire/3`, `release/2`, `release_all/1`, `transfer/3` |
+| an instantiation that failed part way | `discard/1` |
+| per-holder page caps | `set_limit/2`, `build_limit/2`, `total_of/1` |
+| growing a memory in two stages | `grow_begin/4`, `grow_commit/3`, `grow_abort/2` |
+| extending a restored memory's arena | `arena_begin/4`, `arena_commit/3`, `arena_abort/2`, `ack/2` |
+| charging a GC heap for its tables | `reconcile/2`, `reconcile/3` |
+| snapshot images and their byte budget | `image_reserve/3`, `image_live/1` |
+| a holder's process dying | `handle_info/2` |
+| finishing or undoing a transaction after a restart | `init/1`, `recover_transactions/1` |
+| diagnostics | `charge_of/1`, `holders_of/1`, `resources/0` |
+
 ## Why a holder set and not a count
 
 A count cannot tell two releases by one holder from releases by two. Destroy an

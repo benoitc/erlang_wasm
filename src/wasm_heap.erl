@@ -6,6 +6,21 @@ You will not call this directly; `wasm:pin/2` and `wasm:release/2` are the parts
 you use. Read it when you want to know what a struct or an array costs, or why
 holding a reference needs a pin.
 
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| a new store, and the instances that share it | `new/0`, `new/2`, `register/3`, `acquire/3`, `delete/2` |
+| allocating a struct or an array | `new_struct/3`, `new_array/5` |
+| reading and writing fields and elements | `get_field/3`, `set_field/4`, `array_get/3`, `array_set/4` |
+| `array.fill` and `array.copy` | `array_fill/5`, `array_copy/6` |
+| charging the store to the node's page budget | `charge/1`, `charge/2`, `refuse_if_over/2` |
+| read leases, and the exclusive hold a collection takes | `lease/1`, `unlease/2`, `try_exclusive/1`, `release_exclusive/1` |
+| deciding and running a collection | `should_collect/1`, `collect/2`, `major/3`, `minor/3` |
+| marking and sweeping | `mark/4`, `sweep/3` |
+| the write barrier's remembered set | `remember/4`, `remembered_children/2` |
+| pins held for the embedder | `pin/2`, `unpin/2`, `unpin_all/1`, `pins/1` |
+
 ## Why it is not a term inside the instance state
 
 It was, and that was the most expensive thing in this runtime.

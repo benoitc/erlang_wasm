@@ -7,6 +7,23 @@ which says where it keeps its files; `wasm_script_worker` refuses a request
 when none is running. `wasm_script_worker:cleanup_stats/0` and
 `wasm_script_worker:cleanup_requests/0` are the supported way to look at it.
 
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| starting, and sweeping what a previous run left | `start_link/1`, `init/1`, `sweep/1`, `sweep_root/3` |
+| reserving a request before anything exists | `reserve/4` |
+| registering, withdrawing and handing over cleanup | `register/2`, `withdraw/2`, `transfer/3`, `finish/1` |
+| a guardian, owner or steward going down | `guardian_down/2`, `owner_down/3`, `steward_down/2` |
+| queueing cleanup jobs within capacity | `schedule/2`, `pump/1`, `start_job/2` |
+| what a cleanup job runs, and its time bound | `job/4`, `run_cleanup/3`, `run_bounded/2` |
+| whether a job may still act on a request | `authorise/2`, `generation/0` |
+| writing and removing journal records | `journal/3`, `writer/1`, `encode_record/2` |
+| reading a record back at a restart | `decode_record/3`, `adopt_or_orphan/3` |
+| asking a live guardian whether it still owns a request | `ask/1`, `retry_handshake/2` |
+| a cleanup callback that will not finish | `quarantine/2` |
+| the operator view | `stats/0`, `requests/0` |
+
 ## Why a process and not a table
 
 A worker's guardian owns the request's directories and its registered cleanup

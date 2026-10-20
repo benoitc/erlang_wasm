@@ -13,6 +13,30 @@ when you are done.
 ok         = wasm:destroy(Inst).
 ```
 
+## Where things are
+
+The banners `%%% lifecycle`, `%%% calls`, `%%% host helpers` and `%%% errors`
+divide the file; this table goes one step further.
+
+| area | you want | look at |
+| --- | --- | --- |
+| compile and load | a module from bytes or text, cached or not | `load/1`, `load/2`, `load_file/1`, `compile/1`, `compile/2` |
+| compile and load | validation, and dropping a cached module | `validate/1`, `compile_with/3`, `unload/1` |
+| instantiate | a new instance, and the limits it gets | `instantiate/2`, `instantiate/3`, `check_limits/1`, `defaults/1` |
+| instantiate | the start function | `run_start/3` |
+| call | calling an export, and checking its arguments | `call/3`, `call/4`, `check_args/3` |
+| call | the lease, depth and limits around one invocation | `invoke_with/5`, `leased_invoke/6`, `invoke_at/6` |
+| call | a wasm-to-wasm call through a link | `call_nested/3` |
+| call | exports, globals and function types | `exports/1`, `get_global/2`, `func_type_of/2` |
+| memory access | reading and writing linear memory from the host | `read_memory/3`, `write_memory/3`, `memory_size/1` |
+| snapshots | capturing and restoring an image | `snapshot/1`, `snapshot/2`, `restore/3`, `snapshot_info/1` |
+| snapshots | images on disk, and holding one | `save_snapshot/2`, `load_snapshot/2`, `acquire/1`, `release/1` |
+| extern and GC refs | an export in the form another module imports | `extern/2` |
+| extern and GC refs | collection after a call, and its roots | `maybe_collect/4`, `roots_of/1` |
+| extern and GC refs | keeping a reference alive outside the runtime | `pin/2`, `release/2`, `release_all/1` |
+| destroy | releasing an instance's claims | `destroy/1`, `do_destroy/1`, `share_ir/1` |
+| errors | printing an error value | `format_error/1` |
+
 ## You get one execution path
 
 Create an instance, call it, destroy it. That is the *inline* path and there is

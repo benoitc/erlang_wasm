@@ -1,0 +1,40 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== warmup-cand ==
+# 16:26  up 11 days,  2:51, 53 users, load averages: 34.54 31.78 22.31
+guest    operation           n       min us    median us
+py       restore             3        429.5        478.6
+py       load_snapshot       2      22348.9      22348.9
+qjs      restore             3        117.3        141.3
+qjs      load_snapshot       2       1075.3       1075.3
+lua      restore             3         63.1         82.5
+lua      load_snapshot       2        335.8        335.8
+plain    restore             3         14.4         15.7
+plain    load_snapshot       2         41.8         41.8
+# 16:26  up 11 days,  2:51, 53 users, load averages: 40.82 33.41 23.11
+
+== warmup-main ==
+# 16:26  up 11 days,  2:51, 53 users, load averages: 32.03 31.19 21.93
+guest    operation           n       min us    median us
+py       restore             3        650.7        881.5
+py       load_snapshot       2      24111.3      24111.3
+qjs      restore             3        113.5        149.6
+qjs      load_snapshot       2       1128.5       1128.5
+lua      restore             3         69.8         82.1
+lua      load_snapshot       2        441.7        441.7
+plain    restore             3         14.3         17.6
+plain    load_snapshot       2         43.8         43.8
+# 16:26  up 11 days,  2:51, 53 users, load averages: 34.54 31.78 22.31
+
+== warmup-null ==
+# 16:26  up 11 days,  2:51, 53 users, load averages: 40.82 33.41 23.11
+guest    operation           n       min us    median us
+py       restore             3        735.2        993.8
+py       load_snapshot       2      24415.9      24415.9
+qjs      restore             3        126.1        147.0
+qjs      load_snapshot       2       1184.6       1184.6
+lua      restore             3         66.5         77.5
+lua      load_snapshot       2        382.0        382.0
+plain    restore             3         13.2         15.6
+plain    load_snapshot       2         50.5         50.5
+# 16:26  up 11 days,  2:52, 53 users, load averages: 32.94 32.13 22.89

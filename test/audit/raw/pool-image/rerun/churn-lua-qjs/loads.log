@@ -1,0 +1,15 @@
+churn-lua-qjs r1 main attempt1 load 6.61 -> 51.90
+churn-lua-qjs r1 cand attempt1 load 7.19 -> 55.38
+churn-lua-qjs r1 null attempt1 load 6.94 -> 60.27
+churn-lua-qjs r2 null attempt1 load 7.56 -> 52.00
+churn-lua-qjs r2 cand attempt1 load 6.67 -> 63.75
+churn-lua-qjs r2 main attempt1 load 6.59 -> 47.31
+churn-lua-qjs r3 main attempt1 load 7.11 -> 45.99
+churn-lua-qjs r3 cand attempt1 load 7.30 -> 49.19
+churn-lua-qjs r3 null attempt1 load 6.34 -> 50.26
+churn-lua-qjs r4 null attempt1 load 6.51 -> 60.98
+churn-lua-qjs r4 cand attempt1 load 6.56 -> 44.17
+churn-lua-qjs r4 main attempt1 load 7.03 -> 64.60
+churn-lua-qjs r5 main attempt1 load 6.93 -> 44.32
+churn-lua-qjs r5 cand attempt1 load 6.81 -> 60.73
+churn-lua-qjs r5 null attempt1 load 7.34 -> 62.51

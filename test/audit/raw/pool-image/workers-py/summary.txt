@@ -1,0 +1,226 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 6.01 7.04 7.29
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 1.0,holders => "2",image_rows => 1,
+  images_charged => 8328192,n => 50,pooled => true,recycling => false,
+  memory_idle => {total,1781883375},
+  pages_idle => 0,busy_increment_per_worker => 23377257.12,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2950746231},
+  pages_busy => 1650}
+
+== cand-r2 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 5.79 6.96 7.25
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 1.0,holders => "2",image_rows => 1,
+  images_charged => 8328192,n => 50,pooled => true,recycling => false,
+  memory_idle => {total,1805424287},
+  pages_idle => 0,busy_increment_per_worker => 22854807.36,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2948164655},
+  pages_busy => 1650}
+
+== cand-r3 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 7.09 7.21 7.34
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 1.0,holders => "2",image_rows => 1,
+  images_charged => 8328192,n => 50,pooled => true,recycling => false,
+  memory_idle => {total,1793929879},
+  pages_idle => 0,busy_increment_per_worker => 2.31171e7,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2949784879},
+  pages_busy => 1650}
+
+== cand-r4 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 6.76 7.14 7.31
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 1.0,holders => "2",image_rows => 1,
+  images_charged => 8328192,n => 50,pooled => true,recycling => false,
+  memory_idle => {total,1792296679},
+  pages_idle => 0,busy_increment_per_worker => 23066669.12,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2945630135},
+  pages_busy => 1650}
+
+== cand-r5 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 7.50 7.28 7.36
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 1.0,holders => "2",image_rows => 1,
+  images_charged => 8328192,n => 50,pooled => true,recycling => false,
+  memory_idle => {total,1782586903},
+  pages_idle => 0,busy_increment_per_worker => 23257207.36,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2945447271},
+  pages_busy => 1650}
+
+== main-r1 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 6.01 7.04 7.29
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1219478703},
+  pages_idle => 0,busy_increment_per_worker => 23274106.88,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2383184047},
+  pages_busy => 1650}
+
+== main-r2 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 5.79 6.96 7.25
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1186240271},
+  pages_idle => 0,busy_increment_per_worker => 24199623.52,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2396221447},
+  pages_busy => 1650}
+
+== main-r3 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 7.09 7.21 7.34
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1182388367},
+  pages_idle => 0,busy_increment_per_worker => 24121571.68,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2388466951},
+  pages_busy => 1650}
+
+== main-r4 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 7.02 7.18 7.33
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1178573959},
+  pages_idle => 0,busy_increment_per_worker => 24211853.12,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2389166615},
+  pages_busy => 1650}
+
+== main-r5 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 7.02 7.18 7.33
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1179439727},
+  pages_idle => 0,busy_increment_per_worker => 24429590.56,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2400919255},
+  pages_busy => 1650}
+
+== null-r1 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 5.77 6.97 7.26
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1192575383},
+  pages_idle => 0,busy_increment_per_worker => 23860520.16,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2385601391},
+  pages_busy => 1650}
+
+== null-r2 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 5.77 6.97 7.26
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1197879527},
+  pages_idle => 0,busy_increment_per_worker => 23688502.72,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2382304663},
+  pages_busy => 1650}
+
+== null-r3 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 7.09 7.21 7.34
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1182236407},
+  pages_idle => 0,busy_increment_per_worker => 23980937.12,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2381283263},
+  pages_busy => 1650}
+
+== null-r4 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 6.76 7.14 7.31
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1180845215},
+  pages_idle => 0,busy_increment_per_worker => 23938333.76,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2377761903},
+  pages_busy => 1650}
+
+== null-r5 ==
+# 7:02  up 9 days, 17:27, 43 users, load averages: 7.50 7.28 7.36
+#{mode => busy,idle => no_recycling,guest => py,arm => workers,
+  image_bytes => 8328192,verdict => ok,restore_ahead => false,
+  distinct_images => 50.0,
+  holders =>
+      [50 samples: min 1 median 1 max 1],
+  image_rows => 50,images_charged => 416409600,n => 50,pooled => false,
+  recycling => false,
+  memory_idle => {total,1178602399},
+  pages_idle => 0,busy_increment_per_worker => 23935301.12,
+  charged_pages_per_worker => 33.0,handoff_at_barrier => skipped,
+  handoff_before => skipped,
+  memory_busy => {total,2375367455},
+  pages_busy => 1650}

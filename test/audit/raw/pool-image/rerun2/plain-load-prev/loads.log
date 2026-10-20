@@ -1,0 +1,10 @@
+r1 main load 7.98 -> 7.98
+r1 prev load 7.98 -> 7.98
+r1 cand load 7.98 -> 7.98
+r2 cand load 7.98 -> 7.98
+r2 prev load 7.98 -> 7.98
+r2 main load 7.98 -> 7.98
+r3 prev load 7.98 -> 8.38
+r3 main load 7.52 -> 7.52
+r3 cand load 7.52 -> 7.52
+PREVDONE

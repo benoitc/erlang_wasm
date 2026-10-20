@@ -1,0 +1,15 @@
+req-py-interp r1 main attempt1 load 7.87 -> 7.56
+req-py-interp r1 cand attempt1 load 7.56 -> 7.32
+req-py-interp r1 null attempt1 load 7.32 -> 7.06
+req-py-interp r2 null attempt1 load 7.06 -> 7.21
+req-py-interp r2 cand attempt1 load 7.21 -> 6.95
+req-py-interp r2 main attempt1 load 6.95 -> 6.65
+req-py-interp r3 main attempt1 load 6.65 -> 6.44
+req-py-interp r3 cand attempt1 load 6.44 -> 6.33
+req-py-interp r3 null attempt1 load 6.33 -> 6.04
+req-py-interp r4 null attempt1 load 6.04 -> 5.80
+req-py-interp r4 cand attempt1 load 5.80 -> 5.73
+req-py-interp r4 main attempt1 load 5.73 -> 5.84
+req-py-interp r5 main attempt1 load 5.84 -> 5.69
+req-py-interp r5 cand attempt1 load 5.69 -> 5.56
+req-py-interp r5 null attempt1 load 5.56 -> 5.43

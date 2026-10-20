@@ -1,0 +1,196 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 5:28  up 9 days, 15:54, 43 users, load averages: 5.27 6.15 6.73
+guest    operation           n       min us    median us
+py       restore           200        813.7        899.5
+py       load_snapshot      20      22741.7      24088.0
+qjs      restore           200         95.8        149.5
+qjs      load_snapshot      20       1087.7       1174.8
+lua      restore           200         54.9         62.0
+lua      load_snapshot      20        332.2        351.3
+plain    restore           200          8.5          9.2
+plain    load_snapshot      20         30.3         38.1
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.17 6.12 6.71
+
+== cand-r2 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.08 6.08 6.70
+guest    operation           n       min us    median us
+py       restore           200        836.2        922.0
+py       load_snapshot      20      22788.4      23889.0
+qjs      restore           200         94.5        150.4
+qjs      load_snapshot      20       1050.7       1188.0
+lua      restore           200         54.2         60.9
+lua      load_snapshot      20        285.4        302.3
+plain    restore           200          8.5         10.3
+plain    load_snapshot      20         30.5         36.9
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.08 6.08 6.70
+
+== cand-r3 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 4.99 6.05 6.68
+guest    operation           n       min us    median us
+py       restore           200        802.8        864.8
+py       load_snapshot      20      25647.9      26856.3
+qjs      restore           200         95.0        152.6
+qjs      load_snapshot      20       1113.0       1202.0
+lua      restore           200         55.0         61.0
+lua      load_snapshot      20        263.5        288.2
+plain    restore           200          8.3          9.0
+plain    load_snapshot      20         30.8         34.7
+# 5:29  up 9 days, 15:54, 43 users, load averages: 4.99 6.05 6.68
+
+== cand-r4 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.47 6.13 6.70
+guest    operation           n       min us    median us
+py       restore           200        825.1        917.3
+py       load_snapshot      20      22759.4      23964.5
+qjs      restore           200         96.4        143.4
+qjs      load_snapshot      20       1123.0       1191.8
+lua      restore           200         54.9         61.1
+lua      load_snapshot      20        271.7        278.3
+plain    restore           200          8.6          9.0
+plain    load_snapshot      20         30.4         34.5
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.47 6.13 6.70
+
+== cand-r5 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.35 6.09 6.69
+guest    operation           n       min us    median us
+py       restore           200        814.6        870.8
+py       load_snapshot      20      22871.5      23994.8
+qjs      restore           200         96.5        151.9
+qjs      load_snapshot      20       1126.2       1200.1
+lua      restore           200         54.6         60.8
+lua      load_snapshot      20        265.2        277.0
+plain    restore           200          8.4          8.9
+plain    load_snapshot      20         28.4         34.4
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.17 6.04 6.67
+
+== main-r1 ==
+# 5:28  up 9 days, 15:54, 43 users, load averages: 5.27 6.15 6.73
+guest    operation           n       min us    median us
+py       restore           200        611.3        723.1
+py       load_snapshot      20      22988.5      23697.7
+qjs      restore           200        106.7        112.5
+qjs      load_snapshot      20        913.7       1079.8
+lua      restore           200         55.3         57.3
+lua      load_snapshot      20        268.5        291.9
+plain    restore           200          8.4          9.3
+plain    load_snapshot      20         30.4         35.9
+# 5:28  up 9 days, 15:54, 43 users, load averages: 5.27 6.15 6.73
+
+== main-r2 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.08 6.08 6.70
+guest    operation           n       min us    median us
+py       restore           200        613.6        720.8
+py       load_snapshot      20      23078.0      23752.0
+qjs      restore           200        106.8        111.7
+qjs      load_snapshot      20        942.2       1093.5
+lua      restore           200         55.3         57.6
+lua      load_snapshot      20        271.9        297.9
+plain    restore           200          8.4          9.1
+plain    load_snapshot      20         29.8         38.2
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.08 6.08 6.70
+
+== main-r3 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.08 6.08 6.70
+guest    operation           n       min us    median us
+py       restore           200        614.7        745.8
+py       load_snapshot      20      23301.5      23940.5
+qjs      restore           200        104.3        111.5
+qjs      load_snapshot      20        925.8       1122.0
+lua      restore           200         55.7         59.2
+lua      load_snapshot      20        265.4        299.8
+plain    restore           200          8.4          9.1
+plain    load_snapshot      20         27.6         33.5
+# 5:29  up 9 days, 15:54, 43 users, load averages: 4.99 6.05 6.68
+
+== main-r4 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.47 6.13 6.70
+guest    operation           n       min us    median us
+py       restore           200        623.5        771.8
+py       load_snapshot      20      22997.4      23647.6
+qjs      restore           200        106.0        112.5
+qjs      load_snapshot      20        947.7       1112.6
+lua      restore           200         55.3         57.9
+lua      load_snapshot      20        261.8        287.0
+plain    restore           200          8.5          9.4
+plain    load_snapshot      20         35.5         43.0
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.35 6.09 6.69
+
+== main-r5 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.35 6.09 6.69
+guest    operation           n       min us    median us
+py       restore           200        620.2        725.6
+py       load_snapshot      20      23161.5      23861.4
+qjs      restore           200        106.2        112.9
+qjs      load_snapshot      20        972.3       1156.2
+lua      restore           200         55.2         57.4
+lua      load_snapshot      20        263.8        299.1
+plain    restore           200          8.6          9.5
+plain    load_snapshot      20         29.1         34.4
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.35 6.09 6.69
+
+== null-r1 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.17 6.12 6.71
+guest    operation           n       min us    median us
+py       restore           200        753.8        866.1
+py       load_snapshot      20      23006.9      23735.1
+qjs      restore           200        107.1        113.9
+qjs      load_snapshot      20        928.0       1120.6
+lua      restore           200         55.3         58.0
+lua      load_snapshot      20        287.3        328.8
+plain    restore           200          8.5          9.1
+plain    load_snapshot      20         29.3         34.9
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.17 6.12 6.71
+
+== null-r2 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.17 6.12 6.71
+guest    operation           n       min us    median us
+py       restore           200        624.6        705.3
+py       load_snapshot      20      22918.2      23697.2
+qjs      restore           200        106.8        113.3
+qjs      load_snapshot      20        926.9       1115.8
+lua      restore           200         51.2         58.3
+lua      load_snapshot      20        272.9        316.3
+plain    restore           200          8.6          9.7
+plain    load_snapshot      20         29.9         35.2
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.08 6.08 6.70
+
+== null-r3 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 4.99 6.05 6.68
+guest    operation           n       min us    median us
+py       restore           200        614.0        703.7
+py       load_snapshot      20      22803.7      23649.5
+qjs      restore           200        111.0        118.0
+qjs      load_snapshot      20        921.2       1102.3
+lua      restore           200         55.2         57.5
+lua      load_snapshot      20        261.8        299.7
+plain    restore           200          8.3          9.2
+plain    load_snapshot      20         27.6         36.6
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.47 6.13 6.70
+
+== null-r4 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.47 6.13 6.70
+guest    operation           n       min us    median us
+py       restore           200        615.5        760.8
+py       load_snapshot      20      23339.8      23781.8
+qjs      restore           200        104.9        111.4
+qjs      load_snapshot      20        957.5       1128.6
+lua      restore           200         55.2         57.7
+lua      load_snapshot      20        264.8        274.3
+plain    restore           200          8.4          9.0
+plain    load_snapshot      20         27.6         34.7
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.47 6.13 6.70
+
+== null-r5 ==
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.17 6.04 6.67
+guest    operation           n       min us    median us
+py       restore           200        617.2        719.3
+py       load_snapshot      20      22969.9      23700.9
+qjs      restore           200        106.9        113.5
+qjs      load_snapshot      20        938.0       1100.8
+lua      restore           200         56.3         59.0
+lua      load_snapshot      20        275.4        286.9
+plain    restore           200          8.5          9.3
+plain    load_snapshot      20         27.5         36.0
+# 5:29  up 9 days, 15:54, 43 users, load averages: 5.17 6.04 6.67

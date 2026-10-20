@@ -1,0 +1,15 @@
+restore r1 main attempt1 load 6.90 -> 6.90
+restore r1 cand attempt1 load 6.90 -> 7.07
+restore r1 null attempt1 load 7.07 -> 7.07
+restore r2 null attempt1 load 7.07 -> 6.74
+restore r2 cand attempt1 load 6.74 -> 6.74
+restore r2 main attempt1 load 6.74 -> 6.74
+restore r3 main attempt1 load 6.74 -> 6.36
+restore r3 cand attempt1 load 6.36 -> 6.36
+restore r3 null attempt1 load 6.36 -> 7.86
+restore r4 null attempt1 load 7.86 -> 7.86
+restore r4 cand attempt1 load 7.86 -> 7.86
+restore r4 main attempt1 load 7.71 -> 7.71
+restore r5 main attempt1 load 7.71 -> 7.71
+restore r5 cand attempt1 load 7.71 -> 7.49
+restore r5 null attempt1 load 7.49 -> 7.49

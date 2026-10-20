@@ -17,6 +17,14 @@ other tree.
         -run densitybench main expiry py 50 raw/expiry.terms
     erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
         -run densitybench main density py raw/density.terms
+    erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
+        -run densitybench main pool py 10 raw/pool.terms
+    erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
+        -run densitybench main capture qjs 4 raw/capture.terms
+    erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
+        -run densitybench main copy py 200 raw/copy.terms
+    erl -noshell +S 10:10 -pa _build/default/lib/wasm/ebin -pa bench/paths \\
+        -run densitybench main churn py_entry 10 lua 200 CACHEDIR raw/churn.terms
 
 Guests are `py`, `py_entry`, `qjs`, `lua` and `plain`; `workers` and
 `expiry` take all but `plain`. The last argument is the raw file, `none` for
@@ -59,6 +67,52 @@ a short-lived process.
 
 Image duplication is reported apart, from the snapshot byte budget: what the
 workers added to `wasm_snapshot_owner:charged/0`, over one image's bytes.
+
+**A pool where the build has one.** On a build that exports
+`wasm_script_worker:prepare/2` the N workers start from one prepared image,
+which is how a pool is meant to be run there; on one that does not, the first
+worker starts alone so the image is filed and the rest start together, as
+before. Every pool mode below makes the same choice, read from the code.
+
+## `pool`: a pool started on a filed image
+
+`snapshot_dir` as `workers`. One worker is started and stopped first, so the
+image is filed, and the harness waits until the image's charge is given back.
+Then the clock starts: with `prepare/2` the image is prepared and N workers
+start together from it; without, N workers start together. The result is the
+time from the start to the last `start_link/2` returning, prepare included:
+with `restore_ahead` off a started worker is idle. Every worker then serves
+one request, checked.
+
+## `capture`: a pool started on a missing image
+
+`snapshot_dir` a new empty directory, named by the OS pid and the system
+time so no two VMs share one. As `pool`, without the first worker. Every call
+of `wasm_snapshot:capture/3` is counted with `call_count`. Once all are up and
+the holder counts are stable for 200 ms, the keeper's image rows made since
+the start are the generations, each with its holder count from its owner.
+
+## `copy`: what sending the image costs
+
+One worker started as usual. The image it holds is read from its state, and
+`erts_debug:flat_size/1` of it is the words a send or a spawn copies, since
+an off-heap binary counts only its reference. Then K processes are spawned
+with the image in the closure, one at a time, each timed from before the
+`spawn` to the child's first instruction; the median and minimum are
+reported, in microseconds.
+
+## `churn`: a serving pool while another pool starts and stops
+
+N workers of the serving guest on the compiled tier, `code_cache_dir` as
+given, each warmed until a request enters generated code, then two requests
+each. A churner then starts and stops a pool of one worker of the churn guest
+every 500 ms, its image filed beforehand (with `prepare/2`, prepared, started
+and released each cycle), while every serving worker serves `Per` requests
+back to back, each timed. `erlang:memory(total)` is sampled every 100 ms from
+just before the burst to its end. Reported: the p50 and p99 of all requests,
+requests a second over the burst's wall time, the peak memory and the churn
+cycles completed. A churn guest of `none` runs no churner: that is the
+saturated pool on its own.
 
 ## `expiry`: the idle diagnostic
 
@@ -107,7 +161,16 @@ run("workers", [G, N, Ahead, Raw]) ->
 run("expiry", [G, N, Raw]) ->
     record(Raw, workers(list_to_atom(G), list_to_integer(N), false, expiry));
 run("density", [G, Raw]) ->
-    record(Raw, density(list_to_atom(G))).
+    record(Raw, density(list_to_atom(G)));
+run("pool", [G, N, Raw]) ->
+    record(Raw, pool(list_to_atom(G), list_to_integer(N)));
+run("capture", [G, N, Raw]) ->
+    record(Raw, capture(list_to_atom(G), list_to_integer(N)));
+run("copy", [G, K, Raw]) ->
+    record(Raw, copy(list_to_atom(G), list_to_integer(K)));
+run("churn", [G, N, C, Per, Cache, Raw]) ->
+    record(Raw, churn(list_to_atom(G), list_to_integer(N), list_to_atom(C),
+                      list_to_integer(Per), Cache)).
 
 %% What is printed: the full term goes to the raw file, and here every
 %% `erlang:memory/0' list is cut to its total.
@@ -229,13 +292,17 @@ workers(Name, N, Ahead, Mode) ->
                                           harness => self(),
                                           restore_ahead => Ahead},
     Recycles = recycles(),
+    Rows0 = image_rows(),
     Ws = start_workers(Opts, N),
     C1 = charged(),
+    Gens = stable_generations(Rows0, 50),
     Base = #{arm => workers, mode => Mode, guest => Name, n => N,
              restore_ahead => Ahead, meta => Meta, image_bytes => Bytes,
-             recycling => Recycles,
+             recycling => Recycles, pooled => pooled(),
              images_charged => C1 - C0,
-             distinct_images => (C1 - C0) / Bytes},
+             distinct_images => (C1 - C0) / Bytes,
+             image_rows => length(Gens),
+             holders => [H || {_, H} <- Gens]},
     R = try workers_1(Ws, Request, Expected, Ahead, Recycles, Mode, Base)
         catch throw:{void, Why} ->
                 io:format("VOID: ~p~n", [Why]),
@@ -370,18 +437,58 @@ stock_floor(Adapter, Opts) ->
         end,
     maps:merge(maps:with([runner_min_heap_words], D), Opts).
 
-%% One at a time for the first, so the image is captured once and filed; the
-%% rest read it, as `reqbench' does.
+%% From one prepared image where the build has `prepare/2'. Otherwise one at
+%% a time for the first, so the image is captured once and filed; the rest
+%% read it, as `reqbench' does.
 start_workers(Opts, N) ->
-    {ok, W1} = wasm_script_worker:start_link(barrier_adapter, Opts),
+    case pooled() of
+        true ->
+            {ok, P} = wasm_script_worker:prepare(barrier_adapter, Opts),
+            Ws = [W || {W, _} <- start_together(barrier_adapter,
+                                                Opts#{prepared => P}, N,
+                                                erlang:monotonic_time(
+                                                  millisecond))],
+            ok = wasm_script_worker:release_prepared(P),
+            Ws;
+        false ->
+            {ok, W1} = wasm_script_worker:start_link(barrier_adapter, Opts),
+            [W1 | [W || {W, _} <- start_together(
+                                     barrier_adapter, Opts, N - 1,
+                                     erlang:monotonic_time(millisecond))]]
+    end.
+
+%% Whether this build prepares one image for a pool.
+pooled() ->
+    {module, _} = code:ensure_loaded(wasm_script_worker),
+    erlang:function_exported(wasm_script_worker, prepare, 2).
+
+%% A pool of N, the way this build runs one: prepared once and started from
+%% it, or started together. Answers the workers, each with the milliseconds
+%% from `T0' to its start returning, and the prepared image or `none'.
+start_pool(Adapter, Opts, N, T0) ->
+    case pooled() of
+        true ->
+            {ok, P} = wasm_script_worker:prepare(Adapter, Opts),
+            {start_together(Adapter, Opts#{prepared => P}, N, T0), P};
+        false ->
+            {start_together(Adapter, Opts, N, T0), none}
+    end.
+
+release_pool(none) -> ok;
+release_pool(P) -> wasm_script_worker:release_prepared(P).
+
+%% N workers, each started from its own process at once; each answer is the
+%% worker and the milliseconds from `T0' to its start returning.
+start_together(Adapter, Opts, N, T0) ->
     Self = self(),
-    Rest = [spawn_link(fun() ->
-                               {ok, W} = wasm_script_worker:start_link(
-                                           barrier_adapter, Opts),
-                               unlink(W),
-                               Self ! {up, self(), W}
-                       end) || _ <- lists:seq(2, N)],
-    [W1 | [receive {up, P, W} -> link(W), W end || P <- Rest]].
+    Ps = [spawn_link(fun() ->
+                             {ok, W} = wasm_script_worker:start_link(Adapter,
+                                                                     Opts),
+                             unlink(W),
+                             Self ! {up, self(), W,
+                                     erlang:monotonic_time(millisecond) - T0}
+                     end) || _ <- lists:seq(1, N)],
+    [receive {up, P, W, T} -> link(W), {W, T} end || P <- Ps].
 
 %%% ------------------------------------------------------- idle and handoff ---
 
@@ -491,6 +598,301 @@ charged() ->
     case erlang:function_exported(wasm_snapshot_owner, charged, 0) of
         true -> wasm_snapshot_owner:charged();
         false -> 0
+    end.
+
+%%% ----------------------------------------------------------------- pool ---
+
+pool(Name, N) ->
+    ok = reactorlib:page_limit(65536),
+    Meta = reactorlib:meta(),
+    io:format("# ~s~n", [maps:get(uptime, Meta)]),
+    ok = filelib:ensure_path(?IMAGES),
+    ok = application:set_env(wasm, snapshot_dir, filename:absname(?IMAGES)),
+    {ok, G} = reactorlib:guest(Name),
+    {Adapter, Opts} = reactorlib:worker_opts(Name, ?WORKER_TIMEOUT),
+    C0 = charged(),
+    {ok, W0} = wasm_script_worker:start_link(Adapter, Opts),
+    unlink(W0),
+    ok = wasm_script_worker:stop(W0),
+    ok = until_charged(C0, 30_000),
+    T0 = erlang:monotonic_time(millisecond),
+    {Up, P} = start_pool(Adapter, Opts, N, T0),
+    Wall = erlang:monotonic_time(millisecond) - T0,
+    Ws = [W || {W, _} <- Up],
+    Rs = [{W, 0, wasm_script_worker:run(W, maps:get(request, G))} || W <- Ws],
+    Base = #{arm => pool, guest => Name, n => N, meta => Meta,
+             pooled => pooled(), wall_ms => Wall,
+             start_ms => lists:sort([T || {_, T} <- Up])},
+    R = try ok = all_expected(pool, Rs, reactorlib:expected(G)),
+            Base#{verdict => ok}
+        catch throw:{void, Why} -> Base#{verdict => void, why => Why}
+        end,
+    ok = release_pool(P),
+    [begin unlink(W), wasm_script_worker:stop(W) end || W <- Ws],
+    R.
+
+until_charged(_C0, Ms) when Ms =< 0 -> throw({void, still_charged});
+until_charged(C0, Ms) ->
+    case charged() =< C0 of
+        true -> ok;
+        false -> timer:sleep(20), until_charged(C0, Ms - 20)
+    end.
+
+%%% -------------------------------------------------------------- capture ---
+
+capture(Name, N) ->
+    ok = reactorlib:page_limit(65536),
+    Meta = reactorlib:meta(),
+    io:format("# ~s~n", [maps:get(uptime, Meta)]),
+    Dir = filename:absname(
+            lists:flatten(io_lib:format("_build/densitybench/capture-~s-~p",
+                                        [os:getpid(),
+                                         os:system_time(microsecond)]))),
+    [] = filelib:wildcard(filename:join(Dir, "*")),
+    ok = filelib:ensure_path(Dir),
+    ok = application:set_env(wasm, snapshot_dir, Dir),
+    {ok, G} = reactorlib:guest(Name),
+    {Adapter, Opts} = reactorlib:worker_opts(Name, ?WORKER_TIMEOUT),
+    Rows0 = image_rows(),
+    {module, wasm_snapshot} = code:ensure_loaded(wasm_snapshot),
+    1 = erlang:trace_pattern({wasm_snapshot, capture, 3}, true, [call_count]),
+    T0 = erlang:monotonic_time(millisecond),
+    {Up, P} = start_pool(Adapter, Opts, N, T0),
+    Wall = erlang:monotonic_time(millisecond) - T0,
+    {call_count, Captures} =
+        erlang:trace_info({wasm_snapshot, capture, 3}, call_count),
+    _ = erlang:trace_pattern({wasm_snapshot, capture, 3}, false, [call_count]),
+    Gens = stable_generations(Rows0, 50),
+    Ws = [W || {W, _} <- Up],
+    Rs = [{W, 0, wasm_script_worker:run(W, maps:get(request, G))} || W <- Ws],
+    Base = #{arm => capture, guest => Name, n => N, meta => Meta,
+             pooled => pooled(), wall_ms => Wall, captures => Captures,
+             files => length(filelib:wildcard(filename:join(Dir, "*.img"))),
+             generations => length(Gens), holders => [H || {_, H} <- Gens]},
+    R = try ok = all_expected(capture, Rs, reactorlib:expected(G)),
+            Base#{verdict => ok}
+        catch throw:{void, Why} -> Base#{verdict => void, why => Why}
+        end,
+    ok = release_pool(P),
+    [begin unlink(W), wasm_script_worker:stop(W) end || W <- Ws],
+    R.
+
+%% The image rows made since `Rows0', each with its owner's holder count,
+%% once two reads 200 ms apart agree.
+stable_generations(Rows0, 0) ->
+    generations(Rows0);
+stable_generations(Rows0, N) ->
+    A = generations(Rows0),
+    timer:sleep(200),
+    case generations(Rows0) of
+        A -> A;
+        _ -> stable_generations(Rows0, N - 1)
+    end.
+
+generations(Rows0) ->
+    lists:sort([{Res, holders_of_owner(H)}
+                || {Res, H} <- image_rows(), not lists:keymember(Res, 1, Rows0)]).
+
+image_rows() ->
+    [{element(1, R), element(4, R)}
+     || R <- ets:tab2list(wasm_holders), is_tuple(R), tuple_size(R) >= 4,
+        is_tuple(element(2, R)), element(1, element(2, R)) =:= image,
+        is_map(element(4, R))].
+
+holders_of_owner(Holders) ->
+    case [O || {{snapshot, _}, O} <- maps:to_list(Holders), is_pid(O)] of
+        [Owner] -> wasm_snapshot_owner:holders(Owner);
+        _ -> no_owner
+    end.
+
+%%% ----------------------------------------------------------------- copy ---
+
+copy(Name, K) ->
+    ok = reactorlib:page_limit(65536),
+    Meta = reactorlib:meta(),
+    io:format("# ~s~n", [maps:get(uptime, Meta)]),
+    ok = filelib:ensure_path(?IMAGES),
+    ok = application:set_env(wasm, snapshot_dir, filename:absname(?IMAGES)),
+    {Adapter, Opts} = reactorlib:worker_opts(Name, ?WORKER_TIMEOUT),
+    {ok, W} = wasm_script_worker:start_link(Adapter, Opts),
+    [Image] = [E || E <- tuple_to_list(sys:get_state(W)),
+                    is_tuple(E), tuple_size(E) > 0,
+                    element(1, E) =:= snapshot],
+    Words = erts_debug:flat_size(Image),
+    _ = [spawn_us(Image) || _ <- lists:seq(1, 10)],
+    Us = lists:sort([spawn_us(Image) || _ <- lists:seq(1, K)]),
+    unlink(W),
+    ok = wasm_script_worker:stop(W),
+    #{arm => copy, guest => Name, k => K, meta => Meta, verdict => ok,
+      image_words => Words, image_bytes => maps:get(bytes,
+                                                    wasm:snapshot_info(Image)),
+      spawn_p50_us => pct(Us, 50), spawn_min_us => hd(Us), samples => Us}.
+
+%% From before the `spawn' to the child's first instruction, with the image
+%% in the closure so the spawn copies it.
+spawn_us(Image) ->
+    Self = self(),
+    true = erlang:garbage_collect(),
+    T0 = erlang:monotonic_time(nanosecond),
+    Pid = spawn(fun() ->
+                        T1 = erlang:monotonic_time(nanosecond),
+                        Self ! {began, self(), T1, element(1, Image)}
+                end),
+    receive {began, Pid, T1, snapshot} -> (T1 - T0) / 1000 end.
+
+%%% ---------------------------------------------------------------- churn ---
+
+-define(CHURN_MS, 500).
+-define(SAMPLE_MS, 100).
+-define(ENTRY_DEADLINE_S, 25 * 60).
+
+churn(Name, N, ChurnName, Per, Cache) ->
+    _ = application:load(wasm),
+    ok = application:set_env(wasm, code_cache_dir, Cache),
+    ok = reactorlib:page_limit(65536),
+    Meta = reactorlib:meta(),
+    io:format("# ~s~n", [maps:get(uptime, Meta)]),
+    ok = filelib:ensure_path(?IMAGES),
+    ok = application:set_env(wasm, snapshot_dir, filename:absname(?IMAGES)),
+    {ok, G} = reactorlib:guest(Name),
+    Request = maps:get(request, G),
+    Expected = reactorlib:expected(G),
+    {Adapter, Opts0} = reactorlib:worker_opts(Name, ?WORKER_TIMEOUT),
+    Limits = maps:get(limits, Opts0),
+    Opts = Opts0#{compiled => true, limits => Limits#{fuel => infinity}},
+    %% The image filed first, so the pool starts as it would in production.
+    {ok, W0} = wasm_script_worker:start_link(Adapter, Opts),
+    unlink(W0),
+    ok = wasm_script_worker:stop(W0),
+    {Up, P} = start_pool(Adapter, Opts, N, erlang:monotonic_time(millisecond)),
+    Ws = [W || {W, _} <- Up],
+    Deadline = erlang:monotonic_time(second) + ?ENTRY_DEADLINE_S,
+    Entered = [until_generated(W, Request, Expected, Deadline, 0) || W <- Ws],
+    Base = #{arm => churn, guest => Name, n => N, churn_guest => ChurnName,
+             per_worker => Per, meta => Meta, pooled => pooled(),
+             entered => Entered},
+    R = case [E || {never, _} = E <- Entered] of
+            [] -> churn_1(Ws, Request, Expected, ChurnName, Per, Base);
+            Never -> Base#{verdict => void, why => {never_entered, Never}}
+        end,
+    ok = release_pool(P),
+    [begin unlink(W), wasm_script_worker:stop(W) end || W <- Ws],
+    R.
+
+churn_1(Ws, Request, Expected, ChurnName, Per, Base) ->
+    _ = burst(Ws, Request, Expected, 2),
+    Self = self(),
+    Churner = start_churner(Self, ChurnName),
+    Sampler = spawn_link(fun() -> sample(Self, 0, []) end),
+    T0 = erlang:monotonic_time(nanosecond),
+    Ts = burst(Ws, Request, Expected, Per),
+    Wall = (erlang:monotonic_time(nanosecond) - T0) / 1.0e6,
+    Cycles = stop_churner(Self, Churner),
+    Sampler ! {stop, Self},
+    {Peak, Samples} = receive {peak, Sampler, Pk, S} -> {Pk, S} end,
+    Sorted = lists:sort(Ts),
+    Base#{verdict => ok, wall_ms => Wall, rps => length(Ts) / (Wall / 1000),
+          p50_us => pct(Sorted, 50), p99_us => pct(Sorted, 99),
+          peak_memory => Peak, memory_samples => Samples,
+          churn_cycles => Cycles, samples => Ts}.
+
+start_churner(_Self, none) ->
+    none;
+start_churner(Self, ChurnName) ->
+    {CA, COpts} = reactorlib:worker_opts(ChurnName, ?WORKER_TIMEOUT),
+    {ok, C0} = wasm_script_worker:start_link(CA, COpts),
+    unlink(C0),
+    ok = wasm_script_worker:stop(C0),
+    timer:sleep(1_000),
+    spawn_link(fun() -> churner(Self, CA, COpts, 0) end).
+
+stop_churner(_Self, none) ->
+    0;
+stop_churner(Self, Churner) ->
+    Churner ! {stop, Self},
+    receive {cycles, Churner, C} -> C end.
+
+pct(Sorted, P) ->
+    lists:nth(max(1, (length(Sorted) * P + 99) div 100), Sorted).
+
+%% Every worker serves `Per' requests back to back, all at once; the answer
+%% is every request's time in microseconds.
+burst(Ws, Request, Expected, Per) ->
+    Self = self(),
+    _ = [spawn_link(fun() ->
+                            Self ! {burst, self(),
+                                    [timed(W, Request, Expected)
+                                     || _ <- lists:seq(1, Per)]}
+                    end) || W <- Ws],
+    lists:append([receive {burst, _, T} -> T end || _ <- Ws]).
+
+timed(W, Request, Expected) ->
+    T0 = erlang:monotonic_time(nanosecond),
+    R = wasm_script_worker:run(W, Request),
+    T1 = erlang:monotonic_time(nanosecond),
+    case matches(R, Expected) of
+        true -> (T1 - T0) / 1000;
+        false -> exit({wrong_result, R})
+    end.
+
+sample(Owner, Peak, Acc) ->
+    M = erlang:memory(total),
+    receive
+        {stop, Owner} ->
+            Owner ! {peak, self(), max(Peak, M), lists:reverse([M | Acc])}
+    after ?SAMPLE_MS ->
+        sample(Owner, max(Peak, M), [M | Acc])
+    end.
+
+%% One pool of one worker of the churn guest started and stopped every
+%% 500 ms, the way this build runs a pool.
+churner(Owner, Adapter, Opts, N) ->
+    Next = erlang:monotonic_time(millisecond) + ?CHURN_MS,
+    {[{W, _}], P} = start_pool(Adapter, Opts, 1,
+                                erlang:monotonic_time(millisecond)),
+    unlink(W),
+    ok = wasm_script_worker:stop(W),
+    ok = release_pool(P),
+    Wait = max(0, Next - erlang:monotonic_time(millisecond)),
+    receive
+        {stop, Owner} -> Owner ! {cycles, self(), N + 1}
+    after Wait ->
+        churner(Owner, Adapter, Opts, N + 1)
+    end.
+
+%% As `requestbench': the loop ends at the first request during which a
+%% generated `wasm_f_' function of a slot module was called.
+until_generated(W, R, E, Deadline, N) ->
+    case erlang:monotonic_time(second) >= Deadline of
+        true -> {never, N};
+        false -> traced(W, R, E, Deadline, N)
+    end.
+
+traced(W, R, E, Deadline, N) ->
+    Self = self(),
+    Tracer = spawn_link(fun() -> generated_calls(Self, false) end),
+    Mods = wasm_code_slots:slots(),
+    [erlang:trace_pattern({Mod, '_', '_'}, true, [local]) || Mod <- Mods],
+    _ = erlang:trace(all, true, [call, {tracer, Tracer}]),
+    Got = wasm_script_worker:run(W, R),
+    _ = erlang:trace(all, false, [call]),
+    [erlang:trace_pattern({Mod, '_', '_'}, false, [local]) || Mod <- Mods],
+    Tracer ! {done, Self},
+    Seen = receive {seen, Tracer, S} -> S end,
+    matches(Got, E) orelse exit({wrong_result, Got}),
+    case Seen of
+        true -> {entered, N + 1};
+        false -> until_generated(W, R, E, Deadline, N + 1)
+    end.
+
+generated_calls(Owner, Seen) ->
+    receive
+        {trace, _, call, {Mod, F, _}} ->
+            Generated = lists:prefix("wasm_code_", atom_to_list(Mod))
+                andalso lists:prefix("wasm_f_", atom_to_list(F)),
+            generated_calls(Owner, Seen orelse Generated);
+        {done, Owner} ->
+            Owner ! {seen, self(), Seen}
     end.
 
 %%% -------------------------------------------------------------- density ---

@@ -1,0 +1,15 @@
+churn-py-lua r1 main attempt1 load 7.98 -> 16.33
+churn-py-lua r1 cand attempt1 load 7.80 -> 13.82
+churn-py-lua r1 null attempt1 load 6.81 -> 18.10
+churn-py-lua r2 null attempt1 load 7.92 -> 15.28
+churn-py-lua r2 cand attempt1 load 7.94 -> 11.46
+churn-py-lua r2 main attempt1 load 6.85 -> 11.75
+churn-py-lua r3 main attempt1 load 6.92 -> 18.24
+churn-py-lua r3 cand attempt1 load 6.71 -> 11.40
+churn-py-lua r3 null attempt1 load 7.56 -> 14.14
+churn-py-lua r4 null attempt1 load 7.92 -> 14.72
+churn-py-lua r4 cand attempt1 load 7.33 -> 15.88
+churn-py-lua r4 main attempt1 load 7.35 -> 14.38
+churn-py-lua r5 main attempt1 load 7.31 -> 21.62
+churn-py-lua r5 cand attempt1 load 7.60 -> 11.18
+churn-py-lua r5 null attempt1 load 7.72 -> 8.75

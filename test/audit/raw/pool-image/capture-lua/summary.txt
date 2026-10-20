@@ -1,0 +1,106 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.37 8.12 8.13
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 71,captures => 1,files => 1,
+  generations => 1}
+
+== cand-r2 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.34 8.10 8.12
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 69,captures => 1,files => 1,
+  generations => 1}
+
+== cand-r3 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.34 8.10 8.12
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 67,captures => 1,files => 1,
+  generations => 1}
+
+== cand-r4 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.34 8.10 8.12
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 69,captures => 1,files => 1,
+  generations => 1}
+
+== cand-r5 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 6.91 8.00 8.09
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 68,captures => 1,files => 1,
+  generations => 1}
+
+== main-r1 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.37 8.12 8.13
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 75,captures => 4,files => 1,
+  generations => 4}
+
+== main-r2 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.34 8.10 8.12
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 74,captures => 4,files => 1,
+  generations => 4}
+
+== main-r3 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.34 8.10 8.12
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 74,captures => 4,files => 1,
+  generations => 4}
+
+== main-r4 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 6.91 8.00 8.09
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 75,captures => 4,files => 1,
+  generations => 4}
+
+== main-r5 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 6.91 8.00 8.09
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 74,captures => 4,files => 1,
+  generations => 4}
+
+== null-r1 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.34 8.10 8.12
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 74,captures => 4,files => 1,
+  generations => 4}
+
+== null-r2 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.34 8.10 8.12
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 74,captures => 4,files => 1,
+  generations => 4}
+
+== null-r3 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.34 8.10 8.12
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 73,captures => 4,files => 1,
+  generations => 4}
+
+== null-r4 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 7.34 8.10 8.12
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 74,captures => 4,files => 1,
+  generations => 4}
+
+== null-r5 ==
+# 5:08  up 9 days, 15:33, 43 users, load averages: 6.91 8.00 8.09
+#{guest => lua,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 75,captures => 4,files => 1,
+  generations => 4}

@@ -1,0 +1,15 @@
+workers-py r1 main attempt1 load 6.01 -> 6.01
+workers-py r1 cand attempt1 load 6.01 -> 5.77
+workers-py r1 null attempt1 load 5.77 -> 5.77
+workers-py r2 null attempt1 load 5.77 -> 5.79
+workers-py r2 cand attempt1 load 5.79 -> 5.79
+workers-py r2 main attempt1 load 5.79 -> 7.09
+workers-py r3 main attempt1 load 7.09 -> 7.09
+workers-py r3 cand attempt1 load 7.09 -> 7.09
+workers-py r3 null attempt1 load 7.09 -> 6.76
+workers-py r4 null attempt1 load 6.76 -> 6.76
+workers-py r4 cand attempt1 load 6.76 -> 7.02
+workers-py r4 main attempt1 load 7.02 -> 7.02
+workers-py r5 main attempt1 load 7.02 -> 7.50
+workers-py r5 cand attempt1 load 7.50 -> 7.50
+workers-py r5 null attempt1 load 7.50 -> 7.50

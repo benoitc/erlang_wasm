@@ -1,0 +1,106 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 5:09  up 9 days, 15:34, 43 users, load averages: 7.32 7.95 8.06
+#{guest => py,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 16524,captures => 1,files => 1,
+  generations => 1}
+
+== cand-r2 ==
+# 5:11  up 9 days, 15:36, 43 users, load averages: 6.90 7.63 7.92
+#{guest => py,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 16244,captures => 1,files => 1,
+  generations => 1}
+
+== cand-r3 ==
+# 5:13  up 9 days, 15:38, 43 users, load averages: 6.45 7.27 7.75
+#{guest => py,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 16313,captures => 1,files => 1,
+  generations => 1}
+
+== cand-r4 ==
+# 5:14  up 9 days, 15:39, 43 users, load averages: 6.69 7.01 7.58
+#{guest => py,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 16258,captures => 1,files => 1,
+  generations => 1}
+
+== cand-r5 ==
+# 5:16  up 9 days, 15:41, 43 users, load averages: 6.49 6.84 7.44
+#{guest => py,arm => capture,verdict => ok,
+  holders => [5],
+  n => 4,pooled => true,wall_ms => 16285,captures => 1,files => 1,
+  generations => 1}
+
+== main-r1 ==
+# 5:09  up 9 days, 15:34, 43 users, load averages: 6.85 7.95 8.07
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 39711,captures => 4,files => 1,
+  generations => 4}
+
+== main-r2 ==
+# 5:11  up 9 days, 15:36, 43 users, load averages: 6.41 7.48 7.86
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 40444,captures => 4,files => 1,
+  generations => 4}
+
+== main-r3 ==
+# 5:12  up 9 days, 15:37, 43 users, load averages: 6.60 7.39 7.81
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 39986,captures => 4,files => 1,
+  generations => 4}
+
+== main-r4 ==
+# 5:15  up 9 days, 15:40, 43 users, load averages: 6.32 6.91 7.53
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 41446,captures => 4,files => 1,
+  generations => 4}
+
+== main-r5 ==
+# 5:15  up 9 days, 15:40, 43 users, load averages: 6.48 6.87 7.49
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 40322,captures => 4,files => 1,
+  generations => 4}
+
+== null-r1 ==
+# 5:10  up 9 days, 15:35, 43 users, load averages: 6.59 7.75 7.98
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 39913,captures => 4,files => 1,
+  generations => 4}
+
+== null-r2 ==
+# 5:10  up 9 days, 15:35, 43 users, load averages: 7.14 7.76 7.98
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 40375,captures => 4,files => 1,
+  generations => 4}
+
+== null-r3 ==
+# 5:13  up 9 days, 15:38, 43 users, load averages: 5.92 7.11 7.68
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 39577,captures => 4,files => 1,
+  generations => 4}
+
+== null-r4 ==
+# 5:14  up 9 days, 15:39, 43 users, load averages: 5.77 6.93 7.58
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 40474,captures => 4,files => 1,
+  generations => 4}
+
+== null-r5 ==
+# 5:16  up 9 days, 15:41, 43 users, load averages: 5.63 6.62 7.35
+#{guest => py,arm => capture,verdict => ok,
+  holders => [1,1,1,1],
+  n => 4,pooled => false,wall_ms => 39808,captures => 4,files => 1,
+  generations => 4}

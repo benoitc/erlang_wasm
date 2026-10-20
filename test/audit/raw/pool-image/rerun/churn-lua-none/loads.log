@@ -1,0 +1,15 @@
+churn-lua-none r1 main attempt1 load 7.03 -> 77.01
+churn-lua-none r1 cand attempt1 load 7.61 -> 68.42
+churn-lua-none r1 null attempt1 load 6.26 -> 85.51
+churn-lua-none r2 null attempt1 load 7.92 -> 79.72
+churn-lua-none r2 cand attempt1 load 7.71 -> 73.40
+churn-lua-none r2 main attempt1 load 7.38 -> 78.82
+churn-lua-none r3 main attempt1 load 7.51 -> 78.53
+churn-lua-none r3 cand attempt1 load 7.16 -> 59.32
+churn-lua-none r3 null attempt1 load 7.38 -> 89.34
+churn-lua-none r4 null attempt1 load 6.88 -> 80.40
+churn-lua-none r4 cand attempt1 load 7.35 -> 82.01
+churn-lua-none r4 main attempt1 load 7.95 -> 71.89
+churn-lua-none r5 main attempt1 load 7.56 -> 80.67
+churn-lua-none r5 cand attempt1 load 7.05 -> 81.58
+churn-lua-none r5 null attempt1 load 6.89 -> 75.81

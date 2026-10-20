@@ -1,0 +1,15 @@
+copy-py r1 main attempt1 load 5.98 -> 5.98
+copy-py r1 cand attempt1 load 5.98 -> 5.74
+copy-py r1 null attempt1 load 5.74 -> 5.74
+copy-py r2 null attempt1 load 5.74 -> 5.74
+copy-py r2 cand attempt1 load 5.74 -> 5.74
+copy-py r2 main attempt1 load 5.74 -> 5.74
+copy-py r3 main attempt1 load 5.74 -> 5.68
+copy-py r3 cand attempt1 load 5.68 -> 5.68
+copy-py r3 null attempt1 load 5.68 -> 5.68
+copy-py r4 null attempt1 load 5.68 -> 5.68
+copy-py r4 cand attempt1 load 5.68 -> 5.79
+copy-py r4 main attempt1 load 5.79 -> 5.79
+copy-py r5 main attempt1 load 5.79 -> 5.79
+copy-py r5 cand attempt1 load 5.79 -> 5.79
+copy-py r5 null attempt1 load 5.79 -> 5.56

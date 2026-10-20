@@ -1,0 +1,15 @@
+churn-py-none r1 main attempt1 load 7.85 -> 13.52
+churn-py-none r1 cand attempt1 load 7.81 -> 16.77
+churn-py-none r1 null attempt1 load 7.90 -> 26.11
+churn-py-none r2 null attempt1 load 7.68 -> 17.41
+churn-py-none r2 cand attempt1 load 7.86 -> 15.76
+churn-py-none r2 main attempt1 load 7.79 -> 22.23
+churn-py-none r3 main attempt1 load 7.91 -> 19.28
+churn-py-none r3 cand attempt1 load 7.46 -> 22.84
+churn-py-none r3 null attempt1 load 7.96 -> 22.55
+churn-py-none r4 null attempt1 load 7.71 -> 13.11
+churn-py-none r4 cand attempt1 load 7.96 -> 20.79
+churn-py-none r4 main attempt1 load 7.87 -> 10.87
+churn-py-none r5 main attempt1 load 7.15 -> 10.64
+churn-py-none r5 cand attempt1 load 7.99 -> 16.34
+churn-py-none r5 null attempt1 load 7.45 -> 16.86

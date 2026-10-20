@@ -1,0 +1,15 @@
+capture-py r1 main attempt1 load 6.85 -> 7.32
+capture-py r1 cand attempt1 load 7.32 -> 6.59
+capture-py r1 null attempt1 load 6.59 -> 7.14
+capture-py r2 null attempt1 load 7.14 -> 6.90
+capture-py r2 cand attempt1 load 6.90 -> 6.41
+capture-py r2 main attempt1 load 6.41 -> 6.74
+capture-py r3 main attempt1 load 6.74 -> 6.45
+capture-py r3 cand attempt1 load 6.45 -> 5.92
+capture-py r3 null attempt1 load 5.92 -> 5.84
+capture-py r4 null attempt1 load 5.77 -> 6.69
+capture-py r4 cand attempt1 load 6.69 -> 6.32
+capture-py r4 main attempt1 load 6.32 -> 6.48
+capture-py r5 main attempt1 load 6.48 -> 6.49
+capture-py r5 cand attempt1 load 6.49 -> 5.63
+capture-py r5 null attempt1 load 5.63 -> 5.75

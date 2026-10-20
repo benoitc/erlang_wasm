@@ -43,6 +43,8 @@ count on the way back in, and the directory is documented as being as trusted
 as the release, in the same words `wasm_code_cache` uses.
 """.
 
+-include("wasm.hrl").
+
 -export([encode/1, decode/2, limits/0, representable/2]).
 -export([own_atoms/0]).
 -export([format_version/0, image_abi/0]).
@@ -87,8 +89,11 @@ as the release, in the same words `wasm_code_cache` uses.
 -define(S_DROPPED, 8).
 -define(S_HOOKS, 9).
 
+%% A table is its list of entries or, decoded from a file, the same entries
+%% packed (`untables/3').
 -type parts() :: #{hash := binary(), version := binary(), key := term(),
-                   shape := term(), globals := [term()], tables := [[term()]],
+                   shape := term(), globals := [term()],
+                   tables := [[term()] | binary()],
                    mems := [map()], dropped := {map(), map()},
                    hooks := map()}.
 -export_type([parts/0]).
@@ -334,13 +339,17 @@ section_value(?S_HASH, hash, _Other, _Acc, _Lim) ->
 section_value(?S_VERSION, version, Bin, Acc, Lim) ->
     {ok, Acc#{version => Bin}, Lim};
 section_value(Tag, Key, Bin, Acc, #{depth := D, nodes := N} = Lim) ->
-    case unterm(Bin, D, N) of
+    case value(Tag, Bin, D, N) of
         {ok, V, <<>>, N2} -> {ok, Acc#{Key => V}, Lim#{nodes := N2}};
         {ok, _V, _R, _N2} -> refuse(snapshot_corrupt,
                                     ~"a section has trailing bytes",
                                     #{section => Tag});
         {error, _} = E    -> E
     end.
+
+%% The tables section packs as it decodes; every other section is a plain value.
+value(?S_TABLES, Bin, D, N) -> untables(Bin, D, N);
+value(_Tag, Bin, D, N)      -> unterm(Bin, D, N).
 
 complete(Acc) ->
     Want = [hash, version, key, shape, globals, tables, mems, dropped, hooks],
@@ -400,6 +409,62 @@ unterm(<<6, N:32, R/binary>>, D, Budget) ->
     collect(N * 2, R, [], fun pairs/1, D - 1, Budget - 1);
 unterm(_Other, _D, _Budget) ->
     refuse(snapshot_corrupt, no_encoding_msg(), #{}).
+
+%% **Tables are packed as they are read.** A funcref table on disk is a list
+%% of `null' and `{funcref, self, F}', and decoding it as terms built that
+%% list in the caller only for `wasm_snapshot' to pack it into one binary
+%% straight after: for QuickJS that list was most of a load's garbage. A table
+%% whose every entry has exactly one of those two encodings, with `F' a
+%% non-negative index below the null word, becomes the packed binary
+%% `wasm_snapshot' would have built, one 32-bit word per entry
+%% (`?NULL_FUNC_WORD' for `null'). `F' is checked against the module's function
+%% count later, by `wasm_snapshot:from_parts/3', which is the first place that
+%% knows it.
+%%
+%% Anything else, and any table the depth or node limit would refuse, is
+%% decoded by `unterm/3' from its first byte, so its value and every refusal
+%% are exactly what they were. The packed path spends the node budget the term
+%% path would: one for the list, one for a `null', four for a funcref tuple.
+untables(<<4, N:32, R/binary>>, D, Budget) when D > 0, Budget > 0 ->
+    untables(N, R, [], D - 1, Budget - 1);
+untables(Bin, D, Budget) ->
+    unterm(Bin, D, Budget).
+
+untables(_N, _R, _Acc, _D, Budget) when Budget =< 0 ->
+    refuse(snapshot_too_many_nodes,
+           ~"the image decodes to more nodes than allowed", #{});
+untables(0, R, Acc, _D, Budget) ->
+    {ok, lists:reverse(Acc), R, Budget};
+untables(N, R, Acc, D, Budget) ->
+    case untable(R, D, Budget) of
+        {ok, T, R2, Budget2} -> untables(N - 1, R2, [T | Acc], D, Budget2);
+        {error, _} = E       -> E
+    end.
+
+%% A table nests three deep (the list, a tuple, its fields), so the packed path
+%% needs that much depth. It stops where the budget runs out, as the term path
+%% does, and leaves the refusal to it; a table that ends with the budget at
+%% zero is refused by `untables/5', as the term path's list refuses it.
+untable(<<4, N:32, R/binary>> = Bin, D, Budget) when D >= 3 ->
+    case packed(R, N, <<>>, Budget - 1) of
+        {ok, _Packed, _R2, _Budget2} = Ok -> Ok;
+        declined                          -> unterm(Bin, D, Budget)
+    end;
+untable(Bin, D, Budget) ->
+    unterm(Bin, D, Budget).
+
+%% The bytes first, so the match carries from one entry to the next without a
+%% sub-binary each.
+packed(<<3, 4:16, "null", R/binary>>, N, Acc, Budget) when N > 0, Budget > 0 ->
+    packed(R, N - 1, <<Acc/binary, ?NULL_FUNC_WORD:32>>, Budget - 1);
+packed(<<5, 3:32, 3, 7:16, "funcref", 3, 4:16, "self", 0, U:64, R/binary>>,
+       N, Acc, Budget)
+  when N > 0, Budget > 0, U band 1 =:= 0, U bsr 1 < ?NULL_FUNC_WORD ->
+    packed(R, N - 1, <<Acc/binary, (U bsr 1):32>>, Budget - 4);
+packed(R, 0, Acc, Budget) ->
+    {ok, Acc, R, Budget};
+packed(_R, _N, _Acc, _Budget) ->
+    declined.
 
 %% Adjacent sigils do not concatenate, and a message long enough to want two
 %% lines is clearer as its own function anyway.

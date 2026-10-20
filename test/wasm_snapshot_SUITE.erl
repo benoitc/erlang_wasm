@@ -62,6 +62,11 @@ all() ->
      a_packed_table_restores_every_slot,
      a_packed_table_survives_a_file,
      a_packed_image_files_as_the_list_did,
+     every_producer_restores_a_plain_table_alike,
+     every_producer_restores_a_grown_table_alike,
+     a_file_table_is_packed_without_a_list,
+     the_packed_decode_keeps_the_term_decode_limits,
+     an_out_of_range_funcref_on_disk_is_refused,
      packed_words_fill_a_table_directly,
      a_data_segment_the_guest_zeroed_stays_zero,
      a_zeroed_gap_between_runs_stays_zero,
@@ -810,6 +815,256 @@ a_packed_image_files_as_the_list_did(Config) ->
     ok = wasm:save_snapshot(Lists, B),
     ?assertEqual(file:read_file(B), file:read_file(A)),
     ok = wasm:release(Image).
+
+%%% ------------------------------------------- producers and consumers ---
+%%
+%% A packed table must not depend on what made the image or what restores it.
+%% Three producers: the live capture, a file (saved, then decoded straight into
+%% words), and a parts map written out by hand with list tables, which
+%% `from_parts/3' packs. Two consumers: an interpreted restore and one through
+%% generated code. Each restore calls every slot, and every producer's image
+%% saves to the same bytes.
+
+-define(IMG_RES, 14).
+-define(COMPILED, #{compile => true, compile_sync => true, compile_after => 1,
+                   compile_force => true}).
+
+every_producer_restores_a_plain_table_alike(Config) ->
+    producers_alike(Config, plain, [{ok, [9]}, trap, {ok, [11]}, {ok, [44]}]).
+
+%% Grown from the host past the module's minimum of 4, with an imported
+%% function and an own one in the new slots, so a restore must grow its fresh
+%% table before it lays the words.
+every_producer_restores_a_grown_table_alike(Config) ->
+    producers_alike(Config, grown, [{ok, [9]}, trap, {ok, [11]}, {ok, [44]},
+                                    trap, {ok, [11]}, {ok, [9]}]).
+
+producers_alike(Config, Shape, Expected) ->
+    ct:timetrap({minutes, 3}),
+    Dir = ?config(priv_dir, Config),
+    Handle = fixture(packed_table),
+    {ok, M} = wasm_module_cache:get(Handle),
+    Init = init(Handle, seven()),
+    ok = shaped(Shape, Init),
+    {ok, Captured} = wasm:snapshot(Init, #{version => ~"v1",
+                                           compatibility_key => ~"k"}),
+    ok = wasm:destroy(Init),
+    [Words] = tables_of(Captured),
+    ?assert(is_binary(Words)),
+    ?assertEqual(length(Expected) * 4, byte_size(Words)),
+    CapFile = filename:join(Dir, atom_to_list(Shape) ++ "-capture.img"),
+    ok = wasm:save_snapshot(Captured, CapFile),
+    {ok, FromFile} = wasm:load_snapshot(CapFile, Handle),
+    Parts = (wasm_snapshot:to_parts(Captured))#{tables => [by_hand(Words)]},
+    {ok, Built} = wasm_snapshot:from_parts(Parts, Handle, M),
+    %% No memory to build: the owner and the page record are the capture's,
+    %% which is what `wasm:load_snapshot/2' would attach.
+    FromParts = wasm_snapshot:with_owner(
+                  wasm_snapshot:build(Built, element(?IMG_RES, Captured)),
+                  wasm_snapshot:owner(Captured)),
+    {ok, CapBytes} = file:read_file(CapFile),
+    [begin
+         ?assertEqual({Name, [Words]}, {Name, tables_of(Image)}),
+         File = filename:join(Dir, atom_to_list(Shape) ++ "-" ++
+                                  atom_to_list(Name) ++ ".img"),
+         ok = wasm:save_snapshot(Image, File),
+         ?assertEqual({Name, {ok, CapBytes}}, {Name, file:read_file(File)}),
+         [?assertEqual({Name, Tier, Expected},
+                       {Name, Tier, slots(Image, Tier, length(Expected))})
+          || Tier <- [interpreted, compiled]]
+     end || {Name, Image} <- [{capture, Captured}, {file, FromFile},
+                              {parts, FromParts}]],
+    ok = wasm:release(FromFile),
+    ok = wasm:release(Captured).
+
+shaped(plain, _Inst) ->
+    ok;
+shaped(grown, Inst) ->
+    #mut{tables = {T}} = wasm_instance:mut(Inst),
+    {ok, 4} = wasm_table:grow(T, 3, null),
+    ok = wasm_table:set(T, 5, {funcref, Inst#inst.id, 3}),
+    wasm_table:set(T, 6, {funcref, Inst#inst.id, 0}).
+
+%% The file's `self' form of a packed table, written out here.
+by_hand(Words) ->
+    [case W of
+         16#FFFFFFFF -> null;
+         F -> {funcref, self, F}
+     end || <<W:32>> <= Words].
+
+%% Every slot of a fresh restore, called three times, and in the compiled tier
+%% only once the module is compiled, which the count of entries confirms.
+slots(Image, Tier, N) ->
+    Opts = case Tier of
+               interpreted -> #{};
+               compiled    -> ?COMPILED
+           end,
+    {ok, Fresh} = wasm:restore(Image, nine(),
+                               Opts#{snapshot_hooks => #{~"env" => stateless},
+                                     compatibility_key => ~"k"}),
+    ok = tiered(Tier, Fresh),
+    Entered = maps:get(entered, wasm_jit:counts()),
+    Answers = [lists:usort([answer(wasm:call(Fresh, ~"call_at", [I]))
+                            || _ <- lists:seq(1, 3)])
+               || I <- lists:seq(0, N - 1)],
+    ok = wasm:destroy(Fresh),
+    ?assertEqual({Tier, true},
+                 {Tier, (Tier =:= compiled) =:=
+                      (maps:get(entered, wasm_jit:counts()) > Entered)}),
+    [?assertMatch({Tier, [_]}, {Tier, A}) || A <- Answers],
+    [A || [A] <- Answers].
+
+%% The first call compiles, synchronously, and the calls after it run the
+%% generated code.
+tiered(interpreted, _Fresh) ->
+    ok;
+tiered(compiled, Fresh) ->
+    {ok, [11]} = wasm:call(Fresh, ~"call_at", [2]),
+    wasm_jit:await(Fresh, 60000).
+
+answer({ok, _} = R)                  -> R;
+answer({error, #{class := trap}})    -> trap.
+
+%% Decoding a file's funcref table builds the packed words and no list: the
+%% list form is at least two words a slot (a cons, and four more for a
+%% funcref's tuple), and the decode's whole allocation here stays under a
+%% quarter of a word a slot. Counted in a fresh process whose heap is fixed
+%% large enough that nothing is collected until the decode is done.
+a_file_table_is_packed_without_a_list(_Config) ->
+    N = 20000,
+    Table = [case I rem 3 of 0 -> null; _ -> {funcref, self, I} end
+             || I <- lists:seq(1, N)],
+    Bin = wasm_snapshot_file:encode(bare_parts(#{tables => [Table]})),
+    {ok, Lim} = wasm_snapshot_file:limits(),
+    {Words, Minor, Result} =
+        allocated(fun() -> wasm_snapshot_file:decode(Bin, Lim) end),
+    ct:pal("decode of ~b slots allocated ~b words", [N, Words]),
+    ?assert(Words < N div 4),
+    ?assertEqual(0, Minor),
+    {ok, #{tables := [Packed]}} = Result,
+    ?assertEqual(<< <<(case E of null -> 16#FFFFFFFF;
+                                 {funcref, self, F} -> F
+                       end):32>> || E <- Table >>, Packed).
+
+%% Words a fun allocates, from the collections traced in its process: each
+%% starts with what the last one left plus what was allocated since. The heap
+%% and the binary heap are fixed too large to fill, so the one collection is
+%% normally the explicit one at the end.
+allocated(Fun) ->
+    Self = self(),
+    P = spawn_opt(fun() ->
+                          receive go -> ok end,
+                          R = Fun(),
+                          GC = process_info(self(), garbage_collection),
+                          true = erlang:garbage_collect(),
+                          Self ! {done, self(), GC, R}
+                  end, [{min_heap_size, 4000000},
+                        {min_bin_vheap_size, 100000000}]),
+    1 = erlang:trace(P, true, [garbage_collection]),
+    P ! go,
+    {GC, R} = receive {done, P, {garbage_collection, GC0}, R0} -> {GC0, R0} end,
+    Ref = erlang:trace_delivered(P),
+    receive {trace_delivered, P, Ref} -> ok end,
+    {gc_alloc(0, 0), proplists:get_value(minor_gcs, GC), R}.
+
+gc_alloc(After, Acc) ->
+    receive
+        {trace, _, S, I} when S =:= gc_major_start; S =:= gc_minor_start ->
+            gc_alloc_end(Acc + used(I) - After);
+        {trace, _, _, _} ->
+            gc_alloc(After, Acc)
+    after 0 ->
+        Acc
+    end.
+
+gc_alloc_end(Acc) ->
+    receive
+        {trace, _, E, I} when E =:= gc_major_end; E =:= gc_minor_end ->
+            gc_alloc(used(I), Acc)
+    end.
+
+used(Info) ->
+    proplists:get_value(heap_size, Info) +
+        proplists:get_value(old_heap_size, Info).
+
+bare_parts(Overrides) ->
+    maps:merge(#{hash => <<0:256>>, version => ~"1", key => ~"k",
+                 shape => undefined, globals => [], tables => [],
+                 mems => [], dropped => {#{}, #{}}, hooks => #{}},
+               Overrides).
+
+%% The packed path spends the node budget and the depth the term path would.
+%% Two tables of one size, one packed and one the decoder cannot pack (a
+%% negative index), are decoded under every node limit and every depth around
+%% their cost, and each limit refuses both or neither, by the same name.
+the_packed_decode_keeps_the_term_decode_limits(_Config) ->
+    Packable = [{funcref, self, 1}, null, {funcref, self, 0}],
+    Declined = [{funcref, self, -1}, null, {funcref, self, 0}],
+    {ok, Lim} = wasm_snapshot_file:limits(),
+    Decode = fun(T, L) ->
+                     case wasm_snapshot_file:decode(
+                            wasm_snapshot_file:encode(
+                              bare_parts(#{tables => [T]})), L) of
+                         {ok, _}                 -> ok;
+                         {error, #{kind := K}} -> K
+                     end
+             end,
+    Outcomes = [{L, Decode(Packable, L), Decode(Declined, L)}
+                || L <- [Lim#{nodes := K} || K <- lists:seq(1, 40)] ++
+                        [Lim#{depth := D} || D <- lists:seq(1, 6)]],
+    [?assertEqual({L, B}, {L, A}) || {L, A, B} <- Outcomes],
+    %% Both answers occur, so the limits really were crossed.
+    ?assertEqual([ok, snapshot_too_deep, snapshot_too_many_nodes],
+                 lists:usort([A || {_, A, _} <- Outcomes])),
+    %% And the packed path stops where the budget runs out, as the term path
+    %% does, rather than packing the whole table first: a large table under a
+    %% small node limit costs what the same table costs when the term path
+    %% decodes it from its first entry. Without the stop it costs a reduction
+    %% or more per entry beyond the limit.
+    N = 200000,
+    Small = Lim#{nodes := 1000},
+    Costs = [begin
+                 Bin = wasm_snapshot_file:encode(
+                         bare_parts(#{tables => [[First | Rest]]})),
+                 reductions(fun() -> wasm_snapshot_file:decode(Bin, Small) end)
+             end || Rest <- [[{funcref, self, I} || I <- lists:seq(2, N)]],
+                    First <- [{funcref, self, 1}, {funcref, self, -1}]],
+    [{PackedCost, {error, #{kind := snapshot_too_many_nodes}}},
+     {TermCost, {error, #{kind := snapshot_too_many_nodes}}}] = Costs,
+    ct:pal("under a 1000 node limit: packed path ~b, term path ~b reductions",
+           [PackedCost, TermCost]),
+    ?assert(PackedCost < TermCost + N div 4).
+
+reductions(Fun) ->
+    Self = self(),
+    P = spawn(fun() ->
+                      {reductions, R0} = process_info(self(), reductions),
+                      R = Fun(),
+                      {reductions, R1} = process_info(self(), reductions),
+                      Self ! {self(), R1 - R0, R}
+              end),
+    receive {P, Cost, R} -> {Cost, R} end.
+
+%% The decoder packs any index below the null word, since it cannot know the
+%% module's function count; an index past it is still refused when the image
+%% is bound to the module, as the list form was.
+an_out_of_range_funcref_on_disk_is_refused(_Config) ->
+    {ok, Lim} = wasm_snapshot_file:limits(),
+    {ok, Parts} = wasm_snapshot_file:decode(
+                    wasm_snapshot_file:encode(
+                      bare_parts(#{tables => [[null, {funcref, self, 99}]]})),
+                    Lim),
+    ?assertMatch(#{tables := [<<16#FFFFFFFF:32, 99:32>>]}, Parts),
+    ?assertMatch({error, #{kind := snapshot_invalid_value,
+                           ctx := #{shape := funcref}}},
+                 wasm_snapshot:from_parts(Parts, {wasm_module, <<0:256>>},
+                                          module_with(1))),
+    ?assertMatch({ok, _},
+                 wasm_snapshot:from_parts(Parts, {wasm_module, <<0:256>>},
+                                          module_with(100))),
+    %% A binary that is not whole words is no table at all.
+    ?assertMatch({error, #{kind := snapshot_corrupt}},
+                 restore_parts(#{tables => [<<0, 0, 0>>]}, module_with(1))).
 
 %% **A fresh instance is not zero.** `wasm_instance:new/3` runs the active data
 %% segments before a restore sees it, so a restore that skipped the regions it

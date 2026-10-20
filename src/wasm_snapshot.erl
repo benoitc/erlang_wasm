@@ -796,14 +796,41 @@ an image is for and this refuses one that does not match.
 from_parts(#{hash := Hash} = P, {wasm_module, Want} = Handle, M) ->
     case Hash of
         Want ->
-            case restore_admissible(P, M) of
-                ok             -> built(P, Handle, func_count(M));
+            NFuncs = func_count(M),
+            P1 = in_range(P, NFuncs),
+            case restore_admissible(P1, M) of
+                ok             -> built(P1, Handle, NFuncs);
                 {error, _} = E -> E
             end;
         _    -> refuse(snapshot_wrong_module,
                        ~"this image was captured from another module",
                        #{expected => Want, found => Hash})
     end.
+
+%% A table the file decoder packed (`wasm_snapshot_file:untables/3') names
+%% functions it could not range-check, since only the module knows how many
+%% there are. One whose every word is `null' or below `NFuncs' stays packed;
+%% any other goes back to the list it was on disk, so `restore_values_ok/2'
+%% refuses it exactly as it refuses that list.
+in_range(#{tables := Ts} = P, NFuncs) when is_list(Ts) ->
+    P#{tables := [in_range_table(T, NFuncs) || T <- Ts]};
+in_range(P, _NFuncs) ->
+    P.
+
+in_range_table(Packed, NFuncs) when is_binary(Packed),
+                                    byte_size(Packed) rem 4 =:= 0 ->
+    case words_below(Packed, NFuncs) of
+        true  -> Packed;
+        false -> unpack_table(Packed, self)
+    end;
+in_range_table(T, _NFuncs) ->
+    T.
+
+words_below(<<?NULL_WORD:32, R/binary>>, NFuncs) -> words_below(R, NFuncs);
+words_below(<<F:32, R/binary>>, NFuncs) when F < NFuncs ->
+    words_below(R, NFuncs);
+words_below(<<>>, _NFuncs) -> true;
+words_below(_R, _NFuncs) -> false.
 
 %% A forged image, with a valid digest, must not be able to produce an instance
 %% that capture could never have produced. Two things are re-checked off disk
@@ -832,7 +859,23 @@ no_defined_shared_memory(#module{mems = Mems}) ->
 %% the module, since restore writes them straight into a table.
 restore_values_ok(#{globals := Gs, tables := Ts}, M) when is_list(Gs),
                                                           is_list(Ts) ->
-    NFuncs = func_count(M),
+    case lists:all(fun table_form_ok/1, Ts) of
+        true  -> restore_values_ok(Gs, Ts, func_count(M));
+        false -> malformed_values()
+    end;
+restore_values_ok(_P, _M) ->
+    malformed_values().
+
+malformed_values() ->
+    refuse(snapshot_corrupt, ~"the image's globals or tables are malformed",
+           #{}).
+
+%% A list, or the whole words `in_range/2' kept packed.
+table_form_ok(T) when is_list(T)   -> true;
+table_form_ok(T) when is_binary(T) -> byte_size(T) rem 4 =:= 0;
+table_form_ok(_T)                  -> false.
+
+restore_values_ok(Gs, Ts, NFuncs) ->
     Values = Gs ++ lists:append([T || T <- Ts, is_list(T)]),
     case [V || V <- Values, not restore_value_ok(V, NFuncs)] of
         [] -> ok;
@@ -840,9 +883,7 @@ restore_values_ok(#{globals := Gs, tables := Ts}, M) when is_list(Gs),
             refuse(snapshot_invalid_value,
                    ~"the image holds a value that could not have been captured",
                    #{shape => shape_of(V)})
-    end;
-restore_values_ok(_P, _M) ->
-    refuse(snapshot_corrupt, ~"the image's globals or tables are malformed", #{}).
+    end.
 
 %% Every memory the file describes, checked against the module before any page
 %% is built: as many as the module defines, each within its declared limits and
@@ -916,8 +957,11 @@ built(P, Handle, NFuncs) ->
                    hooks = Hooks, bytes = Bytes, img_res = undefined,
                    owner = undefined}}.
 
-%% Packed as a capture packs, from the file's `self' form: every funcref in it
-%% was range-checked by `restore_values_ok/2' before this runs.
+%% A table the file decoder packed is kept, `in_range/2' having checked it; a
+%% list is packed as a capture packs, from the file's `self' form, every
+%% funcref in it range-checked by `restore_values_ok/2' before this runs.
+loaded_table(Packed, _Src, _NFuncs) when is_binary(Packed) ->
+    Packed;
 loaded_table(T, Src, NFuncs) ->
     case pack_table(T, self, NFuncs) of
         Packed when is_binary(Packed) -> Packed;

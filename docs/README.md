@@ -1,6 +1,15 @@
 # Documentation
 
-Pick the row that matches what you want to do, then follow the index below.
+This is the index. Start with the row that matches why you are here and read
+its pages in order; every page ends by saying what to read next.
+
+| You want to | read, in order |
+| --- | --- |
+| run WebAssembly from Erlang | [What it is for](introduction.md), [Concepts](concepts.md), [Getting started](getting-started.md), then the guide for your case below |
+| understand how it works | [Concepts](concepts.md), [Architecture](architecture.md), the page for the part you care about under [Internals](#internals), then [Design notes](design-notes.md) for the why |
+| change it | [CONTRIBUTING.md](../CONTRIBUTING.md), the [recipe](contributing/recipes.md) for your change, then [Testing](contributing/testing.md) and [Measuring](contributing/measuring.md) |
+
+If you already know the task:
 
 | I want to | start with |
 | --- | --- |
@@ -54,6 +63,8 @@ You are running WebAssembly and want to know how.
 | [Host functions](host-functions.md) | calling from WebAssembly into Erlang |
 | [WASI](wasi.md) | running a `wasm32-wasip1` program, and its capabilities |
 | [Components](components.md) | running and composing Component Model components, and their typed signatures |
+| [WASI 0.2](wasi-0-2.md) | the interfaces a component imports, and how to grant each |
+| [HTTP](http.md) | outbound requests from a component, and serving one |
 | [Streams](streams.md) | talking to a guest while it runs |
 | [Using workers](worker.md) | running untrusted code one request at a time, with a deadline |
 | [Hosting scripting languages](scripting.md) | JavaScript, Python and Lua, one request per sandbox |
@@ -89,11 +100,25 @@ You are changing the runtime rather than using it.
 | | |
 | --- | --- |
 | [Architecture](architecture.md) | the module map, the layers, the path of a call |
+| [Memory](memory.md) | linear memory, restored images, the keeper and the page budget |
+| [Garbage collection](gc.md) | the GC proposal's heap, roots and collector |
 | [Worker internals](worker-internals.md) | how the worker kernel and its reaper are built |
-| [Adding an instruction](adding-an-instruction.md) | the change you will make most often |
+| [Component internals](component-internals.md) | how a component becomes core instances and calls |
 | [Design notes](design-notes.md) | why it is built this way |
 
-Two more things live outside `docs/` and are worth knowing about:
+## Contributing
+
+You are about to change it.
+
+| | |
+| --- | --- |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | the checks, the rules, where things live |
+| [Recipes](contributing/recipes.md) | one section per kind of change: the files, the test, the page |
+| [Adding an instruction](contributing/adding-an-instruction.md) | the change you will make most often |
+| [Testing](contributing/testing.md) | running the suites, the fixtures, a test that can fail |
+| [Measuring](contributing/measuring.md) | turning a number into a claim |
+| [Changing the NIF](contributing/nif.md) | running the file NIF under a sanitizer |
+
 `test/audit/PERF.md` is the measurement record every performance claim cites,
-and `test/audit/ATTEMPTS.md` is what was tried and reverted. Read the second
+and `test/audit/ATTEMPTS.md` is what was tried and dropped. Read the second
 before proposing an optimisation.

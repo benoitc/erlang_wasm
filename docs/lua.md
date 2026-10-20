@@ -127,3 +127,7 @@ A tenant error arrives as a value, in the same shape every other language uses:
 
 `~"no_entry_point"` when no global `main` is defined, and `~"exception"` for
 anything the chunk raised, at load time or during the call.
+
+## Read this next
+
+[Tuning](tuning.md), then [Snapshots](snapshots.md).

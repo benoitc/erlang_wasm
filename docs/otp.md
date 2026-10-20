@@ -97,3 +97,7 @@ owner exits, whatever the reason.
 
 For scripts rather than exports, the same shape holds with
 `wasm_script_worker`; see [Workers](worker.md).
+
+## Read this next
+
+[Using workers](worker.md), to run code you did not write.

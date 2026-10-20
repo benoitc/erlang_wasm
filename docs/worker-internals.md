@@ -30,6 +30,42 @@ reservation, the request directory, the channels and the runner spawn -- is
 a CPython one. It has not been attacked because nothing yet needs it to be
 smaller.
 
+## Cleanup goes through a steward
+
+The guardian never talks to the reaper directly. Each request gets a
+**cleanup steward**, started by the node-wide **cleanup manager**, and the
+steward carries every cleanup operation (register an action, withdraw it,
+hand ownership over) to the reaper and keeps a ledger of them.
+
+```text
+guardian --operations--> steward --send_request--> reaper (journal on disk)
+                            ^
+cleanup manager ------------+  admits the request, bounds how many
+                               hold cleanup state, starts the steward
+```
+
+The split exists so a slow or restarting reaper cannot block a request or
+lose its cleanup:
+
+- **The manager bounds cleanup.** It admits a request before its steward
+  starts, against a capacity computed from the reaper's settings, so cleanup
+  state cannot grow without bound while the reaper is slow or absent. It does
+  no filesystem work.
+- **The steward never blocks.** It sends with `gen_server:send_request/2` and
+  matches answers as they come, numbering each operation so a resend is
+  recognised.
+- **A reaper restart loses nothing.** The steward pins the reaper it reserved
+  against. When that reaper dies, its pending operations wait; the replacement
+  adopts the request during its sweep, the steward hands over its ledger and
+  resends. If no reaper will come back, the operation fails instead of
+  hanging.
+
+`wasm_worker_sup` starts the steward supervisor, the manager and the reaper
+in that order, `rest_for_one`, so a manager restart restarts the reaper
+behind it. `wasm_script_worker:cleanup_requests/0` lists the requests whose
+cleanup is still held. The full protocol, with its state machines and
+invariants, is `test/audit/CLEANUP_STEWARD.md`.
+
 ## The reaper is supervised, and knows which roots are its own
 
 `wasm_worker_sup` starts the reaper, and `reaper_spec/0` is the only place its
@@ -90,3 +126,8 @@ Two things a change here has to keep:
   snapshot store itself, so fifty workers on one file hold fifty copies of its
   pages. `test/audit/ATTEMPTS.md`, "Shared image pages: what was left out, and
   the constants", says what sharing them would need.
+
+## Read this next
+
+[Design notes](design-notes.md), then the adapter recipe in
+[Recipes](contributing/recipes.md).

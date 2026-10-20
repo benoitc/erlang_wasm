@@ -171,3 +171,8 @@ side channels, scheduler saturation across many workers, and host functions
 you write yourself. See [Security](security.md).
 
 Every setting is in [Worker configuration](worker-reference.md).
+
+## Read this next
+
+[Hosting scripting languages](scripting.md), then [Worker
+configuration](worker-reference.md).

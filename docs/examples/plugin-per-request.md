@@ -41,3 +41,7 @@ To run it under a deadline too, give each request to a worker instead; see
 [Stop a runaway](stop-a-runaway.md).
 
 **Next:** [Restore a snapshot](restore-a-snapshot.md).
+
+## Read this next
+
+The guide behind this example: [Using workers](../worker.md).

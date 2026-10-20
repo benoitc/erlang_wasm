@@ -40,3 +40,7 @@ ok = wasm:destroy(Inst).
 ```
 
 **Next:** [Call Erlang from a guest](call-erlang-from-a-guest.md).
+
+## Read this next
+
+The guide behind this example: [Embedding](../embedding.md).

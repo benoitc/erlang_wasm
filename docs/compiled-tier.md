@@ -455,3 +455,8 @@ An unrecognised profile is `{error, #{kind := unknown_profile}}`, not a crash.
   when you upgrade OTP.
 - The measurement record for all of this is `test/audit/PERF.md`, and the list
   of what was tried and reverted is `test/audit/ATTEMPTS.md`.
+
+## Read this next
+
+[Tuning](tuning.md), or [Design notes](design-notes.md) for why the tier is
+built this way.

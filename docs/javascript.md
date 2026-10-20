@@ -173,3 +173,7 @@ Everything arrives as a value. A tenant exception comes back as
 
 `code` is a **binary** and always will be: the atom table is node-wide and
 never reclaimed, so nothing a guest names can reach it.
+
+## Read this next
+
+[Tuning](tuning.md), then [Snapshots](snapshots.md).

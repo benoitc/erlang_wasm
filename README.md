@@ -25,14 +25,14 @@ kind, the specification's message text, and context.
 
 ## Where to start
 
-| I want to | start with |
+| You want to | start with |
 | --- | --- |
-| call exported WebAssembly functions from Erlang | [Getting started](docs/getting-started.md), then [Embedding](docs/embedding.md) |
-| run a program that has a `main` (a WASI command) | [WASI](docs/wasi.md) |
-| run WebAssembly I did not write | [Workers](docs/worker.md), then [Security](docs/security.md) |
-| run JavaScript, Python or Lua source | [JavaScript](docs/javascript.md), [Python](docs/python.md), [Lua](docs/lua.md) |
-| stop paying interpreter startup on every request | [Snapshots](docs/snapshots.md) |
-| speed up a workload I have measured | [The compiled tier](docs/compiled-tier.md) |
+| run WebAssembly from Erlang | [Getting started](docs/getting-started.md), then the guide for your case |
+| understand how it works | [Architecture](docs/architecture.md) |
+| change it | [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+[docs/README.md](docs/README.md) has the reading order for each, and every
+page by task.
 
 ## Status
 
@@ -48,6 +48,10 @@ exception handling, garbage collection, relaxed SIMD, threads and shared
 memories, sign extension, saturating
 float-to-int, and 45 WASI preview 1 syscalls with capability-based filesystem
 and network access.
+
+The Component Model runs too: components with resources, composition and the
+async Canonical ABI, on a WASI 0.2 host with filesystem, sockets and
+`wasi:http`. See [docs/components.md](docs/components.md).
 
 It reads both formats: the binary one and the text format, `.wat` modules and
 `.wast` scripts alike.
@@ -95,27 +99,9 @@ you need it, and how to put a pool of them in your own supervision tree.
 
 ## Documentation
 
-[The full index is in docs/](docs/README.md). The pages you are most likely to
-want first:
-
-- [What it is for](docs/introduction.md) and [Concepts](docs/concepts.md)
-- [Getting started](docs/getting-started.md)
-- [Examples](docs/README.md#examples): one task per page, each one tested
-- [Producing a module](docs/guests.md): which shape to build, and how
-- [Embedding](docs/embedding.md): lifetime, ownership, limits
-- [WASI](docs/wasi.md): capabilities and preopens
-- [Workers](docs/worker.md): running untrusted code one request at a time
-- [Snapshots](docs/snapshots.md): start an interpreter once, not per request
-- [The compiled tier](docs/compiled-tier.md): what `compile => true` buys, and when
-- [Security](docs/security.md): the threat model
-- [Features and conformance](docs/features.md)
-- [Upgrading from 0.3](docs/upgrading.md): if you copied modules out of `examples/`
-
-For changing the runtime rather than using it:
-
-- [Architecture](docs/architecture.md): the layers, the cycles, the path of a call
-- [Adding an instruction](docs/adding-an-instruction.md): the files, per opcode space
-- [Design notes](docs/design-notes.md): why it is built this way
+[docs/README.md](docs/README.md) is the index: where to start for each kind
+of reader, then every page by task. [docs/concepts.md](docs/concepts.md)
+defines the words the other pages use.
 
 ## Building
 

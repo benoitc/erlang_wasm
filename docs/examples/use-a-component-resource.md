@@ -91,3 +91,7 @@ with its own handle table, so a dropped, reused or wrong-type handle is caught
 rather than quietly accepted.
 
 **Next:** [Components](../components.md).
+
+## Read this next
+
+The guide behind this example: [Components](../components.md).

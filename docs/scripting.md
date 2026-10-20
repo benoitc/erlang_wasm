@@ -124,3 +124,8 @@ wasm_script_worker:start_link(my_adapter, #{capture_min_heap_words => 2_000_000}
 Every setting, with its default, is in [Worker configuration](worker-reference.md).
 How the kernel's processes fit together is in [Worker
 internals](worker-internals.md).
+
+## Read this next
+
+The page for your language: [JavaScript](javascript.md), [Python](python.md) or
+[Lua](lua.md).

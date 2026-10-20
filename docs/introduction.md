@@ -25,15 +25,8 @@ operations easier, and measured speed already meets your needs.
 If the fastest possible guest execution is your main need, a native engine
 such as Wasmtime, embedded through a NIF, fits better.
 
-## Where to start
+## Read this next
 
-| I want to | start with |
-| --- | --- |
-| understand the words used everywhere else | [Concepts](concepts.md) |
-| call exported WebAssembly functions from Erlang | [Getting started](getting-started.md), then [Call an export](examples/call-an-export.md) |
-| run a program that has a `main` (a WASI command) | [Run a WASI command](examples/run-a-wasi-command.md) |
-| run WebAssembly I did not write | [Stop a runaway](examples/stop-a-runaway.md), then [Workers](worker.md) |
-| run JavaScript, Python or Lua source | [Run JavaScript](examples/run-javascript.md), [Run Python](examples/run-python.md), [Lua](lua.md) |
-| stop paying interpreter startup on every request | [Restore a snapshot](examples/restore-a-snapshot.md) |
-| speed up a workload I have measured | [Turn on the compiled tier](examples/turn-on-the-tier.md) |
-| know what is installed and what I write | [What you get](what-you-get.md) |
+[Concepts](concepts.md) defines the words every other page uses, then
+[Getting started](getting-started.md) takes an empty project to a running
+module. The index, [docs/README.md](README.md), lists every page by task.

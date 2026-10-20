@@ -89,3 +89,8 @@ for you.
 
 WASI is the worked example of doing this properly. See [wasi.md](wasi.md) and
 `wasi_preview1`, where every capability is explicit and absence means refusal.
+
+## Read this next
+
+[WASI](wasi.md), the standard set of host functions, or [Streams](streams.md)
+to talk to a guest while it runs.

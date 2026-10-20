@@ -305,3 +305,8 @@ bounds work, and fuel turns the compiled tier off. And the clock is the sharp
 instrument: `clock_res_get` answers 1 us while `clock_time_get` returns
 nanoseconds, so the untrusted preset passes `clocks => [monotonic]` explicitly.
 That does not close the timing channel and is not claimed to.
+
+## Read this next
+
+[Worker internals](worker-internals.md), and the adapter recipe in
+[Recipes](contributing/recipes.md).

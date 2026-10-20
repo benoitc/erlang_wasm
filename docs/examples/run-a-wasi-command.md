@@ -48,3 +48,7 @@ ok = file:del_dir_r(Dir).
 ```
 
 **Next:** [Run a WASI 0.2 component](run-a-wasi-2-component.md).
+
+## Read this next
+
+The guide behind this example: [WASI](../wasi.md).

@@ -117,3 +117,7 @@ own flush call is the answer, not a change here.
 [`wasm_demo`](https://github.com/benoitc/wasm_demo) runs QuickJS this way: a
 `priv/worker.js` reading a line at a time, a worker process owning the
 instance, and `make test` proving the round trip.
+
+## Read this next
+
+[Using workers](worker.md).

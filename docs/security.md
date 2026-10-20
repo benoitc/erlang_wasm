@@ -259,3 +259,7 @@ somebody else can rename -- rather than an attacker who is already inside.
 If you need to trust artifacts written by a party that may **not** run code in
 your node, this is not enough: that needs the artifacts authenticated, which
 this runtime does not do.
+
+## Read this next
+
+[WASI](wasi.md), for the capabilities you grant.

@@ -322,3 +322,7 @@ message in the envelope:
 
 `code` is a **binary**. Nothing a guest names becomes an atom, because the atom
 table is node-wide and never reclaimed.
+
+## Read this next
+
+[Tuning](tuning.md), then [Snapshots](snapshots.md).

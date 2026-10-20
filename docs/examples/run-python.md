@@ -50,3 +50,7 @@ ok = wasm_script_worker:stop(W).
 ```
 
 **Next:** [Put it in an OTP application](../otp.md).
+
+## Read this next
+
+The guide behind this example: [Python](../python.md).

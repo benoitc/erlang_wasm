@@ -243,9 +243,14 @@ third of a second to answer. Two different settings do:
   tier guide](compiled-tier.md).
 
 A pool started worker by worker captures up to once per worker when no image
-is filed yet, and holds one image per worker after. Prepare the image once
-with `wasm_script_worker:prepare/2` and start the pool from it: "Run a pool
-from one image" in [Using workers](worker.md).
+is filed yet, and holds one image per worker after, each charged to
+`max_snapshot_bytes`. Prepare the image once with
+`wasm_script_worker:prepare/2` and start the pool from it: one capture, one
+image, one charge, so `max_snapshot_bytes` bounds the distinct images on the
+node rather than the workers. "Run a pool from one image" in [Using
+workers](worker.md) shows how. Four CPython workers on a missing image took
+16 s to come up that way against 40 s started together
+(`test/audit/PERF.md`, "One image for a pool").
 
 ## How it scales, and what it costs
 

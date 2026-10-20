@@ -10,12 +10,15 @@ copies its tables.
   `Opts#{prepared => Prepared}` holds that one image instead of its own copy:
   one capture on a missing image, one charge to `max_snapshot_bytes`. Release
   the caller's hold with `wasm_script_worker:release_prepared/1`. A worker
-  started without `prepared` is unchanged. "Run a pool from one image" in
-  `docs/worker.md` shows a supervised pool.
+  started without `prepared` is unchanged. An adapter without snapshots
+  answers the new `wasm_worker_error` kind `unsupported`. "Run a pool from one
+  image" in `docs/worker.md` shows a supervised pool.
 - **A table of functions travels as one binary.** An image's table holding
   only `null` and the module's own functions is packed at capture and at load,
   so handing an image to a request's runner copies a reference instead of the
   table. The snapshot file format is unchanged.
+- **A malformed table in a snapshot file is `snapshot_corrupt`.** That is a
+  table that decodes to neither a list nor whole 32-bit words.
 - **An idle worker no longer keeps its module file.** `Adapter:artifact/1`
   runs in a short-lived process that hands its module claims to the worker,
   so the file it read (30 MB for CPython) is freed when that process exits.

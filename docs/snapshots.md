@@ -167,6 +167,14 @@ from it, and the first write to a 4 KiB page copies that page into memory of
 the instance's own. So a restore costs a page table, one 8-byte entry per
 4 KiB of image, and a request costs the pages it writes.
 
+**Sending an image copies almost nothing.** Its pages are binaries, which a
+send shares by reference. A function table holding only `null` and the
+module's own functions is packed into one binary, a 32-bit word per slot, at
+capture and at load, so it is shared the same way, and a restore builds the
+new table straight from the words. A table holding anything else stays a
+list. Packing changes nothing on disk: the file holds the same lists it always
+did, and files already written load as before.
+
 Against the 0.8 releases, which copied the image into every restore, medians
 from `test/audit/PERF.md`, "Shared pages":
 
@@ -266,7 +274,9 @@ same protection `restore/3` gets from the other direction. Every failure is a
 refusal by name: `snapshot_corrupt`, `snapshot_truncated`,
 `snapshot_wrong_module`, `snapshot_wrong_shape`, `snapshot_too_large`,
 `snapshot_unknown_atom`, `snapshot_abi_mismatch`. A worker treats all of them as
-a miss and captures.
+a miss and captures. A table that decodes to neither a list of entries nor
+whole 32-bit words is `snapshot_corrupt`; one that names a function the module
+does not have is `snapshot_invalid_value`.
 
 A file's memories are checked against the module before any page is built: as
 many as the module defines, each within its declared limits, and its runs in
@@ -276,9 +286,10 @@ The node page budget plays no part in loading: a sparse image loads on a node
 too small to hold its whole address space, and its restores pay only for what
 they write.
 
-Loading costs what it did: the file's runs are laid into 64 KiB pages once, about
-25 ms for a started CPython and 1.3 ms for QuickJS (`test/audit/PERF.md`,
-"Shared pages"). Every restore after that shares them.
+Loading lays the file's runs into 64 KiB pages once and packs its tables as it
+decodes them: about 21 ms for a started CPython and 1.0 ms for QuickJS
+(`test/audit/PERF.md`, "One image for a pool"). Every restore after that shares
+them.
 
 ## Declare what your imports hold
 
@@ -366,6 +377,11 @@ every page that holds data, and 8 bytes for every page of address space. The
 charge is held while the image is held **or** while any memory restored from it
 remains, including one another instance imported, because those memories read
 its pages.
+
+It counts images, not workers. Each worker started without `prepared` loads
+its own copy and is charged for it, so fifty workers on one file are charged
+fifty times. Workers started from one `wasm_script_worker:prepare/2` share one
+image, charged once.
 
 A restore does not charge it again. What a restored memory allocates, its page
 table and the pages it writes, is charged to the node page budget, and

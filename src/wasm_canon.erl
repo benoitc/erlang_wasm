@@ -1,6 +1,6 @@
 -module(wasm_canon).
 -moduledoc """
-Internal: the Canonical ABI lift/lower for component-model values.
+The Canonical ABI lift/lower for component-model values.
 
 The Canonical ABI is how a component-model value crosses between the host and a
 core module's linear memory. `lower_params/3` turns Erlang terms into the flat
@@ -28,9 +28,10 @@ Value types and their Erlang shapes:
 | `handle` | integer (a resource `own`/`borrow`, an opaque i32) |
 
 Names in records, variants, enums and flags come from the type descriptor the
-host holds, not from guest bytes. Not yet: resources, and a parameter list that
-flattens past `MAX_FLAT_PARAMS` (spilled to memory) -- neither is reached by the
-current fixtures.
+host holds, not from guest bytes. A resource is an `{own, T}` or `{borrow, T}`
+descriptor whose value is the handle `wasm_resources` minted. A parameter list
+that flattens past `MAX_FLAT_PARAMS` is stored in memory as one tuple and passed
+as a pointer, as the specification says.
 """.
 
 -export([lower_params/3, lift_result/3, size_align/1, flat_types/1]).

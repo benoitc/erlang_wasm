@@ -40,9 +40,8 @@ Up to two tables, because they are traversed differently:
 - **elements**, an `ordered_set` keyed `{Id, Index}`, holding array elements
   that have actually been written. An array of a million defaults costs one
   row, and the ordering is what lets the collector walk one array's elements
-  without scanning the table. A module declaring no array type never gets this
-  table, because a table costs about a microsecond and instantiation is under
-  three.
+  without scanning the table. It also holds the write barrier's remembered
+  set, so every heap has one, arrays or not.
 
 ## Identity
 

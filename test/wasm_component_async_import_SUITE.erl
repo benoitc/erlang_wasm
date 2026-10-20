@@ -8,8 +8,8 @@ implemented as `compute(x).await + 1`. The host supplies `compute` as an async i
 (registered `{async_import, Sig, Fun}`); the guest lowers the call through `canon lower`
 with the async option, which returns a subtask. This host completes the import
 synchronously (the subtask reports RETURNED at once), so the guest reads the result and
-runs to `task.return` without suspending; a host import that suspends and completes
-later is a further milestone.
+runs to `task.return` without suspending; `awaits_a_suspending_import` covers a host
+import that suspends and completes later.
 """.
 
 -compile([export_all, nowarn_export_all]).

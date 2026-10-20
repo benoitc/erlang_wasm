@@ -13,9 +13,9 @@ Here WASI is an Erlang host interface, not an embedded WASI runtime. Every
 syscall is an ordinary host function, so you can trace it, replace it, or refuse
 it, and every capability decision is made in Erlang.
 
-Most of this page is WASI Preview 1 (`wasm32-wasip1`). For WASI 0.2
-(`wasm32-wasip2`, the Component Model), read the **WASI 0.2** section below, or go
-straight to [Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
+This page is WASI Preview 1 (`wasm32-wasip1`). For WASI 0.2 (`wasm32-wasip2`,
+the Component Model), read [WASI 0.2](wasi-0-2.md), or go straight to
+[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
 
 ## Run a command
 
@@ -288,54 +288,9 @@ behaviours you have.
 
 ## WASI 0.2
 
-WASI 0.2 (`wasm32-wasip2`) is the Component Model form of WASI: a guest imports
-typed worlds such as `wasi:cli`, `wasi:io`, `wasi:filesystem`, `wasi:clocks`,
-`wasi:sockets` and `wasi:random`, and ships as a *component* rather than a core
-module. Reach for it when your toolchain targets `wasm32-wasip2` or emits a
-component; the same Erlang host answers both, so the capabilities and their
-grants read the same as above.
-
-Run a command component with `wasi_preview2:run_command/3`. It takes the component
-bytes, the stdin to feed it, and an options map, and returns the exit code and
-what it wrote:
-
-```erlang
-{ok, Bin} = file:read_file("app.component.wasm"),
-{ok, #{exit_code := Code, stdout := Out, stderr := Err}} =
-    wasi_preview2:run_command(Bin, <<"input bytes">>,
-                              #{args    => [~"app", ~"--flag"],
-                                env     => [{~"MODE", ~"prod"}],
-                                preopen => "/srv/app/data",
-                                writable => false}).
-```
-
-The options grant capabilities the same way the Preview 1 map does:
-
-| key | grants | leaving it out means |
-| --- | --- | --- |
-| `args` | the command line | zero arguments |
-| `env` | environment variables, as `{Name, Value}` pairs | zero variables |
-| `preopen` | one host directory, at the guest root | **no filesystem at all** |
-| `writable` | `true` adds create, write, rename and unlink | read-only |
-
-For a component that exports typed functions rather than a command, instantiate it
-and call an export by name, lowering the arguments and lifting the result through
-the Canonical ABI (see [Pass data in and out](passing-data.md)):
-
-```erlang
-{ok, Inst} = wasm_component:instantiate(Bin),
-{ok, Result} = wasm_component:call(Inst, ~"run", {[{list, u8}], {list, u8}}, [~"hi"]),
-ok = wasm_component:destroy(Inst).
-```
-
-A worked, runnable version of both is in
-[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
-
-The host implements the full `wasi:filesystem` and `wasi:clocks` surface and the
-synchronous `wasi:io/poll` model, so a real command component runs end to end. It
-reuses the same sandbox and NIF as Preview 1, so the directory guarantees above
-hold unchanged. The one boundary is the async Canonical ABI (`stream`, `future`),
-which is WASI 0.3 and not implemented; a 0.2 component never needs it.
+A component built for `wasm32-wasip2` is answered by a different host,
+`wasi_preview2`. Its grants, interfaces and `wasi:http` are in
+[WASI 0.2](wasi-0-2.md) and [HTTP](http.md).
 
 ## Check it against the official suite
 
@@ -383,69 +338,12 @@ case wasm:call(Inst, ~"_start", []) of
 end.
 ```
 
-## Run the NIF under a sanitizer
+## Change the NIF
 
-The optional file NIF is the only C in the project, and it is where a memory
-error would be invisible from Erlang. Use this when you change
-`c_src/wasi_file_nif.c`.
+If you are changing `c_src/`, [The file NIF](contributing/nif.md) says how to
+run it under a sanitizer and what each sanitizer can find.
 
-```sh
-./scripts/sanitize.sh                      # the NIF suite
-./scripts/sanitize.sh test/wasi_SUITE      # any suite
-```
+## Read this next
 
-That builds the NIF with AddressSanitizer inside a Linux container and runs the
-suite against it. A sanitizer has to be in the process before anything it
-watches, and Linux is where you can arrange that without rebuilding the
-emulator: `LD_PRELOAD` survives the exec from `erl` to the emulator there.
-
-To do it by hand, or in an image of your own:
-
-```sh
-WASM_NIF_SANITIZE=address rebar3 compile
-LD_PRELOAD=$(gcc -print-file-name=libasan.so) \
-  ASAN_OPTIONS=detect_leaks=0 rebar3 ct --suite=test/wasi_nif_SUITE
-```
-
-## What each sanitizer will and will not find
-
-**AddressSanitizer will not find every defect this NIF can have.** It watches
-memory. Closing a descriptor while another thread reads it is not a memory
-error: the read succeeds, against whatever file the kernel handed that number
-to next. ThreadSanitizer is what sees that one, because the race is on the
-descriptor field itself.
-
-**ThreadSanitizer cannot be preloaded.** Unlike AddressSanitizer it needs the
-whole program instrumented, and preloading it into a stock emulator segfaults
-it outright rather than reporting anything. That means an emulator built with
-it:
-
-```sh
-git clone --depth 1 https://github.com/erlang/otp && cd otp
-export ERL_TOP=$PWD
-./otp_build configure CFLAGS="-fsanitize=thread -fPIE" LDFLAGS="-fsanitize=thread"
-make
-```
-
-Expect noise. ERTS is full of deliberate lock-free code that ThreadSanitizer
-reports, so a suppression file comes before the output is worth reading. This
-route is described rather than demonstrated: it has not been run here.
-
-**Neither of them replaces the test.** `wasi_nif_SUITE` reproduces the
-close-against-read race with no sanitizer at all, by asserting that no read
-ever returns a byte belonging to another file. That is the cheaper check, it is
-wired into `rebar3 ct`, and it is the one that caught the defect. Sanitizers
-are for what a test cannot phrase.
-
-## Short notes
-
-- On macOS none of this works natively. `DYLD_INSERT_LIBRARIES` is stripped
-  when the `erl` launcher execs the emulator, so an instrumented library gets
-  you `Interceptors are not working`: the runtime arrived through `dlopen`,
-  after the fact. Use the container.
-- Leak detection is off in the script on purpose. The emulator holds
-  allocations for its whole life by design, so it reports pages of them and
-  none of them are the NIF.
-- `WASM_SANITIZE_IMAGE` picks a different base image if you need a particular
-  OTP version.
-
+[WASI 0.2](wasi-0-2.md), for components, or [Security](security.md) for what
+the sandbox does not cover.

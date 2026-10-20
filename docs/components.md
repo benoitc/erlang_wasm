@@ -17,9 +17,10 @@ The entry points are `wasm_component` (decode, instantiate, call) and, for the
 WASI 0.2 host a component imports, `wasi_preview2`. Components work with or
 without the `wasm` application started: when it runs, each core module goes
 through its module cache, so the same bytes compile once per node; when it does
-not, they are compiled inline, as `wasm:compile/1` does. Only the synchronous
-Component Model is implemented; the async ABI (`stream`, `future`, WASI 0.3) is
-not, and a 0.2 component never needs it.
+not, they are compiled inline, as `wasm:compile/1` does. The async Canonical ABI
+(`async func`, `stream<T>`, `future<T>`) is supported: call an async export with
+`wasm_component:call_async/4`. The WASI 0.3 interfaces built on it are not
+provided, and a 0.2 component never needs them.
 
 ## Run a component
 
@@ -88,8 +89,8 @@ WASI) is instantiated with a map of host functions, keyed
 
 Leave a capability out of the host options and the guest cannot reach it, the
 same posture as Preview 1. For running a command component (one with a `main`)
-with a directory, stdin and arguments, see the WASI 0.2 section of
-[WASI](wasi.md) and the worked [Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
+with a directory, stdin and arguments, see [WASI 0.2](wasi-0-2.md) and the
+worked [Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
 
 ## Compose components
 
@@ -163,3 +164,8 @@ For a runnable version, see [Use a component resource](examples/use-a-component-
   returns `{error, _}` from `call/4`.
 - Strings marshal as UTF-8 by default, and as UTF-16 or Latin-1+UTF-16 when the
   component's lift declares that encoding; you do not choose it.
+
+## Read this next
+
+[Use a component resource](examples/use-a-component-resource.md), then
+[Security](security.md).

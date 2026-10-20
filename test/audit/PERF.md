@@ -1,6 +1,148 @@
-# Where the 30x goes, and what would close it
+# The measurement record
 
-Exploration only. No code was changed.
+Every measured figure this project cites, with how it was taken. Each `##`
+section answers one question, roughly in the order they were asked; the
+first ones are the original exploration of where the interpreter's 30x went.
+Read `ATTEMPTS.md` for what was tried and dropped, and
+`docs/contributing/measuring.md` before you add an entry.
+
+## Topics
+
+**Interpreter and dispatch**
+
+- [Four defects, and one change that cost 75% for a reason nothing explains](#four-defects-and-one-change-that-cost-75-for-a-reason-nothing-explains)
+- [The synthetic loop lied, and a real module said so](#the-synthetic-loop-lied-and-a-real-module-said-so)
+- [The bounded operand cache](#the-bounded-operand-cache)
+- [The instrument, before any of the numbers](#the-instrument-before-any-of-the-numbers)
+- [What carrying the stack heights costs, and what it uncovered](#what-carrying-the-stack-heights-costs-and-what-it-uncovered)
+- [The BEAM is not the limit](#the-beam-is-not-the-limit)
+- [What each instruction costs](#what-each-instruction-costs)
+- [Three things stand out](#three-things-stand-out)
+- [Done: the comparison defect](#done-the-comparison-defect)
+- [Done, and now settled: extending fusion](#done-and-now-settled-extending-fusion)
+- [What to do, in order](#what-to-do-in-order)
+- [What is honestly reachable](#what-is-honestly-reachable)
+- [Instantiation and the call boundary, which nobody had measured](#instantiation-and-the-call-boundary-which-nobody-had-measured)
+- [Head to head with erlang-wasmtime](#head-to-head-with-erlang-wasmtime)
+- [Signed words, priced](#signed-words-priced)
+- [Compiled wasm against the same work written in Erlang](#compiled-wasm-against-the-same-work-written-in-erlang)
+- [The second audit's fixes, held against QuickJS](#the-second-audits-fixes-held-against-quickjs)
+- [The stress run's fixes, held against QuickJS](#the-stress-runs-fixes-held-against-quickjs)
+
+**Decoding and loading**
+
+- [`load/1` is 4.6x slower than `compile/1` on a large guest](#load1-is-46x-slower-than-compile1-on-a-large-guest)
+- [What a decoded module keeps of its input](#what-a-decoded-module-keeps-of-its-input)
+
+**Compiled tier**
+
+- [Compiled-code lifetime, before any of it is generated](#compiled-code-lifetime-before-any-of-it-is-generated)
+- [The QuickJS arm was measuring a usage error](#the-quickjs-arm-was-measuring-a-usage-error)
+- [`call_indirect` was 64% of the refusals](#call_indirect-was-64-of-the-refusals)
+- [Bulk memory finishes the plugin, and the tier gate fails](#bulk-memory-finishes-the-plugin-and-the-tier-gate-fails)
+- [The boundary was a one-way door, and the hot function is refused for floats](#the-boundary-was-a-one-way-door-and-the-hot-function-is-refused-for-floats)
+- [Floats compile, and the tier is still not faster on QuickJS](#floats-compile-and-the-tier-is-still-not-faster-on-quickjs)
+- [SIMD, and the tier finally pays: 9.0x on QuickJS](#simd-and-the-tier-finally-pays-90x-on-quickjs)
+- [Closing over locals instead of passing them: reverted](#closing-over-locals-instead-of-passing-them-reverted)
+- [The lifetime gate, and the defect it found](#the-lifetime-gate-and-the-defect-it-found)
+- [The gate on the tier, item by item](#the-gate-on-the-tier-item-by-item)
+- [Should the tier be on by default? No, and the plugin says why](#should-the-tier-be-on-by-default-no-and-the-plugin-says-why)
+- [Compiled code, cached: 43.7 seconds to 0.2](#compiled-code-cached-437-seconds-to-02)
+- [The compiled tier: 2.6 ns/iteration, and what the safety property cost](#the-compiled-tier-26-nsiteration-and-what-the-safety-property-cost)
+- [The Core Erlang spike: 2.59 ns/iteration](#the-core-erlang-spike-259-nsiteration)
+- [The rule the cache turned out to have: consumers are free, entry points are not](#the-rule-the-cache-turned-out-to-have-consumers-are-free-entry-points-are-not)
+- [Where the tier's compile time goes](#where-the-tiers-compile-time-goes)
+- [The cost model: what generated code actually pays for](#the-cost-model-what-generated-code-actually-pays-for)
+- [Telling the JIT what validation already proved](#telling-the-jit-what-validation-already-proved)
+- [Lowering once per module, not once per request](#lowering-once-per-module-not-once-per-request)
+- [A compiled worker's first request, with the code cache warm](#a-compiled-workers-first-request-with-the-code-cache-warm)
+- [What a code load holds up, and `preload => async`](#what-a-code-load-holds-up-and-preload--async)
+- [The preload loads on the last scheduler](#the-preload-loads-on-the-last-scheduler)
+
+**Compiler bounds and memory**
+
+- [Peak memory per IR word, and why the estimator matters more than the guest](#peak-memory-per-ir-word-and-why-the-estimator-matters-more-than-the-guest)
+- [Sampling cannot bound a compile, at any interval](#sampling-cannot-bound-a-compile-at-any-interval)
+- [Owning the compiler worker: the ceiling is free, and the row that killed it does not reproduce](#owning-the-compiler-worker-the-ceiling-is-free-and-the-row-that-killed-it-does-not-reproduce)
+- [The other half of the bound: one budget the whole node draws on](#the-other-half-of-the-bound-one-budget-the-whole-node-draws-on)
+- [Compiling on another node is 0.5%, and the helper needs none of our code](#compiling-on-another-node-is-05-and-the-helper-needs-none-of-our-code)
+- [The aggregate bound belongs in the VM, and the entry above oversold the OS](#the-aggregate-bound-belongs-in-the-vm-and-the-entry-above-oversold-the-os)
+
+**Garbage collection and allocation accounting**
+
+- [Repeating QuickJS in one process is a garbage collection artefact](#repeating-quickjs-in-one-process-is-a-garbage-collection-artefact)
+- [What the garbage collection is actually about: 1.4 billion words a run](#what-the-garbage-collection-is-actually-about-14-billion-words-a-run)
+- [Charging the object store, and two versions that were too expensive](#charging-the-object-store-and-two-versions-that-were-too-expensive)
+- [Giving the collector a byte-side trigger](#giving-the-collector-a-byte-side-trigger)
+- [One reconcile cadence for writes and allocations](#one-reconcile-cadence-for-writes-and-allocations)
+- [The reconcile counter counts words, not operations](#the-reconcile-counter-counts-words-not-operations)
+- [Covering the paths that reached no counter, and inlining to pay for it](#covering-the-paths-that-reached-no-counter-and-inlining-to-pay-for-it)
+- [The bulk array arm could not fail, and now reports allocation](#the-bulk-array-arm-could-not-fail-and-now-reports-allocation)
+- [The array.copy loop moves next to the accounting](#the-arraycopy-loop-moves-next-to-the-accounting)
+- [Direction decides an overlapping array.copy, so nothing is materialised](#direction-decides-an-overlapping-arraycopy-so-nothing-is-materialised)
+- [The partial fill loop stops building a list of the indices it will use](#the-partial-fill-loop-stops-building-a-list-of-the-indices-it-will-use)
+- [What the per-element charge costs, measured by deleting it](#what-the-per-element-charge-costs-measured-by-deleting-it)
+- [What `uns(64, _)` costs: about 3.5 nanoseconds, and not worth a change](#what-uns64-_-costs-about-35-nanoseconds-and-not-worth-a-change)
+- [Four rows of the price table had stopped measuring anything](#four-rows-of-the-price-table-had-stopped-measuring-anything)
+- [The bimodality, caught on a bigger guest: 183 major collections against one](#the-bimodality-caught-on-a-bigger-guest-183-major-collections-against-one)
+- [Where the words go: an 11-word record, rebuilt once per instruction](#where-the-words-go-an-11-word-record-rebuilt-once-per-instruction)
+
+**Linear memory and shared pages**
+
+- [What linear memory costs, and the floor underneath it](#what-linear-memory-costs-and-the-floor-underneath-it)
+- [The inline memory path had never run, and what was left underneath it](#the-inline-memory-path-had-never-run-and-what-was-left-underneath-it)
+- [The NIF floors, measured](#the-nif-floors-measured)
+- [What a bulk NIF would be worth, before building one](#what-a-bulk-nif-would-be-worth-before-building-one)
+- [Shared pages: the page table against the mmap NIF](#shared-pages-the-page-table-against-the-mmap-nif)
+- [Where A4's time goes: the 0.8-to-A4 attribution](#where-a4s-time-goes-the-08-to-a4-attribution)
+- [What makes A4's generated code large: two diagnostics](#what-makes-a4s-generated-code-large-two-diagnostics)
+- [The miss path out of line](#the-miss-path-out-of-line)
+
+**Snapshots and restore**
+
+- [What the snapshot lease costs on the call path](#what-the-snapshot-lease-costs-on-the-call-path)
+- [What a snapshot buys a JavaScript worker](#what-a-snapshot-buys-a-javascript-worker)
+- [What a snapshot buys a CPython worker](#what-a-snapshot-buys-a-cpython-worker)
+- [What a restored table cost, and what the memory runs did not](#what-a-restored-table-cost-and-what-the-memory-runs-did-not)
+- [What a filed image is worth](#what-a-filed-image-is-worth)
+- [Recycling a restore's memory](#recycling-a-restores-memory)
+- [Recycling in a worker that does not restore ahead](#recycling-in-a-worker-that-does-not-restore-ahead)
+
+**Workers and pools**
+
+- [The tier through a per-request worker, QuickJS](#the-tier-through-a-per-request-worker-quickjs)
+- [The switchover a worker host sees, per cache arm](#the-switchover-a-worker-host-sees-per-cache-arm)
+- [A third language, and what it cost to add](#a-third-language-and-what-it-cost-to-add)
+- [The worker numbers, re-measured after both merges](#the-worker-numbers-re-measured-after-both-merges)
+- [Where a QuickJS request actually goes](#where-a-quickjs-request-actually-goes)
+- [Where a CPython reactor request actually goes](#where-a-cpython-reactor-request-actually-goes)
+- [The kernel moved into the application, compared against the one it replaced](#the-kernel-moved-into-the-application-compared-against-the-one-it-replaced)
+- [Two numbers the docs had been citing without a run behind them](#two-numbers-the-docs-had-been-citing-without-a-run-behind-them)
+- [Requests on a pool, and what they queued behind](#requests-on-a-pool-and-what-they-queued-behind)
+- [A CPython request that compiles nothing](#a-cpython-request-that-compiles-nothing)
+- [Where a compiled QuickJS run and a CPython request spend their time](#where-a-compiled-quickjs-run-and-a-cpython-request-spend-their-time)
+- [A precompiled CPython standard library](#a-precompiled-cpython-standard-library)
+
+**Worker cleanup**
+
+- [The cleanup steward's terminal handoff is off the latency path](#the-cleanup-stewards-terminal-handoff-is-off-the-latency-path)
+- [Journal v2 and adoption stay off the latency path too](#journal-v2-and-adoption-stay-off-the-latency-path-too)
+- [Local cleanup off the guardian stays off the latency path](#local-cleanup-off-the-guardian-stays-off-the-latency-path)
+- [The steward, manager and ceiling stages leave the request path where it was](#the-steward-manager-and-ceiling-stages-leave-the-request-path-where-it-was)
+
+**Heap floors**
+
+- [Default heap floors for runners](#default-heap-floors-for-runners)
+- [Compiled CPython's floor, by tier](#compiled-cpythons-floor-by-tier)
+- [Default floors in a pool](#default-floors-in-a-pool)
+- [Why RSS rose more than `erlang:memory` with the floors](#why-rss-rose-more-than-erlangmemory-with-the-floors)
+
+**Components**
+
+- [Running a real WASI 0.2 component costs a cold instantiation per call](#running-a-real-wasi-02-component-costs-a-cold-instantiation-per-call)
+- [Multi-core component linking: native decode unchanged (2026-09-23)](#multi-core-component-linking-native-decode-unchanged-2026-09-23)
+- [Multi-core linking: the realloc override is off the guarded path (2026-09-23)](#multi-core-linking-the-realloc-override-is-off-the-guarded-path-2026-09-23)
+
 
 ## Compiled-code lifetime, before any of it is generated
 

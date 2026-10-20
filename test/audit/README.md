@@ -1,14 +1,39 @@
-# The audit, and the probes that back it
+# The measurement and audit record
 
-Two rounds of audit against `release-0.3.0`. Read `REVIEW.md` for the findings
-and `PERF.md` for where the interpreter's time goes. Everything claimed in
-either was reproduced by a probe in `probes/`, and the probes are here so the
-claims can be checked rather than believed.
+This directory is where every performance claim, every dropped idea and every
+audit finding of this project is written down, with the evidence behind it.
+Read it when you need the number behind a claim in the docs, before you
+propose an optimisation, or before you change something an audit fixed.
+
+## What is here
+
+| path | what it holds | read it when |
+| --- | --- | --- |
+| `PERF.md` | the measurement record: every measured figure a claim cites, one `##` section per question, roughly in the order they were taken. A topic index is at the top | you cite a number, or need to know how one was taken |
+| `ATTEMPTS.md` | ideas tried and dropped or reverted, with the numbers that dropped them and what would reopen them; also what succeeded and the rules the failures produced | before you propose any optimisation, so you do not repeat one already measured |
+| `REVIEW.md` | the pre-release audit of `release-0.3.0`: ten findings, each reproduced by a probe, and the commit that closed each | you change a mechanism one of the findings covers |
+| `CLEANUP_STEWARD.md` | the design record for the worker cleanup rework: the problem, the roles (guardian, cleanup steward, reaper), the protocol and its journal | you change worker cleanup, the reaper or its journal |
+| `UPSTREAM-OTP.md` | a report for `erlang/otp`, not yet filed: `compile:forms/2`'s worker cannot be bounded and outlives a killed caller | you touch `wasm_core:reap/2` or how the compiler process is bounded |
+| `probes/` | the modules that reproduced each `REVIEW.md` finding; see below | you want to check a finding rather than believe it |
+| `raw/` | raw results, scripts and manifests behind some `PERF.md` and `ATTEMPTS.md` entries; see below | you want to recompute or audit a cited figure |
+
+## The raw records
+
+Each directory has a `manifest.txt` (`meta.txt` in `shared-pages/`) naming
+the trees, commits and harness hashes it was taken from.
+
+| directory | cited by |
+| --- | --- |
+| `raw/shared-pages/` | the shared-pages arbitration in `PERF.md` and `ATTEMPTS.md`, and `bench/paths/README.md` |
+| `raw/a4-attribution/` | "Where A4's time goes" and the A4 code-size diagnostics in `PERF.md` |
+| `raw/outline-miss/` | "The miss path out of line" in `PERF.md`; the generated BEAM files are not kept |
+| `raw/fault-copy/` | "Copying only a page's non-zero runs on a first write" in `ATTEMPTS.md` |
+| `raw/ahead-prepare/` | "Preparing a request's write set while the worker is idle" in `ATTEMPTS.md` |
 
 ## Running a probe
 
-They are ordinary modules driving the public API, not a test suite: each one
-prints what it observed, and several are expected to print the *broken*
+The probes are ordinary modules driving the public API, not a test suite: each
+one prints what it observed, and several are expected to print the *broken*
 behaviour when run against the commit that had the defect.
 
 ```sh
@@ -24,7 +49,7 @@ erl -noshell -pa _build/default/lib/wasm/ebin \
     -pa _build/test/lib/wasm/test -pa /tmp -eval 'p5_sock:run(), init:stop().'
 ```
 
-## What each one shows
+## What each probe shows
 
 | probe | finding |
 | --- | --- |
@@ -40,17 +65,17 @@ erl -noshell -pa _build/default/lib/wasm/ebin \
 | `v1_cache` | the module cache fixes, verified after |
 | `v2_wait` | the waiter table fixes, verified after |
 
-## Short notes
+Notes:
 
 - `r2_pages` poisons the node's page counter by design. Anything measured in
   the same VM afterwards is measuring the poison, which is how a first run of
-  `r3_limits` produced a wrong conclusion. Give each one its own VM.
+  `r3_limits` produced a wrong conclusion. Give each probe its own VM.
 - A probe that no longer reproduces is evidence a fix landed, not evidence the
   probe was wrong. Check the commit before assuming.
 
-## Final verification
+## How the 0.3.0 audit was verified
 
-Run before the release, against `16e7c1e` and after:
+Run before that release, against `16e7c1e` and after:
 
 - Every probe above, each in a clean VM. `r2_pages` and `r3_limits` no longer
   reproduce; `p1_cache`, `p4_race2`, `p5_sock`, `p8_wait2` and `r1_mutof` show
@@ -72,3 +97,5 @@ Run before the release, against `16e7c1e` and after:
 Not done: ThreadSanitizer over the NIF, which needs an emulator built with it.
 The close-against-read race is covered by a test instead, and that test is what
 found the defect.
+
+To add a measurement of your own, follow `docs/contributing/measuring.md`.

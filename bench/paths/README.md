@@ -5,6 +5,53 @@ that caused it. Use it when you have changed something on a hot path and need a
 number rather than an opinion, and to check a change against a threshold that
 was written down before the numbers arrived.
 
+## Arms
+
+Every module in this directory, what it measures or is for, and the section
+of this page that covers it.
+
+| module | what it measures | section |
+| --- | --- | --- |
+| `adopt` | whether a one-call guest ever reaches generated code, watched through `wasm_jit:counts/0` | "Does a reactor ever reach the compiled tier" |
+| `allocwords` | heap words one process allocated, and its collection time, from its own collection trace; a library for other arms | "Where a compile's memory is spent, and what a ceiling would cost" |
+| `barrier_adapter` | test adapter: holds a request after its last guest call so `densitybench workers` can sample live instances | "Comparing memory representations" |
+| `benchlib` | shared helpers every arm needs, such as running work in a fresh process | "Comparing memory representations" |
+| `callcost` | what a call costs the interpreter, and what it would cost a compiled function | "What a call costs, and what it would cost a compiled function" |
+| `capturebench` | what capturing an image costs: `wasm:snapshot/2` alone and a whole worker start | none |
+| `compileheap` | where a compile's memory is spent, and what a ceiling on it would cost | "Where a compile's memory is spent, and what a ceiling would cost" |
+| `corespike` | feasibility spike: one function compiled to Core Erlang and run | "Compiling one function instead of interpreting it" |
+| `coverage` | what share of a real module the compiled tier takes, and what refuses the rest; a diagnostic | "What the generator actually refuses today" |
+| `densitybench` | what a live instance costs the node, and how many fit under a page budget | "Restores, density and footprint" |
+| `floor` | the benchmark loop written in Erlang against the interpreter: the floor no interpreter beats | none |
+| `fusecount` | which fusion rules fire and how many dispatches they remove; a diagnostic | "Which fusion rules actually fire" |
+| `fuseoff` | one module's loop timed with `fuse => false` and `fuse => true` | none |
+| `gap` | compiled wasm against the same algorithm written in Erlang, per kernel | "How far compiled code is from plain Erlang" |
+| `guestarm` | one start-up of a real language runtime, priced on the process that runs it | none |
+| `guestprof` | where a real guest's compiled run spends its time, and what memory it touches | "Where a real guest's time goes" |
+| `instbench` | what a fresh `wasm:instantiate/3` costs, for each way a module reaches it | "Memory kernels and instantiation" |
+| `lowbench` | a request's wall time on a real guest, and what its first request costs | none |
+| `matrix` | the instrument for repeated runs: wall, CPU, reductions, collections and msacc per run; a diagnostic | "The measurement protocol, and why it is not optional" |
+| `optbshare` | what K held instances cost the node and the OS, per instance, including memory outside the BEAM's allocators | "Restores, density and footprint" |
+| `pagedbench` | the `storebench` and `gap sieve` memory kernels over a plain and a restored memory | "Memory kernels and instantiation" |
+| `pathbench` | the path arms: decode, validate, instantiate, call, memory, WASI and more, one at a time | "Run an arm" |
+| `perinstr` | per-instruction cost and allocation, from a snippet repeated K against 2K times | none |
+| `phasing_adapter` | test adapter: times one worker request at its adapter boundaries | "Where a request's milliseconds go" |
+| `pyarms` | the four CPython configurations, each proving which one ran | none |
+| `reactorlib` | reactor images and one request against them, without a worker; a library for other arms | "Comparing memory representations" |
+| `realbench` | real compiler output rather than the synthetic loop, one process per run; the check for any dispatch change | "Changing the dispatch path: check QuickJS first" |
+| `relop` | comparison operators as `wasm_exec` once wrote them against a direct clause | none |
+| `reqbench` | requests a second through a pool, and which node-wide processes they queue behind | "Many callers on a pool, and what they queue behind" |
+| `requestbench` | one script worker's request latency: a fresh node's first request, and steady ones | "One worker's request latency" |
+| `restorebench` | what `wasm:restore/3` and `wasm:load_snapshot/2` take, per guest | "Restores, density and footprint" |
+| `restorebits` | what one `wasm:restore/3` spends, and on what | none |
+| `retainbench` | what a compiled module holds of its input once the input is gone | none |
+| `sockbench` | a WASI socket send and receive round trip against a local TCP echo | none |
+| `storebench` | what a store costs in generated code | "What a store costs in generated code" |
+| `subset` | how much of a real module a compiler could take, one restriction at a time; a diagnostic | "How much of a module a compiler could take" |
+| `teardown` | what it costs to take down a process that was carrying an image | none |
+| `tiered` | whether the compiled tier is actually running the program | "Is the tier actually running the program" |
+| `workerbench` | what a worker host sees per request, and when the tier changes it; also heap-floor sweeps | "Pricing a request rather than a path" |
+
 ## Run an arm
 
 ```sh
@@ -297,11 +344,16 @@ the table as a ceiling on coverage, not as a share of run time.
 
 ## The measurement protocol, and why it is not optional
 
-Read this before taking any number from this directory.
-
-`matrix.erl` is the instrument. It runs a workload several times and records,
-per run, wall and CPU time, reductions, collections and words reclaimed, the
-process heap, node memory by category, and the microstate accounting delta.
+Read this before taking any number from this directory. **Run one process per
+run:** repeating QuickJS in one process is bimodal, about 1.7 s or about 13,
+and a fresh process per run takes the spread to 1.02x. **A minimum only means
+something across runs from one distribution:** the 1.33x once reported for
+the compiled tier was a minimum landing on a fast run for one arm and a slow
+one for the other. `matrix.erl` is the instrument for this class of question
+(workloads `qjs`, `plugin`, `memloop`, `arith`; modes `same`, `fresh`,
+`helper`), and `msacc` says in one run whether lost time went to collection,
+the emulator, a port or NIF, or auxiliary work: reach for it before
+theorising.
 
 ```sh
 erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/matrix.erl
@@ -309,27 +361,8 @@ erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
     -run matrix main qjs same 5
 ```
 
-Workloads are `qjs`, `plugin`, `memloop` and `arith`. The last two are the same
-counted loop with and without memory traffic, so a difference that shows in one
-and not the other says whether memory access is where time went.
-
-Modes are `same` (every iteration in the calling process), `fresh` (a new
-process each time) and `helper` (build in one process, run in another).
-
-**The rule: one process per run.** Repeating QuickJS in a single process is
-bimodal, about 1.7 seconds or about 13, decided by whether the collector handles
-the interpreter's 10-million-word heap cheaply. Reductions are identical and the
-output is byte identical; only collection time moves, by up to 430x. A fresh
-process per run takes the spread to 1.02x. `realbench` does this now.
-
-**And never take a minimum across runs.** A minimum assumes the runs are draws
-from one distribution. Under the old protocol they were not, and the 1.33x once
-reported for the compiled tier was a minimum landing on a fast run for one arm
-and a slow run for the other.
-
-`msacc` is the instrument that settles this class of question in one run,
-because it says whether lost time went to collection, to the emulator, to a port
-or NIF, or to auxiliary work. Reach for it before theorising.
+The full protocol, from writing the gates down first to recording the result,
+is in `docs/contributing/measuring.md`.
 
 ## Is the tier actually running the program
 

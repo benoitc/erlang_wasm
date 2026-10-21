@@ -28,8 +28,8 @@ src/    Front end: wasm_decode(+_code/_simd/_gc/_atomic), wasm_leb128,
 src/component/  wasm_component(+_link/_types), wasm_canon,
         wasm_resources, wasm_async, wasm_recipe
 src/wasi/  wasi, wasi_preview1, wasi_fs, wasi_path, wasi_net, wasi_sock,
-        wasi_file_nif; WASI 0.2: wasi_preview2, wasi_sock2, wasi_http
-        (+_h1/_h2/_listener/_transport)
+        wasi_file_nif; WASI 0.2: wasi_preview2, wasi_p2_filesystem,
+        wasi_p2_sockets, wasi_sock2, wasi_http (+_h1/_h2/_listener/_transport)
 src/worker/  wasm_instance_worker, wasm_script_worker (the kernel),
         wasm_worker_adapter (the behaviour), wasm_worker_error, the adapters
         wasm_javascript(_command), wasm_python(_command), wasm_lua, the kit

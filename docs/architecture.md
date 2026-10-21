@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the eighty-six modules are, which
+This page is the map of the runtime: what the eighty-eight modules are, which
 ones depend on which, and where to start reading. You need it before you change
 anything, because every module explains itself and none of them explains the
 shape of the whole.
@@ -46,7 +46,7 @@ read. `test/` holds every suite named here.
 | Snapshots | `wasm:snapshot/2`, `wasm:restore/3` | `wasm_snapshot`, `wasm_snapshot_owner`, `wasm_snapshot_file`, `wasm_snapshot_store` | `max_snapshot_bytes` | `snapshot_hooks` | `wasm_snapshot_SUITE` | [Snapshots](snapshots.md) |
 | Module cache | `wasm:load/1` | `wasm_module_cache` | `max_resident_modules` | none | `wasm_module_cache_SUITE` | [Put it in an OTP application](otp.md) |
 | WASI preview 1 | `wasi_preview1:imports/1` | `wasi_preview1`, `wasi_fs`, `wasi_path`, `wasi_net`, `wasi_sock`, `wasi_file_nif` | the WASI options | the optional file NIF | the `wasi_*` suites | [WASI](wasi.md) |
-| Components and WASI 0.2 | `wasm_component:instantiate/2`, `wasm_component:call/4` | `wasm_component`, `wasm_component_link`, `wasm_component_types`, `wasm_canon`, `wasm_async`, `wasm_resources`, `wasi_preview2`, `wasi_sock2` | the imports map | `wasm_component:import_fun/2` | the `wasm_component_*` and `wasm_wasi2_*` suites | [Components](components.md), [WASI 0.2](wasi-0-2.md), [Component internals](component-internals.md) |
+| Components and WASI 0.2 | `wasm_component:instantiate/2`, `wasm_component:call/4` | `wasm_component`, `wasm_component_link`, `wasm_component_types`, `wasm_canon`, `wasm_async`, `wasm_resources`, `wasi_preview2`, `wasi_p2_filesystem`, `wasi_p2_sockets`, `wasi_sock2` | the imports map | `wasm_component:import_fun/2` | the `wasm_component_*` and `wasm_wasi2_*` suites | [Components](components.md), [WASI 0.2](wasi-0-2.md), [Component internals](component-internals.md) |
 | HTTP | `wasi_http:http/1`, `wasi_http_listener:start/1` | `wasi_http`, `wasi_http_h1`, `wasi_http_h2`, `wasi_http_listener` | `http_transport` | the `wasi_http_transport` behaviour | `wasm_wasi2_http_SUITE`, `wasm_wasi2_https_SUITE` | [HTTP](http.md) |
 | Script workers | `wasm_script_worker:start_link/2`, `wasm_script_worker:run/2` | `wasm_script_worker`, the adapters, `wasm_worker_reaper`, `wasm_cleanup_manager`, `wasm_cleanup_steward` | worker options; `scratch_roots`, `reaper_options` | the `wasm_worker_adapter` behaviour | the `wasm_worker_*` and `wasm_cleanup_*` suites | [Using workers](worker.md), [Worker internals](worker-internals.md) |
 | Build, packaging, the NIF | `rebar.config`, `scripts/` | `c_src/` | `WASM_NIF_SANITIZE` | none | `wasm_package_SUITE`, `wasm_scripts_SUITE` | [Changing the NIF](contributing/nif.md) |
@@ -97,7 +97,8 @@ module, not a namespace: names stay `wasm_*` and `wasi_*`.
 ```text
 L10 wasm_javascript  wasm_javascript_command  wasm_python
     wasm_python_command  wasm_lua  wasm_adapter_conformance
-L9  wasi  wasm_script_worker  wasi_preview2  wasi_http  wasi_http_transport  wasi_http_h1  wasi_http_h2  wasi_http_listener
+L9  wasi  wasm_script_worker  wasi_preview2  wasi_p2_filesystem  wasi_p2_sockets
+    wasi_http  wasi_http_transport  wasi_http_h1  wasi_http_h2  wasi_http_listener
 L8  wasi_preview1  wasm_snapshot_store  wasm_instance_worker
     wasm_component  wasm_component_link  wasm_canon  wasm_async  wasm_component_types
 L7  wasm  wasm_module_cache  wasm_snapshot_owner  wasm_jit_sup
@@ -188,7 +189,7 @@ capture copies and what a restore lays over -- and stays out of it.
 Cycles are not forbidden here. What is forbidden is a fourth one appearing
 because nobody noticed. A cycle is the one structural property you cannot
 discover by reading a module: everything else about `wasm_memory` is answered
-inside `wasm_memory`, and this is answered only by reading all eighty-six.
+inside `wasm_memory`, and this is answered only by reading all eighty-eight.
 
 The margin is thinner than it looks. Adding one call from `wasm_error`, at
 level 0, up into `wasm` collapses fourteen modules into a single component, and

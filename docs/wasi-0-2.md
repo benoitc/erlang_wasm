@@ -111,8 +111,8 @@ report the port it was given.
 | `wasi:cli/environment` | `environment/0`, `environment/3` |
 | `wasi:io` streams, `error` and `poll` | `io/0`, `io/1` |
 | `wasi:cli` stdio, exit, terminals (no tty) | `command/1` |
-| `wasi:filesystem`, read-only or writable per mount | `filesystem/1` |
-| `wasi:sockets`: TCP, UDP, name lookup | `sockets/1` |
+| `wasi:filesystem`, read-only or writable per mount | `filesystem/1`, in `wasi_p2_filesystem` |
+| `wasi:sockets`: TCP, UDP, name lookup | `sockets/1`, in `wasi_p2_sockets` |
 | `wasi:http` types and `outgoing-handler` | `wasi_http:http/1` |
 | one `wasi:http/incoming-handler` request | `run_serve/3` |
 

@@ -295,4 +295,15 @@
     preopen = false  :: boolean()
 }).
 
+%% WASI 0.2 socket state shared by wasi_preview2 (the streams) and
+%% wasi_p2_sockets (the sockets). The keys keep the wasi_preview2 name they had
+%% before the split, so a value written on one side is found on the other.
+
+%% How long a blocking socket wait lasts, in milliseconds.
+-define(SOCK_TIMEOUT, 5000).
+%% Process-dict key marking a connection whose receive side the guest shut down.
+-define(SHUT_RECV, {wasi_preview2, shut_recv}).
+%% Process-dict key of a socket's best-effort option values.
+-define(SOCKOPT, {wasi_preview2, sockopt}).
+
 -endif.

@@ -28,7 +28,8 @@ main([Guest, Dir, Secs]) -> main([Guest, Dir, Secs, "", "load"]);
 main([Guest, Dir, Secs, Cache]) -> main([Guest, Dir, Secs, Cache, "load"]);
 main([Guest, Dir, Secs, Cache, How]) ->
     {ok, _} = application:ensure_all_started(wasm),
-    Cache =:= "" orelse application:set_env(wasm, code_cache_dir, Cache),
+    Cache =:= "" orelse application:set_env(wasm, code_cache_dir,
+                                           filename:absname(Cache)),
     {ok, Bin} = file:read_file(Guest),
     %% Three ways in. `load' puts the module in `persistent_term'; `compile'
     %% keeps it on this process's heap and, with no identity,

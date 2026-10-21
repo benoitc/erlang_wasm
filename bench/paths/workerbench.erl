@@ -120,7 +120,7 @@ main([Adapter, Config, Arm, N, Cache]) ->
     case Cache of
         "" -> application:unset_env(wasm, code_cache_dir);
         _  -> ok = filelib:ensure_path(Cache),
-              application:set_env(wasm, code_cache_dir, Cache)
+              application:set_env(wasm, code_cache_dir, filename:absname(Cache))
     end,
     Root = "/tmp/workerbench_root",
     _ = os:cmd("rm -rf " ++ Root),

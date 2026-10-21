@@ -748,7 +748,7 @@ spawn_us(Image) ->
 
 churn(Name, N, ChurnName, Per, Cache) ->
     _ = application:load(wasm),
-    ok = application:set_env(wasm, code_cache_dir, Cache),
+    ok = application:set_env(wasm, code_cache_dir, filename:absname(Cache)),
     ok = reactorlib:page_limit(65536),
     Meta = reactorlib:meta(),
     io:format("# ~s~n", [maps:get(uptime, Meta)]),

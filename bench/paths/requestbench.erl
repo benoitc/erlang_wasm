@@ -105,7 +105,8 @@ run(Mode, Name, Tier, Ahead, Cache, Raw) ->
     _ = application:load(wasm),
     case Cache of
         "none" -> ok;
-        _ -> ok = application:set_env(wasm, code_cache_dir, Cache)
+        _ -> ok = application:set_env(wasm, code_cache_dir,
+                                     filename:absname(Cache))
     end,
     ok = filelib:ensure_path(?IMAGES),
     ok = application:set_env(wasm, snapshot_dir, filename:absname(?IMAGES)),

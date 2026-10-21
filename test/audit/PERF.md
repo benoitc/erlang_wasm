@@ -122,6 +122,7 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [A CPython request that compiles nothing](#a-cpython-request-that-compiles-nothing)
 - [Where a compiled QuickJS run and a CPython request spend their time](#where-a-compiled-quickjs-run-and-a-cpython-request-spend-their-time)
 - [A precompiled CPython standard library](#a-precompiled-cpython-standard-library)
+- [One image for a pool](#one-image-for-a-pool)
 
 **Worker cleanup**
 

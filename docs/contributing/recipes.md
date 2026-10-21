@@ -28,6 +28,9 @@ pick the recipe -> read what it names -> test that fails -> change
 
 1. Find the interface's builder in `wasi_preview2` (its module doc has a
    table), or add one returning a map keyed by `{Interface, Field}`.
+   `wasi:filesystem` lives in `wasi_p2_filesystem` and `wasi:sockets` in
+   `wasi_p2_sockets`; neither calls back into `wasi_preview2`, which would
+   add a module cycle.
 2. Build each function with `wasm_component:import_fun/2`, giving its
    Canonical ABI signature; `wasm_canon` lifts and lowers the values.
 3. Reuse the preview 1 internals (`wasi_fs`, `wasi_net`) rather than writing a

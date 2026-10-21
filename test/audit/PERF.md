@@ -8119,8 +8119,8 @@ Raw terms, logs, scripts, the one-entry patch and what each new test fails on:
 `pool-image`: `wasm_script_worker:prepare/2` loads or captures one image for a
 pool, an image's function tables travel as one packed binary, and a worker's
 artifact is loaded in a process of its own. Held to gates fixed in the plan
-before anything was measured. Gates 1 to 4 and 6 pass. Gate 5 passes except
-one clause, `load_snapshot` of the one-page module, which is not resolved.
+before anything was measured. Every gate passes; the one-page module's
+`load_snapshot` needed ten rounds to settle.
 
 ### Arms and protocol
 
@@ -8251,21 +8251,25 @@ slot in turn; `e5826ab` builds the table from the words at once. On the rerun
 QuickJS's load still built every table as a list for `from_parts` to pack;
 `61e4ef1` decodes the file's tables straight into packed words.
 
-**Not passed: `load_snapshot` of the one-page module.** Its 20 loads a VM are
-too few for a 37 us figure: the null's spread reaches 23 us. Three more sets:
+**`load_snapshot` of the one-page module passes on ten rounds.** Its 20 loads a
+VM were too few for a 37 us figure: the null's spread reaches 23 us. Four more
+sets:
 
 | set | cand / main | null or prev / main |
 | --- | ---: | ---: |
 | 2,000 loads a VM, five rounds, `61e4ef1` | 1.036 | null 1.001 |
 | 2,000 loads a VM, three rounds, main, prev and cand | 0.997 | prev 0.980 |
 | per phase, 3,000 calls each, three rounds: the whole call | 42.08 us against 42.29 | null 41.50 |
+| 2,000 loads a VM, **ten rounds**, `61e4ef1`, the gate's statistic | **1.010** | null 1.025 |
 
 By phase, the median of three VMs in us, main against cand: reading the file
 18.75 and 17.63, decoding it 1.416 and 1.250, `from_parts` 0.125 and 0.167
 (null 0.167, the timer's step), the whole call 42.29 and 42.08. No phase is
-slower beyond the null. The five-round set reads 1.036x and the diagnostic
-finds nothing behind it; the clause stays open until a longer measurement
-settles it.
+slower beyond the null. The ten-round set, the same protocol with twice the
+rounds (`raw/pool-image/plain-load-10/`), reads 1.010x against a null of
+1.025x, and paired by round 1.022x against 1.027x: cand sits inside the null's
+spread and under 1.03x. The 1.036x of five rounds was the spread of a 42 us
+figure, and gate 5 passes.
 
 ### Gate 6: memory, steady and under churn
 

@@ -16,7 +16,7 @@ to the peer; the guest cannot tell the difference.
           wasi_http_transport:response().
 request(#{host := Host, port := Port, method := Method, path := Path,
           headers := Headers, body := Body} = Req, Timeout) ->
-    case h2:connect(Host, Port, h2_connect_opts(Req)) of
+    case h2:connect(maps:get(address, Req, Host), Port, h2_connect_opts(Req)) of
         {ok, Conn} ->
             Result =
                 case h2:request(Conn, Method, Path, Headers, Body) of
@@ -35,7 +35,8 @@ request(#{host := Host, port := Port, method := Method, path := Path,
 h2_connect_opts(Req) ->
     case maps:get(scheme, Req, <<"http">>) of
         <<"https">> ->
-            case maps:get(tls, Req, []) of
+            case wasi_http_transport:tls_opts(maps:get(host, Req),
+                                              maps:get(tls, Req, [])) of
                 []  -> #{transport => ssl};
                 Tls -> #{transport => ssl, ssl_opts => Tls}
             end;

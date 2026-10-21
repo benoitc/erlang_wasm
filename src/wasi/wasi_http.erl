@@ -728,16 +728,23 @@ perform(#{authority := Authority} = R, Grant, Transport, Tls) ->
         {error, _} = E ->
             E;
         {ok, Host, Port} ->
-            case wasi_net:allows(connect, {tcp, resolve_host(Host), Port}, Grant) of
-                false ->
-                    {error, {<<"HTTP-request-denied">>, none}};
-                true ->
+            case connect_address(Host, Port, Grant) of
+                {error, _} = E ->
+                    E;
+                {ok, Address} ->
                     #{connect_timeout := CT, first_byte_timeout := FBT} =
                         maps:get(timeouts, R, req_timeouts(none)),
+                    %% The transport connects to `Address', the one the grant
+                    %% admitted, and never resolves the name again: a second
+                    %% lookup could answer an address nobody checked. The
+                    %% name still travels as the Host header and the TLS
+                    %% server name. A guest cannot set `host' itself.
+                    Headers = [{<<"host">>, Authority} | maps:get(headers, R)],
                     Transport:request(
-                      #{host => Host, port => Port, scheme => Scheme, tls => Tls,
+                      #{host => Host, address => Address, port => Port,
+                        scheme => Scheme, tls => Tls,
                         method => maps:get(method, R), path => maps:get(path, R),
-                        headers => maps:get(headers, R), body => maps:get(body, R),
+                        headers => Headers, body => maps:get(body, R),
                         connect_timeout => ms(CT), first_byte_timeout => ms(FBT)},
                       ?HTTP_TIMEOUT)
             end
@@ -989,10 +996,35 @@ authority_endpoint(Authority, Scheme) ->
 default_port(<<"https">>) -> 443;
 default_port(_)           -> 80.
 
-%% For the grant check: a literal ip, else 127.0.0.1 (the tests use a loopback
-%% authority). A real resolver is the sockets slice's job.
-resolve_host(Host) ->
+%% The address to connect to, chosen under the grant. A literal address is
+%% checked as itself. A name is resolved here, once, only when the grant allows
+%% resolving at all, and the first answer the `connect' rules admit is the one
+%% used: the grant names addresses, so it is checked against what the name
+%% resolves to, never against the name.
+connect_address(Host, Port, Grant) ->
     case inet:parse_address(binary_to_list(Host)) of
-        {ok, Ip} -> Ip;
-        _        -> {127, 0, 0, 1}
+        {ok, Ip} ->
+            admitted([Ip], Port, Grant);
+        {error, _} ->
+            case wasi_net:resolves(Grant) of
+                false -> {error, {<<"HTTP-request-denied">>, none}};
+                true  -> resolved(resolve_name(Host), Port, Grant)
+            end
     end.
+
+resolved([], _Port, _Grant) ->
+    {error, {<<"DNS-error">>, #{<<"rcode">> => none, <<"info-code">> => none}}};
+resolved(Addrs, Port, Grant) ->
+    admitted(Addrs, Port, Grant).
+
+admitted(Addrs, Port, Grant) ->
+    case [A || A <- Addrs, wasi_net:allows(connect, {tcp, A, Port}, Grant)] of
+        [A | _] -> {ok, A};
+        []      -> {error, {<<"HTTP-request-denied">>, none}}
+    end.
+
+%% Both families, as preview 1's `sock_getaddrinfo' asks them.
+resolve_name(Host) ->
+    Name = binary_to_list(Host),
+    lists:append([Addrs || Family <- [inet, inet6],
+                           {ok, Addrs} <- [inet:getaddrs(Name, Family)]]).

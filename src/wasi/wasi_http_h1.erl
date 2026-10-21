@@ -19,7 +19,10 @@ request(#{host := Host, port := Port, method := Method, path := Path,
     ConnectTimeout = maps:get(connect_timeout, Req, undefined),
     Scheme = maps:get(scheme, Req, <<"http">>),
     Tls = maps:get(tls, Req, []),
-    case h1:connect(Host, Port, connect_opts(ConnectTimeout, Scheme, Tls)) of
+    Target = maps:get(address, Req, Host),
+    case h1:connect(Target, Port,
+                    connect_opts(ConnectTimeout, Scheme,
+                                 wasi_http_transport:tls_opts(Host, Tls))) of
         {ok, Conn} ->
             %% The h1 client connects asynchronously; wait for the socket so a
             %% connect timeout surfaces as connection-timeout, distinct from the

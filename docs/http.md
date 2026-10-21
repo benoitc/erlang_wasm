@@ -29,11 +29,18 @@ Grant = #{connect => [{tcp, ~"127.0.0.1", 8080}], resolve => allow},
 
 The grant is the one `wasi:sockets` uses, described in
 [WASI](wasi.md). Before each request the host splits the authority into a host
-and a port (80 for `http`, 443 for `https` when the port is omitted) and checks
-`{tcp, Host, Port}` against the `connect` rules. A refused request comes back
-to the guest as `HTTP-request-denied`.
+and a port (80 for `http`, 443 for `https` when the port is omitted) and
+checks it against the `connect` rules:
 
-Grants name addresses, never host names, as they do for sockets.
+- A literal address is checked as itself.
+- A name needs `resolve => allow`. The host resolves it once and checks each
+  address it resolves to; the request goes to the first one the rules admit,
+  and the name is still sent as the Host header and the TLS server name.
+- A name that resolves to nothing is `DNS-error`. Anything else refused comes
+  back to the guest as `HTTP-request-denied`.
+
+Grants name addresses, never host names, as they do for sockets, so grant the
+addresses the names you expect resolve to.
 
 ### What the guest gets back
 

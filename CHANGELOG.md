@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **A `wasi:http` request to a host name is checked against the addresses the
+  name resolves to.** Before, a name was checked as if it were `127.0.0.1` and
+  then connected to by name, so a grant for a loopback port admitted any host
+  on that port. A name now also needs `resolve => allow` in the grant, as
+  socket name lookups already did. Literal addresses are unchanged.
+
 ## 0.9.2
 
 Compiled code is smaller, compiles faster and runs faster. Nothing to set; the

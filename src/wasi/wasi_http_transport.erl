@@ -8,11 +8,17 @@ performs a guest's outbound request through the configured transport (default
 `wasi_http_h1`, HTTP/1.1), and a different binding (h2, h3) can be swapped in
 without the interface changing. The request and response are the abstract form the
 `wasi:http/types` resources carry; the binding turns them into wire bytes.
+
+When the request carries an `address`, the binding connects to it and not to
+`host`: `wasi_http` resolved the name and checked that address against the
+guest's grant, and resolving it again could reach one it did not check. `host`
+stays the name, for TLS.
 """.
 
 -type request() :: #{host := binary(), port := inet:port_number(),
                      method := binary(), path := binary(),
                      headers := [{binary(), binary()}], body := binary(),
+                     address => inet:ip_address(),
                      scheme => binary(),
                      tls => [ssl:tls_client_option()],
                      connect_timeout => timeout() | undefined,
@@ -22,7 +28,25 @@ without the interface changing. The request and response are the abstract form t
                   | {error, ErrorCode :: term()}.
 
 -export_type([request/0, response/0]).
+-export([tls_opts/2]).
 
 %% Perform one request and return the response (or an http error-code value). The
 %% call is synchronous: `wasi_http` runs it when the guest reads the future.
 -callback request(request(), timeout()) -> response().
+
+-doc """
+The TLS options for a request to `Host`, naming it as the server.
+
+A binding that connects to the request's `address` loses the name the peer's
+certificate is checked against, so the name is given to TLS explicitly, unless
+the options already carry one or `Host` is itself an address.
+""".
+-spec tls_opts(binary(), [ssl:tls_client_option()]) ->
+          [ssl:tls_client_option()].
+tls_opts(Host, Tls) ->
+    Named = lists:keymember(server_name_indication, 1, Tls),
+    case inet:parse_address(binary_to_list(Host)) of
+        {ok, _}    -> Tls;
+        {error, _} when Named -> Tls;
+        {error, _} -> [{server_name_indication, binary_to_list(Host)} | Tls]
+    end.

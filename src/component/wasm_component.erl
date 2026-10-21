@@ -47,6 +47,8 @@ The wiring of several cores is `wasm_component_link`; lifting and lowering
 values is `wasm_canon`; the handle tables are `wasm_resources`.
 """.
 
+-include("wasm_component.hrl").
+
 -export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
          call_async/4, call_async/5, destroy/1, destroy/2, drop_resource/3]).
 -export([import_fun/2, exports/1]).
@@ -75,9 +77,6 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
                          cores := [wasm:instance()],
                          dispatch := #{binary() => {non_neg_integer(), binary()}}}.
 
--define(CORE_MODULE_SEC, 1).
--define(NESTED_COMPONENT_SEC, 4).
--define(EXPORT_SEC, 11).
 -define(HOST, {?MODULE, host_resources}).
 -define(HOST_NEXT, {?MODULE, host_next}).
 %% An optional cap on how many host resources may be live at once, so a guest that
@@ -150,15 +149,15 @@ sections(<<Id, Rest0/binary>>, Acc) ->
             {error, truncated_section}
     end.
 
-section(?CORE_MODULE_SEC, Content, #{cores := Cs} = Acc) ->
+section(?SEC_CORE_MODULE, Content, #{cores := Cs} = Acc) ->
     Acc#{cores => [Content | Cs]};
-section(?EXPORT_SEC, Content, #{exports := Es} = Acc) ->
+section(?SEC_EXPORT, Content, #{exports := Es} = Acc) ->
     %% A component may split its exports across several export sections (one per
     %% export is what the standard toolchain emits), so accumulate rather than
     %% replace: overwriting kept only the last section and dropped, for a proxy
     %% component, `wasi:http/incoming-handler` in favour of `wasi:cli/run`.
     Acc#{exports => Es ++ export_names(Content)};
-section(?NESTED_COMPONENT_SEC, _Content, Acc) ->
+section(?SEC_COMPONENT, _Content, Acc) ->
     Acc#{nested => true};
 section(_Other, _Content, Acc) ->
     Acc.

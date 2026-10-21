@@ -43,6 +43,8 @@ error value carrying a kind and context, and no name a component supplies become
 an atom.
 """.
 
+-include("wasm_component.hrl").
+
 -export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
          export_bindings/1, exports_resolve_on_entry/2, validate_lifts/2,
          resource_info/2]).
@@ -82,15 +84,6 @@ an atom.
 
 %% A resource built-in an entry core imports, and the type it acts on.
 -type intrinsic() :: {new | drop | rep, non_neg_integer() | undefined}.
-
--define(SEC_CORE_MODULE, 1).
--define(SEC_CORE_INSTANCE, 2).
--define(SEC_COMPONENT, 4).
--define(SEC_COMP_INSTANCE, 5).
--define(SEC_ALIAS, 6).
--define(SEC_CANON, 8).
--define(SEC_COMP_IMPORT, 10).
--define(SEC_EXPORT, 11).
 
 %% The import section id inside a *core* module's own section stream (not a
 %% component section).

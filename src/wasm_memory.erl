@@ -21,6 +21,24 @@ a NIF this project ships, so linear memory needs no native code of its own to
 be viable. That is the single biggest reason a pure-Erlang runtime is
 practical at all.
 
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| a new memory, standalone or for an instance | `new/1`, `new/2`, `new_shared/1`, `create/2`, `create/4` |
+| how large a chunk is | `chunk_shift/1` |
+| releasing a memory, and adding a holder | `free/1`, `acquire/3`, `release/2` |
+| `memory.grow` | `grow/2`, `extend/3` |
+| scalar loads and stores | `load/3`, `store/4` |
+| atomic access and `cmpxchg` | `atomic_load/3`, `atomic_store/4`, `atomic_rmw/5`, `atomic_cmpxchg/5` |
+| byte ranges, as `wasm:read_memory/3` uses them | `load_bytes/3`, `store_bytes/3`, `to_binary/1` |
+| `memory.fill`, `memory.copy`, `memory.init` | `fill/4`, `copy/4`, `copy/5`, `init/5` |
+| restoring over an image without copying it | `with_image/4` |
+| the first write to an image page | `ensure_private/2`, `fault/2` |
+| capturing a memory as an image | `image/1` |
+
+## How it is built
+
 **Chunking.** Memory is a tuple of `atomics` arrays, so `memory.grow` appends
 a chunk instead of reallocating and copying. A single flat array would make
 growth O(size), and growing to 64 MiB one page at a time would copy about a

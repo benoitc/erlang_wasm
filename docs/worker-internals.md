@@ -16,6 +16,46 @@ guardian goes. The guardian traps exits, owns the mounts and the deadline, and
 is the process a `cancel` acts on. The worker is the API and holds the single
 in-flight slot.
 
+One request, in order:
+
+```text
+caller          worker            guardian             runner
+  |                |                  |                    |
+  | run/2: submit  |                  |                    |
+  |--------------->| fix the deadline |                    |
+  |                | spawn_monitor -->| trap exits,        |
+  |                |                  | monitor the worker |
+  |                |                  | steward reserve:   |
+  |                |                  | request directory  |
+  |                |<- guardian_ready |                    |
+  |<-- {ok, Ref} --|                  | spawn_opt          |
+  | await          |                  | [link, monitor] -->|
+  |--------------->|                  |                    | requirements
+  |                |                  |<----- mounts ------| (made here)
+  |                |                  |                    | prepare
+  |                |                  |                    | instantiate
+  |                |                  |                    |  or restore
+  |                |                  |                    | invoke
+  |                |                  |                    | decode
+  |                |                  |                    | destroy
+  |                |                  |<----- result ------|
+  |                |                  | kill, await DOWN   x
+  |                |<- guardian_done -|
+  |<-- outcome ----|                  | steward complete:
+  |                |                  | cleanup to the reaper
+```
+
+`run/2` is `submit/2` then `await/3`, two calls on the worker, so the worker
+never blocks on a request. The guardian waits on the deadline the worker
+fixed; reaching it, a `cancel` or a dead worker kills the runner on the same
+path. The outcome reaches the caller before cleanup starts, so a slow cleanup
+never delays an answer.
+
+With `restore_ahead => true` the runner column is the worker's own runner,
+started before the request with an instance already restored. The guardian
+links and monitors it, sends it the request, and on the result unlinks it
+instead of killing it; the runner then restores the next instance.
+
 Everything a request can leak -- a directory, a staged file, a registered
 cleanup action -- is owned by the guardian and handed to a node-wide **reaper**
 when the request ends. That reaper is a process and not an ETS table with the

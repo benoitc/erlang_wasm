@@ -279,28 +279,19 @@ each: they come from different runs. The start row predates the precompiled
 standard library, which brought one capture to 13.6 s without the floor and
 4.5 to 5.0 s with it.
 
-Both processes keep almost nothing on their own Erlang heap, because the
-module is a cache handle and the interpreter's memory is off-heap. The
-collector sizes a heap from the live set, so it gives them the emulator's 233
-words and then collects thousands of times through work that allocates
-billions.
+[How a heap floor works](tuning.md#how-a-heap-floor-works) explains the
+mechanism: where the options go (beside `root`, not in the map
+`wasm_python:limits/0` returns), why there are two, and how a floor is rounded.
+What is particular to CPython:
 
-Three things to know:
-
-- **The two options sit beside `root`, not inside `limits`.** A floor is not a
-  bound, and one written into the map `wasm_python:limits/0` returns is
-  ignored silently.
-- **They are separate settings because they are separate processes.** CPython
-  wants twice as much to capture as to answer, and a worker reading its image
-  from `snapshot_dir` never captures at all, so it pays for the first and uses
-  only the second.
+- **Both processes collect thousands of times without a floor**, through work
+  that allocates billions of words.
+- **It wants twice as much to capture as to answer**, which is why the two
+  floors differ.
 - **Raise `max_heap_words` when you add the capture floor**, which is why the
   example above overrides it, and why the adapter sets no capture default: a
-  default cannot know you raised the ceiling. `max_heap_words` bounds the peak
-  and a floor raises the baseline that peak is measured from, so a ceiling
-  that was comfortable without one can stop being comfortable with it.
-  CPython at the adapter's own 16 M words is close enough to the edge that a
-  floored capture dies **some** of the time: measured again on 0.7.0, four
+  default cannot know you raised the ceiling. CPython at the adapter's own
+  16 M words is close enough to the edge that a floored capture dies **some** of the time: measured again on 0.7.0, four
   fresh starts at 2 M words, three captures died and one passed. A start that
   fails that way says `the capture died`, and names `max_heap_words` and the
   floor in its context so it is not a mystery.

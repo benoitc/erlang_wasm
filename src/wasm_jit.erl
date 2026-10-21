@@ -7,6 +7,24 @@ decision on top of two mechanisms that already exist: `wasm_core` generates and
 compiles, and `wasm_code_slots` decides which module name the result may be
 loaded into and when that name may be reused.
 
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| what a call runs: compiled code or the interpreter | `entry/3`, and `%%% api` |
+| adopting a module another instance already compiled | `maybe_adopt/3`, `adopt/2` |
+| the per-instance compiled entry, and its lease | `cached_entry/3`, `compiled/3`, `hashed_entry/6`, `generational_entry/4` |
+| asking for a compile when a call returns | `after_call/2`, `ask/2` |
+| which functions get compiled | `wanted/2`, `unit/2`, `ran/1` |
+| starting the work off the calling process | `spawn_compile/2`, `start_compiler/0`, `compiler_loop/0` |
+| one compile, from generation to publish | `compile/4`, `generate/5`, `build/9`, `publish_all/5` |
+| splitting a compile into shards | `shard_count/2`, `shards/1`, `pmap/2` |
+| heap and concurrency limits on a compile | `compile_limits/0`, `max_heap_words/0`, `concurrency/2` |
+| waiting until an instance has compiled code | `await/2` |
+| counting every outcome | `record/3`, `counts/0`, `reset_counts/0` |
+| diagnostics and the generated source | `diagnostics/0`, `dump/1` |
+| an instance letting go of its slot | `release/1` |
+
 ## Off by default
 
 Compiled code is opt-in, `#{compile => true}` in an instance's limits, the way

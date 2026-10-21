@@ -21,6 +21,23 @@ breaks, and the `canon lower` and `canon lift` functions between the cores,
 sync and async (`wasm_async`). A single-core program stays on
 `wasm_component`'s direct path.
 
+## Where things are
+
+| you want | look at |
+| --- | --- |
+| reading the section stream into a graph | `parse/1`, `sections/2` |
+| rejecting a bad `canon lift` before any core runs | `validate_lifts/2` |
+| building every core in graph order | `link/4`, `fold/2`, `step/2` |
+| which core is the entry | `entry/1` |
+| one core instance: its imports and its instantiation | `instantiate_core/3`, `imports_for/3`, `host_import/2` |
+| aliases into the index spaces | `alias_into/5`, `export_val/3`, `synthetic/2` |
+| decoding `canon` functions and their options | `canon/1`, `canonopts/1` |
+| a lowered host function, and the realloc it allocates through | `lowered/4`, `bind_realloc/3` |
+| `resource.drop` and destructors | `resource_drop/5`, `resource_dtor/2` |
+| what the component exports, and how | `export_map/1`, `export_encodings/1`, `export_bindings/1` |
+| a core's own imports | `core_imports/1` |
+| freeing the cores a failed link built | `destroy_built/1` |
+
 Nothing here raises: a malformed section or an unresolved import is a returned
 error value carrying a kind and context, and no name a component supplies becomes
 an atom.

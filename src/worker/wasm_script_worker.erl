@@ -52,6 +52,28 @@ own `wasm_worker_error()`.
 and the cleanup modules (`wasm_cleanup_manager`, `wasm_cleanup_steward`,
 `wasm_cleanup_steward_sup`) are internal: they may change in any release.
 
+## Where things are
+
+The worker, the guardian, the runner and, with `restore_ahead`, the ahead
+runner each have their own entry and loop. "The process shape" below draws
+them.
+
+| you want | look at |
+| --- | --- |
+| starting a worker, and capturing its image once | `start_link/2`, `init/1`, `capture_image/3` |
+| running a request from the caller's side | `run/2`, `submit/2`, `await/3`, `cancel/2` |
+| the worker (`gen_server`): accepting a request, never blocking | `handle_call/3`, `do_submit/3`, `handle_info/2` |
+| the guardian: its entry and its deadline loop | `guardian/1`, `loop/1` |
+| the guardian starting and killing the runner | `start_runner/4`, `spawn_runner/1`, `kill_runner/2` |
+| the guardian ending a request and handing cleanup on | `finish/3`, `hand_off/1` |
+| the runner: requirements, mounts, instantiate, invoke, decode | `runner/2`, `request/2`, `execute/3`, `invoke_loop/5` |
+| the ahead runner: restoring the next instance early | `start_ahead/1`, `ahead_runner/2`, `ahead_loop/2`, `restore_next/1` |
+| a request taking the instance restored ahead | `take_ahead/2` |
+| mounts and staged files | `make_mounts/2`, `do_stage/4` |
+| bounded output channels | `new_channel/2`, `channel_write/2`, `channel_read/1` |
+| what a request is allowed to ask for | `policy/2` |
+| calling an adapter callback without raising | `call_back/3` |
+
 ## The execution model is the one every other runtime has
 
 Stripped of processes and bounds, the whole job is three lines:

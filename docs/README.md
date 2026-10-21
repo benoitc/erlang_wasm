@@ -9,6 +9,19 @@ its pages in order; every page ends by saying what to read next.
 | understand how it works | [Concepts](concepts.md), [Architecture](architecture.md), the page for the part you care about under [Internals](#internals), then [Design notes](design-notes.md) for the why |
 | change it | [CONTRIBUTING.md](../CONTRIBUTING.md), the [recipe](contributing/recipes.md) for your change, then [Testing](contributing/testing.md) and [Measuring](contributing/measuring.md) |
 
+```text
+  Orientation      Start here: what it is for, concepts, getting started
+       |
+  Using it         Examples, Guides, Operate, Reference
+       |
+  How it works     Internals: architecture, memory, workers, design notes
+       |
+  Contributing     CONTRIBUTING.md, recipes, testing, measuring
+```
+
+Each layer assumes the one above it. Stop at the layer that answers your
+question; most readers never need the last two.
+
 If you already know the task:
 
 | I want to | start with |

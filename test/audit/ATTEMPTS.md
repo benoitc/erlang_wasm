@@ -1,12 +1,16 @@
-# The compiled tier: what worked, what did not
+# What was tried: kept, reverted and dropped
 
-A record of what was attempted while building the Core Erlang tier, what
-survived and what was reverted or withdrawn. Read this before proposing an
-optimisation for the tier or for `wasm_exec`, so you do not spend a day
-rediscovering something already measured and thrown away. The numbers behind
-every claim here are in `PERF.md`; this page is the index of decisions.
+A record of the ideas tried on this runtime, what survived and what was
+reverted, withdrawn or never built, with the numbers that decided each and,
+where one exists, what would reopen it. It began with the Core Erlang tier and
+`wasm_exec`, and now also covers allocation accounting, restore and recycling,
+shared image pages and the worker request path. Read this before proposing an
+optimisation, so you do not spend a day rediscovering something already
+measured and thrown away. The numbers behind every claim here are in
+`PERF.md`; this page is the index of decisions.
 
-Covers `391ea9a` through `cbe1ecb`.
+The first sections cover `391ea9a` through `cbe1ecb`; later sections name
+their own branches and commits.
 
 ## What succeeded
 

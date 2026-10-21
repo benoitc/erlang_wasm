@@ -49,6 +49,54 @@ it. Run the same arm against itself first: if the two halves of a null
 experiment differ by more than a few per cent, the box is too busy to measure
 on at all.
 
+## How a heap floor works
+
+Read this once before you set either floor. A heap floor is the
+`min_heap_size` the kernel gives one process when it spawns it, and there are
+two options for it, one per process:
+
+| option | process | spawned |
+| --- | --- | --- |
+| `runner_min_heap_words` | the request runner | once per request |
+| `capture_min_heap_words` | the snapshot capture | once, at `start_link/2` |
+
+Both processes hold almost nothing on their own heap, so the collector starts
+them at 233 words and collects through the work dozens or thousands of times.
+A floor makes the heap start where the work will take it.
+
+- **A floor is not a ceiling.** It sets where a heap starts, not how far it
+  may grow; `max_heap_words` in `limits` is the bound. So both options sit
+  beside `root` in the worker's options and **not** inside `limits`: a floor
+  written into the limits map is ignored silently.
+- **They are separate settings because they are separate processes.** A
+  worker that reads its image from `snapshot_dir` never captures, so it pays
+  for the runner's floor and never for the capture's.
+- The emulator rounds the number **up** to a heap-size class, and the jump is
+  large: 200,000 words becomes 318,187, and 1,000 becomes 1,598. That is
+  2.4 MiB of ballast per concurrent runner, and it does not cost you memory on
+  balance: see the scaling section below.
+- The floor must fit under this worker's `max_heap_words` with room for that
+  rounding. One that does not is refused with a warning and the process gets no
+  floor, because `min_heap_size` above `max_heap_size` is a kill at spawn.
+- **That check is not the whole of it.** It catches a floor too large to start
+  under; it cannot catch a floor that starts fine and then leaves too little
+  headroom under the ceiling for the work itself. `max_heap_words` bounds the
+  peak and a floor raises the baseline the peak is measured from, so raise the
+  two together. CPython captures at the 16 M words its adapter asks for, and
+  with a 2 M capture floor it dies about three times in four. When that
+  happens the error names `max_heap_words` and the floor rather than only
+  saying `killed`.
+
+`wasm_script_worker:runner_heap_words/2` answers what a given pair of options and
+limits resolves to, so you can check a configuration without starting a worker.
+It reads only the options you pass it; merge the adapter's `defaults/1`, asked
+with the worker's limits, under them first to see what a worker would get.
+
+A default that does not fit is refused the same way, and the warning says
+`(the adapter's default)`, so you can tell it from a value you set. A Lua or
+QuickJS default lacks room only under 400,000 words, and CPython's under
+2,000,000 interpreted and 3,000,000 compiled.
+
 ## Give the request runner a heap floor
 
 The shipped adapters already set the floor they were measured at, through
@@ -113,34 +161,6 @@ Sweep, take the knee, and stop. Two rules that came from getting it wrong:
   back flat and had to be thrown away.
 - **Go past the knee.** Otherwise you cannot tell a plateau from a peak, and
   the number you pick may be on the far side of it.
-
-Two things to know before you set it:
-
-- The emulator rounds the number **up** to a heap-size class, and the jump is
-  large: 200,000 words becomes 318,187, and 1,000 becomes 1,598. That is
-  2.4 MiB of ballast per concurrent runner, and it does not cost you memory on
-  balance: see the scaling section below.
-- The floor must fit under this worker's `max_heap_words` with room for that
-  rounding. One that does not is refused with a warning and the process gets no
-  floor, because `min_heap_size` above `max_heap_size` is a kill at spawn.
-- **That check is not the whole of it.** It catches a floor too large to start
-  under; it cannot catch a floor that starts fine and then leaves too little
-  headroom under the ceiling for the work itself. `max_heap_words` bounds the
-  peak and a floor raises the baseline the peak is measured from, so raise the
-  two together. CPython captures at the 16 M words its adapter asks for, and
-  with a 2 M capture floor it dies about three times in four. When that
-  happens the error names `max_heap_words` and the floor rather than only
-  saying `killed`.
-
-`wasm_script_worker:runner_heap_words/2` answers what a given pair of options and
-limits resolves to, so you can check a configuration without starting a worker.
-It reads only the options you pass it; merge the adapter's `defaults/1`, asked
-with the worker's limits, under them first to see what a worker would get.
-
-A default that does not fit is refused the same way, and the warning says
-`(the adapter's default)`, so you can tell it from a value you set. A Lua or
-QuickJS default lacks room only under 400,000 words, and CPython's under
-2,000,000 interpreted and 3,000,000 compiled.
 
 ## Give the capture a floor as well
 

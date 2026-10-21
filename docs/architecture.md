@@ -128,6 +128,30 @@ at the bottom because a file format needs nothing, `wasm_snapshot` in the
 middle because it copies instance state, `wasm_snapshot_owner` at the top
 because it holds a module claim, which is why it is in a cycle with the facade.
 
+```text
+      script workers: wasm_script_worker, wasm_instance_worker, adapters
+                                  |
+      WASI and components: wasi_preview1, wasm_component, wasi_preview2,
+                           wasi_http
+                                  |
+                                wasm                the facade
+                                  |
+          +-----------------------+-----------------------+
+          |                       |                       |
+      front end               runtime                   tier
+      wasm_wat                wasm_exec                 wasm_jit
+      wasm_validate           wasm_instance             wasm_core
+      wasm_decode             wasm_memory, siblings     wasm_code_slots
+      wasm_leb128             wasm_keeper
+          |                       ^                       |
+          +------ #module{} ------+----- compiled code ---+
+```
+
+The front end hands the runtime a `#module{}`, and the tier hands it compiled
+functions to run in place of interpreted ones. The layers above `wasm` are
+built on it, and the level listing above says which lower modules each may
+also call directly.
+
 ## The three cycles
 
 There are exactly three, and each is a few edges rather than a tangle.

@@ -8300,7 +8300,10 @@ its own.
 Every new test was run with the line it guards reverted and failed;
 `mutations.log` lists each mutant, the cases run and the failure.
 
-Raw terms, logs and scripts: `test/audit/raw/pool-image/`. The first run is
+Scripts, load logs and one `summary.txt` per cell: `test/audit/raw/pool-image/`.
+Each summary holds every run's printed result with its sample lists reduced to
+count, minimum, median and maximum; the per-sample files (111 MB) are not kept.
+The first run is
 at the top, `rerun/` and `rerun2/` hold the later sets, and `memory-diag/`,
 `fix-option-gc/`, `restore-diag/`, `churn200-py_entry-none/`,
 `rerun/load-diag/`, `rerun/fill-variants/` and `rerun2/plain-*` are the

@@ -45,7 +45,7 @@ an atom.
 
 -include("wasm_component.hrl").
 
--export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
+-export([parse/1, fold_sections/3, link/4, core_imports/1, export_map/1, export_encodings/1,
          export_bindings/1, exports_resolve_on_entry/2, validate_lifts/2,
          resource_info/2]).
 
@@ -99,18 +99,33 @@ reaches the next section.
 """.
 -spec parse(binary()) -> {ok, graph()} | {error, term()}.
 parse(Bin) ->
-    sections(Bin, []).
+    Step = fun(Id, Content, Items) ->
+               {ok, New} = section(Id, Content),
+               lists:reverse(New) ++ Items
+           end,
+    case fold_sections(Step, [], Bin) of
+        {ok, Items}     -> {ok, lists:reverse(Items)};
+        {truncated, Id} -> {error, {truncated_section, Id}}
+    end.
 
-sections(<<>>, Items) ->
-    {ok, lists:reverse(Items)};
-sections(<<Id, Rest0/binary>>, Items) ->
+-doc """
+Fold `Fun(Id, Content, Acc)` over a component's top-level sections, in order.
+
+Each section is a one-byte id, a u32 size, then that many content bytes. The
+one walk `parse/1` and `wasm_component:decode/1` share; each decides what a
+section means and what a truncated one is called.
+""".
+-spec fold_sections(fun((byte(), binary(), Acc) -> Acc), Acc, binary()) ->
+          {ok, Acc} | {truncated, byte()}.
+fold_sections(_Fun, Acc, <<>>) ->
+    {ok, Acc};
+fold_sections(Fun, Acc, <<Id, Rest0/binary>>) ->
     {Size, Rest1} = wasm_leb128:u32(Rest0),
     case Rest1 of
         <<Content:Size/binary, Rest2/binary>> ->
-            {ok, New} = section(Id, Content),
-            sections(Rest2, lists:reverse(New) ++ Items);
+            fold_sections(Fun, Fun(Id, Content, Acc), Rest2);
         _ ->
-            {error, {truncated_section, Id}}
+            {truncated, Id}
     end.
 
 %% Each recognised section yields its entries as items, in order. An

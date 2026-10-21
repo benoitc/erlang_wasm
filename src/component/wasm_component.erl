@@ -97,7 +97,7 @@ Decode a component binary into its embedded core module and export names.
 """.
 -spec decode(binary()) -> {ok, component()} | {error, term()}.
 decode(<<16#00, 16#61, 16#73, 16#6d, 16#0d, 16#00, 16#01, 16#00, Rest/binary>>) ->
-    case sections(Rest, #{exports => [], cores => [], nested => false}) of
+    case sections(Rest, #{exports => [], cores => []}) of
         {ok, #{cores := [], exports := Exports}} ->
             %% No top-level core module: a composed component whose cores live inside
             %% nested components (e.g. from `wac`), or an import-only / re-export / empty
@@ -138,15 +138,10 @@ largest([First | _] = Cores) ->
 %% content bytes. Only the core module and export sections matter here; the
 %% instance/alias/canon graph is parsed later (`wasm_component_link`) and only
 %% when the entry core has a cross-core import, so the common path skips it.
-sections(<<>>, Acc) ->
-    {ok, Acc};
-sections(<<Id, Rest0/binary>>, Acc) ->
-    {Size, Rest1} = wasm_leb128:u32(Rest0),
-    case Rest1 of
-        <<Content:Size/binary, Rest2/binary>> ->
-            sections(Rest2, section(Id, Content, Acc));
-        _ ->
-            {error, truncated_section}
+sections(Bin, Acc) ->
+    case wasm_component_link:fold_sections(fun section/3, Acc, Bin) of
+        {ok, _} = Ok   -> Ok;
+        {truncated, _} -> {error, truncated_section}
     end.
 
 section(?SEC_CORE_MODULE, Content, #{cores := Cs} = Acc) ->
@@ -157,8 +152,6 @@ section(?SEC_EXPORT, Content, #{exports := Es} = Acc) ->
     %% replace: overwriting kept only the last section and dropped, for a proxy
     %% component, `wasi:http/incoming-handler` in favour of `wasi:cli/run`.
     Acc#{exports => Es ++ export_names(Content)};
-section(?SEC_COMPONENT, _Content, Acc) ->
-    Acc#{nested => true};
 section(_Other, _Content, Acc) ->
     Acc.
 

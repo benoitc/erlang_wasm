@@ -51,3 +51,7 @@ ok = wasm:destroy(Inst).
 ```
 
 **Next:** [Run JavaScript](run-javascript.md).
+
+## Read this next
+
+The guide behind this example: [The compiled tier](../compiled-tier.md).

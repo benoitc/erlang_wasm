@@ -39,7 +39,7 @@ typing rules are identical; only the traversal differs.
 
 SIMD, atomic and GC opcodes are delegated to `wasm_validate_simd` and
 `wasm_validate_atomic`; add there, not here, if the opcode is in one of those
-spaces. [Adding an instruction](../docs/adding-an-instruction.md) has the full
+spaces. [Adding an instruction](../docs/contributing/adding-an-instruction.md) has the full
 four-stage recipe.
 """.
 

@@ -1,6 +1,6 @@
 -module(wasm_async).
 -moduledoc """
-Internal: the async Canonical ABI runtime (Component Model async, not a WASI
+The async Canonical ABI runtime (Component Model async, not a WASI
 version).
 
 The async ABI lets a component export or import an `async func` and carry typed
@@ -27,8 +27,7 @@ a completion; it delivers only from ingested state.
 
 All per-task state lives in the process dictionary, one live task per process (matching
 the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCKED is
-`-1`, since the operand stack holds signed Erlang integers (see
-[[i32-host-results-are-signed]]).
+`-1`, since the operand stack holds signed Erlang integers.
 """.
 
 -export([builtin/2, begin_task/2, end_task/0, take_return/0, task_ref/0, waits/0,

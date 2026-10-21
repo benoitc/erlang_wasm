@@ -9,7 +9,7 @@
 %% *fourth* one appearing without anybody deciding it should. A cycle is the
 %% one structural property a reader cannot discover locally: every other
 %% question about a module can be answered by reading that module, and this one
-%% can only be answered by reading all sixty-eight.
+%% can only be answered by reading all of them.
 -module(wasm_architecture_SUITE).
 
 -compile([export_all, nowarn_export_all]).
@@ -22,7 +22,8 @@ all() ->
      every_module_says_what_it_is,
      the_layer_diagram_names_every_module,
      the_page_counts_the_modules_right,
-     every_function_a_moduledoc_names_exists].
+     every_function_a_moduledoc_names_exists,
+     every_module_and_page_is_in_the_docs_site].
 
 %% The three components `docs/architecture.md' names, and why each one is there.
 %%
@@ -181,14 +182,43 @@ is_module_name(W) ->
         andalso lists:member(list_to_atom(W), modules()).
 
 architecture_page() ->
-    Path = filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
-                          "docs", "architecture.md"]),
-    case file:read_file(Path) of
-        {ok, B} -> binary_to_list(B);
-        {error, _} ->
-            {ok, B2} = file:read_file("docs/architecture.md"),
-            binary_to_list(B2)
+    {ok, B} = file:read_file(repo_file("docs/architecture.md")),
+    binary_to_list(B).
+
+%% A file at the root of the repository. Common Test runs from its log
+%% directory, so the root is found from the build tree and not the cwd.
+repo_file(Name) ->
+    Root = filename:join([code:lib_dir(wasm), "..", "..", "..", ".."]),
+    case filelib:is_regular(filename:join(Root, "rebar.config")) of
+        true  -> filename:join(Root, Name);
+        false -> Name
     end.
+
+%% The published site is built from `rebar.config', and anything it does not
+%% list is invisible there. Eighteen modules (the components, WASI 0.2, HTTP and
+%% the cleanup steward) sat in an unnamed bucket at the bottom of the sidebar,
+%% and `components.md' was not published at all, because a new module or page
+%% is one more list to remember and nothing said so.
+%%
+%% `docs/README.md' is the one page left out on purpose: it is the index a
+%% reader browsing the repository gets, and the site builds its own.
+every_module_and_page_is_in_the_docs_site(_) ->
+    {ok, Config} = file:consult(repo_file("rebar.config")),
+    ExDoc = proplists:get_value(ex_doc, Config),
+    Grouped = lists:append([Ms || {_, Ms} <-
+                                      proplists:get_value(groups_for_modules,
+                                                          ExDoc)]),
+    ?assertEqual([], lists:sort(modules()) -- lists:sort(Grouped),
+                 "modules in no ex_doc group"),
+    Extras = [atom_to_list(F) || {F, _} <- proplists:get_value(extras, ExDoc)],
+    InGroups = [binary_to_list(B)
+                || {_, Bs} <- proplists:get_value(groups_for_extras, ExDoc),
+                   B <- Bs],
+    Pages = [P || P <- filelib:wildcard("docs/**/*.md", repo_file("")),
+                  P =/= "docs/README.md"],
+    ?assert(length(Pages) > 20),
+    ?assertEqual([], Pages -- Extras, "pages missing from ex_doc extras"),
+    ?assertEqual([], Pages -- InGroups, "pages in no ex_doc group").
 
 %%% ---------------------------------------------------------------- helpers ---
 

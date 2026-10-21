@@ -120,7 +120,7 @@ io:format("~s~n", [wasm_jit:dump(I)]).
 ```
 
 `wasm_jit:dump/2` takes a function index when the module is large. See
-[the compiled tier](compiled-tier.md).
+[the compiled tier](../compiled-tier.md).
 
 ## Short notes
 
@@ -132,5 +132,5 @@ io:format("~s~n", [wasm_jit:dump(I)]).
   `wasm_core_SUITE:every_supported_operation_reaches_an_implementation`.
 - If the instruction touches memory, `wasm_exec:load_spec/1` and `store_spec/1`
   are read by `wasm_core` at generation time. Change the spec, not both paths.
-- If you find yourself adding a module, read [architecture](architecture.md)
+- If you find yourself adding a module, read [architecture](../architecture.md)
   first and decide its level.

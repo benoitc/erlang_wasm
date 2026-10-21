@@ -4,8 +4,6 @@ This page records what the runtime implements, how it scores against the
 official WebAssembly specification test suite, and what it measures. Use it to
 find out whether a module you care about will run, and what it will cost.
 
-Status as of **0.4.1**.
-
 The internals that used to sit at the end of this page -- how the garbage
 collector works and how the WASI sandboxes are enforced -- are in
 [design notes](design-notes.md), which is where the rest of the runtime's
@@ -50,12 +48,17 @@ rationale lives. Build and test instructions are in the README.
 | Initialized runtime snapshots: capture, restore per request, and files | complete |
 | A worker kernel for untrusted guests, with an adapter per language | complete |
 | WASI sockets: a capability model, the four standard calls, the client extension | complete |
+| The Component Model: decoding, linking several cores, composition, resources | complete |
+| The async Canonical ABI: `async func`, `stream`, `future` | complete |
+| WASI 0.2: random, clocks, cli, io, filesystem, sockets | complete |
+| `wasi:http`: outbound requests and serving an incoming-handler | complete |
 
 ## Not implemented
 
 | Area | Why |
 | --- | --- |
-| The component model and WASI Preview 2 | Preview 1 is what toolchains ship today; Preview 2 is a different interface, not a bigger one |
+| WASI 0.3 interfaces | built on the async ABI, which is here; no toolchain needs them yet |
+| Snapshots of component instances | `wasm:snapshot/2` captures a core instance; a component's handle tables point at host state an image cannot hold |
 
 ## Caching compiled code
 
@@ -649,3 +652,7 @@ Two real defects surfaced from those suites before they were set aside: a shared
 memory did not link against a shared import (sharing has to match exactly, in
 both directions, and was not compared at all), and `wasm_spectest` had no shared
 memory to import.
+
+## Read this next
+
+[Upgrading](upgrading.md) and the [changelog](../CHANGELOG.md).

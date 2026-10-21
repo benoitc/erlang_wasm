@@ -2,8 +2,8 @@
 -moduledoc """
 Optional native file access that closes the WASI path race.
 
-Changing the C means running it under a sanitizer; the sanitizer section of
-`docs/wasi.md` says how, and why AddressSanitizer alone is not enough for it.
+Changing the C means running it under a sanitizer; `docs/contributing/nif.md`
+says how, and why AddressSanitizer alone is not enough for it.
 
 You never call this; `wasi_fs` picks it when it built. Call `wasi_fs:backend/0`
 to find out whether you have it. `wasi_path` resolves a path and then opens it,

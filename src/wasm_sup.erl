@@ -21,8 +21,10 @@ wasm_sup                one_for_one, 5 in 300
   +-- wasm_cache_sup    one_for_one    modules, keyed by content hash
   |     +-- wasm_module_cache
   |
-  +-- wasm_worker_sup   one_for_one    the reaper, once a worker needs one
-        +-- wasm_worker_reaper
+  +-- wasm_worker_sup   rest_for_one   request cleanup for script workers
+        +-- wasm_cleanup_steward_sup   one steward per in-flight request
+        +-- wasm_cleanup_manager       bounds how many requests hold cleanup
+        +-- wasm_worker_reaper         once a worker needs one
 ```
 
 There is deliberately no instance supervisor. An instance is owned by the

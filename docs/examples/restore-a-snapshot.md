@@ -51,3 +51,7 @@ ok = wasm:destroy(B).
 **Next:** [Turn on the compiled tier](turn-on-the-tier.md), or
 [Snapshots](../snapshots.md) for images kept on disk and what a worker does
 with them.
+
+## Read this next
+
+The guide behind this example: [Snapshots](../snapshots.md).

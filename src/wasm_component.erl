@@ -1,12 +1,12 @@
 -module(wasm_component).
 -moduledoc """
-Internal: decode and run a WebAssembly **component**.
+Decode and run a WebAssembly **component**: the Component Model's entry point.
+`docs/components.md` is the guide; this is the reference.
 
-The first slices of component-model support (see the plan). A component binary
-shares the core preamble magic but a different version/layer
+A component binary shares the core preamble magic but a different version/layer
 (`00 61 73 6d 0d 00 01 00`, layer 1) where a core module is layer 0
 (`... 01 00 00 00`). `decode/1` walks the top-level sections, extracts the
-embedded core module (section id 1) and the exported names (section id 11).
+embedded core modules (section id 1) and the exported names (section id 11).
 `instantiate/1` loads and instantiates that core module through the existing
 runtime, providing the resource intrinsics its imports declare; `call/4` lowers
 Erlang terms into the guest, calls the export, lifts the result and runs the
@@ -28,9 +28,23 @@ this single-core path. When the entry core imports from *another* core,
 the other cores' exports; `instantiate/3` keeps every built core in `cores` so
 `destroy/1` frees them all.
 
-Not yet handled (later phases): nested components, the preview1-to-preview2
-adapter's startup cycle (a shim table filled at instantiate) and its canon
-lower/lift, and the async Canonical ABI.
+A component with no top-level core, such as one `wac` composed from nested
+components, is instantiated component by component and its exports dispatched
+to the one that provides each. `call_async/4` drives an `async func` export
+through `wasm_async`.
+
+| To | Use |
+|---|---|
+| decode a binary | `decode/1` |
+| instantiate, with host imports and options | `instantiate/1`, `instantiate/2`, `instantiate/3` |
+| call an export, sync or async | `call/4`, `call_async/4` |
+| drop a resource the host holds | `drop_resource/3` |
+| free the instance | `destroy/1`, `destroy/2` |
+| write a host import | `import_fun/2` |
+| keep host-side state behind a handle | `host_new/2`, `host_get/1`, `host_update/2`, `host_drop/1` |
+
+The wiring of several cores is `wasm_component_link`; lifting and lowering
+values is `wasm_canon`; the handle tables are `wasm_resources`.
 """.
 
 -export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
@@ -355,9 +369,8 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts)
 %% A composed component (nested component definitions instantiated and their exports
 %% wired together, as `wac` produces) has no top-level core. Instantiate each nested
 %% component recursively and build an instance whose exports dispatch to the
-%% sub-instance that provides them. Wiring one sub-instance's export into another's
-%% import (`comp_instantiate` args) is the next composition step; this handles a nested
-%% component instantiated with no arguments whose export is aliased out and re-exported.
+%% sub-instance that provides them. A nested component's `comp_instantiate`
+%% arguments wire a sibling's export into its imports (`bridge_imports/3`).
 instantiate_composed(#{sec := Sec, exports := Exports}, Imports, Opts) ->
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
@@ -638,7 +651,8 @@ exports(#{exports := Exports}) ->
 Call a lifted export, lowering `Args` and lifting the result by `Sig`.
 
 `Sig` is `{Params, Result}` of Canonical ABI value descriptors (see `wasm_canon`).
-The post-return `cabi_post_<Export>` is run after the result is lifted.
+The post-return function the export's lift declares runs after the result is
+lifted.
 """.
 -spec call(instance(), binary(),
            {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->

@@ -467,3 +467,7 @@ Said plainly rather than filled with general advice, because a claim here cites
 the segment cache above, scheduler binding (`+sbt`), scheduler counts and dirty
 schedulers have no measurement in this tree. If you measure any of them, that
 file is where the numbers go.
+
+## Read this next
+
+[Snapshots](snapshots.md), then [The compiled tier](compiled-tier.md).

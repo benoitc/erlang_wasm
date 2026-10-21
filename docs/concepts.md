@@ -132,3 +132,51 @@ place and copies only the 4 KiB pages it writes. See
 
 Snapshots cut the cost of **starting**; the compiled tier cuts the cost of
 **running**. They solve different problems and work together or apart.
+
+## Glossary
+
+Every term the other pages use, with the page that explains it.
+
+| term | meaning | read |
+| --- | --- | --- |
+| **ABI** (generated code) | the contract between compiled code and the interpreter; a code cache written under another ABI is refused | [The compiled tier](compiled-tier.md) |
+| **adapter** | a module teaching the worker kernel one language, implementing `wasm_worker_adapter` | [Writing an adapter](worker-contract.md) |
+| **arena** | where a restored memory keeps its private copies of the pages it wrote | [Memory](memory.md) |
+| **async ABI** | the Canonical ABI's `async func`, `stream` and `future`; called with `wasm_component:call_async/4` | [Components](components.md) |
+| **`baseline`, `full`** | the two compile qualities: `full` runs faster, `baseline` compiles faster | [The compiled tier](compiled-tier.md) |
+| **Canonical ABI** | how a component-level value (a string, a record, a handle) crosses into a core module's memory and back | [Components](components.md) |
+| **capability** | a permission granted by supplying an import, such as a directory or an address | [WASI](wasi.md) |
+| **chunk** | one `atomics` array of linear memory; memory grows by adding chunks | [Memory](memory.md) |
+| **class**, **kind** | the two fields that classify an error: one of five classes (`malformed`, `invalid`, `link`, `trap`, `exhaustion`) and a machine-readable kind | [Getting started](getting-started.md) |
+| **cleanup steward** | the per-request process that owns a request's cleanup with the reaper | [Worker internals](worker-internals.md) |
+| **code cache** | compiled BEAM modules kept on disk under `code_cache_dir`, so a restart does not compile again | [The compiled tier](compiled-tier.md) |
+| **command**, **reactor** | a guest that runs `main` once and exits, against one that exports functions and stays ready | [Producing a module](guests.md) |
+| **compiled tier** | compiling the functions a guest runs most into BEAM code, through Core Erlang | [The compiled tier](compiled-tier.md) |
+| **component** | a Component Model binary: core modules plus typed interfaces, instantiated with `wasm_component` | [Components](components.md) |
+| **fuel** | a work budget: the guest stops when it has done that much work; compiled code does not run under it | [Embedding](embedding.md) |
+| **guardian** | the process that owns one worker request: its deadline, its files and its runner | [Worker internals](worker-internals.md) |
+| **host**, **guest** | Erlang, and the WebAssembly code it runs | above |
+| **image** | the stored copy of a snapshot, in memory or in a file; restores read it in place | [Snapshots](snapshots.md) |
+| **keeper**, **holder** | `wasm_keeper` records which processes hold each memory, table or image, and frees it when the last holder is gone | [Memory](memory.md) |
+| **limits** | the ceilings on one instance: fuel, memory pages, call depth, heap; start from `wasm_limits:untrusted/0` or `trusted/0` | [Embedding](embedding.md) |
+| **module**, **instance** | validated code, and one running copy of it with its own state | above |
+| **module cache** | one compiled copy of each module per node, keyed by content hash | [Put it in an OTP application](otp.md) |
+| **owner** | the process responsible for an instance or an image; when it exits, what it holds is released | [Embedding](embedding.md) |
+| **page budget** | the node-wide ceiling on linear-memory pages, held by `wasm_engine` | [Memory](memory.md) |
+| **page table** | per restored memory, one entry for each 4 KiB page: still the image's, or a private copy in the arena | [Memory](memory.md) |
+| **preview 1**, **0.2**, **0.3** | the WASI generations: preview 1 for core modules, 0.2 for components; 0.3 is not provided | [WASI](wasi.md), [Components](components.md) |
+| **profile** | `plugin` or `script`: one name that sets the compile options for a kind of workload | [The compiled tier](compiled-tier.md) |
+| **reaper** | the node-wide process that removes what finished requests left on disk | [Worker internals](worker-internals.md) |
+| **resource**, **`own`**, **`borrow`** | a component-level object behind a handle; `own` passes it, `borrow` lends it for one call | [Components](components.md) |
+| **restore ahead** | a worker restoring the next request's instance while it waits | [Tuning](tuning.md) |
+| **runner** | the process that runs the guest for one request | [Worker internals](worker-internals.md) |
+| **snapshot** | a frozen copy of a guest after startup, restored as a fresh instance per request | [Snapshots](snapshots.md) |
+| **trap** | the guest stopped on an error the specification defines, returned as a value | [Getting started](getting-started.md) |
+| **translation cache** | two entries in compiled code remembering where recent memory pages live, so most accesses skip the page table | [The compiled tier](compiled-tier.md) |
+| **WASI** | the standard imports for files, clocks, randomness and networking | [WASI](wasi.md) |
+| **worker**, **worker kernel** | a process owning an instance; `wasm_script_worker` runs one request at a time with a deadline | [Using workers](worker.md) |
+
+## Read this next
+
+[Getting started](getting-started.md) to run a module, or
+[Architecture](architecture.md) to see how the runtime is built.

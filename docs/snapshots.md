@@ -345,3 +345,8 @@ hashes are already cached against the old secret.
 
 So rotation means recapturing. Anything a guest reads from the clock before the
 capture is frozen the same way.
+
+## Read this next
+
+[The compiled tier](compiled-tier.md), which cuts the cost of running where
+snapshots cut the cost of starting.

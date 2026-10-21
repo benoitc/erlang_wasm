@@ -94,3 +94,7 @@ lowering the setting shrinks nothing by itself; `wasm_snapshot_store:purge/0`
 empties it now. `max_snapshot_bytes` and `max_snapshot_dir_bytes` bound
 different things for the same image, memory and disk; [Snapshots](snapshots.md)
 has the sizes side by side.
+
+## Read this next
+
+[Tuning](tuning.md).

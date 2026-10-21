@@ -9,9 +9,9 @@ binary (a direct component call takes the signature from its caller), so this mo
 the component type section (`0x07`) and the import section (`0x0a`) and resolves, for each
 imported interface, its functions' signatures.
 
-The value types it decodes are the Canonical ABI primitives, which cover the common
-composition case. An aggregate type (list, record, variant, ...) it does not yet decode is
-reported as `{error, {unsupported_valtype, Byte}}`, to be extended rather than guessed.
+It decodes the primitives, the aggregates (list, record, tuple, variant, enum,
+flags, option, result), resource handles and the async `future`, `stream` and
+`error-context`; any other byte is read as an index into the type space.
 """.
 
 -export([import_interfaces/1, parse_types/1, type_space/1, func_sig/2,

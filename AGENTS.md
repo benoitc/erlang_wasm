@@ -50,7 +50,7 @@ rebar3 compile      # warnings_as_errors is on
 rebar3 lint         # elvis
 rebar3 xref
 rebar3 dialyzer
-rebar3 ct           # 900 cases
+rebar3 ct           # every suite under test/
 ```
 
 The benchmarks are not among them: `wasm_bench_SUITE` and
@@ -70,7 +70,7 @@ rebar3 shell
 rebar3 ct --suite=test/wasm_spec_SUITE
 make suites                                   # clone the upstream suites
 make bench                                    # the benchmark arms
-rebar3 ex_doc                                 # docs into _build/doc
+rebar3 ex_doc                                 # docs into doc/
 ```
 
 ## Measure before you claim

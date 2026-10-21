@@ -1,6 +1,6 @@
 -module(wasm_component_link).
 -moduledoc """
-Internal: read a component's wiring diagram and build its cores.
+Read a component's wiring diagram and build its cores.
 
 A component holds one or more core modules plus a wiring diagram (its
 core-instance, alias and canon sections) saying how each core gets its imports
@@ -16,11 +16,10 @@ of a core built before it (`wasm:extern/2` carries an export across, and one
 shared store via `#{link => ...}` lets a memory or table of one core serve
 another).
 
-Milestone 1 scope: the non-cyclic core-to-core case, exercised by a two-core
-fixture and leaving every native single-core program on its existing path. The
-preview1-to-preview2 adapter (a startup cycle broken by a shim table, plus canon
-lower/lift) is milestone 2; canon, component-import and component-instance
-sections are parsed but not yet interpreted here.
+It covers the preview1-to-preview2 adapter too: the startup cycle a shim table
+breaks, and the `canon lower` and `canon lift` functions between the cores,
+sync and async (`wasm_async`). A single-core program stays on
+`wasm_component`'s direct path.
 
 Nothing here raises: a malformed section or an unresolved import is a returned
 error value carrying a kind and context, and no name a component supplies becomes
@@ -54,9 +53,8 @@ an atom.
 
 -type core_sort() :: func | table | memory | global.
 
-%% The `string-encoding` canon option. This runtime marshals strings as UTF-8, the
-%% encoding every WASI toolchain emits; a canon def declaring another is refused at
-%% link time rather than silently mis-decoded.
+%% The `string-encoding` canon option: UTF-8, UTF-16 or Latin-1+UTF-16, each
+%% marshalled as the canon def declares.
 -type string_encoding() :: utf8 | utf16 | latin1_utf16.
 
 %% A lift/lower is `sync`, or `{async, Callback}` where Callback is the callback core
@@ -85,9 +83,9 @@ an atom.
 Parse a component's top-level sections into an ordered item list.
 
 The component preamble (`00 61 73 6d 0d 00 01 00`) is already stripped by the
-caller; `Bin` is the section stream. Sections we do not yet interpret (types,
-canon, component imports, component instances, customs) are stepped over by their
-declared size, so parsing always reaches the next section.
+caller; `Bin` is the section stream. A section the linker does not act on, such
+as a custom section, is stepped over by its declared size, so parsing always
+reaches the next section.
 """.
 -spec parse(binary()) -> {ok, graph()} | {error, term()}.
 parse(Bin) ->
@@ -1175,9 +1173,9 @@ alias_entry(Bin) ->
 %% `0x01 0x00 f opts` lower (a core func over component func `f`);
 %% `0x02/03/04 rt` resource new/drop/rep (a core func). Of the ABI options the
 %% linker reads only the two it must act on: a lower's realloc index (a result that
-%% crosses by memory allocates through it) and the string encoding (a non-UTF-8 one
-%% is refused in `step/2` rather than silently mis-marshalled); the rest are stepped
-%% over, since the linker binds host functions by name.
+%% crosses by memory allocates through it) and the string encoding, checked in
+%% `step/2`; the rest are stepped over, since the linker binds host functions by
+%% name.
 canon(<<16#00, 16#00, R0/binary>>) ->
     {F, R1} = wasm_leb128:u32(R0),
     %% A lift keeps its realloc and post-return function indices (not just the string
@@ -1345,7 +1343,7 @@ supported_encoding(Enc)          -> {error, {unsupported_string_encoding, Enc}}.
 %% A lower's options, keeping the realloc function index (`0x04 f`) and the string
 %% encoding. A result that crosses by memory (a string or list) allocates through
 %% realloc, and the adapter names its own, not one reachable on the instance calling
-%% the import; the encoding is checked in `step/2` (only UTF-8 is marshalled).
+%% the import; the encoding is checked in `step/2`.
 %% A lift's options, keeping the realloc (`0x04`) and post-return (`0x05`) function
 %% indices and the string encoding. Memory (`0x03`) and core-type (`0x08`) carry an index
 %% that is consumed but not yet acted on (all fixtures use the default memory).

@@ -65,3 +65,7 @@ still names them:
 ```sh
 grep -rlwE 'script_worker|worker_reaper|script_v1|qjs_adapter|py_adapter' src
 ```
+
+## Read this next
+
+The [changelog](../CHANGELOG.md).

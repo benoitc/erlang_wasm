@@ -48,8 +48,9 @@ and `start_link/2,3` fails with a `gen_server` start reason, one of
 `{unknown_root, Root, Known}`, `{unknown_reaper_option, Keys}` or the adapter's
 own `wasm_worker_error()`.
 
-`wasm_worker_reaper`, `wasm_worker_sup` and `wasm_script_v1` are internal:
-they may change in any release.
+`wasm_worker_reaper`, `wasm_worker_sup`, `wasm_script_v1`, `wasm_worker_fs`
+and the cleanup modules (`wasm_cleanup_manager`, `wasm_cleanup_steward`,
+`wasm_cleanup_steward_sup`) are internal: they may change in any release.
 
 ## The execution model is the one every other runtime has
 

@@ -74,3 +74,7 @@ ok = file:del_dir_r(Dir).
 ```
 
 **Next:** [Stop a runaway](stop-a-runaway.md).
+
+## Read this next
+
+The guide behind this example: [Components](../components.md).

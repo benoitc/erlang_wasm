@@ -21,10 +21,20 @@ a NIF this project ships, so linear memory needs no native code of its own to
 be viable. That is the single biggest reason a pure-Erlang runtime is
 practical at all.
 
-**Chunking.** Memory is a tuple of `atomics` arrays, one per 1 MiB, so
-`memory.grow` appends a chunk instead of reallocating and copying. A single
-flat array would make growth O(size), and growing to 64 MiB one page at a
-time would copy about a thousand times more than it allocates.
+**Chunking.** Memory is a tuple of `atomics` arrays, so `memory.grow` appends
+a chunk instead of reallocating and copying. A single flat array would make
+growth O(size), and growing to 64 MiB one page at a time would copy about a
+thousand times more than it allocates. A chunk is sized to the memory's
+initial size, between one 64 KiB page and 1 MiB, rounded up to a power of two
+(`chunk_shift/1`), so a one-page module does not pay for a megabyte.
+
+**Restored memories.** A memory restored from a snapshot image does not copy
+the image. Its lower region reads the image's immutable 64 KiB binaries,
+shared by every memory restored from it, through a page table with one entry
+per 4 KiB page. The first write to such a page copies those 4 KiB into a
+private slot in an arena of `atomics` chunks and records the slot in the
+table; later accesses go to the slot. Addresses above the image region use
+ordinary chunks. `docs/snapshots.md` has the user's side.
 
 **Alignment.** `atomics` granularity is 64 bits, so an aligned i64 store
 is one `put` while an i32 store is a read-modify-write. Accesses that span

@@ -5,15 +5,30 @@ supplied as a host function keyed by `{Interface, Field}` for
 `wasm_component:instantiate/2`.
 
 Preview 2 is the component-model side of WASI. A guest imports a world such as
-`wasi:random/random` and the host provides every function in it. This module
-holds those functions; `imports/0` is the merged map to hand a component. The
-functions map onto the same hardened internals as Preview 1 (here
-`crypto:strong_rand_bytes/1`).
+`wasi:random/random` and the host provides every function in it. The functions
+map onto the same hardened internals as Preview 1: paths go through `wasi_fs`,
+address decisions through `wasi_net`, randomness through
+`crypto:strong_rand_bytes/1`.
 
-Worlds land one at a time: `wasi:random`, `wasi:clocks`, `wasi:cli/environment`,
-`wasi:io`, and a read-only `wasi:filesystem`. Keys are the bare, unversioned
-interface ids (`wasi:random/random`); matching a versioned `@0.2.x` import is a
-later step.
+Keys are the bare interface ids (`wasi:random/random`). A component imports
+versioned ids (`wasi:io/streams@0.2.0`), and `wasm_component` strips the
+version when it resolves them, so one host serves every `0.2.x`.
+
+| Interface | Built by |
+|---|---|
+| `wasi:random` | `random/0` |
+| `wasi:clocks` | `clocks/0` |
+| `wasi:cli/environment` | `environment/0` |
+| `wasi:io` streams and `poll` | `io/0`, `poll/1` |
+| `wasi:filesystem`, read-only or writable per mount | `filesystem/1` |
+| `wasi:sockets`: TCP, UDP, name lookup | `sockets/1`, over `wasi_sock2` |
+| `wasi:http` | `wasi_http:http/1` |
+| a whole `wasi:cli/command` world | `command/1`, run by `run_command/2` |
+| one `wasi:http/incoming-handler` request | `run_serve/3` |
+
+`imports/0` is the merged map of the stateless interfaces. `command/1` is the
+one to hand a command component: it merges everything above under the grants
+in its options. `docs/components.md` shows both from the caller's side.
 """.
 
 -include("wasi.hrl").
@@ -1181,13 +1196,13 @@ skip_stream(Handle, Len) ->
     end.
 
 -doc """
-A read-only `wasi:filesystem` over one preopened directory. `get-directories`
-hands the guest a descriptor for `preopen` (named `name`, default `/`);
-`open-at` resolves a path under it and opens it read-only; `read` is a pread and
-`get-type` says file or directory. Path resolution and the sandbox are not
-reimplemented here: `open-at` passes the guest path straight to `wasi_fs:open/3`,
-the same call Preview 1 makes, so the same escapes are refused. Write intent is
-refused with `read-only`.
+`wasi:filesystem` over preopened directories. `get-directories` hands the guest
+a descriptor for `preopen` (named `name`, default `/`), or one per entry of
+`mounts` as `{Name, Dir, Writable}`. A mount is read-only unless its flag (or
+`writable`, for the single `preopen`) says otherwise, and write intent on a
+read-only one is refused with `read-only`. Path resolution and the sandbox are not reimplemented here:
+`open-at` passes the guest path straight to `wasi_fs:open/3`, the same call
+Preview 1 makes, so the same escapes are refused.
 """.
 -spec filesystem(#{preopen => file:filename_all(), name => binary(),
                    writable => boolean(),
@@ -1934,8 +1949,8 @@ read_directory_entry(Stream) ->
     end.
 
 -doc """
-A slice of `wasi:sockets`: the network foundation and `ip-name-lookup`.
-`instance-network` mints a network resource carrying the grant; `resolve-addresses`
+`wasi:sockets`: the network foundation, `ip-name-lookup`, TCP and UDP, the
+sockets themselves over `wasi_sock2`. `instance-network` mints a network resource carrying the grant; `resolve-addresses`
 resolves a name (gated by `wasi_net:resolves/1`, so a component with no grant
 resolves nothing) into a stream of addresses; `resolve-next-address` pops each as
 an `ipv4`/`ipv6` value. The address decision is `wasi_net`, not a second copy of

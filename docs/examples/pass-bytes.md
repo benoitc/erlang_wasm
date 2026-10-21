@@ -55,3 +55,7 @@ ok = wasm:destroy(Inst).
 ```
 
 **Next:** [Run a WASI command](run-a-wasi-command.md).
+
+## Read this next
+
+The guide behind this example: [Pass data in and out](../passing-data.md).

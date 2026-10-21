@@ -164,3 +164,7 @@ Imported memories and tables are shared by reference, so both instances see the
 same bytes and the same table entries. A `funcref` carries the instance that
 defined it, so a reference one module writes into a shared table calls that
 module's function, against that module's memory and globals.
+
+## Read this next
+
+[Put it in an OTP application](otp.md), then [Tuning](tuning.md).

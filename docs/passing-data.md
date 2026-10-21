@@ -117,3 +117,7 @@ Bytes = iolist_to_binary(json:encode(#{~"value" => 41})),
 The language workers do exactly this for you: `wasm_script_worker:run/3` takes
 an Erlang term as the context and gives the script's result back as one. See
 [Run JavaScript](examples/run-javascript.md).
+
+## Read this next
+
+[Host functions](host-functions.md), to give the guest operations of its own.

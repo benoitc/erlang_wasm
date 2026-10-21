@@ -1,11 +1,11 @@
 -module(wasm_component_SUITE).
 -moduledoc """
-Phase 0 of component-model support: a real component runs end to end.
+A real component runs end to end.
 
 The fixture is a no-import component built from a `wit-bindgen` guest and
 `wasm-tools` (see `scripts/build-component-fixture.sh`), exporting
 `run: func(list<u8>) -> result<list<u8>, string>`. These cases prove the whole
-Phase 0 pipeline: recognise a component, extract and instantiate its core module,
+pipeline: recognise a component, extract and instantiate its core module,
 lower a `list<u8>` argument through the Canonical ABI, call the export, and lift a
 `result<list<u8>, string>` back -- both the ok and the error case.
 """.

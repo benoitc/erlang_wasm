@@ -1,0 +1,91 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.24 9.46
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => [10 samples: min 3 median 4 max 4],
+  wall_ms => 4}
+
+== cand-r2 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.20 9.43
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => [10 samples: min 4 median 5 max 5],
+  wall_ms => 5}
+
+== cand-r3 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.20 9.43
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => [10 samples: min 3 median 3 max 4],
+  wall_ms => 4}
+
+== cand-r4 ==
+# 11:28  up 11 days, 21:53, 44 users, load averages: 3.99 6.20 9.43
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => [10 samples: min 3 median 4 max 4],
+  wall_ms => 4}
+
+== cand-r5 ==
+# 11:28  up 11 days, 21:53, 44 users, load averages: 3.91 6.15 9.39
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => [10 samples: min 4 median 4 max 4],
+  wall_ms => 4}
+
+== main-r1 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.24 9.46
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 5 median 5 max 6],
+  wall_ms => 6}
+
+== main-r2 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.20 9.43
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 4 median 4 max 6],
+  wall_ms => 6}
+
+== main-r3 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.20 9.43
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 4 median 5 max 6],
+  wall_ms => 6}
+
+== main-r4 ==
+# 11:28  up 11 days, 21:53, 44 users, load averages: 3.99 6.20 9.43
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 4 median 5 max 5],
+  wall_ms => 5}
+
+== main-r5 ==
+# 11:28  up 11 days, 21:53, 44 users, load averages: 3.99 6.20 9.43
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 3 median 4 max 5],
+  wall_ms => 5}
+
+== null-r1 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.24 9.46
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 4 median 5 max 5],
+  wall_ms => 5}
+
+== null-r2 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.24 9.46
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 4 median 5 max 6],
+  wall_ms => 6}
+
+== null-r3 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.20 9.43
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 4 median 5 max 6],
+  wall_ms => 6}
+
+== null-r4 ==
+# 11:27  up 11 days, 21:53, 44 users, load averages: 3.99 6.20 9.43
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 4 median 5 max 5],
+  wall_ms => 5}
+
+== null-r5 ==
+# 11:28  up 11 days, 21:53, 44 users, load averages: 3.91 6.15 9.39
+#{guest => qjs,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => [10 samples: min 4 median 5 max 6],
+  wall_ms => 6}

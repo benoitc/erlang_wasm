@@ -8155,7 +8155,8 @@ before anything was measured. Every gate passes; the one-page module's
 The first run measured every gate. Gates 5 and 6 failed on it, the two fixes
 went in, and the rerun measured gates 5 and 6 again. `load_snapshot` still
 failed on QuickJS, `61e4ef1` went in, and rerun2 measured gate 5 again. Gates
-1 to 4 were not run again after `fa9f742`.
+1 to 4 were then run again on `61e4ef1`, the final code; see "Gates 1 to 4 on
+the final code" below.
 
 ### Gate 1: one image per pool
 
@@ -8295,6 +8296,34 @@ at 1.054x (null 0.988). The cause was the module file each idle worker kept
 referenced, 30 MB for CPython; `a03fcf3` loads the artifact in a process of
 its own.
 
+### Gates 1 to 4 on the final code
+
+The same protocol and gates, on `61e4ef1` against `bd8b7b6`, with the
+harnesses' code cache directory made absolute (`9a4ae6d`): before it, a
+relative directory was refused and every compiled arm recompiled on each
+start. Each tree filled its cache in one unrecorded compiled run per guest.
+
+| gate | py_entry | py | qjs | lua | |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1: distinct images, 50 workers, main / cand | 50 / 1 | 50 / 1 | 50 / 1 | 50 / 1 | pass |
+| 2: captures, 4 workers, main / cand | 4 / 1 | 4 / 1 | 4 / 1 | 4 / 1 | pass |
+| 2: capture wall, cand / main | 0.394 | 0.405 | 0.913 | 0.900 | pass |
+| 3: pool start, cand / main (null) | 1.000 (1.012) | 1.014 (1.000), ten rounds | 0.667 | 0.333 | pass |
+| 4: words a hand-off copies, fall | 96.8% | 96.8% | 83.8% | 67.4% | pass (CPython gated, the rest reported) |
+| 4: spawn with the image, cand / main | 0.030 | 0.029 | 0.159 | 0.357 | pass (CPython gated, the rest reported) |
+| requests, compiled p50, cand / main | 0.772 | 0.941 | 1.001 | 0.971 | pass |
+| requests, interpreted p50, cand / main | 0.882 | 0.979 | 0.986, ten rounds | 1.008 | pass |
+
+Gate 1 charges one image, 8.3 MB for CPython against 416.4 MB, in every round.
+Two cells needed ten rounds. CPython's pool start read 1.111x on five, cand
+higher in every round, while `py_entry`, which starts the same module, read
+1.000x; on ten it reads 1.014x against a null of 1.000x, and 1.047x paired by
+round against the null's 1.014x, a few percent consistent with the
+artifact loader's process hop, inside the gate. QuickJS interpreted read
+1.33x on five rounds with the null at 1.32x: every tree ran about 13 ms in
+rounds 1 and 2 and about 18 ms in rounds 3 to 5, a bimodal set the protocol
+discards; ten rounds read 0.986x against a null of 0.992x.
+
 ### Tests that can fail
 
 Every new test was run with the line it guards reverted and failed;
@@ -8307,4 +8336,6 @@ The first run is
 at the top, `rerun/` and `rerun2/` hold the later sets, and `memory-diag/`,
 `fix-option-gc/`, `restore-diag/`, `churn200-py_entry-none/`,
 `rerun/load-diag/`, `rerun/fill-variants/` and `rerun2/plain-*` are the
-diagnostics behind the fixes and the open clause.
+diagnostics behind the fixes, `plain-load-10/` settles gate 5's last clause,
+and `final/` holds gates 1 to 4 on the final code (`final/ten/` the ten-round
+cells).

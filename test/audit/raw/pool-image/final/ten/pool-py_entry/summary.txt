@@ -1,0 +1,151 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.19 6.34 8.18
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "DDDGGGHHII",wall_ms => 73}
+
+== cand-r2 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.25 6.34 8.17
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => ";;GHHHHHHI",wall_ms => 73}
+
+== cand-r3 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.25 6.34 8.17
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "EEEEEEFFLM",wall_ms => 77}
+
+== cand-r4 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.15 6.30 8.14
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "<<<EFFGGGH",wall_ms => 72}
+
+== cand-r5 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.98 6.24 8.11
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "====CDEFFH",wall_ms => 72}
+
+== cand-r6 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.74 6.17 8.07
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "??@AOPPPPP",wall_ms => 80}
+
+== cand-r7 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.60 6.12 8.04
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "DEGGGGGHHH",wall_ms => 72}
+
+== cand-r8 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.60 6.12 8.04
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "AAABBLMNNN",wall_ms => 78}
+
+== cand-r9 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.47 6.07 8.01
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "AAACEOPPPP",wall_ms => 80}
+
+== cand-r10 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.68 6.08 8.01
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "@@ABNNOOOO",wall_ms => 79}
+
+== main-r1 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.47 6.42 8.21
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "78:?HHHIIJ",wall_ms => 74}
+
+== main-r2 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.25 6.34 8.17
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => ">>ADDDDFFG",wall_ms => 71}
+
+== main-r3 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.25 6.34 8.17
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "88FIJJJJKK",wall_ms => 75}
+
+== main-r4 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.15 6.30 8.14
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "FGGHHIJKKK",wall_ms => 75}
+
+== main-r5 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.98 6.24 8.11
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "::>DDEFFGH",wall_ms => 72}
+
+== main-r6 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.74 6.17 8.07
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "6678:AGGGG",wall_ms => 71}
+
+== main-r7 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.74 6.17 8.07
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "6789CGGGGH",wall_ms => 72}
+
+== main-r8 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.47 6.07 8.01
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "99::;DIIJJ",wall_ms => 74}
+
+== main-r9 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.47 6.07 8.01
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "888::?BDEK",wall_ms => 75}
+
+== main-r10 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.68 6.08 8.01
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "7889;EHHII",wall_ms => 73}
+
+== null-r1 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.19 6.34 8.18
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "7779;FGHHH",wall_ms => 72}
+
+== null-r2 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.19 6.34 8.18
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "@@ABBBCDHH",wall_ms => 72}
+
+== null-r3 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.15 6.30 8.14
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => ":::<<BIIIJ",wall_ms => 74}
+
+== null-r4 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 5.15 6.30 8.14
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "889;JKLLMM",wall_ms => 77}
+
+== null-r5 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.98 6.24 8.11
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "999:;=CHHI",wall_ms => 73}
+
+== null-r6 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.74 6.17 8.07
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "999;=CFGGH",wall_ms => 72}
+
+== null-r7 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.60 6.12 8.04
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "77788;FHII",wall_ms => 73}
+
+== null-r8 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.60 6.12 8.04
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "8889;?EEGG",wall_ms => 71}
+
+== null-r9 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.68 6.08 8.01
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => ":::;BIIIJJ",wall_ms => 74}
+
+== null-r10 ==
+# 11:36  up 11 days, 22:01, 44 users, load averages: 4.68 6.08 8.01
+#{guest => py_entry,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "888:<DJKKK",wall_ms => 75}

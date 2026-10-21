@@ -1,0 +1,109 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== warm-lua-cand ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 8,tier => compiled,verdict => ok,warm_requests => 3,
+  entry_ms => 567,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 1,reentered => 1005},
+  median_us => 3163.667,min_us => 2697.791}
+
+== warm-lua-main ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 77,tier => compiled,verdict => ok,warm_requests => 736,
+  entry_ms => 23893,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 1005},
+  median_us => 3359.542,min_us => 2840.167}
+
+== warm-lua-null ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 77,tier => compiled,verdict => ok,warm_requests => 725,
+  entry_ms => 23894,
+  counts =>
+      #{failed => 0,compiled => 223,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 1005},
+  median_us => 3407.208,min_us => 2831.833}
+
+== warm-py-cand ==
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 16857,tier => compiled,verdict => ok,warm_requests => 1746,
+  entry_ms => 108933,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11299.18,min_us => 10593.875}
+
+== warm-py-main ==
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 17390,tier => compiled,verdict => ok,warm_requests => 1720,
+  entry_ms => 108789,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11839.328,min_us => 10763.537}
+
+== warm-py-null ==
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 16731,tier => compiled,verdict => ok,warm_requests => 1760,
+  entry_ms => 107490,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11548.036,min_us => 10735.823}
+
+== warm-py_entry-cand ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 16592,tier => compiled,verdict => ok,warm_requests => 1500,
+  entry_ms => 45256,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 1809.917,min_us => 1611.583}
+
+== warm-py_entry-main ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 16848,tier => compiled,verdict => ok,warm_requests => 1431,
+  entry_ms => 42896,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 2442.541,min_us => 2183.208}
+
+== warm-py_entry-null ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 16765,tier => compiled,verdict => ok,warm_requests => 1396,
+  entry_ms => 43395,
+  counts =>
+      #{failed => 0,compiled => 233,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 3107.375,min_us => 2337.792}
+
+== warm-qjs-cand ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 120,tier => compiled,verdict => ok,warm_requests => 1724,
+  entry_ms => 71145,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5250.5,min_us => 4625.5}
+
+== warm-qjs-main ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 111,tier => compiled,verdict => ok,warm_requests => 1709,
+  entry_ms => 70693,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7325.417,min_us => 5480.834}
+
+== warm-qjs-null ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 110,tier => compiled,verdict => ok,warm_requests => 1700,
+  entry_ms => 71742,
+  counts =>
+      #{failed => 0,compiled => 264,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 6471.0,min_us => 5513.542}

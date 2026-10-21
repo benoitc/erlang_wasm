@@ -10,9 +10,9 @@ here. It is not a binding to Wasmtime, Wasmer, WAMR or wasm3. The only native
 code is an optional file NIF that closes a time-of-check-to-time-of-use window
 in WASI path resolution, and the runtime works without it.
 
-One OTP application, every module prefixed `wasm_` or `wasi_`. The runtime
-is flat in `src/`; the workers are in `src/worker/`, which is a folder for
-finding them and not a namespace:
+One OTP application, every module prefixed `wasm_` or `wasi_`. The core
+runtime is in `src/`; the Component Model, WASI and the workers each have a
+folder, which is for finding them and not a namespace:
 
 ```
 src/    Front end: wasm_decode(+_code/_simd/_gc/_atomic), wasm_leb128,
@@ -25,8 +25,11 @@ src/    Front end: wasm_decode(+_code/_simd/_gc/_atomic), wasm_leb128,
         Compiled tier: wasm_jit, wasm_core, wasm_code_slots,
         wasm_code_cache, wasm_jit_sup
         Numerics: wasm_num(+_float/_trunc), wasm_simd
-        WASI: wasi_preview1, wasi_fs, wasi_path, wasi_net, wasi_sock,
-        wasi_file_nif
+src/component/  wasm_component(+_link/_types), wasm_canon,
+        wasm_resources, wasm_async, wasm_recipe
+src/wasi/  wasi, wasi_preview1, wasi_fs, wasi_path, wasi_net, wasi_sock,
+        wasi_file_nif; WASI 0.2: wasi_preview2, wasi_sock2, wasi_http
+        (+_h1/_h2/_listener/_transport)
 src/worker/  wasm_instance_worker, wasm_script_worker (the kernel),
         wasm_worker_adapter (the behaviour), wasm_worker_error, the adapters
         wasm_javascript(_command), wasm_python(_command), wasm_lua, the kit

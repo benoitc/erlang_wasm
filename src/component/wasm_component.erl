@@ -47,6 +47,8 @@ The wiring of several cores is `wasm_component_link`; lifting and lowering
 values is `wasm_canon`; the handle tables are `wasm_resources`.
 """.
 
+-include("wasm_component.hrl").
+
 -export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
          call_async/4, call_async/5, destroy/1, destroy/2, drop_resource/3]).
 -export([import_fun/2, exports/1]).
@@ -75,9 +77,6 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
                          cores := [wasm:instance()],
                          dispatch := #{binary() => {non_neg_integer(), binary()}}}.
 
--define(CORE_MODULE_SEC, 1).
--define(NESTED_COMPONENT_SEC, 4).
--define(EXPORT_SEC, 11).
 -define(HOST, {?MODULE, host_resources}).
 -define(HOST_NEXT, {?MODULE, host_next}).
 %% An optional cap on how many host resources may be live at once, so a guest that
@@ -98,7 +97,7 @@ Decode a component binary into its embedded core module and export names.
 """.
 -spec decode(binary()) -> {ok, component()} | {error, term()}.
 decode(<<16#00, 16#61, 16#73, 16#6d, 16#0d, 16#00, 16#01, 16#00, Rest/binary>>) ->
-    case sections(Rest, #{exports => [], cores => [], nested => false}) of
+    case sections(Rest, #{exports => [], cores => []}) of
         {ok, #{cores := [], exports := Exports}} ->
             %% No top-level core module: a composed component whose cores live inside
             %% nested components (e.g. from `wac`), or an import-only / re-export / empty
@@ -139,27 +138,20 @@ largest([First | _] = Cores) ->
 %% content bytes. Only the core module and export sections matter here; the
 %% instance/alias/canon graph is parsed later (`wasm_component_link`) and only
 %% when the entry core has a cross-core import, so the common path skips it.
-sections(<<>>, Acc) ->
-    {ok, Acc};
-sections(<<Id, Rest0/binary>>, Acc) ->
-    {Size, Rest1} = wasm_leb128:u32(Rest0),
-    case Rest1 of
-        <<Content:Size/binary, Rest2/binary>> ->
-            sections(Rest2, section(Id, Content, Acc));
-        _ ->
-            {error, truncated_section}
+sections(Bin, Acc) ->
+    case wasm_component_link:fold_sections(fun section/3, Acc, Bin) of
+        {ok, _} = Ok   -> Ok;
+        {truncated, _} -> {error, truncated_section}
     end.
 
-section(?CORE_MODULE_SEC, Content, #{cores := Cs} = Acc) ->
+section(?SEC_CORE_MODULE, Content, #{cores := Cs} = Acc) ->
     Acc#{cores => [Content | Cs]};
-section(?EXPORT_SEC, Content, #{exports := Es} = Acc) ->
+section(?SEC_EXPORT, Content, #{exports := Es} = Acc) ->
     %% A component may split its exports across several export sections (one per
     %% export is what the standard toolchain emits), so accumulate rather than
     %% replace: overwriting kept only the last section and dropped, for a proxy
     %% component, `wasi:http/incoming-handler` in favour of `wasi:cli/run`.
     Acc#{exports => Es ++ export_names(Content)};
-section(?NESTED_COMPONENT_SEC, _Content, Acc) ->
-    Acc#{nested => true};
 section(_Other, _Content, Acc) ->
     Acc.
 
@@ -178,7 +170,10 @@ export_names(N, <<_Kind, Rest0/binary>>, Acc) ->
     {Len, Rest1} = wasm_leb128:u32(Rest0),
     case Rest1 of
         <<Name:Len/binary, Rest2/binary>> ->
-            export_names(N - 1, skip_desc(skip_sortidx(Rest2)), [Name | Acc]);
+            export_names(N - 1,
+                         wasm_component_link:skip_export_desc(
+                           skip_sortidx(Rest2)),
+                         [Name | Acc]);
         _ ->
             lists:reverse(Acc)
     end;
@@ -190,13 +185,6 @@ skip_sortidx(<<_Sort, Rest0/binary>>) ->
     Rest1;
 skip_sortidx(Bin) ->
     Bin.
-
-%% The optional type ascription after a sortidx: `0x00` absent (the common case,
-%% and all the standard toolchain emits), `0x01` present. Only the absent form is
-%% skipped past to reach the next entry; a present descriptor stops the walk, which
-%% is harmless because each export sits in its own section (count 1).
-skip_desc(<<0, Rest/binary>>) -> Rest;
-skip_desc(Bin)               -> Bin.
 
 -doc "Decode and instantiate a component, wiring any resource intrinsics.".
 -spec instantiate(binary()) -> {ok, instance()} | {error, term()}.
@@ -569,7 +557,7 @@ drop_fun(Opts) ->
     end.
 
 start(Loader, Core, Imports, Limits, Exports, Extra) ->
-    case load_core(Loader, Core) of
+    case wasm_component_link:load_core(Loader, Core) of
         {ok, Mod} ->
             case wasm:instantiate(Mod, Imports, Limits) of
                 {ok, Inst} ->
@@ -581,9 +569,6 @@ start(Loader, Core, Imports, Limits, Exports, Extra) ->
         {error, _} = E ->
             E
     end.
-
-load_core(compile, Core) -> wasm:compile(Core);
-load_core(_Load, Core)   -> wasm:load(Core).
 
 -doc """
 Destroy a component instance, freeing every core it built and sweeping the host
@@ -1117,17 +1102,18 @@ drop_checked(#{res_id := Id} = I, DtorExport, Handle) ->
     case wasm_resources:exists(Id) of
         true  -> drop_live(Id, Rt, Inst, CoreName, Handle);
         %% No table: answer what the destroyed (or unowned) instance answers.
-        false -> run_dtor(Inst, CoreName, Handle)
+        false -> call_guest_dtor(Inst, CoreName, Handle)
     end.
 
 drop_live(Id, Rt, Inst, CoreName, Handle) ->
     wasm_resources:with_instance(
       Id,
       fun() ->
-          run_dtor(Inst, CoreName, wasm_resources:host_drop(Id, Rt, Handle))
+          call_guest_dtor(Inst, CoreName,
+                          wasm_resources:host_drop(Id, Rt, Handle))
       end).
 
-run_dtor(Inst, CoreName, Rep) ->
+call_guest_dtor(Inst, CoreName, Rep) ->
     case wasm:call(Inst, CoreName, [Rep]) of
         {ok, _}        -> ok;
         {error, _} = E -> E

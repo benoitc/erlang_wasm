@@ -14,6 +14,9 @@ flags, option, result), resource handles and the async `future`, `stream` and
 `error-context`; any other byte is read as an index into the type space.
 """.
 
+-include("wasm_component.hrl").
+
+-export([plain_name/1]).
 -export([import_interfaces/1, parse_types/1, type_space/1, func_sig/2,
          resource_dtors/1]).
 
@@ -30,10 +33,6 @@ flags, option, result), resource handles and the async `future`, `stream` and
                  | {resource, non_neg_integer() | none}
                  | other.
 
--define(SEC_ALIAS, 6).
--define(SEC_TYPE, 7).
--define(SEC_IMPORT, 10).
--define(SEC_EXPORT, 11).
 
 -doc """
 The imported interfaces of a component and each of their functions' signatures.
@@ -49,7 +48,7 @@ import_interfaces(Sec) ->
     wasm_error:capture(
       fun() ->
           Types = types_table(collect(?SEC_TYPE, Sec)),
-          Imports = collect(?SEC_IMPORT, Sec),
+          Imports = collect(?SEC_COMP_IMPORT, Sec),
           {ok, resolve_imports(Imports, Types)}
       end).
 
@@ -101,7 +100,7 @@ type_section(?SEC_ALIAS, Content, Idx, Acc) ->
              {Sort, R} = alias_decl(Bin),
              {R, other_if_type(Sort, IA)}
          end);
-type_section(?SEC_IMPORT, Content, Idx, Acc) ->
+type_section(?SEC_COMP_IMPORT, Content, Idx, Acc) ->
     {Count, Rest} = wasm_leb128:u32(Content),
     each(Count, Rest, {Idx, Acc},
          fun(Bin, IA) ->
@@ -519,7 +518,8 @@ label(<<_Kind, Rest0/binary>>) ->
     <<Name:Len/binary, Rest2/binary>> = Rest1,
     {Name, Rest2}.
 
-%% A function parameter/result name: a u32 length then the bytes, with no kind byte.
+-doc "A name with no kind byte: a u32 length, then the bytes.".
+-spec plain_name(binary()) -> {binary(), binary()}.
 plain_name(Bin) ->
     {Len, Rest0} = wasm_leb128:u32(Bin),
     <<Name:Len/binary, Rest1/binary>> = Rest0,

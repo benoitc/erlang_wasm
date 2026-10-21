@@ -1,7 +1,7 @@
 // The wasi:random/random 0.2 interface, declared locally so the fixture pins no
 // external WIT. Unversioned, so the host key is the bare `wasi:random/random`;
 // matching a versioned `@0.2.x` import is a later step. The host supplies it
-// (see src/wasi_preview2.erl).
+// (see src/wasi/wasi_preview2.erl).
 package wasi:random;
 
 interface random {

@@ -25,7 +25,7 @@ sync and async (`wasm_async`). A single-core program stays on
 
 | you want | look at |
 | --- | --- |
-| reading the section stream into a graph | `parse/1`, `sections/2` |
+| reading the section stream into a graph | `parse/1`, `fold_sections/3` |
 | rejecting a bad `canon lift` before any core runs | `validate_lifts/2` |
 | building every core in graph order | `link/4`, `fold/2`, `step/2` |
 | which core is the entry | `entry/1` |
@@ -43,6 +43,9 @@ error value carrying a kind and context, and no name a component supplies become
 an atom.
 """.
 
+-include("wasm_component.hrl").
+
+-export([fold_sections/3, skip_export_desc/1, load_core/2]).
 -export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
          export_bindings/1, exports_resolve_on_entry/2, validate_lifts/2,
          resource_info/2]).
@@ -83,15 +86,6 @@ an atom.
 %% A resource built-in an entry core imports, and the type it acts on.
 -type intrinsic() :: {new | drop | rep, non_neg_integer() | undefined}.
 
--define(SEC_CORE_MODULE, 1).
--define(SEC_CORE_INSTANCE, 2).
--define(SEC_COMPONENT, 4).
--define(SEC_COMP_INSTANCE, 5).
--define(SEC_ALIAS, 6).
--define(SEC_CANON, 8).
--define(SEC_COMP_IMPORT, 10).
--define(SEC_EXPORT, 11).
-
 %% The import section id inside a *core* module's own section stream (not a
 %% component section).
 -define(CORE_SEC_IMPORT, 2).
@@ -106,18 +100,33 @@ reaches the next section.
 """.
 -spec parse(binary()) -> {ok, graph()} | {error, term()}.
 parse(Bin) ->
-    sections(Bin, []).
+    Step = fun(Id, Content, Items) ->
+               {ok, New} = section(Id, Content),
+               lists:reverse(New) ++ Items
+           end,
+    case fold_sections(Step, [], Bin) of
+        {ok, Items}     -> {ok, lists:reverse(Items)};
+        {truncated, Id} -> {error, {truncated_section, Id}}
+    end.
 
-sections(<<>>, Items) ->
-    {ok, lists:reverse(Items)};
-sections(<<Id, Rest0/binary>>, Items) ->
+-doc """
+Fold `Fun(Id, Content, Acc)` over a component's top-level sections, in order.
+
+Each section is a one-byte id, a u32 size, then that many content bytes. The
+one walk `parse/1` and `wasm_component:decode/1` share; each decides what a
+section means and what a truncated one is called.
+""".
+-spec fold_sections(fun((byte(), binary(), Acc) -> Acc), Acc, binary()) ->
+          {ok, Acc} | {truncated, byte()}.
+fold_sections(_Fun, Acc, <<>>) ->
+    {ok, Acc};
+fold_sections(Fun, Acc, <<Id, Rest0/binary>>) ->
     {Size, Rest1} = wasm_leb128:u32(Rest0),
     case Rest1 of
         <<Content:Size/binary, Rest2/binary>> ->
-            {ok, New} = section(Id, Content),
-            sections(Rest2, lists:reverse(New) ++ Items);
+            fold_sections(Fun, Fun(Id, Content, Acc), Rest2);
         _ ->
-            {error, {truncated_section, Id}}
+            {truncated, Id}
     end.
 
 %% Each recognised section yields its entries as items, in order. An
@@ -163,9 +172,14 @@ comp_export(<<_Kind, R0/binary>>) ->
     {Idx, R4} = wasm_leb128:u32(R3),
     {{comp_export, Name, Sort, Idx}, skip_export_desc(R4)}.
 
-%% The optional type ascription after an export's sortidx: `0x00` absent (all the standard
-%% toolchain emits, and what a hand-authored component uses). A present one (`0x01 ...`)
-%% is left for the next entry rather than misparsed; that shape has not been observed.
+-doc """
+Skip the optional type ascription after an export's sortidx.
+
+`0x00` is absent, which is all the standard toolchain emits. A present one
+(`0x01 ...`) is left for the next entry rather than misparsed; that shape has
+not been observed.
+""".
+-spec skip_export_desc(binary()) -> binary().
 skip_export_desc(<<16#00, Rest/binary>>) -> Rest;
 skip_export_desc(Rest)                   -> Rest.
 
@@ -929,7 +943,7 @@ missing(Key, _S) ->
 resource_drop(true, Rt, Dtor, H, _Drop) ->
     case wasm_resources:drop(Rt, H) of
         remote -> {ok, []};
-        Rep    -> run_dtor(Dtor, Rep), {ok, []}
+        Rep    -> apply_resource_dtor(Dtor, Rep), {ok, []}
     end;
 resource_drop(false, _Rt, _Dtor, H, Drop) ->
     host_drop_result(Drop, H).
@@ -953,10 +967,14 @@ resource_dtor(Rt, S) ->
 %% Run a resource's destructor with its representation. The destructor is a core
 %% function (an extern `{wasm_func, Fun, _}` or a bare host fun); its result is
 %% ignored, and a trap in it unwinds the drop.
-run_dtor(none, _Rep) -> ok;
-run_dtor({wasm_func, Fun, _Type}, Rep) -> _ = Fun(#{}, [Rep]), ok;
-run_dtor(Fun, Rep) when is_function(Fun, 2) -> _ = Fun(#{}, [Rep]), ok;
-run_dtor(_Other, _Rep) -> ok.
+apply_resource_dtor(none, _Rep) ->
+    ok;
+apply_resource_dtor({wasm_func, Fun, _Type}, Rep) ->
+    _ = Fun(#{}, [Rep]), ok;
+apply_resource_dtor(Fun, Rep) when is_function(Fun, 2) ->
+    _ = Fun(#{}, [Rep]), ok;
+apply_resource_dtor(_Other, _Rep) ->
+    ok.
 
 %% The value of core instance `InstIdx`'s export `Name`: an `extern()` from a real
 %% instance, or the stored value of a synthetic one.
@@ -1059,6 +1077,8 @@ add_inst(S, Entry) ->
 link_to(undefined, Limits) -> Limits;
 link_to(Anchor, Limits)    -> Limits#{link => Anchor}.
 
+-doc "Compile or load a core module's bytes, as the instantiate options ask.".
+-spec load_core(atom(), binary()) -> {ok, wasm:module_()} | {error, term()}.
 load_core(compile, Bytes) -> wasm:compile(Bytes);
 load_core(_Load, Bytes)   -> wasm:load(Bytes).
 
@@ -1495,10 +1515,7 @@ skip_limits(<<1, Rest/binary>>) ->
 
 %%% ------------------------------------------------------------------ helpers ---
 
-name(Bin) ->
-    {Len, Rest} = wasm_leb128:u32(Bin),
-    <<Name:Len/binary, Rest1/binary>> = Rest,
-    {Name, Rest1}.
+name(Bin) -> wasm_component_types:plain_name(Bin).
 
 core_sort(16#00) -> func;
 core_sort(16#01) -> table;

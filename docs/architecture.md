@@ -88,6 +88,12 @@ nothing else in the project, which is where you can start and be certain of
 finishing. The worker modules, in `src/worker/`, sit on top of the runtime
 they use: the adapters at L10, the kernel below them.
 
+The folders follow the same split. `src/` is the core runtime: the front
+end, instances, the interpreter, memory, snapshots and the compiled tier.
+`src/component/` is the Component Model, `src/wasi/` is WASI preview 1 and
+0.2 with HTTP, and `src/worker/` is the workers. A folder is for finding a
+module, not a namespace: names stay `wasm_*` and `wasi_*`.
+
 ```text
 L10 wasm_javascript  wasm_javascript_command  wasm_python
     wasm_python_command  wasm_lua  wasm_adapter_conformance

@@ -1,16 +1,26 @@
 # The compiled tier
 
-Every instance starts **interpreted**. The compiled tier, off by default,
-turns the functions a module calls most into BEAM code, through Core Erlang,
-and runs that instead. These are the two **execution modes**: interpreted
-always, compiled once a module is hot. Read this page before you turn it on.
+The compiled tier makes a guest run faster by turning its busiest functions
+into BEAM code. It is off by default. Read this page before you turn it on:
+it explains what it compiles, what it costs, and which limits apply.
 
-**Do you need this?** Yes, if a guest runs long, such as an interpreter: it is
-worth 8.4x on a language runtime. No, for a small plugin, where it is flat;
-measure your own module before deciding.
+**Do you need it?** Yes if a guest runs for a long time, like a language
+interpreter: there it made QuickJS about 8 times faster. No for a small
+plugin, where it changes nothing measurable. Measure your own module before
+you decide.
 
-For how the tier is built, and the options that exist only for the
-conformance suites, see [Design notes](design-notes.md#the-compiled-tier-for-someone-changing-it).
+## The words on this page
+
+| word | what it means here |
+| --- | --- |
+| **interpreted** | the runtime reads the guest's instructions one by one and does what each says. Every instance starts like this. |
+| **compiled** | the runtime has translated a guest function into BEAM code, which the Erlang VM runs directly. |
+| **hot** | a module that has been called often enough to be worth compiling: 32 calls by default. |
+| **hot set** | the functions a module actually ran. Only these are compiled. |
+| **unit** | one generated BEAM module holding the compiled functions of one guest module. |
+| **slot** | a place for one unit. A node has **16**. |
+| **code cache** | a directory where compiled units are saved, so a restart can reuse them instead of compiling again. |
+| **word** | the Erlang VM's unit of process memory: 8 bytes on a 64-bit system. |
 
 ## Turn it on
 
@@ -20,22 +30,23 @@ Per instance:
 {ok, I} = wasm:instantiate(M, Imports, #{compile => true}).
 ```
 
-A module is compiled once it has been called `compile_after` times, 32 by
-default, counted per module rather than per instance so a workload of
-short-lived instances still gets hot. Every function the compiler can take
-becomes a Core Erlang function in one generated BEAM module; everything else
-stays interpreted, and the two call each other through the ordinary paths.
+The instance starts interpreted. After the module has been called
+`compile_after` times (32 by default, counted for the module, not for each
+instance), the runtime compiles its hot set in the background. The call that
+triggered it does not wait. A later call finds the compiled code and runs it.
 
-Locals become Core variables, so `local.set` is a new binding rather than a
-tuple update. The operand stack is a compile-time list and does not exist at run
-time. Control frames become Core functions and a branch becomes a tail call.
+A function the compiler cannot handle stays interpreted. Compiled and
+interpreted functions can call each other, so a partly compiled module still
+works.
 
-Wait for it when you want to, which tests and warm-up paths do:
+To wait for the compile, in a test or at warm-up:
 
 ```erlang
 {ok, I} = wasm:instantiate(M, Imports, #{compile => true}),
 ok = wasm_jit:await(I, 60000).
 ```
+
+To see what happened on the node:
 
 ```erlang
 wasm_jit:counts().    %% #{compiled => N, entered => M, reentered => K, cached => C}
@@ -44,41 +55,40 @@ wasm_jit:counts().    %% #{compiled => N, entered => M, reentered => K, cached =
 ## How the pieces fit
 
 ```text
-  wasm:call/3,4 at depth 0, the outermost call only
+  wasm:call/3,4, the outermost call only
         |
         v
-  wasm_jit:entry/3 ---- resident? ----yes----> compiled entry, wasm_code_N
+  wasm_jit:entry/3 ---- compiled code loaded? ---yes---> run it
         | no
         v
-  interpreted run (wasm_exec), which records the functions that ran
+  run interpreted (wasm_exec), remembering which functions ran
         |
         v
-  wasm_jit:after_call/2      policy: what to compile, and when
+  wasm_jit:after_call/2       decides what to compile, and when
         |
         v
-  wasm_code_cache:lookup     files under code_cache_dir ----hit----+
-        | miss                                                     |
+  wasm_code_cache:lookup      saved in code_cache_dir? -----yes----+
+        | no                                                       |
         v                                                          |
-  wasm_core                  IR to Core Erlang, one unit at a time |
+  wasm_core                   guest functions to Core Erlang       |
         |                                                          |
         v                                                          |
-  compile:forms/2            BEAM binary, stored in the cache      |
-        |                                                          |
+  compile:forms/2             the OTP compiler makes a BEAM module |
+        |                     and saves it in the cache            |
         v                                                          |
-  wasm_code_slots            loaded into a pre-named slot  <-------+
+  wasm_code_slots             loaded into one of the 16 slots <----+
 ```
 
-`wasm_jit` decides; `wasm_core` and the OTP compiler do the work in a
-process of their own, so the call that asked never waits for it. The next
-outermost call finds the slot resident and enters the compiled code.
+The compile runs in a separate process, so the caller never waits for it.
 
-## Keep what it compiled, or pay for it on every start
+## Keep compiled code across restarts
 
-Turn this on at the same time. Without it a node recompiles from scratch every
-time it starts, and for a reactor that is about 150 seconds and several
-thousand interpreted requests before the tier arrives.
+Without a code cache, a node compiles everything again every time it starts.
+For a reactor worker that means about 150 seconds and several thousand slow,
+interpreted requests before the compiled code arrives. Turn the cache on
+together with the tier.
 
-Set it as release configuration, so it is in force before anything is
+Set it in your release configuration, so it applies before anything is
 instantiated:
 
 ```erlang
@@ -86,83 +96,73 @@ instantiated:
 [{wasm, [{code_cache_dir, "/var/lib/my_release/wasm"}]}].
 ```
 
-**Reading a cache entry is executing it**, so the runtime checks the directory
-before it trusts one and refuses it otherwise. What it requires:
+**Loading a file from this directory runs the code in it.** So the runtime
+only uses a directory that nobody else can write to, and refuses any other.
+The directory must be:
 
-- **absolute**, with no `.` or `..`, and owned by the user the node runs as
-- **no group or other write bit**, on it or on any directory above it. `0700`
-  and `0750` are the sensible choices; any mode without those bits is accepted,
-  so a `0755` directory you own is fine
-- **every directory above it owned by root or by you**, not merely unwritable
-  by others: one owned by somebody else at `0755` is not group-writable and its
-  owner can still replace what is beneath it
-- **nothing on the path a symlink**
-- **every parent must already exist.** The runtime creates the last component
-  if it is missing, at `0700`, and creates nothing above it
-- **not under `/tmp`**, which fails the mode rule on every ordinary system
+- an **absolute path**, with no `.` or `..`, owned by the user the node runs as;
+- **not writable by group or others**, and neither is any directory above it.
+  `0700` and `0750` are good choices; `0755` is fine if you own it;
+- under directories that are **all owned by root or by you**. A parent owned by
+  someone else can be changed by that person, even at `0755`;
+- free of **symbolic links** anywhere on the path;
+- inside **parents that already exist**. The runtime creates the last directory
+  if it is missing, at `0700`, and nothing above it;
+- **not under `/tmp`**, which fails the rules above on any normal system.
 
-A directory that does not qualify is refused, the cache is simply off, and the
-log says so once. Nothing fails: a refused cache is a slower start, never an
-error.
+If the directory does not qualify, the runtime logs it once and works without
+a cache. Nothing fails: you only lose the faster start.
 
-**Why this is opt-in when a release you control should almost always turn it
-on.** A library cannot invent a safe place to keep executable artifacts. Where
-a release keeps its state is your decision, and a default this code picked
-would be a directory it could not vouch for. So it asks.
+**Why it is off by default.** A library cannot choose a safe place to store
+code it will later run. Where your release keeps its state is your decision,
+so the runtime asks you for it.
 
-The entry itself carries a checksum, verified before the bytes are loaded, so
-a file damaged by a crash or a bad disk is a miss rather than a broken start.
-That catches **damage, not a hostile writer**: see [Security](security.md).
+Each saved file carries a checksum, checked before loading, so a file damaged
+by a crash or a bad disk is ignored and compiled again. A checksum does not
+stop someone who can write to the directory: see [Security](security.md).
 
 ## What to do at startup
 
-The cache spares a node the **compile**. It does not spare it the requests
-before the compile is asked for, and it only helps a workload that executes the
-same functions as the one that filled it. Both of those shape what a host has
-to do.
+The cache saves the **compile**. It does not save the requests that run
+interpreted before the compile starts, and it only helps when the node runs
+the same functions as the run that filled it.
 
-1. **Configure an absolute, trusted, persistent `code_cache_dir`**, as above. A
-   directory that does not qualify is refused and the node recompiles on every
-   start.
-2. **Load the guest with a stable content identity** -- `wasm:load/1` on
-   committed bytes. A module built from text takes a fresh `reference()` every
-   validation and is **never cached**.
-3. **Run one fixed representative request at startup**, and do not vary it
-   between deploys. Pinning it is what keeps the cache key stable; it is a rule
-   of thumb rather than the mechanism, since what the key actually turns on is
-   the set of functions a request executed.
-4. **There is no supported way to wait until the tier is ready**, and no
-   request count substitutes for one. See the limitation below.
-5. **Admit traffic knowing early requests interpret.**
+1. **Set an absolute, private, persistent `code_cache_dir`**, as above.
+2. **Load the guest from its bytes**, with `wasm:load/1`. A module built from
+   the text format gets a new identity each time it is validated and is
+   **never cached**.
+3. **Run the same representative request at every start.** The cache key
+   includes the set of functions that ran, so a different first request makes
+   a different key.
+4. **There is no supported way to wait until compiled code is ready** in a
+   worker host; see the limitation below.
+5. **Accept traffic knowing the first requests run interpreted.**
 
-What it is worth, measured on a reactor worker:
+What it is worth on a reactor worker:
 
-| guest | cold start | warm start |
+| guest | first start | next start, cache filled |
 | --- | --- | --- |
 | Lua | 47 s, 3,835 requests | **0.5 s, 44 requests** |
 | QuickJS | 147 s, 6,412 requests | **1.5 s, 34 requests** |
 | CPython | 319 s, 1,908 requests | **7.7 s, 33 requests** |
 
-And what a *different* script gets from that warm cache: nothing. A second
-script against a cache filled by the first paid the full cold cost again and
-wrote a second entry, because it executed a different set of functions.
+A *different* script gets nothing from that cache: it runs different
+functions, so it pays the full first-start cost and saves a second entry.
 
-**The readiness limitation.** `wasm_jit:await/2` takes an instance, and a
+**The readiness limitation.** `wasm_jit:await/2` waits on an instance, and a
 worker destroys its instance after every request, so a worker host has nothing
-supported to wait on. Waiting for the compile rather than serving through it is
-worth a great deal -- on Lua it is 32 interpreted requests instead of 3,835,
-for the same wall time -- which is why this is recorded as a gap rather than
-left unsaid. `test/audit/PERF.md` has the measurements.
+to wait on. Waiting would help: on Lua it would mean 32 interpreted requests
+instead of 3,835. This is a known gap; `test/audit/PERF.md` has the numbers.
 
-## Know what you will get
+## What gets compiled
 
-**Coverage is not speed, and there is no partial credit.** A single unsupported
-instruction anywhere in a hot function keeps that whole function interpreted,
-and a language runtime's execution concentrates in one or two functions. QuickJS
-was worth 1.0x at 93% of functions compiled and **9.0x at 100%**, with nothing
-in between.
+**A function is compiled whole or not at all.** One unsupported instruction
+anywhere in a function keeps the whole function interpreted. A language
+runtime spends almost all its time in one or two functions, so the speed-up
+jumps rather than grows: QuickJS ran at the same speed with 93% of its
+functions compiled and **9 times faster at 100%**.
 
-Check what the subset leaves for a module of your own:
+Check a module of your own:
 
 ```sh
 erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/coverage.erl
@@ -170,235 +170,172 @@ erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
     -run coverage main your.wasm
 ```
 
-It reports the share of functions that compile and, for the rest, the first
-instruction that refused each one. Expect the number to matter only when it
-reaches 100 for the functions you actually execute.
+It reports how many functions compile and, for each one that does not, the
+first instruction that stopped it. What matters is reaching 100% for the
+functions you actually run.
 
-What the subset covers today: i32 and i64 arithmetic including the trapping
-division and remainder, comparisons, the conversions, locals, constants,
-structured control with `br_table` and `select`, 32-bit memory loads and stores,
-globals that are not shared cells, direct and indirect calls, bulk memory
-(`memory.copy`, `fill`, `size`, `grow`, `init` and `data.drop`), the whole float
-set, and the whole SIMD set. Not exceptions, not the GC types, and not
-memory64.
+The compiler handles: i32 and i64 arithmetic, including division and
+remainder that trap, comparisons, conversions, locals, constants, blocks,
+loops, branches (including `br_table`) and `select`, 32-bit memory loads and
+stores, globals that are not exported mutable globals, direct and indirect
+calls, bulk memory (`memory.copy`, `fill`, `size`, `grow`, `init`,
+`data.drop`), all float instructions and all SIMD instructions. It does not
+handle exceptions, the garbage-collected types, or 64-bit memories.
 
-**Exporting a mutable global costs you every function that reads it.** An
-exported mutable global becomes a reference cell rather than a value, and a
-function reading one is refused with `{unsupported, global_get_ref}`. That is
-the "globals that are not shared cells" clause above, and it is easy to trip
-without noticing, because nothing about the module looks different and the
-interpreter answers correctly either way. It is worth checking against
-`subset.erl` if your eligible-function count is lower than the instruction list
-above suggests: a module that exports its mutable globals can lose every
-eligible function to it, and removing only those exports puts them back.
+**Exporting a mutable global stops every function that reads it from
+compiling.** An exported mutable global is stored as a shared cell instead of
+a plain value, and a function that reads one is refused with
+`{unsupported, global_get_ref}`. Nothing in the module looks different and the
+interpreter gives the right answer, so this is easy to miss. If fewer
+functions compile than you expect, check for exported mutable globals:
+removing the exports brings the functions back.
 
-**Only the functions your workload actually ran are compiled**, which for
-QuickJS is 223 of 1666 and about 23 seconds of a core in the background. A
-function left out is interpreted and can still call back into compiled code.
+**Only the hot set is compiled.** For QuickJS that is 223 of its 1,666
+functions, about 23 seconds of one core in the background. The hot set is
+taken once: a function that first runs after the compile stays interpreted.
+The tier suits long-lived instances of modules you run again and again, and
+helps less when the busy functions change over time.
 
-That is one shot: a function that first runs after the module was built stays
-interpreted. So this suits long-lived instances of modules you run repeatedly,
-and a workload whose hot set changes over time gets less from it.
+**A large hot set is split into two units.** One unit holds at most 4,096
+functions, because each function needs a name and names come from a fixed
+pool made at startup (nothing a guest supplies may become an atom). A hot set
+of 4,097 to 8,192 functions is split into two units, automatically. Splitting
+has two costs: a call from one unit into the other is slower than a call
+inside a unit, and **a split module is never saved in the code cache**, so it
+is compiled again on every start. CPython 3.12 runs 2,333 functions in one
+`_start`, which fits in one unit: 1,105 seconds to compile the first time, two
+seconds on the next start with the cache.
 
-**A very large hot set is compiled into several BEAM modules, not one.** Every
-name a unit can use comes from a pool generated at startup, because nothing a
-guest supplies may become an atom, and that pool is **4096** functions deep. A
-hot set past it is split across as many as four units, automatically; below it
-nothing is split, and you want it not to be, for two reasons. A call between
-units is a crossing rather than a call, which costs: CPython allocates 217 M
-words in one unit against 306 M in four. And **only a unit that ends its chain
-is cached on disk**, so a split hot set is recompiled on every node.
+A hot set of **more than 8,192 functions is refused**: the module stays
+interpreted, and the reason is recorded:
 
-Ask `wasm_jit:shard_count(NFuns, Limits)` what a given hot set would do, or
-`wasm_jit:shards(Instance)` how many units it is actually resident in.
+```text
+1> wasm_jit:counts().
+#{compiled => 0, entered => 0, reentered => 0, cached => 0,
+  refused => 1, failed => 0, crashed => 0}
+2> wasm_jit:diagnostics().
+[{refused, {{sha256, <<...>>}, 3}, {limit, {too_many_functions, 9000}}}]
+```
 
-CPython 3.12 reaches 2,333 functions in a single `_start`, which is one unit and
-an 80 MB artifact: 1,105 seconds to compile the first time, two seconds on the
-next node to see it.
+`counts/0` says how many compiles were refused; `diagnostics/0` keeps the
+last few dozen reasons. To check ahead of time how many units a hot set needs,
+call `wasm_jit:shard_count(NumberOfFunctions, Limits)`; to see how many units
+an instance's module is loaded in, call `wasm_jit:shards(Instance)`.
 
-Past four units there is no split that fits, and the answer is a refusal rather
-than silence:
+## When compiled code is not used
 
-    1> wasm_jit:counts().
-    #{compiled => 0, entered => 0, reentered => 0, cached => 0,
-      refused => 1, failed => 0, crashed => 0}
-    2> wasm_jit:diagnostics().
-    [{refused, {{sha256, <<...>>}, 3}, {limit, {too_many_functions, 16385}}}]
+**Every refusal falls back to interpreting**, and none of them is an error.
+The runtime interprets when a function uses an unsupported instruction, when
+all 16 slots are taken, when another process is already compiling the same
+module, when the call has a fuel limit, when the compile fails, or when the
+compiler goes over its memory ceiling.
 
-`counts/0` says how many, `diagnostics/0` says what: the reasons are normalised
-to a bounded shape and the last few dozen are kept.
+**A call with a fuel limit is always interpreted.** Fuel is counted at every
+loop, and counting it inside compiled code would cost what compiling saved.
+So a call made with a `fuel` limit runs interpreted even when the module is
+compiled. This is per call: the same instance called without a fuel limit
+uses its compiled code.
 
-## What turns it off underneath you
-
-**Every refusal means interpret**, and none of them is an error: a function
-outside the subset, a slot pool with nothing free, another process already
-compiling the same module, a finite fuel budget, a compile failure, or a
-compiler over its heap ceiling.
-
-**Metered execution is interpreted.** Fuel is charged at every loop back edge,
-and charging it round a compiled loop gives back what compiling it bought, so an
-invocation with a `fuel` limit does not use compiled code even when the module
-is already compiled. That is per invocation: the same instance called without a
-limit is compiled again.
-
-**To cancel a running invocation, kill the process.** Compiled code carries no
-deadline or interruption check, for the same reason: a test on every back edge
-costs what compiling it bought.
-
-Killing a caller inside compiled code is safe and costs nothing lasting. It does
-leak the call lease, because that is given back in an `after` and an `after`
-does not run for an untrappable kill, but a leaked lease does not pin its
-slot: generated code checks the slot generation it was built for against the one
-its caller was promised, so reuse is safe whatever the counter says.
-`wasm_jit_lifetime_SUITE` covers this, along with a compiler killed mid-flight,
+**To stop a call that runs too long, kill its process.** Compiled code has no
+built-in deadline check, for the same reason. Killing a process in the middle
+of compiled code is safe and leaves nothing broken behind:
+`wasm_jit_lifetime_SUITE` tests it, along with a compiler killed mid-compile,
 an instance destroyed while it compiles, and more modules than slots.
 
-Nothing derived from a module ever becomes an atom. Generated module names come
-from a fixed pool of sixteen in `wasm_code_slots`, and function and frame names
-from bounded pools in `wasm_core`, so the number of atoms the compiler can ever
-create is a literal you can read in the source.
+## The node-wide limit: 16 compiled units at a time
 
-## What the cache keys on, and what bounds it
+A node has **16 slots**, and each loaded unit takes one. In practice:
 
-Set it as shown in [Keep what it compiled](#keep-what-it-compiled-or-pay-for-it-on-every-start)
-above; this is the reference. QuickJS takes 0.2 seconds instead of 43.7 on the
-second start.
+- **16 different guest modules** can have compiled code loaded at the same
+  time; a module split in two units counts twice.
+- **Any number of instances** can use that code: all instances of one module
+  share its unit and its slot.
+- A 17th module is **not refused for good**: it runs interpreted, and is
+  compiled on a later call once a slot is free.
+- A slot becomes free when no instance of its module exists and no call is
+  running in its code.
+- **At most 16 compiles run at once**, one per slot being filled.
 
-A key covers everything that would make an artifact wrong if it changed: the
-module's content hash, the ABI between generated code and `wasm_exec`, the OTP
-release, the emulator flavour, the architecture, the quality asked for, the set
-of functions compiled, and the slot it was built for. A module identified by a
-`reference()` rather than a content hash is never cached, which is every module
-built from text.
+The number is fixed because each slot has a module name written into the
+runtime's source (`wasm_code_0` to `wasm_code_15`). Generated code never gets
+a new name, so a guest can never fill the node's atom table, which is never
+cleaned.
 
-A **sharded** compile is never cached either, and that one is a real
-limitation rather than an oversight: a sharded artifact embeds the module a
-crossing re-enters through and where the other functions live, and the key
-describes neither, so a cached shard could be adopted into a chain headed by a
-different module. A guest large enough to split therefore recompiles on every
-start.
+## Limit the memory one compile may use
 
-The directory is bounded by total size, oldest first, and `wasm_code_cache:purge/0`
-empties it. `purge/0` validates the directory like everything else, so it will
-not follow a rejected path and delete files somewhere else.
-
-## What a reactor gets, and what it costs to get there
-
-A worker that restores a snapshot per request builds a **fresh instance every
-time**, and an instance attempts adoption on its first call, so a reactor
-reaches resident code on every request rather than on the one in 32 where a
-hotness counter happens to fire.
-
-What a whole request costs, per guest, interpreted against the tier once it is
-resident. Both arms have the heap floor on, so this is the tier's own share and
-not the floor's. Twelve paired samples, medians, all three guests in one
-session:
-
-| guest | interpreted | with the tier |
-| --- | ---: | ---: |
-| Lua | 11.4 ms | **4.4 ms** |
-| QuickJS | 20.4 ms | **6.9 ms** |
-| CPython | 93.1 ms | **37.6 ms** |
-
-Throughput at fourteen workers rises about three quarters over the same guest
-interpreted.
-
-**Most of what is left is not the guest's code**, and how much depends entirely
-on the size of the image being restored. The same requests, by phase, tier on:
-
-| guest | accept | deliver + restore | invocation | reply |
-| --- | ---: | ---: | ---: | ---: |
-| Lua | 1.18 ms | 0.26 ms | 2.35 ms | 0.03 ms |
-| QuickJS | 1.42 ms | 0.56 ms | 4.38 ms | 0.06 ms |
-| CPython | 1.99 ms | **13.5 ms** | 20.7 ms | 0.86 ms |
-
-The tier can only act on the invocation, and it does so evenly: 3.9x on Lua,
-4.0x on QuickJS, 3.7x on CPython. What separates the guests is the restore --
-0.26 ms for Lua's 196,608-byte memory against 13.5 ms for CPython's 41.9 MB --
-and accepting a request, which is a fixed 1.2 to 2.0 ms and therefore a quarter
-of a Lua request and 5% of a CPython one. `test/audit/PERF.md` has the full phase
-tables and what is in each interval.
-
-Those phases were measured with a restore that copied the image. A restore
-lays a page table over a shared image instead: a CPython restore is 0.79 ms
-rather than 12.0, and the request pays about 1.3 ms of first-write copies
-inside the invocation. [Snapshots](snapshots.md) has the table.
-
-**Budget for the cold node, because that is where the cost is.** The tier
-arrives after a fixed amount of compiling, and a reactor request is roughly ten
-times faster than a command one, so it takes ten times as many requests to get
-there: about 150 s and several thousand requests on QuickJS, every one of them
-interpreted. `code_cache_dir` above is what turns the second start into an
-immediate one; without it every node start pays that window again.
-
-## Bound what a compile may spend
-
-The runtime runs `compile:forms/2` in a process it spawns itself, so a heap
-ceiling can be put on the process that actually does the work:
+The OTP compiler can use a lot of memory on a large guest: about 2.5 GB for
+QuickJS's hot set, and 33 GB once for CPython's whole module. You can put a
+**ceiling** on each compile:
 
 ```erlang
-application:set_env(wasm, compile_max_heap_words, 2_000_000_000).
+application:set_env(wasm, compile_max_heap_words, 250_000_000).  %% 2 GB
 ```
 
-A compile over it is killed and **refused**, which means the guest interprets
-and answers exactly as before, and `wasm_jit:diagnostics/0` says
-`{limit, {compile_memory, Words}}`. Ask what is in force with
-`wasm_jit:compile_limits/0`, which reports `max_heap_words => 0` when there is
-none.
+The value is in words (8 bytes each on a 64-bit system), so 250,000,000 words
+is 2 GB. A compile that goes over it is stopped, the module stays
+interpreted, and `wasm_jit:diagnostics/0` records
+`{limit, {compile_memory, Words}}`. `wasm_jit:compile_limits/0` shows the
+value in force; `max_heap_words => 0` means no ceiling.
 
-**Off by default**, because there is no number that is right for every guest:
-QuickJS's compiler peaks around 2.5 GB, CPython's whole-module compile reached
-33 GB, and CPython's *legitimate* 2,333-function compile sits between them, so
-a ceiling low enough to catch the second refuses the third. Set it from a
-measurement of your own module, and set it before you use `compile_whole` on a
-large guest.
+**It is off by default** because no single number suits every guest. Measure
+your own guest and set the ceiling a little above what it needs; see
+"Sizing the ceiling" below.
 
-Three things it does not bound, and it is a ceiling rather than a guarantee:
-Core generation, which happens on the calling process before the compiler is
-spawned; anything that is not process heap, such as allocator memory and node
-RSS; and the sum across concurrent compiles, since sixteen compilers may each
-sit under it. `max_heap_size` is also checked only when a garbage collection
-runs, so a compile can overshoot between collections.
+What the ceiling does not cover:
+
+- the first step of a compile, turning guest functions into Core Erlang,
+  which happens before the compiler process starts;
+- memory outside the compiler process's heap, such as the VM's allocators;
+- the total of several compiles: up to 16 can run at once, each under its own
+  ceiling. Use the budget below for that.
+
+The VM checks the ceiling when it collects garbage, so a compile can go a
+little over it between two collections.
 
 A value that is not a whole number of words between `min_heap_size` and
-`(1 bsl 59) - 1` is reported once through `logger` and ignored, rather than
-turning the tier off for the life of the node.
+`(1 bsl 59) - 1` is logged once and ignored; the tier keeps working.
 
-## Bound what the whole node has in flight
+## Limit the memory all compiles may use together
 
-The ceiling above bounds one compiler. Sixteen slots means up to sixteen of
-them, so it is not a bound on the node:
+The ceiling limits one compile. With 16 slots, up to 16 compiles can run at
+once, so the node could use 16 times the ceiling. The **budget** limits the
+total:
 
 ```erlang
-application:set_env(wasm, compile_budget_heap_words,
-                    8_000_000_000 div erlang:system_info(wordsize)).
+application:set_env(wasm, compile_budget_heap_words, 1_000_000_000).  %% 8 GB
 ```
 
-In heap words, the same unit as the ceiling, so the two compose. **It needs the
-ceiling**: a compile reserves the ceiling it will be held to, so without one
-there is nothing to aggregate, and a budget set alone is reported as 0 and said
-once through `logger`. Divide by `Budget div Ceiling` to see how many compilers
-it admits, or read `max_concurrent_compilers` from `wasm_jit:compile_limits/0`.
+The budget is also in words. **It works only together with a ceiling**: each
+compile reserves its ceiling from the budget when it starts and gives it back
+when it ends. Without a ceiling there is nothing to reserve, so a budget set
+alone is ignored (reported as 0) and logged once.
 
-A request that does not fit beside what is already running is **refused**, so
-the guest interprets and asks again at the next hot call. Nothing is queued: a
-caller that waited would hold the unit IR it was admitted to compile for the
-whole wait, which is the memory the budget exists to bound. A request larger
-than the entire budget still compiles when nothing else is running, so a budget
-set too low slows compilation instead of stopping it.
+How many compiles may run at once is the budget divided by the ceiling,
+written `Budget div Ceiling` (whole-number division), but never fewer than 4
+and never more than 16. With the two values above:
 
-**What it bounds, and what it does not.** It bounds how many compiler workers
-are admitted, each under the ceiling. It is steady-state capacity: a killed
-compiler's reservation is released through a different monitor than the one that
-kills it, so a replacement can briefly overlap it. And actual node memory is
-that, plus each compiler's overshoot between collections, plus the coordinators,
-which are not capped because under `compile_sync` the owner is your own process,
-plus allocator carriers, which no in-VM bound covers. Leave headroom: on QuickJS
-the coordinator added about 7% on top of its compiler.
+```text
+1_000_000_000 div 250_000_000 = 4 compiles at once
+```
 
-Both are off by default.
+`wasm_jit:compile_limits/0` shows the result as `max_concurrent_compilers`.
 
-**Sizing the ceiling.** Measure your own guest rather than copying a number:
+When a compile would go over the budget, it does not start: the module stays
+interpreted and asks again on a later call. Compiles are not queued, because
+a waiting compile would keep its input in memory, which is what the budget is
+there to limit. A compile larger than the whole budget still runs when no
+other compile is running, so a budget set too low slows compiling down
+instead of stopping it.
+
+The budget is a target, not a hard limit. Real memory use can be a little
+higher: a stopped compile may still be finishing when the next one starts,
+each compiler can go over its ceiling between collections, the process that
+starts each compile is not counted (about 7% more on QuickJS), and the VM's
+own allocators are outside it. Leave some room.
+
+Both the ceiling and the budget are off by default.
+
+**Sizing the ceiling.** Measure your own guest:
 
 ```sh
 erlc -I _build/default/lib -o bench/paths bench/paths/compileheap.erl
@@ -406,23 +343,15 @@ erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
     -run compileheap main your.wasm 3
 ```
 
-The `child` arm's `worker MB` is what one compiler of that guest peaks at. Take
-that plus headroom as the ceiling. Predicting it from a module's size does not
-work: peak memory per IR word spans 4.95 to 6.77 KB on one guest by estimator
-choice alone, which is why the budget counts ceilings and not weights.
+The `worker MB` of the `child` line is the most one compile of that guest
+used. Set the ceiling a little above it. You cannot predict it from the
+module's size: on one guest it ranged from 4.95 to 6.77 KB per word of the
+compiler's input, depending only on how it was measured.
 
-**Off by default, and the directory is as trusted as your release.** Loading a
-`.beam` from it executes whatever is in that file, so it must not be writable by
-anything you would not run as code.
+## Choose a profile instead of setting each option
 
-Only modules with a content hash are cached, which means modules you loaded from
-bytes. A module built from text takes a fresh identity every time it is
-validated, so there is nothing stable to key on.
-
-## Pick a profile instead of the knobs
-
-`profile` names a workload. Everything it sets is an option you could set
-yourself, and anything you do set wins.
+A `profile` sets the compile options for a kind of workload. Anything you set
+yourself wins.
 
 ```erlang
 {ok, I} = wasm:instantiate(M, Imports, #{profile => plugin}).
@@ -430,91 +359,136 @@ yourself, and anything you do set wins.
 
 | | `plugin` | `script` |
 | --- | --- | --- |
-| the shape | a module called many times through a long-lived instance | a program run end to end, usually an interpreter with a script |
+| for | a module called many times through an instance that lives long | a program run from start to end, usually an interpreter running a script |
 | `compile` | `true` | `true` |
 | `compile_quality` | `full` | `baseline` |
 | `compile_after` | 32, the default | **1** |
 
-**Why they differ, in numbers.** `full` is 75.0 to 76.8 milliseconds on QuickJS
-against 86.1 to 87.7 at `baseline`, and costs 129.3 seconds against 58.1 to
-compile the hot set. A plugin pays that once and wins on every call after it. A
-script may be run a handful of times, so the cheaper compile wins unless it is
-run thousands.
+`full` makes faster code; `baseline` compiles faster. On QuickJS, `full` runs
+in 75.0 to 76.8 ms against 86.1 to 87.7 ms for `baseline`, but takes 129.3
+seconds to compile against 58.1. A plugin compiles once and gains on every
+call after, so `full` is worth it. A script may run only a few times, so the
+quicker compile wins unless it runs thousands of times.
 
-`compile_after => 1` matters more than it looks. A script is often a *single*
-call -- `_start` and nothing else -- and the default threshold of 32 is never
-reached, so nothing is ever compiled. The whole tier is invisible without it.
+`compile_after => 1` matters for scripts. A script is often a single call,
+`_start`, so the default of 32 calls is never reached and nothing would ever
+be compiled.
 
-**Set `code_cache_dir` with `script`.** Otherwise the compile is paid at every
-node start, and for a program run once per start the tier is a pure loss: 58
-seconds to save 1.9. See `wasm_code_cache`.
+**Set `code_cache_dir` when you use `script`.** Otherwise the compile is paid
+again at every start, and for a program that runs once per start that is a
+loss: 58 seconds spent to save 1.9.
 
-An unrecognised profile is `{error, #{kind := unknown_profile}}`, not a crash.
+An unknown profile returns `{error, #{kind := unknown_profile}}`.
+
+## What a reactor gets from it
+
+A worker that restores a snapshot for each request makes a **new instance
+every time**. A new instance looks for compiled code on its first call, so
+each request uses the compiled code once it exists.
+
+A whole request, interpreted against compiled, with the heap floor on in both
+cases. Medians of twelve paired runs:
+
+| guest | interpreted | compiled |
+| --- | ---: | ---: |
+| Lua | 11.4 ms | **4.4 ms** |
+| QuickJS | 20.4 ms | **6.9 ms** |
+| CPython | 93.1 ms | **37.6 ms** |
+
+With fourteen workers, requests per second rise by about three quarters.
+
+**The rest of a request is not the guest's code.** The same requests, split
+into steps, compiled:
+
+| guest | accept the request | deliver and restore | run the guest | reply |
+| --- | ---: | ---: | ---: | ---: |
+| Lua | 1.18 ms | 0.26 ms | 2.35 ms | 0.03 ms |
+| QuickJS | 1.42 ms | 0.56 ms | 4.38 ms | 0.06 ms |
+| CPython | 1.99 ms | **13.5 ms** | 20.7 ms | 0.86 ms |
+
+Compiling only speeds up "run the guest", by about 4 times for all three. The
+difference between guests is the restore, which depends on the size of the
+snapshot, and accepting the request, which costs 1.2 to 2.0 ms whatever the
+guest. These steps were measured when a restore still copied the snapshot;
+a restore now shares it instead, and a CPython restore takes 0.79 ms instead
+of 12.0. [Snapshots](snapshots.md) has the numbers.
+
+**Plan for the first start.** Compiled code arrives after a fixed amount of
+compiling, and a reactor request is about ten times faster than a command, so
+about ten times as many requests run interpreted before it: about 150 seconds
+and several thousand requests on QuickJS. `code_cache_dir` is what makes the
+next start immediate.
+
+## What the cache key covers
+
+A saved unit is used only if everything that could make it wrong is the same:
+the module's content, the version of the generated-code format (the **ABI**),
+the OTP release, the emulator type, the machine architecture, the compile
+quality, the set of functions compiled, and the slot it was built for.
+
+Two kinds of module are never saved:
+
+- a module with no content hash, which means every module built from the text
+  format;
+- a module split into two units. A split unit refers to the other unit, and
+  the key does not describe that link, so a saved one could be joined to the
+  wrong partner. A guest large enough to split is compiled again on every
+  start.
+
+The cache keeps at most 512 MB and removes the oldest files first.
+`wasm_code_cache:purge/0` empties it, and checks the directory first like any
+other use, so it never deletes files somewhere else.
 
 ## What a memory access costs
 
-Compiled code reaches memory 0 through a two-entry translation cache, so a
-restored memory's low addresses do not walk the page table on every access.
-One load, at address `A` in page `P`:
+Compiled code reads and writes the guest's memory through a small cache of
+the two pages it used last, so most accesses skip the page table that a
+restored memory uses. One load at address `A`, in page `P`:
 
 ```text
-  the site, inline in the function
-    straddles two words? ------------yes---> wasm_exec:load_at, the helper
-    P is entry one's page? ----------yes---> read the array, done
+  the access, inline in the compiled function
+    crosses two words? -------------yes---> wasm_exec:load_at, slow path
+    P is the first cached page? ---yes---> read it, done
         | no
         v
-  apply wasm_m_load_4_i32_u(State, A, six cache values), module-local
-    P is entry two's page? ----------yes---> read, swap the two entries
-    out of bounds? ------------------yes---> the helper, which traps
-    past the image? -----------------yes---> growth chunk, cached first
+  a helper function inside the compiled module
+    P is the second cached page? --yes---> read it, swap the two
+    outside the memory? ------------yes---> slow path, which traps
+    above the snapshot's pages? ----yes---> memory added by growth
         |
         v
-  page table entry for P
-    0      untouched image page -----------> read the image binary,
-                                             not cached
-    slot   private page in the arena ------> read the array, cached first
+  the page table entry for P
+    not written yet --------------> read the snapshot's page, not cached
+    written ----------------------> read the private copy, cache it
 ```
 
-A hit is one compare and no bounds test; nothing invalidates an entry,
-because a slot and a growth chunk never move. A store to an untouched page
-goes to the helper, which makes the page private first. The page table is
-described in [Memory](memory.md), and the cache in
-[Design notes](design-notes.md#the-translation-cache).
+A hit costs one comparison. A write to a page that was never written goes to
+the slow path, which first makes a private copy of the page. [Memory](memory.md)
+describes the page table, and
+[Design notes](design-notes.md#the-translation-cache) the cache.
 
 ## Short notes
 
-- `full` is the default. `baseline` skips the OTP compiler's SSA optimiser,
-  which costs run time, because the generator states value ranges that pass
-  can use. QuickJS is **75.0 to 76.8 ms at `full` against 86.1 to 87.7 at
-  `baseline`**, and `full` costs 129.3 seconds against 58.1 to compile the hot
-  set. Ask for
-  `#{compile_quality => baseline}` when the compile time matters more than the
-  run. Figures in `test/audit/PERF.md`.
-- Turning the tier on by default is a decision that has not been made. Every
-  gate passes; the recommendation is still no, because it is 8.4x on one real
-  workload and flat on another.
-- **A restored memory costs compiled code a lookup.** Memory 0 is reached
-  through a two-entry translation cache, and a miss resolves the page through
-  the memory's page table. A memory not restored from an image pays one
-  compare. `test/audit/PERF.md`, "Shared pages", has what the lookup
-  costs.
-- **A memory access compiles to one compare and a call.** The access tests
-  the first cache entry inline and, when that fails, applies a function of the
-  generated module that holds the second entry and the page table lookup.
-  Against emitting all of it at every access, compiled code is 41 to 43% of
-  the size, a cold compile takes a quarter of the time
-  (CPython 104 s against 415 s, QuickJS 69 s against 271 s), and a compiled
-  request's guest time is 12 to 35% lower. `test/audit/PERF.md`, "The miss
-  path out of line", has the gates.
-- **Generated code is ABI 15**, so a code cache written by an earlier release is
-  ignored and rebuilt once. Nothing to set.
-- **`baseline` works around an OTP compiler defect.** Under `no_ssa_opt` an
-  unused value of a multi-value `let` can overwrite a used one, on OTP 29.0.3
-  through 29.1.1 at least. The generator orders what an access answers so that
-  it cannot happen; [Design notes](design-notes.md) has the detail to recheck
-  when you upgrade OTP.
-- The measurement record for all of this is `test/audit/PERF.md`, and the list
-  of what was tried and reverted is `test/audit/ATTEMPTS.md`.
+- `full` is the default quality. `baseline` skips one optimisation pass of the
+  OTP compiler: it compiles about twice as fast and runs about 14% slower.
+  Ask for `#{compile_quality => baseline}` when compile time matters more than
+  run time.
+- The tier is off by default on purpose: it made one real workload 8 times
+  faster and another not faster at all.
+- **A restored memory costs compiled code a lookup** when the two-page cache
+  misses. A memory that was not restored pays one comparison.
+- **A memory access compiles to one comparison and a call.** Putting the
+  whole lookup at every access instead made the code more than twice as big
+  and the compile four times slower; `test/audit/PERF.md`, "The miss path out
+  of line", has the numbers.
+- **Generated code uses format version (ABI) 15.** Units saved by an earlier
+  release are ignored and compiled again once. Nothing to set.
+- **`baseline` avoids an OTP compiler bug.** Without its optimisation pass,
+  OTP 29.0.3 to at least 29.1.1 can overwrite a value it still needs in one
+  rare code shape. The generator avoids that shape; [Design
+  notes](design-notes.md) says what to check when you upgrade OTP.
+- Every figure on this page comes from `test/audit/PERF.md`; what was tried
+  and dropped is in `test/audit/ATTEMPTS.md`.
 
 ## Read this next
 

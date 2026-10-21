@@ -1,0 +1,15 @@
+churn-qjs-none r1 main attempt1 load 7.24 -> 10.59
+churn-qjs-none r1 cand attempt1 load 7.96 -> 11.29
+churn-qjs-none r1 null attempt1 load 6.81 -> 10.69
+churn-qjs-none r2 null attempt1 load 7.92 -> 11.15
+churn-qjs-none r2 cand attempt1 load 7.73 -> 10.72
+churn-qjs-none r2 main attempt1 load 7.18 -> 12.94
+churn-qjs-none r3 main attempt1 load 7.86 -> 12.02
+churn-qjs-none r3 cand attempt1 load 7.33 -> 9.35
+churn-qjs-none r3 null attempt1 load 7.83 -> 10.79
+churn-qjs-none r4 null attempt1 load 7.92 -> 11.27
+churn-qjs-none r4 cand attempt1 load 7.98 -> 14.29
+churn-qjs-none r4 main attempt1 load 7.58 -> 9.14
+churn-qjs-none r5 main attempt1 load 7.72 -> 12.33
+churn-qjs-none r5 cand attempt1 load 7.51 -> 11.52
+churn-qjs-none r5 null attempt1 load 7.03 -> 15.12

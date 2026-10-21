@@ -1,0 +1,15 @@
+workers-py_entry r1 main attempt1 load 7.50 -> 6.67
+workers-py_entry r1 cand attempt1 load 6.67 -> 5.90
+workers-py_entry r1 null attempt1 load 5.90 -> 5.62
+workers-py_entry r2 null attempt1 load 5.62 -> 5.57
+workers-py_entry r2 cand attempt1 load 5.57 -> 5.57
+workers-py_entry r2 main attempt1 load 5.57 -> 5.57
+workers-py_entry r3 main attempt1 load 5.57 -> 5.36
+workers-py_entry r3 cand attempt1 load 5.36 -> 5.36
+workers-py_entry r3 null attempt1 load 5.36 -> 5.36
+workers-py_entry r4 null attempt1 load 5.36 -> 5.17
+workers-py_entry r4 cand attempt1 load 5.17 -> 5.17
+workers-py_entry r4 main attempt1 load 5.17 -> 5.17
+workers-py_entry r5 main attempt1 load 5.17 -> 5.16
+workers-py_entry r5 cand attempt1 load 5.16 -> 5.16
+workers-py_entry r5 null attempt1 load 5.16 -> 5.31

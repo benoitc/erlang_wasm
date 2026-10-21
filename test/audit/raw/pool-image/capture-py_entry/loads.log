@@ -1,0 +1,15 @@
+capture-py_entry r1 main attempt1 load 5.75 -> 6.50
+capture-py_entry r1 cand attempt1 load 6.50 -> 6.48
+capture-py_entry r1 null attempt1 load 6.48 -> 7.05
+capture-py_entry r2 null attempt1 load 7.05 -> 7.35
+capture-py_entry r2 cand attempt1 load 7.35 -> 6.91
+capture-py_entry r2 main attempt1 load 6.91 -> 6.26
+capture-py_entry r3 main attempt1 load 6.26 -> 6.32
+capture-py_entry r3 cand attempt1 load 6.32 -> 5.67
+capture-py_entry r3 null attempt1 load 5.67 -> 5.91
+capture-py_entry r4 null attempt1 load 5.91 -> 5.90
+capture-py_entry r4 cand attempt1 load 5.90 -> 5.51
+capture-py_entry r4 main attempt1 load 5.51 -> 6.54
+capture-py_entry r5 main attempt1 load 6.54 -> 7.54
+capture-py_entry r5 cand attempt1 load 7.54 -> 7.06
+capture-py_entry r5 null attempt1 load 7.06 -> 6.92

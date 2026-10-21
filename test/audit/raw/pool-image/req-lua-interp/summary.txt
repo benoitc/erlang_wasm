@@ -1,0 +1,121 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 6,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 6997.708,min_us => 6831.667}
+
+== cand-r2 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 6,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7054.25,min_us => 6884.084}
+
+== cand-r3 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 6992.833,min_us => 6812.625}
+
+== cand-r4 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7060.333,min_us => 6815.917}
+
+== cand-r5 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 6986.375,min_us => 6831.292}
+
+== main-r1 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7028.666,min_us => 6848.0}
+
+== main-r2 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 6,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7117.166,min_us => 6840.209}
+
+== main-r3 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7033.291,min_us => 6850.125}
+
+== main-r4 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 6,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7019.375,min_us => 6855.417}
+
+== main-r5 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7140.792,min_us => 6870.542}
+
+== null-r1 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7031.083,min_us => 6859.375}
+
+== null-r2 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7006.708,min_us => 6850.333}
+
+== null-r3 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 6,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 6982.375,min_us => 6839.417}
+
+== null-r4 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 5,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7124.959,min_us => 6874.583}
+
+== null-r5 ==
+#{mode => steady,cache => "_build/codecache",guest => lua,ahead => false,
+  start_ms => 6,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 7054.041,min_us => 6860.542}

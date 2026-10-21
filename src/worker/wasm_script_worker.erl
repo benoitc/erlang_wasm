@@ -30,7 +30,7 @@ These are covered by compatibility and the release notes:
 
 | module | what it is |
 | --- | --- |
-| `wasm_script_worker` | this module: start, run, submit, await, cancel, stop, and the operator view (`cleanup_stats/0`, `cleanup_requests/0`) |
+| `wasm_script_worker` | this module: start, prepare, run, submit, await, cancel, stop, and the operator view (`cleanup_stats/0`, `cleanup_requests/0`) |
 | `wasm_worker_adapter` | the behaviour an adapter implements, and every type its callbacks name |
 | `wasm_worker_error` | the errors a worker answers with, and the constructors an adapter builds its own with |
 | `wasm_javascript`, `wasm_javascript_command`, `wasm_python`, `wasm_python_command`, `wasm_lua` | the shipped adapters |
@@ -39,7 +39,7 @@ These are covered by compatibility and the release notes:
 
 So are the option keys this module takes (`root`, `timeout`, `trusted`,
 `limits`, `capture_timeout`, `runner_min_heap_words`,
-`capture_min_heap_words`, `restore_ahead`, `compiled`, and the
+`capture_min_heap_words`, `restore_ahead`, `compiled`, `prepared`, and the
 `limits` keys `docs/worker-reference.md` lists), the
 `wasm` application settings `scratch_roots` and `reaper_options`, and the
 error shapes: a running worker answers `{error, wasm_worker_error:worker_error()}`,
@@ -148,6 +148,7 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 -behaviour(gen_server).
 
 -export([start_link/2, start_link/3, stop/1]).
+-export([prepare/2, release_prepared/1]).
 -export([submit/2, await/3, cancel/2, run/2]).
 -export([run/3, submit/3]).
 -export([withdraw_waiter/3, consumed/3, channel_write/2]).
@@ -248,6 +249,12 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
         #{fuel => infinity, compile => true, compile_after => 1,
           compile_quality => baseline}).
 
+%% What `prepare/2' answers: the adapter and options it was prepared with,
+%% the image, and the store key and module a worker checks it against.
+-opaque prepared() :: {prepared, module(), map(), wasm:snapshot(), term(),
+                       wasm_module_cache:handle()}.
+-export_type([prepared/0]).
+
 -record(w, {adapter        :: module(),
             artifact       :: artifact(),
             opts           :: map(),
@@ -305,6 +312,86 @@ start_link(Name, Adapter, Opts) ->
         {ok, Opts1}    -> gen_server:start_link(Name, ?MODULE, {Adapter, Opts1},
                                                 []);
         {error, _} = E -> E
+    end.
+
+-doc """
+Load or capture the image a pool of workers will share, once.
+
+Runs a start's own steps in a temporary process: the artifact, the lookup in
+`snapshot_dir`, and on a miss the capture and the filing. Answers a value the
+caller holds the image through. Start each worker with
+`Opts#{prepared => Prepared}` and the same `Adapter` and `Opts`; it loads its
+own artifact, checks the image is the one it would have built, and takes its
+own hold. `release_prepared/1` drops the caller's.
+
+`capture_timeout` bounds the capture only, as in a plain start. An adapter
+without snapshots answers `{error, #{class := worker, kind := unsupported}}`.
+
+<!-- check: modules my_adapter -->
+```erlang
+{ok, P} = wasm_script_worker:prepare(my_adapter, #{}),
+{ok, W} = wasm_script_worker:start_link(my_adapter, #{prepared => P}),
+ok = wasm_script_worker:release_prepared(P).
+```
+""".
+-spec prepare(module(), map()) -> {ok, prepared()} | {error, term()}.
+prepare(Adapter, Opts) ->
+    case prepare_start(maps:remove(prepared, Opts)) of
+        {ok, Opts1}    -> prepare_in(Adapter, Opts1);
+        {error, _} = E -> E
+    end.
+
+-doc "Drop the hold `prepare/2` gave the caller. Always `ok`.".
+-spec release_prepared(prepared()) -> ok.
+release_prepared({prepared, _Adapter, _Opts, Image, _Key, _M}) ->
+    wasm:release(Image).
+
+unsupported() ->
+    wasm_worker_error:worker(unsupported, ~"this adapter takes no image", #{}).
+
+%% **Everything in a process of its own.** The artifact may claim modules for
+%% the process that loads it and the image's first holder is the process that
+%% loads or captures it; both leave with `T' once the caller holds the image,
+%% and a failure anywhere leaves nothing behind. The handoff is the capture's:
+%% `T' waits until the caller has acquired before it exits.
+prepare_in(Adapter, Opts) ->
+    Parent = self(),
+    {Pid, Mon} = spawn_monitor(
+                   fun() -> prepare_proc(Parent, Adapter, Opts) end),
+    receive
+        {prepared, Pid, {ok, Image, Key, M}} ->
+            Held = wasm:acquire(Image),
+            reap(Pid, Mon),
+            case Held of
+                ok ->
+                    {ok, {prepared, Adapter, Opts, Image, Key, M}};
+                {error, _} = E ->
+                    E
+            end;
+        {prepared, Pid, {error, _} = E} ->
+            reap(Pid, Mon),
+            E;
+        {'DOWN', Mon, process, Pid, Reason} ->
+            {error, wasm_worker_error:worker(crashed, ~"the prepare died",
+                                             #{reason => reason_of(Reason)})}
+    end.
+
+prepare_proc(Parent, Adapter, Opts) ->
+    Mon = erlang:monitor(process, Parent),
+    Parent ! {prepared, self(), prepared_image(Adapter, Opts)},
+    receive {'DOWN', Mon, process, Parent, _} -> ok
+    after ?CAPTURE_HANDOFF -> ok
+    end.
+
+prepared_image(Adapter, Opts) ->
+    case start_steps(Adapter, Opts) of
+        {error, _} = E ->
+            E;
+        {ok, #{image := undefined}} ->
+            {error, unsupported()};
+        {ok, #{image := Image,
+               cap := #{module := M, imports := ImportSet} = Cap}} ->
+            {ok, Image, image_key(M, Cap, ImportSet), M}
     end.
 
 -doc """
@@ -505,23 +592,123 @@ init({Adapter, Opts}) ->
         error ->
             {stop, {missing_option, root}};
         {ok, Root} ->
-            case Adapter:artifact(Opts) of
-                {error, E} ->
-                    {stop, E};
-                {ok, Artifact} ->
-                    case compiled(Opts) of
-                        {error, E} ->
-                            {stop, E};
-                        {ok, Compiled} ->
-                            Limits = maps:merge(
-                                       maps:merge(wasm_limits:untrusted(),
-                                                  ?WORKER_LIMITS),
-                                       maps:merge(Compiled,
-                                                  maps:get(limits, Opts, #{}))),
-                            started(Adapter, Artifact, Opts, Limits, Root)
-                    end
+            case maps:take(prepared, Opts) of
+                error         -> plain(Adapter, Opts, Root);
+                {P, Opts1} -> from_prepared(Adapter, Opts1, Root, P)
             end
     end.
+
+%% A start with no `prepared': load or capture the image itself, as every
+%% worker did before there was a way to share one.
+plain(Adapter, Opts, Root) ->
+    case start_steps(Adapter, Opts) of
+        {error, E} ->
+            {stop, E};
+        {ok, #{artifact := Artifact, limits := Limits, runner_heap := Heap,
+               image := Image, cap := Cap}} ->
+            W = worker_state(Adapter, Artifact, Opts, Limits, Root, Heap),
+            {ok, with_image(W, Image, Cap)}
+    end.
+
+with_image(W, undefined, _Cap) -> W;
+with_image(W, Image, Cap) ->
+    start_ahead(W#w{image = Image, snapshot_cap = Cap}).
+
+%% **The steps of a start, up to and including the image.** A plain start and
+%% `prepare/2''s process both run exactly these, so a prepared image is the
+%% one the worker would have loaded or captured itself.
+start_steps(Adapter, Opts) ->
+    case loaded(Adapter, Opts) of
+        {error, _} = E ->
+            E;
+        {ok, Artifact, Limits, Heap} ->
+            case image(Adapter, Artifact, Opts, Limits) of
+                {error, _} = E ->
+                    E;
+                {ok, Image, Cap} ->
+                    {ok, #{artifact => Artifact, limits => Limits,
+                           runner_heap => Heap, image => Image, cap => Cap}}
+            end
+    end.
+
+%% The artifact, the limits and the runner's heap floor.
+loaded(Adapter, Opts) ->
+    case artifact_elsewhere(Adapter, Opts) of
+        {error, E} ->
+            {error, E};
+        {ok, Artifact} ->
+            case compiled(Opts) of
+                {error, E} ->
+                    {error, E};
+                {ok, Compiled} ->
+                    Limits = maps:merge(
+                               maps:merge(wasm_limits:untrusted(),
+                                          ?WORKER_LIMITS),
+                               maps:merge(Compiled,
+                                          maps:get(limits, Opts, #{}))),
+                    {Heap, Note} = runner_heap_words(
+                                     floors(Adapter, Opts, Limits), Limits),
+                    ok = say_heap(Adapter, runner_min_heap_words, Opts, Note),
+                    {ok, Artifact, Limits, Heap}
+            end
+    end.
+
+%% **The artifact is loaded in a process of its own.** Loading reads the
+%% module file, 30 MB for CPython, and a worker does so little after it starts
+%% that it is never collected: every idle worker kept a dead reference to the
+%% file. The loader hands the module claims it took to this process with
+%% `wasm_module_cache:claim_for/2' while it still holds them, so the module is
+%% never unclaimed in between, then exits and takes the file with it. What
+%% comes back is the artifact alone. A raise in the adapter is raised again
+%% here, so a start fails exactly as it did when it ran here.
+artifact_elsewhere(Adapter, Opts) ->
+    Parent = self(),
+    {Pid, Mon} = spawn_monitor(
+                   fun() -> artifact_proc(Parent, Adapter, Opts) end),
+    receive
+        {artifact, Pid, {raised, C, R, St}} ->
+            reap(Pid, Mon),
+            erlang:raise(C, R, St);
+        {artifact, Pid, Result} ->
+            reap(Pid, Mon),
+            Result;
+        {'DOWN', Mon, process, Pid, Reason} ->
+            {error, wasm_worker_error:worker(crashed, ~"the artifact load died",
+                                             #{reason => reason_of(Reason)})}
+    end.
+
+artifact_proc(Parent, Adapter, Opts) ->
+    Result = try Adapter:artifact(Opts) of
+                 {ok, _} = Ok -> with_claims_handed(Parent, Ok);
+                 Other        -> Other
+             catch C:R:St -> {raised, C, R, St}
+             end,
+    Parent ! {artifact, self(), Result}.
+
+with_claims_handed(Parent, Ok) ->
+    case wasm_module_cache:claims(self()) of
+        {ok, Held} ->
+            hand_claims([H || {H, N} <- Held, _ <- lists:seq(1, N)], Parent,
+                        Ok);
+        {error, E} ->
+            not_handed(E)
+    end.
+
+hand_claims([], _Parent, Ok) ->
+    Ok;
+hand_claims([H | Hs], Parent, Ok) ->
+    case wasm_module_cache:claim_for(H, Parent) of
+        ok         -> hand_claims(Hs, Parent, Ok);
+        {error, E} -> not_handed(E)
+    end.
+
+not_handed(E) ->
+    {error, wasm_worker_error:worker(
+              crashed, ~"the module claim was not handed over",
+              #{reason => reason_of(E)})}.
+
+floors(Adapter, Opts, Limits) ->
+    maps:merge(adapter_defaults(Adapter, Limits), Opts).
 
 %% `compiled => true' is the compiled tier's four keys under one name, beneath
 %% whatever the caller set in `limits'. Four because the tier runs only with
@@ -551,25 +738,59 @@ compiled(Opts) ->
 %% `Limits' is final here, merged from the preset, the worker's own and the
 %% caller's, and it is what the adapter's `defaults/1' is asked with, so a
 %% default can follow the tier the requests will actually run on.
-started(Adapter, Artifact, Opts, Limits, Root) ->
-    Floors = maps:merge(adapter_defaults(Adapter, Limits), Opts),
-    {Heap, Note} = runner_heap_words(Floors, Limits),
-    ok = say_heap(Adapter, runner_min_heap_words, Opts, Note),
-    W = #w{adapter = Adapter, artifact = Artifact, opts = Opts,
-           limits = Limits, root = Root, runner_heap = Heap,
-           timeout = maps:get(timeout, Limits, ?DEFAULT_TIMEOUT),
-           trusted = maps:get(trusted, Opts, false)},
-    {CapHeap, CapNote} = capture_heap_words(Floors, Limits),
+worker_state(Adapter, Artifact, Opts, Limits, Root, Heap) ->
+    #w{adapter = Adapter, artifact = Artifact, opts = Opts,
+       limits = Limits, root = Root, runner_heap = Heap,
+       timeout = maps:get(timeout, Limits, ?DEFAULT_TIMEOUT),
+       trusted = maps:get(trusted, Opts, false)}.
+
+image(Adapter, Artifact, Opts, Limits) ->
+    {CapHeap, CapNote} = capture_heap_words(floors(Adapter, Opts, Limits),
+                                            Limits),
     ok = say_heap(Adapter, capture_min_heap_words, Opts, CapNote),
-    case capture_image(Adapter, Artifact,
-                       #{timeout => maps:get(capture_timeout, Opts,
-                                             ?CAPTURE_TIMEOUT),
-                         words => maps:get(max_heap_words, Limits),
-                         floor => CapHeap}) of
-        {error, E}          -> {stop, E};
-        {ok, undefined, _}  -> {ok, W};
-        {ok, Image, Cap}    ->
-            {ok, start_ahead(W#w{image = Image, snapshot_cap = Cap})}
+    capture_image(Adapter, Artifact,
+                  #{timeout => maps:get(capture_timeout, Opts,
+                                        ?CAPTURE_TIMEOUT),
+                    words => maps:get(max_heap_words, Limits),
+                    floor => CapHeap}).
+
+%% **A start from a prepared image.** The worker still loads its own artifact,
+%% since that is opaque and may hold what belongs to one process; it shares
+%% only the image, and only once it has checked the image is the one it would
+%% have built. Options equal covers what the store key does not (a `lib'
+%% path, say); the key and the module equal covers the artifact itself.
+from_prepared(Adapter, Opts, Root, {prepared, Adapter, Opts, Image, Key, M}) ->
+    case loaded(Adapter, Opts) of
+        {error, E} ->
+            {stop, E};
+        {ok, Artifact, Limits, Heap} ->
+            case snapshot_cap(Adapter, Artifact) of
+                #{module := M, imports := ImportSet} = Cap ->
+                    case image_key(M, Cap, ImportSet) of
+                        Key  -> acquired(Adapter, Artifact, Opts, Limits,
+                                         Root, Heap, Image, Cap);
+                        _Not -> {stop, {bad_option, prepared, image_differs}}
+                    end;
+                _Other ->
+                    {stop, {bad_option, prepared, image_differs}}
+            end
+    end;
+from_prepared(Adapter, _Opts, _Root, {prepared, Adapter, _, _, _, _}) ->
+    {stop, {bad_option, prepared, options_differ}};
+from_prepared(_Adapter, _Opts, _Root, {prepared, _, _, _, _, _}) ->
+    {stop, {bad_option, prepared, adapter_differs}};
+from_prepared(_Adapter, _Opts, _Root, _P) ->
+    {stop, {bad_option, prepared, not_prepared}}.
+
+%% The worker's own hold, taken before it serves anything: the image is freed
+%% with its last holder, and the caller of `prepare/2' may already have let go.
+acquired(Adapter, Artifact, Opts, Limits, Root, Heap, Image, Cap) ->
+    case wasm:acquire(Image) of
+        {error, E} ->
+            {stop, E};
+        ok ->
+            W = worker_state(Adapter, Artifact, Opts, Limits, Root, Heap),
+            {ok, with_image(W, Image, Cap)}
     end.
 
 %% The image is taken once, here, from a **trusted** initialisation context and

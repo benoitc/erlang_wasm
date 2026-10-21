@@ -1,0 +1,15 @@
+copy-py_entry r1 main attempt1 load 5.44 -> 5.24
+copy-py_entry r1 cand attempt1 load 5.24 -> 5.24
+copy-py_entry r1 null attempt1 load 5.24 -> 5.24
+copy-py_entry r2 null attempt1 load 5.24 -> 5.24
+copy-py_entry r2 cand attempt1 load 5.24 -> 5.06
+copy-py_entry r2 main attempt1 load 5.06 -> 5.06
+copy-py_entry r3 main attempt1 load 5.06 -> 5.06
+copy-py_entry r3 cand attempt1 load 5.06 -> 5.06
+copy-py_entry r3 null attempt1 load 5.06 -> 5.06
+copy-py_entry r4 null attempt1 load 5.06 -> 5.30
+copy-py_entry r4 cand attempt1 load 5.30 -> 5.30
+copy-py_entry r4 main attempt1 load 5.30 -> 5.30
+copy-py_entry r5 main attempt1 load 5.30 -> 5.30
+copy-py_entry r5 cand attempt1 load 5.30 -> 5.27
+copy-py_entry r5 null attempt1 load 5.27 -> 5.27

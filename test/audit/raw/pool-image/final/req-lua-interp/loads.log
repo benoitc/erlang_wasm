@@ -1,0 +1,15 @@
+req-lua-interp r1 main attempt1 load 7.16 -> 7.16
+req-lua-interp r1 cand attempt1 load 7.16 -> 7.16
+req-lua-interp r1 null attempt1 load 7.16 -> 7.23
+req-lua-interp r2 null attempt1 load 7.23 -> 7.23
+req-lua-interp r2 cand attempt1 load 7.23 -> 7.05
+req-lua-interp r2 main attempt1 load 7.05 -> 7.05
+req-lua-interp r3 main attempt1 load 7.05 -> 7.05
+req-lua-interp r3 cand attempt1 load 7.05 -> 6.72
+req-lua-interp r3 null attempt1 load 6.72 -> 6.72
+req-lua-interp r4 null attempt1 load 6.72 -> 6.99
+req-lua-interp r4 cand attempt1 load 6.99 -> 6.99
+req-lua-interp r4 main attempt1 load 6.99 -> 6.99
+req-lua-interp r5 main attempt1 load 6.99 -> 6.67
+req-lua-interp r5 cand attempt1 load 6.67 -> 6.67
+req-lua-interp r5 null attempt1 load 6.67 -> 6.61

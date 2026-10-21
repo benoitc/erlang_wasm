@@ -1,0 +1,16 @@
+req-lua-compiled r1 main attempt1 load 6.23 -> 6.23
+req-lua-compiled r1 cand attempt1 load 6.23 -> 6.23
+req-lua-compiled r1 null attempt1 load 6.23 -> 6.69
+req-lua-compiled r2 null attempt1 load 6.69 -> 6.69
+req-lua-compiled r2 cand attempt1 load 6.69 -> 6.69
+req-lua-compiled r2 main attempt1 load 6.69 -> 6.24
+req-lua-compiled r3 main attempt1 load 6.24 -> 6.24
+req-lua-compiled r3 cand attempt1 load 6.24 -> 6.24
+req-lua-compiled r3 null attempt1 load 6.24 -> 6.24
+req-lua-compiled r4 null attempt1 load 6.24 -> 8.70
+req-lua-compiled r4 null attempt2 load 7.45 -> 7.45
+req-lua-compiled r4 cand attempt1 load 7.45 -> 7.45
+req-lua-compiled r4 main attempt1 load 7.45 -> 7.18
+req-lua-compiled r5 main attempt1 load 7.18 -> 7.18
+req-lua-compiled r5 cand attempt1 load 7.18 -> 7.18
+req-lua-compiled r5 null attempt1 load 7.18 -> 7.16

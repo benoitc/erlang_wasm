@@ -1,0 +1,166 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+=WARNING REPORT==== 19-Oct-2026::05:51:08.107873 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 46,tier => compiled,verdict => ok,warm_requests => 1784,
+  entry_ms => 106032,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10417.457,min_us => 9701.497}
+
+== cand-r2 ==
+=WARNING REPORT==== 19-Oct-2026::05:58:57.382105 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1769,
+  entry_ms => 106014,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11327.96,min_us => 9691.578}
+
+== cand-r3 ==
+=WARNING REPORT==== 19-Oct-2026::06:04:26.590018 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1759,
+  entry_ms => 106004,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10446.623,min_us => 9642.329}
+
+== cand-r4 ==
+=WARNING REPORT==== 19-Oct-2026::06:14:35.294120 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1762,
+  entry_ms => 105616,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10476.875,min_us => 9598.871}
+
+== cand-r5 ==
+=WARNING REPORT==== 19-Oct-2026::06:22:07.395157 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1773,
+  entry_ms => 106167,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11432.795,min_us => 9505.08}
+
+== main-r1 ==
+=WARNING REPORT==== 19-Oct-2026::05:49:18.075444 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 46,tier => compiled,verdict => ok,warm_requests => 1765,
+  entry_ms => 106669,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10839.084,min_us => 10149.914}
+
+== main-r2 ==
+=WARNING REPORT==== 19-Oct-2026::06:00:46.825815 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1759,
+  entry_ms => 105988,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 202,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10861.917,min_us => 10115.164}
+
+== main-r3 ==
+=WARNING REPORT==== 19-Oct-2026::06:02:36.213670 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1765,
+  entry_ms => 106964,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11017.793,min_us => 10012.288}
+
+== main-r4 ==
+=WARNING REPORT==== 19-Oct-2026::06:16:24.223139 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 46,tier => compiled,verdict => ok,warm_requests => 1760,
+  entry_ms => 106020,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10830.043,min_us => 10025.624}
+
+== main-r5 ==
+=WARNING REPORT==== 19-Oct-2026::06:20:18.422188 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1758,
+  entry_ms => 105584,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10950.711,min_us => 10010.29}
+
+== null-r1 ==
+=WARNING REPORT==== 19-Oct-2026::05:52:57.418688 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 49,tier => compiled,verdict => ok,warm_requests => 1765,
+  entry_ms => 106320,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12108.255,min_us => 11249.711}
+
+== null-r2 ==
+=WARNING REPORT==== 19-Oct-2026::05:57:07.274704 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1757,
+  entry_ms => 106696,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 202,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11112.918,min_us => 10120.581}
+
+== null-r3 ==
+=WARNING REPORT==== 19-Oct-2026::06:08:51.002488 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1763,
+  entry_ms => 107435,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10923.544,min_us => 9917.291}
+
+== null-r4 ==
+=WARNING REPORT==== 19-Oct-2026::06:10:41.841628 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 47,tier => compiled,verdict => ok,warm_requests => 1769,
+  entry_ms => 106044,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 10915.128,min_us => 10073.749}
+
+== null-r5 ==
+=WARNING REPORT==== 19-Oct-2026::06:23:57.017335 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{mode => steady,cache => "_build/codecache",guest => py,ahead => false,
+  start_ms => 48,tier => compiled,verdict => ok,warm_requests => 1761,
+  entry_ms => 106311,
+  counts =>
+      #{failed => 0,compiled => 896,entered => 201,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 11354.337,min_us => 10573.667}

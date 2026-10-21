@@ -1,0 +1,15 @@
+workers-qjs r1 main attempt1 load 6.50 -> 6.46
+workers-qjs r1 cand attempt1 load 6.46 -> 6.46
+workers-qjs r1 null attempt1 load 6.46 -> 6.46
+workers-qjs r2 null attempt1 load 6.46 -> 6.46
+workers-qjs r2 cand attempt1 load 6.46 -> 6.46
+workers-qjs r2 main attempt1 load 6.46 -> 6.46
+workers-qjs r3 main attempt1 load 6.46 -> 6.19
+workers-qjs r3 cand attempt1 load 6.19 -> 6.19
+workers-qjs r3 null attempt1 load 6.19 -> 6.19
+workers-qjs r4 null attempt1 load 6.19 -> 6.19
+workers-qjs r4 cand attempt1 load 6.19 -> 6.19
+workers-qjs r4 main attempt1 load 6.19 -> 6.19
+workers-qjs r5 main attempt1 load 6.19 -> 6.01
+workers-qjs r5 cand attempt1 load 6.01 -> 6.01
+workers-qjs r5 null attempt1 load 6.01 -> 6.01

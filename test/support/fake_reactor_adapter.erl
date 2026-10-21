@@ -30,9 +30,17 @@ artifact(Opts) ->
     Path = maps:get(path, Opts, default_path()),
     {ok, Bytes} = file:read_file(Path),
     case wasm:load(Bytes) of
-        {ok, M}    -> {ok, #{module => M, opts => Opts}};
+        {ok, M}    -> loaded(M, Opts);
         {error, E} -> {error, wasm_worker_error:runtime(E)}
     end.
+
+%% `fail_after_load' refuses once the module is loaded and claimed, for the
+%% case that a failed artifact leaves no claim behind.
+loaded(_M, #{fail_after_load := true}) ->
+    {error, wasm_worker_error:adapter(adapter_failure, ~"refused after load",
+                                      #{})};
+loaded(M, Opts) ->
+    {ok, #{module => M, opts => Opts}}.
 
 default_path() ->
     filename:join([wasm_spec_runner:fixtures_dir(), "snapshot", "reactor.wasm"]).

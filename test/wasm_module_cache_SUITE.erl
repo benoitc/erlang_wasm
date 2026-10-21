@@ -36,7 +36,8 @@ all() ->
      eviction_takes_the_shared_bodies_with_it,
      only_the_cached_module_shares,
      two_destroys_at_once_publish_once,
-     a_publish_racing_an_eviction_leaves_nothing].
+     a_publish_racing_an_eviction_leaves_nothing,
+     claims_name_what_a_process_holds_and_hand_over].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -628,3 +629,36 @@ shared(Hash, Fuse) ->
 ir_claims() ->
     State = sys:get_state(wasm_module_cache),
     element(tuple_size(State), State).
+
+%% `claims/1' answers each module a process holds and how many times, which
+%% is what a short-lived loader needs to hand them to the process that
+%% outlives it: claimed for the survivor first, so the module is never
+%% unclaimed in between, and still resident once the loader is gone.
+claims_name_what_a_process_holds_and_hand_over(Config) ->
+    A = unique(?config(small, Config)),
+    B = unique(?config(small, Config)),
+    Self = self(),
+    {Loader, Mon} =
+        spawn_monitor(
+          fun() ->
+                  {ok, HA} = wasm:load(A),
+                  {ok, HA} = wasm:load(A),
+                  {ok, HB} = wasm:load(B),
+                  {ok, Held} = wasm_module_cache:claims(self()),
+                  [ok = wasm_module_cache:claim_for(H, Self)
+                   || {H, N} <- Held, _ <- lists:seq(1, N)],
+                  Self ! {held, self(), lists:sort(Held), HA, HB}
+          end),
+    {Held, HA, HB} = receive {held, Loader, Hs, X, Y} -> {Hs, X, Y} end,
+    ?assertEqual(lists:sort([{HA, 2}, {HB, 1}]), Held),
+    receive {'DOWN', Mon, process, Loader, _} -> ok end,
+    wait_until(fun() -> holders(A) =:= 2 andalso holders(B) =:= 1 end, 5000),
+    {ok, Mine} = wasm_module_cache:claims(self()),
+    ?assertEqual(Held, lists:sort(Mine)),
+    {ok, Gone} = wasm_module_cache:claims(Loader),
+    ?assertEqual([], Gone),
+    ?assertMatch({ok, _}, wasm_module_cache:get(HA)),
+    [ok = wasm_module_cache:unclaim_for(H, self())
+     || {H, N} <- Mine, _ <- lists:seq(1, N)],
+    ?assertEqual({ok, []}, wasm_module_cache:claims(self())),
+    ?assertEqual({absent, absent}, {holders(A), holders(B)}).

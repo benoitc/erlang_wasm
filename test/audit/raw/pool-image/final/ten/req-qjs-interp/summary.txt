@@ -1,0 +1,241 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12532.75,min_us => 12070.0}
+
+== cand-r2 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12590.584,min_us => 12122.0}
+
+== cand-r3 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 9,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12641.917,min_us => 12185.125}
+
+== cand-r4 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12486.292,min_us => 12092.042}
+
+== cand-r5 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12532.791,min_us => 12101.458}
+
+== cand-r6 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 9,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12991.208,min_us => 12413.042}
+
+== cand-r7 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12797.041,min_us => 12162.75}
+
+== cand-r8 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12820.125,min_us => 12425.375}
+
+== cand-r9 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12751.417,min_us => 12299.833}
+
+== cand-r10 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12860.791,min_us => 12226.667}
+
+== main-r1 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 9,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12701.291,min_us => 12249.875}
+
+== main-r2 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12606.25,min_us => 12128.416}
+
+== main-r3 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12769.709,min_us => 12229.958}
+
+== main-r4 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 10,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12914.417,min_us => 12266.708}
+
+== main-r5 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12703.084,min_us => 12260.75}
+
+== main-r6 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13056.083,min_us => 12491.334}
+
+== main-r7 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12977.709,min_us => 12422.375}
+
+== main-r8 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12906.084,min_us => 12420.75}
+
+== main-r9 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12849.75,min_us => 12253.458}
+
+== main-r10 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12987.375,min_us => 12251.125}
+
+== null-r1 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 9,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12624.708,min_us => 12119.0}
+
+== null-r2 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12719.834,min_us => 12137.209}
+
+== null-r3 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 7,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12741.542,min_us => 12166.375}
+
+== null-r4 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12661.709,min_us => 12224.292}
+
+== null-r5 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12667.084,min_us => 12230.25}
+
+== null-r6 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 13050.625,min_us => 12479.458}
+
+== null-r7 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12859.75,min_us => 12382.667}
+
+== null-r8 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12909.708,min_us => 12468.75}
+
+== null-r9 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12886.75,min_us => 12339.917}
+
+== null-r10 ==
+#{mode => steady,cache => "_build/codecache",guest => qjs,ahead => false,
+  start_ms => 8,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 12820.083,min_us => 12383.666}

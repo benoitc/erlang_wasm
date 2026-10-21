@@ -1,0 +1,121 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 49,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4524.375,min_us => 4428.875}
+
+== cand-r2 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 45,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4484.833,min_us => 4375.667}
+
+== cand-r3 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 45,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4524.209,min_us => 4420.459}
+
+== cand-r4 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 44,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4546.541,min_us => 4424.0}
+
+== cand-r5 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 44,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4523.125,min_us => 4406.875}
+
+== main-r1 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 47,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4973.083,min_us => 4814.292}
+
+== main-r2 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 46,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4956.0,min_us => 4825.041}
+
+== main-r3 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 46,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4937.584,min_us => 4820.667}
+
+== main-r4 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 46,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4988.75,min_us => 4837.083}
+
+== main-r5 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 45,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4979.958,min_us => 4828.833}
+
+== null-r1 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 57,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5016.25,min_us => 4855.125}
+
+== null-r2 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 46,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5010.0,min_us => 4833.875}
+
+== null-r3 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 47,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4971.791,min_us => 4841.0}
+
+== null-r4 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 46,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 5045.75,min_us => 4857.167}
+
+== null-r5 ==
+#{mode => steady,cache => "_build/codecache",guest => py_entry,ahead => false,
+  start_ms => 47,tier => interp,verdict => ok,warm_requests => 20,
+  counts =>
+      #{failed => 0,compiled => 0,entered => 0,crashed => 0,refused => 0,
+        cached => 0,reentered => 0},
+  median_us => 4974.5,min_us => 4853.208}

@@ -55,7 +55,8 @@ main([Guest, Dir, Arm, Cache, Count, Shards]) ->
                             N -> list_to_integer(N)
                         end),
     {ok, _} = application:ensure_all_started(wasm),
-    Cache =:= "" orelse application:set_env(wasm, code_cache_dir, Cache),
+    Cache =:= "" orelse application:set_env(wasm, code_cache_dir,
+                                           filename:absname(Cache)),
     {ok, Bin} = file:read_file(Guest),
     io:format("arm ~s~nguest ~s ~w bytes~n",
               [Arm, hex(crypto:hash(sha256, Bin)), byte_size(Bin)]),

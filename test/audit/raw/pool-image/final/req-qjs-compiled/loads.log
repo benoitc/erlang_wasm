@@ -1,0 +1,15 @@
+req-qjs-compiled r1 main attempt1 load 3.68 -> 3.68
+req-qjs-compiled r1 cand attempt1 load 3.68 -> 3.54
+req-qjs-compiled r1 null attempt1 load 3.54 -> 3.58
+req-qjs-compiled r2 null attempt1 load 3.58 -> 3.58
+req-qjs-compiled r2 cand attempt1 load 3.58 -> 3.69
+req-qjs-compiled r2 main attempt1 load 3.69 -> 3.69
+req-qjs-compiled r3 main attempt1 load 3.69 -> 3.56
+req-qjs-compiled r3 cand attempt1 load 3.56 -> 3.51
+req-qjs-compiled r3 null attempt1 load 3.51 -> 3.51
+req-qjs-compiled r4 null attempt1 load 3.51 -> 3.55
+req-qjs-compiled r4 cand attempt1 load 3.55 -> 3.51
+req-qjs-compiled r4 main attempt1 load 3.51 -> 3.51
+req-qjs-compiled r5 main attempt1 load 3.51 -> 3.55
+req-qjs-compiled r5 cand attempt1 load 3.55 -> 3.82
+req-qjs-compiled r5 null attempt1 load 3.82 -> 3.82

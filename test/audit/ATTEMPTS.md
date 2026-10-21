@@ -922,11 +922,16 @@ owner and a budget tied to the module's lifetime rather than a snapshot's.
 Every worker restores, so no guest needs it to benefit; worth building when a
 host that instantiates per request turns up.
 
-**One image per file rather than per worker.** Not built. A worker loads its
-image from the snapshot store itself, so fifty workers on one file hold fifty
-copies of its pages; `bench/paths/densitybench.erl` reports that as image
-duplication. Sharing them needs the store to hand out one loaded image per
-file, with its own holder.
+**One image per file rather than per worker.** Resolved on `pool-image`, not
+by the store. A worker loads its image from the snapshot store itself, so
+fifty workers on one file held fifty copies of its pages;
+`bench/paths/densitybench.erl` reports that as image duplication. A store
+handing out one loaded image per file would have been node-wide state, the
+registry tried on the `shared-image` branch and reverted. Instead the
+embedder holds the image: `wasm_script_worker:prepare/2` loads or captures it
+once and every worker started with `prepared` takes its own hold on it
+(`PERF.md`, "One image for a pool"). Fifty workers now hold one image. A
+worker started without `prepared` still loads its own, as before.
 
 **The constants**, each fixed and none an option:
 

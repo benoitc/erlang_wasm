@@ -1,0 +1,13 @@
+churn-py-none r1 main load 7.57 -> 13.67
+churn-py-none r1 candgc load 7.14 -> 13.06
+churn-py-none r2 candgc load 7.91 -> 8.48
+churn-py-none r2 main load 6.75 -> 7.48
+churn-py-none r3 main load 7.48 -> 9.44
+churn-py-none r3 candgc load 7.97 -> 10.57
+churn-lua-qjs r1 main load 7.18 -> 23.70
+churn-lua-qjs r1 candgc load 7.27 -> 33.70
+churn-lua-qjs r2 candgc load 7.20 -> 101.55
+churn-lua-qjs r2 main load 6.63 -> 50.56
+churn-lua-qjs r3 main load 7.96 -> 28.05
+churn-lua-qjs r3 candgc load 7.64 -> 21.60
+done

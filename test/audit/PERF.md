@@ -122,6 +122,7 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [A CPython request that compiles nothing](#a-cpython-request-that-compiles-nothing)
 - [Where a compiled QuickJS run and a CPython request spend their time](#where-a-compiled-quickjs-run-and-a-cpython-request-spend-their-time)
 - [A precompiled CPython standard library](#a-precompiled-cpython-standard-library)
+- [One image for a pool](#one-image-for-a-pool)
 
 **Worker cleanup**
 
@@ -8113,3 +8114,229 @@ Its code is 85 to 86% of cand's instructions.
 
 Raw terms, logs, scripts, the one-entry patch and what each new test fails on:
 `test/audit/raw/outline-miss/` (the generated BEAM files are not kept).
+
+## One image for a pool
+
+`pool-image`: `wasm_script_worker:prepare/2` loads or captures one image for a
+pool, an image's function tables travel as one packed binary, and a worker's
+artifact is loaded in a process of its own. Held to gates fixed in the plan
+before anything was measured. Every gate passes; the one-page module's
+`load_snapshot` needed ten rounds to settle.
+
+### Arms and protocol
+
+| arm | tree | what it is |
+| --- | --- | --- |
+| main | `bd8b7b6` | 0.9.2 |
+| cand, first run | `fa9f742` | packed tables and `prepare/2` |
+| cand, rerun | `e5826ab` | adds the artifact loader process (`a03fcf3`) and restore straight from packed words |
+| cand, rerun2 | `61e4ef1` | adds the file decoder building packed tables directly |
+| prev | `e5826ab` | rerun2's diagnostics only |
+| null | `bd8b7b6` | main again, in its own tree, for the null comparison |
+
+- Each arm in its own fresh VM at `+S 10:10`, from its own tree. The
+  `densitybench` modes `pool`, `capture`, `copy` and `churn` are the ones
+  committed with this record; `restorebench` and `requestbench` are
+  unchanged from `main`.
+- Guests: `py_entry`, `py`, `qjs`, `lua`, and for restore and load also
+  `plain`, the one-page module (`test/fixtures/snapshot/reactor.wasm`).
+- Five rounds, odd rounds main, cand, null and even rounds null, cand, main.
+  A run starts at a one-minute load below 8 and is redone, up to three
+  attempts, when the load at its end is 8 or more: 21 redone attempts across
+  the 120 request runs, 1 in the 2,000-load `plain` set, none elsewhere.
+  Churn runs raise the load themselves (end load median 8 to 79), so they
+  are recorded and not redone.
+- A VM's figure is the p50 of its samples. An arm's figure is the median of
+  its five VMs. A ratio is the median of the five per-round ratios against
+  main; null / main is the same for null.
+- The compiled runs passed `code_cache_dir` as a relative path, which the
+  runtime refuses, so every arm compiled from scratch at every start. That
+  holds on all three arms alike.
+
+The first run measured every gate. Gates 5 and 6 failed on it, the two fixes
+went in, and the rerun measured gates 5 and 6 again. `load_snapshot` still
+failed on QuickJS, `61e4ef1` went in, and rerun2 measured gate 5 again. Gates
+1 to 4 were then run again on `61e4ef1`, the final code; see "Gates 1 to 4 on
+the final code" below.
+
+### Gate 1: one image per pool
+
+`densitybench workers`, 50 busy workers. Cand starts them from one
+`prepare/2`; main starts one, then the rest together. Identical in all five
+rounds; null equals main.
+
+| guest | distinct images, main | cand | charged to `max_snapshot_bytes`, main | cand | |
+| --- | ---: | ---: | ---: | ---: | --- |
+| py_entry | 50 | 1 | 416.4 MB | 8.3 MB | pass |
+| py | 50 | 1 | 416.4 MB | 8.3 MB | pass |
+| qjs | 50 | 1 | 19.7 MB | 0.39 MB | pass |
+| lua | 50 | 1 | 9.8 MB | 0.20 MB | pass |
+
+On cand the one image has 50 holders; on main each of the 50 has one.
+
+### Gate 2: one capture
+
+`densitybench capture`, 4 workers on an empty `snapshot_dir`. Identical
+counts in all five rounds; null equals main.
+
+| guest | captures, main | cand | images made, main | cand | files | wall, main | cand | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| py_entry | 4 | 1 | 4 | 1 | 1 | 40.5 s | 16.4 s | pass |
+| py | 4 | 1 | 4 | 1 | 1 | 40.3 s | 16.3 s | pass |
+| qjs | 4 | 1 | 4 | 1 | 1 | 119 ms | 104 ms | pass |
+| lua | 4 | 1 | 4 | 1 | 1 | 74 ms | 69 ms | pass |
+
+### Gate 3: pool start no slower, at most 1.10x
+
+`densitybench pool`, 10 workers on a filed image, from asking for the pool to
+the last start returning, `prepare/2` included. Milliseconds, so qjs and lua
+are at the clock's resolution.
+
+| guest | main | cand | cand / main | null / main | |
+| --- | ---: | ---: | ---: | ---: | --- |
+| py_entry | 78 | 73 | 0.936 | 0.951 | pass |
+| py | 73 | 74 | 1.041 | 0.986 | pass |
+| qjs | 5 | 4 | 0.800 | 1.000 | pass |
+| lua | 3 | 2 | 0.667 | 1.000 | pass |
+
+### Gate 4: the copy is gone
+
+`densitybench copy`: words a hand-off copies (`erts_debug:flat_size/1` of the
+image a worker holds), and a spawn with the image in its closure, timed to
+the child's first instruction, p50 of 200. CPython must fall by at least 90%
+in words and to at most 0.10x in time.
+
+| guest | words, main | cand | fall | spawn, main | cand | cand / main | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| py_entry | 55,376 | 1,751 | 96.8% | 165.4 us | 5.0 us | 0.030 | pass |
+| py | 55,372 | 1,747 | 96.8% | 174.3 us | 4.9 us | 0.028 | pass |
+| qjs | 6,211 | 1,006 | 83.8% | 20.5 us | 3.7 us | 0.176 | reported |
+| lua | 2,594 | 845 | 67.4% | 5.4 us | 1.9 us | 0.351 | reported |
+
+`requestbench steady`, p50 in ms. py_entry compiled at most 0.95x; every other
+cell within 1.03x.
+
+| guest | compiled main | cand | ratio | interpreted main | cand | ratio | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| py_entry | 2.258 | 1.833 | 0.809 | 4.973 | 4.524 | 0.910 | pass |
+| py | 10.862 | 10.477 | 0.967 | 23.819 | 23.417 | 0.981 | pass |
+| qjs | 5.030 | 5.043 | 1.003 | 11.883 | 11.801 | 0.992 | pass |
+| lua | 2.834 | 2.800 | 0.985 | 7.033 | 6.998 | 0.994 | pass |
+
+Saturated throughput, at least 0.97x: `densitybench churn` with no churner,
+10 compiled workers, requests a second.
+
+| guest | first run, cand / main | rerun, cand / main | null / main, rerun | |
+| --- | ---: | ---: | ---: | --- |
+| py_entry | 1.155 | 1.166 | 0.991 | pass |
+| py | 1.037 | 1.005 | 1.003 | pass |
+| qjs | 1.004 | 1.006 | 0.993 | pass |
+| lua | 1.003 | 0.999 | 0.999 | pass |
+
+### Gate 5: restore and load within 1.03x
+
+`restorebench`, 200 restores and 20 loads a VM; ratios cand / main, null / main
+in brackets.
+
+| guest | restore, first | rerun | rerun2 | `load_snapshot`, first | rerun | rerun2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| py | 1.195 | 0.779 | 0.839 | 1.012 | 0.989 | 0.910 |
+| qjs | 1.346 | 0.843 | 0.827 | 1.059 | 1.064 | 0.821 |
+| lua | 1.058 | 0.888 | 0.891 | 0.973 | 0.914 | 0.814 |
+| plain | 0.984 | 1.005 | 0.993 | 1.005 | 1.069 (0.999) | 1.091 (1.024) |
+
+At rerun2, in us: restore py 740 to 611, qjs 110 to 90, lua 57.6 to 51.0;
+`load_snapshot` py 23,195 to 21,490, qjs 1,188 to 978, lua 315 to 259.
+
+On the first run restoring a packed table unpacked it to a list and set each
+slot in turn; `e5826ab` builds the table from the words at once. On the rerun
+QuickJS's load still built every table as a list for `from_parts` to pack;
+`61e4ef1` decodes the file's tables straight into packed words.
+
+**`load_snapshot` of the one-page module passes on ten rounds.** Its 20 loads a
+VM were too few for a 37 us figure: the null's spread reaches 23 us. Four more
+sets:
+
+| set | cand / main | null or prev / main |
+| --- | ---: | ---: |
+| 2,000 loads a VM, five rounds, `61e4ef1` | 1.036 | null 1.001 |
+| 2,000 loads a VM, three rounds, main, prev and cand | 0.997 | prev 0.980 |
+| per phase, 3,000 calls each, three rounds: the whole call | 42.08 us against 42.29 | null 41.50 |
+| 2,000 loads a VM, **ten rounds**, `61e4ef1`, the gate's statistic | **1.010** | null 1.025 |
+
+By phase, the median of three VMs in us, main against cand: reading the file
+18.75 and 17.63, decoding it 1.416 and 1.250, `from_parts` 0.125 and 0.167
+(null 0.167, the timer's step), the whole call 42.29 and 42.08. No phase is
+slower beyond the null. The ten-round set, the same protocol with twice the
+rounds (`raw/pool-image/plain-load-10/`), reads 1.010x against a null of
+1.025x, and paired by round 1.022x against 1.027x: cand sits inside the null's
+spread and under 1.03x. The 1.036x of five rounds was the spread of a 42 us
+figure, and gate 5 passes.
+
+### Gate 6: memory, steady and under churn
+
+`densitybench churn`, 10 compiled workers each serving 1,000 (py) to 4,000
+(lua) requests back to back, `erlang:memory(total)` sampled every 100 ms. The
+churn columns start and stop a pool of one worker of another guest every
+500 ms. Peak at most 1.05x main, and under churn the serving p99 at most
+1.10x. Rerun, `e5826ab`:
+
+| serving, churn | peak main | cand | ratio | null | p99 main | cand | ratio | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| py_entry, none | 611 MB | 404 MB | 0.687 | 1.101 | 7.28 ms | 5.21 ms | 0.744 | pass |
+| py, none | 603 MB | 456 MB | 0.743 | 1.000 | 23.36 ms | 23.09 ms | 0.991 | pass |
+| qjs, none | 189 MB | 180 MB | 0.972 | 0.972 | 14.27 ms | 13.77 ms | 0.962 | pass |
+| lua, none | 126 MB | 122 MB | 0.962 | 0.970 | 8.15 ms | 8.20 ms | 1.000 | pass |
+| py_entry, lua | 942 MB | 958 MB | 0.972 | 1.042 | 7.65 ms | 5.09 ms | 0.650 | pass |
+| py, lua | 706 MB | 581 MB | 0.812 | 0.974 | 24.00 ms | 23.42 ms | 1.008 | pass |
+| qjs, lua | 326 MB | 311 MB | 0.932 | 0.963 | 14.73 ms | 14.60 ms | 1.002 | pass |
+| lua, qjs | 920 MB | 933 MB | 1.034 | 1.037 | 8.82 ms | 8.87 ms | 1.003 | pass |
+
+On the first run py with no churner peaked at 1.169x and lua under qjs churn
+at 1.054x (null 0.988). The cause was the module file each idle worker kept
+referenced, 30 MB for CPython; `a03fcf3` loads the artifact in a process of
+its own.
+
+### Gates 1 to 4 on the final code
+
+The same protocol and gates, on `61e4ef1` against `bd8b7b6`, with the
+harnesses' code cache directory made absolute (`9a4ae6d`): before it, a
+relative directory was refused and every compiled arm recompiled on each
+start. Each tree filled its cache in one unrecorded compiled run per guest.
+
+| gate | py_entry | py | qjs | lua | |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1: distinct images, 50 workers, main / cand | 50 / 1 | 50 / 1 | 50 / 1 | 50 / 1 | pass |
+| 2: captures, 4 workers, main / cand | 4 / 1 | 4 / 1 | 4 / 1 | 4 / 1 | pass |
+| 2: capture wall, cand / main | 0.394 | 0.405 | 0.913 | 0.900 | pass |
+| 3: pool start, cand / main (null) | 1.000 (1.012) | 1.014 (1.000), ten rounds | 0.667 | 0.333 | pass |
+| 4: words a hand-off copies, fall | 96.8% | 96.8% | 83.8% | 67.4% | pass (CPython gated, the rest reported) |
+| 4: spawn with the image, cand / main | 0.030 | 0.029 | 0.159 | 0.357 | pass (CPython gated, the rest reported) |
+| requests, compiled p50, cand / main | 0.772 | 0.941 | 1.001 | 0.971 | pass |
+| requests, interpreted p50, cand / main | 0.882 | 0.979 | 0.986, ten rounds | 1.008 | pass |
+
+Gate 1 charges one image, 8.3 MB for CPython against 416.4 MB, in every round.
+Two cells needed ten rounds. CPython's pool start read 1.111x on five, cand
+higher in every round, while `py_entry`, which starts the same module, read
+1.000x; on ten it reads 1.014x against a null of 1.000x, and 1.047x paired by
+round against the null's 1.014x, a few percent consistent with the
+artifact loader's process hop, inside the gate. QuickJS interpreted read
+1.33x on five rounds with the null at 1.32x: every tree ran about 13 ms in
+rounds 1 and 2 and about 18 ms in rounds 3 to 5, a bimodal set the protocol
+discards; ten rounds read 0.986x against a null of 0.992x.
+
+### Tests that can fail
+
+Every new test was run with the line it guards reverted and failed;
+`mutations.log` lists each mutant, the cases run and the failure.
+
+Scripts, load logs and one `summary.txt` per cell: `test/audit/raw/pool-image/`.
+Each summary holds every run's printed result with its sample lists reduced to
+count, minimum, median and maximum; the per-sample files (111 MB) are not kept.
+The first run is
+at the top, `rerun/` and `rerun2/` hold the later sets, and `memory-diag/`,
+`fix-option-gc/`, `restore-diag/`, `churn200-py_entry-none/`,
+`rerun/load-diag/`, `rerun/fill-variants/` and `rerun2/plain-*` are the
+diagnostics behind the fixes, `plain-load-10/` settles gate 5's last clause,
+and `final/` holds gates 1 to 4 on the final code (`final/ten/` the ten-round
+cells).

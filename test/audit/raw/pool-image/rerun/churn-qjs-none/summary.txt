@@ -1,0 +1,391 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 3:00  up 10 days, 13:25, 51 users, load averages: 7.24 6.33 5.87
+=WARNING REPORT==== 20-Oct-2026::03:00:39.903643 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => true,
+  wall_ms => 20281.171899,
+  samples =>
+      [20000 samples: min 5599.02 median 10081 max 47490],
+  churn_guest => none,
+  entered =>
+      [{entered,1774},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [201 samples: min 1.27484e+08 median 1.5847e+08 max 1.74018e+08],
+  p50_us => 10080.831,p99_us => 13613.583,peak_memory => 174017650,
+  rps => 986.1363090653621}
+
+== cand-r2 ==
+# 3:07  up 10 days, 13:33, 51 users, load averages: 6.97 7.64 6.79
+=WARNING REPORT==== 20-Oct-2026::03:07:53.903840 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => true,
+  wall_ms => 19923.449487,
+  samples =>
+      [20000 samples: min 5590.61 median 9848.71 max 22315.2],
+  churn_guest => none,
+  entered =>
+      [{entered,1764},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [197 samples: min 1.25758e+08 median 1.59136e+08 max 1.80041e+08],
+  p50_us => 9848.703,p99_us => 13769.083,peak_memory => 180041338,
+  rps => 1003.8422318911164}
+
+== cand-r3 ==
+# 3:15  up 10 days, 13:40, 51 users, load averages: 7.10 8.25 7.52
+=WARNING REPORT==== 20-Oct-2026::03:15:27.068175 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => true,
+  wall_ms => 19874.758187,
+  samples =>
+      [20000 samples: min 5188.69 median 9675.62 max 52984.8],
+  churn_guest => none,
+  entered =>
+      [{entered,1755},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [197 samples: min 1.25348e+08 median 1.60163e+08 max 2.20779e+08],
+  p50_us => 9675.619,p99_us => 14109.5,peak_memory => 220779106,
+  rps => 1006.30155153696}
+
+== cand-r4 ==
+# 3:22  up 10 days, 13:47, 51 users, load averages: 6.91 8.14 7.78
+=WARNING REPORT==== 20-Oct-2026::03:22:40.664679 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => true,
+  wall_ms => 19763.45688,
+  samples =>
+      [20000 samples: min 5822.86 median 9785.81 max 44787.9],
+  churn_guest => none,
+  entered =>
+      [{entered,1766},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [196 samples: min 1.25643e+08 median 1.57239e+08 max 1.92576e+08],
+  p50_us => 9785.792,p99_us => 13389.926,peak_memory => 192576378,
+  rps => 1011.9687118218358}
+
+== cand-r5 ==
+# 3:31  up 10 days, 13:56, 51 users, load averages: 7.74 8.76 8.59
+=WARNING REPORT==== 20-Oct-2026::03:31:13.651110 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => true,
+  wall_ms => 20031.545597,
+  samples =>
+      [20000 samples: min 4949.26 median 9832.91 max 20103.9],
+  churn_guest => none,
+  entered =>
+      [{entered,1752},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [199 samples: min 1.26185e+08 median 1.60073e+08 max 1.77478e+08],
+  p50_us => 9832.902,p99_us => 14216.791,peak_memory => 177478330,
+  rps => 998.4252040439293}
+
+== main-r1 ==
+# 2:58  up 10 days, 13:23, 51 users, load averages: 7.80 5.62 5.58
+=WARNING REPORT==== 20-Oct-2026::02:58:22.448627 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 20194.757045,
+  samples =>
+      [20000 samples: min 5170.35 median 9905.83 max 57987],
+  churn_guest => none,
+  entered =>
+      [{entered,1766},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [200 samples: min 1.36954e+08 median 1.66699e+08 max 1.88619e+08],
+  p50_us => 9905.83,p99_us => 14147.0,peak_memory => 188618906,
+  rps => 990.3560590223482}
+
+== main-r2 ==
+# 3:10  up 10 days, 13:35, 51 users, load averages: 7.52 8.08 7.11
+=WARNING REPORT==== 20-Oct-2026::03:10:11.439014 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 20343.400324,
+  samples =>
+      [20000 samples: min 5897.98 median 10068.3 max 61077.4],
+  churn_guest => none,
+  entered =>
+      [{entered,1762},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [202 samples: min 1.34352e+08 median 1.67209e+08 max 1.85198e+08],
+  p50_us => 10068.25,p99_us => 14268.792,peak_memory => 185198490,
+  rps => 983.1198168186824}
+
+== main-r3 ==
+# 3:12  up 10 days, 13:37, 51 users, load averages: 7.92 8.37 7.40
+=WARNING REPORT==== 20-Oct-2026::03:12:49.430983 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 20131.386763,
+  samples =>
+      [20000 samples: min 5664.06 median 9971.9 max 29161.7],
+  churn_guest => none,
+  entered =>
+      [{entered,1760},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [200 samples: min 1.34406e+08 median 1.64721e+08 max 1.89394e+08],
+  p50_us => 9971.875,p99_us => 14366.292,peak_memory => 189393914,
+  rps => 993.4735363963363}
+
+== main-r4 ==
+# 3:26  up 10 days, 13:51, 51 users, load averages: 6.99 9.89 8.80
+=WARNING REPORT==== 20-Oct-2026::03:26:38.706723 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 19609.688614,
+  samples =>
+      [20000 samples: min 5523.35 median 9541.58 max 22221.1],
+  churn_guest => none,
+  entered =>
+      [{entered,1747},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [194 samples: min 1.34061e+08 median 1.65773e+08 max 1.8804e+08],
+  p50_us => 9541.542,p99_us => 14250.081,peak_memory => 188040466,
+  rps => 1019.9040073344838}
+
+== main-r5 ==
+# 3:28  up 10 days, 13:54, 51 users, load averages: 7.31 9.21 8.70
+=WARNING REPORT==== 20-Oct-2026::03:28:55.990334 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 20155.470741,
+  samples =>
+      [20000 samples: min 5916.64 median 9884.36 max 22312.4],
+  churn_guest => none,
+  entered =>
+      [{entered,1750},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [200 samples: min 1.35073e+08 median 1.65598e+08 max 2.18551e+08],
+  p50_us => 9884.311,p99_us => 14786.832,peak_memory => 218550658,
+  rps => 992.2864247132792}
+
+== null-r1 ==
+# 3:03  up 10 days, 13:28, 51 users, load averages: 7.88 7.34 6.36
+=WARNING REPORT==== 20-Oct-2026::03:03:17.732385 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 20256.450244,
+  samples =>
+      [20000 samples: min 4979.81 median 10016 max 57872.2],
+  churn_guest => none,
+  entered =>
+      [{entered,1761},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [201 samples: min 1.32619e+08 median 1.63715e+08 max 1.83427e+08],
+  p50_us => 10015.75,p99_us => 14007.345,peak_memory => 183426578,
+  rps => 987.3398230730993}
+
+== null-r2 ==
+# 3:05  up 10 days, 13:30, 51 users, load averages: 7.65 7.65 6.64
+=WARNING REPORT==== 20-Oct-2026::03:05:35.899391 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 20312.942298,
+  samples =>
+      [20000 samples: min 5872.48 median 10035.5 max 41261.7],
+  churn_guest => none,
+  entered =>
+      [{entered,1752},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [201 samples: min 1.38661e+08 median 1.6612e+08 max 2.57572e+08],
+  p50_us => 10035.455,p99_us => 14525.555,peak_memory => 257572418,
+  rps => 984.5939454063819}
+
+== null-r3 ==
+# 3:17  up 10 days, 13:42, 51 users, load averages: 6.92 7.90 7.49
+=WARNING REPORT==== 20-Oct-2026::03:17:44.971842 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 20266.125798,
+  samples =>
+      [20000 samples: min 6107.44 median 9934.03 max 24170.2],
+  churn_guest => none,
+  entered =>
+      [{entered,1751},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [200 samples: min 1.34082e+08 median 1.67506e+08 max 1.8354e+08],
+  p50_us => 9934.0,p99_us => 15143.641,peak_memory => 183540410,
+  rps => 986.868442412103}
+
+== null-r4 ==
+# 3:20  up 10 days, 13:45, 51 users, load averages: 7.66 8.40 7.79
+=WARNING REPORT==== 20-Oct-2026::03:20:23.425836 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 20205.375579,
+  samples =>
+      [20000 samples: min 6284.19 median 9944.96 max 33611.6],
+  churn_guest => none,
+  entered =>
+      [{entered,1745},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [200 samples: min 1.31697e+08 median 1.63009e+08 max 1.88449e+08],
+  p50_us => 9944.792,p99_us => 14467.459,peak_memory => 188449234,
+  rps => 989.8355970569806}
+
+== null-r5 ==
+# 3:33  up 10 days, 13:58, 51 users, load averages: 6.82 8.20 8.38
+=WARNING REPORT==== 20-Oct-2026::03:33:51.134168 ===
+wasm: code_cache_dir _build/codecache is not usable (not_absolute); the compiled tier will recompile on every start. It must be an absolute path, owned by this node's user, with no group or other write bit on it or any directory above it, and nothing on the path a symlink.
+#{guest => qjs,arm => churn,verdict => ok,n => 10,pooled => false,
+  wall_ms => 20365.722423,
+  samples =>
+      [20000 samples: min 5141.64 median 10029.3 max 43044.2],
+  churn_guest => none,
+  entered =>
+      [{entered,1752},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1},
+       {entered,1}],
+  per_worker => 2000,churn_cycles => 0,
+  memory_samples =>
+      [202 samples: min 1.34711e+08 median 1.65775e+08 max 1.883e+08],
+  p50_us => 10029.208,p99_us => 14394.792,peak_memory => 188300010,
+  rps => 982.0422563263962}

@@ -1,0 +1,15 @@
+pool-py_entry r1 main attempt1 load 6.14 -> 5.84
+pool-py_entry r1 cand attempt1 load 5.84 -> 5.51
+pool-py_entry r1 null attempt1 load 5.51 -> 5.68
+pool-py_entry r2 null attempt1 load 5.68 -> 5.68
+pool-py_entry r2 cand attempt1 load 5.68 -> 5.68
+pool-py_entry r2 main attempt1 load 5.68 -> 5.70
+pool-py_entry r3 main attempt1 load 5.70 -> 5.70
+pool-py_entry r3 cand attempt1 load 5.70 -> 5.70
+pool-py_entry r3 null attempt1 load 5.70 -> 5.73
+pool-py_entry r4 null attempt1 load 5.73 -> 5.73
+pool-py_entry r4 cand attempt1 load 5.73 -> 5.73
+pool-py_entry r4 main attempt1 load 5.73 -> 5.73
+pool-py_entry r5 main attempt1 load 5.73 -> 5.99
+pool-py_entry r5 cand attempt1 load 5.99 -> 5.99
+pool-py_entry r5 null attempt1 load 5.99 -> 5.99

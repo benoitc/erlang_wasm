@@ -1,0 +1,15 @@
+req-py-compiled r1 main attempt1 load 7.15 -> 6.83
+req-py-compiled r1 cand attempt1 load 6.83 -> 6.71
+req-py-compiled r1 null attempt1 load 6.71 -> 6.29
+req-py-compiled r2 null attempt1 load 6.29 -> 6.31
+req-py-compiled r2 cand attempt1 load 6.31 -> 7.46
+req-py-compiled r2 main attempt1 load 7.46 -> 7.48
+req-py-compiled r3 main attempt1 load 7.48 -> 7.34
+req-py-compiled r3 cand attempt1 load 7.34 -> 7.70
+req-py-compiled r3 null attempt1 load 7.70 -> 7.14
+req-py-compiled r4 null attempt1 load 7.14 -> 6.65
+req-py-compiled r4 cand attempt1 load 6.65 -> 6.25
+req-py-compiled r4 main attempt1 load 6.25 -> 5.83
+req-py-compiled r5 main attempt1 load 5.83 -> 5.55
+req-py-compiled r5 cand attempt1 load 5.55 -> 6.11
+req-py-compiled r5 null attempt1 load 6.11 -> 5.50

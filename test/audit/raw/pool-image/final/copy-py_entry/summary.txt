@@ -1,0 +1,121 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.71 9.38 20.36
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 1751,
+  samples =>
+      [200 samples: min 4.125 median 4.833 max 9.875],
+  spawn_min_us => 4.125,spawn_p50_us => 4.833}
+
+== cand-r2 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.71 9.38 20.36
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 1751,
+  samples =>
+      [200 samples: min 4.292 median 5.167 max 12.375],
+  spawn_min_us => 4.292,spawn_p50_us => 5.167}
+
+== cand-r3 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.57 9.31 20.27
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 1751,
+  samples =>
+      [200 samples: min 4.167 median 4.834 max 18.833],
+  spawn_min_us => 4.167,spawn_p50_us => 4.834}
+
+== cand-r4 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.29 9.20 20.17
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 1751,
+  samples =>
+      [200 samples: min 4.791 median 5.042 max 11.042],
+  spawn_min_us => 4.791,spawn_p50_us => 5.042}
+
+== cand-r5 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.29 9.20 20.17
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 1751,
+  samples =>
+      [200 samples: min 4.083 median 4.8955 max 37.75],
+  spawn_min_us => 4.083,spawn_p50_us => 4.875}
+
+== main-r1 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 5.99 9.28 20.39
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 157.166 median 164.271 max 210.166],
+  spawn_min_us => 157.166,spawn_p50_us => 164.25}
+
+== main-r2 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.71 9.38 20.36
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 143.708 median 160.959 max 214.583],
+  spawn_min_us => 143.708,spawn_p50_us => 160.958}
+
+== main-r3 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.57 9.31 20.27
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 159.791 median 168.25 max 431.292],
+  spawn_min_us => 159.791,spawn_p50_us => 168.209}
+
+== main-r4 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.29 9.20 20.17
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 148.25 median 160.667 max 186.333],
+  spawn_min_us => 148.25,spawn_p50_us => 160.667}
+
+== main-r5 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.29 9.20 20.17
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 156.666 median 161.52 max 176.875],
+  spawn_min_us => 156.666,spawn_p50_us => 161.5}
+
+== null-r1 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.71 9.38 20.36
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 153.708 median 172.625 max 245.459],
+  spawn_min_us => 153.708,spawn_p50_us => 172.5}
+
+== null-r2 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.71 9.38 20.36
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 152.708 median 160.875 max 254.458],
+  spawn_min_us => 152.708,spawn_p50_us => 160.875}
+
+== null-r3 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.57 9.31 20.27
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 138.625 median 160.312 max 251.416],
+  spawn_min_us => 138.625,spawn_p50_us => 160.291}
+
+== null-r4 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.57 9.31 20.27
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 145.709 median 172.042 max 209.209],
+  spawn_min_us => 145.709,spawn_p50_us => 172.042}
+
+== null-r5 ==
+# 11:03  up 11 days, 21:28, 44 users, load averages: 6.18 9.13 20.08
+#{k => 200,guest => py_entry,arm => copy,image_bytes => 8328192,verdict => ok,
+  image_words => 55376,
+  samples =>
+      [200 samples: min 152.583 median 159.5 max 183.584],
+  spawn_min_us => 152.583,spawn_p50_us => 159.458}

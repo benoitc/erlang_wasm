@@ -367,6 +367,28 @@ def holds_host_value():
     return module(types=types, imports=imports, funcs=funcs, mems=mems,
                   globals_=globals_, exports=exports, code=[init, ready])
 
+# ---------------------------------------------------------- packed_table ---
+# A table holding the three things a packed table can: an imported function,
+# a null hole, and the module's own functions up to the last index there is.
+# `call_at(i)` calls slot `i`, so a restore that unpacked a slot wrongly gives
+# a wrong answer or a trap where there should be none.
+def packed_table():
+    types = [functype([], [I32]), functype([], []), functype([I32], [I32])]
+    imports = [name("env") + name("f") + b"\x00" + u32(0)]
+    funcs = [1, 2, 0, 0]           # 1 init, 2 call_at, 3 eleven, 4 last
+    tables = [b"\x70\x00" + u32(4)]
+    exports = [export("init", 0x00, 1), export("call_at", 0x00, 2)]
+    elems = [b"\x03\x00" + vec([u32(0), u32(3), u32(4)])]
+    def put(slot, fn):
+        return b"\x41" + i32(slot) + b"\xd2" + u32(fn) + b"\x26" + u32(0)
+    init = body([], put(0, 0) + put(2, 3) + put(3, 4))
+    call_at = body([], b"\x20\x00" + b"\x11" + u32(0) + b"\x00")
+    eleven = body([], b"\x41" + i32(11))
+    last = body([], b"\x41" + i32(44))
+    return module(types=types, imports=imports, funcs=funcs, tables=tables,
+                  exports=exports, elems=elems,
+                  code=[init, call_at, eleven, last])
+
 if __name__ == "__main__":
     dest = sys.argv[1] if len(sys.argv) > 1 else "test/fixtures/snapshot"
     os.makedirs(dest, exist_ok=True)
@@ -379,7 +401,8 @@ if __name__ == "__main__":
                    ("grown_table", grown_table),
                    ("zeroed_data", zeroed_data),
                    ("zeroed_gap", zeroed_gap),
-                   ("holds_host_value", holds_host_value)]:
+                   ("holds_host_value", holds_host_value),
+                   ("packed_table", packed_table)]:
         path = os.path.join(dest, nm + ".wasm")
         data = fn()
         with open(path, "wb") as f:

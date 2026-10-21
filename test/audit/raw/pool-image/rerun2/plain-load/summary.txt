@@ -1,0 +1,106 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.4          8.5
+plain    load_snapshot    2000         27.8         41.7
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== cand-r2 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.5          8.5
+plain    load_snapshot    2000         26.4         39.3
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== cand-r3 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.5          8.6
+plain    load_snapshot    2000         25.6         40.3
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== cand-r4 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.5          8.8
+plain    load_snapshot    2000         25.7         39.3
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== cand-r5 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 7.54 18.68 20.48
+guest    operation           n       min us    median us
+plain    restore           200          7.9          9.6
+plain    load_snapshot    2000         27.6         45.3
+# 16:33  up 11 days,  2:58, 53 users, load averages: 7.54 18.68 20.48
+
+== main-r1 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.8          9.4
+plain    load_snapshot    2000         25.8         39.1
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== main-r2 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.5          9.2
+plain    load_snapshot    2000         25.7         40.7
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== main-r3 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.4          8.2
+plain    load_snapshot    2000         25.8         38.9
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== main-r4 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.4          8.6
+plain    load_snapshot    2000         25.3         38.4
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== main-r5 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 7.54 18.68 20.48
+guest    operation           n       min us    median us
+plain    restore           200          7.3          8.7
+plain    load_snapshot    2000         26.7         36.5
+# 16:33  up 11 days,  2:58, 53 users, load averages: 7.54 18.68 20.48
+
+== null-r1 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.6          9.6
+plain    load_snapshot    2000         25.7         39.0
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== null-r2 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.4          8.5
+plain    load_snapshot    2000         25.8         38.7
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== null-r3 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.5          8.5
+plain    load_snapshot    2000         26.0         38.9
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== null-r4 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+guest    operation           n       min us    median us
+plain    restore           200          7.5          9.1
+plain    load_snapshot    2000         26.0         40.3
+# 16:33  up 11 days,  2:58, 53 users, load averages: 6.58 19.41 20.78
+
+== null-r5 ==
+# 16:33  up 11 days,  2:58, 53 users, load averages: 7.54 18.68 20.48
+guest    operation           n       min us    median us
+plain    restore           200          7.4          9.3
+plain    load_snapshot    2000         26.7         41.4
+# 16:33  up 11 days,  2:58, 53 users, load averages: 7.54 18.68 20.48

@@ -1,0 +1,15 @@
+capture-lua r1 main attempt1 load 7.37 -> 7.37
+capture-lua r1 cand attempt1 load 7.37 -> 7.34
+capture-lua r1 null attempt1 load 7.34 -> 7.34
+capture-lua r2 null attempt1 load 7.34 -> 7.34
+capture-lua r2 cand attempt1 load 7.34 -> 7.34
+capture-lua r2 main attempt1 load 7.34 -> 7.34
+capture-lua r3 main attempt1 load 7.34 -> 7.34
+capture-lua r3 cand attempt1 load 7.34 -> 7.34
+capture-lua r3 null attempt1 load 7.34 -> 7.34
+capture-lua r4 null attempt1 load 7.34 -> 7.34
+capture-lua r4 cand attempt1 load 7.34 -> 6.91
+capture-lua r4 main attempt1 load 6.91 -> 6.91
+capture-lua r5 main attempt1 load 6.91 -> 6.91
+capture-lua r5 cand attempt1 load 6.91 -> 6.91
+capture-lua r5 null attempt1 load 6.91 -> 6.91

@@ -162,10 +162,48 @@ Two things a change here has to keep:
 - **The image outlives every memory restored from it.** The keeper counts each
   restored memory as a holder of the image, so a worker that stops while a
   runner is still finishing does not free pages the runner reads.
-- **One image per worker, not per file.** A worker loads its image from the
-  snapshot store itself, so fifty workers on one file hold fifty copies of its
-  pages. `test/audit/ATTEMPTS.md`, "Shared image pages: what was left out, and
-  the constants", says what sharing them would need.
+- **One image per pool, when the pool prepares it.** `prepare/2` loads or
+  captures the image once, in a process of its own, and every worker started
+  with `prepared` takes a hold on that one. A worker started without it loads
+  its own, so fifty such workers on one file hold fifty copies.
+
+## Why sending an image copies almost nothing
+
+An image is an Erlang term, and a send or a spawn copies it into the receiving
+process: the worker sends it to each request's runner. Its memory pages are
+binaries, which a copy shares by reference. Its tables used to be lists of
+`{funcref, Instance, Index}` tuples, which a copy does not share, so every
+request copied them. A table holding only `null` and the instance's own
+functions is now packed into one binary of a 32-bit word per entry: at
+capture, and at load, where the file decoder builds the words directly
+instead of a list first. A restore lays the words straight into the new
+instance's table (`wasm_table:init_funcrefs/3`). A table holding anything else
+stays a list, and the file holds lists as it always did.
+
+For CPython that takes a hand-off from 55,372 words to 1,747 and a spawn
+carrying the image from 174 us to 5 us; `test/audit/PERF.md`, "One image for
+a pool", has the rest.
+
+## Why the artifact is loaded in a process of its own
+
+`Adapter:artifact/1` reads the module file, 30 MB for CPython. A worker does
+so little after it starts that it is rarely collected, so when it called
+`artifact/1` itself every idle worker kept a dead reference to that file. The
+kernel now calls it in a short-lived process. Before that process exits it
+lists the module claims it holds (`wasm_module_cache:claims/1`) and takes each
+again for the worker (`wasm_module_cache:claim_for/2`), so the module is never
+unclaimed in between; then it exits and the file goes with it. A raise in the
+adapter is raised again in the worker, so a start fails as it did before.
+
+Two things a change here has to keep:
+
+- **Only claims cross over.** Anything else the adapter tied to the calling
+  process, such as an ETS table or a link, dies with it. The contract says so
+  in [Writing an adapter](worker-contract.md).
+- **`prepare/2` runs the same steps.** It loads the artifact, looks the image
+  up and captures on a miss in one temporary process, which waits until the
+  caller has acquired the image before it exits. A worker started from the
+  result still loads its own artifact this way, and shares only the image.
 
 ## Read this next
 

@@ -1,0 +1,76 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 11:20  up 11 days, 21:45, 44 users, load averages: 5.96 7.81 11.64
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "IIIIKNQQST",wall_ms => 84}
+
+== cand-r2 ==
+# 11:20  up 11 days, 21:45, 44 users, load averages: 6.02 7.66 11.43
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "CCCFGHJLMO",wall_ms => 79}
+
+== cand-r3 ==
+# 11:20  up 11 days, 21:45, 44 users, load averages: 6.42 7.71 11.43
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "EEEEGGJMNP",wall_ms => 80}
+
+== cand-r4 ==
+# 11:20  up 11 days, 21:46, 44 users, load averages: 6.70 7.75 11.42
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "GGGGJKMORS",wall_ms => 83}
+
+== cand-r5 ==
+# 11:21  up 11 days, 21:46, 44 users, load averages: 6.57 7.71 11.38
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "@@@@DDFHJK",wall_ms => 75}
+
+== main-r1 ==
+# 11:19  up 11 days, 21:44, 44 users, load averages: 6.79 8.09 11.83
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "<<<<=@ABHH",wall_ms => 72}
+
+== main-r2 ==
+# 11:20  up 11 days, 21:45, 44 users, load averages: 6.42 7.71 11.43
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => ";;<<>??EKK",wall_ms => 75}
+
+== main-r3 ==
+# 11:20  up 11 days, 21:45, 44 users, load averages: 6.42 7.71 11.43
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "6:::::BBBF",wall_ms => 70}
+
+== main-r4 ==
+# 11:20  up 11 days, 21:46, 44 users, load averages: 6.57 7.71 11.38
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "AABGGGGGMQ",wall_ms => 81}
+
+== main-r5 ==
+# 11:20  up 11 days, 21:46, 44 users, load averages: 6.57 7.71 11.38
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "99999BBBBG",wall_ms => 71}
+
+== null-r1 ==
+# 11:20  up 11 days, 21:45, 44 users, load averages: 6.74 7.90 11.60
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => ";;;>?CCCHH",wall_ms => 72}
+
+== null-r2 ==
+# 11:20  up 11 days, 21:45, 44 users, load averages: 6.02 7.66 11.43
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => ":::>?@@HHL",wall_ms => 76}
+
+== null-r3 ==
+# 11:20  up 11 days, 21:45, 44 users, load averages: 6.70 7.75 11.42
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => ";;;;@@@AFJ",wall_ms => 74}
+
+== null-r4 ==
+# 11:20  up 11 days, 21:46, 44 users, load averages: 6.70 7.75 11.42
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "===>@@IJJK",wall_ms => 75}
+
+== null-r5 ==
+# 11:21  up 11 days, 21:46, 44 users, load averages: 6.92 7.76 11.38
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "9:>>>>EFFK",wall_ms => 75}

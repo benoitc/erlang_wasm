@@ -98,6 +98,13 @@ cleanup(_State) -> ok.
 That is the only reason a reactor and a command are the same code path: they
 are the same call, chosen by different adapters.
 
+**`artifact/1` runs in a short-lived process.** The kernel calls it in a
+process of its own, so the file you read is freed when that process exits
+instead of staying referenced by an idle worker. Module claims taken through
+`wasm:load/1` are handed to the worker before the process exits. Anything
+else tied to the calling process, such as an ETS table or a link, does not
+survive it: return values, not resources.
+
 **Only the adapter knows what a trap meant.** `proc_exit` becomes a trap
 carrying the status, so a kernel that told it from any other trap would be
 calling `wasi_preview1:exit_code/1`, and a kernel that calls `wasi_preview1`

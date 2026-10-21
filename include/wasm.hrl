@@ -46,6 +46,10 @@
 -define(EXTERNREF, {ref, null, extern}).
 -define(EXNREF,    {ref, null, exn}).
 
+%% A packed funcref table slot that is `null': one 32-bit word per slot, any
+%% other word a function index (`wasm_table:init_funcrefs/3').
+-define(NULL_FUNC_WORD, 16#FFFFFFFF).
+
 -type typeidx()   :: non_neg_integer().
 -type funcidx()   :: non_neg_integer().
 -type tableidx()  :: non_neg_integer().

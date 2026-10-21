@@ -1,0 +1,196 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.90 22.53 21.91
+guest    operation           n       min us    median us
+py       restore           200        367.0        580.6
+py       load_snapshot      20      23834.2      25916.0
+qjs      restore           200         70.7         88.6
+qjs      load_snapshot      20        880.3        966.6
+lua      restore           200         42.9         51.0
+lua      load_snapshot      20        225.4        240.5
+plain    restore           200          7.5          9.0
+plain    load_snapshot      20         29.1         35.4
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.07 22.31 21.84
+
+== cand-r2 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.74 21.99 21.73
+guest    operation           n       min us    median us
+py       restore           200        377.3        623.9
+py       load_snapshot      20      20538.8      20924.6
+qjs      restore           200         72.2         88.0
+qjs      load_snapshot      20        832.9        968.8
+lua      restore           200         43.6         51.6
+lua      load_snapshot      20        225.5        251.7
+plain    restore           200          7.5          8.8
+plain    load_snapshot      20         31.1         38.1
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.74 21.99 21.73
+
+== cand-r3 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.36 21.66 21.61
+guest    operation           n       min us    median us
+py       restore           200        381.5        605.9
+py       load_snapshot      20      20439.8      21516.9
+qjs      restore           200         72.5         94.0
+qjs      load_snapshot      20        843.4       1016.8
+lua      restore           200         43.0         51.0
+lua      load_snapshot      20        239.3        289.5
+plain    restore           200          7.8          9.5
+plain    load_snapshot      20         32.3         41.4
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.36 21.66 21.61
+
+== cand-r4 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.86 21.71 21.63
+guest    operation           n       min us    median us
+py       restore           200        383.3        594.7
+py       load_snapshot      20      20361.9      20869.4
+qjs      restore           200         71.8         90.1
+qjs      load_snapshot      20        888.3        954.2
+lua      restore           200         43.4         51.2
+lua      load_snapshot      20        238.0        302.0
+plain    restore           200          7.6          9.0
+plain    load_snapshot      20         28.8         35.8
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.86 21.71 21.63
+
+== cand-r5 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.71 21.45 21.54
+guest    operation           n       min us    median us
+py       restore           200        374.6        547.8
+py       load_snapshot      20      20650.2      21458.6
+qjs      restore           200         70.1         91.0
+qjs      load_snapshot      20        858.2       1000.8
+lua      restore           200         43.2         51.0
+lua      load_snapshot      20        234.9        257.0
+plain    restore           200          7.7          9.7
+plain    load_snapshot      20         29.4         36.8
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.49 21.18 21.44
+
+== main-r1 ==
+# 16:31  up 11 days,  2:57, 53 users, load averages: 6.90 22.53 21.91
+guest    operation           n       min us    median us
+py       restore           200        580.0        736.9
+py       load_snapshot      20      21735.4      23082.9
+qjs      restore           200         93.5        106.9
+qjs      load_snapshot      20        848.4       1103.3
+lua      restore           200         48.7         56.2
+lua      load_snapshot      20        279.8        308.5
+plain    restore           200          7.7          8.9
+plain    load_snapshot      20         28.4         32.6
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.90 22.53 21.91
+
+== main-r2 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.74 21.99 21.73
+guest    operation           n       min us    median us
+py       restore           200        596.2        744.5
+py       load_snapshot      20      22397.5      23158.8
+qjs      restore           200         96.0        108.8
+qjs      load_snapshot      20        932.5       1182.9
+lua      restore           200         50.2         57.6
+lua      load_snapshot      20        260.7        309.1
+plain    restore           200          7.5          8.9
+plain    load_snapshot      20         30.5         33.5
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.74 21.99 21.73
+
+== main-r3 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.74 21.99 21.73
+guest    operation           n       min us    median us
+py       restore           200        593.3        728.1
+py       load_snapshot      20      21835.3      22696.4
+qjs      restore           200         94.7        110.7
+qjs      load_snapshot      20        983.3       1127.8
+lua      restore           200         48.6         57.2
+lua      load_snapshot      20        261.0        322.9
+plain    restore           200          7.7          9.5
+plain    load_snapshot      20         27.0         37.5
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.36 21.66 21.61
+
+== main-r4 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.71 21.45 21.54
+guest    operation           n       min us    median us
+py       restore           200        589.2        717.1
+py       load_snapshot      20      22329.6      23355.9
+qjs      restore           200         97.9        111.3
+qjs      load_snapshot      20       1008.0       1214.2
+lua      restore           200         49.6         59.5
+lua      load_snapshot      20        266.9        313.9
+plain    restore           200          7.8          9.4
+plain    load_snapshot      20         26.8         35.4
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.71 21.45 21.54
+
+== main-r5 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.71 21.45 21.54
+guest    operation           n       min us    median us
+py       restore           200        568.5        738.8
+py       load_snapshot      20      22496.9      23592.8
+qjs      restore           200         93.8        110.2
+qjs      load_snapshot      20        973.7       1249.1
+lua      restore           200         51.5         64.0
+lua      load_snapshot      20        277.2        352.3
+plain    restore           200          8.2          9.8
+plain    load_snapshot      20         34.5         54.3
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.71 21.45 21.54
+
+== null-r1 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.07 22.31 21.84
+guest    operation           n       min us    median us
+py       restore           200        574.2        770.6
+py       load_snapshot      20      24244.4      25338.0
+qjs      restore           200         95.5        110.0
+qjs      load_snapshot      20        985.3       1170.8
+lua      restore           200         49.1         57.6
+lua      load_snapshot      20        263.2        289.9
+plain    restore           200          7.7          9.2
+plain    load_snapshot      20         29.8         36.9
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.07 22.31 21.84
+
+== null-r2 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.07 22.31 21.84
+guest    operation           n       min us    median us
+py       restore           200        580.7        697.1
+py       load_snapshot      20      21402.5      22471.1
+qjs      restore           200         95.0        107.8
+qjs      load_snapshot      20        921.3       1192.0
+lua      restore           200         49.8         57.1
+lua      load_snapshot      20        270.7        312.1
+plain    restore           200          7.6          9.2
+plain    load_snapshot      20         29.8         34.3
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.74 21.99 21.73
+
+== null-r3 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 6.36 21.66 21.61
+guest    operation           n       min us    median us
+py       restore           200        588.7        795.6
+py       load_snapshot      20      22268.6      23040.3
+qjs      restore           200         96.4        107.7
+qjs      load_snapshot      20        905.9       1130.2
+lua      restore           200         49.7         59.2
+lua      load_snapshot      20        275.5        327.0
+plain    restore           200          7.7          9.0
+plain    load_snapshot      20         29.0         37.4
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.86 21.71 21.63
+
+== null-r4 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.86 21.71 21.63
+guest    operation           n       min us    median us
+py       restore           200        574.8        713.5
+py       load_snapshot      20      22437.4      23155.6
+qjs      restore           200         95.2        108.0
+qjs      load_snapshot      20        987.4       1175.4
+lua      restore           200         49.8         56.7
+lua      load_snapshot      20        272.7        296.5
+plain    restore           200          7.5          8.9
+plain    load_snapshot      20         30.0         36.2
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.86 21.71 21.63
+
+== null-r5 ==
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.49 21.18 21.44
+guest    operation           n       min us    median us
+py       restore           200        593.9        756.2
+py       load_snapshot      20      22110.0      23111.4
+qjs      restore           200         92.8        110.4
+qjs      load_snapshot      20        928.8       1112.1
+lua      restore           200         48.8         56.9
+lua      load_snapshot      20        272.1        328.1
+plain    restore           200          7.6          8.9
+plain    load_snapshot      20         27.3         32.5
+# 16:32  up 11 days,  2:57, 53 users, load averages: 7.49 21.18 21.44

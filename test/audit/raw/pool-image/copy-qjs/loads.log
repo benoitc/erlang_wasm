@@ -1,0 +1,15 @@
+copy-qjs r1 main attempt1 load 5.56 -> 5.56
+copy-qjs r1 cand attempt1 load 5.56 -> 5.56
+copy-qjs r1 null attempt1 load 5.56 -> 5.56
+copy-qjs r2 null attempt1 load 5.56 -> 5.44
+copy-qjs r2 cand attempt1 load 5.44 -> 5.44
+copy-qjs r2 main attempt1 load 5.44 -> 5.44
+copy-qjs r3 main attempt1 load 5.44 -> 5.44
+copy-qjs r3 cand attempt1 load 5.44 -> 5.44
+copy-qjs r3 null attempt1 load 5.44 -> 5.44
+copy-qjs r4 null attempt1 load 5.44 -> 5.44
+copy-qjs r4 cand attempt1 load 5.44 -> 5.44
+copy-qjs r4 main attempt1 load 5.44 -> 5.44
+copy-qjs r5 main attempt1 load 5.44 -> 5.44
+copy-qjs r5 cand attempt1 load 5.44 -> 5.44
+copy-qjs r5 null attempt1 load 5.44 -> 5.44

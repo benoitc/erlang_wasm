@@ -1,0 +1,76 @@
+Each run's printed result; sample lists reduced to their count, min, median and max.
+
+== cand-r1 ==
+# 5:26  up 9 days, 15:51, 43 users, load averages: 6.66 6.65 6.98
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "CCCCDDGJKN",wall_ms => 78}
+
+== cand-r2 ==
+# 5:26  up 9 days, 15:51, 43 users, load averages: 6.31 6.58 6.95
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "@@@@BCEGIL",wall_ms => 76}
+
+== cand-r3 ==
+# 5:26  up 9 days, 15:51, 43 users, load averages: 5.97 6.50 6.92
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => ">>>ABDFGIJ",wall_ms => 74}
+
+== cand-r4 ==
+# 5:26  up 9 days, 15:52, 43 users, load averages: 6.53 6.61 6.95
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => "===?ACEFGI",wall_ms => 73}
+
+== cand-r5 ==
+# 5:27  up 9 days, 15:52, 43 users, load averages: 6.65 6.63 6.96
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => true,
+  start_ms => ">>>@BDFGIJ",wall_ms => 74}
+
+== main-r1 ==
+# 5:26  up 9 days, 15:51, 43 users, load averages: 6.73 6.66 6.99
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "77779;<?CJ",wall_ms => 74}
+
+== main-r2 ==
+# 5:26  up 9 days, 15:51, 43 users, load averages: 6.31 6.58 6.95
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "555589=>CI",wall_ms => 73}
+
+== main-r3 ==
+# 5:26  up 9 days, 15:51, 43 users, load averages: 5.97 6.50 6.92
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "5669;;?@BE",wall_ms => 69}
+
+== main-r4 ==
+# 5:26  up 9 days, 15:52, 43 users, load averages: 6.53 6.61 6.95
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "66679<>@BG",wall_ms => 71}
+
+== main-r5 ==
+# 5:26  up 9 days, 15:52, 43 users, load averages: 6.53 6.61 6.95
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "<<<@ABEEGN",wall_ms => 78}
+
+== null-r1 ==
+# 5:26  up 9 days, 15:51, 43 users, load averages: 6.66 6.65 6.98
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "66779<<?FF",wall_ms => 70}
+
+== null-r2 ==
+# 5:26  up 9 days, 15:51, 43 users, load averages: 6.31 6.58 6.95
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "7889;<>?DH",wall_ms => 72}
+
+== null-r3 ==
+# 5:26  up 9 days, 15:52, 43 users, load averages: 5.97 6.50 6.92
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "7778;<=@EJ",wall_ms => 74}
+
+== null-r4 ==
+# 5:26  up 9 days, 15:52, 43 users, load averages: 6.53 6.61 6.95
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "7888:=>ABF",wall_ms => 70}
+
+== null-r5 ==
+# 5:27  up 9 days, 15:52, 43 users, load averages: 6.65 6.63 6.96
+#{guest => py,arm => pool,verdict => ok,n => 10,pooled => false,
+  start_ms => "6668;<?ACD",wall_ms => 68}

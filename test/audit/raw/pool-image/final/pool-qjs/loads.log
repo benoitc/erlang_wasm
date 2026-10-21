@@ -1,0 +1,15 @@
+pool-qjs r1 main attempt1 load 3.99 -> 3.99
+pool-qjs r1 cand attempt1 load 3.99 -> 3.99
+pool-qjs r1 null attempt1 load 3.99 -> 3.99
+pool-qjs r2 null attempt1 load 3.99 -> 3.99
+pool-qjs r2 cand attempt1 load 3.99 -> 3.99
+pool-qjs r2 main attempt1 load 3.99 -> 3.99
+pool-qjs r3 main attempt1 load 3.99 -> 3.99
+pool-qjs r3 cand attempt1 load 3.99 -> 3.99
+pool-qjs r3 null attempt1 load 3.99 -> 3.99
+pool-qjs r4 null attempt1 load 3.99 -> 3.99
+pool-qjs r4 cand attempt1 load 3.99 -> 3.99
+pool-qjs r4 main attempt1 load 3.99 -> 3.99
+pool-qjs r5 main attempt1 load 3.99 -> 3.91
+pool-qjs r5 cand attempt1 load 3.91 -> 3.91
+pool-qjs r5 null attempt1 load 3.91 -> 3.91

@@ -28,10 +28,10 @@ wasm:call(Inst, ~"add", [3, 4]).
 %% => {ok, [7]}
 ```
 
-**What happened.** `compile/1` decoded and validated the text into a
-**module**. `instantiate/2` made an **instance**, a running copy with its own
-state; the empty map is its imports. `call/3` ran the exported `add` and
-answered with the list of its results.
+**What happened.** `compile/1` decoded and validated the text, and made a
+**module**. `instantiate/2` made an **instance**: a running copy with its own
+state. The empty map is its imports. `call/3` ran the exported function `add`
+and returned the list of its results.
 
 **Clean up:**
 

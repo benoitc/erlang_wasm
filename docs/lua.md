@@ -1,15 +1,27 @@
 # Lua
 
-Run Lua that arrives at request time, in a sandbox that gets one directory and
-nothing else. You need this page when you are deciding whether what you want to
-run can run here, and when you are building the artifact, since Lua needs two
-build flags that nothing else in this repository does.
+This page shows you how to run Lua code that you receive at request time. The
+code runs in a sandbox that can see one directory and nothing else. Read it to
+decide whether your Lua code can run here, and when you build the artifact:
+Lua needs two build flags that no other guest in this repository needs.
+
+A few words used on this page:
+
+- a **worker** is a process that runs one request at a time with a deadline;
+- an **adapter** is the module that teaches a worker one language, here
+  `wasm_lua`;
+- the **tenant** is the person who writes the Lua code you run;
+- a **runner** is the process that runs the guest for one request;
+- a **heap floor** is a minimum heap size given to a process when it starts,
+  so the Erlang garbage collector runs less often.
+
+The [glossary](concepts.md#glossary) defines the others.
 
 ## Run one
 
 > **Where these modules come from.** `wasm_lua` and the worker kernel it runs
-> on (`wasm_script_worker`) are installed with the application; you supply the
-> Lua artifact.
+> on (`wasm_script_worker`) are installed with the application. You supply
+> the Lua artifact, the `.wasm` file.
 
 ```sh
 scripts/build-lua-reactor.sh
@@ -36,15 +48,15 @@ function main(context)
 end
 ```
 
-A worker starts in about 75 ms and a request costs 30 ms, or **12.7 ms** with
-the heap floor below, which is the one place Lua is simply better than the
-other two guests here.
+A worker starts in about 75 ms. A request takes 30 ms, or **12.7 ms** with
+the heap floor below. Here Lua is clearly faster than the other two guests.
 
 ## The runner's heap floor
 
-`wasm_lua` gives every request runner a 200,000-word heap floor by default, so
-you do not set anything to get it. It more than halves a request: **30.0 ms
-becomes 12.7 ms**, and the collections in it go from 98 to 23.
+`wasm_lua` gives every request runner a heap floor of 200,000 words by
+default, so you do not need to set anything. It makes a request more than
+twice as fast: **12.7 ms instead of 30.0 ms**, with 23 garbage collections
+instead of 98.
 
 Set the option yourself to change it, or pass `0` to turn it off:
 
@@ -59,71 +71,76 @@ Set the option yourself to change it, or pass `0` to turn it off:
               runner_min_heap_words => 0}).
 ```
 
-Pass it beside `root`, not inside the map `wasm_lua:limits/0` returns: [How a
-heap floor works](tuning.md#how-a-heap-floor-works) explains why, and how the
-number is rounded.
+Pass it next to `root`, not inside the map that `wasm_lua:limits/0` returns.
+[How a heap floor works](tuning.md#how-a-heap-floor-works) explains why, and
+how the number is rounded.
 
-200,000 words is where Lua plateaus, and it rounds up to 318,187 words, about
-2.5 MB held only while a request runs. It is a property of the guest, so a
-different build wants its own; [the tuning guide](tuning.md) is how to find
-one. `capture_min_heap_words` exists for the worker start and is worth nothing
-here, because 75 ms is already most of the way to free.
+Above 200,000 words Lua gets no faster. The value is rounded up to 318,187
+words, about 2.5 MB, held only while a request runs. The right value depends
+on the guest, so a different build needs its own; [the tuning
+guide](tuning.md) shows how to find it. `capture_min_heap_words` is for the
+worker start, and it does not help here: the start takes only 75 ms.
 
 ## What you get
 
-The language and its standard library, a JSON context in and a JSON result out,
-and capability-controlled file access. The JSON codec is written in Lua and
-evaluated when the interpreter starts, so it is compiled once into the image
-rather than once per request.
+You get the language and its standard library, a JSON context in and a JSON
+result out, and file access controlled by capabilities. The JSON encoder and
+decoder are written in Lua and loaded when the interpreter starts. So they are
+compiled once, into the image the worker saves after the start, and not once
+per request.
 
-Tables are both arrays and objects in Lua, so the codec has to choose: a table
-whose keys are exactly `1..n` encodes as an array, and anything else, including
-an empty table, encodes as an object.
+In Lua, a table is both an array and an object, so the encoder must choose. A
+table whose keys are exactly `1..n` becomes a JSON array. Any other table,
+including an empty one, becomes a JSON object.
 
 ## What you do not get
 
 **`os.execute` and `io.tmpfile`.** They exist, because Lua's standard library
-references them, and they fail: there is no shell to run and one read-only
-directory to write into. `os.tmpname` fails the same way.
+refers to them, but they fail: there is no shell, and the only directory is
+read-only. `os.tmpname` fails the same way.
 
-**A network API.** Not unavailable, **ungranted**: an absent `net` key is no
-network however much the artifact imports. `wasi_net` is what would grant it,
-and what that gives you is described in [the WASI guide](wasi.md).
+**A network API.** It is not missing, it is **not granted**: without a `net`
+key there is no network, whatever the artifact imports. A `wasi_net` rule
+grants it; [the WASI guide](wasi.md) describes what you then get.
 
-**Coroutines that outlive a request.** `coroutine` works inside one, but a
-request is a finite sequence of calls and the instance goes when it ends.
+**Coroutines that live longer than a request.** `coroutine` works inside a
+request. But a request is a fixed sequence of calls, and the instance is
+destroyed when the request ends.
 
-**`require` of anything on disk.** The tenant's chunk is loaded by absolute
-path, never by a search path, so nothing it writes can reach a module the host
-did not put there.
+**`require` of a file on disk.** The tenant's code (a "chunk" in Lua) is
+loaded from an absolute path, never through a search path. So it can only
+load modules that the host put there.
 
-## Building it needs two flags, and one of them is not optional
+## The build needs two flags, and one is required
 
-Lua signals errors with `longjmp`, which on WebAssembly is exception handling:
+Lua reports errors with `longjmp`. On WebAssembly, `longjmp` uses exception
+handling, which needs these flags:
 
 ```text
 -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false
 ```
 
-Without the second the module will not load, with
-`#{kind => illegal_opcode, ctx => #{opcode => 6}}`. Opcode 6 is the legacy
-`try` from the superseded proposal, which LLVM still emits by default; this
-runtime implements the standardised `try_table`. Anything else that unwinds
-with `longjmp` will meet the same thing.
+Without the second flag the module does not load, and you get
+`#{kind => illegal_opcode, ctx => #{opcode => 6}}`. Opcode 6 is the old `try`
+instruction from an earlier version of the proposal. LLVM still produces it by
+default, but this runtime implements the standard `try_table`. Any other code
+that uses `longjmp` has the same problem.
 
 `test/fixtures/lang/LUA.md` has the rest of the build.
 
 ## Errors
 
-A tenant error arrives as a value, in the same shape every other language uses:
+An error in the tenant's code comes back as a value, in the same shape as for
+every other language:
 
 ```erlang
 {error, #{class := adapter, kind := adapter_failure,
           ctx := #{code := ~"exception"}}}
 ```
 
-`~"no_entry_point"` when no global `main` is defined, and `~"exception"` for
-anything the chunk raised, at load time or during the call.
+`code` is `~"no_entry_point"` when no global `main` is defined, and
+`~"exception"` for any error the code raised, while loading or during the
+call.
 
 ## Read this next
 

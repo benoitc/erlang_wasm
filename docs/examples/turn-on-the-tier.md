@@ -1,9 +1,11 @@
 # Turn on the compiled tier
 
-This example turns a function the module calls often into BEAM code. Every
-instance starts **interpreted**; the **compiled tier**, off by default,
-compiles what a module calls most, through Core Erlang, once it has been
-called enough.
+This example translates a function that the module calls often into BEAM
+code (code for the Erlang virtual machine). Every instance starts
+**interpreted**: the runtime reads the guest's instructions one by one. The
+**compiled tier** is off by default. When it is on, it compiles the functions
+a module calls most, through Core Erlang, once the module has been called
+enough times.
 
 **You need:** nothing beyond the application.
 
@@ -23,7 +25,8 @@ Src = ~"""
 {ok, Mod} = wasm:compile({wat, Src}).
 ```
 
-Ask for the tier, and call it enough to get it hot:
+Turn on the tier, and call the function enough times to make it "hot"
+(worth compiling):
 
 ```erlang
 {ok, Inst} = wasm:instantiate(Mod, #{}, #{compile => true, fuel => infinity}),
@@ -34,15 +37,18 @@ maps:with([compiled, entered], wasm_jit:counts()).
 %% => #{compiled := 1, entered := 1}
 ```
 
-**What happened.** After 32 calls, the default `compile_after`, the module was
-compiled in the background; `await/2` waited for that, and the call after it
-entered the generated code, which `counts/0` shows. `fuel => infinity` is required: generated code
-cannot count fuel, so an instance with a fuel ceiling silently stays
-interpreted. Bound compiled code by time instead, in a worker.
+**What happened.** After 32 calls (the default `compile_after`), the runtime
+compiled the module in the background. `await/2` waited for the compile. The
+next call ran the generated code, as `counts/0` shows.
 
-It is worth it for a guest that runs long, such as an interpreter, and flat
-for a small plugin. Measure your own; [The compiled tier](../compiled-tier.md)
-has the numbers, and how to keep compiled code across restarts.
+`fuel => infinity` is required. Generated code cannot count fuel, so an
+instance with a fuel limit stays interpreted, and no error tells you. Limit
+compiled code by time instead, in a worker.
+
+The tier helps a guest that runs for a long time, such as an interpreter. For
+a small plugin it changes nothing measurable. Measure your own module;
+[The compiled tier](../compiled-tier.md) has the numbers, and explains how to
+keep compiled code across restarts.
 
 **Clean up:**
 

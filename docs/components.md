@@ -1,31 +1,49 @@
 # Components
 
-The WebAssembly Component Model is how you run a `.wasm` that ships *typed
-interfaces* rather than a core module of bare numeric functions. A component
-declares what it imports and exports in terms of strings, lists, records,
-variants and results, and the runtime marshals those values across the boundary
-for you through the Canonical ABI. Read this when your toolchain emits a
+The WebAssembly Component Model lets you run a `.wasm` file that has *typed
+interfaces*. A core module only has functions over numbers. A component
+describes its imports and exports with strings, lists, records, variants and
+results. The runtime converts these values between Erlang and the guest for
+you, using the Canonical ABI. Read this page when your toolchain produces a
 component (`cargo-component`, `wit-bindgen`, `componentize-py`, `jco`, or a
-`wac`-composed bundle), or when you want to plug several components together.
+bundle built with `wac`), or when you want to connect several components.
 
 **Do you need this?** Yes, if `wasm-tools print your.wasm` starts with
 `(component ...)`, or your build targets `wasm32-wasip2`. No, for a core module
 (`(module ...)`) of functions over the memory you give it: use
 [Embedding](embedding.md) instead.
 
-The entry points are `wasm_component` (decode, instantiate, call) and, for the
-WASI 0.2 host a component imports, `wasi_preview2`. Components work with or
-without the `wasm` application started: when it runs, each core module goes
-through its module cache, so the same bytes compile once per node; when it does
-not, they are compiled inline, as `wasm:compile/1` does. The async Canonical ABI
-(`async func`, `stream<T>`, `future<T>`) is supported: call an async export with
-`wasm_component:call_async/4`. The WASI 0.3 interfaces built on it are not
-provided, and a 0.2 component never needs them.
+You use two modules: `wasm_component` to decode, instantiate and call, and
+`wasi_preview2` for the WASI 0.2 host that a component imports. Components
+work whether the `wasm` application is started or not. When it is started,
+each core module goes through its module cache, so the same bytes are
+compiled once per node. When it is not started, each core module is compiled
+in the calling process, as `wasm:compile/1` does. The async Canonical ABI
+(`async func`, `stream<T>`, `future<T>`) is supported: call an async export
+with `wasm_component:call_async/4`. The WASI 0.3 interfaces that use it are
+not provided. A 0.2 component never needs them.
+
+## The words on this page
+
+| word | what it means here |
+| --- | --- |
+| **component** | a Component Model binary: core modules plus typed interfaces. `wasm-tools print` shows `(component ...)`. |
+| **core module** | a plain WebAssembly module, `(module ...)`, whose functions take and return numbers. |
+| **WIT** | the language that describes a component's interfaces and types. |
+| **Canonical ABI** | the rules that copy a typed value (a string, a record, a handle) into a core module's memory and back. |
+| **signature** | the types of a function's parameters and result. You pass it to `call/4`. |
+| **descriptor** | an Erlang term that names one value type in a signature, such as `u32` or `{list, u8}`. |
+| **resource** | an object that a component owns, which you reach through a handle. |
+| **handle** | a small integer that names one resource in one instance. |
+| **`own`**, **`borrow`** | `own` gives the resource to the receiver; `borrow` lends it for one call only. |
+| **compose** | combine several components into one, so the imports of one are the exports of another. |
+
+More terms are in the [glossary](concepts.md#glossary).
 
 ## Run a component
 
-Instantiate the bytes, call an export by name with its signature, and destroy
-the instance when you are done so its resources are freed:
+Instantiate the bytes, and call an export by name with its signature. When
+you are done, destroy the instance to free its resources:
 
 ```erlang
 {ok, Bin} = file:read_file("echo.component.wasm"),
@@ -36,14 +54,14 @@ ok = wasm_component:destroy(Inst).
 
 The third argument is the export's signature as `{Params, Result}`: `Params` is
 a list of one descriptor per parameter, and `Result` is one descriptor or
-`none`. You pass the signature because a `.wasm` does not carry its interface
-types in a form the caller names here; it is the WIT function type, written as
-the descriptors below.
+`none`. You must pass the signature because you cannot get the interface types
+from the `.wasm` file through this call. The signature is the WIT function type,
+written with the descriptors below.
 
 ## Describe the signature
 
-A descriptor names a component-model value type. Use these in the parameter list
-and the result of `call/4`:
+A descriptor names one Component Model value type. Use these in the parameter
+list and in the result of `call/4`:
 
 | descriptor | WIT type | Erlang value |
 | --- | --- | --- |
@@ -69,8 +87,9 @@ Sig = {[{list, u8}], {result, {list, u8}, string}},
 {ok, {ok, Output}} = wasm_component:call(Inst, ~"run", Sig, [~"data"]).
 ```
 
-A `result` lifts as `{ok, V}` on the ok arm and `{error, E}` on the error arm, so
-a guest that rejects its input comes back as a value, not a trap:
+A `result` comes back as `{ok, V}` when the guest returns ok, and as
+`{error, E}` when it returns an error. So when a guest rejects its input, you
+get a value, not a trap:
 
 ```erlang
 {ok, {error, Reason}} = wasm_component:call(Inst, ~"run", Sig, [~""]).
@@ -78,27 +97,28 @@ a guest that rejects its input comes back as a value, not a trap:
 
 ## Supply the imports it needs
 
-A component that imports interfaces (anything built for `wasm32-wasip2` imports
-WASI) is instantiated with a map of host functions, keyed
-`{InterfaceName, FieldName}`. The WASI 0.2 host builds that map for you:
+A component may import interfaces. Anything built for `wasm32-wasip2`
+imports WASI. You instantiate such a component with a map of host functions,
+with keys of the form `{InterfaceName, FieldName}`. The WASI 0.2 host builds
+that map for you:
 
 ```erlang
 {ok, Inst} = wasm_component:instantiate(Bin, wasi_preview2:imports()),
 {ok, _} = wasm_component:call(Inst, ~"run", {[], u32}, []).
 ```
 
-Leave a capability out of the host options and the guest cannot reach it, the
-same posture as Preview 1. For running a command component (one with a `main`)
-with a directory, stdin and arguments, see [WASI 0.2](wasi-0-2.md) and the
-worked [Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
+If you leave a capability out of the host options, the guest cannot reach it,
+as in Preview 1. To run a command component (one with a `main`) with a
+directory, stdin and arguments, see [WASI 0.2](wasi-0-2.md) and the example
+[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
 
 ## Compose components
 
-A component composed from several others (what `wac plug` or `wasm-tools
-compose` produces) has no work for you to do differently: its nested components
-are instantiated and their imports and exports are wired together inside the
-one instance. Values cross a cross-component call by copy, each side keeping its
-own memory.
+`wac plug` and `wasm-tools compose` build one component from several others.
+You run it like any other component. The runtime instantiates the inner
+components and connects their imports and exports inside the one instance.
+When one inner component calls another, the values are copied. Each side
+keeps its own memory.
 
 ```erlang
 {ok, Bin} = file:read_file("composed.component.wasm"),
@@ -109,13 +129,14 @@ ok = wasm_component:destroy(Inst).
 
 ## Resources
 
-A component may hand out a *resource*: an opaque handle to state it owns, as an
-`own<T>` (you hold it) or a `borrow<T>` (lent for one call). You construct one,
-pass the handle back to call its methods, and drop it when you are done.
+A component may give you a *resource*: a handle to state that the component
+owns. You cannot see inside it. You get it as an `own<T>` (you hold it) or as
+a `borrow<T>` (lent for one call). You create one, pass the handle back to
+call its methods, and drop it when you are done.
 
-The handle you get is a small integer, an index into the instance's handle
-table, not anything inside the guest. In a signature a resource type is
-`{own, TypeIndex}` or `{borrow, TypeIndex}`; a plain `u32` works the same,
+The handle is a small integer. It is an index into the instance's handle
+table, not an address inside the guest. In a signature, a resource type is
+`{own, TypeIndex}` or `{borrow, TypeIndex}`. A plain `u32` works the same,
 because the runtime checks every handle against the export's own signature:
 
 ```erlang
@@ -124,15 +145,15 @@ because the runtime checks every handle against the export's own signature:
 ```
 
 Drop a handle with `drop_resource/3`, naming the resource's destructor export.
-It runs the destructor once and answers `ok`:
+It runs the destructor once and returns `ok`:
 
 ```erlang
 ok = wasm_component:drop_resource(Inst, ~"[dtor]counter", Handle).
 ```
 
-Every handle is checked before the guest runs. A check that fails answers
-`{error, #{class := trap, kind := Kind, ctx := Ctx}}`, and the guest is not
-called:
+Every handle is checked before the guest runs. If a check fails, the call
+returns `{error, #{class := trap, kind := Kind, ctx := Ctx}}`, and the guest
+is not called:
 
 | What you passed | `kind` | `ctx` |
 | --- | --- | --- |
@@ -144,26 +165,28 @@ called:
     wasm_component:drop_resource(Inst, ~"[dtor]counter", Handle).
 ```
 
-- Each instance has its own table: a handle from one instance means nothing to
-  another.
+- Each instance has its own table. A handle from one instance means nothing
+  in another.
 - `destroy/1` discards every handle the instance still holds. No destructor
   runs, because the guest's memory goes with the instance.
 - When a resource passes between composed components, the component that
-  receives an `own` gets a handle of its own. It can use the resource while it
+  receives an `own` gets its own new handle. It can use the resource while it
   holds the handle, and dropping it runs the destructor in the component that
   defined the resource.
 
-For a runnable version, see [Use a component resource](examples/use-a-component-resource.md).
+For a runnable version, see [Use a component
+resource](examples/use-a-component-resource.md).
 
 ## Notes
 
-- One component instance is owned by the process that instantiated it; call it
-  from that process and `destroy/1` it there.
+- The process that instantiated a component instance owns it. Call it from
+  that process, and call `destroy/1` there.
 - Malformed input is a value, never a crash: a truncated or ill-typed component
   returns `{error, _}` from `instantiate`, and a bad argument or guest trap
   returns `{error, _}` from `call/4`.
-- Strings marshal as UTF-8 by default, and as UTF-16 or Latin-1+UTF-16 when the
-  component's lift declares that encoding; you do not choose it.
+- Strings are passed as UTF-8 by default. They are passed as UTF-16 or as
+  Latin-1+UTF-16 when the component declares that encoding. You do not choose
+  it.
 
 ## Read this next
 

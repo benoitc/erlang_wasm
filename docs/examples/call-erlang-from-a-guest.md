@@ -1,7 +1,7 @@
 # Call Erlang from a guest
 
-This example gives a guest one Erlang function to call. The guest hands it a
-name; the function writes a greeting back into the guest's memory.
+This example gives a guest one Erlang function to call. The guest gives it a
+name, and the function writes a greeting back into the guest's memory.
 
 **You need:** nothing beyond the application.
 
@@ -44,10 +44,10 @@ wasm:read_memory(Inst, 1024, N).
 %% => {ok, ~"hello, erlang!"}
 ```
 
-**What happened.** The guest named an operation, `env.greet`; the host
-supplied what it does. That is a **capability**: had you left `Greet` out, the
-module would not have instantiated at all. The function answers `{ok,
-Results}`; `{trap, Reason}` would stop the call instead.
+**What happened.** The guest named an operation, `env.greet`, and the host
+supplied the code for it. This is a **capability**: without `Greet`, the
+module would not instantiate at all. The function returns `{ok, Results}`.
+Returning `{trap, Reason}` would stop the call instead.
 
 **Clean up:**
 

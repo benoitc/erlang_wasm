@@ -1,16 +1,16 @@
 # Embedding the runtime
 
-This page tells you how to hold a module and an instance correctly: what each
-one costs you, how long it lives, and which process owns it. Read it when you
-are past your first `wasm:call/3` and are deciding where instances live in your
-supervision tree.
+This page tells you how to keep a module and an instance correctly: what each
+one costs, how long it lives, and which process owns it. Read it when your
+first `wasm:call/3` works and you are deciding where instances go in your
+supervision tree (the supervisors that start and restart your processes).
 
 **Do you need this?** Yes, once your first call works and you are deciding
-where instances live and how long. No, for a first try: start with
+where instances live and for how long. No, for a first try: start with
 [Getting started](getting-started.md).
 
-Have the application running before any of this. It owns the page budget and the
-module cache:
+Start the application before any of this. It owns the page budget (the limit
+on guest memory for the node) and the module cache:
 
 ```erlang
 {ok, _} = application:ensure_all_started(wasm).
@@ -18,8 +18,8 @@ module cache:
 
 ## Where the runtime sits
 
-`erlang_wasm` is the engine. There is no second one, and the only thing you
-choose is what goes in the innermost box:
+`erlang_wasm` is the engine. There is no other engine inside it. The only
+thing you choose is what goes in the innermost box:
 
 ```text
 ┌─────────────────────────────────────────────────────┐
@@ -42,9 +42,9 @@ choose is what goes in the innermost box:
 └─────────────────────────────────────────────────────┘
 ```
 
-Your guest can be a plugin you compiled, or a whole language runtime such as
-QuickJS that interprets scripts of its own. The engine treats both as ordinary
-modules. [guests.md](guests.md) covers producing either.
+Your guest can be a plugin you compiled, or a whole language runtime, such as
+QuickJS, that runs scripts of its own. The engine treats both as ordinary
+modules. [guests.md](guests.md) explains how to build either one.
 
 ## Load once, instantiate many
 
@@ -54,50 +54,52 @@ modules. [guests.md](guests.md) covers producing either.
 {ok, B}   = wasm:instantiate(Mod, Imports).     % A and B share nothing
 ```
 
-A module and an instance are different things, and the difference decides where
-you put each one:
+A module and an instance are different things, and the difference tells you
+where to put each one:
 
 | | module | instance |
 | --- | --- | --- |
 | what | decoded, validated code | running state: memory, globals, tables |
-| mutable | no | yes |
-| shared | yes, node-wide, cached by content hash | no, owned by one process |
-| cost | 1.6 ms to compile a 46 KB plugin and 310 ms a 1.8 MB QuickJS build, 18 us to load either again | 540 us for that plugin and 3.2 ms for QuickJS, plus its declared memory |
+| can change | no | yes |
+| shared | yes, by the whole node, cached by content hash (a checksum of its bytes) | no, owned by one process |
+| cost | 1.6 ms to compile a 46 KB plugin and 310 ms for a 1.8 MB QuickJS build, 18 us to load either again | 540 us for that plugin and 3.2 ms for QuickJS, plus its declared memory |
 
-Use `wasm:compile/1` only for one-shot work; it skips the cache. If you
-instantiate more than once, use `load/1`.
+Use `wasm:compile/1` only for work you do once: it does not use the cache. If
+you instantiate a module more than once, use `load/1`.
 
-`compile/1` also takes the text format, which is the one-shot case by
-construction:
+`compile/1` also takes the text format, which is always a case of work you do
+once:
 
 ```erlang
 {ok, Mod} = wasm:compile({wat, ~"(module (func (export \"f\") (result i32) i32.const 7))"}).
 ```
 
-`load/1` takes bytes only. The cache is keyed on a content hash and a module
-built from text takes a fresh identity every time it is validated, so there
-would be nothing stable to key on.
+`load/1` takes only bytes. The cache uses the content hash as its key, and a
+module built from text gets a new identity each time it is validated. So the
+cache would have no stable key for it.
 
 ## Know who owns the instance
 
-An instance belongs to the process that created it, like a port or an ETS table:
+An instance belongs to the process that created it, like a port or an ETS
+table (an in-memory table owned by one process):
 
 | event | effect |
 | --- | --- |
-| owner alive | handle valid; you may pass it to other processes |
-| **two processes calling at once** | **unsound**: both read-modify-write the same state, last writer wins |
-| trap | invocation aborts, instance stays valid and usable |
-| fuel or depth exhaustion | same: invocation aborts, instance still usable |
-| `destroy/1` | releases pages and state; idempotent |
-| owner exits | pages released automatically |
+| owner alive | the handle is valid; you may pass it to other processes |
+| **two processes call at the same time** | **unsafe**: both read and change the same state, and the last write wins |
+| trap | the call stops; the instance stays valid and you can use it |
+| fuel or call depth runs out | the same: the call stops, and you can still use the instance |
+| `destroy/1` | frees pages and state; calling it twice is harmless |
+| owner exits | pages are freed automatically |
 
-The concurrency row is the one that bites you. If more than one process needs to
-call an instance, put the instance inside a process and let its mailbox
-serialise the calls. That is what [worker.md](worker.md) describes.
+The row about two processes is the one that causes bugs. If more than one
+process needs to call an instance, put the instance inside a process. Its
+mailbox then handles the calls one at a time. [worker.md](worker.md)
+describes this.
 
-Forgetting `destroy/1` is untidy but not a leak. `wasm_keeper` monitors the
-owning process and reclaims its pages when it exits, however it exits, kill
-included.
+If you forget `destroy/1`, nothing leaks. `wasm_keeper` monitors the owner
+process and frees its pages when it exits, however it exits, even when it is
+killed.
 
 ## Set limits
 
@@ -114,13 +116,14 @@ Or per call, which is usually what you want for a request:
 {ok, R} = wasm:call(Inst, ~"handle", [Req], #{fuel => 1_000_000}).
 ```
 
-Start from `wasm_limits:untrusted/0` or `wasm_limits:trusted/0` and raise what
-you need.
+Start from `wasm_limits:untrusted/0` or `wasm_limits:trusted/0`, and raise
+the values you need.
 
-`fuel` bounds work, not time. It is charged at calls and loop back-edges, which
-every unbounded execution has to pass through, so it reliably stops a runaway
-loop. It does not stop a host function that blocks. For wall-clock bounding you
-need a timeout, and a timeout needs a process.
+`fuel` limits work, not time. The runtime takes fuel at each call and each
+time a loop jumps back to its start. Code that runs forever must do one of
+these again and again, so fuel always stops a loop that never ends. It does
+not stop a host function that blocks. To limit real time, you need a timeout,
+and a timeout needs a separate process.
 
 ## Move bytes in and out
 
@@ -130,40 +133,43 @@ ok        = wasm:write_memory(Inst, Ptr, <<"data">>),
 {ok, Pages} = wasm:memory_size(Inst).
 ```
 
-Budget roughly the declared memory per instance: a module declaring one 64 KiB
-page costs about 64 KB, plus the process you put it in. Bulk
-transfers run at roughly 0.5 GB/s, because bytes are assembled from 64-bit
-words.
+Plan for about the declared memory per instance: a module that declares one
+64 KiB page uses about 64 KB, plus the process you put it in. Large copies run
+at about 0.5 GB/s, because the runtime builds the bytes from 64-bit words.
 
-Cap total linear memory for the node:
+Set a maximum for all linear memory on the node:
 
 ```erlang
 wasm_engine:set_page_limit(16384),          % 1 GiB
 #{pages_in_use := N} = wasm_engine:stats().
 ```
 
-Set this. Linear memory is off-heap and invisible to `max_heap_size`, so nothing
-else bounds it. It counts what is allocated rather than what a guest can
-address: a memory's chunks, and for a memory restored from an image, its page
-table and the pages it has written. The budget also covers the garbage-collected object store, which
-is measured rather than requested, so `pages_in_use` can read a little above the
-limit: it is the sum of what is held, and pages already spent are counted
-whether or not the budget likes them. Every further allocation on the node is
-refused while it is over.
+Set this. Linear memory is stored outside the process heap, and
+`max_heap_size` does not see it, so nothing else limits it. The budget counts
+what is allocated, not what a guest could address: a memory's chunks (the
+arrays it is made of), and, for a memory restored from an image, its page
+table and the pages it has written.
+
+The budget also counts the store of garbage-collected objects. That store is
+measured after the fact, not requested in advance, so `pages_in_use` can be a
+little above the limit. It is the sum of what is held, and it includes pages
+already used even if they went over the limit. While the node is over the
+limit, every new allocation on the node is refused.
 
 ## Link modules together
 
-Make one instance's export another's import:
+Use an export of one instance as an import of another:
 
 ```erlang
 {ok, LogFn} = wasm:extern(Lib, ~"log"),
 {ok, App}   = wasm:instantiate(AppMod, #{{~"lib", ~"log"} => LogFn}).
 ```
 
-Imported memories and tables are shared by reference, so both instances see the
-same bytes and the same table entries. A `funcref` carries the instance that
-defined it, so a reference one module writes into a shared table calls that
-module's function, against that module's memory and globals.
+Imported memories and tables are shared, not copied, so both instances see
+the same bytes and the same table entries. A `funcref` (a reference to a
+function) remembers the instance that defined it. So when one module writes a
+reference into a shared table, a call through it runs that module's function,
+with that module's memory and globals.
 
 ## Read this next
 

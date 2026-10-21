@@ -1,8 +1,8 @@
 # Run JavaScript
 
-This example runs JavaScript that arrives as text, through the worker kernel
-and the QuickJS adapter. The script exports `main`; the worker gives it a
-context and returns what it returns.
+This example runs JavaScript source text, through the worker kernel and the
+QuickJS adapter. The script exports `main`. The worker calls it with a
+context, and returns its result.
 
 **You need:** the QuickJS build, fetched by `scripts/fetch-qjs-fixture.sh`
 into `test/fixtures/lang/qjs.wasm`.
@@ -25,15 +25,15 @@ Result.
 ```
 
 **What happened.** The **worker kernel**, `wasm_script_worker`, gave the
-request its own processes and a deadline, five seconds unless you set
+request its own processes and a deadline: five seconds, unless you set
 `timeout`. The **adapter**, `wasm_javascript_command`, knows how to start
-QuickJS, hand it the script and the context as JSON, and read the result
-back. The script got one read-only directory holding its own source, and
+QuickJS, give it the script and the context as JSON, and read the result.
+The script got one read-only directory that holds its own source, and
 nothing else: no network, no other files.
 
-This build starts QuickJS for every request. `wasm_javascript` with the
-reactor build starts it once and restores a snapshot per request instead; see
-[JavaScript](../javascript.md).
+This build starts QuickJS for every request. `wasm_javascript`, with the
+reactor build, starts it once and restores a snapshot for each request
+instead; see [JavaScript](../javascript.md).
 
 **Clean up:**
 

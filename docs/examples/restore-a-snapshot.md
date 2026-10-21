@@ -1,9 +1,9 @@
 # Restore a snapshot
 
-This example starts a guest once, captures it, and gives every request a fresh
-copy of that started state. A **snapshot** is a frozen copy of a guest after
-startup; restoring it skips the startup, which is what makes an interpreter
-that takes seconds to start cost milliseconds per request.
+This example starts a guest once, saves it, and gives every request a new
+copy of that started state. A **snapshot** is a saved copy of a guest after
+it has started. Restoring it skips the startup. This is how an interpreter
+that takes seconds to start costs only milliseconds per request.
 
 **You need:** a checkout of this repository, which has a small guest built for
 this in `test/fixtures/snapshot/`. It exports `init`, which sets its state up,
@@ -23,7 +23,7 @@ Start it once, and capture it:
 ok = wasm:destroy(Init).
 ```
 
-Every restore is a fresh instance, already initialised:
+Every restore gives a new instance that is already initialised:
 
 ```erlang
 {ok, A} = wasm:restore(Image, #{}, #{}),
@@ -34,12 +34,13 @@ wasm:call(B, ~"handle", []).
 %% => {ok, [1235]}
 ```
 
-**What happened.** `init` ran once. `A` counted on from where `init` left it;
-`B`, restored from the same **image**, started from that point again and saw
-nothing `A` did. The image holds the guest's memory, globals and tables, not a
-paused process. Only a **reactor**, a guest that exports functions and stays
-ready between calls, can be captured: a command that runs `main` and exits has
-no moment worth keeping.
+**What happened.** `init` ran once. `A` continued counting from where `init`
+left it. `B` was restored from the same **image** (the stored snapshot), so
+it started again from that point and saw nothing that `A` did. The image
+holds the guest's memory, globals and tables. It is not a paused process.
+Only a **reactor**, a guest that exports functions and stays ready between
+calls, can be saved. A command runs `main` and exits, so it has no state
+worth keeping.
 
 **Clean up:**
 

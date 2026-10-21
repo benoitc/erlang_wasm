@@ -1,10 +1,27 @@
 # Memory
 
-How linear memory is stored, how a restored memory shares its snapshot image,
-and how the node page budget is kept. Read this before you change
-`wasm_memory`, `wasm_keeper`, `wasm_engine` or `wasm_snapshot`, or anything
-that reserves, grows or frees pages: the representation was chosen by
-measurement, and the accounting is what keeps a guest from exhausting the node.
+This page explains how the runtime stores a guest's linear memory, how a
+restored memory shares its snapshot image, and how the runtime counts pages
+for the whole node. Read it before you change `wasm_memory`, `wasm_keeper`,
+`wasm_engine` or `wasm_snapshot`, or any code that reserves, grows or frees
+pages. The storage format was chosen by measurement. The page counting is what
+stops one guest from using all the memory of the node.
+
+## The words on this page
+
+| word | what it means here |
+| --- | --- |
+| **linear memory** | the array of bytes a WebAssembly guest reads and writes. It grows in **pages** of 64 KiB. |
+| **chunk** | one `atomics` array holding part of a linear memory. |
+| **snapshot** | a saved copy of an instance's state, taken so that new instances can start from it. See [Snapshots](snapshots.md). |
+| **image** | the memory part of a snapshot: its pages, read-only, shared by every memory restored from it. |
+| **restore** | making a new instance from a snapshot instead of running the guest's start-up code again. |
+| **page table** | a small `atomics` array, one entry per 4 KiB page, that says where each page of a restored memory is now: still in the image, or in a private copy. |
+| **arena** | the private 4 KiB copies of the image pages that one memory has written to. |
+| **slot** | one 4 KiB place in the arena. |
+| **keeper** | `wasm_keeper`, the process that records which process holds each memory, table or image. |
+| **holder** | something whose existence keeps a resource alive, written as a token such as `{instance, Id}`. |
+| **page budget** | the maximum number of pages the whole node may use for memory the Erlang VM cannot see. |
 
 ## Memory is chunked atomics arrays
 
@@ -40,24 +57,24 @@ of two, so address decoding stays a shift and a mask against `#mem.shift`.
   16 or more      1 MiB
 ```
 
-A fixed 1 MiB chunk made a module declaring one page cost 1 MiB, a 16x
-over-allocation that dominated the per-instance footprint (1080 KB against
-11 KB of process).
+With a fixed 1 MiB chunk, a module that declared one page used 1 MiB. That is
+16 times too much, and it was most of the memory one instance used (1080 KB,
+against 11 KB for its process).
 
-A restored memory sizes its chunk from the image instead: the largest chunk,
-up to 1 MiB, that the image's size is a multiple of, so the image region ends
-on a chunk boundary and growth appends whole chunks after it.
+A restored memory takes its chunk size from the image instead. It uses the
+largest chunk size, up to 1 MiB, that divides the image size exactly. So the
+image region ends on a chunk boundary, and growth adds whole chunks after it.
 
 Generated code reads `#mem{}` by literal field index.
 `wasm_core_SUITE:the_memory_field_indices_match_the_record` pins those indices
-to `wasm_memory:field_indices/0`, so adding a field to `#mem{}` fails there
-rather than corrupting memory quietly.
+to `wasm_memory:field_indices/0`. If you add a field to `#mem{}`, that test
+fails, instead of memory being corrupted without any error.
 
 ## A restored memory shares its image
 
-A memory restored from a snapshot is two regions. Below `img_bytes` every
-address resolves through a page table over the image; at or above it, through
-the ordinary chunks a growth appends.
+A memory restored from a snapshot has two regions. An address below
+`img_bytes` is found through the page table over the image. An address at or
+above it is found in the ordinary chunks that growth adds.
 
 ```text
   address 0                     img_bytes                       size
@@ -76,9 +93,9 @@ The `#mem{}` fields involved:
 | `tab` | the page table: one `atomics` entry per 4 KiB page, plus two |
 | `arena` | the arena chunks this handle has seen |
 
-Every image field is set once, when the memory is made, and never changes in
-any handle; only what the arrays hold changes. A memory with no image pays one
-comparison per access for all of this.
+Each image field is set once, when the memory is made, and never changes in
+any handle. Only the contents of the arrays change. For a memory with no
+image, all of this costs one extra comparison per access.
 
 ```text
   image (shared)        page table (per memory)       arena (per memory)
@@ -112,44 +129,46 @@ What happens on an access:
   restored from it.
 - **An entry goes from 0 to a slot once**, by `compare_exchange`, and never
   changes again.
-- **The arena** grows in chunks of 64, 128, 256 and 512 KiB, then 1 MiB each,
-  so a memory that writes little pays little and one that writes a lot is not
-  thousands of small arrays. A CPython request's 256 written pages need five
-  arena chunks, so five keeper transactions.
-- **Three orders make it safe**, each resting on `atomics` operations being
-  mutually ordered: an arena chunk is published before any slot in it is
-  claimed, a slot is filled before it is published in the table, and a reader
-  acts only on a slot it found published.
-- **A write is prepared first.** Every image page a write touches is made
-  private before a byte changes, so a write the budget refuses part way has
-  changed nothing anyone can read.
+- **The arena** grows in chunks of 64, 128, 256 and 512 KiB, then 1 MiB each.
+  So a memory that writes little uses little memory, and a memory that writes
+  a lot does not become thousands of small arrays. A CPython request writes
+  256 pages: that needs five arena chunks, so five keeper transactions.
+- **Three ordering rules make it safe.** They work because `atomics`
+  operations are ordered with each other. An arena chunk is published before
+  any slot in it is claimed. A slot is filled before it is published in the
+  table. A reader only uses a slot that it found published.
+- **A write is prepared first.** Every image page that a write touches is made
+  private before any byte changes. So if the budget refuses the write part
+  way, nothing that anyone can read has changed.
 - **Nothing is invalidated.** A slot and a growth chunk never move.
 
-A write that can publish arena chunks (a host write, a bulk or vector
-instruction, `wasm:write_memory/3`) answers a refreshed handle through
-`wasm_memory:store_r/4` or `wasm_memory:refresh/1`. Ignoring it is correct; a
-stale handle reads new chunks through the published cell, only slower.
+Some writes can publish arena chunks: a host write, a bulk or vector
+instruction, `wasm:write_memory/3`. They return an updated handle through
+`wasm_memory:store_r/4` or `wasm_memory:refresh/1`. You may ignore it and keep
+the old handle. The old handle still reads the new chunks through the
+published cell, only more slowly.
 
 The constants are fixed, not options. `test/audit/ATTEMPTS.md`, "Shared image
 pages: what was left out, and the constants", has why each is what it is.
 
-A page table replaced restore recycling, which kept a destroyed instance's
-chunks per process and marked every store to know which to rewrite. The page
-table shares one image across every restore in the node, copies only what a
-request writes, and puts no mark on the store path.
+The page table replaced an older design, restore recycling. Recycling kept the
+chunks of a destroyed instance in each process, and marked every store to know
+which chunks to rewrite. The page table shares one image between all restores
+in the node, copies only what a request writes, and adds no mark to stores.
 
-A native backend that maps the image and lets the kernel copy on write was
-built, measured and deferred: `test/audit/ATTEMPTS.md`, "Restored memory in an
+A native version was also built and measured: it maps the image into memory
+and lets the operating system copy a page when it is first written. It was
+not adopted for now: `test/audit/ATTEMPTS.md`, "Restored memory in an
 mmap region: B, deferred", has the numbers and what would reopen it.
 
 ## The translation cache
 
 Generated code reaches memory 0 through a two-entry cache of page translations,
-so a restored memory's low addresses do not walk the page table on every
-access. It caches only translations to an array (a private slot or a growth
-chunk), and since neither ever moves, no entry is ever invalidated. If you
-change how an access is lowered, read "The translation cache" in
-[Design notes](design-notes.md#the-translation-cache) and
+so that low addresses of a restored memory do not read the page table on
+every access. It only caches translations to an array (a private slot or a
+growth chunk). Neither of these ever moves, so no entry ever becomes wrong.
+If you change the code generated for a memory access, read "The translation
+cache" in [Design notes](design-notes.md#the-translation-cache) and
 [Compiled tier](compiled-tier.md).
 
 ## The keeper: who holds what
@@ -158,9 +177,9 @@ change how an access is lowered, read "The translation cache" in
 them. Every page is reserved before it is allocated, and `wasm_keeper` records
 who holds it.
 
-A resource is keyed by a stable id and holds a **set of holder tokens**, not a
-count. Removing a token that is not there is a no-op, so a double release is
-harmless, and the resource is reclaimed when the set empties.
+Each resource has a stable id and a **set of holder tokens**, not a count.
+Removing a token that is not in the set does nothing, so releasing twice is
+harmless. The resource is freed when the set is empty.
 
 ```text
   token            held by                      removed by
@@ -193,24 +212,27 @@ harmless, and the resource is reclaimed when the set empties.
     reclaimed when {snapshot, Id} is gone AND no restored memory remains
 ```
 
-- **Death releases.** A process killed with `exit(Pid, kill)` runs no cleanup,
-  which is what a worker timeout does, so every token names the process whose
-  death removes it and the keeper monitors that process.
-- **One row, one write.** Every change to what a memory owes is a single
-  `ets:insert` of its row, carrying the transaction in flight: a growth or an
-  arena extension, named by an operation id the caller made. A keeper killed
-  between two steps leaves the old row or the new one, and the restart
-  finishes or undoes the transaction from the row.
-- **Growth is two stages.** The keeper validates and reserves
-  (`wasm_keeper:grow_begin/4`), the grower allocates chunks outside the
-  keeper, and the keeper commits the chunk tuple and the size together.
-  Concurrent growers queue rather than fail, because `memory.grow` answering
-  -1 must mean the budget really was exhausted.
-- **The registry is the authority on size.** `wasm_memory:free/1` gives back
-  the size the memory is now, not the size its handle was made at.
+- **When a process dies, its tokens are removed.** A process killed with
+  `exit(Pid, kill)` runs no cleanup code, and a worker timeout kills this way.
+  So every token names the process whose death removes it, and the keeper
+  monitors that process.
+- **One row, one write.** Every change to the pages a memory is charged is one
+  `ets:insert` of its row. The row also records the change that is not
+  finished yet: a growth or an arena extension, named by an operation id that
+  the caller made. If the keeper is killed between two steps, the table holds
+  either the old row or the new one. When the keeper restarts, it reads the
+  row and finishes or undoes the change.
+- **Growth has two stages.** First the keeper checks and reserves the pages
+  (`wasm_keeper:grow_begin/4`). Then the growing process allocates the chunks,
+  outside the keeper. Last, the keeper saves the chunk tuple and the size
+  together. Two processes growing at the same time wait in turn instead of
+  failing, because `memory.grow` must return -1 only when the budget is really
+  used up.
+- **The keeper's table decides the size.** `wasm_memory:free/1` gives back the
+  size the memory has now, not the size it had when its handle was made.
 
-The node page counter and the snapshot byte counter are caches, rebuilt from
-the rows every time the keeper starts.
+The node page counter and the snapshot byte counter are only caches. The
+keeper rebuilds them from the rows every time it starts.
 
 ## The node page budget
 
@@ -221,16 +243,17 @@ wasm_engine:set_page_limit(16384),          % 1 GiB, the default
 #{pages_in_use := N} = wasm_engine:stats().
 ```
 
-- It covers every kind of memory the BEAM cannot see: linear memory, the
+- It counts every kind of memory the BEAM cannot see: linear memory, the
   object store of the garbage collector (see [GC](gc.md)), and table cells.
-- It is node-wide, not per instance, because a thousand small instances are as
-  much of a threat as one large one.
-- Reading it is a lock-free `atomics:get`. Moving it happens only inside a
-  keeper transaction, together with the row that says whose pages they are.
-- It can read above the limit. The object store is measured after the rows
-  exist, so `wasm_engine:charge_pages/1` records pages already spent, and
-  every `wasm_engine:reserve_pages/1` refuses while the node is over. A limit
-  bounds what a guest may take next, not what it has taken.
+- It is for the whole node, not for each instance, because a thousand small
+  instances are as dangerous as one large one.
+- Reading it is a lock-free `atomics:get`. It changes only inside a keeper
+  transaction, together with the row that says whose pages they are.
+- It can show more than the limit. The object store is measured after its
+  pages are already used, so `wasm_engine:charge_pages/1` records pages
+  already spent. While the node is over the limit, every
+  `wasm_engine:reserve_pages/1` is refused. The limit controls what a guest may
+  take next, not what it has already taken.
 
 ## Charged pages and logical pages
 
@@ -254,19 +277,19 @@ in bytes against `max_snapshot_bytes` instead.
 
 ## The snapshot byte budget
 
-An image is a keeper row of its own, charged its bytes against the
-application setting `max_snapshot_bytes` (default `infinity`) when it is
-captured or loaded. Over the limit, the capture fails with a `snapshot_budget`
-exhaustion error.
+An image has its own keeper row. When it is captured or loaded, its size in
+bytes is counted against the application setting `max_snapshot_bytes`
+(default `infinity`). If that goes over the limit, the capture fails with a
+`snapshot_budget` exhaustion error.
 
 ```erlang
 application:set_env(wasm, max_snapshot_bytes, 512 * 1024 * 1024).
 ```
 
-The bytes stay charged until the snapshot's holder is gone and no memory
+The bytes stay counted until the snapshot's holder is gone and no memory
 restored from it remains, because those memories still read its pages.
 
 ## Read this next
 
-[Snapshots](snapshots.md) for the user's side of images and restores, and the
+[Snapshots](snapshots.md) for how you use images and restores, and the
 `wasm_memory` and `wasm_keeper` module docs for the code.

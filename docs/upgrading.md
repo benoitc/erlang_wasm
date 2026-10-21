@@ -1,11 +1,12 @@
 # Upgrading from 0.3
 
-This page is for you if you copied modules out of `examples/` in 0.3: the
-worker, the worker kernel, the reaper or a language adapter. In 0.4 those
-modules ship with the application under `wasm_` names. Nothing you copied
-breaks: no new module shares a name with anything in the 0.3 `examples/`, so
-your copies keep compiling and running. Moving to the installed modules is
-optional, and you can do it one module at a time.
+This page is for you if you copied modules from `examples/` in 0.3: the
+worker, the worker kernel, the reaper or a language adapter (the
+[glossary](concepts.md#glossary) defines each one). In 0.4 those modules are
+part of the application, with `wasm_` names. Nothing you copied breaks: no
+new module has the same name as a module in the 0.3 `examples/`, so your
+copies still compile and run. Moving to the installed modules is optional,
+and you can move one module at a time.
 
 ## Pick your case
 
@@ -17,9 +18,9 @@ optional, and you can do it one module at a time.
 
 ## Switch the simple worker
 
-`wasm_instance_worker` takes the 0.3 example's calls exactly: `start_link/1,2`,
-`call/3,4`, `stop/1` and `info/1`, with the same options and the same return
-values. So switching is a rename of the calls:
+`wasm_instance_worker` has exactly the calls of the 0.3 example:
+`start_link/1,2`, `call/3,4`, `stop/1` and `info/1`, with the same options and
+the same return values. So you only rename the calls:
 
 ```sh
 perl -pi -e 's/\bwasm_worker:/wasm_instance_worker:/g' $(grep -rlw wasm_worker src)
@@ -50,16 +51,17 @@ built for 0.3 needs nothing.
 
 ## Where scratch files go now
 
-Without `scratch_roots`, the reaper keeps request files in a directory of this
-node's own under the user cache directory, and removes it at a clean shutdown.
-If the node crashes, that directory is not reclaimed on the next start, since
-the next start uses a new one. Set `scratch_roots` in production: a configured
-root is where a restarted node finds and cleans what a crashed one left. A
-configured root must belong to one node at a time.
+Without `scratch_roots`, the reaper keeps request files in a directory that
+only this node uses, under the user cache directory. It removes that
+directory when the node stops cleanly. If the node crashes, the next start
+does not clean that directory, because the next start uses a new one. Set
+`scratch_roots` in production. When a node restarts, it finds and cleans what
+a crashed node left in the configured root. Only one node at a time may use a
+configured root.
 
 ## Delete what you replaced
 
-Remove the copies you switched away from, run your tests, and check nothing
+Remove the copies you no longer use, run your tests, and check that nothing
 still names them:
 
 ```sh

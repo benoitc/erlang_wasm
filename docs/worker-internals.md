@@ -1,20 +1,23 @@
 # Worker internals
 
-How the worker kernel is built, for someone changing it rather than using it.
-To use it, read [Hosting scripting languages](scripting.md); for every
-setting, [Worker configuration](worker-reference.md).
+This page explains how the worker kernel is built. Read it when you want to
+change the kernel. To use it, read [Hosting scripting
+languages](scripting.md). For every setting, read [Worker
+configuration](worker-reference.md). Short definitions of the terms are in
+the [glossary](concepts.md#glossary).
 
 ## A request is three processes, not one
 
-The worker kernel gives each request a **worker**, a **guardian** and a
-**runner**, and the split is about who can be trusted to survive what.
+The worker kernel uses three processes for each request. Each one must
+survive different failures:
 
-The runner is the only process that touches tenant data: it instantiates,
-invokes, decodes and dies. It is spawned `[link, monitor]` so that the monitor
-delivers a `DOWN` carrying the exit reason, and the link kills it if the
-guardian goes. The guardian traps exits, owns the mounts and the deadline, and
-is the process a `cancel` acts on. The worker is the API and holds the single
-in-flight slot.
+- the **runner** is the only process that touches the tenant's data. It
+  creates the instance, calls the guest, decodes the result, and then exits.
+  It is started with `[link, monitor]`: the monitor sends a `DOWN` message
+  with the exit reason, and the link kills the runner if the guardian dies;
+- the **guardian** traps exits. It owns the mounts (the directories the guest
+  can see) and the deadline. A `cancel` acts on this process;
+- the **worker** is the API. It runs one request at a time.
 
 One request, in order:
 
@@ -45,37 +48,48 @@ caller          worker            guardian             runner
   |                |                  | cleanup to the reaper
 ```
 
-`run/2` is `submit/2` then `await/3`, two calls on the worker, so the worker
-never blocks on a request. The guardian waits on the deadline the worker
-fixed; reaching it, a `cancel` or a dead worker kills the runner on the same
-path. The outcome reaches the caller before cleanup starts, so a slow cleanup
-never delays an answer.
+`run/2` is `submit/2` then `await/3`: two calls on the worker. So the worker
+never waits for a request to finish. The guardian waits until the deadline
+the worker set. Three things kill the runner, all in the same way: the
+deadline, a `cancel`, or the death of the worker. The caller gets the
+outcome before cleanup starts, so a slow cleanup never delays an answer.
 
-With `restore_ahead => true` the runner column is the worker's own runner,
-started before the request with an instance already restored. The guardian
-links and monitors it, sends it the request, and on the result unlinks it
-instead of killing it; the runner then restores the next instance.
+With `restore_ahead => true`, the runner in this diagram is the worker's
+own long-lived runner. It started before the request and has already
+restored an instance. The guardian links to it, monitors it and sends it the
+request. When the result arrives, the guardian unlinks it instead of killing
+it. The runner then restores the instance for the next request.
 
-Everything a request can leak -- a directory, a staged file, a registered
-cleanup action -- is owned by the guardian and handed to a node-wide **reaper**
-when the request ends. That reaper is a process and not an ETS table with the
-worker as `heir`, for two reasons `wasm_worker_reaper` states: `heir` fires when the
-*owner* dies, so a worker-owned table survives exactly the failure it is not
-needed for; and deferring the sweep to the worker's next request leaks for as
-long as that worker is idle, which for a lightly used tenant has no bound.
+A request can leave things behind: a directory, a staged file, a
+registered cleanup action. The guardian owns all of them. When the request
+ends, it hands them to the **reaper**, one process per node that cleans up.
 
-The cost of that shape is measurable and small. Accepting a request -- the
-reservation, the request directory, the channels and the runner spawn -- is
-1.2 to 2.0 ms whatever the guest, which is a quarter of a Lua request and 5% of
-a CPython one. It has not been attacked because nothing yet needs it to be
-smaller.
+The reaper is a process, not an ETS table with the worker as `heir`.
+`wasm_worker_reaper` gives two reasons:
+
+- `heir` acts when the table's *owner* dies. A table owned by the worker
+  survives only when the worker dies, which is the one case where it is not
+  needed;
+- if cleanup waited for the worker's next request, files would stay as long
+  as the worker is idle. For a tenant with little traffic, that time has no
+  limit.
+
+This design costs a little time, and it was measured. Accepting a request
+takes 1.2 to 2.0 ms for any guest: the reservation, the request directory,
+the output channels and starting the runner. That is a quarter of a Lua
+request and 5% of a CPython one. Nobody has tried to make it smaller,
+because nothing needs it yet.
 
 ## Cleanup goes through a steward
 
-The guardian never talks to the reaper directly. Each request gets a
-**cleanup steward**, started by the node-wide **cleanup manager**, and the
-steward carries every cleanup operation (register an action, withdraw it,
-hand ownership over) to the reaper and keeps a ledger of them.
+The guardian never talks to the reaper directly. Two more processes sit
+between them:
+
+- the **cleanup manager**, one per node, accepts each request and starts its
+  steward;
+- the **cleanup steward**, one per request, sends every cleanup operation to
+  the reaper: register an action, withdraw it, or hand ownership over. It
+  keeps a list (a ledger) of these operations.
 
 ```text
 guardian --operations--> steward --send_request--> reaper (journal on disk)
@@ -84,126 +98,143 @@ cleanup manager ------------+  admits the request, bounds how many
                                hold cleanup state, starts the steward
 ```
 
-The split exists so a slow or restarting reaper cannot block a request or
+With this split, a slow or restarting reaper cannot block a request or
 lose its cleanup:
 
-- **The manager bounds cleanup.** It admits a request before its steward
-  starts, against a capacity computed from the reaper's settings, so cleanup
-  state cannot grow without bound while the reaper is slow or absent. It does
-  no filesystem work.
-- **The steward never blocks.** It sends with `gen_server:send_request/2` and
-  matches answers as they come, numbering each operation so a resend is
-  recognised.
-- **A reaper restart loses nothing.** The steward pins the reaper it reserved
-  against. When that reaper dies, its pending operations wait; the replacement
-  adopts the request during its sweep, the steward hands over its ledger and
-  resends. If no reaper will come back, the operation fails instead of
-  hanging.
+- **The manager limits cleanup.** It accepts a request before the steward
+  starts, only if there is room. The room is computed from the reaper's
+  settings. So cleanup state cannot grow without limit while the reaper is
+  slow or gone. The manager does no filesystem work.
+- **The steward never waits.** It sends with `gen_server:send_request/2` and
+  handles each answer when it arrives. It numbers each operation, so the
+  reaper recognises an operation sent twice.
+- **A reaper restart loses nothing.** The steward remembers which reaper it
+  reserved with. When that reaper dies, its pending operations wait. The new
+  reaper takes over the request when it scans its journal (its record on
+  disk). The steward then gives it the ledger and sends the operations again.
+  If no reaper comes back, the operation fails; it does not wait forever.
 
-`wasm_worker_sup` starts the steward supervisor, the manager and the reaper
-in that order, `rest_for_one`, so a manager restart restarts the reaper
-behind it. `wasm_script_worker:cleanup_requests/0` lists the requests whose
-cleanup is still held. The full protocol, with its state machines and
-invariants, is `test/audit/CLEANUP_STEWARD.md`.
+`wasm_worker_sup` starts the steward supervisor, the manager and the
+reaper, in that order, with `rest_for_one`. So a manager restart also
+restarts the reaper. `wasm_script_worker:cleanup_requests/0` lists the
+requests whose cleanup is not finished. The full protocol, with its state
+machines and the rules it keeps, is in `test/audit/CLEANUP_STEWARD.md`.
 
 ## The reaper is supervised, and knows which roots are its own
 
-`wasm_worker_sup` starts the reaper, and `reaper_spec/0` is the only place its
-child spec is built, so boot and a worker's first start can never disagree on
-its roots. With `scratch_roots` configured it starts at boot, which is when a
-restarted node recovers what a crashed one left: every journal record names
-its node's incarnation, and a record from another incarnation is an orphan
-whose directory is removed. That is also why a configured root must belong to
-one node at a time.
+A **root** is a directory where request files go. `wasm_worker_sup` starts
+the reaper. Only `reaper_spec/0` builds its child spec, so the application
+start and a worker's first start always agree on the roots.
 
-Without `scratch_roots`, the first `wasm_script_worker:start_link/2,3` starts
-the reaper with one root, `scratch`, in a directory named for the node, the OS
-process and a unique integer, so no two live nodes can share it. The path is
-fixed in the child spec, so a supervised restart after a reaper crash comes
-back to the same directory and its journal. Which roots the reaper generated
-is a separate start argument that only the supervisor passes, not a key in
-`reaper_options`, so no configuration can mark a directory for deletion; a
-generated root is removed at a clean shutdown only when no reservation is left
-and its journal is empty.
+With `scratch_roots` configured, the reaper starts with the application. At
+that moment a restarted node cleans up what a crashed node left. Each
+journal record names the run of the node that wrote it (its incarnation). A
+record from another run is an orphan, and the reaper removes its directory.
+This is also why only one node at a time may use a configured root.
 
-`wasm_adapter_conformance` stops and restarts a reaper by hand in several
-cases, so `suspend_reaper/0` takes the supervised one away, and stops lazy
-start from bringing another up, until `resume_reaper/0`.
+Without `scratch_roots`, the first `wasm_script_worker:start_link/2,3`
+starts the reaper with one root, `scratch`. Its directory name contains the
+node name, the OS process and a unique integer, so two running nodes never
+share it. The path is fixed in the child spec, so after a reaper crash the
+supervisor restarts it on the same directory and journal.
+
+The list of roots the reaper created itself is a separate start argument.
+Only the supervisor passes it; it is not a key in `reaper_options`. So no
+configuration can mark one of your directories for deletion. A created root
+is removed at a clean shutdown, and only when no reservation is left and its
+journal is empty.
+
+Several cases in `wasm_adapter_conformance` stop and restart a reaper by
+hand. For them, `suspend_reaper/0` stops the supervised reaper and prevents a
+worker start from starting another one, until `resume_reaper/0`.
 
 ## Why `max_heap_words` is applied at spawn
 
 `max_heap_words` in a limits map is set with `spawn_opt` when the runner is
-created, not with `process_flag` inside it, because the closure and the
-request are copied onto the new heap before an in-process call would run. An
-inline caller does not get it by passing the key.
+created. It is not set with `process_flag` inside the runner: the closure and
+the request are copied onto the new heap before such a call could run. If
+you call the guest inline, passing the key does nothing.
 
 ## Why reactors were slow to adopt compiled code
 
-Until 0.3.0 a new instance could adopt compiled code only on a call where the
-tier's hotness counter fired, one call in 32. A reactor builds a fresh
-instance per request, so 31 requests in 32 ran interpreted with the compiled
-code already resident beside them. `wasm_jit`'s `maybe_adopt` now looks for
-resident code first and consults the counter only when there is none, so an
-instance adopts on its first call; `test/audit/PERF.md` has the before and
-after.
+Until 0.3.0, a new instance could start using compiled code only on a call
+where the tier's hotness counter fired: one call in 32. A reactor makes a new
+instance for each request. So 31 requests in 32 ran interpreted, even though
+the compiled code was already loaded. Now `wasm_jit`'s `maybe_adopt` first
+looks for loaded code, and reads the counter only when there is none. An
+instance uses compiled code from its first call. `test/audit/PERF.md` has the
+numbers before and after.
 
 ## Why a request's memory is a page table over the worker's image
 
-The runner restores the worker's image and the restored memory reads the
-image's pages in place, so a request allocates a page table and the 4 KiB
-pages it writes, and nothing else. When the runner exits, its arena goes back
-to the node and the image stays with the worker. There is no state to carry
-from one request to the next, which is why the kernel no longer recycles a
-destroyed instance's memory: that needed one process to restore every request
-and a mark on every store, and it shared nothing between workers.
+The runner restores the worker's image. The restored memory reads the
+image's pages where they are, without copying them. So a request allocates
+only two things: a page table (one entry per 4 KiB page, saying where that
+page is) and the pages it writes. Those written pages live in the memory's
+arena. When the runner exits, the arena goes back to the node and the image
+stays with the worker.
+
+Nothing has to pass from one request to the next. This is why the kernel no
+longer reuses the memory of a destroyed instance. Reuse needed one process
+to restore every request and a mark on every memory write, and workers
+could not share it.
 
 Two things a change here has to keep:
 
-- **The image outlives every memory restored from it.** The keeper counts each
-  restored memory as a holder of the image, so a worker that stops while a
-  runner is still finishing does not free pages the runner reads.
+- **The image lives longer than every memory restored from it.** The
+  keeper (`wasm_keeper`) records which processes hold each image. It counts
+  each restored memory as a holder. So when a worker stops while a runner is
+  still finishing, the pages the runner reads are not freed.
 - **One image per pool, when the pool prepares it.** `prepare/2` loads or
-  captures the image once, in a process of its own, and every worker started
-  with `prepared` takes a hold on that one. A worker started without it loads
-  its own, so fifty such workers on one file hold fifty copies.
+  captures the image once, in its own process. Every worker started with
+  `prepared` takes a hold on that one image. A worker started without it
+  loads its own copy, so fifty such workers on one file hold fifty copies.
 
 ## Why sending an image copies almost nothing
 
-An image is an Erlang term, and a send or a spawn copies it into the receiving
-process: the worker sends it to each request's runner. Its memory pages are
-binaries, which a copy shares by reference. Its tables used to be lists of
-`{funcref, Instance, Index}` tuples, which a copy does not share, so every
-request copied them. A table holding only `null` and the instance's own
-functions is now packed into one binary of a 32-bit word per entry: at
-capture, and at load, where the file decoder builds the words directly
-instead of a list first. A restore lays the words straight into the new
-instance's table (`wasm_table:init_funcrefs/3`). A table holding anything else
-stays a list, and the file holds lists as it always did.
+An image is an Erlang term. A send or a spawn copies it into the process
+that receives it, and the worker sends it to each request's runner. The
+image's memory pages are binaries, and a copy shares a binary by reference
+instead of copying its bytes.
 
-For CPython that takes a hand-off from 55,372 words to 1,747 and a spawn
-carrying the image from 174 us to 5 us; `test/audit/PERF.md`, "One image for
-a pool", has the rest.
+Its tables used to be lists of `{funcref, Instance, Index}` tuples. A copy
+does not share those, so every request copied them. Now a table that holds
+only `null` and the instance's own functions is packed into one binary, with
+a 32-bit word per entry. This happens at capture, and at load, where the file
+decoder builds the words directly instead of a list first. A restore writes
+the words straight into the new instance's table
+(`wasm_table:init_funcrefs/3`). A table that holds anything else stays a
+list, and the file stores lists as before.
+
+For CPython, this reduces the copied image from 55,372 words to 1,747, and
+a spawn that carries the image from 174 us to 5 us. `test/audit/PERF.md`,
+section "One image for a pool", has the rest.
 
 ## Why the artifact is loaded in a process of its own
 
-`Adapter:artifact/1` reads the module file, 30 MB for CPython. A worker does
-so little after it starts that it is rarely collected, so when it called
-`artifact/1` itself every idle worker kept a dead reference to that file. The
-kernel now calls it in a short-lived process. Before that process exits it
-lists the module claims it holds (`wasm_module_cache:claims/1`) and takes each
-again for the worker (`wasm_module_cache:claim_for/2`), so the module is never
-unclaimed in between; then it exits and the file goes with it. A raise in the
-adapter is raised again in the worker, so a start fails as it did before.
+`Adapter:artifact/1` reads the module file: 30 MB for CPython. After it
+starts, a worker does so little that the garbage collector rarely runs in
+it. So when the worker called `artifact/1` itself, every idle worker kept a
+reference to that file that it no longer used.
+
+The kernel now calls `artifact/1` in a short-lived process. A **claim** is a
+process's hold on a loaded module in the module cache. Before the
+short-lived process exits, it lists its claims (`wasm_module_cache:claims/1`)
+and takes each one again for the worker (`wasm_module_cache:claim_for/2`).
+So the module always has a claim. Then the process exits, and the file
+memory is freed with it. If the adapter raises an exception, the worker
+raises it again, so a failed start looks the same as before.
 
 Two things a change here has to keep:
 
-- **Only claims cross over.** Anything else the adapter tied to the calling
-  process, such as an ETS table or a link, dies with it. The contract says so
-  in [Writing an adapter](worker-contract.md).
-- **`prepare/2` runs the same steps.** It loads the artifact, looks the image
-  up and captures on a miss in one temporary process, which waits until the
-  caller has acquired the image before it exits. A worker started from the
-  result still loads its own artifact this way, and shares only the image.
+- **Only claims pass to the worker.** Anything else the adapter tied to the
+  calling process, such as an ETS table or a link, ends with that process.
+  [Writing an adapter](worker-contract.md) says so too.
+- **`prepare/2` runs the same steps.** In one temporary process, it loads the
+  artifact, looks up the image, and captures it if it is not found. The
+  process waits until the caller holds the image, then exits. A worker
+  started from the result still loads its own artifact this way. It shares
+  only the image.
 
 ## Read this next
 

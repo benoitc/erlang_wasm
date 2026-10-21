@@ -1,9 +1,10 @@
 # Host functions
 
-A host function is how WebAssembly calls into your Erlang. It is an ordinary
-Erlang function: no registration step, no interface definition language. Read
-this when your module needs to do anything you have not granted it through WASI,
-or when you are deciding what a module you do not trust is allowed to reach.
+A host function lets WebAssembly call your Erlang code. It is an ordinary
+Erlang function: you do not register it, and you do not describe it in an
+interface language. Read this page when your module needs to do something you
+have not granted through WASI, or when you decide what an untrusted module may
+reach.
 
 ## Write one
 
@@ -13,25 +14,25 @@ Imports = #{{~"env", ~"now"} => fun(_Ctx, []) ->
                                  end}.
 ```
 
-Key it by `{ModuleName, FieldName}`, matching what the module imports. The value
+The key is `{ModuleName, FieldName}`, the names the module imports. The value
 is `fun(Ctx, Args) -> Result` or an `{Module, Function}` tuple.
 
 Return one of:
 
 | you return | what happens |
 | --- | --- |
-| `{ok, Results}` | arity is checked against the import signature, execution continues |
-| `{trap, Reason}` | the invocation traps; your caller of `wasm:call/3` gets `{error, _}` |
-| you raise | caught and converted to a trap carrying the class, reason and stacktrace |
+| `{ok, Results}` | the runtime checks the number of results against the import's type, and the guest continues |
+| `{trap, Reason}` | the call traps (stops with an error); the code that called `wasm:call/3` gets `{error, _}` |
+| you raise an exception | the runtime catches it and turns it into a trap with the class, reason and stack trace |
 
-That last row is deliberate. An exception in your import does not escape into
-the process that made the call, so an embedder's import cannot destabilise a
-caller who merely invoked a module.
+The last row is on purpose. An exception in your import never reaches the
+process that made the call. So a faulty import cannot crash code that only
+called a module.
 
 ## Read and write memory
 
-WebAssembly hands you pointers, not data. Use the context to reach the
-instance's memory:
+WebAssembly gives you addresses in its memory, not the data itself. Use the
+context to read the instance's memory:
 
 ```erlang
 fun(Ctx, [Ptr, Len]) ->
@@ -41,7 +42,7 @@ fun(Ctx, [Ptr, Len]) ->
 end
 ```
 
-To return data, the module has to give you somewhere to put it, usually by
+To return data, the module must give you a place to write it, usually by
 exporting an allocator:
 
 ```erlang
@@ -57,38 +58,42 @@ fun(Ctx, [OutPtr, OutLen]) ->
 end
 ```
 
-Reads and writes are bounds-checked and trap if they leave the memory, so a
-module cannot use your host function to read outside its own sandbox.
+Every read and write checks its bounds, and traps if it goes outside the
+memory. So a module cannot use your host function to read outside its own
+sandbox.
 
 ## Block, if you have to
 
-Your host function may send a message, wait for a reply, or query a database.
-Nothing prevents it, and the instance is simply busy meanwhile. Two consequences
-you should plan for:
+Your host function may send a message, wait for a reply, or query a
+database. Nothing prevents this, and the instance just waits until it
+returns. Plan for two effects:
 
-- `fuel` does not bound it. Fuel counts WebAssembly work, and a host call that
-  waits ten seconds consumes none. Wall-clock bounding needs a timeout, which
-  needs a process; see [worker.md](worker.md).
-- The caller blocks too, if the call is inline. An inline `wasm:call/3` runs in
-  your process, so a blocking import blocks you.
+- `fuel` does not limit it. Fuel counts WebAssembly work, and a host call that
+  waits ten seconds uses none. To limit real time, you need a timeout, and a
+  timeout needs a separate process; see [worker.md](worker.md).
+- The caller waits too, if it called the instance directly. A direct
+  `wasm:call/3` runs in your process, so an import that blocks also blocks
+  you.
 
 ## Expect re-entrancy
 
-Your host function may call back into the same instance. `max_depth` bounds how
-deep that goes, and the nested call sees the same instance state, because it is
-the same instance. Nested calls are not isolated from each other, so do not
-assume the state you left is the state you return to.
+Your host function may call back into the same instance. This is called
+re-entrancy. `max_depth` limits how deep these nested calls go. The nested
+call sees the same state, because it is the same instance. Nested calls are
+not isolated from each other: the state may have changed when your function
+gets control back.
 
 ## Keep the import set small
 
-Limits constrain WebAssembly, not the Erlang you supply. A host function that
-reads any file, allocates without bound, or blocks forever sits outside every
-limit the runtime enforces. If you run untrusted modules, the import set you
-hand them is part of your sandbox, and it is the part the runtime cannot check
-for you.
+Limits apply to WebAssembly code, not to the Erlang code you supply. A host
+function that reads any file, allocates without limit, or blocks forever is
+outside every limit the runtime enforces. If you run untrusted modules, the
+imports you give them are part of your sandbox, and the runtime cannot check
+that part for you.
 
-WASI is the worked example of doing this properly. See [wasi.md](wasi.md) and
-`wasi_preview1`, where every capability is explicit and absence means refusal.
+WASI is a good example of how to do this. See [wasi.md](wasi.md) and
+`wasi_preview1`: every capability is granted explicitly, and a capability you
+do not grant is refused.
 
 ## Read this next
 

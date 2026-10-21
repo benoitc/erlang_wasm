@@ -1,9 +1,9 @@
 # Run a WASI command
 
-This example runs a program built by `rustc --target wasm32-wasip1`: it has a
-`main`, reads arguments, a file and the clock, and writes to stdout. **WASI**
-is the standard set of operations such a program imports, and you grant each
-one by name.
+This example runs a program built by `rustc --target wasm32-wasip1`. It has
+a `main`, reads its arguments, a file and the clock, and writes to stdout.
+**WASI** is the standard set of operations that such a program imports. You
+grant each one by name.
 
 **You need:** a checkout of this repository, which has the program in
 `test/fixtures/rust/`.
@@ -32,13 +32,13 @@ Exit.
 %% => 7
 ```
 
-**What happened.** The program saw `/data`, read `note.txt` from it and listed
-it, and was refused when it tried to write there: the grant said `read`. It
-could not reach anything outside `/data`. It exits with status 7 on purpose,
-so you can see the status come back.
+**What happened.** The program saw `/data`, read `note.txt` from it and
+listed the directory. When it tried to write there, it was refused, because
+the grant said `read`. It could not reach anything outside `/data`. It exits
+with status 7 on purpose, so that you can see the status come back.
 
-Leave `dirs` out and the program has no filesystem at all, not one rooted at
-your working directory; leave `net` out and it has no network. See
+Without `dirs`, the program has no filesystem at all. It does not get your
+working directory. Without `net`, it has no network. See
 [WASI](../wasi.md).
 
 **Clean up:**

@@ -170,7 +170,10 @@ export_names(N, <<_Kind, Rest0/binary>>, Acc) ->
     {Len, Rest1} = wasm_leb128:u32(Rest0),
     case Rest1 of
         <<Name:Len/binary, Rest2/binary>> ->
-            export_names(N - 1, skip_desc(skip_sortidx(Rest2)), [Name | Acc]);
+            export_names(N - 1,
+                         wasm_component_link:skip_export_desc(
+                           skip_sortidx(Rest2)),
+                         [Name | Acc]);
         _ ->
             lists:reverse(Acc)
     end;
@@ -182,13 +185,6 @@ skip_sortidx(<<_Sort, Rest0/binary>>) ->
     Rest1;
 skip_sortidx(Bin) ->
     Bin.
-
-%% The optional type ascription after a sortidx: `0x00` absent (the common case,
-%% and all the standard toolchain emits), `0x01` present. Only the absent form is
-%% skipped past to reach the next entry; a present descriptor stops the walk, which
-%% is harmless because each export sits in its own section (count 1).
-skip_desc(<<0, Rest/binary>>) -> Rest;
-skip_desc(Bin)               -> Bin.
 
 -doc "Decode and instantiate a component, wiring any resource intrinsics.".
 -spec instantiate(binary()) -> {ok, instance()} | {error, term()}.
@@ -561,7 +557,7 @@ drop_fun(Opts) ->
     end.
 
 start(Loader, Core, Imports, Limits, Exports, Extra) ->
-    case load_core(Loader, Core) of
+    case wasm_component_link:load_core(Loader, Core) of
         {ok, Mod} ->
             case wasm:instantiate(Mod, Imports, Limits) of
                 {ok, Inst} ->
@@ -573,9 +569,6 @@ start(Loader, Core, Imports, Limits, Exports, Extra) ->
         {error, _} = E ->
             E
     end.
-
-load_core(compile, Core) -> wasm:compile(Core);
-load_core(_Load, Core)   -> wasm:load(Core).
 
 -doc """
 Destroy a component instance, freeing every core it built and sweeping the host
@@ -1109,17 +1102,18 @@ drop_checked(#{res_id := Id} = I, DtorExport, Handle) ->
     case wasm_resources:exists(Id) of
         true  -> drop_live(Id, Rt, Inst, CoreName, Handle);
         %% No table: answer what the destroyed (or unowned) instance answers.
-        false -> run_dtor(Inst, CoreName, Handle)
+        false -> call_guest_dtor(Inst, CoreName, Handle)
     end.
 
 drop_live(Id, Rt, Inst, CoreName, Handle) ->
     wasm_resources:with_instance(
       Id,
       fun() ->
-          run_dtor(Inst, CoreName, wasm_resources:host_drop(Id, Rt, Handle))
+          call_guest_dtor(Inst, CoreName,
+                          wasm_resources:host_drop(Id, Rt, Handle))
       end).
 
-run_dtor(Inst, CoreName, Rep) ->
+call_guest_dtor(Inst, CoreName, Rep) ->
     case wasm:call(Inst, CoreName, [Rep]) of
         {ok, _}        -> ok;
         {error, _} = E -> E

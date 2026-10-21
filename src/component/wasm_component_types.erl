@@ -16,6 +16,7 @@ flags, option, result), resource handles and the async `future`, `stream` and
 
 -include("wasm_component.hrl").
 
+-export([plain_name/1]).
 -export([import_interfaces/1, parse_types/1, type_space/1, func_sig/2,
          resource_dtors/1]).
 
@@ -517,7 +518,8 @@ label(<<_Kind, Rest0/binary>>) ->
     <<Name:Len/binary, Rest2/binary>> = Rest1,
     {Name, Rest2}.
 
-%% A function parameter/result name: a u32 length then the bytes, with no kind byte.
+-doc "A name with no kind byte: a u32 length, then the bytes.".
+-spec plain_name(binary()) -> {binary(), binary()}.
 plain_name(Bin) ->
     {Len, Rest0} = wasm_leb128:u32(Bin),
     <<Name:Len/binary, Rest1/binary>> = Rest0,

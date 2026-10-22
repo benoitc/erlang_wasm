@@ -1,9 +1,9 @@
 # Stop a runaway
 
-This example runs a guest that never returns, twice: once bounded by a work
-budget, once by a deadline. A call made directly runs in your process and
-cannot be interrupted, so a deadline needs the instance in a process of its
-own, a **worker**.
+This example runs a guest that never returns, twice: once limited by a work
+budget, and once by a deadline. A call made directly runs in your process,
+and nothing can interrupt it. So a deadline needs the instance in a process
+of its own: a **worker**.
 
 **You need:** nothing beyond the application.
 
@@ -12,8 +12,8 @@ own, a **worker**.
 {ok, Spin} = wasm:compile({wat, ~"(module (func (export \"spin\") (loop $l (br $l))))"}).
 ```
 
-**Bounded by fuel.** **Fuel** is a work budget: the guest stops when it has
-done that much work, and the worker carries on.
+**Limited by fuel.** **Fuel** is a work budget: the guest stops after it has
+done that much work, and the worker keeps running.
 
 ```erlang
 {ok, W} = wasm_instance_worker:start_link(Spin, #{limits => wasm_limits:untrusted()}),
@@ -21,9 +21,9 @@ wasm_instance_worker:call(W, ~"spin", [], 5000).
 %% => {error, #{class := exhaustion, kind := out_of_fuel}}
 ```
 
-**Bounded by time.** With no fuel ceiling, only the deadline can stop it. When
-it passes, the worker is killed, so the work really stops rather than running
-on with nobody waiting:
+**Limited by time.** With no fuel limit, only the deadline can stop the
+guest. When the deadline passes, the worker is killed. So the work really
+stops, and does not keep running with nobody waiting for it:
 
 <!-- check: expect-exit killed -->
 ```erlang
@@ -32,10 +32,10 @@ wasm_instance_worker:call(W2, ~"spin", [], 200).
 %% => {error, #{class := exhaustion, kind := timeout}}
 ```
 
-**What happened.** Fuel counts work, not time: a guest blocked in a host
-function burns none. A deadline counts time, and costs a process. Untrusted
-code wants both. The killed worker was linked to you, which is why a shell
-shows it exiting; put workers under a supervisor, as
+**What happened.** Fuel counts work, not time: a guest that waits in a host
+function uses none. A deadline counts time, and needs a separate process. For
+untrusted code, use both. The killed worker was linked to your shell process,
+so the shell shows it exiting. Put workers under a supervisor, as
 [Put it in an OTP application](../otp.md) shows.
 
 **Clean up:**

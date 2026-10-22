@@ -1,17 +1,18 @@
 # Architecture
 
 This page is the map of the runtime: what the eighty-eight modules are, which
-ones depend on which, and where to start reading. You need it before you change
-anything, because every module explains itself and none of them explains the
-shape of the whole.
+ones depend on which, and where to start reading. Read it before you change
+anything. Each module documents itself, but no module describes how they fit
+together.
 
-Everything here is derived from the compiled modules rather than described from
-memory, and `test/wasm_architecture_SUITE.erl` recomputes it on every test run.
-If this page and the code disagree, that suite fails.
+Everything here is computed from the compiled modules, not written from
+memory, and `test/wasm_architecture_SUITE.erl` computes it again on every test
+run. If this page and the code disagree, that suite fails.
 
 ## Where to start reading
 
-Read in this order. Each step is understandable with only the ones before it.
+Read in this order. You can understand each step if you have read the steps
+before it.
 
 1. `wasm` is the front door. Every public operation is here, and each one is a
    few lines that delegate. Read it to learn the vocabulary: module, instance,
@@ -27,8 +28,8 @@ Read in this order. Each step is understandable with only the ones before it.
 6. `wasm_jit` and `wasm_core` are the compiled tier. Read
    [the compiled tier](compiled-tier.md) first, then `wasm_jit:entry/3`.
 
-`wasi_preview1` is a separate world sitting on top of all of it. You can ignore
-it entirely unless you are working on WASI.
+`wasi_preview1` is a separate part that sits on top of all of this. You can
+ignore it unless you are working on WASI.
 
 ## Where things are
 
@@ -55,9 +56,10 @@ read. `test/` holds every suite named here.
 
 ## The supervision tree
 
-What `application:ensure_all_started(wasm)` starts. Each subsystem has its own
-supervisor, so one that keeps crashing uses up its own restart budget and not
-its neighbours'; `wasm_sup` says why.
+This is what `application:ensure_all_started(wasm)` starts. Each subsystem has
+its own supervisor. So a subsystem that keeps crashing uses up only its own
+restart limit, not the limit of the others. The `wasm_sup` module doc says
+why.
 
 ```text
 wasm_sup                one_for_one
@@ -76,17 +78,18 @@ it, and your application decides what shape those processes take.
 
 ## The layers
 
-This is a map for changing the runtime, not for using it: a level says which
-modules a module may call, and nothing about what you do with them. If you are
-running WebAssembly rather than changing the runtime, start at
+This map is for changing the runtime, not for using it. A level says which
+modules a module may call. It says nothing about how you use them. If you run
+WebAssembly and do not change the runtime, start at
 [Getting started](getting-started.md) instead.
 
-Eleven of them, derived rather than drawn: a module sits one level above the
-highest thing it calls, and the three cycles below each occupy a single level
-together. So a module only ever calls **downward**, and level 0 depends on
-nothing else in the project, which is where you can start and be certain of
-finishing. The worker modules, in `src/worker/`, sit on top of the runtime
-they use: the adapters at L10, the kernel below them.
+There are eleven levels, computed from the code and not drawn by hand. A
+module sits one level above the highest module it calls. The modules of each
+of the three cycles below share one level. So a module only ever calls
+**downward**, and level 0 depends on nothing else in the project: you can
+start reading there and understand it completely. The worker modules, in
+`src/worker/`, sit on top of the runtime they use: the adapters at L10, the
+kernel below them.
 
 The folders follow the same split. `src/` is the core runtime: the front
 end, instances, the interpreter, memory, snapshots and the compiled tier.
@@ -120,20 +123,21 @@ L0  wasm_error  wasm_num  wasm_limits  wasm_code_slots  wasm_file_cache
 ```
 
 `test/wasm_architecture_SUITE.erl` asserts that this block names every module
-in the application and nothing else. It was added after seven modules went
-missing from it -- the four snapshot ones, `wasm_file_cache`, `wasm_store` and
-`wasm_subsup` -- while the cycles below were kept current by hand.
+in the application and nothing else. That check was added after seven modules
+went missing from the block while the cycles below were kept up to date by
+hand. The seven were the four snapshot modules, `wasm_file_cache`,
+`wasm_store` and `wasm_subsup`.
 
 Read it as three stacks that meet at the top. The **front end** goes
 `wasm_leb128` to `wasm_decode` to `wasm_validate`, or `wasm_wat_lex` to
 `wasm_wat` for the text format, and both produce the same `#module{}`. The
 **runtime** goes `wasm_keeper` to `wasm_memory` and its siblings to
 `wasm_instance` to `wasm_exec`. The **tier** goes `wasm_code_slots` to
-`wasm_core` to `wasm_jit`. `wasm` sits over all three, and the snapshot
-modules hang off the runtime at three different heights: `wasm_snapshot_file`
-at the bottom because a file format needs nothing, `wasm_snapshot` in the
-middle because it copies instance state, `wasm_snapshot_owner` at the top
-because it holds a module claim, which is why it is in a cycle with the facade.
+`wasm_core` to `wasm_jit`. `wasm` sits over all three. The snapshot modules
+are at three different levels of the runtime. `wasm_snapshot_file` is at the
+bottom, because a file format needs nothing. `wasm_snapshot` is in the middle,
+because it copies instance state. `wasm_snapshot_owner` is at the top, because
+it holds a claim on a module; that is why it is in a cycle with the facade.
 
 ```text
       script workers: wasm_script_worker, wasm_instance_worker, adapters
@@ -161,12 +165,13 @@ also call directly.
 
 ## The three cycles
 
-There are exactly three, and each is a few edges rather than a tangle.
+There are exactly three cycles, and each one is only a few calls.
 
 **The decoder, five modules.** `wasm_decode_code` and the opcode-space modules
 `wasm_decode_simd`, `wasm_decode_gc` and `wasm_decode_atomic` call each other. A
 SIMD immediate can contain a memory argument and a GC instruction can contain a
-block type, so this is the format's own recursion and not a layering slip.
+block type. The recursion comes from the binary format itself; it is not a
+mistake in the layers.
 
 **The tier, three modules.** Two edges, one function each. `wasm_core` calls
 `wasm_exec:load_spec/1` and `store_spec/1` at generation time, so that the
@@ -174,26 +179,27 @@ interpreted and generated paths cannot describe a load differently.
 `wasm_exec` calls `wasm_jit:reentered/0` on the way back into generated code.
 
 **The facade, the cache and the snapshot owner, three modules.**
-`wasm_module_cache` calls `wasm:compile/2` on a miss. One line, and for a long
-time that was the whole of it.
+`wasm_module_cache` calls `wasm:compile/2` when a module is not in the cache.
+That is one line, and for a long time it was the whole cycle.
 
-`wasm_snapshot_owner` joined it deliberately. An initialized runtime snapshot
-holds a module's layout, so it needs a claim on that module that outlives the
-process which captured it, and a claim is given back by the process that holds
-it. Anything long-lived enough to do that calls the cache, and the cache calls
-the facade, so there is no arrangement that avoids the cycle: only a choice of
-which module is in it. The choice was the fifty lines whose entire purpose is
-holding a claim, rather than `wasm_snapshot`, which is the mechanism -- what a
-capture copies and what a restore lays over -- and stays out of it.
+`wasm_snapshot_owner` was added to it on purpose. An initialized runtime
+snapshot holds a module's layout. So it needs a claim on that module that
+lives longer than the process that captured it, and only the process that
+holds a claim can give it back. Any process that lives long enough to do this
+calls the cache, and the cache calls the facade. So the cycle cannot be
+avoided; you can only choose which module is in it. The choice was
+`wasm_snapshot_owner`, fifty lines whose only job is to hold a claim. The
+mechanism, `wasm_snapshot`, stays out of the cycle: it is what a capture
+copies and what a restore writes back.
 
-Cycles are not forbidden here. What is forbidden is a fourth one appearing
-because nobody noticed. A cycle is the one structural property you cannot
-discover by reading a module: everything else about `wasm_memory` is answered
-inside `wasm_memory`, and this is answered only by reading all eighty-eight.
+Cycles are allowed here. What is not allowed is a fourth cycle that appears
+without anyone noticing. You cannot see a cycle by reading one module.
+Everything else about `wasm_memory` you learn inside `wasm_memory`, but a
+cycle you only find by reading all eighty-eight.
 
-The margin is thinner than it looks. Adding one call from `wasm_error`, at
-level 0, up into `wasm` collapses fourteen modules into a single component, and
-nothing but the guard would have told you.
+It is easy to add one by mistake. One call from `wasm_error`, at level 0, up
+into `wasm` would merge fourteen modules into one cycle, and only the test
+would tell you.
 
 ## The path of a call
 
@@ -221,23 +227,24 @@ wasm:call/3                      check per-call limits, if any were given
 
 Three things about that shape are deliberate and easy to undo by accident.
 
-**The tier is entered once, at the outermost invocation.** Not inside
-`do_call/4`, where a "is this callee compiled?" test would sit on the
-interpreter's hot path. Three separate changes to `run/3` and `branch/3` have
-each cost about 70% on QuickJS while the synthetic loop measured nothing;
-`test/audit/PERF.md` has them.
+**The tier is entered once, at the outermost call.** It is not entered inside
+`do_call/4`, because there an "is this function compiled?" test would run on
+every interpreted call. Three separate changes to `run/3` and `branch/3` each
+made QuickJS about 70% slower, while the small synthetic loop benchmark showed
+no change; `test/audit/PERF.md` records them.
 
 **Depth is per process.** A host function may call back into the instance that
 called it, so the count cannot live on the instance.
 
-**The lease is the outermost frame's.** Nested calls are already inside one,
-and taking a second would be two atomic operations per re-entry for nothing.
+**Only the outermost call takes the lease.** Nested calls already run inside
+it. Taking a second lease would add two atomic operations to each nested call,
+with no benefit.
 
-A request through the worker kernel arrives at this path by a longer road:
-`wasm_script_worker` spawns a runner per request, the adapter's `prepare/3` builds
-the import set, and a reactor restores an image before `handle` is called. That
-road is drawn in [Worker internals](worker-internals.md), and its cost is broken down
-phase by phase in `test/audit/PERF.md`.
+A request through the worker kernel takes a longer route to this path.
+`wasm_script_worker` starts a runner process for each request, the adapter's
+`prepare/3` builds the imports, and a reactor restores an image before
+`handle` is called. [Worker internals](worker-internals.md) draws that route,
+and `test/audit/PERF.md` gives its cost for each phase.
 
 ## Reading the graph yourself
 
@@ -255,19 +262,19 @@ exactly this.
 
 Do not derive the graph by grepping the sources. Module documentation refers to
 other modules as `` `wasm_exec:call/3` `` and a grep counts every one of those as
-a dependency; on this tree that turns three cycles into one component of
-fourteen modules and a completely wrong picture.
+a dependency. On this code that turns three cycles into one cycle of fourteen
+modules, which is completely wrong.
 
 ## Short notes
 
-- Level 0 is a good place to make a change: nothing in the project depends on
-  its internals, so the blast radius is what its callers use.
-- `wasm_keeper` is the lifetime authority for anything two instances can share.
-  If you are adding a resource with a lifetime, it goes through there.
+- Level 0 is a good place to make a change. Nothing in the project depends on
+  its internals, so a change affects only what its callers use.
+- `wasm_keeper` decides how long anything that two instances can share stays
+  alive. If you add a resource with a lifetime, it must go through the keeper.
   That includes a snapshot's image, which every memory restored from it holds,
   and each memory's charged pages: its page table, growth chunks and arena.
-- `wasm_error` is at level 0 on purpose. Everything may build an error and
-  nothing may ask the runtime a question while doing it.
+- `wasm_error` is at level 0 on purpose. Every module may build an error, and
+  building one must never call back into the runtime.
 - Adding a module means deciding its level. If it needs something above it, you
   are about to add a fourth cycle.
 
@@ -275,4 +282,5 @@ fourteen modules and a completely wrong picture.
 
 The page for the part you are changing: [Worker
 internals](worker-internals.md), [The compiled tier](compiled-tier.md) or
-[Snapshots](snapshots.md); then [Design notes](design-notes.md) for the why.
+[Snapshots](snapshots.md); then [Design notes](design-notes.md) for the reasons
+behind the design.

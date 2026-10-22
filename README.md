@@ -1,11 +1,12 @@
 # erlang_wasm
 
-A WebAssembly runtime implemented in Erlang/OTP.
+A WebAssembly runtime written in Erlang/OTP.
 
-Decoding, validation, instantiation, execution, linear memory and WASI are all
-implemented here. This is not a binding to Wasmtime, Wasmer, WAMR or wasm3. The
-only native code is an optional 900-line file NIF that closes one specific
-security window, and the runtime works without it.
+This project implements every part itself: decoding, validation,
+instantiation, execution, linear memory and WASI. It is not a binding to
+Wasmtime, Wasmer, WAMR or wasm3. The only native code is an optional file NIF
+of 900 lines. It closes one specific security gap, and the runtime works
+without it.
 
 ```erlang
 {ok, Mod}  = wasm:load_file("plugin.wasm"),
@@ -19,9 +20,10 @@ security window, and the runtime works without it.
 {ok, [Result]} = wasm:call(Inst, ~"run", [42]).
 ```
 
-Nothing raises. A malformed binary, an ill-typed module, a trap and a resource
-limit all come back as `{error, Error}` carrying a class, a machine-readable
-kind, the specification's message text, and context.
+Nothing raises an exception. A malformed binary, a module with type errors, a
+trap and a resource limit all return `{error, Error}`. The error carries a
+class, a kind your code can match on, the message text from the
+specification, and context.
 
 ## Where to start
 
@@ -31,33 +33,35 @@ kind, the specification's message text, and context.
 | understand how it works | [Architecture](docs/architecture.md) |
 | change it | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
-[docs/README.md](docs/README.md) has the reading order for each, and every
-page by task.
+[docs/README.md](docs/README.md) gives the reading order for each case, and
+lists every page by task.
 
 ## Status
 
-Runs unmodified real-toolchain output: a Rust `wasm32-wasip1` `std` binary
-through `_start`, and `clang -O2` freestanding modules.
+The runtime runs real compiler output without changes: a Rust
+`wasm32-wasip1` binary that uses `std`, started through `_start`, and
+freestanding modules built with `clang -O2`.
 
-**All 65,481 core specification assertions pass**, across 256 suites, with an
-empty baseline. Not implemented is refused explicitly rather than approximated.
+**All 65,481 assertions of the core specification tests pass**, across 256
+suites, with no known failures. A feature that is not implemented is refused
+with an error. It is never approximated.
 
 Implemented: WebAssembly 1.0 core, bulk memory, reference types, multi-value,
 multiple memories, memory64, SIMD, tail calls, typed function references,
 exception handling, garbage collection, relaxed SIMD, threads and shared
-memories, sign extension, saturating
-float-to-int, and 45 WASI preview 1 syscalls with capability-based filesystem
-and network access.
+memories, sign extension, saturating float-to-int, and 45 WASI preview 1
+system calls. File and network access are capability-based: the guest can
+reach only what you grant.
 
-The Component Model runs too: components with resources, composition and the
+The Component Model works too: components with resources, composition and the
 async Canonical ABI, on a WASI 0.2 host with filesystem, sockets and
 `wasi:http`. See [docs/components.md](docs/components.md).
 
-It reads both formats: the binary one and the text format, `.wat` modules and
-`.wast` scripts alike.
+The runtime reads both formats: the binary format, and the text format
+(`.wat` modules and `.wast` scripts).
 
-Sockets are granted the way directories are: by naming what may be reached, with
-nothing reachable by default. See [docs/wasi.md](docs/wasi.md) and
+You grant sockets the same way as directories: you name what the guest may
+reach. By default it can reach nothing. See [docs/wasi.md](docs/wasi.md) and
 [docs/security.md](docs/security.md).
 
 ## A plugin or a script
@@ -72,14 +76,15 @@ nothing reachable by default. See [docs/wasi.md](docs/wasi.md) and
 {ok, ~"3\n"} = qjs_worker:eval(S, ~"print(1 + 2);").
 ```
 
-Both are in `examples/`, both run untrusted code under a timeout with nothing
-surviving a request. [docs/guests.md](docs/guests.md) has the commands to build
-the guests, run both from `rebar3 shell`, and decide which shape you want.
+Both examples are in `examples/`. Both run untrusted code under a timeout, and
+no state is kept from one request to the next.
+[docs/guests.md](docs/guests.md) has the commands to build the guests and to
+run both from `rebar3 shell`. It also helps you choose between the two.
 
 ## Sandboxing
 
-WASI capabilities are explicit, and an absent capability is refused rather than
-silently granted:
+You grant each WASI capability explicitly. A capability you do not grant is
+refused:
 
 ```erlang
 {ok, Exit, Stdout, _} =
@@ -87,15 +92,17 @@ silently granted:
                     dirs => [{~"/data", "/srv/data", read}]}).
 ```
 
-No `dirs` means no filesystem at all, not one rooted at the working directory.
-Every filesystem escape technique has its own test case, verified against
-Rust's own `std::fs`. [docs/security.md](docs/security.md) states what the
-sandbox does *not* cover, which is the more useful half.
+Without `dirs`, the guest has no filesystem at all. It does not get one rooted
+at the working directory. Each known way to escape the filesystem sandbox has
+its own test case, checked against the behaviour of Rust's `std::fs`.
+[docs/security.md](docs/security.md) lists what the sandbox does *not*
+protect against. That list is the more useful part.
 
-For untrusted code, put the instance in a process so a runaway module can be
-killed on a timeout. `wasm_instance_worker` is that process: one instance, a
-deadline, and a kill when it passes. [docs/worker.md](docs/worker.md) says when
-you need it, and how to put a pool of them in your own supervision tree.
+For untrusted code, run the instance in its own process, so you can kill a
+module that runs too long. `wasm_instance_worker` is that process: one
+instance, a deadline, and a kill when the deadline passes.
+[docs/worker.md](docs/worker.md) says when you need it, and how to put a pool
+of them in your own supervision tree.
 
 ## Documentation
 
@@ -112,74 +119,93 @@ rebar3 dialyzer
 rebar3 bench      # benchmarks
 ```
 
-A C compiler is optional. Without one, the WASI path resolver falls back to
-pure Erlang and the residual race is documented.
+A C compiler is optional. Without one, the WASI path resolver uses pure
+Erlang. A small race condition then remains, and the documentation describes
+it.
 
-The conformance suite runs from the upstream sources, read directly. Clone it
-beside the project and `rebar3 ct` picks it up:
+The conformance tests are read directly from the upstream sources. Clone them
+next to the project and `rebar3 ct` finds them:
 
 ```sh
 git clone --depth 1 https://github.com/WebAssembly/testsuite.git
 ```
 
-Nothing is generated and no other tool is needed. Without the checkout the
-conformance suite skips with that message and everything else still runs.
+Nothing is generated and you need no other tool. Without the clone, the
+conformance suite is skipped with a message, and every other test still runs.
 
 ## Why it is built this way
 
-The design follows from measurements on the BEAM rather than from how C
-runtimes are built. Five results shaped it:
+The design comes from measurements on the BEAM (the Erlang virtual machine),
+not from the way C runtimes are built. Six results shaped it.
 
-**A cons-list walk beats a flattened instruction stream.** Same program, 2.4M
-instructions: walking a nested AST measured 3.7 ns per instruction, while the
-bytecode-plus-program-counter shape every C interpreter uses measured 5.6 ns.
-`element/2` with a runtime index is bounds-checked; matching a list head is a
-dereference the compiler turns into a jump table. WebAssembly control flow is
-structured, so blocks nest and there is no program counter at all.
+**Walking a nested list is faster than a flat instruction array.** We ran the
+same program of 2.4 million instructions both ways. Walking a nested tree of
+lists took 3.7 ns per instruction. A flat array of bytecode with a program
+counter, the design every C interpreter uses, took 5.6 ns. In Erlang,
+`element/2` with an index known only at run time checks its bounds each time.
+Matching the head of a list is a pointer read, and the compiler turns it into
+a jump table. WebAssembly control flow is structured: blocks nest, so the
+interpreter needs no program counter at all.
 
-**Erlang cannot represent NaN or Infinity as a float.** `0.0/0.0` raises
-`badarith`, and `<<F:64/float>>` does not even match those bit patterns. Floats
-use a hybrid representation. A C NIF was measured as an alternative and was
-*slower*: a NaN-capable NIF must return raw bit patterns, and every such pattern
-is a heap bignum.
+**An Erlang float cannot be NaN or Infinity.** `0.0/0.0` raises `badarith`,
+and `<<F:64/float>>` does not match those bit patterns. So the runtime stores
+floats in a mixed form: an Erlang float when possible, a tuple or atom
+otherwise. We measured a C NIF as an alternative, and it was *slower*. A NIF
+that handles NaN must return the raw bit pattern, and each one is a big
+integer allocated on the heap.
 
-**A `v128` is a binary, not a 128-bit integer.** Bit syntax truncates each
-field to its declared width, so lane wrapping is free, and the vector is built
-in one allocation. `i32x4.add` measured 11.8 ns against 126 ns for the integer
-form; `i8x16.add` 14.6 ns against 610 ns.
+**A `v128` is a binary, not a 128-bit integer.** Binary syntax cuts each field
+to its declared width, so the overflow of each lane is handled with no extra
+work, and the vector is built in one allocation. `i32x4.add` took 11.8 ns, and
+126 ns as an integer. `i8x16.add` took 14.6 ns, and 610 ns as an integer.
 
-**Garbage-collected objects cannot ride on BEAM garbage collection.** They are
-mutable and cyclic, and the BEAM's only traced mutable container holds
-integers. So they live in a store this runtime owns and this runtime collects,
-which is affordable only because the interpreter owns all execution state
-explicitly: between calls the operand stack is empty, so the roots are
-enumerable without stack maps or safe points.
+**Garbage-collected objects cannot use the BEAM garbage collector.** These
+objects can change and can point to each other in cycles. The only mutable
+container the BEAM collector traces holds integers. So the objects live in a
+store that this runtime owns and collects itself. This is affordable only
+because the interpreter keeps all execution state in plain data. Between two
+calls, the operand stack is empty, so the runtime can list every root without
+stack maps or safe points.
 
-**The collector is generational, and the generation is free.** Object ids come
-from a counter and are never reused, so the objects allocated since the last
-collection are exactly an id range: the nursery needs no bookkeeping. A minor
-collection after a thousand allocations costs 0.083 ms whether the live set is a
-thousand objects or a hundred thousand, where tracing all of the latter costs
-14.9 ms.
+**The collector is generational, and the generations cost nothing to track.**
+Object ids come from a counter and are never reused. So the objects created
+since the last collection are exactly a range of ids, and the young
+generation needs no bookkeeping. After a thousand allocations, a minor
+collection takes 0.083 ms, whether a thousand or a hundred thousand objects
+are alive. Tracing a hundred thousand objects takes 14.9 ms.
 
-**`atomics` makes linear memory viable without native code.** A store costs
-6 ns against 1201 ns for rebuilding an immutable binary. Memory is chunked
-`atomics` arrays sized to the memory, so growth appends instead of copying. A
-memory restored from a snapshot reads the image's pages in place and copies a
-4 KiB page on its first write, so a CPython restore is 0.8 ms rather than 12.
+**`atomics` arrays make linear memory possible without native code.** A store
+takes 6 ns. Rebuilding an immutable binary takes 1201 ns. Memory is a set of
+`atomics` arrays sized to the memory, so growing it adds arrays and copies
+nothing. A memory restored from a snapshot reads the image's pages where they
+are, and copies a 4 KiB page only the first time the guest writes to it. So a
+CPython restore takes 0.8 ms instead of 12.
 
-The full reasoning, including the trade-offs rejected and the benchmark that
-lied, is in the module documentation and [docs/features.md](docs/features.md).
+The full reasoning, with the options we rejected and the benchmark that gave
+a wrong result, is in the module documentation and in
+[docs/features.md](docs/features.md).
 
 ## AI-assisted development
 
-This software is developed with **strong assistance from GPT 5.6, Claude Opus 5, and Fable**, with humans leading the architecture, semantics, testing, benchmarking, and debugging.
+This software is developed with **strong assistance from GPT 5.6, Claude Opus
+5, and Fable**. Humans lead the architecture, semantics, testing, benchmarking
+and debugging.
 
-We say this openly because it shaped how the project was built. If you are not comfortable using AI-developed code, this software may not be for you.
+We say this openly because it shaped how the project was built. If you are
+not comfortable using code developed with AI, this software may not be for
+you.
 
-The development process is not prompt-and-accept. Humans define the design, architecture, expected behaviour, and correctness criteria. AI agents are used extensively for implementation, refactoring, test generation, code analysis, and exploring alternative approaches.
+We do not simply accept what an agent writes. Humans define the design, the
+architecture, the expected behaviour and the rules for correctness. AI agents
+are used a lot for implementation, refactoring, writing tests, analysing code
+and trying other approaches.
 
-Generated code is treated as a proposal, not as evidence of correctness. Changes are validated through the WebAssembly specification test suite, real toolchain output, differential testing against established runtimes where applicable, and repeatable performance benchmarks. Unexpected results are investigated rather than accepted because an agent produced plausible code.
+Generated code is a proposal. It is not proof that the code is correct. We
+check changes with the WebAssembly specification test suite, with real
+compiler output, by comparing results against established runtimes where we
+can, and with benchmarks we can repeat. When a result is unexpected, we
+investigate it. We do not accept it because an agent produced code that looks
+right.
 
 ## Licence
 

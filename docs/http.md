@@ -1,24 +1,29 @@
 # HTTP
 
-`wasi:http` is the WASI 0.2 interface a component uses to make HTTP requests
-and to answer them. Read this when a component you run calls
-`wasi:http/outgoing-handler` to reach a server, when it exports
-`wasi:http/incoming-handler` and you want to serve requests with it, or when
-you need a wire protocol the host does not ship. The component sees abstract
-HTTP; the host picks the wire protocol, performs TLS, and decides which
-addresses are reachable. For running components in general, read
-[WASI 0.2](wasi-0-2.md) first.
+`wasi:http` is the WASI 0.2 interface that a component uses to send HTTP
+requests and to answer them. Read this page in three cases: a component you
+run calls `wasi:http/outgoing-handler` to reach a server; a component exports
+`wasi:http/incoming-handler` and you want it to serve requests; or you need a
+wire protocol that the host does not include. The component only sees
+requests and responses. The host chooses the wire protocol (HTTP/1.1 or
+HTTP/2), does TLS, and decides which addresses the component may reach. For
+running components in general, read [WASI 0.2](wasi-0-2.md) first.
 
-The host side is `wasi_http` (the `wasi:http/types` resources and the
-outgoing handler), `wasi_http_transport` (the behaviour a wire binding
-implements), `wasi_http_h1` and `wasi_http_h2` (the two bindings), and
-`wasi_http_listener` (a live server).
+The host side has these modules:
+
+- `wasi_http`: the `wasi:http/types` resources and the outgoing handler.
+- `wasi_http_transport`: the behaviour that a *transport* implements. A
+  transport is the module that sends a request on the network.
+- `wasi_http_h1` and `wasi_http_h2`: the two transports, for HTTP/1.1 and
+  HTTP/2.
+- `wasi_http_listener`: a server that accepts real connections.
 
 ## Let a component make requests
 
-`wasi:http` is always in the import map `wasi_preview2:command/1` builds, so a
-component that imports it links with no options. Its requests are refused
-until you pass a `network` grant naming what it may reach:
+`wasi:http` is always in the import map that `wasi_preview2:command/1`
+builds, so a component that imports it links with no options. The host
+refuses its requests until you pass a `network` grant that names what it may
+reach:
 
 ```erlang
 {ok, Bin} = file:read_file("client.component.wasm"),
@@ -27,25 +32,28 @@ Grant = #{connect => [{tcp, ~"127.0.0.1", 8080}], resolve => allow},
     wasi_preview2:run_command(Bin, <<>>, #{network => Grant}).
 ```
 
-The grant is the one `wasi:sockets` uses, described in
-[WASI](wasi.md). Before each request the host splits the authority into a host
-and a port (80 for `http`, 443 for `https` when the port is omitted) and
-checks it against the `connect` rules:
+It is the same grant that `wasi:sockets` uses, described in
+[WASI](wasi.md). Before each request, the host splits the *authority* (the
+`host:port` part of the URL) into a host and a port. Without a port, it uses
+80 for `http` and 443 for `https`. Then it checks them against the `connect`
+rules:
 
-- A literal address is checked as itself.
-- A name needs `resolve => allow`. The host resolves it once and checks each
-  address it resolves to; the request goes to the first one the rules admit,
-  and the name is still sent as the Host header and the TLS server name.
-- A name that resolves to nothing is `DNS-error`. Anything else refused comes
-  back to the guest as `HTTP-request-denied`.
+- An IP address is checked as it is.
+- A host name needs `resolve => allow`. The host resolves the name once and
+  checks each address it gets. The request goes to the first address the
+  rules allow. The name is still sent as the Host header and as the TLS
+  server name.
+- If a name resolves to no address, the guest gets `DNS-error`. For any other
+  refusal, the guest gets `HTTP-request-denied`.
 
-Grants name addresses, never host names, as they do for sockets, so grant the
-addresses the names you expect resolve to.
+As for sockets, grants name addresses, never host names. So grant the
+addresses that you expect your host names to resolve to.
 
 ### What the guest gets back
 
-The request is performed when the guest first reads the response future, after
-it has finished writing the body. Failures arrive as `wasi:http` error codes:
+The host sends the request when the guest first reads the response *future*
+(a value that is ready later), after the guest has finished writing the body.
+Failures reach the guest as `wasi:http` error codes:
 
 | the host sees | the guest gets |
 | --- | --- |
@@ -58,30 +66,32 @@ it has finished writing the body. Failures arrive as `wasi:http` error codes:
 | the body stalls past the overall deadline | `HTTP-response-timeout` |
 | the server closes before responding | `HTTP-response-incomplete` |
 
-The overall deadline is 30 seconds and is not an option. The guest can set
-`connect-timeout` and `first-byte-timeout` on its `request-options`;
-`wasi_http_h1` applies both, and `wasi_http_h2` applies neither.
-`between-bytes-timeout` is stored and read back but not applied.
+The overall deadline is 30 seconds. You cannot change it. The guest can set
+`connect-timeout` and `first-byte-timeout` in its `request-options`.
+`wasi_http_h1` applies both. `wasi_http_h2` applies neither.
+The host stores `between-bytes-timeout` and returns it when read, but does
+not apply it.
 
-Two limits are enforced on what the guest builds. A header section larger
-than 64 KiB traps, because the WIT `header-error` has no case for it. A body
-that declares `content-length` and writes more than that fails with
-`HTTP-request-body-size`.
+The host enforces two limits on the request the guest builds. Headers larger
+than 64 KiB in total cause a trap, because the WIT type `header-error` has no
+case for this error. A body that declares a `content-length` and then writes
+more bytes than that fails with `HTTP-request-body-size`.
 
 ## Make HTTPS requests
 
-The guest sets the scheme to `HTTPS`; the host performs TLS. By default the
-peer is verified against the system CA store, with the host name from the
-authority. Pass `http_tls` to give your own `ssl` client options, for example
-to trust a private CA:
+The guest sets the scheme to `HTTPS`, and the host does TLS. By default the host
+checks the server's certificate against the system CA store, with the host name
+from the authority. Pass `http_tls` to give your own `ssl` client options, for
+example to trust a private CA:
 
 ```erlang
 CaCerts = public_key:cacerts_get(),
 #{network => Grant, http_tls => [{cacerts, CaCerts}]}.
 ```
 
-`wasi_http_h1` merges these over its defaults key by key, so the example keeps
-peer verification and replaces only the trust store.
+`wasi_http_h1` merges these options with its defaults, one key at a time. So
+the example still verifies the server, and replaces only the list of trusted
+CAs.
 
 Against a test server with a self-signed certificate, this is what
 `wasm_wasi2_https_SUITE` passes:
@@ -97,14 +107,15 @@ Without `http_tls` a self-signed server is refused.
 
 ## Speak HTTP/2
 
-Pick the binding with `http_transport`:
+Choose the transport with `http_transport`:
 
 ```erlang
 #{network => Grant, http_transport => wasi_http_h2}
 ```
 
-`wasi_http_h2` negotiates HTTP/2 with ALPN over `https`, and speaks cleartext
-HTTP/2 (h2c) over `http`. The guest cannot tell which binding answered.
+Over `https`, `wasi_http_h2` agrees on HTTP/2 with the server through ALPN.
+Over `http`, it uses unencrypted HTTP/2 (h2c). The guest cannot tell which
+transport answered.
 
 If you build the import map yourself, `wasi_http:http/1` takes the same three
 settings as `grant`, `transport` and `tls`:
@@ -117,8 +128,10 @@ Http = wasi_http:http(#{grant     => Grant,
 
 ## Serve one request
 
-A reactor component exports `wasi:http/incoming-handler`. Hand it one request
-with `wasi_preview2:run_serve/3` and get back the response it set:
+A *reactor* component (one that exports functions and stays ready, see the
+[glossary](concepts.md#glossary)) can export `wasi:http/incoming-handler`.
+Give it one request with `wasi_preview2:run_serve/3`, and you get back the
+response it set:
 
 ```erlang
 {ok, Bin} = file:read_file("hello.component.wasm"),
@@ -131,10 +144,12 @@ Request = #{method    => ~"GET",
 {ok, Status, Headers, Body} = wasi_preview2:run_serve(Bin, Request, #{}).
 ```
 
-Each call instantiates the component, calls its `handle`, reads the response
-off the outparam, and destroys the instance. The third argument takes the
-`wasi_preview2:command/1` options: pass `network` so the reactor can make its
-own outbound requests, and `compile => true` to use the compiled tier.
+Each call instantiates the component, calls its `handle` function, reads the
+response from the *outparam* (the response-outparam resource where the guest
+sets its answer), and destroys the instance. The third argument takes the
+options of `wasi_preview2:command/1`. Pass `network` so the reactor can send
+its own requests, and `compile => true` to use the
+[compiled tier](compiled-tier.md).
 
 The other results:
 
@@ -165,8 +180,8 @@ ok = wasi_http_listener:stop(L).
 
 Notes on how it behaves:
 
-- The component is instantiated per request, so a slow or trapping guest
-  affects only its own request.
+- The listener creates a new instance for each request. So a slow guest, or
+  a guest that traps, affects only its own request.
 - A trap, a link failure or an error result is answered with a 500 and the
   body `wasi:http reactor error`. The socket is not dropped.
 - The request body is read only when `content-length` is set and non-zero,
@@ -175,14 +190,14 @@ Notes on how it behaves:
 - The response gets a `content-length` unless the guest set one or a
   `transfer-encoding`.
 - `address/1` returns `127.0.0.1:Port`. The listener passes no bind address to
-  the wire library, so with `h1` it listens on every interface. Firewall the
-  port, or put a proxy in front, if that matters.
+  the network library, so with `h1` it listens on every interface. If that is
+  a problem, block the port with a firewall or put a proxy in front.
 
 ## Write a transport
 
 A transport is a module implementing `wasi_http_transport`: one callback,
-`request/2`, which performs one request synchronously. This one logs each
-request and hands it to the HTTP/1.1 binding:
+`request/2`, which sends one request and waits for the response. This
+example logs each request and passes it to the HTTP/1.1 transport:
 
 <!-- check: modules my_http_transport -->
 ```erlang
@@ -207,8 +222,9 @@ such as `{error, {~"connection-refused", none}}`. Then select it:
 #{network => Grant, http_transport => my_http_transport}
 ```
 
-`wasm_wasi2_http_SUITE` calls each binding's `request/2` directly against an
-echo server, which is how to test yours before a guest uses it.
+`wasm_wasi2_http_SUITE` calls the `request/2` of each transport directly,
+against an echo server. Test your transport the same way before a guest uses
+it.
 
 ## Read this next
 

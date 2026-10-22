@@ -1,15 +1,16 @@
 # Run Python
 
-This example runs Python that arrives as text, through the worker kernel and
-the CPython adapter. The script defines `main`; the worker gives it a context
-and returns what it returns.
+This example runs Python source text, through the worker kernel and the
+CPython adapter. The script defines `main`. The worker calls it with a
+context, and returns its result.
 
-**You need:** the CPython build, fetched by `scripts/fetch-python-fixture.sh`
-into `test/fixtures/lang/python.wasm`, and patience: this build starts CPython
-for every request, which takes a minute or more.
+**You need:** the CPython build, downloaded by
+`scripts/fetch-python-fixture.sh` into `test/fixtures/lang/python.wasm`. You
+also need patience: this build starts CPython for every request, which takes
+a minute or more.
 
-CPython needs more than the untrusted defaults allow, so the limits are raised
-knowingly:
+CPython needs more than the untrusted defaults allow, so the limits below are
+raised on purpose:
 
 <!-- check: needs python -->
 ```erlang
@@ -34,13 +35,14 @@ Result.
 %% => #{~"answer" := 42}
 ```
 
-**What happened.** The same kernel as [Run JavaScript](run-javascript.md), with
-the CPython adapter. Each limit above was measured; [Python](../python.md)
-says why each is what it is.
+**What happened.** The same kernel as in [Run JavaScript](run-javascript.md)
+ran the script, with the CPython adapter. Each limit above was measured;
+[Python](../python.md) explains each value.
 
 The reactor build, `wasm_python`, starts CPython once and restores a snapshot
-per request, which brings a request from a minute or more to about a third of a second, and
-under 100 ms once you add the heap floors [Python](../python.md) describes.
+for each request. A request then takes about a third of a second instead of a
+minute or more. It takes under 100 ms once you add the heap floors (minimum
+process heap sizes) that [Python](../python.md) describes.
 
 **Clean up:**
 

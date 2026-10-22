@@ -1,13 +1,14 @@
 # Design notes
 
-Why the runtime is built the way it is, indexed by subject. Read a section when
-you are about to change the thing it describes, so you find out what was already
-tried before you try it again.
+This page explains why the runtime is built the way it is, one subject per
+section. Read a section before you change the thing it describes. You will
+learn what was already tried, so you do not try it again.
 
 This is not the measurement record. `test/audit/PERF.md` is the lab notebook,
-ordered by when each thing was discovered, and `test/audit/ATTEMPTS.md` lists
-what was tried and reverted. Both are worth keeping in that order and neither is
-a reference. This page is the reference, and it links into them.
+in the order things were discovered, and `test/audit/ATTEMPTS.md` lists what
+was tried and then reverted. Both files stay in that order, so neither is easy
+to look things up in. This page is for looking things up, and it links to
+them.
 
 [Threads](features.md#threads) are documented as a feature rather than here,
 because what matters about them is what is implemented. So is the compiled
@@ -25,53 +26,56 @@ sandbox boundary in Erlang. Moved to [Memory](memory.md).
 
 A restored memory reads its snapshot image through a page table with one entry
 per 4 KiB page, and copies a page into a private arena slot on its first write.
-The keeper records logical and charged pages apart. Moved to
+The keeper records logical pages and charged pages separately. Moved to
 [Memory](memory.md).
 
 ## The interpreter keeps its own control stack
 
-`#st.frames` and `#st.ctrl` are explicit lists rather than the Erlang call
-stack. Erlang has no first-class continuations, so an implicit stack could not
-be suspended, inspected from outside, or bounded independently of Erlang's own
-stack growth. Those three are what `max_depth`, trap reporting and the worker's
-cancellation all rest on.
+`#st.frames` and `#st.ctrl` are plain lists, not the Erlang call stack. Erlang
+cannot capture its own call stack as a value. So if the interpreter used the
+Erlang stack, the runtime could not pause it, could not look into it from
+outside, and could not limit its depth separately from Erlang's own stack.
+`max_depth`, trap reports and the worker's cancellation all need these three
+things.
 
 `#st.stack` is a cons list with the top at the head, which measured faster than
 any indexed structure.
 
 ## The mutable half of an instance is separate from the immutable half
 
-`#inst{}` is everything derived from the module and never written during
-execution; `#mut{}` is what changes. A call reads the mutable half once, threads
-it functionally through execution, and writes it back once at the end. A tuple
-update is a few nanoseconds and an ETS write is forty.
+`#inst{}` holds everything that comes from the module and is never written
+while code runs. `#mut{}` holds what changes. A call reads the mutable half
+once, passes it along as a value while it runs, and writes it back once at the
+end. A tuple update costs a few nanoseconds; an ETS write costs forty.
 
-The garbage-collected object store sits in the *immutable* half, which looks
-wrong and is the point: the handle is immutable and only what it names changes.
+The garbage-collected object store is in the *immutable* half. This looks
+wrong, but it is on purpose: the handle to the store never changes, only the
+objects it points to change.
 While the store was a term inside `#mut{}`, committing it copied the whole heap
 into ETS, at 1993 microseconds per mutating call at a hundred thousand objects.
 
 ## Generated code checks a stamp, and does not hold a lease
 
-A slot holding generated code may be reused once nobody is inside it. The
-obvious way to know that is a lease per call, and it was tried: a killed caller
-leaks its lease, because a lease is given back in an `after` and an `after` does
-not run for an untrappable kill, so one killed process pinned a slot for the
-life of the node.
+A slot that holds generated code may be reused when no process is running
+inside it. The obvious way to know this is a lease for each call, and that was
+tried. It failed when a caller was killed. A lease is given back in an `after`
+block, and an `after` block does not run when a process is killed with
+`kill`. So one killed process kept a slot busy until the node stopped.
 
-So the check moved into the callee. Generated code is built for a stamp, the
-module's content hash where it has one and the slot generation otherwise, and it
-refuses a caller that presents a different one. A killed caller now costs
-nothing: reuse is safe whatever the lease counter says, and `soft_purge` is the
-authority rather than the leases.
+So the check moved into the called code. Generated code is built for a stamp:
+the module's content hash if it has one, otherwise the slot generation. It
+refuses a caller that brings a different stamp. A killed caller now costs
+nothing. Reuse is safe whatever the lease counter says, and `soft_purge`
+decides, not the leases.
 
-`wasm_code_slots_SUITE` caught the first version of this, which was unsound in
-the window between taking a lease and entering the code.
+`wasm_code_slots_SUITE` found a bug in the first version of this. It was not
+safe in the short time between taking a lease and entering the code.
 
 ## Sixteen fixed module names, and bounded name pools
 
-The atom table is node-wide and never reclaimed, so any name derived from a
-module's own bytes is a permanent leak with a remote tap on it. Generated module
+The atom table is shared by the whole node, and atoms are never freed. So a
+name made from a module's own bytes would be a leak that never goes away, and
+a remote guest could make it grow. Generated module
 names come from a pool of sixteen written out literally in `wasm_code_slots`,
 and function and frame names from bounded pools in `wasm_core`. The number of
 atoms the compiler can ever create is a literal you can read in the source, and
@@ -79,36 +83,42 @@ atoms the compiler can ever create is a literal you can read in the source, and
 
 ## Compile what ran, not what exists
 
-QuickJS is 1666 functions and a workload reaches about 223 of them. Compiling
-all of them is most of the time and most of the fifteen megabytes of code space.
-A function left out is not a correctness question: it is interpreted, and since
-the boundary became two-way it can still call back into compiled code.
+QuickJS has 1666 functions, and a workload reaches about 223 of them.
+Compiling all of them takes most of the time and most of the fifteen megabytes
+of code space. A function that is left out still runs correctly: it is
+interpreted. Compiled and interpreted code can call each other in both
+directions, so it can still call compiled code.
 
-One shot, and honestly so. A function that becomes hot afterwards is never
-compiled, because nothing asks for a recompile. Which unit holds which function
-is decided before anything is generated, so a second cut is a policy question
-rather than a missing mapping, and the measurements have not asked for one.
+The runtime compiles only once. A function that becomes hot later is never
+compiled, because nothing asks for a second compile. The runtime decides which
+unit holds which function before it generates anything. So adding a second
+compile would only need a new rule for when to do it, not new code to track
+functions. The measurements have not shown a need for one.
 
 ## A benchmark that lied, and how it was caught
 
-Interleaving two arms in one VM cancels load drift, so it was used for every
-A/B here. On a memory-heavy workload it reported that superinstructions made
-things **2x slower**, reproducibly (0.49x across three runs).
+To compare two versions (A and B) of the code, the benchmarks ran them in
+turn, one after the other, in the same VM. This removes the effect of the
+machine's load changing over time, so it was used for every A/B comparison
+here. On a workload that uses a lot of memory, it reported that
+superinstructions made the code **2x slower**, every time (0.49x across three
+runs).
 
-The control experiment settled it: with *all fusions disabled*, so both arms
-ran byte-identical code, the same harness still reported 0.38x. The harness was
-wrong, not the runtime. Alternating between two instances alternates between
-two 1 MiB linear memories and thrashes the CPU cache; the same instance
-measured twice in a row ran at 1560 us against 2200 us when alternating.
+A control experiment found the cause. With *all fusions disabled*, both
+versions ran exactly the same code, and the same harness still reported 0.38x.
+So the harness was wrong, not the runtime. Switching between two instances
+switches between two 1 MiB linear memories, and the CPU cache keeps losing its
+contents. The same instance measured twice in a row ran in 1560 us, against
+2200 us when switching.
 
-Interleaving is the right tool for load drift and the wrong tool when each arm
-carries a large private working set. Those A/Bs are run one arm per VM instead,
-several launches, minimum taken. Re-measured that way, fusion is **1.14x
-faster** on the same workload, not 2x slower.
+Running in turn is right when the machine's load changes, and wrong when each
+version uses a lot of its own memory. Those A/B comparisons now run each
+version in its own VM, several times, and keep the minimum. Measured that way,
+fusion is **1.14x faster** on the same workload, not 2x slower.
 
-The lesson is kept here because a benchmark that produces a confident, stable,
-reproducible, wrong number is more dangerous than a noisy one, and the only
-thing that caught it was running the null experiment.
+This is recorded because a benchmark that gives a stable, repeatable, wrong
+number is more dangerous than a noisy one. Only the null experiment found it:
+running the comparison with no real difference between the two sides.
 
 ## Where a call's time goes
 
@@ -122,8 +132,8 @@ was the smallest part of it:
 | **interpreter execution** | **~45 ns** |
 | instance state write-back (ETS) | 185 ns |
 
-Marshalling the instance's mutable state in and out of ETS dominated a short
-call. Two changes followed:
+For a short call, most of the time went into copying the instance's mutable
+state out of ETS and back in. These changes followed:
 
 - **Skip the write-back when nothing changed.** A function that only reads
   threads the same `#mut{}` term straight through, so `=:=` is a pointer
@@ -187,17 +197,18 @@ backward copy, so every high-to-low copy took the byte-at-a-time path even when
 the ranges were disjoint. `load_bytes` was building 8192 small binaries and
 joining them instead of accumulating into one.
 
-Even after a 21x and an 11.8x fix, bulk memory remains 26x to 47x off the
-memcpy ceiling, and that gap is irreducible in Erlang: the bytes have to be
-assembled from 64-bit atomic words one at a time. This, unlike float
-arithmetic, is where the optional native backend earns its place, and the
-memory-model property test will validate it for free when it arrives.
+Even after a 21x and an 11.8x fix, bulk memory is still 26x to 47x slower than
+`memcpy`, and Erlang cannot close that gap: it must build the bytes from
+64-bit atomic words one at a time. So here, unlike for floats, a native
+backend would be worth having. If one is written, the memory-model property
+test will check it with no extra work.
 
 ## Table representation
 
-Tables are `array`, not flat tuples. A tuple gives O(1) reads, which looks
-right because `call_indirect` reads on every dynamic call, but it makes every
-write copy the whole table. Measured on a 10,000-element table:
+Tables are `array`, not flat tuples. A tuple reads in O(1) time. That looks
+right, because `call_indirect` reads the table on every dynamic call. But with
+a tuple, every write copies the whole table. Measured on a 10,000-element
+table:
 
 | operation | tuple + `setelement` | `array` |
 | --- | ---: | ---: |
@@ -217,7 +228,8 @@ Erlang floats are native IEEE 754 doubles, but they cannot hold NaN or
 Infinity. Every route in is closed: arithmetic and `math:*` raise `badarith`,
 and `binary_to_term`, `list_to_float`, `erlang:float/1` and `<<F:64/float>>`
 matching all reject those bit patterns. So floats are hybrid: Erlang floats for
-finite values, `infinity` / `neg_infinity` / `{nan, Sign, Payload}` for the rest.
+finite values, and `infinity` / `neg_infinity` / `{nan, Sign, Payload}` for
+the rest.
 
 The obvious response is to push float arithmetic into C. Measured, f64 add,
 1,000,000 operations:
@@ -242,23 +254,25 @@ worker kernel is built.
 
 ## A snapshot is a copy of state, not of an instance
 
-`wasm:snapshot/1` does not freeze an instance. It copies the guest-visible
-state -- the 64 KiB pages of each memory that hold data, the table contents,
-the globals -- and `restore/3` lays that over a **fresh** instance built from
-the same module with **fresh imports**. Nothing of the host side travels: file descriptors,
-sockets, clocks and random providers are the embedder's to supply again.
+`wasm:snapshot/1` does not freeze an instance. It copies the state the guest
+can see: the 64 KiB pages of each memory that hold data, the table contents
+and the globals. `restore/3` puts that state into a **fresh** instance, built
+from the same module with **fresh imports**. Nothing from the host side is
+copied. You, the embedder, supply file descriptors, sockets, clocks and random
+sources again.
 
-That is what makes a restored instance safe to hand a different tenant. It is
-also why capture refuses an image holding a `funcref` into another instance or
-any `externref`: those name something on this node that a restore has no way to
-recreate, so the refusal is at capture, where it can still be explained.
+This is why you can safely give a restored instance to a different tenant. It
+is also why capture refuses an image that holds a `funcref` into another
+instance, or any `externref`. These point to something on this node that a
+restore cannot create again. So capture refuses them, at a time when the error
+can still be explained.
 
-Two consequences worth knowing before changing the restore path. A restore
-writes nothing into memory: it lays a page table over the image, onto an
-instance built without its active data segments applied, because the image
-already holds what they wrote. And the module is taken from the
-handle the image retained rather than passed in, so there is no argument that
-could lay one module's bytes over another's layout.
+Two facts matter before you change the restore path. First, a restore writes
+nothing into memory. It puts a page table over the image, in an instance built
+without its active data segments, because the image already holds what those
+segments wrote. Second, the restore takes the module from the handle the image
+kept, not from an argument. So no argument can put one module's bytes over
+another module's layout.
 
 ## Garbage collection
 
@@ -408,8 +422,8 @@ rather than using them.
 | `wasm_jit_sup` | the processes that compile, so none of them is invisible. |
 
 The compile runs in a supervised process that **owns** its slot reservation.
-That is the whole lifetime argument: the reservation dies with its owner, so a
-compiler that crashes or is killed costs nothing but the work.
+This is all that keeps the reservation safe: the reservation ends when its
+owner ends. So a compiler that crashes or is killed loses only its work.
 
 ### Read what it generated
 
@@ -436,7 +450,7 @@ generated code having run.
 | option | what it changes |
 | --- | --- |
 | `compile_sync` | compile on the calling process, so the next call is already compiled |
-| `compile_whole` | compile every eligible function, not only the ones that have run. Honoured on the background path as well as under `compile_sync`; it silently was not, and compiled what had run instead |
+| `compile_whole` | compile every eligible function, not only the ones that have run. Applies to background compiles as well as under `compile_sync`; an earlier version ignored it there without any error, and compiled only what had run |
 | `compile_force` | raise on a compile error instead of interpreting |
 
 `wasm_spec_SUITE:compiled_phase` sets all three and then asserts
@@ -444,25 +458,27 @@ generated code having run.
 interprets. That phase is what found `i32.shr_u` answering 4294967295 where the
 specification says -1.
 
-`compile_whole` is not a tuning knob. Compiling every function of QuickJS measured 107 s in the run that first
-moved it, against 15.2 s for the 223-function hot set in four units.
-Specification modules are a few
-functions each, which is why it is affordable there and nowhere else.
+`compile_whole` is not a setting for speed. Compiling every function of
+QuickJS took 107 s in the first run that measured it, against 15.2 s for the
+223-function hot set in four units. Specification modules have only a few
+functions each, so it is affordable there and nowhere else.
 
-**Nowhere else is meant literally.** Pointed at CPython 3.12, whose 11,447
-functions are eligible module-wide and so are not refused by the four-unit
-ceiling -- a single request only ever *reaches* 971 of them -- it
-reached 33 GB resident on a 48 GB machine in eleven minutes, published nothing,
-and spent that time paging rather than compiling. The ceiling bounds the names a
-unit can use; it is not a promise that everything under it will compile.
+**Nowhere else means nowhere else.** CPython 3.12 has 11,447 eligible
+functions, few enough that the four-unit limit does not refuse it, although
+one request only *reaches* 971 of them. With `compile_whole` it used 33 GB of
+memory on a 48 GB machine in eleven minutes, produced nothing, and spent that
+time swapping to disk instead of compiling. The four-unit limit bounds the
+names a unit can use. It does not promise that everything under it will
+compile.
 
 
 ### The translation cache
 
-Generated code reaches memory 0 through a two-entry cache carried through every
-continuation, because a restored memory's low addresses resolve through a page
-table and resolving one on every access is what made the page table expensive.
-Read `wasm_core`'s private `cached/8` before you change how an access is lowered.
+Generated code reaches memory 0 through a cache of two entries, passed through
+every continuation. In a restored memory, low addresses are found through a
+page table, and reading the page table on every access is what made it slow.
+Read `wasm_core`'s private `cached/8` before you change the code generated for
+a memory access.
 
 - An entry is a 4 KiB page number, the array that page lives in and the word
   index of its first word. Only translations to an array are cached: a private
@@ -479,17 +495,18 @@ Read `wasm_core`'s private `cached/8` before you change how an access is lowered
   and growth only appends chunks, so a cached translation is right whatever
   another holder does.
 
-Only the first entry's hit is emitted at the access. A site is the straddle
-test with its call to the helper, one compare against the first cached page
-with the load or store under it, and an `apply` for everything else. What it
-applies is a function of the generated module, one per access shape the
-module uses, built by `wasm_core`'s private `miss_fn/1`:
+Only the hit on the first entry is generated at the access itself. Each access
+site has three parts: the test for an access that crosses a page boundary,
+with its call to the helper; one compare against the first cached page, with
+the load or store under it; and an `apply` for every other case. The `apply`
+calls a function of the generated module. There is one such function for each
+access shape the module uses, built by `wasm_core`'s private `miss_fn/1`:
 
 - It holds the second entry's hit with its swap, the bounds test, the page
   table, the growth chunks, the read of an untouched image page and the call
   to the helper.
 - It takes the state, the address, the value for a store and the six cache
-  values, and answers `{Result, P1, A1, B1, P2, A2, B2}` on every path.
+  values, and returns `{Result, P1, A1, B1, P2, A2, B2}` on every path.
 - A shape is a direction, a width and a kind, twenty at most, and each has a
   literal name: `wasm_m_load_4_i32_u`, `wasm_m_store_8_int`. Nothing a guest
   supplies names one.
@@ -503,38 +520,42 @@ To see it, dump a module with one load and look for the `apply`:
 io:format("~s~n", [wasm_jit:dump(I)]).
 ```
 
-Keep the miss path out of line. The cache starts empty in every function, so
-31 to 50% of a real guest's accesses miss, and the miss path is hot code and
-not a rare branch. Emitted at every access it made generated code 2.3 to 2.5
-times as large, four times as slow to compile and 1.1 to 1.5 times as slow to
-run.
+Keep the miss path in its own function, not at each access. The cache starts
+empty in every function, so 31 to 50% of a real guest's accesses miss. The
+miss path runs often; it is not a rare branch. When it was generated at every
+access, generated code was 2.3 to 2.5 times as large, four times as slow to
+compile and 1.1 to 1.5 times as slow to run.
 `wasm_paged_memory_SUITE` has a case that fails if a site grows back, and
 `test/audit/PERF.md`, "The miss path out of line", has the gates it was held
-to. A cache of one entry was measured beside it: no slower to call, but under
-the 10% of compile time the rule written beforehand asked for, so two stay.
+to. A cache of one entry was also measured. Calls were not slower, but it did
+not save the 10% of compile time that the rule, written before measuring,
+required. So the cache keeps two entries.
 
-A write that can publish arena chunks, from the host, a bulk or vector
-instruction or `wasm:write_memory/3`, answers a refreshed memory handle, so the
-code after it reads the new pages inline rather than through the helper.
+Some writes can publish arena chunks: a write from the host, a bulk or vector
+instruction, or `wasm:write_memory/3`. They return an updated memory handle,
+so the code after them reads the new pages directly instead of through the
+helper.
 
 ### Values a multi-value `let` must not leave unused
 
-An access answers its result and the cache after it. As a Core value list that
-is seven values, and as a tuple it is an allocation on every access, about 5 ns
-a store. The out-of-line function always answers the tuple, and the site takes
-it apart into the list; the first entry's hit, inline, builds the list
-directly. The value list is used only where it is safe, because of a defect in
-the OTP compiler: under `no_ssa_opt`, which is the `baseline` quality and so
-what `compiled => true` asks for, a value of a multi-value `let` that nothing
-uses gets a zero-length live interval and can share a register with a value
-that is used. At the join, the unused copy can overwrite the used one. Real
-guests crashed on it, the instance state replaced by a cache word.
+An access returns its result and the cache after it. As a Core value list
+that is seven values. As a tuple it is an allocation on every access, about
+5 ns for each store. The out-of-line function always returns the tuple, and
+the access site takes it apart into the list. The hit on the first entry,
+generated at the site, builds the list directly. The value list is used only
+where it is safe, because of a defect in the OTP compiler. Under `no_ssa_opt`
+(the `baseline` quality, which is what `compiled => true` asks for), a value
+of a multi-value `let` that nothing uses can share a register with a value
+that is used, because the compiler thinks it is live for zero instructions.
+Where the paths join, the unused copy can overwrite the used one. Real guests
+crashed on it: the instance state was replaced by a cache word.
 
 So `wasm_core`'s private `answer/3` orders every list so that no unused value
-follows a used one, and falls back to a tuple where a load's paths disagree
-about what they use. The comment above it lists why each ordering holds. Present on OTP 29.0.3
-through 29.1.1 and on OTP master as of October 2026, and reported upstream;
-recheck it when you move to a newer OTP, before simplifying the ordering.
+comes after a used one. Where the paths of a load disagree about which values
+they use, it returns a tuple instead. The comment above it explains why each
+ordering is safe. The defect is present on OTP 29.0.3 through 29.1.1 and on
+OTP master as of October 2026, and it is reported upstream. Check it again
+when you move to a newer OTP, before you simplify the ordering.
 
 ### Bump the ABI when generated code changes shape
 

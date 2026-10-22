@@ -1,19 +1,20 @@
 # Pass data in and out
 
-This page shows how values cross between Erlang and a guest: numbers through
-a call, everything else through the guest's memory. Read it when your first
-call works with integers and your next one needs a string, a binary or JSON.
+This page shows how values move between Erlang and a guest. Numbers go
+through a call. Everything else goes through the guest's memory. Read it when
+your first call works with integers and your next call needs a string, a
+binary or JSON.
 
 ## Numbers go through the call
 
-A WebAssembly function takes and returns numbers only: `i32`, `i64`, `f32`
-and `f64`. They map onto Erlang terms directly:
+A WebAssembly function takes and returns only numbers: `i32`, `i64`, `f32`
+and `f64`. Each one maps directly to an Erlang term:
 
 | WebAssembly | Erlang |
 | --- | --- |
 | `i32`, `i64` | an integer, signed |
 | `f32`, `f64` | a float |
-| a NaN or an infinity | `{nan, Sign, Payload}`, `infinity` or `neg_infinity`, because an Erlang float cannot hold one; pass the same atoms in |
+| a NaN or an infinity | `{nan, Sign, Payload}`, `infinity` or `neg_infinity`, because an Erlang float cannot hold these values; pass the same terms in |
 
 <!-- check: run -->
 ```erlang
@@ -31,9 +32,10 @@ Src = ~"""
 
 ## Everything else goes through memory
 
-A guest's **linear memory** is its resizable byte array. To pass a string or a
-binary, write the bytes into it and pass the address and the length; to get
-bytes back, read them from where the guest says it put them.
+A guest's **linear memory** is its byte array, which the guest can grow. To
+pass a string or a binary, write the bytes into memory, then pass their
+address and length. To get bytes back, read them at the address where the
+guest says it put them.
 
 <!-- check: fresh -->
 <!-- check: run -->
@@ -67,7 +69,7 @@ bytes a guest reads.
 
 ## Decide who owns the buffer
 
-Where the bytes go is an agreement between you and the guest. Three are common:
+You and the guest must agree on where the bytes go. Three ways are common:
 
 | the guest | you |
 | --- | --- |
@@ -75,14 +77,14 @@ Where the bytes go is an agreement between you and the guest. Three are common:
 | exports an allocator, `alloc(Len) -> Ptr` | call it, write at `Ptr`, pass `Ptr` and `Len` |
 | writes its answer where you asked | pass an output address, read after the call |
 
-A guest built by Rust or C usually exports an allocator; a small hand-written
-one usually has a fixed buffer.
+A guest built with Rust or C usually exports an allocator. A small guest
+written by hand usually has a fixed buffer.
 
 ## Inside a host function, use the context
 
-A host function receives a context rather than the instance, and reads and
-writes the calling instance's memory through it. That is how a guest hands
-you a string:
+A host function receives a context, not the instance. It uses the context
+to read and write the memory of the instance that called it. This is how a
+guest gives you a string:
 
 <!-- check: fresh -->
 <!-- check: run -->
@@ -106,7 +108,7 @@ Log = fun(Ctx, [Ptr, Len]) ->
 
 ## JSON is bytes too
 
-Encode on one side, decode on the other, and pass the bytes as above:
+Encode on one side, decode on the other, and pass the bytes as shown above:
 
 ```erlang
 Bytes = iolist_to_binary(json:encode(#{~"value" => 41})),
@@ -114,9 +116,9 @@ Bytes = iolist_to_binary(json:encode(#{~"value" => 41})),
 #{~"answer" := 42} = json:decode(Out).
 ```
 
-The language workers do exactly this for you: `wasm_script_worker:run/3` takes
-an Erlang term as the context and gives the script's result back as one. See
-[Run JavaScript](examples/run-javascript.md).
+The language workers do this for you. `wasm_script_worker:run/3` takes an
+Erlang term as the context, and returns the script's result as an Erlang term.
+See [Run JavaScript](examples/run-javascript.md).
 
 ## Read this next
 

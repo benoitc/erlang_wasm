@@ -1,21 +1,35 @@
 # WASI
 
-WASI is how you run a program built for `wasm32-wasip1` (Rust, TinyGo, clang
-with a WASI sysroot) and give it a filesystem, environment, clocks and sockets
-that you choose. Read this when your guest is a real program rather than a bag
-of exported functions, and when you need to decide exactly what it may reach.
+WASI lets you run a program built for `wasm32-wasip1` (Rust, TinyGo, clang
+with a WASI sysroot). You give it the files, environment, clocks and sockets
+that you choose. Read this page when your guest is a complete program, not
+only a set of exported functions, and when you must decide what it may reach.
 
 **Do you need this?** Yes, if your guest was built for WASI (it has a `main`,
-reads files or the clock), or you are granting it access to anything. No, for
-a module that only computes over the memory you give it.
+or it reads files or the clock), or if you give it access to anything. No, if
+the module only computes over the memory you give it.
 
-Here WASI is an Erlang host interface, not an embedded WASI runtime. Every
-syscall is an ordinary host function, so you can trace it, replace it, or refuse
-it, and every capability decision is made in Erlang.
+In this project, WASI is written in Erlang. It is not a separate WASI runtime
+inside the node. Every syscall is an ordinary host function, so you can trace
+it, replace it or refuse it. Erlang code makes every decision about what the
+guest may do.
 
 This page is WASI Preview 1 (`wasm32-wasip1`). For WASI 0.2 (`wasm32-wasip2`,
 the Component Model), read [WASI 0.2](wasi-0-2.md), or go straight to
 [Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
+
+## The words on this page
+
+| word | what it means here |
+| --- | --- |
+| **syscall** | a WASI function the guest imports, such as `fd_read` or `path_open`. Here each one is an Erlang host function. |
+| **capability** | a permission you give the guest, such as a directory or a network address. See the [glossary](concepts.md#glossary). |
+| **grant** | the map entry that gives one capability, such as `dirs` or `net`. |
+| **preopen** | a directory you open for the guest before it starts. The guest can only open files relative to one. |
+| **descriptor** (fd) | a small number the guest uses to name an open file, directory or socket. |
+| **backend** | how the host resolves file paths: `native` (with the optional file NIF) or `fallback` (pure Erlang). |
+| **NIF** | native code loaded into the Erlang VM. Here only one small, optional file NIF exists. |
+| **symlink** | a symbolic link: a file whose content is the path of another file. |
 
 ## Run a command
 
@@ -38,9 +52,10 @@ Result = wasm:call(Inst, ~"_start", []).
 
 ## Grant capabilities
 
-Leave a key out and the module does not have that capability. The syscall
-returns `ENOTCAPABLE`, which is deliberately distinct from `EACCES`, so the
-module can tell "you were not granted this" from "the operating system refused".
+If you leave a key out, the module does not get that capability. The
+syscall then returns `ENOTCAPABLE`. This error is different from `EACCES` on
+purpose. The module can tell "you did not get this permission" apart from "the
+operating system refused".
 
 | key | grants | leaving it out means |
 | --- | --- | --- |
@@ -53,19 +68,19 @@ module can tell "you were not granted this" from "the operating system refused".
 | `stdin` | a binary or a fun | end of file |
 | `net` | sockets, to the addresses named | **no network at all** |
 
-A `stdin` fun may block, and a `stdout` pid or fun receives every write as it
-happens, which is all a long-running guest needs to exchange messages with you.
-[streams.md](streams.md) has that recipe.
+A `stdin` fun may block. A `stdout` pid or fun receives each write at the
+moment it happens. With these two, a guest that runs for a long time can
+exchange messages with you. [streams.md](streams.md) shows how.
 
-`dirs` is the one that surprises people. No `dirs` does not mean "the working
-directory" or "read-only everywhere". It means the module has no filesystem, and
-no descriptor to open anything relative to.
+`dirs` often surprises people. Without `dirs`, the module does not get the
+working directory, and it does not get read-only access. It gets no
+filesystem at all, and no descriptor to open anything from.
 
-`{seed, N}` gives the same stream on every run for a given `N`, and a
-*different* stream on each call within a run: the generator is seeded once per
-instance and carried, not reseeded per call. It is never the default, because a
-module that believes it has entropy and does not is worse off than one that is
-told it has none.
+`{seed, N}` gives the same random bytes on every run for the same `N`. Inside
+one run, each call gets *different* bytes: the generator is seeded once per
+instance and keeps its state between calls. A seed is never the default. A
+module that believes its random bytes are unpredictable when they are not is
+in a worse position than a module that is told it has no randomness.
 
 ## Preopen a directory
 
@@ -74,20 +89,20 @@ dirs => [{~"/data",   "/srv/app/data",  read},
          {~"/scratch", "/tmp/app-1234", write}]
 ```
 
-Each entry maps a guest path to a host path. The module finds them through
-`fd_prestat_get` and `fd_prestat_dir_name`, and learns only the guest path; you
-never expose the host path behind it.
+Each entry maps a guest path to a host path. The module finds the entries
+with `fd_prestat_get` and `fd_prestat_dir_name`. It learns only the guest
+path. The host path stays hidden.
 
-`read` grants opening, reading, listing and stat. `write` adds creating,
-renaming, unlinking and truncating. Requested rights are masked against what the
-grant passes down, so a `read` preopen cannot yield a writable descriptor
-whatever flags the module passes.
+`read` allows opening, reading, listing and stat. `write` also allows
+creating, renaming, unlinking and truncating. The host removes any right the
+grant does not include from what the module asks for. So a `read` preopen
+never gives a writable descriptor, whatever flags the module passes.
 
 ### What the sandbox refuses
 
-Every escape technique below has its own test case. All are refused with
-`ENOTCAPABLE` rather than `ENOENT`, so a module cannot use the error code to map
-your directory layout:
+Each way to escape below has its own test case. The host refuses each one
+with `ENOTCAPABLE`, not `ENOENT`. So a module cannot use the error code to
+learn how your directories are laid out:
 
 | the module asks for | it gets |
 | --- | --- |
@@ -99,7 +114,8 @@ your directory layout:
 | `sub/../../secret/key.txt` | refused |
 | `missing.txt` | `ENOENT` |
 
-Verified against Rust's own `std::fs`, not only against hand-written probes.
+These cases were checked with Rust's own `std::fs`, not only with
+hand-written test programs.
 
 ### Check which backend you have
 
@@ -107,16 +123,18 @@ Verified against Rust's own `std::fs`, not only against hand-written probes.
 wasi_fs:backend().        %% native | fallback
 ```
 
-On `native`, the optional NIF built, and path resolution walks each component
-with `openat(..., O_NOFOLLOW)`. The kernel resolves each name exactly once and
-follows no symlink at any depth, which closes the time-of-check-to-time-of-use
-window: swap a component for a symlink between the check and the open and it is
-still refused.
+`native` means the optional NIF was built. The host opens a path one
+component at a time with `openat(..., O_NOFOLLOW)`. The kernel resolves each
+name exactly once and follows no symlink at any depth. This closes the
+time-of-check-to-time-of-use window (a race where an attacker changes a path
+between the check and the open). If someone replaces a component with a
+symlink between the check and the open, the open is still refused.
 
-On `fallback`, resolution uses `filelib:safe_relative_path/2`, which refuses
-every escape above, and re-verifies after opening. The window is narrowed, not
-closed, because Erlang exposes neither `openat` nor `O_NOFOLLOW`. Do not point a
-preopen at a directory a hostile party can write to concurrently.
+`fallback` means the NIF is not there. The host checks paths with
+`filelib:safe_relative_path/2`, which refuses every escape above, and checks
+again after opening. This makes the window smaller but does not close it,
+because Erlang gives access to neither `openat` nor `O_NOFOLLOW`. Do not use a
+preopen on a directory that a hostile party can write to at the same time.
 
 ## Grant a network
 
@@ -134,29 +152,30 @@ Write a rule as `{Proto, Addr, Port}`. `Proto` is `tcp` or `udp`, `Addr` is an
 IP tuple, a binary address or a binary CIDR, and `Port` is a number, a
 `{Lo, Hi}` range, or `any`.
 
-Notes worth having before you write your first grant:
+Read these notes before you write your first grant:
 
-- No `net` key is no network, and `#{net => #{}}` is the same thing. There is no
-  default list, so a grant that names nothing grants nothing.
-- `connect` and `listen` are separate and neither implies the other.
-- `resolve` turns on `sock_getaddrinfo` and defaults to `deny`.
-- A service name is matched against a fixed table (`http`, `https`, `ssh`,
-  `domain`, `postgresql` and about twenty more), **not** against your
-  `/etc/services`. A numeric port always works, and anything else is `EINVAL`.
-  Looking the name up needed `binary_to_atom/2` on a string the guest chose,
-  which is a node-wide unreclaimable allocation a guest must never be able to
-  make. If you need a name the table does not have, pass the port.
-- `max_sockets` caps how many descriptors an instance holds at once, and
-  `timeout` bounds one blocking call.
-- A malformed rule raises `{bad_net_grant, _}` where you build the import map,
-  rather than failing closed later. A sandbox that silently refuses everything
-  looks exactly like one that works.
+- Without a `net` key there is no network. `#{net => #{}}` is the same. There
+  is no default list, so a grant that names nothing allows nothing.
+- `connect` and `listen` are separate. One does not include the other.
+- `resolve` turns on `sock_getaddrinfo`. Its default is `deny`.
+- A service name is looked up in a fixed table (`http`, `https`, `ssh`,
+  `domain`, `postgresql` and about twenty more), **not** in your
+  `/etc/services`. A numeric port always works. Any other name gives
+  `EINVAL`. The system lookup needed `binary_to_atom/2` on a string the guest
+  chose. Atoms are never freed and are shared by the whole node, so a guest
+  must never be able to create one. If the table does not have your name, pass
+  the port number.
+- `max_sockets` limits how many socket descriptors one instance holds at the
+  same time. `timeout` limits how long one blocking call may wait.
+- A malformed rule raises `{bad_net_grant, _}` when you build the import map.
+  It does not fail later by refusing everything. A sandbox that silently
+  refuses everything looks exactly like one that works.
 
 ### Listen
 
-Name one address and one port and you have described a socket the host can open,
-so it does. The listener arrives as a preopened descriptor after the
-directories, and the module accepts on it without ever naming an address:
+If you name one address and one port, the host can open that socket, so it
+does. The listening socket appears as a preopened descriptor after the
+directories. The module accepts connections on it without naming an address:
 
 ```erlang
 {ok, Inst} = wasm:instantiate(Mod, wasi:imports(
@@ -164,8 +183,8 @@ directories, and the module accepts on it without ever naming an address:
 %% fd 3 is listening. sock_accept on it works; nothing else was granted.
 ```
 
-Name a range or a CIDR and nothing is opened. That is permission for the module
-to bind within it itself.
+If you name a range or a CIDR, the host opens nothing. The rule only allows
+the module to bind an address inside it.
 
 ### Connect
 
@@ -174,57 +193,58 @@ net => #{connect => [{tcp, ~"93.184.216.0/24", 443}], resolve => allow}
 ```
 
 The module opens a socket with `sock_open`, then calls `sock_connect` with an
-address. That address is checked against your grant and the same address is
-handed to the operating system, so nothing in between can change the
-destination.
+address. The host checks that address against your grant. Then it gives the
+same address to the operating system. Nothing between the check and the
+connect can change the destination.
 
 Three behaviours to know:
 
-- **Grants name addresses, never names.** You cannot write a rule that says
-  `example.com`. A name would have to be resolved to be checked and resolved
-  again to be used, and the two answers can differ. `sock_getaddrinfo` is a
-  separate capability and what it returns carries no authority: a module may
-  learn an address it cannot reach, and `sock_connect` refuses it then.
-- **`::ffff:127.0.0.1` is `127.0.0.1`.** IPv4-mapped addresses are folded before
-  the check and the folded form is what gets connected to, so the mapped
-  notation cannot walk past an IPv4 rule. The deprecated IPv4-compatible block
-  (`::1.2.3.4`) is left alone, because `::0.0.0.1` and `::1` are the same
-  address; it needs an IPv6 rule.
-- **Binding is checked against `listen`.** Binding claims a local address, and
-  that is what `listen` grants, so a client wanting a specific source port needs
-  a `listen` rule for it. A loopback grant does not permit binding `0.0.0.0`.
+- **Grants name addresses, never host names.** You cannot write a rule that
+  says `example.com`. The host would have to resolve the name once to check
+  it, and again to use it, and the two answers can differ.
+  `sock_getaddrinfo` is a separate capability, and its answer gives no
+  permission. A module may learn an address that it cannot reach.
+  `sock_connect` then refuses that address.
+- **`::ffff:127.0.0.1` is `127.0.0.1`.** The host converts an IPv4-mapped
+  address to plain IPv4 before the check, and connects to the converted
+  address. So the mapped form cannot get past an IPv4 rule. The old,
+  deprecated IPv4-compatible form (`::1.2.3.4`) is not converted, because
+  `::0.0.0.1` and `::1` are the same address. It needs an IPv6 rule.
+- **Binding is checked against `listen`.** Binding takes a local address, and
+  `listen` is the grant for local addresses. So a client that wants a specific
+  source port needs a `listen` rule for it. A loopback grant does not allow
+  binding `0.0.0.0`.
 
 ### Which socket calls you get
 
-Preview 1 standardised four: `sock_accept`, `sock_recv`, `sock_send` and
-`sock_shutdown`. All four assume the socket already exists, which is why a
-listener has to come from the host. Sockets also work through `fd_read`,
-`fd_write`, `fd_close` and `fd_fdstat_get`, which is the path Rust's
-`TcpStream` takes.
+Preview 1 defines four socket calls: `sock_accept`, `sock_recv`, `sock_send`
+and `sock_shutdown`. All four need a socket that already exists. This is why a
+listening socket has to come from the host. Sockets also work with `fd_read`,
+`fd_write`, `fd_close` and `fd_fdstat_get`. Rust's `TcpStream` uses these.
 
-Everything a client needs is an **extension**, defined by WasmEdge and bound
-under the same `wasi_snapshot_preview1` module name: `sock_open`, `sock_bind`,
-`sock_listen`, `sock_connect`, `sock_send_to`, `sock_recv_from`,
-`sock_getlocaladdr`, `sock_getpeeraddr`, `sock_getsockopt`, `sock_setsockopt`
-and `sock_getaddrinfo`. It is not part of the specification and its structure
-layouts can change upstream. Reach it from Rust with the
-`wasmedge_wasi_socket` crate.
+Every other call a client needs is an **extension**. WasmEdge defined these
+calls, and they use the same `wasi_snapshot_preview1` module name:
+`sock_open`, `sock_bind`, `sock_listen`, `sock_connect`, `sock_send_to`,
+`sock_recv_from`, `sock_getlocaladdr`, `sock_getpeeraddr`,
+`sock_getsockopt`, `sock_setsockopt` and `sock_getaddrinfo`. They are not
+part of the specification, and WasmEdge may change their data layouts. From
+Rust, use them through the `wasmedge_wasi_socket` crate.
 
-The extension's `sock_accept` takes two arguments where Preview 1's takes three.
-Both are implemented, so a module compiled against either one links.
+The extension's `sock_accept` takes two arguments. Preview 1's takes three.
+Both are implemented, so a module built against either one links.
 
 ### Poll for readiness
 
-`poll_oneoff` handles socket read and write subscriptions, and clocks. A read
-subscription reports how many bytes are waiting and sets
-`EVENTRWFLAGS_FD_READWRITE_HANGUP` when the peer has closed, so your module can
-tell "nothing yet" from "nothing ever again". Bytes found by a poll are kept for
-the next read rather than consumed.
+`poll_oneoff` waits for sockets to be readable or writable, and for clocks. A
+read subscription reports how many bytes are waiting. It sets
+`EVENTRWFLAGS_FD_READWRITE_HANGUP` when the peer has closed the connection.
+So your module can tell "nothing yet" from "nothing ever again". Bytes that a
+poll finds are kept for the next read. The poll does not consume them.
 
 Set `FDFLAGS_NONBLOCK` through `fd_fdstat_set_flags` to make reads return
 `EAGAIN` instead of waiting. It applies to sockets; files ignore it.
 
-For what socket support does not protect you against, see
+For the risks that socket support does not protect you from, see
 [security.md](security.md).
 
 ## Which syscalls are implemented
@@ -241,50 +261,52 @@ For what socket support does not protect you against, see
 `path_readlink`, `path_link`, `proc_exit`, `sched_yield`, `poll_oneoff`,
 `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown`.
 
-That is enough for Rust's `std::fs`, `std::env`, `thread::sleep`, and buffered
-I/O. Plus the eleven socket extension calls listed above, which are WasmEdge's
-rather than the specification's.
+That is enough for Rust's `std::fs`, `std::env`, `thread::sleep` and
+buffered I/O. The eleven socket extension calls listed above are also
+implemented. They come from WasmEdge, not from the specification.
 
 ## The preopen is a directory, not a name
 
-On the **native** backend a preopen is opened once, when the capability is
-granted, and every guest path is resolved relative to that descriptor. Replace
-or rename the host directory afterwards and the instance keeps reading the
-directory it was given, which is the point: a capability is a thing, not a
+On the **native** backend, the host opens a preopen once, when you grant it.
+It resolves every guest path relative to that open directory. If you replace
+or rename the host directory later, the instance keeps reading the directory
+it was given. This is intended: a capability is a specific directory, not a
 name.
 
-It was a name. The root was resolved again on every open, so swapping the
-directory underneath a running instance redirected every path it held.
+Earlier versions used the name. They resolved the root again on every open,
+so replacing the directory while an instance ran changed where every path
+pointed.
 
-On the **fallback** backend it is still a name, because resolving by name is
-what that backend does. If the host directory can be replaced by anyone but
-you, that is a reason to want the NIF built.
+On the **fallback** backend, a preopen is still a name, because that backend
+always resolves by name. If anyone other than you can replace the host
+directory, build the NIF.
 
 ## Symlinks, and which backend you have
 
-A symlink is followed only when the caller passes
-`LOOKUPFLAGS_SYMLINK_FOLLOW`, which is what Preview 1 says and what both
-backends now do. Without it, opening a link is `ELOOP`. Components before the
-last are followed either way: that is what a path means.
+The host follows a symlink in the last component only when the caller passes
+`LOOKUPFLAGS_SYMLINK_FOLLOW`. Preview 1 says this, and both backends do it.
+Without the flag, opening a link gives `ELOOP`. Links in the other components
+are always followed, as in any normal path.
 
-On the **native** backend a followed link is read and its text walked under the
-same rules as a literal path, one component at a time with
-`openat(O_NOFOLLOW)`, with a budget of eight so a cycle is an error rather than
-a hang. A link that leaves the preopen is refused for the same reason a `..`
-that climbs past the root is: the walk counts depth and will not go above zero.
+On the **native** backend, the host reads a followed link and walks its text
+under the same rules as a literal path: one component at a time with
+`openat(O_NOFOLLOW)`. It follows at most eight links, so a cycle is an error,
+not a hang. A link that leaves the preopen is refused, like a `..` that climbs
+above the root: the walk counts the depth and never goes below the root.
 
-On the **fallback** backend `filelib:safe_relative_path/2` does the same job
-lexically and by resolution. It resolves a path's *parent* and then acts on the
-last component by name, so it can name a link without following it: `readlink`,
-stating a link and unlinking one all work. What it cannot do is set a link's own
-timestamps, or a timestamp finer than a second, because Erlang exposes neither.
+On the **fallback** backend, `filelib:safe_relative_path/2` does the same job,
+by checking the text and by resolving. It resolves the *parent* of a path and
+then acts on the last component by name. So it can name a link without
+following it: `readlink`, stat on a link and unlink of a link all work. It
+cannot set a link's own timestamps, or a timestamp finer than one second,
+because Erlang gives access to neither.
 
 ```erlang
 wasi_fs:backend().   %% native | fallback
 ```
 
-Check it if your guests rely on symlinks: the answer decides which twelve
-behaviours you have.
+Check it if your guests use symlinks. Only the native backend can set a
+link's own timestamps, or a timestamp finer than one second.
 
 ## WASI 0.2
 
@@ -294,10 +316,10 @@ A component built for `wasm32-wasip2` is answered by a different host,
 
 ## Check it against the official suite
 
-The suites in `test/wasi_*_SUITE.erl` are this project's own reading of Preview
-1. `wasi-testsuite` is somebody else's, and it is the only thing here that can
-tell you a capability behaves to the letter rather than to our understanding of
-it.
+The suites in `test/wasi_*_SUITE.erl` test this project's own reading of
+Preview 1. `wasi-testsuite` is written by other people. It is the only test
+here that can show a capability follows the specification exactly, and not
+only our understanding of it.
 
 ```sh
 git clone --depth 1 --branch prod/testsuite-base \
@@ -305,27 +327,30 @@ git clone --depth 1 --branch prod/testsuite-base \
 rebar3 ct --suite=test/wasi_conformance_SUITE
 ```
 
-All 72 cases pass on the native backend, and 68 of 72 on the fallback. The four
-are things Erlang does not expose: `file:write_file_info/3` takes whole seconds
-so a nanosecond timestamp cannot be set, it follows symlinks so a link's own
-times cannot be set, and `file:make_link/2` is `link()`, which follows on
-darwin. The conformance suite's baseline names each one.
+All 72 cases pass on the native backend, and 68 of 72 on the fallback. The
+four failures need things Erlang does not give access to.
+`file:write_file_info/3` takes whole seconds, so it cannot set a nanosecond
+timestamp. It also follows symlinks, so it cannot set a link's own times. And
+`file:make_link/2` calls `link()`, which follows symlinks on darwin. The
+conformance suite's baseline lists each one.
 
-The suite skips without a checkout, so it costs nothing to leave in a run.
+Without a checkout the suite skips, so you can keep it in every run.
 
 ## What is refused on purpose
 
-- `RIFLAGS_RECV_PEEK` returns `ENOTSUP`. Peeking needs a socket that can
-  un-read, and consuming what the module asked to leave is silent data loss.
-- Socket options outside `SOL_SOCKET`, and those that cannot be honoured, return
-  `ENOPROTOOPT`. A module that believes it set a timeout and did not finds out
-  at the worst possible moment.
+- `RIFLAGS_RECV_PEEK` returns `ENOTSUP`. Peeking needs a socket that can put
+  data back. Consuming data that the module asked to keep would lose it
+  without any error.
+- Socket options outside `SOL_SOCKET`, and options the host cannot apply,
+  return `ENOPROTOOPT`. Otherwise a module could believe it set a timeout when
+  it did not, and find out at the worst moment.
 
 ## Get the exit status
 
-`proc_exit` unwinds by trapping, since that is the only way to unwind a
-WebAssembly stack. `wasi:run/2` turns that back into a status code. If you call
-`_start` yourself, do it like this:
+`proc_exit` stops the guest with a trap (a guest error returned as a value),
+because a trap is the only way to unwind a WebAssembly stack. `wasi:run/2`
+turns that trap back into an exit status. If you call `_start` yourself, do
+it like this:
 
 ```erlang
 case wasm:call(Inst, ~"_start", []) of
@@ -340,8 +365,8 @@ end.
 
 ## Change the NIF
 
-If you are changing `c_src/`, [The file NIF](contributing/nif.md) says how to
-run it under a sanitizer and what each sanitizer can find.
+If you change `c_src/`, read [The file NIF](contributing/nif.md). It shows how
+to run the NIF under a sanitizer, and what each sanitizer can find.
 
 ## Read this next
 

@@ -1,15 +1,16 @@
 # Producing a module
 
-This page shows you how to build something this runtime can run, and how to
-choose between the two shapes a guest can take. Read it before you write a
-plugin, an extension point, or anything else where somebody else supplies the
+This page shows you how to build a module that this runtime can run, and how
+to choose between the two forms a guest can take. Read it before you write a
+plugin, an extension point, or anything else where somebody else writes the
 logic.
 
-## Choose a shape
+## Choose a form
 
-To run JavaScript or Python, something has to interpret JavaScript or Python,
-and WebAssembly does not. So you either compile the logic ahead of time, or you
-ship an interpreter inside the module and feed it source at run time.
+WebAssembly cannot run JavaScript or Python source by itself: an interpreter
+must read it. So you have two options. You compile the logic to WebAssembly
+ahead of time. Or you put an interpreter inside the module and give it the
+source code at run time.
 
 ```text
 OPTION A - compile to wasm                OPTION B - interpret inside wasm
@@ -29,7 +30,7 @@ OPTION A - compile to wasm                OPTION B - interpret inside wasm
   ONE level of interpretation            TWO levels, stacked
 ```
 
-What that costs, measured on this machine with the two worked examples:
+The cost of each option, measured on our test machine with the two examples:
 
 | | compiled (`plugin_worker`) | interpreted (`qjs_worker`) |
 | --- | ---: | ---: |
@@ -38,33 +39,35 @@ What that costs, measured on this machine with the two worked examples:
 | instantiate, per request | 540 us | 3.2 ms |
 | a trivial request | under 1 ms | 238 ms |
 
-Most of the plugin's 540 us is zeroing the linear memory Rust's `std` declares;
-a module declaring one page instantiates in about 2.6 us. The QuickJS figure is
-what progressive lowering bought: it instantiates in 3.2 ms because the bodies
-it never calls are never lowered.
+Most of the plugin's 540 us is spent filling with zeros the linear memory
+that Rust's `std` declares. A module that declares one page instantiates in
+about 2.6 us. QuickJS instantiates in only 3.2 ms because the runtime prepares
+each function body for the interpreter (it "lowers" it) only when the function
+is first called. Bodies that are never called are never lowered.
 
-Choose A when the logic changes at deploy time. Choose B when it has to change
-without one, or when whoever writes it will not compile anything. Both get the
-same capabilities and the same limits; they differ in cost and in who writes the
-code.
+Choose A when the logic changes only when you deploy. Choose B when it must
+change between deploys, or when the people who write it will not compile
+anything. Both get the same capabilities and the same limits. They differ in
+cost, and in who writes the code.
 
 ## Build with Rust, which needs nothing else
 
-`rustup` ships the sysroot, so this is your shortest path to a module:
+`rustup` installs the sysroot (the standard library built for the target),
+so this is the shortest way to get a module:
 
 ```sh
 rustup target add wasm32-wasip1
 ```
 
-Build a **command** when the program has a `main` and runs once, entered through
-`_start`:
+Build a **command** when the program has a `main` and runs once. The runtime
+starts it through its `_start` export:
 
 ```sh
 rustc --target wasm32-wasip1 -O -o hello.wasm hello.rs
 ```
 
-Build a **reactor** when you want a plugin: no `main`, exported functions, state
-kept between calls.
+Build a **reactor** when you want a plugin: it has no `main`, it exports
+functions, and it keeps its state between calls.
 
 ```rust
 static mut BUF: [u8; 4096] = [0; 4096];
@@ -81,14 +84,15 @@ rustc --target wasm32-wasip1 -O --crate-type=cdylib -o plugin.wasm plugin.rs
 wasm-tools strip plugin.wasm -o plugin.wasm
 ```
 
-Strip it, and watch what you pull in. `scripts/build-plugin-fixture.sh` builds
-the example plugin; using `str::to_lowercase` instead of `to_ascii_lowercase`
-took it from 46 KB to 2 MB, because the Unicode case tables came with it.
+Strip the module, and check which library code your functions bring in.
+`scripts/build-plugin-fixture.sh` builds the example plugin. Using
+`str::to_lowercase` instead of `to_ascii_lowercase` made it grow from 46 KB to
+2 MB, because the Unicode case tables were included.
 
 ## Build with C or C++, which needs a sysroot
 
-Apple clang and most distribution clangs cannot target `wasm32-wasi`, because
-they have no sysroot for it. Install
+Apple clang, and the clang of most Linux distributions, cannot build for
+`wasm32-wasi`, because they have no sysroot for it. Install
 [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) and use its clang:
 
 ```sh
@@ -103,17 +107,19 @@ clang --target=wasm32 -O2 -nostdlib -Wl,--no-entry -Wl,--export-dynamic \
       -o real.wasm real.c
 ```
 
-That is what `scripts/build-native-fixture.sh` does, and it is enough for pure
-computation over linear memory.
+`scripts/build-native-fixture.sh` does this. It is enough for code that only
+computes over linear memory.
 
 ## Build with threads
 
-Running a module that uses shared memories needs **no external library**. The
-runtime implements the proposal natively, and agents are Erlang processes over
-one shared memory; see the threads section of [features.md](features.md).
+To *run* a module that uses shared memories, you need **no external
+library**. The runtime implements the threads proposal itself. Each thread
+(an "agent" in the specification) is an Erlang process, and all of them use
+one shared memory. See the threads section of [features.md](features.md).
 
-*Compiling* one is the part with a prerequisite. The guest needs atomics and a
-shared memory, which means a threads-capable sysroot:
+To *compile* such a module, you need something more. The guest needs atomic
+instructions and a shared memory, so you need a sysroot that supports
+threads:
 
 ```sh
 rustup target add wasm32-wasip1-threads     # needs wasi-sdk for the sysroot
@@ -121,28 +127,29 @@ rustup target add wasm32-wasip1-threads     # needs wasi-sdk for the sysroot
 $WASI_SDK/bin/clang --target=wasm32-wasi-threads -matomics -mbulk-memory ...
 ```
 
-The two are often confused, so to be clear: nothing about *running* a threaded
-module requires anything outside this application.
+People often confuse the two. To be clear: *running* a threaded module needs
+nothing outside this application.
 
 ## What the runtime will accept
 
-Every proposal listed as complete in [features.md](features.md), which is all of
-the core specification plus SIMD, relaxed SIMD, threads, garbage collection,
-tail calls, typed function references, exception handling and memory64. Use
-anything else and validation refuses the module and names the proposal.
+The runtime accepts every proposal listed as complete in
+[features.md](features.md). That is the whole core specification, plus SIMD,
+relaxed SIMD, threads, garbage collection, tail calls, typed function
+references, exception handling and memory64. If a module uses anything else,
+validation refuses it and names the proposal.
 
-Large modules are handled progressively: above 256 functions, bodies are lowered
-the first time they are called rather than at instantiation, so a module costs
-what is used of it. Nothing about producing the module changes.
+A module with more than 256 functions is prepared in steps: each function body
+is lowered the first time it is called, not at instantiation. So you pay only
+for the part of the module that runs. You build the module the same way.
 
 ## Run the two examples
 
-Both live in `examples/` and are **not** part of the application: they are
-worked code to copy and change, not library modules to depend on. To try them where they are, build the two fixtures and
-compile them into a shell.
+Both are in `examples/`, and they are **not** part of the application. They
+are code for you to copy and change, not library modules to depend on. To try
+them in place, build the two guests and compile the examples in a shell.
 
-Build the guests. The plugin needs the Rust wasm target; the QuickJS build is
-fetched:
+Build the guests. The plugin needs the Rust wasm target. The QuickJS build is
+downloaded:
 
 ```sh
 rustup target add wasm32-wasip1
@@ -191,19 +198,20 @@ To use either one in your own application, copy it and change the policy:
 cp deps/wasm/examples/plugin_worker.erl src/my_plugin_worker.erl
 ```
 
-The parts worth changing are the timeout, the fuel, and what capabilities you
-grant the instance. `plugin_worker` grants none beyond the four imports Rust's
-standard library insists on; `qjs_worker` grants one directory holding one
-script, and no network.
+The parts you will want to change are the timeout, the fuel, and the
+capabilities you grant the instance. `plugin_worker` grants only the four
+imports that Rust's standard library requires. `qjs_worker` grants one
+directory that holds one script, and no network.
 
-`wasm_examples_SUITE` runs everything above, so if a command here stops working
-the build tells you.
+`wasm_examples_SUITE` runs everything above, so if a command on this page
+stops working, the build fails.
 
 ## Next
 
-- [worker.md](worker.md): running one under limits, with the request path
+- [worker.md](worker.md): running a guest under limits, and the path of a
+  request
 - [wasi.md](wasi.md): the capabilities you can grant a module
 - [security.md](security.md): what those limits do and do not cover
-- `examples/plugin_worker.erl` and `examples/qjs_worker.erl`: both shapes,
+- `examples/plugin_worker.erl` and `examples/qjs_worker.erl`: both forms,
   working, with the tests that run them
 - `wasm_instance_worker`: the general worker, installed with the application

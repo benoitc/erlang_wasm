@@ -1,125 +1,140 @@
 # Security model
 
-This page tells you what the runtime protects you against and what it leaves to
-you. Read it before you put a module you did not write in front of user traffic.
-The second list is the important one.
+This page tells you what the runtime protects you against, and what you must
+handle yourself. Read it before a module you did not write handles requests
+from users. The second list ("What you are still responsible for") is the
+important one.
 
-**Do you need this?** Yes, before running any module you did not write. It
-says what the sandbox covers and, more usefully, what it leaves to you.
+**Do you need this?** Yes, before you run any module you did not write.
+
+## The words on this page
+
+| word | what it means here |
+| --- | --- |
+| **sandbox** | the limits that keep a guest module away from everything you did not give it. |
+| **linear memory** | the guest's own memory: one array of bytes, stored in `atomics`, outside any process heap. |
+| **object store** | where garbage-collected guest objects (structs and arrays) live: rows in an ETS table. |
+| **atom table** | the node-wide table of Erlang atoms. An atom is never freed. |
+| **trap** | the guest stopped on an error the specification defines. You get it as a value. |
+| **page budget** | the node-wide limit on linear-memory pages, set with `wasm_engine:set_page_limit/1`. |
+| **fuel** | a work budget: the guest stops when it has done that much work. |
+| **worker** | a process that owns an instance and can be killed when a call takes too long. See [Using workers](worker.md). |
+| **grant** | a permission you give a WASI guest, such as a directory or an address. See [WASI](wasi.md). |
+
+More terms are in the [glossary](concepts.md#glossary).
 
 ## What holds the boundary
 
 A module cannot reach outside its sandbox, for five reasons:
 
-- **Validation** proves every instruction is type-correct and every index is in
-  range, before anything runs. The interpreter never re-checks what validation
-  established.
-- **Linear memory is bounds-checked** on every access, in arbitrary-precision
-  integers, so a base near 2^32 plus a large offset cannot wrap into a valid
-  address.
-- **Imports are the only way out.** A module can do nothing but compute unless
-  you hand it a function.
+- **Validation** proves, before anything runs, that every instruction has the
+  right types and every index is in range. The interpreter does not check
+  these things again.
+- **Every access to linear memory is checked against its size.** The check
+  uses Erlang's unlimited-size integers. So an address near 2^32 plus a large
+  offset cannot wrap around to a valid address.
+- **Imports are the only way out.** A module can only compute, unless you give
+  it a function.
 - **Nothing a guest supplies becomes an atom.** Not the module bytes, and not
-  the strings it passes across the WASI boundary: host names, service names and
-  paths. The atom table is node-wide and never reclaimed, so a guest able to
-  mint one atom per call is a permanent leak and eventually a node kill,
-  immune to every limit here. Both halves are asserted, because for a while
-  only the first was true: `sock_getaddrinfo` resolved a guest-chosen service
-  name through `binary_to_atom/2` while the decoder's property test passed
-  next door. `wasm_prop_SUITE` now covers both, and asserts that atoms do not
-  scale with the number of distinct strings a guest sends.
+  the strings it passes to WASI: host names, service names and paths. The atom
+  table is shared by the whole node and is never freed. A guest that can create
+  one atom per call leaks memory forever, and finally stops the node. No limit
+  on this page can prevent that. Both cases are tested, because for a time only
+  the first was true: `sock_getaddrinfo` converted a service name chosen by the
+  guest with `binary_to_atom/2`, while the property test for the decoder
+  passed. `wasm_prop_SUITE` now tests both. It checks that the number of atoms
+  does not grow with the number of different strings a guest sends.
 - **Nothing raises.** Malformed input, ill-typed modules, traps and exhausted
-  limits are all values. Property tests over random binaries, and over valid
-  modules mutated byte by byte, verify it.
+  limits all come back as values. Property tests check this on random binaries,
+  and on valid modules changed one byte at a time.
 
-None of this depends on processes. Your inline call is exactly as sandboxed as a
-call inside a worker.
+None of this depends on processes. A call in your own process is in the same
+sandbox as a call inside a worker.
 
 ## What limits bound
 
 | limit | bounds |
 | --- | --- |
-| `fuel` | execution work, charged at calls and loop back-edges |
+| `fuel` | execution work, counted at each call and each jump back to the start of a loop |
 | `max_depth` | WebAssembly call depth |
 | `max_heap_words` | Erlang terms on the owning process's own heap, applied by it. Not linear memory, not the object store |
 | `max_host_calls` | calls out through an import, per invocation |
 | `max_memory_pages` | every memory one instance can reach, imports included, and the object store it shares |
 | node page budget | linear memory and object stores across every instance; for a restored memory, its page table and the pages it has written |
-| `max_rec_groups` | distinct recursive type groups interned node-wide |
+| `max_rec_groups` | distinct recursive type groups stored for the whole node |
 
-`max_memory_pages` counts an imported memory, because a module that imports one
-can address every page of it, and it counts a memory once however many import
-slots name it. A memory two instances share grows only as far as the stricter
-of their ceilings allows.
+`max_memory_pages` counts an imported memory, because a module that imports a
+memory can use every page of it. A memory is counted once, even if several
+imports name it. When two instances share a memory, it can grow only up to the
+lower of their two limits.
 
-It counts the garbage-collected object store the same way, because a struct or
-an array is an ETS row and ETS is not process heap: `max_heap_words` cannot see
-it and neither can the BEAM. A store is *measured* rather than requested, so its
-charge follows what it holds, and linked instances share one store and bound it
-by the stricter of their ceilings. `pages_in_use` can therefore read a little
-above the node budget: pages already spent are counted whether or not the budget
-likes them, and everything further is refused while it is over.
+`max_memory_pages` counts the garbage-collected object store in the same way.
+A struct or an array is a row in ETS, and ETS is not on any process heap. So
+`max_heap_words` cannot see it, and neither can the BEAM. The runtime
+*measures* the size of a store, so the count follows what the store really
+holds. Linked instances share one store, and the lower of their limits
+applies. Because of this, `pages_in_use` can be a little above the node
+budget: pages already used are counted even when the budget is exceeded. While
+it is over, every new request for pages is refused.
 
-`max_rec_groups` bounds a table whose rows can never be removed: a type id is
-compared by `ref.eq` and by import matching, so dropping one would make two
-different types the same for whatever module still holds it. A module that would
-push the node past the limit is refused with `too_many_rec_groups`. The default
-is 100,000 and a real module declares tens.
+`max_rec_groups` limits a table whose rows can never be removed. A type id is
+compared by `ref.eq` and when imports are matched. If a row were removed, two
+different types could become the same for a module that still uses them. A
+module that would take the node past the limit is refused with
+`too_many_rec_groups`. The default is 100,000. A real module declares a few
+tens.
 
-`fuel`, `max_depth` and `max_host_calls` belong to the invocation the embedder
-started, not to each entry into the interpreter. A guest that recurses by
-calling out through an import and back in is bounded by the same allowance as
-one that recursed directly.
+`fuel`, `max_depth` and `max_host_calls` count for the whole call that the
+embedder started, not for each entry into the interpreter. A guest can call
+out through an import, and the import can call back into the guest. This
+recursion uses the same budget as direct recursion.
 
 ## What you are still responsible for
 
-Stated plainly, because "each instance is in a process, so it is isolated" is
-the most tempting wrong claim available about this design. A process is a
-**fault and lifecycle** boundary, not a security boundary.
+Many people think: "each instance is in a process, so it is isolated". This
+is wrong. A process is a boundary for **failures and lifetime**, not a
+security boundary.
 
 1. **Neither linear memory nor the object store is on any process heap, so
-   `max_heap_size` bounds neither.** Linear memory is `atomics`; a struct or an
-   array is a row in ETS. Both are counted explicitly by `wasm_engine` instead,
-   which is what `max_memory_pages` and the node page budget bound. A guest
-   filling a twenty-million element array took 1.8 GB before the object store
-   was counted, with every limit reading zero. A snapshot's image is off-heap
-   binaries shared by every instance restored from it, bounded by
-   `max_snapshot_bytes`. An instance never writes to them: its first write to a
-   page copies that page into memory of its own, so one tenant's writes never
-   reach another restored from the same image.
+   `max_heap_size` limits neither.** Linear memory is `atomics`. A struct or
+   an array is a row in ETS. A module can use up the node's memory while its
+   process heap does not grow. So `wasm_engine` counts both itself, and
+   `max_memory_pages` and the node page budget limit that count. Set the
+   budget with `wasm_engine:set_page_limit/1`. Before the object store was
+   counted, a guest that filled an array of twenty million elements used
+   1.8 GB, and every limit showed zero. A snapshot's image is stored in
+   binaries outside the heap, shared by every instance restored from it, and
+   limited by `max_snapshot_bytes`. An instance never writes to them. Its
+   first write to a page copies that page into its own memory. So one
+   tenant's writes never reach another tenant restored from the same image.
 
-1. **Linear memory is invisible to `max_heap_size`.** It is `atomics`, which is
-   off-heap. A module can exhaust node memory without its process heap moving.
-   This is why page accounting is explicit and node-wide, and why you should set
-   `wasm_engine:set_page_limit/1`.
-
-2. **Per-instance limits do not bound concurrency.** No single instance can
-   monopolise a scheduler, because the interpreter is preemptible: every
-   dispatch step is an Erlang function call and consumes a reduction. But ten
-   thousand well-behaved instances will still saturate every scheduler. Bound
+2. **Limits on one instance do not limit how many run at once.** No single
+   instance can keep a scheduler for itself, because the interpreter can be
+   paused: every step is an Erlang function call and uses a reduction. But ten
+   thousand well-behaved instances will still keep every scheduler busy. Limit
    that with a pool.
 
-3. **Host functions are the real attack surface.** Limits constrain
-   WebAssembly, not the Erlang you supply as an import. A host function that
-   reads any file, allocates without bound, or blocks forever is outside all of
-   this. The import set is part of your sandbox, and the part the runtime cannot
-   check for you.
+3. **Host functions are where attacks happen.** Limits apply to WebAssembly,
+   not to the Erlang functions you give as imports. A host function that reads
+   any file, allocates without limit, or blocks forever is outside all of
+   these protections. Your imports are part of your sandbox, and the runtime
+   cannot check them for you.
 
-4. **`fuel` bounds work, not time.** A blocking host call consumes none. You
-   need a timeout as well, and a timeout needs a process to enforce it. The
-   same goes for a guest that parks in `memory.atomic.wait` with a negative
-   timeout, which the specification defines as waiting forever: it consumes no
-   fuel and nothing here will interrupt it.
+4. **`fuel` limits work, not time.** A blocking host call uses no fuel. You
+   also need a timeout, and a timeout needs a process to enforce it. The same
+   is true for a guest that waits in `memory.atomic.wait` with a negative
+   timeout. The specification says this waits forever. It uses no fuel, and
+   nothing in the runtime will interrupt it.
 
-5. **A start function that traps keeps its instance.** The specification
-   requires it: the store keeps what instantiation wrote, so a module that
-   fills an imported memory and then traps has to leave those bytes behind.
-   The pages, tables and globals it took stay held. In a long-lived builder
-   that instantiates many modules, a hostile one can repeat this until the node
-   budget is gone.
+5. **When a start function traps, its instance stays.** The specification
+   requires this: the store keeps what instantiation wrote. So a module that
+   fills an imported memory and then traps must leave those bytes there. The
+   pages, tables and globals it took stay in use. A long-lived process that
+   instantiates many modules is at risk: a hostile module can do this again
+   and again until the node budget is used up.
 
-   The instance comes back in the error so you can end it when you know nothing
-   escaped:
+   The error contains the instance, so you can destroy it when you know that
+   nothing else uses it:
 
    ```erlang
    case wasm:instantiate(Mod, Imports) of
@@ -133,76 +148,80 @@ the most tempting wrong claim available about this design. A process is a
    end.
    ```
 
-   Do not destroy it if another instance imported something from this one and
-   may still reach what it wrote. Building each instantiation in its own
-   short-lived process is the other answer, and the one `docs/worker.md`
-   already recommends.
+   Do not destroy it if another instance imported something from it and may
+   still use what it wrote. The other solution is to instantiate each module
+   in its own short-lived process, as `docs/worker.md` recommends.
 
-6. **Timing and microarchitectural side channels are not addressed.** Nothing
-   here stops a co-tenant module measuring shared cache behaviour. A shared BEAM
-   node is not a boundary against that class of attack; only OS-level or
-   hardware separation is.
+6. **Timing and microarchitectural side channels are not handled.** Nothing
+   here stops a module from measuring how the CPU cache behaves when other
+   modules run beside it. A shared BEAM node does not protect against this
+   kind of attack. Only separation by the operating system or the hardware
+   does.
 
-7. **An inline call cannot be interrupted.** `wasm:call/3` runs in your process.
-   A module looping with `fuel => infinity` hangs you and cannot be killed
-   without killing you. Use a worker for anything untrusted.
+7. **A call in your own process cannot be interrupted.** `wasm:call/3` runs in
+   your process. A module that loops forever with `fuel => infinity` blocks
+   your process, and you cannot kill it without killing your process. Use a
+   worker for any code you do not trust.
 
-8. **WASI path resolution has a residual race without the NIF.** On the
-   `fallback` backend, a component can be swapped for a symlink between the
-   check and the open. Check `wasi_fs:backend()`; on `fallback`, do not point a
-   preopen at a directory a hostile party can write to concurrently.
+8. **Without the NIF, WASI path resolution still has a race.** On the
+   `fallback` backend, someone can replace a path component with a symlink
+   between the check and the open. Check `wasi_fs:backend()`. On `fallback`,
+   do not use a preopen on a directory that a hostile party can write to at
+   the same time.
 
-   A preopen is also a directory rather than a name on the native backend,
-   opened once when the capability is granted, so replacing the host directory
-   underneath a running instance does not redirect the paths it holds. A
-   guest's `path_open` goes through `wasi_fs` and gets that protection;
-   `wasi_SUITE` asserts it by a behaviour only the native backend has.
+   On the native backend, a preopen is a directory, not a name. It is opened
+   once, when you grant it. So if someone replaces the host directory while an
+   instance runs, the instance's paths still point to the original directory.
+   A guest's `path_open` goes through `wasi_fs` and gets this protection.
+   `wasi_SUITE` tests it with a behaviour that only the native backend has.
 
 ## What a network grant does not cover
 
-A `net` grant says which addresses an instance may reach. That is all it says,
-and the gap between that and "the module cannot do harm over the network" is
-yours to close.
+A `net` grant says which addresses an instance may reach. It says nothing
+more. A module can still do harm over the network, and you must prevent that
+yourself.
 
-1. **A granted peer gets whatever the module sends it.** The grant is an address
-   filter, not a protocol filter: nothing inspects, limits or understands the
-   bytes. If a module can reach a host, it can send that host anything it has,
-   including data it read from a preopened directory.
+1. **An allowed peer receives whatever the module sends.** The grant filters
+   addresses, not protocols. Nothing reads, limits or understands the bytes. If
+   a module can reach a host, it can send that host any data it has, including
+   data it read from a preopened directory.
 
-2. **There are no implicit denials.** `~"0.0.0.0/0"` really does include
-   loopback, link-local, RFC 1918 space and the cloud metadata endpoint at
-   `169.254.169.254`. That is deliberate: a hidden deny list makes a grant mean
-   something other than what it says, and the day it is incomplete is the day
-   somebody relies on it. Name what you mean, and prefer a CIDR to a wildcard.
-   `wasi_net_escape_SUITE` asserts this, so it stays true or this document gets
-   corrected with it.
+2. **Nothing is denied unless you deny it.** `~"0.0.0.0/0"` really includes
+   loopback, link-local addresses, RFC 1918 private addresses and the cloud
+   metadata endpoint at `169.254.169.254`. This is intended. A hidden deny list
+   would make a grant mean something other than what it says, and when that
+   list is incomplete, someone who relies on it is exposed. Name exactly what
+   you mean, and use a CIDR rather than a wildcard. `wasi_net_escape_SUITE`
+   tests this, so if the behaviour changes, this page must change too.
 
-3. **Nothing here authenticates an inbound connection.** A `listen` grant opens
-   a socket; whoever reaches it is whoever can route to it. The peer address is
-   reported, never checked against the `connect` rules, because inbound is not
-   outbound. Authentication is your module's problem or your network's.
+3. **Nothing here authenticates an incoming connection.** A `listen` grant
+   opens a socket, and anyone with a network route to it can connect. The peer
+   address is reported, but never checked against the `connect` rules, because
+   incoming and outgoing connections are different things. Your module or your
+   network must do the authentication.
 
-4. **A blocking socket call consumes no fuel.** This is point 4 above with a
-   much sharper edge: a module parked in `sock_recv` does no work. The `timeout`
-   in the grant bounds a single call, not a sequence of them, so a module that
-   reconnects in a loop waits forever in instalments. Use a worker with a
-   timeout for anything untrusted.
+4. **A blocking socket call uses no fuel.** This is point 4 above, but more
+   dangerous: a module that waits in `sock_recv` does no work. The `timeout` in
+   the grant limits one call, not a series of calls. So a module that
+   reconnects in a loop can wait forever, one timeout at a time. Use a worker
+   with a timeout for any code you do not trust.
 
-5. **Descriptors are bounded, bandwidth is not.** `max_sockets` caps how many
-   sockets an instance holds at once. Nothing caps how much it sends through
-   them, how fast it opens and closes them, or how many instances you run.
+5. **The number of sockets is limited, the bandwidth is not.** `max_sockets`
+   limits how many sockets an instance holds at the same time. Nothing limits
+   how much it sends through them, how fast it opens and closes them, or how
+   many instances you run.
 
-6. **Resolution is a lookup, not a permission.** `resolve => allow` lets a
-   module ask your resolver questions, which is an outbound capability of a
-   kind: it reaches your DNS servers, and the names it asks for are visible to
-   them. What it cannot do is widen a `connect` grant, because grants name
-   addresses and `sock_connect` checks the address it is handed.
+6. **Resolving a name gives no permission.** `resolve => allow` lets a module
+   send questions to your resolver. This is a kind of outgoing access: it
+   reaches your DNS servers, and they see the names it asks for. But it cannot
+   extend a `connect` grant, because grants name addresses, and `sock_connect`
+   checks the address it receives.
 
-7. **The socket extension is not a specification.** Preview 1 standardised four
-   socket calls; everything a client needs is a WasmEdge extension bound under
-   the same module name, and its structure layouts are somebody else's decision.
-   They are implemented from WasmEdge's headers, and they can change there. See
-   [wasi.md](wasi.md).
+7. **The socket extension is not part of the specification.** Preview 1
+   defines four socket calls. Every other call a client needs is a WasmEdge
+   extension, under the same module name. WasmEdge decides its data layouts.
+   They are implemented from WasmEdge's headers, and they can change there.
+   See [wasi.md](wasi.md).
 
 ## Run untrusted code
 
@@ -217,7 +236,7 @@ yours to close.
 Check all five before you ship it:
 
 - `isolation => fresh`, so no state survives a request
-- a timeout that kills the worker rather than merely giving up on it
+- a timeout that kills the worker, not one that only stops waiting for it
 - the smallest import set that does the job
 - `wasm_engine:set_page_limit/1` set for the node
 - a bounded pool, so concurrency is capped
@@ -229,36 +248,38 @@ directly.
 
 ## The compiled tier's artifact cache is executable code
 
-`code_cache_dir` holds generated BEAM modules, and reading one back is
+`code_cache_dir` holds generated BEAM modules. To use one, the runtime calls
 `code:load_binary/3` on bytes from a file. **Anyone who can write into that
-directory can run code in your node.** Treat it exactly as you treat the
-release itself, which is why it is off unless you set it.
+directory can run code in your node.** Protect it exactly as you protect the
+release itself. This is why the cache is off unless you set it.
 
 What the runtime checks before it will use one:
 
 - the path is absolute, with no `.` or `..`
 - the directory is owned by the node's user and has no group or other write bit
 - every directory above it is owned by root or by that user, and has no group
-  or other write bit either -- an ancestor owned by somebody else can replace
-  what is beneath it however tight the leaf's own mode is
+  or other write bit either. A parent directory owned by someone else can
+  replace what is below it, whatever the mode of the cache directory itself
 - nothing on the path is a symlink, and an entry is a regular file
-- the entry's own checksum matches before a byte of it is loaded
+- the entry's own checksum matches, before any byte of it is loaded
 
-Every failure is a cache miss and a line in the log. Nothing raises, because a
-cache that cannot be trusted is a slower node and never a broken one.
+Every failure is a cache miss and a line in the log. Nothing raises. A cache
+that cannot be trusted only makes the node slower, never broken.
 
-**What this does not do.** The checksum detects damage -- a torn write, a bad
-disk, a crash -- and **not** a writer who can put a well-formed entry there.
-Validating the path and opening a file under it are not atomic either. Neither
-gap is closed, and neither needs to be under this model: once every ancestor is
-owned by root or the node's user and writable by nobody else, only those two
-can change what the path resolves to, and both can already run code in the
-node. The checks catch misconfiguration -- a cache under `/tmp`, a directory
-somebody else can rename -- rather than an attacker who is already inside.
+**What this does not do.** The checksum detects damage (a partial write, a bad
+disk, a crash). It does **not** detect a writer who puts a well-formed entry
+there. Also, checking the path and then opening a file in it are two separate
+steps, so the path can change between them. Neither gap is closed, and with
+this model neither needs to be. When every parent directory is owned by root
+or by the node's user, and nobody else can write to it, only those two users
+can change where the path leads. Both of them can already run code in the
+node. The checks catch configuration mistakes (a cache under `/tmp`, a
+directory that someone else can rename). They do not stop an attacker who is
+already inside.
 
-If you need to trust artifacts written by a party that may **not** run code in
-your node, this is not enough: that needs the artifacts authenticated, which
-this runtime does not do.
+If you need to trust files written by someone who may **not** run code in
+your node, this is not enough. You would need to authenticate the files, and
+this runtime does not do that.
 
 ## Read this next
 

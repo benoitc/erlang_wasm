@@ -1,13 +1,12 @@
 # Feature and conformance status
 
-This page records what the runtime implements, how it scores against the
-official WebAssembly specification test suite, and what it measures. Use it to
-find out whether a module you care about will run, and what it will cost.
+This page lists what the runtime implements, its results on the official
+WebAssembly specification test suite, and its measured costs. Use it to find
+out whether your module will run, and how fast.
 
-The internals that used to sit at the end of this page -- how the garbage
-collector works and how the WASI sandboxes are enforced -- are in
-[design notes](design-notes.md), which is where the rest of the runtime's
-rationale lives. Build and test instructions are in the README.
+How the garbage collector works and how the WASI sandboxes are enforced are
+explained in the [design notes](design-notes.md), with the other reasons
+behind the runtime's design. Build and test instructions are in the README.
 
 ## What works
 
@@ -40,12 +39,12 @@ rationale lives. Build and test instructions are in the README.
 | Link-time import type checking (kind, limits, signatures, mutability) | complete |
 | Mutable globals shared by reference between instances | complete |
 | Module cache keyed by content hash | complete |
-| Optional native path resolution closing the WASI TOCTOU window | complete |
+| Optional native path resolution, closing the WASI time-of-check-to-time-of-use race ([WASI](wasi.md)) | complete |
 | WASI Preview 1: 45 syscalls, capability-based filesystem | complete |
 | Runs unmodified Rust `wasm32-wasip1` and `clang -O2` output | complete |
 | Text format: `.wat` modules and `.wast` scripts | complete |
-| Compiling hot functions to Core Erlang, with an on-disk artifact cache | complete, off by default |
-| Initialized runtime snapshots: capture, restore per request, and files | complete |
+| Compiling the most used functions to Core Erlang, with a cache on disk | complete, off by default |
+| Snapshots of a started guest: capture, restore one per request, save to files | complete |
 | A worker kernel for untrusted guests, with an adapter per language | complete |
 | WASI sockets: a capability model, the four standard calls, the client extension | complete |
 | The Component Model: decoding, linking several cores, composition, resources | complete |
@@ -57,8 +56,8 @@ rationale lives. Build and test instructions are in the README.
 
 | Area | Why |
 | --- | --- |
-| WASI 0.3 interfaces | built on the async ABI, which is here; no toolchain needs them yet |
-| Snapshots of component instances | `wasm:snapshot/2` captures a core instance; a component's handle tables point at host state an image cannot hold |
+| WASI 0.3 interfaces | they use the async ABI, which is implemented; no toolchain needs them yet |
+| Snapshots of component instances | `wasm:snapshot/2` captures a core instance; a component's handle tables point to host state that a snapshot image cannot store |
 
 ## Caching compiled code
 
@@ -67,57 +66,59 @@ Off by default. See [the compiled tier](compiled-tier.md).
 
 ## Specification test suite
 
-Suites are read straight from the [upstream test suite](https://github.com/WebAssembly/testsuite):
-`wasm_wast` turns a `.wast` script into a command list and `wasm_spec_runner`
-replays it. Nothing is generated and no tool is needed, so running conformance
-is one clone away:
+The tests are read directly from the [upstream test
+suite](https://github.com/WebAssembly/testsuite). `wasm_wast` turns a `.wast`
+script into a list of commands, and `wasm_spec_runner` runs them. Nothing is
+generated and no other tool is needed. To run the conformance tests, you only
+clone the suite:
 
 ```sh
 git clone --depth 1 https://github.com/WebAssembly/testsuite.git
 ```
 
-The checkout is not vendored. `wasm_spec_SUITE` skips with that message when it
-is absent, so a fresh clone still runs everything else, and gates on a per-suite
-baseline when it is present.
+The checkout is not copied into this repository. When it is missing,
+`wasm_spec_SUITE` skips with a message, so a fresh clone still runs all other
+tests. When it is present, the suite compares each test file with a baseline
+of known failures.
 
-Scores below are over the 256 core suites listed in `wasm_spec_manifest:core/0`,
-which is every suite in the checkout. Nothing is left unclassified, so the
-number covers what is there rather than a subset of it.
+The scores below cover the 256 core suites listed in
+`wasm_spec_manifest:core/0`, which is every suite in the checkout. Every suite
+is classified, so the number covers the whole checkout, not a part of it.
 
 | Phase | Pass | Fail | Skip |
 | --- | ---: | ---: | ---: |
 | decode + validate + execute | 65481 | 0 | 0 |
 
 **Every core assertion passes**, at every phase, and the baseline in
-`wasm_spec_SUITE` is empty. The stale-baseline guard fails the build if a
-failure reappears *or* if an entry becomes unnecessary, so an empty map is the
-strongest statement the suite can make.
+`wasm_spec_SUITE` is empty. The build fails if a failure comes back, *or* if a
+baseline entry is no longer needed. So an empty baseline is the strongest
+result the suite can report.
 
-Nothing is skipped either. The 22 that used to be were 18 `assert_exception`
-commands and 4 `module_definition` commands, and neither belonged to a proposal
-outside this runtime's scope: exception handling is implemented, and
-`module definition` and `module instance` are how `instance.wast` checks that
-instantiation is generative. Both were harness gaps, and `wasm_spec_runner` now
-runs them.
+Nothing is skipped either. The 22 commands skipped before were 18
+`assert_exception` commands and 4 `module_definition` commands. Both belong to
+features this runtime implements: exception handling is implemented, and
+`instance.wast` uses `module definition` and `module instance` to check that
+each instantiation creates a new instance. The test runner did not support
+them. `wasm_spec_runner` now runs them.
 
 ### What the harness was not checking
 
-A conformance number is only worth its arithmetic if every assertion counted as
-passing actually compared something. Twice now it has not.
+A conformance score is only correct if every assertion counted as passing
+really compared something. Two times, some did not.
 
-Bringing relaxed SIMD into scope meant looking at how an expected value the
-matcher does not recognise was handled. It answered "skip" for the assertion
-*and every value after it in the same assertion*, and the assertion was tallied
-as a **pass**. Tightening that to report it as unchecked moved **116 assertions
-out of the pass column** across seventeen core suites.
+To add relaxed SIMD, we checked what happens when the matcher does not recognise
+an expected value. It skipped that value *and every later value in the same
+assertion*, and counted the assertion as a **pass**. Tightening that to report
+it as unchecked moved **116 assertions out of the pass column** across seventeen
+core suites.
 
 They were not relaxed SIMD's. The harness could compare a *null* external
 reference and not a particular one, so every assertion naming `(ref.extern 1)`
-in `table_fill`, `table_grow`, `br_table` and a dozen others was passing without
-looking. Teaching it the non-null reference forms brought 109 of them back as
-genuine checks and surfaced one real defect: a host reference in the internal
-hierarchy, `(ref.host N)`, had no decoding at all, so `extern.wast` was
-exercising `extern.convert_any` against a placeholder.
+in `table_fill`, `table_grow`, `br_table` and a dozen others passed without
+comparing anything. After the harness learned the non-null reference forms, 109
+of them became real checks again, and one real defect appeared: a host reference
+in the internal hierarchy, `(ref.host N)`, had no decoding at all, so
+`extern.wast` was exercising `extern.convert_any` against a placeholder.
 
 The totals of that run were unchanged at 63,231 and 1,180. What changed is that
 all of them now check something. The gate reads 65,481 over 256 suites today,
@@ -125,15 +126,16 @@ after the classification the table above records.
 
 ### What the baseline was hiding
 
-A baseline is only honest if each entry fails *because of* the proposal it
-names. Reading this one back to its causes found five defects wearing a
-proposal's name, all now fixed and pinned by `wasm_linking_SUITE`:
+A baseline is only correct if each entry fails *because of* the proposal it
+names. We traced each entry back to its cause, and found five defects listed
+under a proposal's name. All are fixed now, and `wasm_linking_SUITE` tests
+them:
 
 - **An import of the wrong kind raised out of the runtime.** Handing a table to
   a module that imports a memory reached `wasm_memory:limits/1` and died with a
-  `function_clause`, reported as an internal error. Every failure is supposed to
-  be a value, and an embedder passes bare Erlang terms, so this was a hole in
-  the property the whole library rests on.
+  `function_clause`, reported as an internal error. Every failure must be a
+  value, and an embedder passes plain Erlang terms, so this broke the rule that
+  the whole library depends on.
 - **An imported mutable global was copied, not shared.** Two modules linked to
   the same global each got their own, and diverged silently after the first
   write. The same defect imported tables had.
@@ -144,16 +146,17 @@ proposal's name, all now fixed and pinned by `wasm_linking_SUITE`:
 - **A `funcref` global failed to link**, because the shape check still expected
   the bare two-element reference that instance-carrying `funcref`s replaced.
 
-Only mutable globals became reference cells, decided from the module and
-resolved into the instruction when the IR is built. Reading an ETS row measured
-17.7 ns against 1.9 ns for a tuple element, and compiler output reads its shadow
-stack pointer on nearly every function entry, so an ordinary `global.get` still
-reads a tuple.
+Only mutable globals became shared cells. The module decides which globals
+are mutable, and this is fixed in the instruction when the IR (the internal
+form of the code) is built. Reading an ETS row took 17.7 ns, against 1.9 ns
+for a tuple element. Compiled guest code reads its shadow stack pointer (a
+global) at the start of almost every function. So an ordinary `global.get`
+still reads a tuple.
 
 Every entry in that baseline names a specific unimplemented proposal or a
-stated limitation. An unattributable failure is treated as a defect to fix, not
-a number to record, and the suite fails the build if the baseline becomes too
-generous.
+stated limitation. A failure without a known cause is a defect to fix, not a
+number to record. The suite fails the build if the baseline allows more
+failures than really happen.
 
 ### SIMD
 
@@ -172,10 +175,10 @@ the choice was measured. Per operation, 200,000 iterations, minimum of five:
 | `i8x16.shuffle` | **154 ns** | 497 ns |
 | `v128.and` | 11.9 ns | **10.6 ns** |
 
-Bit syntax truncates each field to its declared width, so lane wrapping is
-free where the integer form needs a mask per lane, and a binary is built in one
-allocation where a shift-and-or chain allocates an intermediate bignum per
-lane. The integer form wins only on `v128.and`, and only by 12%.
+Bit syntax cuts each field to its declared width, so lanes wrap around with
+no extra work, while the integer form needs a mask per lane. A binary is built
+in one allocation, while a chain of shifts and ors allocates a temporary
+bignum per lane. The integer form wins only on `v128.and`, and only by 12%.
 
 **Lanes are matched, not iterated.** The obvious `binary_to_list`,
 `lists:zip`, comprehension route costs 182 ns for `i8x16.add` against 14.6 ns
@@ -200,10 +203,11 @@ each behaves exactly as its strict counterpart does.
 | `i16x8.relaxed_q15mulr_s` | saturating, so -32768 squared gives 32767 |
 | `relaxed_dot_i8x16_i7x16_s` | both operands read as signed |
 
-The proposal exists so an engine can emit one machine instruction where the
-strict semantics would need several. There is no vector hardware underneath a
-pure Erlang interpreter, so varying buys nothing and costs reproducibility: the
-same module gives the same answer on every machine.
+The proposal exists so that an engine can use one machine instruction where
+the strict rules would need several. A pure Erlang interpreter does not use
+vector hardware, so different answers would bring no speed. They would only
+make results differ between machines. Here the same module gives the same
+answer on every machine.
 
 `wasm_relaxed_simd_SUITE` asserts each choice on an input where the permitted
 answers differ, because the conformance suite writes them as `either` and would
@@ -213,12 +217,12 @@ assertions at all, so conformance checks nothing about their results.
 
 **Float lanes are not `:32/float` fields.** Erlang cannot represent NaN or
 Infinity as a float and those bit patterns do not match a float field at all,
-so a lane holding one would raise rather than compare unequal. Lanes are
-extracted as integer patterns and converted through `wasm_num`, which is the
-same hybrid representation the scalar instructions use, and so gets NaN
-propagation and quieting for free.
+so a lane holding one would raise an error instead of comparing unequal.
+Lanes are read as integer bit patterns and converted through `wasm_num`, the
+same mixed representation that the scalar instructions use. So NaN
+propagation and quieting work with no extra code.
 
-The two rules that bite regardless of representation: a lane comparison yields
+Two rules apply whatever the representation: a lane comparison yields
 all-ones rather than 1, which is what makes it a mask for `v128.bitselect`; and
 `pmin`/`pmax` are not `min`/`max`, being specified as "return the second
 operand if the comparison is true, otherwise the first", which propagates the
@@ -227,21 +231,21 @@ first operand's value when either is NaN.
 ### Typed function references
 
 Value types gained the general reference form `{ref, Null, HeapType}`, with
-`funcref` normalised to `{ref, null, func}` at the decoder. There is
-deliberately one spelling per type: two terms for one type is how a subtyping
-bug gets in, since every comparison would have to remember they are equal and
-the one that forgot would silently accept or reject the wrong modules.
+`funcref` normalised to `{ref, null, func}` at the decoder. Each type has
+only one form, on purpose. With two terms for one type, every comparison
+would have to know that they are equal. A comparison that forgot would
+silently accept or reject the wrong modules.
 
-**Subtyping did not cost the fast path.** It lives in `pop_expect/2`, the
-single place two value types are compared, and that function's existing
-equality clause stays first. Numeric and vector types therefore keep the
-immediate-word comparison; only reference types fall past it. That is why
+**Subtyping did not slow down the common case.** It is in `pop_expect/2`, the
+only place where two value types are compared, and that function's equality
+clause is still first. So numeric and vector types are still compared as
+simple values. Only reference types go on to the subtyping clauses. That is why
 `wasm.hrl` can still describe value types as compared by equality.
 
 Non-nullable locals get definite-assignment analysis. An assignment made
 *inside* a control frame does not survive it: only one arm of an `if` runs, and
 a `block` may be branched out of before its assignments happen. The
-specification is deliberately this conservative, and the tests pin it.
+specification is this strict on purpose, and the tests check it.
 
 Recursive type groups are flattened. Without garbage collection there is no
 recursion to resolve and no declared subtyping, so a `rec` group is exactly its
@@ -253,27 +257,27 @@ failure.
 
 Tags, `throw`, `throw_ref`, `try_table` and `exnref`.
 
-**Unwinding fell out of frames being explicit.** `run/3` already carries the
-control stack as a list and each call frame holds the caller's control stack, so
-a throw walks outwards through both. It is the same traversal `branch/3` does,
-searching for a handler rather than counting to a depth, and it needs no Erlang
-exceptions inside a single instance.
+**Unwinding was easy because frames are explicit.** `run/3` already keeps the
+control stack as a list, and each call frame holds the caller's control stack.
+So a throw walks outwards through both. It is the same traversal `branch/3`
+does, searching for a handler rather than counting to a depth, and it needs no
+Erlang exceptions inside a single instance.
 
 Crossing an instance boundary does need one, because a foreign call is a nested
-`wasm_exec:call/5`. There the exception travels as an Erlang throw and is put
-back into the interpreter's own unwinding at the host-call boundary, so a
+`wasm_exec:call/5`. There the exception travels as an Erlang throw. At the
+host-call boundary it goes back into the interpreter's own unwinding, so a
 `throw` in an imported function is caught by its caller's `try_table`.
 
 **A trap is not catchable.** Traps stay `wasm_error` throws and pass straight
-through every handler, so a module cannot swallow a division by zero or an
+through every handler, so a module cannot hide a division by zero or an
 out-of-bounds access with `catch_all`. The two paths are separate on purpose and
 `wasm_exception_SUITE` asserts it, because a change merging them would still
 pass every other test.
 
 ### Tail calls
 
-`return_call` and `return_call_indirect`, which fall out of frames being
-explicit: `enter/5` pushes a frame, and a tail call runs the callee's body
+`return_call` and `return_call_indirect`. They were also easy because frames
+are explicit: `enter/5` pushes a frame, and a tail call runs the callee's body
 against the frame list unchanged, so the callee returns straight to the
 original caller and depth does not grow.
 
@@ -286,10 +290,10 @@ call, a million-deep mutual one, the same through
 does exhaust `max_depth`. Without that last case the others would prove
 nothing.
 
-A tail call into *another instance* is not space safe. The callee runs against
-its own memory and globals, so it cannot reuse this frame; it is called
-normally and its results become the caller's, which is observably the same
-apart from the space bound.
+A tail call into *another instance* can still grow the stack. The callee uses
+its own memory and globals, so it cannot reuse this frame. It is called
+normally, and its results become the caller's results. The behaviour is the
+same, except for the stack space.
 
 ### memory64
 
@@ -298,8 +302,8 @@ than the decoder. The index type reaches the operand types of every memory and
 table instruction, the ceilings the validator enforces, how an operand is read
 as unsigned at run time, and whether one module may import another's memory.
 
-The interpreter must not pay a lookup per access to find out which it is dealing
-with, so the width is resolved once when the IR is built and tagged onto the
+The interpreter must not do a lookup on every access to find the index type.
+So the width is found once, when the IR is built, and stored in the
 instruction. A 32-bit memory keeps exactly the shape it had, so nothing on the
 common path changes.
 
@@ -317,8 +321,9 @@ Three things were only reachable once 64-bit operands existed:
   table handle, which is also what lets a module that *imported* the table be
   bound by the defining module's declaration.
 
-Index types must match exactly across an import boundary, unlike minima and
-maxima where "at least as permissive" is the rule. A 32-bit memory handed to a
+Index types must match exactly between an import and its export. Minimum and
+maximum sizes do not need to match exactly; they only need to allow at least
+as much. A 32-bit memory handed to a
 module expecting a 64-bit one would truncate every address that module computes.
 
 ### Shared tables and instance-carrying references
@@ -335,17 +340,18 @@ index it was meaningless outside its own module: a reference written into a
 shared table by module B, read back by module A, resolved against *A's*
 function space and silently called the wrong function. Because a reference
 carries its instance, a cross-module indirect call also runs against the
-callee's own memory and globals, rather than smuggling one module's code into
-another's state.
+callee's own memory and globals, and not against the state of the
+module that made the call.
 
 Nothing is skipped: every command in every suite of the checkout is either
 executed or asserted against.
 
 ## Compiling to Core Erlang
 
-Off by default, and worth 8.4x on a language runtime and flat on a plugin. See
-[the compiled tier](compiled-tier.md) for what it covers, what turns it off, how
-to cache the result across restarts, and how to read the code it generates.
+Off by default. It made a language runtime 8.4 times faster, and did not
+change a plugin. See [the compiled tier](compiled-tier.md) for what it
+compiles, what turns it off, how to keep the result across restarts, and how
+to read the code it generates.
 
 ```erlang
 {ok, I} = wasm:instantiate(M, Imports, #{compile => true}).
@@ -354,16 +360,16 @@ to cache the result across restarts, and how to read the code it generates.
 
 ## Benchmarks
 
-Measured on Apple Silicon, OTP 29, via `rebar3 bench`. Numbers are indicative,
-not a leaderboard entry.
+Measured on Apple Silicon, OTP 29, with `rebar3 bench`. The numbers give an
+idea of the costs. They are not exact results for comparing runtimes.
 
-**On measurement conditions.** The machine these were taken on carried a load
-average around 30, and repeated runs of the same code varied by up to 3x.
-Absolute figures here should be read as an order of magnitude. Where a *change*
-is claimed, it was measured by interleaving both versions in a single VM across
-several rounds and taking the minimum of each arm, so that load drift affects
-both equally; single before-and-after runs on a loaded box are not evidence and
-are not quoted.
+**On measurement conditions.** The machine had a load average of about 30,
+and runs of the same code varied by up to 3 times. Read the absolute numbers
+as an order of magnitude only. When the page claims that a *change* helped, it
+was measured like this: both versions ran in turn in one VM for several
+rounds, and the minimum of each version was kept. So changes in load affect
+both versions equally. One run before and one run after, on a loaded machine,
+proves nothing, and such numbers are not given here.
 
 ### Pipeline
 
@@ -375,9 +381,9 @@ are not quoted.
 | instantiate | 2.9 us |
 | call round trip | 0.40 us |
 
-Instantiation at 2.9 us is the number that matters for plugin and
-request-per-instance workloads, where a runtime is judged on how cheaply it can
-create and discard an instance rather than on steady-state throughput.
+Instantiation at 2.9 us is the important number for plugins and for one
+instance per request. There, what matters is how cheaply the runtime creates
+and discards an instance, more than how fast a long run goes.
 
 ### Execution
 
@@ -394,8 +400,8 @@ An i32 store costs more than an i64 store because `atomics` granularity is 64
 bits, so a 32-bit write is a read-modify-write while an aligned 64-bit write is
 a single operation.
 
-**What garbage collection cost the paths that do not use it.** Measured before
-the work and again after, minimum of three runs each:
+**How much garbage collection support slowed down code that does not use
+it.** Measured before the work and again after, minimum of three runs each:
 
 | Path | Before | After |
 | --- | ---: | ---: |
@@ -405,34 +411,36 @@ the work and again after, minimum of three runs each:
 | memory load i32 | 16.8 ns | 18.2 ns |
 | compile | 11.8 us | 13.2 us |
 
-Three regressions were found this way and fixed rather than accepted:
+These measurements found three slowdowns. All three were fixed:
 
 - **Dispatch had slowed 18%.** The new instructions were inserted early in the
   interpreter's clause list, so every common instruction was tested against
-  forty new patterns first. Moving them after the hot ones restored it exactly.
+  forty new patterns first. Moving them after the common ones gave back the old
+  speed exactly.
 - **Instantiate had slowed 33%**, because the validation context is rebuilt per
-  instance and canonicalising interns every recursive type group. It is now
-  memoised against the last module seen, which is why it ends up *faster* than
-  before. The first attempt keyed a cache on `phash2` of the module and made it
-  worse still: hashing a large module costs more than the work it saved.
+  instance and canonicalising interns every recursive type group. Now the result
+  for the last module is kept and reused, which is why it is *faster* than
+  before. The first attempt used a cache with `phash2` of the module as key, and
+  was even slower: hashing a large module costs more than the work it saved.
 - **Memory access had slowed 15%**, because the page count moved behind an
-  accessor. Inlining it and keeping the private memory's clause a plain record
-  match recovered most of it.
+  accessor. Inlining it, and keeping a plain record match for a private memory,
+  removed most of the slowdown.
 
-Two costs remain and are real. Memory access is 1.4 ns slower, the price of a
-memory being able to be shared at all. Compile is 1.4 us slower, which is
-canonicalisation: a module's recursive type groups are interned once so that
-type identity holds across modules.
+Two real costs remain. Memory access is 1.4 ns slower, because a memory can
+now be shared. Compile is 1.4 us slower, because of canonicalisation: a
+module's recursive type groups are stored once in a node-wide table, so that
+the same type is equal in every module.
 
 ### Scheduler responsiveness
 
-The result that distinguishes this from a runtime behind a NIF. An unrelated
-Erlang process measures its own message round-trip latency while WebAssembly
-infinite loops saturate every scheduler.
+This result shows the difference from a runtime called through a NIF. An
+unrelated Erlang process measures how long its own messages take to come
+back, while WebAssembly infinite loops keep every scheduler busy.
 
-The measurement is **against a control**: the same number of pure-Erlang busy
-loops. Comparing against idle instead would measure what saturating fourteen
-schedulers costs and call the answer a property of this runtime.
+The measurement is **compared with a control**: the same number of pure-Erlang
+busy loops. A comparison with an idle node would only measure the cost of
+fourteen busy schedulers, and wrongly report it as a property of this
+runtime.
 
 | Condition | p99 message latency |
 | --- | ---: |
@@ -440,28 +448,29 @@ schedulers costs and call the answer a property of this runtime.
 | 14 pure-Erlang busy loops (control) | 6-246 us |
 | 14 WebAssembly infinite loops | 2-153 us standalone, 11.4 ms under Common Test |
 
-The two arms overlap when measured the same way, which is the point: the
-interpreter yields like ordinary Erlang code. Every dispatch step is an Erlang
-function call and therefore consumes a reduction, and an infinite `loop` runs in
-**constant space** (986 words, flat, at 780M reductions per second), so there
-is no heap growth to pause on either. A runtime called through a NIF would not
-answer the ping at all until the invocation finished.
+Measured the same way, the two cases give similar numbers, and that is the
+result: the interpreter gives up the scheduler like ordinary Erlang code. Every
+dispatch step is an Erlang function call and therefore consumes a reduction, and
+an infinite `loop` runs in **constant space** (986 words, flat, at 780M
+reductions per second), so the heap does not grow and the garbage collector does
+not pause it either. With a runtime called through a NIF, the process would not
+answer at all until the call finished.
 
-Two honest caveats. The spread is wide: repeated runs of the *same* arm ranged
-from 2 us to 1005 us, so any single before-and-after pair here can show whatever
-you want it to, and an earlier draft of this section reported a 40x regression
-that was one noisy sample. And the same measurement under Common Test
-reproducibly reports 11.4 ms for the WebAssembly arm while its Erlang control
-reports 6 us; that gap is unexplained and is not reproduced standalone.
+Two warnings. The results vary a lot: runs of the *same* case went from 2 us
+to 1005 us. So one before-and-after pair can show any result, and an earlier
+version of this section reported a 40 times slowdown that was one noisy
+sample. Also, under Common Test the same measurement always reports 11.4 ms
+for the WebAssembly case, while its Erlang control reports 6 us. Nobody knows
+why yet, and the gap does not appear outside Common Test.
 `scheduler_stays_responsive/1` now takes the minimum of several rounds per arm
-and logs both, rather than asserting against idle with a bound loose enough to
-hide a real 49 ms block.
+and logs both, instead of comparing with an idle node using a limit so large
+that it would hide a real 49 ms block.
 
 ## Real toolchain acceptance
 
-An unmodified `rustc --target wasm32-wasip1 -O` build runs end to end, entered
-through `_start` under the WASI command model. That path exercises Rust's whole
-startup sequence, not just the syscalls a hand-written probe would touch: it
+An unmodified `rustc --target wasm32-wasip1 -O` build runs from start to end,
+called through `_start` as a WASI command. This runs Rust's whole startup
+code, not only the syscalls that a small hand-written test would use. It
 needs 13 WASI imports (`args_get`, `args_sizes_get`, `environ_get`,
 `environ_sizes_get`, `fd_close`, `fd_fdstat_get`, `fd_filestat_get`,
 `fd_prestat_dir_name`, `fd_prestat_get`, `fd_read`, `fd_write`, `path_open`,
@@ -478,11 +487,12 @@ this goes to stderr
 _start -> exit code 7
 ```
 
-The escape line matters: that is `std::fs::read_to_string("/data/../secret/key.txt")`
-being refused, attempted by Rust's own standard library through the preopen
-table it built from `fd_prestat_*`. The module never learns the host path
-behind `/data`. Rust reports it as "uncategorized" because its `ErrorKind` has
-no name for `ENOTCAPABLE`.
+The escape line matters: that is
+`std::fs::read_to_string("/data/../secret/key.txt")` being refused, attempted by
+Rust's own standard library through the preopen table it built from
+`fd_prestat_*`. The module never learns the host path behind `/data`. Rust
+reports it as "uncategorized" because its `ErrorKind` has no name for
+`ENOTCAPABLE`.
 
 The committed 120 KB stripped build compiles in 4.1 ms and instantiates in
 103 us.
@@ -491,8 +501,8 @@ test runs without a Rust toolchain.
 
 ## Real usage
 
-Two worked embeddings, both in `examples/` and both exercised by
-`wasm_examples_SUITE`, chosen to be the two *shapes* rather than two of one.
+Two complete examples, both in `examples/` and both tested by
+`wasm_examples_SUITE`. They show two different *kinds* of guest.
 
 | | `plugin_worker` | `qjs_worker` |
 | --- | ---: | ---: |
@@ -503,11 +513,12 @@ Two worked embeddings, both in `examples/` and both exercised by
 | a trivial request | under 1 ms | 238 ms |
 | levels of interpretation | one | two |
 
-The second is the more interesting number. A real 1.8 MB QuickJS build, which
-has never heard of this runtime, decodes and validates in 310 ms, instantiates
-in 3.2 ms and evaluates `print('hello')` in 238 ms end to end. A hundred
-thousand iterations of a JavaScript loop take about 7 s, which is the honest
-cost of stacking two interpreters and the reason `plugin_worker` exists.
+The second column is the more interesting one. A real 1.8 MB QuickJS build,
+which was not written for this runtime, decodes and validates in 310 ms,
+instantiates in 3.2 ms and evaluates `print('hello')` in 238 ms end to end. A
+hundred thousand iterations of a JavaScript loop take about 7 s, which is the
+real cost of running one interpreter inside another, and the reason
+`plugin_worker` exists.
 
 That module is also an independent check of the WASI socket extension: it
 imports twelve of those calls with the signatures `wasi_sock_ext_SUITE`
@@ -515,8 +526,8 @@ asserts, including the two-argument `sock_accept`.
 
 ### What running it first found
 
-Nothing here had ever run a large module written by somebody else, and the
-first one that was tried aborted the emulator:
+Before this, the runtime had never run a large module written by someone
+else. The first one we tried crashed the Erlang VM:
 
 ```text
 ets_alloc: Cannot reallocate 18446744060576004240 bytes  (2^64 minus ~3 GB)
@@ -524,22 +535,22 @@ ets_alloc: Cannot reallocate 18446744060576004240 bytes  (2^64 minus ~3 GB)
 
 A function reference carried its whole defining instance, and an instance holds
 the module's compiled functions: 19.5 MB flat, per reference, with 1036 of them
-in the table. Published to the engine store, where `ets:insert` copies without
-preserving sharing, that is 19.8 GB. The cost was `table entries x module size`,
+in the table. Stored in the engine's ETS table, where `ets:insert` copies each
+reference in full, that is 19.8 GB. The cost was `table entries x module size`,
 so no fixture here was large enough to show it.
 
-Two changes followed, and `wasm_scale_SUITE` now pins both from text, with
-nothing to download:
+Two changes followed. `wasm_scale_SUITE` now tests both, with modules written
+in text, so nothing needs to be downloaded:
 
-- **A reference names its instance rather than carrying it.** The hot path
-  already compared only ids, so it is unchanged; a foreign call resolves the id
-  through the calling process's own dictionary, swept so that destroyed
-  instances do not accumulate.
-- **A function is lowered the first time it is called**, above 256 functions per
-  module. Instantiating QuickJS fell from 78 ms, and measures 3.2 ms today; a script
-  went from 752 ms to 238 ms. Below the threshold everything is lowered up front as
-  before, because deferring cost a small module 16% of a call round trip and
-  buys it nothing.
+- **A reference names its instance rather than carrying it.** The common path
+  already compared only ids, so it did not change. A call into another instance
+  finds the instance from its id in the calling process's dictionary, which is
+  cleaned so that destroyed instances do not pile up.
+- **A function is lowered (prepared for the interpreter) the first time it is
+  called**, in modules with more than 256 functions. Instantiating QuickJS fell
+  from 78 ms, and measures 3.2 ms today; a script went from 752 ms to 238 ms.
+  Below the threshold everything is lowered up front as before, because waiting
+  made a call round trip 16% slower in a small module and brought no gain.
 
 ## Testing
 
@@ -562,14 +573,14 @@ nothing to download:
 | `wasm_scale_SUITE` | what only breaks at size: big tables, deferred lowering |
 | `wasm_examples_SUITE` | both worked examples, run as their documentation says |
 
-The properties worth naming:
+The main properties:
 
 - **Totality.** No binary, however hostile, produces anything but `{ok, _}` or a
   structured `{error, _}`. Verified over random binaries and over valid modules
   mutated at the byte level.
 - **No atom creation.** Decoding arbitrary input never moves the atom count. The
-  atom table is node-wide and never reclaimed, so one reachable
-  `binary_to_atom` on module data would be a remote node kill.
+  atom table is node-wide and never reclaimed, so one
+  `binary_to_atom` on module data would let a remote module crash the node.
 - **Memory equivalence.** Random sequences of store, fill, copy and grow against
   the `atomics` backend agree byte for byte with a plain binary model. The same
   property will validate the optional native backend when it arrives.
@@ -577,37 +588,38 @@ The properties worth naming:
 ## Threads
 
 Shared memories, all 66 instructions of the `0xFE` opcode space, and
-`memory.atomic.wait` that genuinely blocks an Erlang process until another
-notifies it. The `atomic` suite passes in full: 297 assertions, no skips.
+`memory.atomic.wait`, which really blocks an Erlang process until another
+process notifies it. The `atomic` suite passes in full: 297 assertions, no
+skips.
 
 **The storage was already atomic.** Linear memory is chunked `atomics` arrays,
 so an eight-byte aligned atomic load is the same single `atomics:get` an
 ordinary one is. Narrower accesses are a *field* of a 64-bit word, so writing
 one means reading the word, replacing the field and writing it back; those go
 through `atomics:compare_exchange` and retry. A read-modify-write is that same
-loop with the arithmetic inside it, which is what makes it one indivisible step
-rather than a load and a store that usually work.
+loop with the arithmetic inside it, and this makes it one indivisible step,
+not a load and a store that usually work.
 
-**`wait` is a `receive`.** On other runtimes this is a futex, with the famous
-hazard that a waiter must check a value and then sleep, and a notifier landing
-between those two steps signals nobody. Here the waiter registers *before* it
+**`wait` is a `receive`.** Other runtimes use a futex, which has a well-known
+risk: a waiter must check a value and then sleep, and a notify that arrives
+between those two steps wakes nobody. Here the waiter registers *before* it
 re-reads the value, so a notify arriving afterwards lands in its mailbox and
-`receive` finds it either way. A mailbox is a queue rather than a signal that
-can be missed, which is the one part of this proposal the BEAM makes easier
-rather than harder.
+`receive` finds it either way. A mailbox is a queue, not a signal that can be
+missed. This is the one part of the proposal that the BEAM makes easier, not
+harder.
 
 **Nothing reorders.** `atomics` is sequentially consistent, so `atomic.fence`
 has nothing to do and the relaxed memory model the proposal permits is not
-exploited. An implementation that reordered would be faster and would also make
-the ordering bugs in guest programs unreproducible.
+exploited. An implementation that reordered would be faster, but ordering bugs
+in guest programs could then not be reproduced.
 
 ### An agent is an Erlang process
 
-The proposal has no instruction that creates a thread. Agents are the
-embedder's to make: instantiate the same module more than once over one shared
+The proposal has no instruction that creates a thread. The embedder creates the
+agents (threads): instantiate the same module more than once over one shared
 memory, each instance in its own process. `memory.atomic.wait` then blocks that
-process in a `receive` and `notify` sends it a message, so a parked agent costs
-what a parked Erlang process costs and the scheduler is free to run others.
+process in a `receive` and `notify` sends it a message, so a waiting agent costs
+the same as a waiting Erlang process, and the scheduler can run other processes.
 
 ```erlang
 {ok, Mem} = wasm_memory:new(#limits{min = 1, max = 4, shared = true}),
@@ -617,38 +629,39 @@ Agents = [spawn_link(fun() ->
           end) || _ <- lists:seq(1, 8)].
 ```
 
-**A shared memory outlives the process that created it**, which is what makes
-that shape work: the coordinator above may exit while its agents carry on. It
-is held manually rather than by any process, so nothing about a process exiting
-releases it. `wasm_memory:free/1` is what releases it.
+**A shared memory outlives the process that created it**, and this is why the
+code above works: the coordinator may exit while its agents continue. No process
+holds the memory, so no process exit frees it. `wasm_memory:free/1` is what
+releases it.
 
-That was not true at first. The memory was charged to whichever process created
-it, so the node's page accounting fell to zero while the memory was still in
-use, and the published chunk tuple was dropped, so growing it afterwards failed.
-Both are fixed and `wasm_threads_SUITE` pins the pattern: a coordinator makes
-the memory, hands it over, exits, and the memory stays readable, stays charged
-and still grows.
+That was not true at first. The memory was counted for the process that created
+it. So when that process exited, the node's page count fell to zero while the
+memory was still in use. Also, the shared tuple of chunks was dropped, so
+growing the memory afterwards failed. Both are fixed, and `wasm_threads_SUITE`
+tests the pattern: a coordinator makes the memory, hands it over, exits, and the
+memory stays readable, stays charged and still grows.
 
-`wasm_threads_SUITE` is the part conformance cannot reach, because the
-specification suite runs one agent. Sixteen processes each add one ten thousand
-times to the same address and the total must be exactly 160,000; a compare and
-exchange contended by sixteen processes must admit exactly one winner; a waiter
-must wake, time out, or answer "not equal" without parking. It carries its own
-control: the same arithmetic written with an ordinary load, add and store, which
-is asserted to **lose** updates. Without that, the atomicity test would pass
-just as well against an implementation that was not atomic at all.
+`wasm_threads_SUITE` tests what the conformance suite cannot, because the
+specification suite runs only one agent. Sixteen processes each add one ten
+thousand times to the same address and the total must be exactly 160,000; a
+compare and exchange contended by sixteen processes must admit exactly one
+winner; a waiter must wake, time out, or answer "not equal" without waiting. It
+has its own control test: the same arithmetic written with an ordinary load, add
+and store, which is asserted to **lose** updates. Without that, the atomicity
+test would pass just as well against an implementation that was not atomic at
+all.
 
 ### Two suites left out, and why
 
-The threads proposal ships its own copy of the whole core suite, and that copy
-predates multiple memories and multiple tables. `imports-threads` and
+The threads proposal includes its own copy of the whole core suite, and that
+copy is older than multiple memories and multiple tables. `imports-threads` and
 `memory-threads` assert that a module with two memories is invalid, which
-contradicts a feature this runtime implements: they fail because the snapshot is
+contradicts a feature this runtime implements: they fail because that copy is
 old, not because anything is missing. The instructions and shared-memory rules
 the proposal actually adds are in `atomic` and `exports-threads`, both of which
 pass in full.
 
-Two real defects surfaced from those suites before they were set aside: a shared
+Those suites found two real defects before they were removed: a shared
 memory did not link against a shared import (sharing has to match exactly, in
 both directions, and was not compared at all), and `wasm_spectest` had no shared
 memory to import.

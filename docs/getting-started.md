@@ -1,8 +1,8 @@
 # Getting started
 
-This page gets you from an empty project to a WebAssembly module running in your
-shell, then to calling Erlang from inside it. Start here if you have never used
-the runtime; everything else in the docs assumes you have done this once. You
+This page takes you from an empty project to a WebAssembly module running in
+your shell, and then to a module that calls Erlang. Start here if you have
+never used the runtime. The other pages assume you have done this once. You
 need Erlang/OTP 29 or later and `rebar3`. A C compiler is optional.
 
 ## Add the dependency
@@ -19,8 +19,9 @@ Start it from your application's `applications` list, or by hand in the shell:
 {ok, _} = application:ensure_all_started(wasm).
 ```
 
-Start it before you do anything else. The application owns the module cache and
-the node's page budget.
+Start it before you do anything else. The application owns the module cache
+(compiled modules, kept for reuse) and the node's page budget (the limit on
+guest memory for the whole node).
 
 ## Run your first module
 
@@ -39,15 +40,15 @@ Src = ~"""
 ok         = wasm:destroy(Inst).
 ```
 
-`compile/1` turns the text into a module, `instantiate/2` gives you a running
-instance of it, and `call/3` calls one of its exported functions. Paste it into
-`rebar3 shell` as it is.
+`compile/1` turns the text into a module. `instantiate/2` gives you an
+instance: a running copy of the module. `call/3` calls one of its exported
+functions. You can paste this into `rebar3 shell` as it is.
 
 ## Load a module from a file
 
-A module built by a real toolchain arrives as a `.wasm` file. The bytes below
-are the same `add` module as `wat2wasm` writes it, so you can try this without
-a toolchain; with your own module, skip the first line:
+A module built by a real compiler comes as a `.wasm` file. The bytes below
+are the same `add` module, as `wat2wasm` writes it, so you can try this
+without a compiler. With your own module, skip the first line:
 
 <!-- check: fresh -->
 ```erlang
@@ -59,25 +60,26 @@ ok         = wasm:destroy(Inst),
 ok         = file:delete("add.wasm").
 ```
 
-You load once and instantiate as often as you like. `load_file/1` decodes and
-validates the bytes and caches the result by content hash, so loading the same
-file again costs microseconds instead of milliseconds. Each `instantiate/2`
-gives you a fresh instance that shares nothing with the others.
+You load a module once and instantiate it as often as you like.
+`load_file/1` decodes and validates the bytes, and keeps the result in a cache
+under its content hash (a checksum of the bytes). So loading the same file
+again takes microseconds instead of milliseconds. Each `instantiate/2` gives
+you a new instance that shares nothing with the others.
 
-`compile/1`, used above, skips that cache, which is right for text: a module
-built from text takes a fresh identity every time, so there is nothing stable
-to cache it against. Use `load_file/1` for a module you instantiate
-repeatedly.
+`compile/1`, used above, does not use that cache. This is correct for text: a
+module built from text gets a new identity every time, so the cache has no
+stable key for it. Use `load_file/1` for a module you instantiate many times.
 
 Each section of this page starts from a clean shell. If you paste them all
-into one, run `f().` between sections so names like `Mod` and `Inst` can be
-bound again.
+into one shell, run `f().` between sections, so that you can bind names like
+`Mod` and `Inst` again.
 
 ## Give it something to call
 
-Imports are plain Erlang functions. Key them by the module and field name the
-WebAssembly module asks for. This module imports `env.log` and calls it with a
-pointer and a length into its memory:
+Imports are plain Erlang functions. You give them in a map, with the module
+name and field name that the WebAssembly module asks for as the key. This
+module imports `env.log`. It calls it with the address and the length of a
+string in its memory:
 
 <!-- check: fresh -->
 ```erlang
@@ -99,15 +101,16 @@ Imports = #{{~"env", ~"log"} =>
 {ok, []}   = wasm:call(Inst, ~"run", []).
 ```
 
-Return `{ok, Results}` to continue or `{trap, Reason}` to stop the invocation.
-If your function raises, the runtime turns that into a trap instead of letting
-it escape into your process. See [host-functions.md](host-functions.md).
+Return `{ok, Results}` to continue, or `{trap, Reason}` to stop the call. If
+your function raises an exception, the runtime turns it into a trap. The
+exception does not reach your process. See
+[host-functions.md](host-functions.md).
 
 ## Run a WASI program
 
 If the module was built with `rustc --target wasm32-wasip1`, TinyGo, or a
-WASI-enabled clang, hand it to `wasi:run/2`. The repository has one, built from
-Rust, in `test/fixtures/rust/`:
+clang with WASI support, give it to `wasi:run/2`. The repository has one,
+built from Rust, in `test/fixtures/rust/`:
 
 <!-- check: fresh -->
 ```erlang
@@ -119,24 +122,27 @@ Rust, in `test/fixtures/rust/`:
 io:format("~ts", [Stdout]).
 ```
 
-`Exit` is the program's exit status. This one prints what it was given, then
-tries to read a file under `/data`; `/srv/app/data` does not exist here, so it
+`Exit` is the program's exit status. This program prints its arguments, then
+tries to read a file under `/data`. Here `/srv/app/data` does not exist, so it
 reports that and exits with 7.
 
-Grant a network the same way you grant a directory, by naming what may be
-reached:
+You grant network access the same way as a directory: you name what the
+program may reach:
 
 ```erlang
 wasi:run(Mod, #{net => #{connect => [{tcp, ~"10.0.0.0/8", 443}]}}).
 ```
 
-Capabilities are explicit and nothing is implied. Leave out `dirs` and the
-module has no filesystem at all, not one rooted at your working directory. Leave
-out `net` and it has no network. See [wasi.md](wasi.md).
+You grant each capability (each permission) explicitly, and nothing is
+granted by default. Without `dirs`, the module has no filesystem at all. It
+does not get your working directory. Without `net`, it has no network. See
+[wasi.md](wasi.md).
 
 ## Handle failure
 
-Nothing raises. Match on the error. This module's `run` always traps:
+Nothing raises an exception: errors come back as values, so you match on
+them. A trap is the guest stopping on an error, such as the `unreachable`
+instruction. This module's `run` always traps:
 
 <!-- check: fresh -->
 ```erlang
@@ -157,15 +163,19 @@ end.
 %% => module_hit_unreachable
 ```
 
-You get one of five classes: `malformed` for a bad binary, `invalid` for a
-module that fails validation, `link` when instantiation fails, `trap` when
-execution traps, and `exhaustion` when a limit is hit.
+Every error has one of five classes:
+
+- `malformed`: the binary is broken;
+- `invalid`: the module fails validation;
+- `link`: instantiation fails;
+- `trap`: the guest traps while it runs;
+- `exhaustion`: a limit is reached.
 
 ## Run untrusted code
 
-Set limits, and put the instance in a process so you can kill a runaway module
-on a timeout. `wasm_instance_worker` is that process, installed with the
-application:
+Set limits, and put the instance in its own process, so that you can kill a
+module that runs too long. `wasm_instance_worker` is that process. It comes
+with the application:
 
 <!-- check: fresh -->
 ```erlang
@@ -180,17 +190,18 @@ Src = ~"""
 {ok, [42]} = wasm_instance_worker:call(W, ~"handle", [41], 500).
 ```
 
-The last argument is the timeout in milliseconds: when it passes, the worker is
-killed, so the work actually stops rather than running on unwatched. `isolation => fresh` destroys and rebuilds the instance
-after every request, so no state survives one. Read [worker.md](worker.md) for
-why the process boundary is what makes the timeout real, and
-[security.md](security.md) for what limits do not cover.
+The last argument is the timeout in milliseconds. When it passes, the worker
+is killed, so the work really stops. It does not keep running with nobody
+waiting for it. `isolation => fresh` destroys and rebuilds the instance after
+every request, so no state is kept from one request to the next. Read
+[worker.md](worker.md) to learn why only a separate process makes the timeout
+work, and [security.md](security.md) for what limits do not cover.
 
 ## Next
 
 - [embedding.md](embedding.md): instance lifetime, ownership, and limits
 - [host-functions.md](host-functions.md): calling Erlang from WebAssembly
-- [guests.md](guests.md): producing a module, and which shape you want
+- [guests.md](guests.md): producing a module, and which form you want
 - [wasi.md](wasi.md): capabilities, preopened directories, sockets
 - [worker.md](worker.md): request isolation, timeouts, pools
 - [security.md](security.md): the threat model, stated plainly

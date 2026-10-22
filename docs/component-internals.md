@@ -1,10 +1,29 @@
 # Component internals
 
-How the Component Model is implemented, for you when you are changing it
-rather than using it. Read it before you touch decoding, linking, the Canonical
-ABI, resource handles or the async ABI, or when you add a host import or a value
-type. To use components, read [Components](components.md); this page does not
-repeat it.
+This page explains how the Component Model is implemented. It is for you
+when you change that code, not when you use it. Read it before you change
+decoding, linking, the Canonical ABI, resource handles or the async ABI, or
+when you add a host import or a value type. To use components, read
+[Components](components.md). This page does not repeat it.
+
+## The words on this page
+
+| word | what it means here |
+| --- | --- |
+| **core** | one core WebAssembly module inside a component, or an instance of it. |
+| **lower** | convert an Erlang term into core values and guest memory, to pass it to the guest. |
+| **lift** | convert core values and guest memory back into an Erlang term. A `canon lift` also declares a component export. |
+| **flat value** | one core number (`i32`, `i64`, `f32`, `f64`) after a typed value is split into numbers. |
+| **spill** | when a value has too many flat values, it is stored in guest memory and passed as one pointer. |
+| **realloc** | the guest function the host calls to allocate guest memory for strings and lists. |
+| **post-return** | a guest function the host calls after it reads a result, so the guest can free that memory. |
+| **representation** (rep) | the guest's own value behind a resource handle, usually a pointer. |
+| **shim**, **adapter** core | small helper cores that toolchains add next to the guest core, for example to turn preview 1 calls into preview 2. |
+| **store** | the shared state that lets several cores use the same memory and tables. |
+| **waitable** | something an async task can wait on: a subtask, a future or a stream end. |
+
+Words used by both pages, such as resource and handle, are in
+[Components](components.md) and in the [glossary](concepts.md#glossary).
 
 ## The modules
 
@@ -19,18 +38,19 @@ repeat it.
 | `wasm_recipe` | how a component is built from a Rust source directory | `steps/1` |
 | `wasi_preview2` | the WASI 0.2 host a component imports | `imports/0` |
 
-`wasm_recipe` is not on the runtime path. It turns a recipe map into `cargo`
-and `wasm-tools` commands so an embedder (hornbeam) can build its components
-without a shell script; nothing in `src/` calls it.
+The runtime does not use `wasm_recipe`. It turns a recipe map into `cargo`
+and `wasm-tools` commands, so that an embedder (hornbeam) can build its
+components without a shell script. Nothing in `src/` calls it.
 
 ## From bytes to a running instance
 
-`wasm_component:decode/1` checks the layer-1 preamble (`00 61 73 6d 0d 00 01
-00`) and walks the top-level sections once. It keeps the core modules
-(section 1), the export names (section 11, accumulated across sections) and the
-raw section stream for later. The graph itself is parsed only when needed.
+`wasm_component:decode/1` checks the layer-1 header (`00 61 73 6d 0d 00 01
+00`) and reads the top-level sections once. It keeps the core modules
+(section 1), the export names (section 11, collected from every such section)
+and the raw sections for later. It parses the graph of instances only when it
+is needed.
 
-Three shapes come out of it:
+A component then has one of three shapes:
 
 | Shape | Recognised by | Path |
 | --- | --- | --- |
@@ -38,9 +58,9 @@ Three shapes come out of it:
 | linked cores | the entry core imports from another core, or an export lifts from a core other than the largest | `wasm_component_link:link/4` |
 | composed | no top-level core (nested components, as `wac` emits) | `instantiate_composed` |
 
-The entry core is the largest one: a resource or WASI component embeds smaller
-shim and adapter cores beside the guest. On a tie the earliest wins, so the
-pick is stable.
+The entry core is the largest core, because a resource or WASI component
+puts smaller shim and adapter cores next to the guest. If two cores have the
+same size, the first one wins, so the choice is always the same.
 
 ```text
   component bytes
@@ -74,24 +94,28 @@ pick is stable.
 
 The steps, in order:
 
-1. Split the options: `loader`, `resource_closer`, `resource_predrop` and
-   `resource_limit` are read here; everything else is core instance limits.
+1. Split the options. `loader`, `resource_closer`, `resource_predrop` and
+   `resource_limit` are read here. All other options are limits for the core
+   instances.
 2. Decode inside `wasm_error:capture/1`, so a malformed component is a value.
-3. `wasm_component_link:validate_lifts/2`: each `canon lift` declares a
-   component type, the Canonical ABI derives a core signature from it, and the
-   core function must have exactly that signature. A mismatch is
-   `{error, {invalid_lift_type, _}}` before any start function runs.
+3. `wasm_component_link:validate_lifts/2`. Each `canon lift` declares a
+   component type. The Canonical ABI computes a core signature from that type,
+   and the core function must have exactly that signature. If it does not,
+   the result is `{error, {invalid_lift_type, _}}`, before any start function
+   runs.
 4. `wasm_component_link:resource_info/2` reads each export's real signature,
    the resource types the component defines, the type each resource built-in
    acts on, and each destructor's export name.
 5. Resolve the entry core's imports. `strip_version` turns
-   `wasi:io/streams@0.2.0` into `wasi:io/streams`, because the host map is keyed
-   bare. An explicit host function wins over an automatic resource intrinsic.
-6. Pick the path. Any import still unresolved sends the component to the
-   linker; so does a multi-core component whose exports do not all resolve on
-   the entry (`wasm_component_link:exports_resolve_on_entry/2`).
-7. Build the cores with a fresh `wasm_resources` table current, so a start
-   function that mints a handle mints it in this instance.
+   `wasi:io/streams@0.2.0` into `wasi:io/streams`, because the host map uses
+   keys without a version. A host function you pass yourself wins over a
+   resource built-in that the runtime adds automatically.
+6. Pick the path. If any import is still unresolved, the component goes to
+   the linker. A component with several cores also goes to the linker when
+   some of its exports are not on the entry core
+   (`wasm_component_link:exports_resolve_on_entry/2`).
+7. Build the cores with a new `wasm_resources` table set as current. So when a
+   start function creates a handle, the handle belongs to this instance.
 8. Record per-export string encodings (`export_encodings/1`) and the declared
    realloc and post-return (`export_bindings/1`) on the instance.
 
@@ -99,50 +123,51 @@ A failed build destroys the resource table it created.
 
 ### Linking several cores
 
-`wasm_component_link:parse/1` turns the section stream into an ordered item
-list. `link/4` folds over it, assigning indices per kind the way the
-specification does: core instances, core funcs, memories, tables, globals,
-component instances and component funcs.
+`wasm_component_link:parse/1` turns the sections into an ordered list of
+items. `link/4` goes through the list in order. It numbers each kind of item
+separately, as the specification does: core instances, core funcs, memories,
+tables, globals, component instances and component funcs.
 
-- `{core_instance, {instantiate, Mod, Args}}`: build the core, taking each
-  import namespace from the instance its `with` argument names, or from the host
-  when there is none. Every core after the first is built with
-  `#{link => Anchor}`, so all cores share one store and a memory or table of one
-  serves another.
-- `{core_alias, Sort, Inst, Name}`: pull an export out of a built instance with
-  `wasm:extern/2`. A func alias also records which instance it came from, which
-  becomes the export's call target.
-- `canon lower`: bind a host function (from the imports map) as a core function,
-  scoped to the lower's realloc and string encoding and run with the guest
-  instance as its context.
-- `canon lift`: add a component func; the encoding is checked here.
+- `{core_instance, {instantiate, Mod, Args}}`: build the core. Each import
+  namespace comes from the instance that its `with` argument names, or from
+  the host if there is none. Every core after the first is built with
+  `#{link => Anchor}`. So all cores share one store, and one core can use the
+  memory or table of another.
+- `{core_alias, Sort, Inst, Name}`: take an export out of a built instance
+  with `wasm:extern/2`. A func alias also records its instance. That instance
+  becomes the call target of the export.
+- `canon lower`: make a host function (from the imports map) into a core
+  function. It uses the realloc and string encoding of that `canon lower`, and
+  runs with the guest instance as its context.
+- `canon lift`: add a component func. The encoding is checked here.
 - `canon resource.new | rep | drop` and the async built-ins: see below.
 
-The entry is the core that exports `wasi:cli/run...#run` (a command), else the
-instance of the largest module (a reactor). A link that fails part way destroys
-every core it built.
+The entry is the core that exports `wasi:cli/run...#run` (a command).
+Otherwise it is the instance of the largest module (a reactor). If a link
+fails in the middle, it destroys every core it built.
 
-The preview1 adapter needs no special case. Its startup cycle (the guest core
-imports adapter functions, and the adapter needs the guest's memory and
-realloc) is broken inside the component: a shim core exports a table of
-indirect-call stubs, and a fixup core fills that table once both sides exist.
-The linker interprets those instances in graph order, and because the cores
-share one store, the table the fixup fills is the table the guest calls
-through.
+The preview1 adapter needs no special code. It has a startup cycle: the guest
+core imports adapter functions, and the adapter needs the guest's memory and
+realloc. The component itself breaks this cycle. A shim core exports a table
+of placeholder functions for indirect calls, and a fixup core fills that table
+when both sides exist. The linker builds those instances in graph order.
+Because the cores share one store, the guest calls through the same table that
+the fixup core filled.
 
 ### Composed components
 
-`instantiate_composed` folds the graph with `compose_step`. Each nested
-component is instantiated through `instantiate/3` again. When an instantiate
-argument binds one of its imports to a sibling's interface export, it gets a
-bridge for each function of that interface: an `import_fun/2` wrapper whose body
-is `call/4` on the provider. Values cross as Erlang terms, each side in its own
-memory. The signatures come from the nested component's own type section,
-through `wasm_component_types:import_interfaces/1`.
+`instantiate_composed` goes through the graph with `compose_step`. Each nested
+component is instantiated by calling `instantiate/3` again. An instantiate
+argument can connect one of its imports to an interface that another nested
+component exports. Then each function of that interface gets a *bridge*: an
+`import_fun/2` wrapper that calls `call/4` on the component that provides it.
+Values pass as Erlang terms, and each side keeps its own memory. The signatures
+come from the nested component's own type section, through
+`wasm_component_types:import_interfaces/1`.
 
 `call/4` on a composed instance looks the export up in `dispatch` and calls the
-sub-instance. An export backed only by an imported interface answers
-`{error, {unresolved_export, Name}}`.
+sub-instance. If an export only comes from an imported interface, the call
+returns `{error, {unresolved_export, Name}}`.
 
 ## A call
 
@@ -163,23 +188,25 @@ sub-instance. An export backed only by an imported interface answers
         lift_handles                      own result -> host
 ```
 
-- **Target.** The linker's `export_targets` wins, because two cores can export
-  the same name. Otherwise the export map renames to the core function, and the
-  last fallback is the export's own name on whichever core has it.
-- **Lowering.** Up to 16 flat values (`MAX_FLAT_PARAMS`) pass directly. Past
-  that, the parameters are stored in guest memory as one tuple and a single
-  pointer is passed. Strings and lists are placed through the realloc the lift
-  declares, or the guest's `cabi_realloc` export when it declares none.
-- **Lifting.** A result of one flat value comes from the core results; anything
-  wider is read from the pointer the guest returned, after an alignment check.
-- **Post-return.** It runs the function the lift declares, not
-  `cabi_post_<export>` by name. A trap in it fails the call.
+- **Target.** The linker's `export_targets` is used first, because two cores
+  can export the same name. Next, the export map gives the core function's
+  name. Last, the runtime uses the export's own name on the core that has it.
+- **Lowering.** Up to 16 flat values (`MAX_FLAT_PARAMS`) are passed directly.
+  With more, the parameters are stored in guest memory as one tuple, and one
+  pointer is passed. Strings and lists are written into memory allocated by
+  the realloc that the lift declares. If it declares none, the guest's
+  `cabi_realloc` export is used.
+- **Lifting.** A result of one flat value comes from the core results. A
+  larger result is read from the pointer that the guest returned, after an
+  alignment check.
+- **Post-return.** The runtime runs the function that the lift declares. It
+  does not look for `cabi_post_<export>` by name. A trap in it fails the call.
 
 ### Handles at the boundary
 
 The export's real signature, from the component's type space, decides how
-handles cross, whatever descriptors the caller passed. So `{[u32], u32}` for a
-method is checked exactly like `{[{borrow, 0}], u32}`.
+handles are passed. The descriptors the caller passed do not change this. So
+`{[u32], u32}` for a method is checked exactly like `{[{borrow, 0}], u32}`.
 
 | Mode | When | Checks |
 | --- | --- | --- |
@@ -193,13 +220,13 @@ method is checked exactly like `{[{borrow, 0}], u32}`.
 | argument | `borrow` | `host_lend/3`, undone by `host_unlend/2` | the representation |
 | result | `own` | `host_receive/3` | (the host now holds it) |
 
-A handle of a type another component defines (a WASI stream) passes through
-untouched. Loans are returned when the call ends, traps, or fails a check part
-way through lowering.
+A handle of a type that another component defines (a WASI stream, for
+example) is passed without change. Lent handles are given back when the call
+ends, when it traps, or when a check fails during lowering.
 
 ## Resources and host handles
 
-There are two tables, and they answer different questions.
+There are two tables, for two kinds of resource.
 
 **`wasm_resources`: resources the guest defines.** One table per component
 instance, in the process dictionary of the process that owns the instance.
@@ -207,7 +234,8 @@ Handles start at 1 and are never reused while the instance lives. Each entry is
 `{Rt, Rep, Owner}`, with `Owner` one of `guest`, `host` or `{lent, N}`.
 
 - The guest side (`new/2`, `rep/2`, `drop/2`) acts on the current instance,
-  the one `with_instance/2` set. With none current they pass the value through.
+  the one that `with_instance/2` set. When no instance is current, they
+  return the value unchanged.
 - The host side (`host_*`) names the instance explicitly.
 - A failed check throws `resource_not_live`, `resource_wrong_type` or
   `resource_borrowed` through `wasm_error:trap/2`.
@@ -217,17 +245,17 @@ Handles start at 1 and are never reused while the instance lives. Each entry is
   the linked path they are `canon resource.*` items bound in `step`.
 - A guest drop of a defined resource runs `<iface>#[dtor]<res>` with the
   representation. `drop_resource/3` does the same for a host-held handle.
-- Across composed components, an `own` the provider returns stays in the
-  provider's table and the consumer gets an `imported` entry whose
+- Between composed components, an `own` that the provider returns stays in
+  the provider's table. The consumer gets an `imported` entry whose
   representation is `{remote, ProviderId, Handle, Release}`. Dropping it runs
-  `Release`, which drops it in the provider.
+  `Release`, which drops the resource in the provider.
 - `destroy/1` discards the table. No destructor runs.
 
 **Host handles: resources the host defines.** `host_new/2`, `host_get/1`,
 `host_update/2` and `host_drop/1` keep `{Tag, State}` in a per-process map,
 separate from the guest table. WASI 0.2 streams, files, sockets and HTTP
-objects live here. A host function mints one when it returns an `own`, and the
-`[resource-drop]` the host map provides removes it.
+objects live here. A host function creates one when it returns an `own`. The
+`[resource-drop]` function in the host map removes it.
 
 ```erlang
 Imports = #{{~"example:store/kv", ~"[constructor]bucket"} =>
@@ -236,47 +264,50 @@ Imports = #{{~"example:store/kv", ~"[constructor]bucket"} =>
                   fun([]) -> wasm_component:host_new(bucket, #{}) end)}.
 ```
 
-- `resource_limit` in the `instantiate/3` options caps how many are live; past
-  it, `host_new/2` traps `resource_limit_reached`.
-- On the linked path a dropped host resource runs `resource_predrop` (which may
-  veto with a trap) and then `resource_closer`, so an OS handle closes at once.
-- `destroy/2` sweeps every live host handle in the process with its closer.
-  That is why the contract is one live instance per process.
+- `resource_limit` in the `instantiate/3` options limits how many host
+  handles can be live. Above it, `host_new/2` traps with
+  `resource_limit_reached`.
+- On the linked path, dropping a host resource runs `resource_predrop` (which
+  can refuse the drop with a trap) and then `resource_closer`. So an
+  operating system handle is closed at once.
+- `destroy/2` closes every live host handle in the process with its closer.
+  This is why the rule is one live instance per process.
 
 ## The async ABI
 
-`wasm_async` runs the async Canonical ABI with the BEAM as its executor: the
-process running the call is the task, a wait is a selective `receive`, and a
-producer signals readiness with a message. All task state is in the process
-dictionary, one task per process.
+`wasm_async` runs the async Canonical ABI on the BEAM's own scheduling. The
+process that runs the call is the task. A wait is a selective `receive`. A
+producer sends a message when its value is ready. All task state is in the
+process dictionary, and there is one task per process.
 
 `wasm_component:call_async/4`:
 
 1. Find `[async-lift]<export>` (or `[async-lift]<export>#<fn>`) on any core,
    and its `[callback]<lift>`.
-2. `wasm_async:begin_task/2`, then lower the arguments. A `future`/`stream`
-   argument becomes the readable end of a waitable: filled at once, queued with
-   `{ready_before, V}`, or fed by `{producer, Fun}`.
-3. Call the lift and decode its status, `code | (set << 4)`: EXIT takes the
-   `task.return` value, YIELD re-enters the callback with no event, WAIT calls
-   `wasm_async:wait_on_set/1` and re-enters the callback with the event.
-4. `wasm_async:end_task/0` stops producers and flushes stale messages.
+2. `wasm_async:begin_task/2`, then lower the arguments. A `future` or
+   `stream` argument becomes the readable end of a waitable. It is filled at
+   once, queued with `{ready_before, V}`, or fed by `{producer, Fun}`.
+3. Call the lift and decode its status, `code | (set << 4)`. EXIT takes the
+   `task.return` value. YIELD calls the callback again with no event. WAIT
+   calls `wasm_async:wait_on_set/1` and calls the callback again with the
+   event.
+4. `wasm_async:end_task/0` stops producers and removes old messages.
 
-The loop is bounded by a turn budget. A lift with no callback (the stackful
-form) answers `{error, async_stackful_unsupported}`.
+The loop stops after a maximum number of turns. A lift with no callback (the
+stackful form) returns `{error, async_stackful_unsupported}`.
 
 On the import side, the linker binds each async canon built-in with
 `wasm_async:builtin/2`. An imports map value of `{async_import, Sig, Fun}`
 becomes `wasm_async:async_lower/2` (completes at once);
 `{async_import, Sig, Fun, {producer, PFun}}` becomes `wasm_async:async_lower/3`
-(the subtask starts, and completes when the producer says so).
+(the subtask starts, and completes when the producer reports it is done).
 
 ## Where to add things
 
 **A host import.** Wrap a typed function with `wasm_component:import_fun/2`
-and key it `{Interface, Field}`, without the version. It lifts the guest's flat
-arguments, calls your fun with terms, and lowers the result, by memory when the
-result is wider than one flat value.
+and use the key `{Interface, Field}`, without the version. The wrapper lifts
+the guest's flat arguments, calls your fun with terms, and lowers the result.
+It passes the result through memory when it is larger than one flat value.
 
 ```erlang
 Clock = #{{~"example:host/clock", ~"now"} =>
@@ -286,8 +317,8 @@ Imports = maps:merge(wasi_preview2:imports(), Clock).
 ```
 
 A WASI interface belongs in `wasi_preview2`, merged into what its `imports/0`
-returns. If the import returns a resource, mint it with `host_new/2` and provide
-its `[resource-drop]` too.
+returns. If the import returns a resource, create it with `host_new/2` and also
+provide its `[resource-drop]`.
 
 **A canonical type.** Every layer has to agree on it:
 
@@ -341,8 +372,8 @@ for s in wasm_component_SUITE \
 done
 ```
 
-Then the full `rebar3 ct`: the `wasm_wasi2_*` suites exercise the same code
-through real WASI 0.2 programs, and the wasmtime fixtures skip unless
+Then run the full `rebar3 ct`. The `wasm_wasi2_*` suites test the same code
+with real WASI 0.2 programs. The wasmtime fixtures skip unless
 `scripts/build-wasmtime-p2.sh` has built them.
 
 ## Read this next

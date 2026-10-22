@@ -1,8 +1,9 @@
 # Pass bytes
 
-This example sends a binary into a guest, lets it change the bytes in place,
-and reads them back. Numbers pass through a call; everything else passes
-through the guest's **linear memory**, its resizable byte array.
+This example sends a binary to a guest, lets the guest change the bytes in
+place, and reads them back. Numbers pass through a call. Everything else
+passes through the guest's **linear memory**: its byte array, which the guest
+can grow.
 
 **You need:** nothing beyond the application.
 
@@ -44,9 +45,9 @@ wasm:read_memory(Inst, 0, byte_size(In)).
 ```
 
 **What happened.** You chose where the bytes went, address 0, and told the
-guest where and how long. Real guests usually decide that themselves, with a
-fixed buffer or an allocator they export; [Pass data in and
-out](../passing-data.md) covers both, and JSON.
+guest the address and the length. Real guests usually decide this themselves,
+with a fixed buffer or an allocator that they export.
+[Pass data in and out](../passing-data.md) covers both, and JSON.
 
 **Clean up:**
 

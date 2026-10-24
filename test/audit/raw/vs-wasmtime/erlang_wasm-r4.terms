@@ -1,0 +1,14 @@
+#{call => #{ns_per_call => 365.2},
+  loop =>
+      #{checksum => -1803823781,n => 65536000,
+        ns_per_iter => 3.4831695556640625},
+  load => "{ 4.99 5.37 6.03 }",
+  mem => #{checksum => -999997,n => 8192000,ns_per_iter => 20.34716796875},
+  arm => "erlang_wasm",
+  qjs =>
+      #{first => #{first_compiled_ms => 314151.252,interpreted_ms => 2144.232},
+        checksum => [<<"59999">>],
+        compile_ms => 78.865,instantiate_ms => 0.502,start_ms => 110.047},
+  plugin => #{us => 3645},
+  fib30 => #{checksum => 832040,ms => 18.583},
+  bulk => #{checksum => 1000007,n => 32000,ns_per_iter => 5147.90625}}.

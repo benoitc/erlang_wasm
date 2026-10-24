@@ -1,0 +1,11 @@
+r1 erlang_wasm attempt1 load 3.17 -> 4.87
+r1 wasmtime attempt1 load 4.87 -> 4.17
+r2 wasmtime attempt1 load 4.17 -> 4.24
+r2 erlang_wasm attempt1 load 4.24 -> 5.26
+r3 erlang_wasm attempt1 load 5.26 -> 6.68
+r3 wasmtime attempt1 load 6.68 -> 5.63
+r4 wasmtime attempt1 load 5.63 -> 4.99
+r4 erlang_wasm attempt1 load 4.99 -> 4.99
+r5 erlang_wasm attempt1 load 4.99 -> 3.80
+r5 wasmtime attempt1 load 3.80 -> 3.84
+DONE

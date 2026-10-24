@@ -1,0 +1,14 @@
+#{call => #{ns_per_call => 4485.7},
+  loop =>
+      #{checksum => -1803823781,n => 262144000,ns_per_iter => 0.9742431640625},
+  load => "{ 3.84 4.54 5.41 }",
+  mem =>
+      #{checksum => -999997,n => 524288000,ns_per_iter => 0.5041656494140625},
+  arm => "wasmtime",
+  qjs =>
+      #{first => #{},
+        checksum => [<<"59999">>],
+        compile_ms => 63.086,instantiate_ms => 0.109,start_ms => 1.126},
+  plugin => #{us => 4978},
+  fib30 => #{checksum => 832040,ms => 4.187},
+  bulk => #{checksum => 1000007,n => 4096000,ns_per_iter => 40.28759765625}}.

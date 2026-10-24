@@ -24,6 +24,7 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [What is honestly reachable](#what-is-honestly-reachable)
 - [Instantiation and the call boundary, which nobody had measured](#instantiation-and-the-call-boundary-which-nobody-had-measured)
 - [Head to head with erlang-wasmtime](#head-to-head-with-erlang-wasmtime)
+- [Head to head with erlang-wasmtime, again, on 0.9.x](#head-to-head-with-erlang-wasmtime-again-on-09x)
 - [Signed words, priced](#signed-words-priced)
 - [Compiled wasm against the same work written in Erlang](#compiled-wasm-against-the-same-work-written-in-erlang)
 - [The second audit's fixes, held against QuickJS](#the-second-audits-fixes-held-against-quickjs)
@@ -2299,6 +2300,9 @@ ways out of it are closed.
 
 ## Head to head with erlang-wasmtime
 
+Measured around 0.1.0. For the same comparison on 0.9.x see "Head to head
+with erlang-wasmtime, again, on 0.9.x" below.
+
 The comparisons above put `wasmtime` numbers next to ours, but they came from
 the `wasmtime` CLI. This section runs the *Erlang binding*,
 `~/Projects/erlang-wasmtime` (Wasmtime 48 through a NIF), on the same box, in
@@ -2388,6 +2392,74 @@ one.
 one order of magnitude of Cranelift on arithmetic and ahead of it at the Erlang
 boundary. On a bytecode interpreter compiled to wasm it is two orders. Where
 the tier cannot finish in time, there is no tier.
+
+## Head to head with erlang-wasmtime, again, on 0.9.x
+
+The section above was measured around 0.1.0. Since then compiled code got a
+new memory path (0.9.0 shares a restored snapshot's pages, 0.9.2 moves the
+slow part of each access into a helper), so its numbers no longer describe
+`main`. This is the same comparison on `main` at `4a3ddf3`, 2026-10-24, with a
+harness that is now in the repository.
+
+**What was run.** `bench/cross/vs/` (`vs.erl`, `run.sh`, `summary.escript`).
+Each run measures one runtime in a fresh VM at `+S 10:10`; five rounds, the
+order swapped every round; a run starts below a one-minute load of 8 and is
+redone if it ends at 8 or more (none was). The other side is
+`~/Projects/erlang-wasmtime` at `c3402c2`, Wasmtime 48.0.1 through its NIF.
+Both runtimes get the same module bytes, and every workload returned the same
+checksum on both, in every round. The figure is the median of the five
+rounds.
+
+erlang_wasm compiles every function on the first call (`compile_whole`,
+`compile_sync`, `compile_after => 1`), so it is measured compiled, as
+Wasmtime is. Without `compile_after => 1` a module waits for 32 calls before
+it compiles, and a benchmark of a few long calls measures the interpreter:
+the first version of this harness did exactly that and read 70 ns an
+iteration for arithmetic.
+
+| | erlang_wasm | erlang-wasmtime | ratio | at 0.1.0 |
+| --- | ---: | ---: | ---: | ---: |
+| arithmetic, per iteration | 3.18 ns | 0.98 ns | 3.2x | 3.3x |
+| one store and one load, per iteration | 20.4 ns | 0.51 ns | 40x | 58x |
+| 4 KiB `memory.copy` | 5,127 ns | 40 ns | 128x | 95x |
+| `fib(30)` | 18.1 ms | 4.1 ms | 4.4x | 5.9x |
+| one call from Erlang into the guest | 375 ns | 5,027 ns | **0.075x** | 0.083x |
+| compile and instantiate the 46 KB plugin | 4,024 us | 5,258 us | **0.77x** | 0.84x |
+| QuickJS, compile the module | 85 ms | 68 ms | 1.3x | 1.6x |
+| QuickJS, instantiate | 0.50 ms | 0.11 ms | 4.6x | 4.2x |
+| QuickJS, `_start`, compiled | 117 ms | 1.13 ms | 104x | 110x |
+
+The QuickJS build is `qjs-wasi.wasm` (1,566,956 bytes, sha256 starting
+`d2939e98c808e8b9`), the plain wasi-sdk build the earlier section used,
+running `bench/cross/vs/bench.js`: 30,000 iterations, printing `59999` on
+both runtimes. The script of the earlier run was not kept, so its QuickJS
+times are not directly comparable; the ratios are.
+
+On our side, the same script runs interpreted in 2,151 ms. The first compiled
+instance compiles the whole module before it runs: 325.6 s. Every instance
+after it reuses that code, which is the 117 ms row.
+
+**What it says.**
+
+- **Running pure computation costs about 3 to 4 times Wasmtime**: 3.2x for
+  arithmetic, 4.4x for `fib(30)`. That is roughly the cost of generating BEAM
+  code instead of machine code, and it has not moved since 0.1.0.
+- **Memory is the large gap, and it is smaller than it was.** A store and a
+  load went from 29.5 ns to 20.4 ns, so from 58x to 40x, even though a
+  memory access now also checks the page table of a restored snapshot. The
+  4 KiB copy did not change on our side (5.1 us); the ratio grew because
+  Wasmtime's own copy is faster than in the earlier run.
+- **Calling into the guest from Erlang is 13 times cheaper here**, and
+  compiling and instantiating a small plugin is about a quarter cheaper. The
+  guest runs in the calling Erlang process; the binding sends every call to
+  the instance's own OS thread and back.
+- **A language interpreter compiled to WebAssembly is still about 100 times
+  slower**, because it touches memory on almost every step. The compiled
+  tier is worth 18x on it (2,151 ms interpreted against 117 ms), but its
+  whole-module compile took 5.4 minutes.
+
+Raw results: `test/audit/raw/vs-wasmtime/`, one `.terms` file per runtime
+and round, and the load log.
 
 ## Where the tier's compile time goes
 

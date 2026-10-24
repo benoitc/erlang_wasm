@@ -42,3 +42,6 @@ priv/*.dSYM/
 test/fixtures/wasmtime-p2/
 test/fixtures/wasmtime-p2-serve/
 /.wasmtime-src/
+
+# Built from the .wat beside them by bench/cross/vs/run.sh.
+bench/cross/vs/*.wasm

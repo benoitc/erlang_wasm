@@ -2451,7 +2451,15 @@ that also changed, so read them with this beside them:
 | QuickJS, compile the module | 143 ms | 85 ms | 41% faster |
 | QuickJS, instantiate | 0.63 ms | 0.50 ms | 21% faster |
 | 4 KiB `memory.copy` | 5,074 ns | 5,127 ns | the same |
-| compile and instantiate the plugin | 3,630 us | 4,024 us | 11% slower |
+| compile and instantiate the plugin | 3,630 us | 4,024 us | see below |
+
+The plugin row is not a slowdown of the runtime. Measured on its own, each
+phase timed separately, five rounds below load 8, 0.1.0 and `main` are the
+same: compile 2.95 ms against 2.98, instantiate 0.67 ms against 0.71 (paired
+by round, 0.985x and 1.00x); destroy grew from 7 us to 18 us. The 3,630 us
+came from the earlier harness, which kept the minimum of three passes in a VM
+that also had Wasmtime loaded; this one keeps the median of five, one runtime
+per fresh VM.
 
 The copy's ratio grew from 95x to 128x only because Wasmtime's copy went from
 53 ns to 40 ns. The QuickJS run is not in this table: the earlier script was

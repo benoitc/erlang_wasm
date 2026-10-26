@@ -2439,6 +2439,24 @@ On our side, the same script runs interpreted in 2,151 ms. The first compiled
 instance compiles the whole module before it runs: 325.6 s. Every instance
 after it reuses that code, which is the 117 ms row.
 
+**Our own numbers, then and now.** The ratios above compare with a Wasmtime
+that also changed, so read them with this beside them:
+
+| our side | at 0.1.0 | now | change |
+| --- | ---: | ---: | ---: |
+| arithmetic, per iteration | 3.38 ns | 3.18 ns | 6% faster |
+| one store and one load | 29.5 ns | 20.4 ns | 31% faster |
+| `fib(30)` | 25.4 ms | 18.1 ms | 29% faster |
+| one call from Erlang | 483 ns | 375 ns | 22% faster |
+| QuickJS, compile the module | 143 ms | 85 ms | 41% faster |
+| QuickJS, instantiate | 0.63 ms | 0.50 ms | 21% faster |
+| 4 KiB `memory.copy` | 5,074 ns | 5,127 ns | the same |
+| compile and instantiate the plugin | 3,630 us | 4,024 us | 11% slower |
+
+The copy's ratio grew from 95x to 128x only because Wasmtime's copy went from
+53 ns to 40 ns. The QuickJS run is not in this table: the earlier script was
+not kept, so its time is not comparable.
+
 **What it says.**
 
 - **Running pure computation costs about 3 to 4 times Wasmtime**: 3.2x for

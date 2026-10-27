@@ -117,3 +117,20 @@ way.
   realistic case for an embedded library. The CLI arms include process spawn,
   which is the realistic case for them. Cold start is not comparable without
   saying which of those you mean.
+
+## Compare with Wasmtime called from Erlang
+
+`vs/` measures this runtime against `erlang-wasmtime`, Wasmtime through its
+Erlang binding: compiled loops, `fib(30)`, a call from Erlang into the guest,
+compiling and instantiating a small plugin, and a QuickJS build running a
+script. Each run measures one runtime in a fresh VM, and `run.sh` interleaves
+the two over five rounds:
+
+```sh
+bench/cross/vs/run.sh /path/to/qjs-wasi.wasm /tmp/vs
+escript bench/cross/vs/summary.escript /tmp/vs
+```
+
+The binding's `ebin` is looked for under `~/Projects/erlang-wasmtime`; pass
+another path as the third argument. `test/audit/PERF.md`, "Head to head with
+erlang-wasmtime, again, on 0.9.x", has the last results.

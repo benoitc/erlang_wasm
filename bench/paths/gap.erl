@@ -8,7 +8,7 @@ three times: hand-written Erlang (the floor), the interpreter, and the compiled
 tier forced on.
 
     erlc -o bench/paths -pa _build/default/lib/wasm/ebin \\
-        bench/paths/allocwords.erl bench/paths/gap.erl
+        bench/paths/allocwords.erl bench/paths/gapref.erl bench/paths/gap.erl
     erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \\
         -run gap main sieve compiled
 
@@ -70,7 +70,7 @@ kernel(loop) ->
         (br $l)))
     (local.get $acc)))",
      ~"bench", [4000000], fun(_) -> 4000000 end,
-     #{native => fun() -> n_loop(0, 4000000, 0) end}};
+     #{native => fun() -> gapref:n_loop(0, 4000000, 0) end}};
 kernel(fib) ->
     %% Timed per call: fib(27) makes 2 * fib(28) - 1 calls.
     {~"(module
@@ -80,7 +80,7 @@ kernel(fib) ->
       (else (i32.add (call $fib (i32.sub (local.get $n) (i32.const 1)))
                      (call $fib (i32.sub (local.get $n) (i32.const 2))))))))",
      ~"fib", [27], fun(_) -> 2 * 317811 - 1 end,
-     #{native => fun() -> fib(27) end}};
+     #{native => fun() -> gapref:fib(27) end}};
 kernel(sieve) ->
     {~"(module (memory 16)
   (func (export \"sieve\") (param $n i32) (result i32)
@@ -254,18 +254,12 @@ kernel(brtable) ->
      #{native => fun() -> brt(1000000) end}};
 kernel(null) ->
     {<<>>, <<>>, [], fun(_) -> 4000000 end,
-     #{native => fun() -> n_loop(0, 4000000, 0) end,
-       native_b => fun() -> n_loop(0, 4000000, 0) end}}.
+     #{native => fun() -> gapref:n_loop(0, 4000000, 0) end,
+       native_b => fun() -> gapref:n_loop(0, 4000000, 0) end}}.
 
 %%% ------------------------------------------------------ the Erlang arms ---
 
-n_loop(I, N, Acc) when I >= N -> Acc;
-n_loop(I, N, Acc0) ->
-    Acc1 = (Acc0 + I * 3) band ?M32,
-    n_loop(I + 1, N, Acc1 bxor (Acc1 bsr 7)).
-
-fib(N) when N < 2 -> N;
-fib(N) -> fib(N - 1) + fib(N - 2).
+%% `loop` and `fib` are in `gapref`, shared with `bench/cross/vs/vs.erl`.
 
 %% One byte per slot, index = byte + 1, zeroed by `atomics:new/2'.
 sieve_at(N) -> sieve_at(atomics:new(N, [{signed, false}]), 2, N, 0).
@@ -384,24 +378,13 @@ body("interp", Wat, Name, Args, _Natives) ->
 body("compiled", Wat, Name, Args, _Natives) ->
     {ok, M} = wasm:compile({wat, Wat}),
     {ok, I} = wasm:instantiate(M, #{}, ?OPTS),
-    ok = warm(I, Name, Args, 200),
+    ok = gapref:warm(I, Name, Args, 200, ?OPTS),
     fun() ->
-        E0 = maps:get(entered, wasm_jit:counts()),
-        {ok, [V]} = wasm:call(I, Name, Args, ?OPTS),
-        true = maps:get(entered, wasm_jit:counts()) > E0,
-        V
+        gapref:assert_entered(
+          fun() -> {ok, [V]} = wasm:call(I, Name, Args, ?OPTS), V end)
     end;
 body(Arm, _Wat, _Name, _Args, Natives) ->
     maps:get(list_to_atom(Arm), Natives).
-
-warm(_I, _Name, _Args, 0) -> erlang:error(never_entered);
-warm(I, Name, Args, K) ->
-    E0 = maps:get(entered, wasm_jit:counts()),
-    {ok, _} = wasm:call(I, Name, Args, ?OPTS),
-    case maps:get(entered, wasm_jit:counts()) > E0 of
-        true -> ok;
-        false -> timer:sleep(20), warm(I, Name, Args, K - 1)
-    end.
 
 %% Set up, one untimed run, then five timed runs, all in one fresh process.
 time(Arm, Wat, Name, Args, Units, Natives) ->

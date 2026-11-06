@@ -1,0 +1,18 @@
+#{call => #{ns_per_call => 7684.4},
+  label => "wasmtime",
+  loop =>
+      #{checksum => -1803823781,n => 262144000,
+        ns_per_iter => 0.9967880249023438},
+  load => "{ 6.43 8.21 7.38 }",
+  mem =>
+      #{checksum => -999997,n => 524288000,ns_per_iter => 0.5117397308349609},
+  kind => "wasmtime",
+  manifest =>
+      <<"tree reference\nharness e5b05f4f489b7faa07619656c66a579cac3864bd\nwasmtime_binding c3402c2\notp 29\n">>,
+  fib30 => #{checksum => 832040,ms => 4.293},
+  qjs =>
+      #{first => #{},
+        checksum => [<<"59999">>],
+        compile_ms => 82.057,instantiate_ms => 0.122,start_ms => 1.156},
+  plugin => #{us => 5312},
+  bulk => #{checksum => 1000007,n => 4096000,ns_per_iter => 40.17578125}}.

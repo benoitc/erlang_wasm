@@ -25,6 +25,7 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [Instantiation and the call boundary, which nobody had measured](#instantiation-and-the-call-boundary-which-nobody-had-measured)
 - [Head to head with erlang-wasmtime](#head-to-head-with-erlang-wasmtime)
 - [Head to head with erlang-wasmtime, again, on 0.9.x](#head-to-head-with-erlang-wasmtime-again-on-09x)
+- [The comparison harness, run against itself](#the-comparison-harness-run-against-itself)
 - [Signed words, priced](#signed-words-priced)
 - [Compiled wasm against the same work written in Erlang](#compiled-wasm-against-the-same-work-written-in-erlang)
 - [The second audit's fixes, held against QuickJS](#the-second-audits-fixes-held-against-quickjs)
@@ -2486,6 +2487,55 @@ not kept, so its time is not comparable.
 
 Raw results: `test/audit/raw/vs-wasmtime/`, one `.terms` file per runtime
 and round, and the load log.
+
+## The comparison harness, run against itself
+
+`bench/cross/vs/` compares a change (the candidate tree) with a fixed
+baseline commit, with plain Erlang (`bench/paths/gapref.erl`) and
+erlang-wasmtime beside them. Before trusting it for a change, it was run with
+the candidate equal to the baseline: `main` at `e5b05f4` against the working
+tree on top of it, which changes only benchmark files. Five rounds, one fresh
+VM per arm, the order rotating, every run below load 8 (one redone once),
+2026-11-06.
+
+Every check passed: every run present, checksums equal everywhere, every
+compiled run entered generated code, one build per tree, the same QuickJS hot
+set (324 functions) on both trees. Each check was also shown to fail on a
+deliberately broken input before this run.
+
+Same runtime on both sides, so each ratio is the noise of its row:
+
+| row | baseline | candidate | paired candidate / baseline |
+| --- | ---: | ---: | ---: |
+| loop, ns an iteration | 3.497 | 3.551 | 1.032 |
+| one store and one load, ns | 20.80 | 20.24 | 0.974 |
+| 4 KiB `memory.copy`, ns | 5,258 | 5,057 | 0.943 |
+| `fib(30)`, ms | 17.50 | 17.74 | 1.016 |
+| a call from Erlang, ns | 592 | 582 | 0.980 |
+| plugin compile and instantiate, us | 3,837 | 3,676 | 0.940 |
+| QuickJS module compile, ms | 88.9 | 84.9 | 0.950 |
+| QuickJS instantiate, ms | 0.445 | 0.441 | 0.996 |
+| QuickJS `_start`, compiled, ms | 117.5 | 117.9 | 0.998 |
+| cold compile of the hot set, ms | 123,121 | 127,175 | 1.016 |
+| its generated code, bytes | 12,926,070 | 12,926,070 | 1.000 |
+| CPython compiled request, median of each VM's p50, ms | 10.603 | 10.578 | 0.998 |
+
+The rows the call-protocol gates read (`fib(30)`, QuickJS `_start`, the
+CPython request and the cold compile) move by 2% or less, under their 1.03x
+and 1.05x gates. The copy, the plugin and the QuickJS module compile move by
+up to 6%, so a change there under that size is not a result.
+
+For reference in the same run: plain Erlang computes `fib(30)` with the same
+32-bit wrapping in 2.47 ms (3.70 ms without wrapping), Wasmtime in 4.17 ms.
+
+The cold compile takes about two minutes for 324 functions at load 4 to 7,
+where `docs/compiled-tier.md` says about 23 seconds for QuickJS's 223-function
+hot set. The hot set and the measurement differ (this one includes
+generation, `compile:forms/2` and writing the cache file); the difference is
+not yet explained.
+
+Raw results: `test/audit/raw/vs-harness-self/`, with each tree's manifest and
+the summaries.
 
 ## Where the tier's compile time goes
 

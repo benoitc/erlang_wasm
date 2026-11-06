@@ -1,0 +1,19 @@
+#{call => #{ns_per_call => 593.9},
+  label => "baseline",
+  loop =>
+      #{checksum => -1803823781,n => 65536000,ns_per_iter => 3.49725341796875},
+  load => "{ 7.70 7.87 6.78 }",
+  mem => #{checksum => -999997,n => 8192000,ns_per_iter => 20.9302978515625},
+  kind => "erlang_wasm",
+  manifest =>
+      <<"tree baseline\ncommit e5b05f4f489b7faa07619656c66a579cac3864bd\notp 29\n">>,
+  jit_counts =>
+      #{failed => 0,compiled => 1535,refused => 0,crashed => 0,cached => 0,
+        entered => 51085,reentered => 0},
+  fib30 => #{checksum => 832040,ms => 17.5},
+  qjs =>
+      #{first => #{first_compiled_ms => 317745.845,interpreted_ms => 3691.061},
+        checksum => [<<"59999">>],
+        compile_ms => 106.793,instantiate_ms => 0.437,start_ms => 117.684},
+  plugin => #{us => 4632},
+  bulk => #{checksum => 1000007,n => 32000,ns_per_iter => 5257.65625}}.

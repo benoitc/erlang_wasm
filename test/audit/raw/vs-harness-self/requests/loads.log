@@ -1,0 +1,12 @@
+baseline-r1 attempt1 load 5.42 -> 5.19
+candidate-r1 attempt1 load 5.19 -> 6.63
+candidate-r2 attempt1 load 6.63 -> 5.84
+baseline-r2 attempt1 load 5.84 -> 5.24
+baseline-r3 attempt1 load 5.24 -> 4.90
+candidate-r3 attempt1 load 4.90 -> 5.12
+candidate-r4 attempt1 load 5.12 -> 4.60
+baseline-r4 attempt1 load 4.60 -> 6.68
+baseline-r5 attempt1 load 6.68 -> 14.36
+baseline-r5 attempt2 load 6.99 -> 6.45
+candidate-r5 attempt1 load 6.45 -> 5.92
+DONE

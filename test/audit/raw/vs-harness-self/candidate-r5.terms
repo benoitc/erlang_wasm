@@ -1,0 +1,19 @@
+#{call => #{ns_per_call => 582.1},
+  label => "candidate",
+  loop =>
+      #{checksum => -1803823781,n => 65536000,ns_per_iter => 3.608154296875},
+  load => "{ 7.04 8.41 7.43 }",
+  mem => #{checksum => -999997,n => 8192000,ns_per_iter => 19.8775634765625},
+  kind => "erlang_wasm",
+  manifest =>
+      <<"tree candidate\ncommit e5b05f4f489b7faa07619656c66a579cac3864bd\ndiff 4d1c0d9ceb7424d6\nuntracked 77c19f80b990f53d\notp 29\n">>,
+  jit_counts =>
+      #{failed => 0,compiled => 1535,refused => 0,crashed => 0,cached => 0,
+        entered => 51085,reentered => 0},
+  fib30 => #{checksum => 832040,ms => 17.573},
+  qjs =>
+      #{first => #{first_compiled_ms => 310951.715,interpreted_ms => 2326.844},
+        checksum => [<<"59999">>],
+        compile_ms => 89.088,instantiate_ms => 0.436,start_ms => 117.209},
+  plugin => #{us => 3676},
+  bulk => #{checksum => 1000007,n => 32000,ns_per_iter => 4956.53125}}.

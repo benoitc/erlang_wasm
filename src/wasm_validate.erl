@@ -20,6 +20,7 @@ start function, and constant expressions.
 -include("wasm_validate.hrl").
 
 -export([module/1, module_unchecked/1, context/1, cached_context/1]).
+-export([written_tables/1]).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -109,7 +110,7 @@ context(#module{types = Types, imports = Imports, funcs = Funcs, tables = Tables
         refs    = declared_refs(M),
         shared_globals = shared_globals(M),
         shared_mems = shared_mems(M),
-        static_tables = static_tables(M)
+        table_candidates = table_candidates(M)
     }.
 
 %% What `struct.get' and `array.get' need to know about a type, resolved once
@@ -133,15 +134,20 @@ shared_mems(#module{imports = Imports, mems = Mems, exports = Exports}) ->
 
 %% A table is static when nothing can change it after instantiation: neither
 %% imported nor exported (so no other module or host can reach it), no
-%% initialiser expression, no instruction anywhere in the module that writes
-%% it, and every active segment for it at a constant offset, filling it with
-%% `ref.func' or `ref.null'. Its contents are then a property of the module,
+%% initialiser expression, every active segment for it at a constant offset,
+%% filling it with `ref.func' or `ref.null', and no instruction anywhere in the
+%% module that writes it. Its contents are then a property of the module,
 %% which is what lets compiled code resolve a `call_indirect' through it once
 %% instead of at every call. A table larger than `?STATIC_TABLE_MAX' is not
 %% considered: its contents would be a large literal in compiled code.
+%%
+%% This settles everything but the last condition, from the declarations
+%% alone. The last one means reading every instruction, which costs 3.5 ms on
+%% QuickJS and would be paid by every module loaded, so the compiler checks it
+%% with `written_tables/1' when, and only when, it compiles.
 -define(STATIC_TABLE_MAX, 4096).
-static_tables(#module{imports = Imports, tables = Tables, exports = Exports,
-                      elems = Elems, funcs = Funcs}) ->
+table_candidates(#module{imports = Imports, tables = Tables, exports = Exports,
+                         elems = Elems}) ->
     NImported = length([1 || #import{desc = {table, _}} <- Imports]),
     Exported = maps:from_keys([I || #export{desc = {table, I}} <- Exports],
                               true),
@@ -150,19 +156,19 @@ static_tables(#module{imports = Imports, tables = Tables, exports = Exports,
                     <- lists:enumerate(0, Tables),
                 Init =:= undefined, Min =< ?STATIC_TABLE_MAX,
                 not maps:is_key(NImported + K, Exported)],
-    case Cands of
-        [] -> #{};
-        _ ->
-            Written = written_tables(Funcs),
-            maps:from_list(
-              [{T, C} || {T, Min} <- Cands, not maps:is_key(T, Written),
-                         {ok, C} <- [static_contents(T, Min, Elems)]])
-    end.
+    maps:from_list([{T, C} || {T, Min} <- Cands,
+                              {ok, C} <- [static_contents(T, Min, Elems)]]).
 
-%% Every table some instruction of the module writes.
-written_tables(Funcs) ->
-    lists:foldl(fun(#func{body = B}, Acc) -> writes(body_of(B), Acc) end,
-                #{}, Funcs).
+-doc """
+Every table some of these function bodies write, raw or validated.
+
+`#ctx.table_candidates` leaves this one condition to the compiler; see
+`table_candidates/1`.
+""".
+-spec written_tables([[term()] | {validated, [term()]}]) ->
+          #{non_neg_integer() => true}.
+written_tables(Bodies) ->
+    lists:foldl(fun(B, Acc) -> writes(body_of(B), Acc) end, #{}, Bodies).
 
 body_of({validated, Ann}) -> Ann;
 body_of(B) -> B.

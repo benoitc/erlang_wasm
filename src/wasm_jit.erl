@@ -1392,9 +1392,10 @@ An indirect call is typed by the type it names, not by any function, since
 which function it reaches is not known until it runs: type index =>
 `{NParams, NResults}`. Beside those, `{canon, TypeIdx}` => the type's
 canonical identity, and `{table, TableIdx}` => the contents of each table
-that cannot change after instantiation (`#ctx.static_tables`), so a
-`call_indirect` through one can be resolved once. All of it follows from the
-module alone. Exported for tests, which build units by hand.
+that cannot change after instantiation, so a `call_indirect` through one can
+be resolved once: a candidate from `#ctx.table_candidates` that no function of
+the module writes. All of it follows from the module alone. Exported for
+tests, which build units by hand.
 """.
 -spec tsigs(#inst{}) -> map().
 tsigs(#inst{ctx = Ctx, canon = Canon} = Inst) ->
@@ -1404,7 +1405,19 @@ tsigs(#inst{ctx = Ctx, canon = Canon} = Inst) ->
     maps:from_list(
       Sigs
       ++ [{{canon, Idx}, element(Idx + 1, Canon)} || {Idx, _} <- Sigs]
-      ++ [{{table, T}, C} || {T, C} <- maps:to_list(Ctx#ctx.static_tables)]).
+      ++ [{{table, T}, C} || {T, C} <- maps:to_list(static_tables(Inst, Ctx))]).
+
+%% The candidates no function writes. Read here rather than at validation,
+%% so only a module the compiler actually compiles pays for reading every
+%% instruction. Host functions have no body and cannot reach a table that is
+%% neither imported nor exported.
+static_tables(_Inst, #ctx{table_candidates = Cands})
+  when map_size(Cands) =:= 0 ->
+    #{};
+static_tables(#inst{funcs = Funcs}, #ctx{table_candidates = Cands}) ->
+    Written = wasm_validate:written_tables(
+                [F#fn.raw || F <- tuple_to_list(Funcs), is_record(F, fn)]),
+    maps:without(maps:keys(Written), Cands).
 
 %% The type table holds whichever shape the module put there, so both are
 %% matched rather than one assumed: a struct or array type simply has no

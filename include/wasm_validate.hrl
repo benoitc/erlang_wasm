@@ -53,10 +53,12 @@
     %% Memories another instance can observe growing: imported or exported.
     %% Only these pay for a published page count.
     shared_mems = #{} :: #{non_neg_integer() => true},
-    %% Tables whose contents cannot change after instantiation, with those
-    %% contents (a function index or `null' per slot). Derived from the module
-    %% alone, so compiled code may rely on it for every instance.
-    static_tables = #{} :: #{non_neg_integer() => tuple()},
+    %% Tables nothing outside the module can reach, filled by constant
+    %% segments, with their contents after instantiation (a function index or
+    %% `null' per slot). Static if no instruction writes them, which the
+    %% compiler checks when it compiles: reading every instruction here would
+    %% charge it to every module loaded. See `wasm_validate:written_tables/1'.
+    table_candidates = #{} :: #{non_neg_integer() => tuple()},
     %% Per-function state.
     locals   = {}  :: tuple(),      % of valtype(), params then declared locals
     results  = []  :: [valtype()]   % current function's result types

@@ -74,6 +74,17 @@ every other refusal here: interpret it.
 -include("wasm_exec.hrl").
 -include("wasm_memory.hrl").
 
+-define(W32, 16#FFFFFFFF).
+-define(S32, 16#80000000).
+-define(W64, 16#FFFFFFFFFFFFFFFF).
+-define(P64, 16#10000000000000000).
+%% The largest BEAM small integer: 60 bits, signed. A literal at or below this
+%% is an immediate and a literal above it is a bignum, which is the whole
+%% reason `wrap_sum/2` has two range tests instead of one.
+-define(SMALL, 576460752303423487).
+-define(P32, 16#100000000).
+-define(S64, 16#8000000000000000).
+
 %% Read these as the answer to "how many atoms can this module make", which is
 %% `?MAX_FUNS + ?MAX_FRAMES` and nothing else, ever.
 %% 4096, sized against CPython rather than QuickJS. QuickJS is 1666 compilable
@@ -656,12 +667,16 @@ splitting being worth it and not.
           {ok, cerl:c_module()} | {error, term()}.
 forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) ->
     try
-        Shapes = [{Pos, shape_of(IR)} || {Pos, _, _, IR} <- Unit],
+        Shapes = classify(Unit),
+        Cycles = cycles(Unit),
         %% What every function needs to know about its siblings, so that a call
         %% to one of them is a local `apply' and a call to anything else is a
-        %% crossing back into the interpreter.
-        Known = maps:from_list([{Idx, {Pos, maps:get(Pos, maps:from_list(Shapes))}}
-                                || {Pos, Idx, _, _} <- Unit]),
+        %% crossing back into the interpreter, and whether such a call can
+        %% close a cycle, which is the only kind that counts the depth.
+        ShapeOf = maps:from_list(Shapes),
+        Known = maps:from_list([{Idx, {Pos, maps:get(Pos, ShapeOf),
+                                       maps:get(Idx, Cycles), i32_flags(F)}}
+                                || {Pos, Idx, F, _} <- Unit]),
         Defs = [{cerl:c_fname(fun_name(Pos), arity(F, S)),
                  function(F, IR, S, {Known, Sigs, TSigs, Head, Elsewhere,
                                      Stamp})}
@@ -696,11 +711,120 @@ copts(baseline) -> [from_core, binary, return_errors, no_ssa_opt].
 %% The adapter, matching the contract `wasm:invoke_at/6' already calls through
 %% (`src/wasm.erl'), so error capture, checkpoint settlement, the heap lease and
 %% the budget are untouched by any of this.
-shape_of(IR) -> case shape(IR) of pure -> pure; _ -> stateful end.
+%% Three calling conventions, decided per function for the whole unit.
+%%
+%%   pure        touches nothing and calls nothing: `f(Args) -> Result'.
+%%   calls_only  touches no memory, no global and no table, and every call it
+%%               makes is a direct call to a unit member that is itself pure
+%%               or calls-only: `f(Left, Args) -> Result'. It needs the frames
+%%               left before the depth limit, and nothing of the instance.
+%%   stateful    anything else: `f(Inst, Mut, Left, Args) -> {Result, Mut}'.
+%%
+%% Reaching a stateful function, directly or through any chain of calls, makes
+%% the caller stateful, because it has to hand the callee the instance and take
+%% its state back. A call that leaves the unit (to another shard or to the
+%% interpreter) or a `call_indirect' does the same. The fixed point removes
+%% candidates until none calls outside `pure' and `calls_only', which is what
+%% decides a set of mutually recursive functions together.
+%%
+%% `Result' is the bare value for one result and a list otherwise.
+classify(Unit) ->
+    Info = [{Pos, Idx, base(IR), callees(IR)} || {Pos, Idx, _, IR} <- Unit],
+    Pure = sets:from_list([Idx || {_, Idx, clean, []} <- Info]),
+    Members = sets:from_list([Idx || {_, Idx, _, _} <- Info]),
+    Cand0 = sets:from_list(
+              [Idx || {_, Idx, clean, Cs} <- Info, Cs =/= [],
+                      lists:all(fun(C) -> sets:is_element(C, Members) end,
+                                Cs)]),
+    Callees = maps:from_list([{Idx, Cs} || {_, Idx, _, Cs} <- Info]),
+    Calls = fix_calls_only(Cand0, Pure, Callees),
+    [{Pos, case {sets:is_element(Idx, Pure), sets:is_element(Idx, Calls)} of
+               {true, _} -> pure;
+               {_, true} -> calls_only;
+               _ -> stateful
+           end} || {Pos, Idx, _, _} <- Info].
 
+fix_calls_only(Cand, Pure, Callees) ->
+    Ok = fun(C) -> sets:is_element(C, Pure) orelse sets:is_element(C, Cand) end,
+    Next = sets:filter(fun(I) -> lists:all(Ok, maps:get(I, Callees)) end, Cand),
+    case sets:size(Next) =:= sets:size(Cand) of
+        true -> Cand;
+        false -> fix_calls_only(Next, Pure, Callees)
+    end.
+
+%% Whether a body touches anything but its own locals, direct calls aside:
+%% `clean' when it does not, `dirty' when it touches memory, a global, a table
+%% or makes a `call_indirect'.
+base(IR) ->
+    case fold(IR, fun({call, _}, Acc) -> Acc;
+                     (I, Acc) -> max(Acc, touches(I))
+                  end, 0) of
+        0 -> clean;
+        _ -> dirty
+    end.
+
+callees(IR) ->
+    lists:usort(fold(IR, fun({call, F}, Acc) -> [F | Acc];
+                            (_, Acc) -> Acc
+                         end, [])).
 
 arity(#fn{nparams = NP}, pure) -> NP;
+arity(#fn{nparams = NP}, calls_only) -> NP + 1;
 arity(#fn{nparams = NP}, stateful) -> NP + 3.
+
+%% Which functions of the unit can reach each other by direct calls: wasm
+%% function index -> the index of its strongly connected component (Tarjan's
+%% algorithm over `callees/1', calls leaving the unit ignored). A call whose
+%% callee is in the caller's component can close a cycle, and only such a call
+%% has to count the depth: every other call goes from one component to a
+%% different one, the components form a DAG, so a stack holds at most one
+%% uncounted frame per component. A function with no call back to itself is a
+%% component of its own, and a call it makes to itself would be in it.
+cycles(Unit) ->
+    Members = maps:from_list([{Idx, true} || {_, Idx, _, _} <- Unit]),
+    Edges = maps:from_list(
+              [{Idx, [C || C <- callees(IR), maps:is_key(C, Members)]}
+               || {_, Idx, _, IR} <- Unit]),
+    T0 = #{index => 0, idx => #{}, low => #{}, stack => [], on => #{},
+           comp => #{}},
+    T = lists:foldl(fun(V, T1) ->
+                            case maps:is_key(V, maps:get(idx, T1)) of
+                                true -> T1;
+                                false -> tarjan(V, Edges, T1)
+                            end
+                    end, T0, [Idx || {_, Idx, _, _} <- Unit]),
+    maps:get(comp, T).
+
+tarjan(V, Edges, #{index := I, idx := Ix, low := Lo, stack := St,
+                   on := On} = T0) ->
+    T1 = T0#{index := I + 1, idx := Ix#{V => I}, low := Lo#{V => I},
+             stack := [V | St], on := On#{V => true}},
+    T2 = lists:foldl(
+           fun(W, T) ->
+                   case maps:find(W, maps:get(idx, T)) of
+                       error ->
+                           Tw = tarjan(W, Edges, T),
+                           low(V, maps:get(W, maps:get(low, Tw)), Tw);
+                       {ok, Wi} ->
+                           case maps:is_key(W, maps:get(on, T)) of
+                               true -> low(V, Wi, T);
+                               false -> T
+                           end
+                   end
+           end, T1, maps:get(V, Edges)),
+    case maps:get(V, maps:get(low, T2)) =:= maps:get(V, maps:get(idx, T2)) of
+        true -> pop_component(V, I, T2);
+        false -> T2
+    end.
+
+low(V, X, #{low := Lo} = T) -> T#{low := Lo#{V => min(maps:get(V, Lo), X)}}.
+
+pop_component(V, Id, #{stack := [W | St], on := On, comp := C} = T) ->
+    T1 = T#{stack := St, on := maps:remove(W, On), comp := C#{W => Id}},
+    case W of
+        V -> T1;
+        _ -> pop_component(V, Id, T1)
+    end.
 
 invoke_fn(Unit, Shapes, Stamp, Next) ->
     Inst = cerl:c_var('Inst'), Mut = cerl:c_var('Mut'),
@@ -710,11 +834,33 @@ invoke_fn(Unit, Shapes, Stamp, Next) ->
     %% here part way down a call stack: entering at zero every time would let a
     %% recursion go the whole depth budget deeper at every crossing.
     Depth = cerl:c_var('Depth'),
-    Clauses = [invoke_clause(Pos, I, F, maps:get(Pos, Shapes), Inst, Mut, Depth)
+    %% The depth limit, read once per entry rather than at every call, and
+    %% turned into the frames left, which is what a call inside the unit
+    %% counts down. The same value `wasm_exec:check_depth/2' reads, so the
+    %% limit is the instance's.
+    Max = cerl:c_var('Max'), Left = cerl:c_var('Left'),
+    Clauses = [invoke_clause(Pos, I, F, maps:get(Pos, Shapes), Inst, Mut,
+                             Left)
                || {Pos, I, F, _} <- Unit]
         ++ [cerl:c_clause([cerl:c_var('_Other')],
                           miss(Next, Inst, Mut, Idx, Args, Depth))],
-    Body = cerl:c_case(Idx, Clauses),
+    %% Both are non-negative integers by construction: the depth is counted
+    %% from zero and `wasm.erl' refuses a limit that is not one. Saying so in
+    %% a guard is what lets the compiler's type pass carry it into every
+    %% function of the unit, so counting down and comparing compile to integer
+    %% operations without the generic number dispatch. The other clause cannot
+    %% be reached; if it were, the caller would interpret.
+    Typed = cerl:c_case(
+              cerl:c_values([]),
+              [cerl:c_clause([], conj([bif(is_integer, [Depth]),
+                                       bif('>=', [Depth, cerl:abstract(0)]),
+                                       bif(is_integer, [Max]),
+                                       bif('>=', [Max, cerl:abstract(0)])]),
+                             cerl:c_let([Left], bif('-', [Max, Depth]),
+                                        cerl:c_case(Idx, Clauses))),
+               cerl:c_clause([], cerl:c_tuple([cerl:c_atom(error),
+                                               cerl:c_atom(not_compiled)]))]),
+    Body = cerl:c_let([Max], call_op(max_depth, [Inst]), Typed),
     %% What this module was built for, checked against what the caller was
     %% promised when it took its call lease.
     %%
@@ -767,24 +913,43 @@ miss(Next, Inst, Mut, Idx, Args, Depth) ->
     cerl:c_call(cerl:c_atom(Next), cerl:c_atom(invoke),
                 [Inst, Mut, Idx, Args, Depth, cerl:c_var('Stamp')]).
 
-invoke_clause(Pos, Idx, #fn{nparams = NP} = F, Shape, Inst, Mut, Depth) ->
+%% Inside the unit a one-result function returns its bare value; this is where
+%% that becomes the list `invoke/6' has always answered.
+invoke_clause(Pos, Idx, #fn{nparams = NP, nresults = NR} = F, Shape, Inst, Mut,
+              Left) ->
     Vs = [cerl:c_var(N) || N <- lists:seq(1, NP)],
     Name = cerl:c_fname(fun_name(Pos), arity(F, Shape)),
+    M1 = cerl:c_var('M1'),
+    %% The interpreter's i32 arguments are `canon' and the function takes them
+    %% `u32'; its i32 results come back `u32' and leave `canon'.
+    {PFlags, RFlags} = i32_flags(F),
+    In = [case P of true -> mask32(V); false -> V end
+          || {V, P} <- lists:zip(Vs, PFlags)],
+    Rs = [cerl:c_var(N) || N <- lists:seq(NP + 1, NP + NR)],
+    Out = cerl:make_list([case P of true -> signed(R); false -> R end
+                          || {R, P} <- lists:zip(Rs, RFlags)]),
+    Pat = results_pat(Rs),
     Body =
         case Shape of
             pure ->
-                cerl:c_tuple([cerl:c_atom(ok), cerl:c_apply(Name, Vs), Mut]);
+                cerl:c_case(cerl:c_apply(Name, In),
+                            [cerl:c_clause([Pat], ok_tuple(Out, Mut))]);
+            calls_only ->
+                cerl:c_case(cerl:c_apply(Name, [Left | In]),
+                            [cerl:c_clause([Pat], ok_tuple(Out, Mut))]);
             stateful ->
-                R = cerl:c_var('R'), M1 = cerl:c_var('M1'),
-                cerl:c_case(cerl:c_apply(Name, [Inst, Mut, Depth | Vs]),
-                            [cerl:c_clause([cerl:c_tuple([R, M1])],
-                                           cerl:c_tuple([cerl:c_atom(ok), R, M1]))])
+                cerl:c_case(cerl:c_apply(Name, [Inst, Mut, Left | In]),
+                            [cerl:c_clause([cerl:c_tuple([Pat, M1])],
+                                           cerl:c_tuple([cerl:c_atom(ok),
+                                                         Out, M1]))])
         end,
     %% `Args' is a list, so it is taken apart by matching rather than by
     %% `lists:nth/2': one pattern, no walking, and a wrong arity cannot match.
     Bind = cerl:c_case(cerl:c_var('Args'),
                        [cerl:c_clause([list_pat(Vs)], Body)]),
     cerl:c_clause([cerl:abstract(Idx)], Bind).
+
+ok_tuple(Out, Mut) -> cerl:c_tuple([cerl:c_atom(ok), Out, Mut]).
 
 list_pat([]) -> cerl:c_nil();
 list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
@@ -805,11 +970,15 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %%          function is pure. A `global.set' rebinds it, because Core is
 %%          single-assignment, and a continuation therefore has to carry it the
 %%          way it carries the locals.
-%%   d      the call-depth Core variable. Threaded *in* and never out: it is
-%%          restored by returning, so a callee cannot leak its depth back.
-%%   unit   wasm function index -> {Position, pure | stateful} for every
-%%          function compiled alongside this one, which is what makes a
-%%          compiled-to-compiled call a local call rather than a crossing.
+%%   d      the frames left before the depth limit, a Core variable. Threaded
+%%          *in* and never out: it is restored by returning, so a callee
+%%          cannot leak its depth back. See `counted/2'.
+%%   cycle  the function's component in `cycles/1': a call to a function of
+%%          the same component is the only kind that counts the depth.
+%%   unit   wasm function index -> {Position, pure | calls_only | stateful}
+%%          for every function compiled alongside this one, which is what
+%%          makes a compiled-to-compiled call a local call rather than a
+%%          crossing.
 %%   sigs   wasm function index -> {NParams, NResults} for *every* function of
 %%          the instance, compiled or not: a call has to know how many operands
 %%          to take and how many to put back whichever side it lands on.
@@ -825,7 +994,8 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 -define(TLB_SIZE, 6).
 
 -record(g, {env = #{}, stack = [], frames = [], depth = 0, n = 0,
-            nlocals = 0, nres = 0, inst, mut, d, unit = #{}, sigs = #{},
+            nlocals = 0, nres = 0, inst, mut, d, cycle, unit = #{}, sigs = #{},
+            u32 = #{}, i32l = #{}, rflags = [],
             tsigs = #{}, mod, elsewhere = #{}, gen = 0, tlb}).
 
 %% Two shapes, not three. `pure' keeps what the spike measured -- locals as Core
@@ -833,18 +1003,27 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %% memory or a global is handed the instance and the mutable half and hands the
 %% latter back, which reading alone does not need but is free to do and saves a
 %% third calling convention.
-function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
-         {Unit, Sigs, TSigs, Mod, Elsewhere, Stamp}) ->
+function(#fn{nparams = NP, nresults = NRes, defaults = Defaults,
+             idx = Self} = F,
+         IR, Shape, {Unit, Sigs, TSigs, Mod, Elsewhere, Stamp}) ->
     NLocals = NP + length(Defaults),
     {Extra, Inst, Mut, D, N0} =
         case Shape of
             pure -> {[], undefined, undefined, undefined, NP};
+            calls_only ->
+                Lv = cerl:c_var(NP),
+                {[Lv], undefined, undefined, Lv, NP + 1};
             stateful ->
                 I = cerl:c_var(NP), M = cerl:c_var(NP + 1),
-                Dv = cerl:c_var(NP + 2),
-                {[I, M, Dv], I, M, Dv, NP + 3}
+                Lv = cerl:c_var(NP + 2),
+                {[I, M, Lv], I, M, Lv, NP + 3}
         end,
+    {_, _, Cycle, {PFlags, RFlags}} = maps:get(Self, Unit),
     Params = [cerl:c_var(N) || N <- lists:seq(0, NP - 1)],
+    %% Which locals are i32, parameters first: those are held `u32'.
+    LFlags = PFlags ++ [T =:= i32 || T <- local_types(F, Defaults)],
+    I32L = maps:from_list([{I, true}
+                           || {I, true} <- lists:enumerate(0, LFlags)]),
     %% Declared locals start at their type's default; for this subset that is
     %% always the integer zero.
     Env = maps:from_list(
@@ -856,38 +1035,56 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults}, IR, Shape,
     %% pools in this module exist for.
     %% The cache starts empty: no page is -1.
     Tlb = case Shape of
-              pure -> undefined;
               stateful -> {cerl:abstract(-1), cerl:abstract(none),
                            cerl:abstract(0), cerl:abstract(-1),
-                           cerl:abstract(none), cerl:abstract(0)}
+                           cerl:abstract(none), cerl:abstract(0)};
+              _ -> undefined
           end,
-    G = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
-           inst = Inst, mut = Mut, d = D, unit = Unit, sigs = Sigs,
-           tsigs = TSigs, mod = Mod, elsewhere = Elsewhere,
-           gen = Stamp, tlb = Tlb},
-    %% Parameters arrive in the interpreter's representation, which holds
-    %% integers *signed*, and `wasm_exec:op1/2' and `op2/3' expect exactly that.
-    %%
-    %% Establishing a range on entry so the SSA type pass can drop the JIT's
-    %% type and overflow checks is a real opportunity and is not done here. The
-    %% first attempt masked each parameter with `band', which destroys the sign
-    %% and made `i32.div_s(-10, 3)' answer 1431655762. Doing it correctly needs
-    %% the parameter's declared width, which this generator does not carry, and
-    %% it is worth its own change with its own measurement rather than a line
-    %% smuggled into this one.
+    G0 = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
+            inst = Inst, mut = Mut, d = D, cycle = Cycle, unit = Unit,
+            sigs = Sigs,
+            tsigs = TSigs, mod = Mod, elsewhere = Elsewhere,
+            gen = Stamp, tlb = Tlb, i32l = I32L, rflags = RFlags},
+    %% An i32 parameter arrives `u32': every caller in the unit converts, and
+    %% `invoke/6' converts what the interpreter hands in.
+    G = lists:foldl(fun({P, true}, Acc) -> mark(P, Acc);
+                       (_, Acc) -> Acc
+                    end, G0, lists:zip(Params, PFlags)),
+    %% An i32 parameter is `u32' and every other one `canon'; see `u32/2'. A
+    %% first attempt at masking parameters masked all of them, which destroyed
+    %% the sign of the ones a signed operation reads and made
+    %% `i32.div_s(-10, 3)' answer 1431655762. Every operation now converts what
+    %% it reads to the form it needs.
     cerl:c_fun(Extra ++ Params, seq(IR, G, return)).
+
+%% The declared locals' types. A hand-made `#fn{}' without them is treated as
+%% having no i32 local, which keeps it `canon' and correct.
+local_types(#fn{locals = Ts}, Defaults) when length(Ts) =:= length(Defaults) ->
+    Ts;
+local_types(_, Defaults) -> [none || _ <- Defaults].
 
 seq([], G, Exit) -> go(Exit, G);
 seq([I | Rest], G, Exit) -> instr(I, Rest, G, Exit).
 
 %% Leaving a frame, or the function. `return' takes the function's results off
 %% the stack and makes them a list, which is the one place results are built.
-go(return, #g{stack = S, nres = NRes, mut = undefined}) ->
-    cerl:make_list(lists:reverse(lists:sublist(S, NRes)));
-go(return, #g{stack = S, nres = NRes, mut = Mut}) ->
-    cerl:c_tuple([cerl:make_list(lists:reverse(lists:sublist(S, NRes))), Mut]);
+%% A function's i32 results leave it `u32', which is what every caller in the
+%% unit expects and what `invoke/6' converts back. A frame's results travel
+%% `canon'.
+go(return, #g{stack = S, nres = NRes, mut = undefined, rflags = F} = G) ->
+    results(as_slots(top(NRes, S), F, G));
+go(return, #g{stack = S, nres = NRes, mut = Mut, rflags = F} = G) ->
+    cerl:c_tuple([results(as_slots(top(NRes, S), F, G)), Mut]);
 go({K, NArgs}, #g{stack = S} = G) ->
-    cerl:c_apply(K, carried(G) ++ lists:reverse(lists:sublist(S, NArgs))).
+    cerl:c_apply(K, carried(G) ++ [canon(V, G) || V <- top(NArgs, S)]).
+
+%% The top N operands, in stack order bottom first.
+top(N, S) -> lists:reverse(lists:sublist(S, N)).
+
+%% One result travels bare, so a call inside the unit builds no list for it;
+%% any other count is a list. `invoke_clause/8' restores the list at the edge.
+results([R]) -> R;
+results(Rs) -> cerl:make_list(Rs).
 
 %% What every continuation takes: the locals, and the mutable state when there
 %% is any. Both change as a body runs, which is exactly why they are parameters
@@ -896,7 +1093,13 @@ carried(#g{mut = undefined} = G) -> locals(G);
 carried(#g{mut = Mut, d = D, tlb = Tlb} = G) ->
     locals(G) ++ [Mut, D | tuple_to_list(Tlb)].
 
-locals(#g{env = Env, nlocals = N}) -> [maps:get(I, Env) || I <- lists:seq(0, N - 1)].
+%% Each local in the form its slot holds: an i32 local's literal is masked on
+%% the way into a continuation, whose parameter is `u32'.
+locals(#g{env = Env, nlocals = N} = G) ->
+    [case i32_local(I, G) of
+         true -> u32(maps:get(I, Env), G);
+         false -> maps:get(I, Env)
+     end || I <- lists:seq(0, N - 1)].
 
 %% A fresh Core variable. Integers, so nothing is interned.
 var(#g{n = N} = G) -> {cerl:c_var(N), G#g{n = N + 1}}.
@@ -914,15 +1117,41 @@ frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
                                    lists:sublist(Vars, NL))),
     {NewMut, NewD, NewTlb} =
         case Mut of
-            undefined -> {undefined, undefined, undefined};
+            %% No state to carry. A calls-only function keeps its depth, which
+            %% never changes inside it, by closing over it.
+            undefined -> {undefined, G#g.d, undefined};
             _ -> {lists:nth(NL + 1, Vars), lists:nth(NL + 2, Vars),
                   list_to_tuple(lists:sublist(Vars, NL + 3, ?TLB_SIZE))}
         end,
+    G1 = lists:foldl(fun({I, V}, Acc) ->
+                             case i32_local(I, Acc) of
+                                 true -> mark(V, Acc);
+                                 false -> Acc
+                             end
+                     end, G#g{n = N0 + Total},
+                     lists:zip(lists:seq(0, NL - 1), lists:sublist(Vars, NL))),
     {Name, Vars, Env, {NewMut, NewTlb}, NewD, lists:nthtail(NCarried, Vars),
-     G#g{n = N0 + Total}}.
+     G1}.
 
 %%% -------------------------------------------------------------- control ---
 
+%% A frame that ends its body forwards: when nothing follows it and its exit
+%% takes exactly the frame's results, its continuation would only hand those
+%% results on, so the frame branches to the exit itself and no continuation is
+%% built. In a function such as `fib', whose `if' is its last instruction, that
+%% continuation was a local call on every invocation. Forwarding is also
+%% correct for the operands below the frame: the exit takes only its top
+%% `NRes', which are the frame's results either way.
+-define(FORWARDS(Rest, Exit, NRes, G),
+        (Rest =:= [] andalso
+         ((Exit =:= return andalso NRes =:= G#g.nres) orelse
+          (is_tuple(Exit) andalso element(2, Exit) =:= NRes)))).
+
+instr({block, NPar, NRes, Body}, Rest, G, Exit)
+  when ?FORWARDS(Rest, Exit, NRes, G) ->
+    {Top, _Below} = split_stack(NPar, G#g.stack),
+    seq(Body, G#g{stack = Top, frames = [Exit | G#g.frames],
+                  depth = G#g.depth + 1}, Exit);
 instr({block, NPar, NRes, Body}, Rest, G, Exit) ->
     {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
@@ -938,6 +1167,18 @@ instr({block, NPar, NRes, Body}, Rest, G, Exit) ->
 %% Branching to a loop label means the top of the loop, so the loop's own frame
 %% takes its *parameters* where a block's takes its results, and falling off the
 %% end goes to the continuation instead.
+instr({loop, NPar, NRes, Body}, Rest, G, Exit)
+  when ?FORWARDS(Rest, Exit, NRes, G) ->
+    {Top, _Below} = split_stack(NPar, G#g.stack),
+    G2 = G#g{depth = G#g.depth + 1},
+    {Lp, LpVars, LpEnv, {LpMut, LpTlb}, LpD, LpPar, G3} = frame(NPar, G2),
+    Inner = G3#g{env = LpEnv, mut = LpMut, d = LpD, tlb = LpTlb,
+                 stack = lists:reverse(LpPar),
+                 frames = [{Lp, NPar} | G#g.frames],
+                 depth = G2#g.depth + 1},
+    Loop = cerl:c_fun(LpVars, seq(Body, Inner, Exit)),
+    cerl:c_letrec([{Lp, Loop}],
+                  cerl:c_apply(Lp, carried(G) ++ lists:reverse(Top)));
 instr({loop, NPar, NRes, Body}, Rest, G, Exit) ->
     {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
@@ -959,8 +1200,17 @@ instr({loop, NPar, NRes, Body}, Rest, G, Exit) ->
       cerl:c_letrec([{Lp, Loop}],
                     cerl:c_apply(Lp, carried(G) ++ lists:reverse(Top))));
 
+instr({if_, NPar, NRes, Then, Else}, Rest, G0, Exit)
+  when ?FORWARDS(Rest, Exit, NRes, G0) ->
+    {C, G} = pop_raw(G0),
+    {Top, _Below} = split_stack(NPar, G#g.stack),
+    Inner = G#g{stack = Top, frames = [Exit | G#g.frames],
+                depth = G#g.depth + 1},
+    Arm = fun(Body) -> seq(Body, Inner, Exit) end,
+    cerl:c_case(C, [cerl:c_clause([cerl:abstract(0)], Arm(Else)),
+                    cerl:c_clause([cerl:c_var('_C')], Arm(Then))]);
 instr({if_, NPar, NRes, Then, Else}, Rest, G0, Exit) ->
-    {C, G} = pop(G0),
+    {C, G} = pop_raw(G0),
     {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
@@ -979,8 +1229,10 @@ instr({if_, NPar, NRes, Then, Else}, Rest, G0, Exit) ->
 instr({br, N}, _Rest, G, _Exit) ->
     go(target(N, G), G);
 
+%% A condition is tested against zero, which reads the same in either form,
+%% so it is never converted.
 instr({br_if, N}, Rest, G0, Exit) ->
-    {C, G} = pop(G0),
+    {C, G} = pop_raw(G0),
     Taken = go(target(N, G), G),
     cerl:c_case(C, [cerl:c_clause([cerl:abstract(0)], seq(Rest, G, Exit)),
                     cerl:c_clause([cerl:c_var('_C')], Taken)]);
@@ -1018,7 +1270,7 @@ instr(drop, Rest, G0, Exit) ->
     seq(Rest, G, Exit);
 
 instr({select, _}, Rest, G0, Exit) ->
-    {C, G1} = pop(G0), {B, G2} = pop(G1), {A, G3} = pop(G2),
+    {C, G1} = pop_raw(G0), {B, G2} = pop(G1), {A, G3} = pop(G2),
     {V, G4} = var(G3),
     cerl:c_let([V], cerl:c_case(C, [cerl:c_clause([cerl:abstract(0)], B),
                                     cerl:c_clause([cerl:c_var('_C')], A)]),
@@ -1026,11 +1278,13 @@ instr({select, _}, Rest, G0, Exit) ->
 
 instr({local_get, I}, Rest, #g{env = Env} = G, Exit) ->
     seq(Rest, push(maps:get(I, Env), G), Exit);
+%% An i32 local holds a `u32' variable or a `canon' literal, and nothing else.
 instr({local_set, I}, Rest, G0, Exit) ->
-    {V, G} = pop(G0),
-    seq(Rest, G#g{env = (G#g.env)#{I => V}}, Exit);
-instr({local_tee, I}, Rest, #g{stack = [V | _]} = G, Exit) ->
-    seq(Rest, G#g{env = (G#g.env)#{I => V}}, Exit);
+    {V, G} = pop_raw(G0),
+    set_local(I, V, G, fun(_, G1) -> seq(Rest, G1, Exit) end);
+instr({local_tee, I}, Rest, G0, Exit) ->
+    {V, G} = pop_raw(G0),
+    set_local(I, V, G, fun(U, G1) -> seq(Rest, push(U, G1), Exit) end);
 instr({i32_const, C}, Rest, G, Exit) ->
     seq(Rest, push(cerl:abstract(C), G), Exit);
 instr({i64_const, C}, Rest, G, Exit) ->
@@ -1059,7 +1313,7 @@ instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _, _, _, _}} = G0,
     New = {P, Ar, B, P2, Ar2, B2},
     case lists:member(Op, ?LOADS) of
         true ->
-            {Base, G4} = pop(G3),
+            {Base, G4} = pop_raw(G3),
             {V, G5} = var(G4),
             {load, N, Kind} = wasm_exec:load_spec(Op),
             {Form, Next} =
@@ -1071,36 +1325,36 @@ instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _, _, _, _}} = G0,
                     none -> {last, Tlb};
                     mixed -> {tuple, New}
                 end,
-            join(Form, cached(load, G0#g.mut, N, Kind, address(Base, Offset),
-                              undefined, Tlb, Form),
+            join(Form, cached(load, G0#g.mut, N, Kind,
+                              address(Base, Offset, G0), undefined, Tlb, Form),
                  [V | tuple_to_list(New)],
                  seq(Rest, push(V, G5#g{tlb = Next}), Exit));
         false ->
             true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
-            {Val, G4} = pop(G3), {Base, G5} = pop(G4),
+            {Val, G4} = stored(Op, G3), {Base, G5} = pop_raw(G4),
             {Mut1, G6} = var(G5),
             {store, N, Kind} = wasm_exec:store_spec(Op),
-            join(last, cached(store, G0#g.mut, N, Kind, address(Base, Offset),
-                              Val, Tlb, last),
+            join(last, cached(store, G0#g.mut, N, Kind,
+                              address(Base, Offset, G0), Val, Tlb, last),
                  [Mut1 | tuple_to_list(New)],
                  seq(Rest, G6#g{mut = Mut1, tlb = New}, Exit))
     end;
 instr({Op, {_Align, Offset, M}}, Rest, G0, Exit) when is_atom(Op), is_integer(Offset) ->
     case lists:member(Op, ?LOADS) of
         true ->
-            {Base, G1} = pop(G0),
+            {Base, G1} = pop_raw(G0),
             {V, G2} = var(G1),
             {load, N, Kind} = wasm_exec:load_spec(Op),
             cerl:c_let([V], access(load, G0#g.mut, M, N, Kind,
-                                   address(Base, Offset), undefined),
+                                   address(Base, Offset, G0), undefined),
                        seq(Rest, push(V, G2), Exit));
         false ->
             true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
-            {Val, G1} = pop(G0), {Base, G2} = pop(G1),
+            {Val, G1} = stored(Op, G0), {Base, G2} = pop_raw(G1),
             {Mut1, G3} = var(G2),
             {store, N, Kind} = wasm_exec:store_spec(Op),
             cerl:c_let([Mut1], access(store, G0#g.mut, M, N, Kind,
-                                      address(Base, Offset), Val),
+                                      address(Base, Offset, G0), Val),
                        seq(Rest, G3#g{mut = Mut1}, Exit))
     end;
 
@@ -1256,36 +1510,61 @@ instr({global_set, I}, Rest, G0, Exit) ->
 
 instr({call, F}, Rest, #g{unit = Unit, sigs = Sigs} = G0, Exit) ->
     {NP, NR} = maps:get(F, Sigs),
-    {Args, G1} = take(NP, G0),
-    Call = case maps:find(F, Unit) of
-               {ok, {Pos, stateful}} ->
-                   local_call(Pos, NP + 3,
-                              [G0#g.inst, G0#g.mut, deeper(G0) | Args]);
-               {ok, {Pos, pure}} ->
-                   %% A pure callee returns its results and no state, so the
-                   %% caller's own state passes straight through.
-                   cerl:c_tuple([local_call(Pos, NP, Args), G0#g.mut]);
-               error ->
-                   outward(F, Args, G0)
-           end,
-    %% Results come back as a list, whatever side the call landed on, and are
-    %% taken apart by matching: the count is static, so no walking and a wrong
-    %% arity cannot match.
-    {Rs, G2} = vars(NR, G1),
-    {M1, G3} = var(G2),
-    Clause = cerl:c_clause([cerl:c_tuple([list_pat(Rs), M1])],
-                           seq(Rest, G3#g{mut = M1,
-                                          stack = lists:reverse(Rs) ++ G1#g.stack},
-                               Exit)),
-    %% The depth check is this frame's own, so a runaway recursion raises what
-    %% `enter/5' raises instead of growing the Erlang stack until the process
-    %% runs out of heap.
-    %%
-    %% `G0#g.d' is the *caller's* depth -- `invoke_fn/4' takes it that way -- so
-    %% this function's own is `deeper(G0)', and checking `G0#g.d' allowed one
-    %% frame more than the interpreter: 1000 against 999 at `max_depth => 1000'.
-    cerl:c_seq(call_op(check_depth, [G0#g.inst, deeper(G0)]),
-               cerl:c_case(Call, [Clause]));
+    {Raw, G1} = take_raw(NP, G0),
+    {Rs, G1a} = vars(NR, G1),
+    %% A function of the unit takes its i32 arguments `u32' and gives its i32
+    %% results `u32'; anything outside the unit takes and gives `canon'.
+    {Args, G2} =
+        case maps:find(F, Unit) of
+            {ok, {_, _, _, {PFlags, RFlags}}} ->
+                {as_slots(Raw, PFlags, G0), mark_flagged(Rs, RFlags, G1a)};
+            error ->
+                {[canon(V, G0) || V <- Raw], G1a}
+        end,
+    Stack = lists:reverse(Rs) ++ G1#g.stack,
+    Call =
+        case maps:find(F, Unit) of
+            {ok, {Pos, stateful, Cycle, _}} ->
+                %% Only a stateful caller reaches here: `classify/1' never
+                %% lets a calls-only function call a stateful one.
+                {M1, G3} = var(G2),
+                cerl:c_case(
+                  local_call(Pos, NP + 3, [G0#g.inst, G0#g.mut,
+                                           left(G0, Cycle) | Args]),
+                  [cerl:c_clause([cerl:c_tuple([results_pat(Rs), M1])],
+                                 seq(Rest, G3#g{mut = M1, stack = Stack},
+                                     Exit))]);
+            {ok, {Pos, Shape, Cycle, _}} ->
+                %% A pure or calls-only callee returns its results and no
+                %% state, so the caller's own state, if it has any, passes
+                %% straight through.
+                Extra = case Shape of
+                            pure -> [];
+                            calls_only -> [left(G0, Cycle)]
+                        end,
+                cerl:c_case(local_call(Pos, NP + length(Extra), Extra ++ Args),
+                            [cerl:c_clause([results_pat(Rs)],
+                                           seq(Rest, G2#g{stack = Stack},
+                                               Exit))]);
+            error ->
+                %% Another shard or the interpreter, through `wasm_exec',
+                %% which answers `{Results, Mut}' with the results a list.
+                {M1, G3} = var(G2),
+                cerl:c_case(outward(F, Args, G0),
+                            [cerl:c_clause([cerl:c_tuple([list_pat(Rs), M1])],
+                                           seq(Rest,
+                                               G3#g{mut = M1, stack = Stack},
+                                               Exit))])
+        end,
+    %% A call that can close a cycle checks the depth, so a runaway recursion
+    %% raises what `enter/5' raises instead of growing the Erlang stack until
+    %% the process runs out of heap. A call that leaves the unit is checked
+    %% too: it is a crossing, and one comparison is nothing beside it.
+    case maps:find(F, Unit) of
+        {ok, {_, _, Other, _}} when Other =/= G0#g.cycle -> Call;
+        {ok, {_, pure, _, _}} -> Call;
+        _ -> depth_checked(G0, Call)
+    end;
 
 instr({call_indirect, TypeIdx, TableIdx}, Rest,
       #g{tsigs = TSigs, mod = Mod, gen = Stamp} = G0, Exit) ->
@@ -1302,15 +1581,14 @@ instr({call_indirect, TypeIdx, TableIdx}, Rest,
     Call = call_op(indirect_out,
                    [G0#g.inst, G0#g.mut, cerl:abstract(TypeIdx),
                     cerl:abstract(TableIdx), I, cerl:make_list(Args),
-                    deeper(G0), cerl:c_atom(Mod), cerl:abstract(Stamp)]),
+                    absolute(G0), cerl:c_atom(Mod), cerl:abstract(Stamp)]),
     {Rs, G3} = vars(NR, G2),
     {M1, G4} = var(G3),
     Clause = cerl:c_clause([cerl:c_tuple([list_pat(Rs), M1])],
                            seq(Rest, G4#g{mut = M1,
                                           stack = lists:reverse(Rs) ++ G2#g.stack},
                                Exit)),
-    cerl:c_seq(call_op(check_depth, [G0#g.inst, deeper(G0)]),
-               cerl:c_case(Call, [Clause]));
+    depth_checked(G0, cerl:c_case(Call, [Clause]));
 
 %%% ---------------------------------------------------------------- numeric ---
 
@@ -1326,9 +1604,17 @@ instr(I, _Rest, _G, _Exit) ->
     throw({unsupported, I}).
 
 emit1(Op, Rest, G0, Exit) ->
-    {A, G1} = pop(G0),
-    {V, G2} = var(G1),
-    cerl:c_let([V], unop(Op, A), seq(Rest, push(V, G2), Exit)).
+    case unop32(Op) of
+        false ->
+            {A, G1} = pop(G0),
+            {V, G2} = var(G1),
+            cerl:c_let([V], unop(Op, A), seq(Rest, push(V, G2), Exit));
+        {Expr, Gives} ->
+            {A, G1} = pop_raw(G0),
+            {V, G2} = var(G1),
+            G3 = case Gives of u32 -> mark(V, G2); canon -> G2 end,
+            cerl:c_let([V], Expr(A, G0), seq(Rest, push(V, G3), Exit))
+    end.
 
 unop(Op, A) ->
     case inline1(Op) of
@@ -1337,6 +1623,16 @@ unop(Op, A) ->
     end.
 
 emit2(Op, Rest, G0, Exit) ->
+    case binop32(Op) of
+        false -> emit2_canon(Op, Rest, G0, Exit);
+        Expr ->
+            {B, G1} = pop_raw(G0), {A, G2} = pop_raw(G1),
+            {V, G3} = var(G2),
+            cerl:c_let([V], Expr(A, B, G0),
+                       seq(Rest, push(V, mark(V, G3)), Exit))
+    end.
+
+emit2_canon(Op, Rest, G0, Exit) ->
     {B, G1} = pop(G0), {A, G2} = pop(G1),
     {V, G3} = var(G2),
     %% A second name, for an operation that has to look at its own result before
@@ -1345,6 +1641,67 @@ emit2(Op, Rest, G0, Exit) ->
     cerl:c_let([V], binop(Op, A, B, W), seq(Rest, push(V, G4), Exit)).
 
 %%% ------------------------------------------------------ inline arithmetic ---
+%%
+%% The i32 operations on `u32' values (see `u32/2'). Each takes its operands in
+%% whichever form they arrive, converts what it must, and gives a `u32' result:
+%% wrapping is one `band', which also tells the compiler the result's range.
+%% A comparison gives 0 or 1, the same in both forms.
+binop32(i32_add) -> arith32('+');
+binop32(i32_sub) -> arith32('-');
+binop32(i32_mul) -> arith32('*');
+binop32(i32_and) -> bits32('band');
+binop32(i32_or) -> bits32('bor');
+binop32(i32_xor) -> bits32('bxor');
+binop32(i32_shl) ->
+    fun(A, B, G) ->
+            mask32(bif('bsl', [u32(A, G), shamt(32, u32(B, G))]))
+    end;
+binop32(i32_shr_u) ->
+    fun(A, B, G) -> bif('bsr', [u32(A, G), shamt(32, u32(B, G))]) end;
+%% An arithmetic shift reads the sign, so its operand is made `canon' first.
+binop32(i32_shr_s) ->
+    fun(A, B, G) ->
+            mask32(bif('bsr', [canon(A, G), shamt(32, u32(B, G))]))
+    end;
+binop32(Op) ->
+    case cmp(Op) of
+        {Erl, 32} -> fun(A, B, G) -> test(Erl, u32(A, G), u32(B, G)) end;
+        {Erl, signed} ->
+            case lists:member(Op, [i32_eq, i32_ne, i32_lt_s, i32_le_s,
+                                   i32_gt_s, i32_ge_s]) of
+                false -> false;
+                %% Equality holds in `u32' as it does in `canon'.
+                true when Op =:= i32_eq; Op =:= i32_ne ->
+                    fun(A, B, G) -> test(Erl, u32(A, G), u32(B, G)) end;
+                %% Flipping the top bit maps signed order onto unsigned
+                %% order, so a signed comparison is two `bxor's away.
+                true ->
+                    fun(A, B, G) ->
+                            test(Erl, flip32(u32(A, G)), flip32(u32(B, G)))
+                    end
+            end;
+        _ -> false
+    end.
+
+arith32(Erl) -> fun(A, B, G) -> mask32(bif(Erl, [u32(A, G), u32(B, G)])) end.
+bits32(Erl) -> fun(A, B, G) -> bif(Erl, [u32(A, G), u32(B, G)]) end.
+mask32(E) -> bif('band', [E, cerl:abstract(?W32)]).
+flip32(E) -> bif('bxor', [E, cerl:abstract(?S32)]).
+
+%% The unary operations that touch an i32, with the form each result is in.
+%% An i64 or a float result is `canon', as everything that is not i32 is.
+unop32(i32_eqz) ->
+    %% Zero is zero in either form, so the operand is not converted.
+    {fun(A, _) -> test('=:=', A, cerl:abstract(0)) end, u32};
+unop32(i32_wrap_i64) -> {fun(A, G) -> mask32(canon(A, G)) end, u32};
+unop32(i64_extend_i32_u) -> {fun(A, G) -> u32(A, G) end, canon};
+unop32(i64_extend_i32_s) -> {fun(A, G) -> canon(A, G) end, canon};
+unop32(f64_convert_i32_u) ->
+    {fun(A, G) -> bif(float, [u32(A, G)]) end, canon};
+unop32(f64_convert_i32_s) ->
+    {fun(A, G) -> bif(float, [canon(A, G)]) end, canon};
+unop32(_) -> false.
+
 %%
 %% Routing *every* operation through `wasm_exec:op2/3' is what makes compiled
 %% and interpreted arithmetic provably identical, and it costs a remote call per
@@ -1371,16 +1728,7 @@ binop(Op, A, B, W) ->
     end.
 
 
--define(W32, 16#FFFFFFFF).
--define(S32, 16#80000000).
--define(W64, 16#FFFFFFFFFFFFFFFF).
--define(P64, 16#10000000000000000).
-%% The largest BEAM small integer: 60 bits, signed. A literal at or below this
-%% is an immediate and a literal above it is a bignum, which is the whole
-%% reason `wrap_sum/2` has two range tests instead of one.
--define(SMALL, 576460752303423487).
--define(P32, 16#100000000).
--define(S64, 16#8000000000000000).
+%% The i32 and i64 constants are defined at the top of the module.
 
 %% The four integer-to-f64 conversions, which are *total*: every i32 and i64
 %% has a nearest-representable f64, so none of them can produce a NaN or an
@@ -1556,16 +1904,143 @@ shamt(W, E) -> bif('band', [E, cerl:abstract(W - 1)]).
 
 bif(Name, Args) -> cerl:c_call(cerl:c_atom(erlang), cerl:c_atom(Name), Args).
 
+%% Guard tests joined with `and', which a Core guard accepts as a call.
+conj([T]) -> T;
+conj([T | Ts]) -> bif('and', [T, conj(Ts)]).
+
 %%% ---------------------------------------------------------------- helpers ---
 
-pop(#g{stack = [V | S]} = G) -> {V, G#g{stack = S}}.
+%%% ----------------------------------------------------- i32 representation ---
+%%
+%% An i32 has two forms in generated code. `canon' is the interpreter's, held
+%% signed, and it is what every boundary takes: `wasm_exec', the interpreter,
+%% a host, `invoke/6''s callers. `u32' is the same bits held unsigned, in
+%% [0, 2^32), which is what an Erlang programmer writes: wrapping an addition
+%% is one `band' instead of two comparisons and a branch.
+%%
+%% Which form a value is in is a property of the Core variable holding it: a
+%% variable is `u32' exactly when its name is in `#g.u32'. A literal is always
+%% `canon'. Every i32 local and every i32 parameter and result of a function
+%% in the unit is held `u32'; everything else is `canon'.
+%%
+%% `pop/1' and `take/2' answer `canon', so a consumer that knows nothing of
+%% this stays right. Only the consumers that want `u32' ask for the raw value.
+
+pop(#g{stack = [V | S]} = G) -> {canon(V, G), G#g{stack = S}}.
+
+pop_raw(#g{stack = [V | S]} = G) -> {V, G#g{stack = S}}.
 
 %% N operands, in call order rather than stack order.
-take(N, #g{stack = S} = G) ->
+take(N, G0) ->
+    {Vs, G} = take_raw(N, G0),
+    {[canon(V, G0) || V <- Vs], G}.
+
+take_raw(N, #g{stack = S} = G) ->
     {lists:reverse(lists:sublist(S, N)), G#g{stack = lists:nthtail(N, S)}}.
 
-deeper(#g{d = D}) -> cerl:c_call(cerl:c_atom(erlang), cerl:c_atom('+'),
-                                 [D, cerl:abstract(1)]).
+is_u32(E, #g{u32 = U}) ->
+    cerl:is_c_var(E) andalso maps:is_key(cerl:var_name(E), U).
+
+%% The value in `u32' form: a literal is masked now, a `u32' variable is
+%% itself, anything else is masked when it runs.
+u32(E, G) ->
+    case cerl:is_literal(E) of
+        true -> cerl:abstract(cerl:concrete(E) band ?W32);
+        false ->
+            case is_u32(E, G) of
+                true -> E;
+                false -> bif('band', [E, cerl:abstract(?W32)])
+            end
+    end.
+
+%% The value in `canon' form. Only a `u32' variable needs work.
+canon(E, G) ->
+    case is_u32(E, G) of
+        true -> signed(E);
+        false -> E
+    end.
+
+%% A `u32' variable read as the signed value it is.
+signed(E) ->
+    cerl:c_case(bif('>=', [E, cerl:abstract(?S32)]),
+                [cerl:c_clause([cerl:abstract(true)],
+                               bif('-', [E, cerl:abstract(?P32)])),
+                 cerl:c_clause([cerl:abstract(false)], E)]).
+
+%% `V' now holds a `u32' value.
+mark(V, #g{u32 = U} = G) -> G#g{u32 = U#{cerl:var_name(V) => true}}.
+
+mark_flagged(Vs, Flags, G) ->
+    lists:foldl(fun({V, true}, Acc) -> mark(V, Acc);
+                   (_, Acc) -> Acc
+                end, G, lists:zip(Vs, Flags)).
+
+%% Bind `E' to a fresh variable in `u32' form unless it already is one, and go
+%% on with `Then(Var, G)'.
+%% A literal stays the `canon' literal it is: a literal is never `u32'.
+bind_u32(E, G0, Then) ->
+    U = u32(E, G0),
+    case cerl:is_literal(E) of
+        true -> Then(E, G0);
+        false when U =:= E -> Then(U, G0);
+        false ->
+            {V, G1} = var(G0),
+            cerl:c_let([V], U, Then(V, mark(V, G1)))
+    end.
+
+i32_local(I, #g{i32l = L}) -> maps:is_key(I, L).
+
+%% Bind local `I' to `V', in `u32' form when it is an i32 local, and go on
+%% with `Then(Value, G)', the value as the local now holds it.
+set_local(I, V, G, Then) ->
+    Set = fun(U, G1) -> Then(U, G1#g{env = (G1#g.env)#{I => U}}) end,
+    case i32_local(I, G) of
+        true -> bind_u32(V, G, Set);
+        false -> Set(V, G)
+    end.
+
+%% Convert each value to the form its slot holds: `u32' where the flag is
+%% true, `canon' otherwise.
+as_slots(Vs, Flags, G) ->
+    [case F of true -> u32(V, G); false -> canon(V, G) end
+     || {V, F} <- lists:zip(Vs, Flags)].
+
+%% Which of a function's parameters and results are i32, as two lists of
+%% booleans. A function built without a type (a test's hand-made `#fn{}')
+%% gets none, and everything about it stays `canon'.
+%% `#functype{}' is matched as the tuple it is, which spares this module the
+%% whole of `wasm.hrl'.
+i32_flags(#fn{type = {_, _, {functype, Ps, Rs}}}) ->
+    {[T =:= i32 || T <- Ps], [T =:= i32 || T <- Rs]};
+i32_flags(#fn{nparams = NP, nresults = NR}) ->
+    {lists:duplicate(NP, false), lists:duplicate(NR, false)}.
+
+%% The depth inside generated code is the frames left before the limit:
+%% `invoke/6' starts it at `max_depth' less the caller's depth, and a call that
+%% can close a cycle hands its callee one fewer. A call that cannot hands the
+%% same count on, unchecked; see `cycles/1' for why that still bounds the stack.
+left(#g{d = L, cycle = Cycle}, Cycle) -> bif('-', [L, cerl:abstract(1)]);
+left(#g{d = L}, _) -> L.
+
+%% The callee's depth as the interpreter counts it, for a call that leaves
+%% generated code. Only a stateful function makes one, so the instance is at
+%% hand. It is low by at most the uncounted frames `cycles/1' allows.
+absolute(#g{inst = Inst, d = L}) ->
+    bif('+', [bif('-', [call_op(max_depth, [Inst]), L]), cerl:abstract(1)]).
+
+%% `Body' runs only if this frame may call one deeper: the callee would have
+%% `L - 1' frames left, and none is too few. The comparison is against a
+%% literal, inline; the error is the one `wasm_exec:check_depth/2' raises.
+depth_checked(#g{d = L}, Body) ->
+    cerl:c_case(bif('=<', [L, cerl:abstract(1)]),
+                [cerl:c_clause([cerl:abstract(true)],
+                               call_op(depth_exhausted, [])),
+                 cerl:c_clause([cerl:abstract(false)], Body)]).
+
+%% The pattern a call inside the unit matches its callee's results with: a bare
+%% variable for one result, a list otherwise. See `results/1'.
+results_pat([R]) -> R;
+results_pat(Rs) -> list_pat(Rs).
 
 local_call(Pos, Arity, Args) ->
     cerl:c_apply(cerl:c_fname(fun_name(Pos), Arity), Args).
@@ -1589,14 +2064,23 @@ call_op(F, Args) ->
 
 %% The effective address of an access, inline.
 %%
-%% An i32 operand is held signed and the address is unsigned, which
-%% `wasm_num:to_u32/1` did with a remote call per access. Masking to the width
-%% is the same answer on a value already in range, which is what an operand of
-%% this subset always is, and it is two instructions rather than a call. The
-%% offset is a literal, and adding zero is not emitted at all.
-address(Base, 0) -> bif('band', [Base, cerl:abstract(?W32)]);
-address(Base, Offset) ->
-    bif('+', [bif('band', [Base, cerl:abstract(?W32)]), cerl:abstract(Offset)]).
+%% The address is the unsigned reading of an i32, which is `u32/2' exactly: a
+%% `u32' operand is used as it is, any other is masked, two instructions
+%% rather than the remote call `wasm_num:to_u32/1' once was. Taking the
+%% operand `canon' first, as every address did when i32 values were first held
+%% unsigned, converted it and masked it straight back: half the conversions in
+%% QuickJS's generated code, and 8% of its size. The offset is a literal, and
+%% adding zero is not emitted at all.
+address(Base, 0, G) -> u32(Base, G);
+address(Base, Offset, G) -> bif('+', [u32(Base, G), cerl:abstract(Offset)]).
+
+%% The value a store writes. Every store of an i32 writes its low bits and
+%% masks them to its width (`inline_store/8', `wasm_memory:store/4'), so an
+%% i32 is written in whichever form it is in, unconverted. Anything else is
+%% `canon'.
+stored(Op, G) when Op =:= i32_store; Op =:= i32_store8; Op =:= i32_store16 ->
+    pop_raw(G);
+stored(_, G) -> pop(G).
 
 %%% ---------------------------------------------------- inline memory access ---
 %%
@@ -2269,7 +2753,7 @@ encode(f64, V) -> cerl:c_call(cerl:c_atom(wasm_num), cerl:c_atom(f64_to_bits), [
 %% refused.
 outward(F, Args, #g{elsewhere = Elsewhere} = G0) ->
     Common = [G0#g.inst, G0#g.mut, cerl:abstract(F), cerl:make_list(Args),
-              deeper(G0)],
+              absolute(G0)],
     case maps:find(F, Elsewhere) of
         {ok, Other} ->
             call_op(shard_call, Common ++ [cerl:c_atom(Other),

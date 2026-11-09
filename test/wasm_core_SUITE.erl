@@ -52,7 +52,16 @@ all() ->
      compilation_does_not_block_the_call_that_triggers_it,
      everything_that_can_fail_falls_back_to_the_interpreter,
      the_core_you_can_read_is_the_core_that_is_compiled,
-     a_dump_of_one_function_names_that_function].
+     a_dump_of_one_function_names_that_function,
+     each_function_gets_the_calling_convention_its_callees_allow,
+     calls_across_the_conventions_answer_what_the_interpreter_answers,
+     a_compiled_recursion_traps_at_the_interpreters_depth,
+     a_frame_that_ends_its_body_builds_no_continuation,
+     only_a_call_that_can_recurse_counts_the_depth,
+     an_endless_recursion_traps_in_generated_code,
+     every_i32_operation_agrees_in_either_form,
+     an_i32_crosses_every_boundary_unchanged,
+     fib_compiles_to_one_mask_per_result].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -883,3 +892,477 @@ nesting({loop, _, _, B}) -> 1 + nesting(B);
 nesting({try_table, _, _, _, B}) -> 1 + nesting(B);
 nesting({if_, _, _, T, E}) -> 1 + max(nesting(T), nesting(E));
 nesting(_) -> 0.
+
+%%% --------------------------------------------------- calling conventions ---
+%%
+%% Inside a unit a function is called one of three ways (`wasm_core`'s
+%% `classify/1`): pure `f(Args)`, calls-only `f(D, Max, Args)`, or stateful
+%% `f(Inst, Mut, D, Max, Args)`. These cases read the arity of every generated
+%% function head as well as the answer, so they prove which convention ran.
+
+each_function_gets_the_calling_convention_its_callees_allow(_) ->
+    %% Self-recursion with no state is calls-only: one parameter plus two.
+    ?assertEqual(#{0 => 2}, heads(~"(module
+        (func $fib (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 2 i32.lt_u
+          if (result i32) local.get 0
+          else local.get 0 i32.const 1 i32.sub call $fib
+               local.get 0 i32.const 2 i32.sub call $fib i32.add end))")),
+    %% A chain reaching memory: `c' reads it, so `b' and `a', which reach it
+    %% through calls, are stateful too; `d' calls nothing and stays pure.
+    ?assertEqual(#{0 => 4, 1 => 4, 2 => 4, 3 => 1}, heads(~"(module
+        (memory 1)
+        (func $a (export \"f\") (param i32) (result i32)
+          local.get 0 call $b local.get 0 call $d i32.add)
+        (func $b (param i32) (result i32) local.get 0 call $c)
+        (func $c (param i32) (result i32) local.get 0 i32.load)
+        (func $d (param i32) (result i32) local.get 0 i32.const 1 i32.add))")),
+    %% Mutual recursion with no state: both calls-only, decided together.
+    ?assertEqual(#{0 => 2, 1 => 2}, heads(even_odd(~""))),
+    %% The same pair where `odd' writes a global: both stateful.
+    ?assertEqual(#{0 => 4, 1 => 4},
+                 heads(even_odd(~"i32.const 1 global.set $g"))),
+    %% An indirect call makes its caller stateful even if every target is
+    %% pure.
+    ?assertEqual(#{0 => 1, 1 => 4}, heads(~"(module
+        (type $t (func (param i32) (result i32)))
+        (table 1 funcref) (elem (i32.const 0) $p)
+        (func $p (type $t) local.get 0 i32.const 1 i32.add)
+        (func (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 0 call_indirect (type $t)))")),
+    %% A stateful caller of a calls-only callee: each keeps its own.
+    ?assertEqual(#{0 => 2, 1 => 4}, heads(~"(module
+        (memory 1)
+        (func $r (param i32) (result i32)
+          local.get 0 i32.eqz if (result i32) i32.const 0
+          else local.get 0 i32.const 1 i32.sub call $r end)
+        (func (export \"f\") (param i32) (result i32)
+          local.get 0 call $r local.get 0 i32.load i32.add))")).
+
+%% A call that leaves the unit (to a function the compiler refused) makes its
+%% caller stateful. Checked through `check/4', whose unit leaves the refused
+%% function out exactly as production does.
+calls_across_the_conventions_answer_what_the_interpreter_answers(_) ->
+    Cases =
+        [{"calls-only to calls-only, one result", even_odd(~""),
+          [[0], [1], [7], [10]], #{0 => 2, 1 => 2}},
+         {"calls-only to pure, two results", ~"(module
+            (func $two (param i32) (result i32 i32)
+              local.get 0 local.get 0 i32.const 3 i32.mul)
+            (func $c (param i32) (result i32 i32)
+              local.get 0 i32.eqz if (result i32 i32) local.get 0 call $two
+              else local.get 0 i32.const 1 i32.sub call $c end)
+            (func (export \"f\") (param i32) (result i32 i32)
+              local.get 0 call $c))", [[0], [3], [5]],
+          #{0 => 1, 1 => 2, 2 => 2}},
+         {"calls-only, no result", ~"(module
+            (func $n (param i32)
+              local.get 0 i32.eqz if else local.get 0 i32.const 1 i32.sub call $n end)
+            (func (export \"f\") (param i32) local.get 0 call $n))",
+          [[0], [4]], #{0 => 2, 1 => 2}},
+         {"stateful to calls-only and to pure", ~"(module
+            (memory 1)
+            (func $r (param i32) (result i32)
+              local.get 0 i32.eqz if (result i32) i32.const 0
+              else local.get 0 i32.const 1 i32.sub call $r end)
+            (func $p (param i32) (result i32 i32) local.get 0 local.get 0)
+            (func (export \"f\") (param i32) (result i32)
+              i32.const 4 local.get 0 i32.store
+              local.get 0 call $r local.get 0 call $p i32.add i32.add
+              i32.const 4 i32.load i32.add))", [[0], [2], [9]],
+          #{0 => 2, 1 => 1, 2 => 4}},
+         {"stateful to stateful, threading a global", ~"(module
+            (global $g (mut i32) (i32.const 0))
+            (func $s (param i32) (result i32)
+              global.get $g local.get 0 i32.add global.set $g global.get $g)
+            (func (export \"f\") (param i32) (result i32)
+              local.get 0 call $s local.get 0 call $s i32.add))", [[1], [5]],
+          #{0 => 4, 1 => 4}},
+         {"stateful to stateful, two results", ~"(module
+            (memory 1)
+            (func $s (param i32) (result i32 i32)
+              i32.const 0 local.get 0 i32.store
+              i32.const 0 i32.load local.get 0 i32.const 1 i32.add)
+            (func (export \"f\") (param i32) (result i32)
+              local.get 0 call $s i32.sub))", [[0], [6]],
+          #{0 => 4, 1 => 4}},
+         {"an indirect call whose target is calls-only", ~"(module
+            (type $t (func (param i32) (result i32)))
+            (table 1 funcref) (elem (i32.const 0) $r)
+            (func $r (type $t)
+              local.get 0 i32.eqz if (result i32) i32.const 0
+              else local.get 0 i32.const 1 i32.sub call $r end)
+            (func (export \"f\") (param i32) (result i32)
+              local.get 0 i32.const 0 call_indirect (type $t)))", [[0], [5]],
+          #{0 => 2, 1 => 4}},
+         {"a calls-only function entered from outside", ~"(module
+            (func $fib (export \"f\") (param i32) (result i32)
+              local.get 0 i32.const 2 i32.lt_u
+              if (result i32) local.get 0
+              else local.get 0 i32.const 1 i32.sub call $fib
+                   local.get 0 i32.const 2 i32.sub call $fib i32.add end))",
+          [[0], [1], [10], [20]], #{0 => 2}}],
+    %% The heads first: the answers alone would pass under the old convention
+    %% too, and this case is about which convention ran.
+    [begin
+         ?assertEqual({Name, Heads}, {Name, heads(Wat)}),
+         check_module(Name, Wat, ArgSets)
+     end || {Name, Wat, ArgSets, Heads} <- Cases].
+
+%% `max_depth => 8' on the instance, compiled against interpreted: the same
+%% answer below the limit, the same error at it, with the compiled side
+%% proven to have run generated code.
+a_compiled_recursion_traps_at_the_interpreters_depth(_) ->
+    CallsOnly = ~"(module
+        (func $r (export \"f\") (param i32) (result i32)
+          local.get 0 i32.eqz if (result i32) i32.const 0
+          else local.get 0 i32.const 1 i32.sub call $r i32.const 1 i32.add end))",
+    Stateful = ~"(module
+        (global $g (mut i32) (i32.const 0))
+        (func $r (export \"f\") (param i32) (result i32)
+          global.get $g i32.const 1 i32.add global.set $g
+          local.get 0 i32.eqz if (result i32) i32.const 0
+          else local.get 0 i32.const 1 i32.sub call $r i32.const 1 i32.add end))",
+    ?assertEqual(#{0 => 2}, heads(CallsOnly)),
+    ?assertEqual(#{0 => 4}, heads(Stateful)),
+    [begin
+         M = build(Wat),
+         Opts = #{compile => true, compile_whole => true, compile_sync => true,
+                  compile_after => 1, max_depth => 8},
+         {ok, Ic} = wasm:instantiate(M, #{}, Opts),
+         _ = wasm:call(Ic, ~"f", [0]),
+         {ok, Ii} = wasm:instantiate(M, #{}, #{max_depth => 8}),
+         [begin
+              Want = wasm:call(Ii, ~"f", [N]),
+              E0 = maps:get(entered, wasm_jit:counts()),
+              Got = wasm:call(Ic, ~"f", [N]),
+              ?assert(maps:get(entered, wasm_jit:counts()) > E0),
+              ct:log("~p: interpreted ~p, compiled ~p", [N, Want, Got]),
+              ?assertEqual(same_trap(Want), same_trap(Got))
+          end || N <- [5, 6, 7, 8, 9, 20]],
+         %% Both sides trap somewhere in that range.
+         ?assertMatch({error, #{kind := call_stack_exhausted}},
+                      wasm:call(Ic, ~"f", [20])),
+         ok = wasm:destroy(Ic), ok = wasm:destroy(Ii)
+     end || Wat <- [CallsOnly, Stateful]],
+    ok.
+
+%% A block, loop or if with nothing after it, whose exit takes exactly its
+%% results, branches to that exit: no continuation is built for it. Each case
+%% counts the continuations in the generated Core, so it fails on a generator
+%% that still builds one, and checks the answers against the interpreter.
+a_frame_that_ends_its_body_builds_no_continuation(_) ->
+    Fib = ~"(module (func $fib (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 2 i32.lt_u
+          if (result i32) local.get 0
+          else local.get 0 i32.const 1 i32.sub call $fib
+               local.get 0 i32.const 2 i32.sub call $fib i32.add end))",
+    FibThen = ~"(module (func $fib (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 2 i32.lt_u
+          if (result i32) local.get 0
+          else local.get 0 i32.const 1 i32.sub call $fib
+               local.get 0 i32.const 2 i32.sub call $fib i32.add end
+          i32.const 0 i32.add))",
+    %% The loop's own header is a continuation; the one after it is not.
+    Loop = ~"(module (func (export \"f\") (param i32) (result i32) (local i32)
+          loop $l (result i32)
+            local.get 1 local.get 0 i32.add local.set 1
+            local.get 0 i32.const 1 i32.sub local.tee 0
+            br_if $l
+            local.get 1
+          end))",
+    %% The inner block ends the outer one and forwards to the outer one's
+    %% continuation; `br 1' and `br 0' reach the same place.
+    Nested = ~"(module (global $g (mut i32) (i32.const 0))
+        (func (export \"f\") (param i32) (result i32)
+          block (result i32)
+            block (result i32)
+              global.get $g i32.const 1 i32.add global.set $g
+              i32.const 10 local.get 0 br_if 1
+              drop i32.const 20 local.get 0 i32.const 1 i32.add br_if 0
+              drop i32.const 30
+            end
+          end
+          global.get $g i32.add))",
+    %% Two results, a trailing block of one: the block's continuation adds the
+    %% operand below it, so it must stay.
+    Below = ~"(module (func (export \"f\") (param i32) (result i32 i32)
+          local.get 0
+          block (result i32)
+            local.get 0 i32.const 3 i32.mul local.get 0 br_if 0
+            drop i32.const 7
+          end))",
+    ?assertEqual(0, conts(Fib)),
+    ?assertEqual(1, conts(FibThen)),
+    ?assertEqual(1, conts(Loop)),
+    ?assertEqual(1, conts(Nested)),
+    ?assertEqual(1, conts(Below)),
+    %% The loop counts down to zero, so it takes positive arguments only.
+    Small = [[0], [1], [2], [10]],
+    [check_module(Name, Wat, Args)
+     || {Name, Wat, Args} <- [{fib, Fib, Small}, {fib_then, FibThen, Small},
+                              {loop, Loop, [[1], [2], [5]]},
+                              {nested, Nested, [[0], [1], [-1], [5]]},
+                              {below, Below, [[0], [1], [-1], [5]]}]],
+    ok.
+
+%% How many continuations the generated Core defines.
+conts(Wat) ->
+    {I, _, _, _} = unit_of(Wat),
+    Text = unicode:characters_to_list(wasm_jit:dump(I)),
+    ok = wasm:destroy(I),
+    case re:run(Text, "'wasm_k_[0-9]+'/[0-9]+ =", [global]) of
+        {match, Ms} -> length(Ms);
+        nomatch -> 0
+    end.
+
+%% A depth trap compared without its context: generated code counts the
+%% frames left and reports no depth.
+same_trap({error, #{class := C, kind := K, msg := M}}) -> {error, C, K, M};
+same_trap(V) -> V.
+
+%% A chain of calls that cannot recurse is not counted, so the trap can come
+%% later than the interpreter's, by at most one frame per component of the
+%% call graph; a recursion inside it is counted exactly.
+only_a_call_that_can_recurse_counts_the_depth(_) ->
+    %% f -> a -> b -> r, r recursive: three uncounted frames before r.
+    Wat = ~"(module
+        (func $r (param i32) (result i32)
+          local.get 0 i32.eqz if (result i32) i32.const 0
+          else local.get 0 i32.const 1 i32.sub call $r i32.const 1 i32.add end)
+        (func $b (param i32) (result i32) local.get 0 call $r)
+        (func $a (param i32) (result i32) local.get 0 call $b)
+        (func (export \"f\") (param i32) (result i32) local.get 0 call $a))",
+    M = build(Wat),
+    Max = 16,
+    Opts = #{compile => true, compile_whole => true, compile_sync => true,
+             compile_after => 1, max_depth => Max},
+    {ok, Ic} = wasm:instantiate(M, #{}, Opts),
+    _ = wasm:call(Ic, ~"f", [0]),
+    {ok, Ii} = wasm:instantiate(M, #{}, #{max_depth => Max}),
+    Deepest = fun(I) ->
+                      lists:last([N || N <- lists:seq(0, 2 * Max),
+                                       element(1, wasm:call(I, ~"f", [N])) =:= ok])
+              end,
+    E0 = maps:get(entered, wasm_jit:counts()),
+    Compiled = Deepest(Ic),
+    ?assert(maps:get(entered, wasm_jit:counts()) > E0),
+    Interpreted = Deepest(Ii),
+    ct:log("deepest that answers: interpreted ~p, compiled ~p",
+           [Interpreted, Compiled]),
+    ?assert(Compiled >= Interpreted),
+    ?assert(Compiled =< Interpreted + 3),
+    ok = wasm:destroy(Ic), ok = wasm:destroy(Ii).
+
+%% A recursion that never ends traps rather than growing the process: through
+%% a call to itself, through a cycle of three functions, and through a table.
+an_endless_recursion_traps_in_generated_code(_) ->
+    Self = ~"(module (func $f (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 1 i32.add call $f))",
+    Three = ~"(module
+        (func $a (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 1 i32.add call $b)
+        (func $b (param i32) (result i32) local.get 0 call $c)
+        (func $c (param i32) (result i32) local.get 0 call $a))",
+    Table = ~"(module (type $t (func (param i32) (result i32)))
+        (table 1 funcref) (elem (i32.const 0) $f)
+        (func $f (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 1 i32.add i32.const 0 call_indirect (type $t)))",
+    Opts = #{compile => true, compile_whole => true, compile_sync => true,
+             compile_after => 1, max_depth => 100},
+    [begin
+         {ok, I} = wasm:instantiate(build(Wat), #{}, Opts),
+         _ = wasm:call(I, ~"f", [0]),
+         E0 = maps:get(entered, wasm_jit:counts()),
+         ?assertMatch({error, #{kind := call_stack_exhausted}},
+                      bounded_call(I, ~"f", [0])),
+         ?assert(maps:get(entered, wasm_jit:counts()) > E0),
+         ok = wasm:destroy(I)
+     end || Wat <- [Self, Three, Table]],
+    ok.
+
+%% A call in a process of its own, killed past 8 M words or 10 seconds, so a
+%% generator that lost its depth check fails this suite instead of taking the
+%% machine's memory.
+bounded_call(I, Name, Args) ->
+    {Pid, Ref} = spawn_opt(fun() -> exit({done, wasm:call(I, Name, Args)}) end,
+                           [monitor, {max_heap_size, #{size => 8000000,
+                                                       kill => true,
+                                                       error_logger => false}}]),
+    receive
+        {'DOWN', Ref, process, Pid, {done, R}} -> R;
+        {'DOWN', Ref, process, Pid, Why} -> {died, Why}
+    after 10000 ->
+            exit(Pid, kill),
+            timeout
+    end.
+
+%% Inside a unit an i32 is held unsigned (`u32') in every slot and signed
+%% (`canon') at every boundary. Each operation is checked with its operands in
+%% each form: straight from the parameters (`u32'), from a division, whose
+%% result `wasm_exec' gives `canon', and one of each.
+every_i32_operation_agrees_in_either_form(_) ->
+    Bin = [i32_add, i32_sub, i32_mul, i32_and, i32_or, i32_xor, i32_shl,
+           i32_shr_u, i32_shr_s, i32_eq, i32_ne, i32_lt_s, i32_lt_u,
+           i32_le_s, i32_le_u, i32_gt_s, i32_gt_u, i32_ge_s, i32_ge_u],
+    Edge = [0, 1, -1, 2147483647, -2147483648, -7, 31, 32, 33],
+    Pairs = [[A, B] || A <- Edge, B <- Edge],
+    Canon = fun(L) -> ["local.get ", L, " i32.const 1 i32.div_s "] end,
+    [begin
+         W = wat_op(Op),
+         Src = iolist_to_binary(
+                 ["(func (export \"f\") (param i32 i32) (result i32 i32 i32)
+                     local.get 0 local.get 1 ", W, " ",
+                  Canon("0"), Canon("1"), W, " ",
+                  Canon("0"), "local.get 1 ", W, ")"]),
+         check(atom_to_list(Op), Src, Pairs, same)
+     end || Op <- Bin],
+    Unary = [{"i32.eqz", "i32", Edge},
+             {"i64.extend_i32_u", "i64", Edge},
+             {"i64.extend_i32_s", "i64", Edge},
+             {"f64.convert_i32_u", "f64", Edge},
+             {"f64.convert_i32_s", "f64", Edge}],
+    [check(Op, iolist_to_binary(
+                 ["(func (export \"f\") (param i32) (result ", R, " ", R, ")
+                     local.get 0 ", Op, " ", Canon("0"), Op, ")"]),
+           [[V] || V <- Vs], same)
+     || {Op, R, Vs} <- Unary],
+    check("i32.wrap_i64",
+          ~"(func (export \"f\") (param i64) (result i32 i32)
+              local.get 0 i32.wrap_i64
+              local.get 0 i32.wrap_i64 i32.const 1 i32.add)",
+          [[V] || V <- [0, -1, 4294967295, 4294967296, -4294967297,
+                        9223372036854775807, -9223372036854775808]], same),
+    ok.
+
+wat_op(Op) -> string:replace(atom_to_list(Op), "_", ".").
+
+%% Negative i32 values across each place a value changes form.
+an_i32_crosses_every_boundary_unchanged(_) ->
+    Vs = [[0], [1], [-1], [2147483647], [-2147483648], [-12345]],
+    Cases =
+        [{"a global, set and read back",
+          ~"(global $g (mut i32) (i32.const 0))
+            (func (export \"f\") (param i32) (result i32 i32)
+              local.get 0 global.set $g global.get $g
+              global.get $g i32.const 1 i32.add)", same},
+         {"memory: a store, then every width of load",
+          ~"(memory 1)
+            (func (export \"f\") (param i32) (result i32 i32 i32 i32 i32)
+              i32.const 8 local.get 0 i32.store
+              i32.const 8 i32.load
+              i32.const 8 i32.load8_s i32.const 8 i32.load8_u
+              i32.const 8 i32.load16_s i32.const 8 i32.load16_u)", same},
+         {"memory at an address held unsigned, in bounds and out",
+          ~"(memory 1)
+            (func (export \"f\") (param i32) (result i32 i32)
+              local.get 0 local.get 0 i32.store offset=4
+              local.get 0 i32.load offset=4
+              local.get 0 i32.const 1 i32.add i32.load8_s offset=3)", same},
+         {"memory.grow and memory.size answers",
+          ~"(memory 1 2)
+            (func (export \"f\") (param i32) (result i32 i32 i32)
+              local.get 0 i32.const 1 i32.and memory.grow
+              i32.const 70000 memory.grow
+              memory.size)", fresh},
+         {"a call to a function the compiler refused, both ways",
+          ~"(table 1 funcref)
+            (func $out (param i32) (result i32)
+              i32.const 0 table.get 0 drop local.get 0 i32.const 1 i32.sub)
+            (func (export \"f\") (param i32) (result i32 i32)
+              local.get 0 call $out
+              local.get 0 call $out i32.const -1 i32.lt_s)", same},
+         {"a call through a table, both ways",
+          ~"(type $t (func (param i32) (result i32)))
+            (table 1 funcref) (elem (i32.const 0) $neg)
+            (func $neg (param i32) (result i32)
+              i32.const 0 local.get 0 i32.sub)
+            (func (export \"f\") (param i32) (result i32 i32)
+              local.get 0 i32.const 0 call_indirect (type $t)
+              local.get 0 i32.const 0 call_indirect (type $t)
+              i32.const 0 i32.lt_s)", same},
+         {"a call inside the unit, several results",
+          ~"(func $two (param i32) (result i32 i32)
+              local.get 0 i32.const -1 i32.xor local.get 0)
+            (func (export \"f\") (param i32) (result i32 i32 i32)
+              local.get 0 call $two i32.lt_s
+              local.get 0 call $two)", same},
+         {"select between the two forms",
+          ~"(func (export \"f\") (param i32) (result i32 i32)
+              local.get 0 local.get 0 i32.const 1 i32.div_s local.get 0
+              select
+              local.get 0 i32.const 1 i32.div_s local.get 0 i32.const 0
+              select)", same},
+         {"br_table on a negative index takes the default",
+          ~"(func (export \"f\") (param i32) (result i32)
+              block block block
+                local.get 0 br_table 0 1 2
+              end i32.const 10 return
+              end i32.const 11 return
+              end i32.const 12)", same},
+         {"a block's result and a loop's locals",
+          ~"(func (export \"f\") (param i32) (result i32 i32)
+              (local $i i32) (local $acc i32)
+              block (result i32)
+                local.get 0 i32.const -3 i32.mul
+              end
+              i32.const 4 local.set $i
+              loop $l
+                local.get $acc local.get 0 i32.sub local.set $acc
+                local.get $i i32.const 1 i32.sub local.tee $i
+                br_if $l
+              end
+              local.get $acc)", same},
+         {"SIMD lanes take and give i32",
+          ~"(func (export \"f\") (param i32) (result i32 i32 i32)
+              local.get 0 i32x4.splat i32x4.extract_lane 2
+              v128.const i32x4 0 0 0 0 local.get 0 i32x4.replace_lane 1
+              i32x4.extract_lane 1
+              local.get 0 i32x4.splat i32x4.bitmask)", same}],
+    [check(Name, Src, Vs ++ [[0], [8], [65528], [65529]], How)
+     || {Name, Src, How} <- Cases],
+    ok.
+
+%% The point of holding an i32 unsigned: the generated `fib' wraps each
+%% result with one `band' and never compares against 2^31, the bound of the
+%% signed form. Fails on a generator that holds i32 signed.
+fib_compiles_to_one_mask_per_result(_) ->
+    Fib = ~"(module (func $fib (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 2 i32.lt_u
+          if (result i32) local.get 0
+          else local.get 0 i32.const 1 i32.sub call $fib
+               local.get 0 i32.const 2 i32.sub call $fib i32.add end))",
+    {I, _, _, _} = unit_of(Fib),
+    Text = unicode:characters_to_list(wasm_jit:dump(I)),
+    ok = wasm:destroy(I),
+    {match, [Body]} = re:run(Text, "'wasm_f_0'/2 =(.*)",
+                             [dotall, {capture, all_but_first, list}]),
+    ?assertEqual(nomatch, string:find(Body, "2147483648")),
+    ?assertEqual(3, length(string:split(Body, "4294967295", all)) - 1),
+    check_module(fib, Fib, [[0], [1], [2], [10], [20]]).
+
+even_odd(OddExtra) ->
+    iolist_to_binary([~"(module
+        (global $g (mut i32) (i32.const 0))
+        (func $even (export \"f\") (param i32) (result i32)
+          local.get 0 i32.eqz if (result i32) i32.const 1
+          else local.get 0 i32.const 1 i32.sub call $odd end)
+        (func $odd (param i32) (result i32) ", OddExtra, ~"
+          local.get 0 i32.eqz if (result i32) i32.const 0
+          else local.get 0 i32.const 1 i32.sub call $even end))"]).
+
+%% Position => arity of every generated function head, from the Core
+%% `wasm_jit:dump/1' prints for the whole compilable unit.
+heads(Wat) ->
+    {I, _, _, _} = unit_of(Wat),
+    Text = unicode:characters_to_list(wasm_jit:dump(I)),
+    ok = wasm:destroy(I),
+    {match, Ms} = re:run(Text, "'wasm_f_([0-9]+)'/([0-9]+) =",
+                         [global, {capture, all_but_first, list}]),
+    maps:from_list([{list_to_integer(P), list_to_integer(A)} || [P, A] <- Ms]).
+
+%% `check/4' over a whole module rather than a list of functions.
+check_module(Name, Wat, ArgSets) ->
+    <<"(module", Rest/binary>> = Wat,
+    Src = binary:part(Rest, 0, byte_size(Rest) - 1),
+    check(Name, Src, ArgSets, same).

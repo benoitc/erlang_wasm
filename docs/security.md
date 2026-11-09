@@ -89,6 +89,11 @@ embedder started, not for each entry into the interpreter. A guest can call
 out through an import, and the import can call back into the guest. This
 recursion uses the same budget as direct recursion.
 
+In compiled code, `max_depth` counts only the calls that can recurse. A chain
+of calls that cannot recurse is not counted, so the real depth can exceed
+`max_depth` by at most the number of functions compiled together. The bound
+still holds: a guest cannot recurse without limit.
+
 ## What you are still responsible for
 
 Many people think: "each instance is in a process, so it is isolated". This

@@ -481,8 +481,23 @@ describes the page table, and
   whole lookup at every access instead made the code more than twice as big
   and the compile four times slower; `test/audit/PERF.md`, "The miss path out
   of line", has the numbers.
-- **Generated code uses format version (ABI) 15.** Units saved by an earlier
+- **Generated code uses format version (ABI) 16.** Units saved by an earlier
   release are ignored and compiled again once. Nothing to set.
+- **A call between compiled functions is a plain local call.** Only a call
+  that can recurse checks the call depth, with one comparison. A function
+  that only calls other arithmetic functions needs nothing of the instance,
+  and a single result is returned as it is.
+- **Compiled code holds an i32 unsigned.** Wrapping 32-bit arithmetic is
+  then one `band`, as in hand-written Erlang. Values change back to the
+  interpreter's signed form at every boundary, so you see no difference.
+  [Design notes](design-notes.md#how-compiled-code-holds-an-i32) has the
+  details.
+- **Compiled code can go slightly past `max_depth`.** A chain of calls that
+  cannot recurse is not counted, so a compiled call can go deeper than
+  `max_depth` by at most the number of functions compiled together. A
+  recursion is counted exactly, and a runaway one still traps. The trap from
+  compiled code does not report the depth. [Design notes](design-notes.md#how-a-compiled-function-calls-another)
+  has the details.
 - **`baseline` avoids an OTP compiler bug.** Without its optimisation pass,
   OTP 29.0.3 to at least 29.1.1 can overwrite a value it still needs in one
   rare code shape. The generator avoids that shape; [Design

@@ -557,6 +557,88 @@ ordering is safe. The defect is present on OTP 29.0.3 through 29.1.1 and on
 OTP master as of October 2026, and it is reported upstream. Check it again
 when you move to a newer OTP, before you simplify the ordering.
 
+### How a compiled function calls another
+
+Inside one compiled unit, a call is a local Erlang call, and each function
+is called one of three ways, decided for the whole unit when it is built:
+
+| kind | when | called as |
+| --- | --- | --- |
+| pure | touches nothing and calls nothing | `f(Args)` |
+| calls-only | touches no memory, global or table, and calls only pure or calls-only functions of the unit | `f(Left, Args)` |
+| stateful | anything else | `f(Inst, Mut, Left, Args)`, which also returns the new `Mut` |
+
+A function that reaches a stateful one, directly or through any chain of
+calls, is stateful itself, because it must hand the callee the instance and
+take its state back. So are a function that makes a `call_indirect` and one
+that calls outside the unit (another shard, or a function the compiler
+refused). A set of functions that call each other is decided together: the
+generator starts from every candidate and removes any that calls something
+else, until nothing changes.
+
+`Left` is the number of calls left before the depth limit. `invoke/6`
+computes it once, when the call enters generated code: the instance's
+`max_depth` minus the caller's depth.
+
+Only a call that can recurse counts. The generator groups the unit's
+functions into strongly connected components: functions that can reach each
+other through direct calls. A call to a function of the caller's own group
+(a call to itself included), a `call_indirect` and a call that leaves the
+unit check `Left =< 1` against a literal and pass `Left - 1`. Past it,
+`wasm_exec:depth_exhausted/0` raises the interpreter's error, without the
+depth in its context. Any other call passes `Left` on unchanged, with no
+test.
+
+That still bounds the stack. An uncounted call goes from one group to a
+different one, and the groups cannot call each other in a loop, so a stack
+holds at most one uncounted frame per group. A compiled call can therefore go
+deeper than `max_depth` by at most the number of functions in the unit. A
+recursion is counted exactly. A function with one result returns the bare
+value; `invoke/6` puts it back in the list callers outside generated code
+expect.
+
+`invoke/6` also tests that the depth and the limit are non-negative integers
+before it dispatches. They always are, and saying so in a guard lets the
+Erlang compiler's type pass carry the type of `Left` into every function of
+the unit, so counting down and comparing compile without the generic number
+checks.
+
+A block, loop or `if` that is the last instruction of its body, and whose
+exit takes exactly its results, gets no continuation function: its branches
+go straight to that exit. A function such as `fib`, which ends with an `if`,
+would otherwise make one extra local call on every invocation.
+
+### How compiled code holds an i32
+
+The interpreter holds an i32 *signed*, between -2^31 and 2^31 - 1. Wrapping a
+sum back into that range takes two comparisons and a branch. Compiled code
+holds most i32 values *unsigned* instead, between 0 and 2^32 - 1, which is
+how you would write 32-bit arithmetic in Erlang: wrapping is one `band`, and
+the `band` also tells the Erlang compiler the value's range.
+
+The generator calls the two forms `canon` (signed, the interpreter's) and
+`u32` (unsigned). Which form a value is in is a property of the Core variable
+that holds it; a literal is always `canon`.
+
+| held `u32` | held `canon` |
+| --- | --- |
+| i32 locals and parameters | i64, f32, f64, v128 and references |
+| i32 results of a function in the unit | block, loop and `if` parameters and results |
+| results of inline i32 operations | anything a `wasm_exec` helper returns |
+
+Every boundary takes `canon`: `invoke/6`'s callers, the `wasm_exec` helpers,
+globals, memory, calls to another shard, to the interpreter or to a host, and
+SIMD lanes. A value changes form at most once on its way there:
+
+- `canon` to `u32`: `V band 16#FFFFFFFF`.
+- `u32` to `canon`: `V - 2^32` when `V >= 2^31`, otherwise `V`.
+
+Operations work on `u32` directly: `add`, `sub`, `mul` and `shl` mask their
+result, `and`, `or`, `xor` and `shr_u` need nothing, and a signed comparison
+flips the top bit of both operands (`bxor 2^31`) and compares them unsigned.
+Division, remainder, rotates and conversions go through `wasm_exec` in
+`canon`, as before.
+
 ### Bump the ABI when generated code changes shape
 
 `wasm_jit`'s `ABI` is part of every cache key, so a node never enters an
@@ -566,7 +648,9 @@ continuation carries, or which helper it calls, and add a line to the history
 above the define saying what an older artifact would do wrong. ABI 14 is the
 two-entry cache; 13 belonged to the deferred mmap prototype and is skipped.
 ABI 15 is the miss path out of line: an older artifact would still be right,
-and the number moved so that its larger code is rebuilt and not loaded.
+and the number moved so that its larger code is rebuilt and not loaded. ABI
+16 is the call convention above and the unsigned i32: every function's
+arity, return shape and i32 representation changed.
 
 ## Read this next
 

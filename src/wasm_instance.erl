@@ -417,6 +417,7 @@ compile_fn(#func{type = TypeIdx, locals = Locals, body = Body}, Ctx, Idx, Lazy) 
     #fn{nparams = length(P),
         nresults = length(R),
         defaults = [default_value(T) || T <- Locals],
+        locals = Locals,
         body = case Lazy of true -> {lazy, Body}; false -> ir(Body, Ctx) end,
         raw = Body,
         idx = Idx,

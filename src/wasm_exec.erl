@@ -69,6 +69,7 @@ to, so the interpreted and compiled paths cannot disagree; `%%% exceptions`,
 %% Read by `wasm_core` at generation time, so the width and signedness of an
 %% access are decided once and in one place.
 -export([load_spec/1, store_spec/1]).
+-export([max_depth/1, depth_exhausted/0]).
 -export([call_out/7, shard_call/8, check_depth/2, indirect_out/9,
          unreachable_at/7]).
 -export([memory_size_at/2, memory_grow_at/5, memory_fill_at/6, memory_copy_at/8,
@@ -1101,7 +1102,26 @@ check_depth(Inst, Depth) ->
         false -> ok
     end.
 
+-doc """
+The instance's call-depth limit.
+
+Generated code reads it once per entry, at `invoke/6`, and compares against it
+inline before every call; `check_depth/2` reads the same value.
+""".
+-spec max_depth(#inst{}) -> non_neg_integer().
 max_depth(#inst{limits = L}) -> maps:get(max_depth, L, 1024).
+
+-doc """
+Raise what `check_depth/2` raises when the depth limit is reached.
+
+Generated code calls it only once its inline comparison has found no frames
+left, so this is the error path and never the call path. The context carries
+no depth: generated code counts the frames left, not the depth, and a
+calls-only function does not know the limit.
+""".
+-spec depth_exhausted() -> no_return().
+depth_exhausted() ->
+    wasm_error:exhaustion(call_stack_exhausted, #{}).
 
 -doc """
 Trap `unreachable` from compiled code.

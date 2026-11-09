@@ -38,6 +38,10 @@
     nparams   = 0  :: non_neg_integer(),
     nresults  = 0  :: non_neg_integer(),
     defaults  = [] :: [term()],    % initial values for declared locals
+    %% The declared locals' types, the list `#module{}' already holds, so it
+    %% copies nothing. `defaults' cannot tell an i32 from an i64 (both start at
+    %% 0), and the compiler holds the two differently.
+    locals    = [] :: [term()],
     %% Either the execution IR, or `{lazy, Body}' holding the decoded
     %% instructions until the function is first called. Building IR for every
     %% function of a module cost 21.7 MB on a real 1.8 MB one, most of it for

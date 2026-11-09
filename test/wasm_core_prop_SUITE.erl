@@ -157,14 +157,19 @@ call_compiled(M, Args) ->
     {ok, I} = wasm:instantiate(M, #{}, opts()),
     _ = wasm:call(I, ~"f", Args),
     R = wasm:call(I, ~"f", Args),
-    ok = wasm:destroy(I),
-    normalise(R).
+    after_call(I, R).
 
 call(M, Opts, Args) ->
     {ok, I} = wasm:instantiate(M, #{}, Opts),
-    R = wasm:call(I, ~"f", Args),
+    after_call(I, wasm:call(I, ~"f", Args)).
+
+%% The answer and the state it left: what each global holds, read as the
+%% instance stores it, so a value written in the wrong form shows even when
+%% `f''s own result, or a getter's, would convert it back.
+after_call(I, R) ->
+    Globals = (wasm_instance:mut(I))#mut.globals,
     ok = wasm:destroy(I),
-    normalise(R).
+    {normalise(R), Globals}.
 
 %% Compare the value, or the class and kind of the trap. The context map carries
 %% things like the instruction offset, which legitimately differ between a
@@ -216,7 +221,14 @@ tree(D, Want) ->
       [{1, leaf(Want)},
        {4, ?LET(Op, oneof(producing(Want)),
                 ?LET(Kids, [tree(D - 1, T) || T <- element(1, sig(Op))],
-                     list_to_tuple([Op | Kids])))}]).
+                     list_to_tuple([Op | Kids])))},
+       %% A value passed through a place where generated code may change its
+       %% representation: an i32 is held unsigned in a local, a block result
+       %% or a call inside the unit, and signed in a global, in memory and at
+       %% every call out.
+       {2, ?LET({How, Kid}, {oneof([call, global, mem, local, block]),
+                             tree(D - 1, Want)},
+                {through, How, Want, Kid})}]).
 
 leaf(i32) -> oneof([{param, 0}, ?LET(V, int32(), {const, i32, V})]);
 leaf(i64) -> oneof([{param, 1}, ?LET(V, int64(), {const, i64, V})]);
@@ -236,10 +248,22 @@ producing(Want) ->
 
 %%% ---------------------------------------------------------------- the wat ---
 
+%% Every module carries a memory, one mutable global and one identity function
+%% per type, and the export one local per type, so that a `through' node has
+%% something to pass its value through. A module that uses none of them still
+%% compiles `f' as pure or calls-only: those are decided by what `f' does.
 wat(Tree) ->
+    Types = ["i32", "i64", "f32", "f64"],
     iolist_to_binary(
-      ["(module (func (export \"f\") (param i32) (param i64) (param f32) (param f64)",
+      ["(module (memory 1)\n",
+       %% Not exported: an exported mutable global is a shared cell, which
+       %% the compiler refuses, and `f' would never compile.
+       [["(global $g_", T, " (mut ", T, ") (", T, ".const 0))\n"] || T <- Types],
+       [["(func $id_", T, " (param ", T, ") (result ", T, ") local.get 0)\n"]
+        || T <- Types],
+       "(func (export \"f\") (param i32) (param i64) (param f32) (param f64)",
        " (result ", atom_to_list(type_of(Tree)), ")\n",
+       [["  (local $l_", T, " ", T, ")\n"] || T <- Types],
        emit(Tree), "))"]).
 
 type_of({param, 0}) -> i32;
@@ -247,12 +271,23 @@ type_of({param, 1}) -> i64;
 type_of({param, 2}) -> f32;
 type_of({param, 3}) -> f64;
 type_of({const, T, _}) -> T;
+type_of({through, _, T, _}) -> T;
 type_of(Node) -> element(2, sig(element(1, Node))).
 
 %% Postfix, which is what WebAssembly is: operands then the operation.
 emit({param, N}) -> ["  local.get ", integer_to_list(N), "\n"];
 emit({const, T, V}) ->
     ["  ", atom_to_list(T), ".const ", literal(T, V), "\n"];
+emit({through, How, Type, Kid}) ->
+    T = atom_to_list(Type),
+    case How of
+        call -> [emit(Kid), "  call $id_", T, "\n"];
+        global -> [emit(Kid), "  global.set $g_", T, "\n  global.get $g_", T, "\n"];
+        mem -> ["  i32.const 16\n", emit(Kid), "  ", T, ".store\n",
+                "  i32.const 16\n  ", T, ".load\n"];
+        local -> [emit(Kid), "  local.tee $l_", T, "\n"];
+        block -> ["  block (result ", T, ")\n", emit(Kid), "  end\n"]
+    end;
 emit(Node) ->
     [Op | Kids] = tuple_to_list(Node),
     [[emit(K) || K <- Kids], "  ", name(Op), "\n"].

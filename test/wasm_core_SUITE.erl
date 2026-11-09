@@ -65,7 +65,10 @@ all() ->
      a_frame_holds_its_values_in_the_form_their_type_needs,
      a_block_result_is_not_converted_on_its_way_out,
      an_i32_load_gives_its_value_in_the_form_its_readers_need,
-     f64_arithmetic_agrees_inline_and_through_the_helper].
+     f64_arithmetic_agrees_inline_and_through_the_helper,
+     a_table_call_reaches_every_kind_of_target,
+     a_table_call_to_another_instance_still_crosses,
+     a_table_call_into_the_unit_is_a_local_dispatch].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -1513,6 +1516,87 @@ f64_arithmetic_agrees_inline_and_through_the_helper(_) ->
          check(Op ++ " specials", SrcS, [[V] || V <- Edge], same)
      end || Op <- Ops],
     ok.
+
+%% `call_indirect' to each kind of function a table can hold: one of the unit
+%% in each convention, one the compiler refused, and the three traps (an
+%% empty slot, a slot past the end, a function of the wrong type), with i32
+%% values of both signs and two results.
+a_table_call_reaches_every_kind_of_target(_) ->
+    Src = ~"(type $t (func (param i32) (result i32 i64)))
+            (type $u (func (param f64) (result f64)))
+            (global $g (mut i32) (i32.const 0))
+            (table 6 funcref)
+            (elem (i32.const 0) $pure $calls $state $refused)
+            (elem (i32.const 5) $other)
+            (func $pure (param i32) (result i32 i64)
+              local.get 0 i32.const -3 i32.mul local.get 0 i64.extend_i32_s)
+            (func $calls (param i32) (result i32 i64)
+              local.get 0 i32.const 1 i32.add call $pure)
+            (func $state (param i32) (result i32 i64)
+              global.get $g local.get 0 i32.add global.set $g
+              global.get $g local.get 0 i64.extend_i32_u)
+            (func $refused (param i32) (result i32 i64)
+              i32.const 0 table.get 0 drop
+              local.get 0 i32.const 1 i32.sub local.get 0 i64.extend_i32_u)
+            (func $other (param f64) (result f64) local.get 0)
+            (func (export \"f\") (param i32 i32) (result i32 i64 i32)
+              local.get 1 local.get 0 call_indirect (type $t)
+              local.get 1 local.get 0 call_indirect (type $t) drop
+              i32.const 0 i32.lt_s)",
+    Args = [[Slot, V] || Slot <- [0, 1, 2, 3, 4, 5, 6, -1],
+                         V <- [0, 5, -1, -2147483648, 2147483647]],
+    check("call_indirect", Src, Args, same).
+
+%% A table imported from another instance holds that instance's function, so
+%% the call is foreign and still goes through `indirect_out/9': the same
+%% answer compiled as interpreted.
+a_table_call_to_another_instance_still_crosses(_) ->
+    Owner = build(~"(module
+        (table (export \"t\") 1 funcref) (elem (i32.const 0) $neg)
+        (func $neg (param i32) (result i32) i32.const 0 local.get 0 i32.sub))"),
+    User = build(~"(module
+        (type $t (func (param i32) (result i32)))
+        (import \"o\" \"t\" (table 1 funcref))
+        (func $mine (param i32) (result i32) local.get 0)
+        (func (export \"f\") (param i32) (result i32 i32)
+          local.get 0 i32.const 0 call_indirect (type $t)
+          local.get 0 call $mine))"),
+    {ok, O} = wasm:instantiate(Owner, #{}),
+    {ok, T} = wasm:extern(O, ~"t"),
+    Imports = #{{~"o", ~"t"} => T},
+    Opts = #{compile => true, compile_whole => true, compile_sync => true,
+             compile_after => 1},
+    {ok, Ic} = wasm:instantiate(User, Imports, Opts),
+    {ok, Ii} = wasm:instantiate(User, Imports, #{}),
+    _ = wasm:call(Ic, ~"f", [1]),
+    [begin
+         E0 = maps:get(entered, wasm_jit:counts()),
+         Got = wasm:call(Ic, ~"f", [V]),
+         ?assert(maps:get(entered, wasm_jit:counts()) > E0),
+         ?assertEqual(wasm:call(Ii, ~"f", [V]), Got)
+     end || V <- [0, 7, -1, -2147483648]],
+    ok = wasm:destroy(Ic), ok = wasm:destroy(Ii), ok = wasm:destroy(O).
+
+%% A target in the unit is reached through the module's dispatcher for its
+%% signature, a local call, and the crossing is only the fallback for a
+%% foreign target. Fails on a generator that sends every table call through
+%% `indirect_out/9'.
+a_table_call_into_the_unit_is_a_local_dispatch(_) ->
+    Wat = ~"(module (type $t (func (param i32) (result i32)))
+        (table 1 funcref) (elem (i32.const 0) $fib)
+        (func $fib (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 2 i32.lt_u
+          if (result i32) local.get 0
+          else local.get 0 i32.const 1 i32.sub i32.const 0
+               call_indirect (type $t)
+               local.get 0 i32.const 2 i32.sub i32.const 0
+               call_indirect (type $t) i32.add end))",
+    {I, _, _, _} = unit_of(Wat),
+    Text = unicode:characters_to_list(wasm_jit:dump(I)),
+    ok = wasm:destroy(I),
+    ?assertNotEqual(nomatch, string:find(Text, "'wasm_i_1'/5 =")),
+    ?assertNotEqual(nomatch, string:find(Text, "apply 'wasm_i_1'/5")),
+    check_module(fibi, Wat, [[0], [1], [2], [10], [20]]).
 
 even_odd(OddExtra) ->
     iolist_to_binary([~"(module

@@ -678,17 +678,20 @@ forms(Name, Unit, Sigs, TSigs, Stamp, Next, Head, Elsewhere) ->
         Known = maps:from_list([{Idx, {Pos, maps:get(Pos, ShapeOf),
                                        maps:get(Idx, Cycles), i32_flags(F)}}
                                 || {Pos, Idx, F, _} <- Unit]),
+        Disp = dispatchers(Unit, Known, Sigs, TSigs),
         Defs = [{cerl:c_fname(fun_name(Pos), arity(F, S)),
                  function(F, IR, S, {Known, Sigs, TSigs, Head, Elsewhere,
-                                     Stamp})}
+                                     Stamp, Disp})}
                 || {{Pos, _Idx, F, IR}, {Pos, S}} <- lists:zip(Unit, Shapes)],
+        Dispatch = [dispatch_fn(Sh, Info, Head, Stamp)
+                    || {Sh, Info} <- lists:sort(maps:to_list(Disp))],
         Invoke = invoke_fn(Unit, maps:from_list(Shapes), Stamp, Next),
         Exports = [cerl:c_fname(invoke, 6)],
         %% The out-of-line half of every memory-0 access the unit makes: see
         %% `cached/8'.
         Misses = [miss_fn(Sp) || Sp <- miss_shapes(Unit)],
         {ok, cerl:c_module(cerl:c_atom(Name), Exports, [],
-                           [Invoke | Defs] ++ Misses)}
+                           [Invoke | Defs] ++ Misses ++ Dispatch)}
     catch
         %% `error:`, not `throw:`. `fun_name/1` and `frame_name/1` raise with
         %% `erlang:error/1`, and this clause spelled `throw:` for long enough
@@ -769,9 +772,11 @@ callees(IR) ->
                             (_, Acc) -> Acc
                          end, [])).
 
-arity(#fn{nparams = NP}, pure) -> NP;
-arity(#fn{nparams = NP}, calls_only) -> NP + 1;
-arity(#fn{nparams = NP}, stateful) -> NP + 3.
+arity(#fn{nparams = NP}, Shape) -> arity_of(NP, Shape).
+
+arity_of(NP, pure) -> NP;
+arity_of(NP, calls_only) -> NP + 1;
+arity_of(NP, stateful) -> NP + 3.
 
 %% Which functions of the unit can reach each other by direct calls: wasm
 %% function index -> the index of its strongly connected component (Tarjan's
@@ -996,7 +1001,7 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 
 -record(g, {env = #{}, stack = [], frames = [], depth = 0, n = 0,
             nlocals = 0, nres = 0, inst, mut, d, cycle, unit = #{}, sigs = #{},
-            u32 = #{}, i32l = #{}, rflags = [],
+            u32 = #{}, i32l = #{}, rflags = [], disp = #{},
             tsigs = #{}, mod, elsewhere = #{}, gen = 0, tlb}).
 
 %% Two shapes, not three. `pure' keeps what the spike measured -- locals as Core
@@ -1006,7 +1011,7 @@ list_pat([V | Vs]) -> cerl:c_cons(V, list_pat(Vs)).
 %% third calling convention.
 function(#fn{nparams = NP, nresults = NRes, defaults = Defaults,
              idx = Self} = F,
-         IR, Shape, {Unit, Sigs, TSigs, Mod, Elsewhere, Stamp}) ->
+         IR, Shape, {Unit, Sigs, TSigs, Mod, Elsewhere, Stamp, Disp}) ->
     NLocals = NP + length(Defaults),
     {Extra, Inst, Mut, D, N0} =
         case Shape of
@@ -1045,7 +1050,8 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults,
             inst = Inst, mut = Mut, d = D, cycle = Cycle, unit = Unit,
             sigs = Sigs,
             tsigs = TSigs, mod = Mod, elsewhere = Elsewhere,
-            gen = Stamp, tlb = Tlb, i32l = I32L, rflags = RFlags},
+            gen = Stamp, tlb = Tlb, i32l = I32L, rflags = RFlags,
+            disp = Disp},
     %% An i32 parameter arrives `u32': every caller in the unit converts, and
     %% `invoke/6' converts what the interpreter hands in.
     G = lists:foldl(fun({P, true}, Acc) -> mark(P, Acc);
@@ -1576,8 +1582,30 @@ instr({call, F}, Rest, #g{unit = Unit, sigs = Sigs} = G0, Exit) ->
     end;
 
 instr({call_indirect, TypeIdx, TableIdx}, Rest,
-      #g{tsigs = TSigs, mod = Mod, gen = Stamp} = G0, Exit) ->
-    {NP, NR} = maps:get(TypeIdx, TSigs),
+      #g{tsigs = TSigs, disp = Disp} = G0, Exit) ->
+    Sh = maps:get(TypeIdx, TSigs),
+    case maps:find(Sh, Disp) of
+        {ok, Info} ->
+            indirect_local(TypeIdx, TableIdx, Sh, Info, Rest, G0, Exit);
+        error -> indirect_crossing(TypeIdx, TableIdx, Sh, Rest, G0, Exit)
+    end;
+
+%%% ---------------------------------------------------------------- numeric ---
+
+instr(Op, Rest, G, Exit) when is_atom(Op) ->
+    case lists:member(Op, ?UNOPS) of
+        true -> emit1(Op, Rest, G, Exit);
+        false ->
+            true = lists:member(Op, ?BINOPS) orelse throw({unsupported, Op}),
+            emit2(Op, Rest, G, Exit)
+    end;
+instr(I, _Rest, _G, _Exit) ->
+    throw({unsupported, I}).
+
+%% A `call_indirect' with no function of the unit to reach: every target goes
+%% through `wasm_exec:indirect_out/9'.
+indirect_crossing(TypeIdx, TableIdx, {NP, NR}, Rest,
+                  #g{mod = Mod, gen = Stamp} = G0, Exit) ->
     %% The table index is on top, above the arguments.
     {I, G1} = pop(G0),
     {Args, G2} = take(NP, G1),
@@ -1597,20 +1625,162 @@ instr({call_indirect, TypeIdx, TableIdx}, Rest,
                            seq(Rest, G4#g{mut = M1,
                                           stack = lists:reverse(Rs) ++ G2#g.stack},
                                Exit)),
-    depth_checked(G0, cerl:c_case(Call, [Clause]));
+    depth_checked(G0, cerl:c_case(Call, [Clause])).
 
-%%% ---------------------------------------------------------------- numeric ---
+%% A `call_indirect' whose signature some function of the unit has. The target
+%% is resolved by `wasm_exec:indirect_index/5', which traps exactly as the
+%% interpreter does; a target in this instance goes to the dispatcher for the
+%% signature, `dispatch_fn/4', and a foreign one to `indirect_out/9'.
+%%
+%% Both answer `{R1, ..., Rn, Mut}', a tuple, which the OTP note on
+%% multi-value joins in `docs/design-notes.md' asks for, with each i32 result
+%% in the form the dispatcher gives it.
+indirect_local(TypeIdx, TableIdx, {NP, NR}, {Name, AF, RF, _}, Rest,
+               #g{mod = Mod, gen = Stamp, inst = Inst, mut = Mut} = G0, Exit) ->
+    {I, G1} = pop(G0),
+    {Raw, G2} = take_raw(NP, G1),
+    {Fv, G3} = var(G2),
+    {Rs, G4} = vars(NR, G3),
+    {M1, G5} = var(G4),
+    {Xs, G6} = vars(NR, G5),
+    {M2, G7} = var(G6),
+    Index = call_op(indirect_index, [cerl:abstract(TypeIdx),
+                                     cerl:abstract(TableIdx), I, Inst, Mut]),
+    Local = cerl:c_apply(cerl:c_fname(Name, 4 + NP),
+                         [Inst, Mut, bif('-', [G0#g.d, cerl:abstract(1)]), Fv
+                          | as_slots(Raw, AF, G0)]),
+    Foreign =
+        cerl:c_case(
+          call_op(indirect_out,
+                  [Inst, Mut, cerl:abstract(TypeIdx), cerl:abstract(TableIdx),
+                   I, cerl:make_list([canon(V, G0) || V <- Raw]),
+                   absolute(G0), cerl:c_atom(Mod), cerl:abstract(Stamp)]),
+          [cerl:c_clause([cerl:c_tuple([list_pat(Xs), M2])],
+                         cerl:c_tuple(as_slots(Xs, RF, G0) ++ [M2]))]),
+    Call = cerl:c_case(Index,
+                       [cerl:c_clause([Fv], bif(is_integer, [Fv]), Local),
+                        cerl:c_clause([cerl:c_var('_Foreign')], Foreign)]),
+    G8 = mark_flagged(Rs, RF, G7),
+    Stack = lists:reverse(Rs) ++ G2#g.stack,
+    Clause = cerl:c_clause([cerl:c_tuple(Rs ++ [M1])],
+                           seq(Rest, G8#g{mut = M1, stack = Stack}, Exit)),
+    depth_checked(G0, cerl:c_case(Call, [Clause])).
 
-instr(Op, Rest, G, Exit) when is_atom(Op) ->
-    case lists:member(Op, ?UNOPS) of
-        true -> emit1(Op, Rest, G, Exit);
-        false ->
-            true = lists:member(Op, ?BINOPS) orelse throw({unsupported, Op}),
-            emit2(Op, Rest, G, Exit)
-    end;
+-define(MAX_DISPATCH_RESULTS, 7).
 
-instr(I, _Rest, _G, _Exit) ->
-    throw({unsupported, I}).
+%% The dispatchers a unit needs: one per signature `{NParams, NResults}' that
+%% some `call_indirect' of the unit uses and some function of the unit has.
+%% Out of line and shared by every site of that signature, as the memory miss
+%% path is, because QuickJS has hundreds of functions of one signature and a
+%% `case' over all of them at every site would multiply its code.
+%%
+%% Each maps the signature to `{Name, ArgForms, ResultForms, Candidates}'. A
+%% value travels `u32' through the dispatcher where every candidate holds it
+%% so (it is an i32 for all of them) and `canon' otherwise.
+dispatchers(Unit, Known, Sigs, TSigs) ->
+    Used = lists:usort(
+             fold([IR || {_, _, _, IR} <- Unit],
+                  fun({call_indirect, T, _}, Acc) -> [maps:get(T, TSigs) | Acc];
+                     (_, Acc) -> Acc
+                  end, [])),
+    maps:from_list(
+      [{Sh, {dispatch_name(NR), all_true(PFs), all_true(RFs), Cands}}
+       || {_NP, NR} = Sh <- Used, NR =< ?MAX_DISPATCH_RESULTS,
+          Cands <- [[{Idx, Pos, Shape, PF, RF}
+                     || {Pos, Idx, _, _} <- Unit, maps:get(Idx, Sigs) =:= Sh,
+                        {_, Shape, _, {PF, RF}} <- [maps:get(Idx, Known)]]],
+          Cands =/= [],
+          PFs <- [[PF || {_, _, _, PF, _} <- Cands]],
+          RFs <- [[RF || {_, _, _, _, RF} <- Cands]]]).
+
+%% Position by position, true where every list is.
+all_true([L | Ls]) ->
+    lists:foldl(fun(X, Acc) -> [A andalso B || {A, B} <- lists:zip(X, Acc)] end,
+                L, Ls).
+
+%% `F(Inst, Mut, Left, FuncIdx, A1, ..., An) -> {R1, ..., Rm, Mut}'. `Left' is
+%% the callee's frames left, already counted down by the site. A function of
+%% the unit is a local call in its own convention; any other function of this
+%% instance (another shard, one the compiler refused) goes through
+%% `wasm_exec:call_out/7', which is where it went before.
+dispatch_fn({NP, NR}, {Name, AF, RF, Cands}, Mod, Stamp) ->
+    Inst = cerl:c_var(0), Mut = cerl:c_var(1), L = cerl:c_var(2),
+    F = cerl:c_var(3),
+    Args = [cerl:c_var(N) || N <- lists:seq(4, 3 + NP)],
+    Rs = [cerl:c_var(N) || N <- lists:seq(4 + NP, 3 + NP + NR)],
+    M1 = cerl:c_var(4 + NP + NR),
+    %% Into a candidate's own form: masked where the dispatcher holds a value
+    %% `canon' and the candidate takes it `u32'.
+    In = fun(PF) ->
+                 [case {A, P} of
+                      {false, true} -> mask32(V);
+                      _ -> V
+                  end || {V, A, P} <- lists:zip3(Args, AF, PF)]
+         end,
+    %% Out of it: made `canon' where the candidate gives `u32' and the
+    %% dispatcher answers `canon'.
+    Out = fun(CRF) ->
+                  [case {C, D} of
+                       {true, false} -> signed(R);
+                       _ -> R
+                   end || {R, C, D} <- lists:zip3(Rs, CRF, RF)]
+          end,
+    Pat = results_pat(Rs),
+    Clause =
+        fun({Idx, Pos, Shape, PF, CRF}) ->
+                Fn = cerl:c_fname(fun_name(Pos), arity_of(NP, Shape)),
+                Body =
+                    case Shape of
+                        pure ->
+                            cerl:c_case(cerl:c_apply(Fn, In(PF)),
+                                        [cerl:c_clause(
+                                           [Pat],
+                                           cerl:c_tuple(Out(CRF) ++ [Mut]))]);
+                        calls_only ->
+                            cerl:c_case(cerl:c_apply(Fn, [L | In(PF)]),
+                                        [cerl:c_clause(
+                                           [Pat],
+                                           cerl:c_tuple(Out(CRF) ++ [Mut]))]);
+                        stateful ->
+                            cerl:c_case(cerl:c_apply(Fn, [Inst, Mut, L
+                                                          | In(PF)]),
+                                        [cerl:c_clause(
+                                           [cerl:c_tuple([Pat, M1])],
+                                           cerl:c_tuple(Out(CRF) ++ [M1]))])
+                    end,
+                cerl:c_clause([cerl:abstract(Idx)], Body)
+        end,
+    Canon = [case A of true -> signed(V); false -> V end
+             || {V, A} <- lists:zip(Args, AF)],
+    Depth = bif('-', [call_op(max_depth, [Inst]), L]),
+    Other =
+        cerl:c_clause(
+          [cerl:c_var('_Other')],
+          cerl:c_case(call_op(call_out, [Inst, Mut, F, cerl:make_list(Canon),
+                                         Depth, cerl:c_atom(Mod),
+                                         cerl:abstract(Stamp)]),
+                      [cerl:c_clause([cerl:c_tuple([list_pat(Rs), M1])],
+                                     cerl:c_tuple(
+                                       [case D of
+                                            true -> mask32(R);
+                                            false -> R
+                                        end || {R, D} <- lists:zip(Rs, RF)]
+                                       ++ [M1]))])),
+    {cerl:c_fname(Name, 4 + NP),
+     cerl:c_fun([Inst, Mut, L, F | Args],
+                cerl:c_case(F, [Clause(C) || C <- Cands] ++ [Other]))}.
+
+%% A dispatcher's name. The parameter count is in its arity, so the result
+%% count is all the name has to tell apart, and these are literal atoms:
+%% nothing is created at run time.
+dispatch_name(0) -> wasm_i_0;
+dispatch_name(1) -> wasm_i_1;
+dispatch_name(2) -> wasm_i_2;
+dispatch_name(3) -> wasm_i_3;
+dispatch_name(4) -> wasm_i_4;
+dispatch_name(5) -> wasm_i_5;
+dispatch_name(6) -> wasm_i_6;
+dispatch_name(7) -> wasm_i_7.
 
 emit1(Op, Rest, G0, Exit) ->
     case unop32(Op) of

@@ -226,14 +226,20 @@ tree(D, Want) ->
        %% representation: an i32 is held unsigned in a local, a block result
        %% or a call inside the unit, and signed in a global, in memory and at
        %% every call out.
-       {2, ?LET({How, Kid}, {oneof([call, global, mem, local, block]),
+       {2, ?LET({How, Kid}, {oneof([call, indirect, global, mem, local, block]),
                              tree(D - 1, Want)},
                 {through, How, Want, Kid})}]).
 
 leaf(i32) -> oneof([{param, 0}, ?LET(V, int32(), {const, i32, V})]);
 leaf(i64) -> oneof([{param, 1}, ?LET(V, int64(), {const, i64, V})]);
 leaf(f32) -> oneof([{param, 2}, ?LET(V, float(), {const, f32, V})]);
-leaf(f64) -> oneof([{param, 3}, ?LET(V, float(), {const, f64, V})]).
+leaf(f64) -> oneof([{param, 3}, ?LET(V, f64(), {const, f64, V})]).
+
+%% Floats, often at the bounds below which compiled f64 arithmetic is inline
+%% (2^1022 for a sum, 2^511 for a product, 1.0 for a divisor) and past them.
+f64() -> oneof([float(), 4.49423283715579e307, 9.0e307, -9.0e307,
+                6.703903964971299e153, 1.0e155, 1.0, -1.0, 0.999, -0.0,
+                1.7976931348623157e308, 1.0e-310]).
 
 %% Cached, because this is asked on every node of every generated tree and the
 %% answer is a property of the source rather than of the run.
@@ -259,8 +265,12 @@ wat(Tree) ->
        %% Not exported: an exported mutable global is a shared cell, which
        %% the compiler refuses, and `f' would never compile.
        [["(global $g_", T, " (mut ", T, ") (", T, ".const 0))\n"] || T <- Types],
+       [["(type $t_", T, " (func (param ", T, ") (result ", T, ")))\n"]
+        || T <- Types],
        [["(func $id_", T, " (param ", T, ") (result ", T, ") local.get 0)\n"]
         || T <- Types],
+       "(table 4 funcref)\n",
+       "(elem (i32.const 0) $id_i32 $id_i64 $id_f32 $id_f64)\n",
        "(func (export \"f\") (param i32) (param i64) (param f32) (param f64)",
        " (result ", atom_to_list(type_of(Tree)), ")\n",
        [["  (local $l_", T, " ", T, ")\n"] || T <- Types],
@@ -282,6 +292,8 @@ emit({through, How, Type, Kid}) ->
     T = atom_to_list(Type),
     case How of
         call -> [emit(Kid), "  call $id_", T, "\n"];
+        indirect -> [emit(Kid), "  i32.const ", slot(Type),
+                     "\n  call_indirect (type $t_", T, ")\n"];
         global -> [emit(Kid), "  global.set $g_", T, "\n  global.get $g_", T, "\n"];
         mem -> ["  i32.const 16\n", emit(Kid), "  ", T, ".store\n",
                 "  i32.const 16\n  ", T, ".load\n"];
@@ -297,6 +309,11 @@ emit(Node) ->
 name(Op) ->
     [Type, Rest] = string:split(atom_to_list(Op), "_"),
     [Type, $., Rest].
+
+slot(i32) -> "0";
+slot(i64) -> "1";
+slot(f32) -> "2";
+slot(f64) -> "3".
 
 literal(i32, V) -> integer_to_list(V);
 literal(i64, V) -> integer_to_list(V);

@@ -61,7 +61,9 @@ all() ->
      an_endless_recursion_traps_in_generated_code,
      every_i32_operation_agrees_in_either_form,
      an_i32_crosses_every_boundary_unchanged,
-     fib_compiles_to_one_mask_per_result].
+     fib_compiles_to_one_mask_per_result,
+     a_frame_holds_its_values_in_the_form_their_type_needs,
+     a_block_result_is_not_converted_on_its_way_out].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -172,7 +174,8 @@ a_refusal_says_which_kind_of_refusal_it_is(_) ->
     ?assertMatch({unsupported, {return_call, 1}},
                  wasm_core:can_compile(Fn, [{return_call, 1}])),
     ?assertMatch({unsupported, {return_call, 1}},
-                 wasm_core:can_compile(Fn, [{block, 0, 0, [{return_call, 1}]}])),
+                 wasm_core:can_compile(Fn, [{block, 0, 0, [{return_call, 1}],
+                                             {[], []}}])),
     #{max_frames := MaxK} = wasm_core:limits(),
     ?assertMatch({limit, too_deeply_nested},
                  wasm_core:can_compile(Fn, nest(MaxK))),
@@ -181,7 +184,8 @@ a_refusal_says_which_kind_of_refusal_it_is(_) ->
                                        [{local_get, 0}])).
 
 nest(0) -> [nop];
-nest(N) -> [{block, 0, 0, nest(N - 1)}].
+%% The compiler's IR: each frame carries its types.
+nest(N) -> [{block, 0, 0, nest(N - 1), {[], []}}].
 
 the_subset_covers_a_measured_share_of_the_real_modules(_) ->
     %% Not a threshold, a record. `bench/paths/subset.erl' predicted 10.3% of
@@ -1340,6 +1344,97 @@ fib_compiles_to_one_mask_per_result(_) ->
     ?assertEqual(nomatch, string:find(Body, "2147483648")),
     ?assertEqual(3, length(string:split(Body, "4294967295", all)) - 1),
     check_module(fib, Fib, [[0], [1], [2], [10], [20]]).
+
+%% A block, loop or `if' parameter or result of type i32 is held `u32', and
+%% every other type `canon': each shape, each type, branches from inside, and
+%% values that change form on the way in.
+a_frame_holds_its_values_in_the_form_their_type_needs(_) ->
+    Vs = [[0], [1], [-1], [2147483647], [-2147483648], [-12345], [7]],
+    Cases =
+        [{"block results of every type, by branch and by falling out",
+          ~"(func (export \"f\") (param i32) (result i32 i64 f64 i32)
+              block (result i32 i64 f64)
+                local.get 0 local.get 0 i64.extend_i32_s
+                local.get 0 f64.convert_i32_s
+                local.get 0 i32.const 7 i32.eq br_if 0
+                drop drop drop
+                local.get 0 i32.const -2 i32.mul
+                local.get 0 i64.extend_i32_u
+                f64.const -0.5
+              end
+              local.get 0 i32.const 3 i32.add)", same},
+         {"block parameters, one from a division (signed form)",
+          ~"(type $p (func (param i32 i32) (result i32 i32)))
+            (func (export \"f\") (param i32) (result i32 i32)
+              local.get 0 local.get 0 i32.const 1 i32.div_s
+              block (type $p)
+                i32.const 3 i32.mul
+              end)", same},
+         {"a loop with i32 and i64 parameters",
+          ~"(type $l (func (param i32 i64) (result i32 i64)))
+            (func (export \"f\") (param i32) (result i32 i64)
+              (local $n i32)
+              i32.const 5 local.set $n
+              local.get 0 local.get 0 i64.extend_i32_s
+              loop (type $l)
+                i64.const -3 i64.add
+                swap_i32_i64
+                i32.const 7 i32.sub
+                swap_i64_i32
+                local.get $n i32.const 1 i32.sub local.tee $n
+                br_if 0
+              end)", same},
+         {"a signed value through a frame, then read by unsigned operations",
+          ~"(type $q (func (param i32) (result i32)))
+            (func (export \"f\") (param i32) (result i64 i32 i32)
+              (local $t i32)
+              local.get 0 i32.const 1 i32.div_s
+              block (type $q) end
+              local.set $t
+              local.get $t i64.extend_i32_u
+              local.get $t i32.const 1 i32.shr_u
+              local.get $t i32.const 5 i32.lt_u)", same},
+         {"if results of i32 and f64, both arms, then used",
+          ~"(func (export \"f\") (param i32) (result i32 f64 i32)
+              local.get 0 i32.const 0 i32.lt_s
+              if (result i32 f64)
+                local.get 0 i32.const -1 i32.xor f64.const 1.5
+              else
+                local.get 0 i32.const 1 i32.div_s f64.const -2.5
+              end
+              local.get 0 i32.const 100 i32.add)", same}],
+    [check(Name, swaps(Src), Vs, How) || {Name, Src, How} <- Cases],
+    ok.
+
+%% WebAssembly has no swap; a loop case needs one, so the two helper
+%% functions are spelled out where it is used.
+swaps(Src) ->
+    S1 = string:replace(Src, "swap_i32_i64", "call $si", all),
+    S2 = string:replace(S1, "swap_i64_i32", "call $is", all),
+    iolist_to_binary(
+      [S2, "(func $si (param i32 i64) (result i64 i32)"
+           " local.get 1 local.get 0)"
+           "(func $is (param i64 i32) (result i32 i64)"
+           " local.get 1 local.get 0)"]).
+
+%% A block's i32 result reaches the code after it unconverted: the
+%% continuation takes it `u32', so nothing compares against 2^31, the bound of
+%% the signed form. Fails on a generator whose frames carry `canon' values.
+a_block_result_is_not_converted_on_its_way_out(_) ->
+    Wat = ~"(module (func (export \"f\") (param i32) (result i32)
+          block (result i32)
+            local.get 0 i32.const 3 i32.add
+            local.get 0 br_if 0
+            i32.const 1 i32.sub
+          end
+          i32.const 5 i32.mul))",
+    {I, _, _, _} = unit_of(Wat),
+    Text = unicode:characters_to_list(wasm_jit:dump(I)),
+    ok = wasm:destroy(I),
+    {match, [Body]} = re:run(Text, "'wasm_f_0'/1 =(.*)",
+                             [dotall, {capture, all_but_first, list}]),
+    ?assertEqual(nomatch, string:find(Body, "2147483648")),
+    check_module(block_result, Wat, [[0], [1], [-1], [-2147483648]]).
 
 even_odd(OddExtra) ->
     iolist_to_binary([~"(module

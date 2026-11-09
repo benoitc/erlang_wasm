@@ -239,9 +239,9 @@ Control instructions carry a body and are answered `true` here; whether their
 supported(I) when is_atom(I) ->
     lists:member(I, ?NULLARY) orelse lists:member(I, ?BINOPS)
         orelse lists:member(I, ?UNOPS);
-supported({block, _, _, _}) -> true;
-supported({loop, _, _, _}) -> true;
-supported({if_, _, _, _, _}) -> true;
+supported({block, _, _, _, _}) -> true;
+supported({loop, _, _, _, _}) -> true;
+supported({if_, _, _, _, _, _}) -> true;
 supported({br, _}) -> true;
 supported({br_if, _}) -> true;
 supported({br_table, _, _}) -> true;
@@ -387,17 +387,18 @@ first_unsupported(IR) ->
 %% Every instruction of a body including nested ones, left to right, stopping
 %% for nothing: an accumulator that has already decided simply ignores the rest.
 fold(L, F, Acc0) when is_list(L) -> lists:foldl(fun(I, A) -> fold(I, F, A) end, Acc0, L);
-fold({block, _, _, B} = I, F, Acc) -> fold(B, F, F(I, Acc));
-fold({loop, _, _, B} = I, F, Acc) -> fold(B, F, F(I, Acc));
+fold({block, _, _, B, _} = I, F, Acc) -> fold(B, F, F(I, Acc));
+fold({loop, _, _, B, _} = I, F, Acc) -> fold(B, F, F(I, Acc));
 fold({try_table, _, _, _, B} = I, F, Acc) -> fold(B, F, F(I, Acc));
-fold({if_, _, _, T, E} = I, F, Acc) -> fold(E, F, fold(T, F, F(I, Acc)));
+fold({if_, _, _, T, E, _} = I, F, Acc) ->
+    fold(E, F, fold(T, F, F(I, Acc)));
 fold(I, F, Acc) -> F(I, Acc).
 
 nesting(L) when is_list(L) -> lists:max([0 | [nesting(I) || I <- L]]);
-nesting({block, _, _, B}) -> 1 + nesting(B);
-nesting({loop, _, _, B}) -> 1 + nesting(B);
+nesting({block, _, _, B, _}) -> 1 + nesting(B);
+nesting({loop, _, _, B, _}) -> 1 + nesting(B);
 nesting({try_table, _, _, _, B}) -> 1 + nesting(B);
-nesting({if_, _, _, T, E}) -> 1 + max(nesting(T), nesting(E));
+nesting({if_, _, _, T, E, _}) -> 1 + max(nesting(T), nesting(E));
 nesting(_) -> 0.
 
 %%% ------------------------------------------------------------- generation ---
@@ -1069,14 +1070,14 @@ seq([I | Rest], G, Exit) -> instr(I, Rest, G, Exit).
 %% Leaving a frame, or the function. `return' takes the function's results off
 %% the stack and makes them a list, which is the one place results are built.
 %% A function's i32 results leave it `u32', which is what every caller in the
-%% unit expects and what `invoke/6' converts back. A frame's results travel
-%% `canon'.
+%% unit expects and what `invoke/6' converts back, and so do a frame's: a
+%% branch hands each value on in the form its target's parameter holds.
 go(return, #g{stack = S, nres = NRes, mut = undefined, rflags = F} = G) ->
     results(as_slots(top(NRes, S), F, G));
 go(return, #g{stack = S, nres = NRes, mut = Mut, rflags = F} = G) ->
     cerl:c_tuple([results(as_slots(top(NRes, S), F, G)), Mut]);
-go({K, NArgs}, #g{stack = S} = G) ->
-    cerl:c_apply(K, carried(G) ++ [canon(V, G) || V <- top(NArgs, S)]).
+go({K, NArgs, Flags}, #g{stack = S} = G) ->
+    cerl:c_apply(K, carried(G) ++ as_slots(top(NArgs, S), Flags, G)).
 
 %% The top N operands, in stack order bottom first.
 top(N, S) -> lists:reverse(lists:sublist(S, N)).
@@ -1108,7 +1109,7 @@ var(#g{n = N} = G) -> {cerl:c_var(N), G#g{n = N + 1}}.
 %% everything else. Its name comes from the nesting depth, because `letrec'
 %% scoping puts a sibling's name out of scope and only a nesting path has to be
 %% unique.
-frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
+frame(NRes, RFlags, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
     NCarried = case Mut of undefined -> NL; _ -> NL + 2 + ?TLB_SIZE end,
     Total = NCarried + NRes,
     Name = cerl:c_fname(frame_name(Depth), Total),
@@ -1130,8 +1131,10 @@ frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
                              end
                      end, G#g{n = N0 + Total},
                      lists:zip(lists:seq(0, NL - 1), lists:sublist(Vars, NL))),
-    {Name, Vars, Env, {NewMut, NewTlb}, NewD, lists:nthtail(NCarried, Vars),
-     G1}.
+    Res = lists:nthtail(NCarried, Vars),
+    %% The frame's own i32 values, results or a loop's parameters, are `u32'.
+    {Name, Vars, Env, {NewMut, NewTlb}, NewD, Res,
+     mark_flagged(Res, RFlags, G1)}.
 
 %%% -------------------------------------------------------------- control ---
 
@@ -1147,40 +1150,44 @@ frame(NRes, #g{depth = Depth, nlocals = NL, n = N0, mut = Mut} = G) ->
          ((Exit =:= return andalso NRes =:= G#g.nres) orelse
           (is_tuple(Exit) andalso element(2, Exit) =:= NRes)))).
 
-instr({block, NPar, NRes, Body}, Rest, G, Exit)
+instr({block, NPar, NRes, Body, _}, Rest, G, Exit)
   when ?FORWARDS(Rest, Exit, NRes, G) ->
     {Top, _Below} = split_stack(NPar, G#g.stack),
     seq(Body, G#g{stack = Top, frames = [Exit | G#g.frames],
                   depth = G#g.depth + 1}, Exit);
-instr({block, NPar, NRes, Body}, Rest, G, Exit) ->
-    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
+instr({block, NPar, NRes, Body, {_, RTs}}, Rest, G, Exit) ->
+    RF = i32s(RTs),
+    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, RF, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
                       seq(Rest, G1#g{env = KEnv, mut = KMut, d = KD,
                                      tlb = KTlb,
                                      stack = lists:reverse(KRes) ++ Below},
                           Exit)),
-    Inner = G1#g{stack = Top, frames = [{K, NRes} | G#g.frames],
+    Inner = G1#g{stack = Top, frames = [{K, NRes, RF} | G#g.frames],
                  depth = G#g.depth + 1},
-    cerl:c_letrec([{K, Cont}], seq(Body, Inner, {K, NRes}));
+    cerl:c_letrec([{K, Cont}], seq(Body, Inner, {K, NRes, RF}));
 
 %% Branching to a loop label means the top of the loop, so the loop's own frame
 %% takes its *parameters* where a block's takes its results, and falling off the
 %% end goes to the continuation instead.
-instr({loop, NPar, NRes, Body}, Rest, G, Exit)
+instr({loop, NPar, NRes, Body, {PTs, _}}, Rest, G, Exit)
   when ?FORWARDS(Rest, Exit, NRes, G) ->
+    PF = i32s(PTs),
     {Top, _Below} = split_stack(NPar, G#g.stack),
     G2 = G#g{depth = G#g.depth + 1},
-    {Lp, LpVars, LpEnv, {LpMut, LpTlb}, LpD, LpPar, G3} = frame(NPar, G2),
+    {Lp, LpVars, LpEnv, {LpMut, LpTlb}, LpD, LpPar, G3} = frame(NPar, PF, G2),
     Inner = G3#g{env = LpEnv, mut = LpMut, d = LpD, tlb = LpTlb,
                  stack = lists:reverse(LpPar),
-                 frames = [{Lp, NPar} | G#g.frames],
+                 frames = [{Lp, NPar, PF} | G#g.frames],
                  depth = G2#g.depth + 1},
     Loop = cerl:c_fun(LpVars, seq(Body, Inner, Exit)),
     cerl:c_letrec([{Lp, Loop}],
-                  cerl:c_apply(Lp, carried(G) ++ lists:reverse(Top)));
-instr({loop, NPar, NRes, Body}, Rest, G, Exit) ->
-    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
+                  cerl:c_apply(Lp, carried(G) ++
+                                   as_slots(lists:reverse(Top), PF, G)));
+instr({loop, NPar, NRes, Body, {PTs, RTs}}, Rest, G, Exit) ->
+    PF = i32s(PTs), RF = i32s(RTs),
+    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, RF, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
                       seq(Rest, G1#g{env = KEnv, mut = KMut, d = KD,
@@ -1188,19 +1195,20 @@ instr({loop, NPar, NRes, Body}, Rest, G, Exit) ->
                                      stack = lists:reverse(KRes) ++ Below},
                           Exit)),
     G2 = G1#g{depth = G#g.depth + 1},
-    {Lp, LpVars, LpEnv, {LpMut, LpTlb}, LpD, LpPar, G3} = frame(NPar, G2),
+    {Lp, LpVars, LpEnv, {LpMut, LpTlb}, LpD, LpPar, G3} = frame(NPar, PF, G2),
     Inner = G3#g{env = LpEnv, mut = LpMut, d = LpD,
                  tlb = LpTlb,
                  stack = lists:reverse(LpPar),
-                 frames = [{Lp, NPar} | G#g.frames],
+                 frames = [{Lp, NPar, PF} | G#g.frames],
                  depth = G2#g.depth + 1},
-    Loop = cerl:c_fun(LpVars, seq(Body, Inner, {K, NRes})),
+    Loop = cerl:c_fun(LpVars, seq(Body, Inner, {K, NRes, RF})),
     cerl:c_letrec(
       [{K, Cont}],
       cerl:c_letrec([{Lp, Loop}],
-                    cerl:c_apply(Lp, carried(G) ++ lists:reverse(Top))));
+                    cerl:c_apply(Lp, carried(G) ++
+                                     as_slots(lists:reverse(Top), PF, G))));
 
-instr({if_, NPar, NRes, Then, Else}, Rest, G0, Exit)
+instr({if_, NPar, NRes, Then, Else, _}, Rest, G0, Exit)
   when ?FORWARDS(Rest, Exit, NRes, G0) ->
     {C, G} = pop_raw(G0),
     {Top, _Below} = split_stack(NPar, G#g.stack),
@@ -1209,18 +1217,19 @@ instr({if_, NPar, NRes, Then, Else}, Rest, G0, Exit)
     Arm = fun(Body) -> seq(Body, Inner, Exit) end,
     cerl:c_case(C, [cerl:c_clause([cerl:abstract(0)], Arm(Else)),
                     cerl:c_clause([cerl:c_var('_C')], Arm(Then))]);
-instr({if_, NPar, NRes, Then, Else}, Rest, G0, Exit) ->
+instr({if_, NPar, NRes, Then, Else, {_, RTs}}, Rest, G0, Exit) ->
+    RF = i32s(RTs),
     {C, G} = pop_raw(G0),
-    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, G),
+    {K, KVars, KEnv, {KMut, KTlb}, KD, KRes, G1} = frame(NRes, RF, G),
     {Top, Below} = split_stack(NPar, G#g.stack),
     Cont = cerl:c_fun(KVars,
                       seq(Rest, G1#g{env = KEnv, mut = KMut, d = KD,
                                      tlb = KTlb,
                                      stack = lists:reverse(KRes) ++ Below},
                           Exit)),
-    Inner = G1#g{stack = Top, frames = [{K, NRes} | G#g.frames],
+    Inner = G1#g{stack = Top, frames = [{K, NRes, RF} | G#g.frames],
                  depth = G#g.depth + 1},
-    Arm = fun(Body) -> seq(Body, Inner, {K, NRes}) end,
+    Arm = fun(Body) -> seq(Body, Inner, {K, NRes, RF}) end,
     cerl:c_letrec([{K, Cont}],
                   cerl:c_case(C, [cerl:c_clause([cerl:abstract(0)], Arm(Else)),
                                   cerl:c_clause([cerl:c_var('_C')], Arm(Then))]));
@@ -1970,6 +1979,9 @@ signed(E) ->
 %% `V' now holds a `u32' value.
 mark(V, #g{u32 = U} = G) -> G#g{u32 = U#{cerl:var_name(V) => true}}.
 
+%% Which of a list of value types are i32.
+i32s(Ts) -> [T =:= i32 || T <- Ts].
+
 mark_flagged(Vs, Flags, G) ->
     lists:foldl(fun({V, true}, Acc) -> mark(V, Acc);
                    (_, Acc) -> Acc
@@ -2399,9 +2411,9 @@ cache_use(Is, Exit, Depth) ->
 %% `{SomePathUses, SomePathLeaves}'.
 paths([], return, _D) -> {false, true};
 paths([], _K, _D) -> {true, false};
-paths([{block, _, _, Body} | _], _Exit, D) -> paths(Body, cont, D + 1);
-paths([{loop, _, _, _} | _], _Exit, _D) -> {true, false};
-paths([{if_, _, _, Then, Else} | _], _Exit, D) ->
+paths([{block, _, _, Body, _} | _], _Exit, D) -> paths(Body, cont, D + 1);
+paths([{loop, _, _, _, _} | _], _Exit, _D) -> {true, false};
+paths([{if_, _, _, Then, Else, _} | _], _Exit, D) ->
     either(paths(Then, cont, D + 1), paths(Else, cont, D + 1));
 paths([{br, N} | _], _Exit, D) -> branch(N, D);
 paths([{br_if, N} | Rest], Exit, D) ->

@@ -233,8 +233,12 @@ no_annotations(IR) ->
          case I of
              {block, _, _, B} -> no_annotations(B);
              {loop, _, _, B} -> no_annotations(B);
+             %% The compiler's IR carries each frame's types as well.
+             {block, _, _, B, _} -> no_annotations(B);
+             {loop, _, _, B, _} -> no_annotations(B);
              {try_table, _, _, _, B} -> no_annotations(B);
              {if_, _, _, T, E} -> no_annotations(T), no_annotations(E);
+             {if_, _, _, T, E, _} -> no_annotations(T), no_annotations(E);
              _ -> ok
          end
      end || I <- IR],
@@ -277,8 +281,11 @@ the_compiler_gets_unfused_ir_whatever_the_instance_asked_for(_) ->
 fused(L) when is_list(L) -> lists:flatten([fused(I) || I <- L]);
 fused({block, _, _, B}) -> fused(B);
 fused({loop, _, _, B}) -> fused(B);
+fused({block, _, _, B, _}) -> fused(B);
+fused({loop, _, _, B, _}) -> fused(B);
 fused({try_table, _, _, _, B}) -> fused(B);
 fused({if_, _, _, T, E}) -> fused(T) ++ fused(E);
+fused({if_, _, _, T, E, _}) -> fused(T) ++ fused(E);
 fused(I) ->
     Op = if is_atom(I) -> I; true -> element(1, I) end,
     case lists:member(Op, [lg_const_add_set, lg_const_add_tee, lg_const_add,

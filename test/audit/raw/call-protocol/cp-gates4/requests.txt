@@ -1,0 +1,4 @@
+CPython compiled request, median over 5 VMs of each VM's p50
+  baseline  9.581 ms   p99 11.746 ms
+  candidate 9.403 ms   p99 11.977 ms
+  candidate / baseline 0.981x

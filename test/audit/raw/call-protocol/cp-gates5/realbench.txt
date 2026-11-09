@@ -1,0 +1,60 @@
+== baseline r1 load { 6.35 7.81 9.10 }
+qjs-30k-js-iterations run 1	359.0 ms
+qjs-30k-js-iterations run 2	323.1 ms
+qjs-30k-js-iterations run 3	304.3 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}
+== candidate r1 load { 6.42 7.17 8.61 }
+qjs-30k-js-iterations run 1	323.1 ms
+qjs-30k-js-iterations run 2	314.0 ms
+qjs-30k-js-iterations run 3	311.4 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}
+== candidate r2 load { 5.27 6.35 8.04 }
+qjs-30k-js-iterations run 1	310.3 ms
+qjs-30k-js-iterations run 2	299.7 ms
+qjs-30k-js-iterations run 3	302.5 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}
+== baseline r2 load { 5.43 5.94 7.62 }
+qjs-30k-js-iterations run 1	323.6 ms
+qjs-30k-js-iterations run 2	305.9 ms
+qjs-30k-js-iterations run 3	301.4 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}
+== baseline r3 load { 7.21 6.29 7.47 }
+qjs-30k-js-iterations run 1	320.0 ms
+qjs-30k-js-iterations run 2	307.2 ms
+qjs-30k-js-iterations run 3	295.3 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}
+== candidate r3 load { 3.91 5.47 6.97 }
+qjs-30k-js-iterations run 1	317.3 ms
+qjs-30k-js-iterations run 2	307.4 ms
+qjs-30k-js-iterations run 3	298.3 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}
+== candidate r4 load { 4.72 4.97 6.52 }
+qjs-30k-js-iterations run 1	319.8 ms
+qjs-30k-js-iterations run 2	300.9 ms
+qjs-30k-js-iterations run 3	311.8 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}
+== baseline r4 load { 4.86 4.70 6.16 }
+qjs-30k-js-iterations run 1	338.3 ms
+qjs-30k-js-iterations run 2	314.3 ms
+qjs-30k-js-iterations run 3	311.7 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}
+== baseline r5 load { 7.07 7.98 7.39 }
+qjs-30k-js-iterations run 1	310.8 ms
+qjs-30k-js-iterations run 2	287.1 ms
+qjs-30k-js-iterations run 3	282.9 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}
+== candidate r5 load { 4.21 6.94 7.08 }
+qjs-30k-js-iterations run 1	357.6 ms
+qjs-30k-js-iterations run 2	349.7 ms
+qjs-30k-js-iterations run 3	343.7 ms
+  #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+    entered => 3,reentered => 0}

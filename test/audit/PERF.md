@@ -26,6 +26,7 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [Head to head with erlang-wasmtime](#head-to-head-with-erlang-wasmtime)
 - [Head to head with erlang-wasmtime, again, on 0.9.x](#head-to-head-with-erlang-wasmtime-again-on-09x)
 - [The comparison harness, run against itself](#the-comparison-harness-run-against-itself)
+- [Compiled calls as cheap as plain Erlang](#compiled-calls-as-cheap-as-plain-erlang)
 - [Signed words, priced](#signed-words-priced)
 - [Compiled wasm against the same work written in Erlang](#compiled-wasm-against-the-same-work-written-in-erlang)
 - [The second audit's fixes, held against QuickJS](#the-second-audits-fixes-held-against-quickjs)
@@ -2537,6 +2538,97 @@ not yet explained.
 Raw results: `test/audit/raw/vs-harness-self/`, with each tree's manifest and
 the summaries.
 
+
+## Compiled calls as cheap as plain Erlang
+
+Against plain Erlang with the same 32-bit semantics, compiled `fib(30)` took
+3.8 times as long (8.57 against 2.25 ms), although a local Erlang call costs
+about what a Wasmtime call does. The gap was in what the generator emitted.
+This section records how it was closed, in the order it was done, with
+`bench/cross/vs/` against `main` at `e5b05f4`: five rounds, a fresh VM per
+arm, the order rotating, every run started below load 8 and every overloaded
+round set aside and run again. The gates were fixed before the first
+measurement and never moved.
+
+| gate | threshold |
+| --- | --- |
+| `fib(30)` against `main` | at least 2.5x faster |
+| `fib(30)` against plain Erlang (`gapref:fib32/1`) | within 2.5x |
+| `loop` (from Step 2) | no slower than the Step 1 tree, 3.525 ns |
+| `perinstr` `call` row | lower than `main` |
+| QuickJS, `realbench qjs on`, five pairs, both orders | at most 1.03x |
+| CPython request, median over five VMs of each VM's p50 | at most 1.03x |
+| cold compile of QuickJS's hot set, time and code size | at most 1.05x |
+
+**Step 1, the call protocol.** Three calling conventions inside a unit
+(`pure`, `calls_only`, `stateful`), the depth checked inline instead of by a
+remote call, one result returned bare.
+
+| `fib(30)`, ms | `main` | Step 1 | plain Erlang |
+| --- | ---: | ---: | ---: |
+| first run | 17.52 | 8.57 (2.04x) | 2.25 (3.80x) |
+
+Both `fib` gates failed; every other gate passed. Hand-written copies of the
+generated shape, timed in one VM, explained the gap: the hand copy's caller
+passed constants, so the compiler knew the types of the depth and the limit,
+and the generated code did not. With opaque arguments the hand copy was no
+faster than the real thing. Two changes followed: a frame that ends its body
+branches to its exit instead of calling a continuation, and `invoke/6`
+guards the depth and the limit as integers so the type pass carries them.
+
+**Step 1c, a cheaper depth.** The depth became one "frames left" argument,
+and only a call that can recurse checks it (see `docs/design-notes.md`, "How
+a compiled function calls another"). Against the Step 1 tree, `fib(30)`, ten
+pairs, both orders: paired median **0.88**, 8.00 to 6.79 ms
+(`step1c-ab.txt`).
+
+| | `main` | Step 1 + 1c | plain Erlang |
+| --- | ---: | ---: | ---: |
+| `fib(30)`, ms | 18.56 | 6.59 (2.82x faster) | 2.38 (**2.77x**) |
+| `loop`, ns/iter | 3.643 | 3.525 | 1.726 |
+
+The Erlang gate still failed, everything else passed. What remained was the
+i32 representation: two comparisons and a branch to wrap each sum, where
+plain Erlang uses one `band`.
+
+**Step 2, i32 held unsigned.** See `docs/design-notes.md`, "How compiled code
+holds an i32". The first run passed every gate but code size:
+
+| | `main` | Step 2, first | limit |
+| --- | ---: | ---: | ---: |
+| `fib(30)` against plain Erlang | | 1.88x | 2.5x |
+| code size | 12,926,070 | 13,932,514 (**1.078x**) | 1.05x |
+
+Counting constructs in the Core generated for 400 QuickJS functions found
+the cause: 27,517 conversions from unsigned to signed, 13,698 of them masked
+straight back to unsigned by a memory address. Addresses now take the
+unsigned value as it is, and an i32 store writes either form unconverted
+(every store masks to its width). The same count after the fix: 3,187
+conversions, none masked back, and 16% less Core.
+
+**Final run, 2026-11-09:**
+
+| | `main` | candidate | plain Erlang | Wasmtime | gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `fib(30)`, ms | 17.734 | **3.795** | 2.379 | 3.920 | 4.67x faster, 1.60x Erlang: pass |
+| `loop`, ns/iter | 3.289 | **1.415** | 1.539 | 0.893 | pass |
+| `perinstr` `call`, ns | 3.56 to 3.79 | 0.68 to 0.73 | | | pass |
+| QuickJS `realbench`, paired median | | 0.996 | | | pass |
+| CPython request p50, ms | 9.228 | 8.362 (0.906x) | | | pass |
+| cold compile, ms | 115,090 | 101,970 (0.89x) | | | pass |
+| code, bytes | 12,926,070 | 12,151,690 (0.94x) | | | pass |
+
+Every harness check passed: every run present, checksums equal, compiled
+code entered in every timed call, one build per tree, the same hot set.
+`fib(30)` is now level with Wasmtime and the arithmetic loop is a little
+faster than plain Erlang. QuickJS `_start` and the memory rows did not move:
+their time is in memory access through `atomics`, which this work did not
+touch.
+
+Raw results: `test/audit/raw/call-protocol/`, one directory per gate run
+(`cp-gates2` Step 1, `cp-gates4` Step 1c, `cp-gates5` Step 2 first,
+`cp-gates6` final), with the candidate tree's manifest, the load log, and the
+request, `perinstr` and `realbench` outputs.
 ## Where the tier's compile time goes
 
 Measured to answer "get hot code compiled sooner". QuickJS, the 223-function

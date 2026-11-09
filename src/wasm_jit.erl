@@ -78,10 +78,11 @@ moved, because even with all three a refusal still interprets.
 -export([compile_limits/0, max_heap_words/0, compile_budget_heap_words/0]).
 -export([reentered/0, ensure_counts/0]).
 -export([compiler_loop/0]).
--export([dump/1, dump/2]).
+-export([dump/1, dump/2, tsigs/1]).
 
 -include("wasm.hrl").
 -include("wasm_exec.hrl").
+-include("wasm_validate.hrl").
 
 %% Bumped whenever the shape of generated code changes, so that code compiled by
 %% an older version of this runtime is never entered by a newer one.
@@ -1384,12 +1385,26 @@ sigs(Inst) ->
       [{Idx, sig(F)}
        || {Idx, F} <- lists:enumerate(0, tuple_to_list(Inst#inst.funcs))]).
 
-%% An indirect call is typed by the type it names, not by any function, since
-%% which function it reaches is not known until it runs.
-tsigs(Inst) ->
+-doc """
+What the generator needs to know about indirect calls in `Inst`'s module.
+
+An indirect call is typed by the type it names, not by any function, since
+which function it reaches is not known until it runs: type index =>
+`{NParams, NResults}`. Beside those, `{canon, TypeIdx}` => the type's
+canonical identity, and `{table, TableIdx}` => the contents of each table
+that cannot change after instantiation (`#ctx.static_tables`), so a
+`call_indirect` through one can be resolved once. All of it follows from the
+module alone. Exported for tests, which build units by hand.
+""".
+-spec tsigs(#inst{}) -> map().
+tsigs(#inst{ctx = Ctx, canon = Canon} = Inst) ->
+    Sigs = [{Idx, S}
+            || {Idx, T} <- lists:enumerate(0, tuple_to_list(Inst#inst.types)),
+               S <- [tsig(T)], S =/= undefined],
     maps:from_list(
-      [{Idx, S} || {Idx, T} <- lists:enumerate(0, tuple_to_list(Inst#inst.types)),
-                   S <- [tsig(T)], S =/= undefined]).
+      Sigs
+      ++ [{{canon, Idx}, element(Idx + 1, Canon)} || {Idx, _} <- Sigs]
+      ++ [{{table, T}, C} || {T, C} <- maps:to_list(Ctx#ctx.static_tables)]).
 
 %% The type table holds whichever shape the module put there, so both are
 %% matched rather than one assumed: a struct or array type simply has no

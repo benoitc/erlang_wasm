@@ -1627,6 +1627,28 @@ indirect_crossing(TypeIdx, TableIdx, {NP, NR}, Rest,
                                Exit)),
     depth_checked(G0, cerl:c_case(Call, [Clause])).
 
+%% A static table's slots as this call sees them: the unit function in each
+%% slot whose type is exactly the call's, or `none'. `none' covers every case
+%% this cannot settle once and for all (an empty slot, another type, a
+%% subtype, a function outside the unit) and sends the call to
+%% `indirect_out/9', which traps or calls exactly as the interpreter does.
+%% `none' when the table is not static or no slot holds a candidate.
+static_slots(TypeIdx, TableIdx, Cands, TSigs) ->
+    case {maps:find({table, TableIdx}, TSigs),
+          maps:find({canon, TypeIdx}, TSigs)} of
+        {{ok, Contents}, {ok, Want}} ->
+            Ok = maps:from_list([{Idx, true}
+                                 || {Idx, _, _, _, _, C} <- Cands, C =:= Want]),
+            Slots = [case is_map_key(F, Ok) of true -> F; false -> none end
+                     || F <- tuple_to_list(Contents)],
+            case lists:all(fun(X) -> X =:= none end, Slots) of
+                true -> none;
+                false -> list_to_tuple(Slots)
+            end;
+        _ ->
+            none
+    end.
+
 %% A `call_indirect' whose signature some function of the unit has. The target
 %% is resolved by `wasm_exec:indirect_index/5', which traps exactly as the
 %% interpreter does; a target in this instance goes to the dispatcher for the
@@ -1635,17 +1657,36 @@ indirect_crossing(TypeIdx, TableIdx, {NP, NR}, Rest,
 %% Both answer `{R1, ..., Rn, Mut}', a tuple, which the OTP note on
 %% multi-value joins in `docs/design-notes.md' asks for, with each i32 result
 %% in the form the dispatcher gives it.
-indirect_local(TypeIdx, TableIdx, {NP, NR}, {Name, AF, RF, _}, Rest,
+indirect_local(TypeIdx, TableIdx, {NP, NR}, {Name, AF, RF, Cands}, Rest,
                #g{mod = Mod, gen = Stamp, inst = Inst, mut = Mut} = G0, Exit) ->
-    {I, G1} = pop(G0),
+    {RawI, G1} = pop_raw(G0),
+    I = canon(RawI, G0),
     {Raw, G2} = take_raw(NP, G1),
     {Fv, G3} = var(G2),
     {Rs, G4} = vars(NR, G3),
     {M1, G5} = var(G4),
     {Xs, G6} = vars(NR, G5),
     {M2, G7} = var(G6),
-    Index = call_op(indirect_index, [cerl:abstract(TypeIdx),
-                                     cerl:abstract(TableIdx), I, Inst, Mut]),
+    Index =
+        case static_slots(TypeIdx, TableIdx, Cands, G0#g.tsigs) of
+            none ->
+                call_op(indirect_index,
+                        [cerl:abstract(TypeIdx), cerl:abstract(TableIdx), I,
+                         Inst, Mut]);
+            Slots ->
+                %% The slot's function, read from a literal: no lookup, no
+                %% type check at run time, both done when this was generated.
+                Iv = cerl:c_var('Ix'),
+                InRange = bif('<', [Iv, cerl:abstract(tuple_size(Slots))]),
+                Slot = bif(element, [bif('+', [Iv, cerl:abstract(1)]),
+                                     cerl:abstract(Slots)]),
+                cerl:c_let([Iv], u32(RawI, G0),
+                           cerl:c_case(InRange,
+                                       [cerl:c_clause([cerl:abstract(true)],
+                                                      Slot),
+                                        cerl:c_clause([cerl:abstract(false)],
+                                                      cerl:abstract(none))]))
+        end,
     Local = cerl:c_apply(cerl:c_fname(Name, 4 + NP),
                          [Inst, Mut, bif('-', [G0#g.d, cerl:abstract(1)]), Fv
                           | as_slots(Raw, AF, G0)]),
@@ -1686,12 +1727,16 @@ dispatchers(Unit, Known, Sigs, TSigs) ->
     maps:from_list(
       [{Sh, {dispatch_name(NR), all_true(PFs), all_true(RFs), Cands}}
        || {_NP, NR} = Sh <- Used, NR =< ?MAX_DISPATCH_RESULTS,
-          Cands <- [[{Idx, Pos, Shape, PF, RF}
-                     || {Pos, Idx, _, _} <- Unit, maps:get(Idx, Sigs) =:= Sh,
+          Cands <- [[{Idx, Pos, Shape, PF, RF, canon_of(F)}
+                     || {Pos, Idx, F, _} <- Unit, maps:get(Idx, Sigs) =:= Sh,
                         {_, Shape, _, {PF, RF}} <- [maps:get(Idx, Known)]]],
           Cands =/= [],
-          PFs <- [[PF || {_, _, _, PF, _} <- Cands]],
-          RFs <- [[RF || {_, _, _, _, RF} <- Cands]]]).
+          PFs <- [[PF || {_, _, _, PF, _, _} <- Cands]],
+          RFs <- [[RF || {_, _, _, _, RF, _} <- Cands]]]).
+
+%% A function's canonical type, or `undefined' for a hand-made `#fn{}'.
+canon_of(#fn{type = {Canon, _, _}}) -> Canon;
+canon_of(_) -> undefined.
 
 %% Position by position, true where every list is.
 all_true([L | Ls]) ->
@@ -1727,7 +1772,7 @@ dispatch_fn({NP, NR}, {Name, AF, RF, Cands}, Mod, Stamp) ->
           end,
     Pat = results_pat(Rs),
     Clause =
-        fun({Idx, Pos, Shape, PF, CRF}) ->
+        fun({Idx, Pos, Shape, PF, CRF, _Canon}) ->
                 Fn = cerl:c_fname(fun_name(Pos), arity_of(NP, Shape)),
                 Body =
                     case Shape of

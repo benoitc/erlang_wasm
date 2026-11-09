@@ -53,6 +53,10 @@
     %% Memories another instance can observe growing: imported or exported.
     %% Only these pay for a published page count.
     shared_mems = #{} :: #{non_neg_integer() => true},
+    %% Tables whose contents cannot change after instantiation, with those
+    %% contents (a function index or `null' per slot). Derived from the module
+    %% alone, so compiled code may rely on it for every instance.
+    static_tables = #{} :: #{non_neg_integer() => tuple()},
     %% Per-function state.
     locals   = {}  :: tuple(),      % of valtype(), params then declared locals
     results  = []  :: [valtype()]   % current function's result types

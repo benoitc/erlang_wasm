@@ -68,7 +68,8 @@ all() ->
      f64_arithmetic_agrees_inline_and_through_the_helper,
      a_table_call_reaches_every_kind_of_target,
      a_table_call_to_another_instance_still_crosses,
-     a_table_call_into_the_unit_is_a_local_dispatch].
+     a_table_call_into_the_unit_is_a_local_dispatch,
+     a_table_nothing_can_change_is_resolved_when_compiled].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -458,10 +459,8 @@ check(Name, Src, ArgSets, How) ->
                                             element(1, wasm_core:can_compile(F, IR))
                                                 =:= ok])],
     Sigs = maps:from_list([{F#fn.idx, {F#fn.nparams, F#fn.nresults}} || F <- Fns]),
-    TSigs = maps:from_list(
-              [{Idx, {length(Ps), length(Rs)}}
-               || {Idx, T} <- lists:enumerate(0, tuple_to_list(I#inst.types)),
-                  #functype{params = Ps, results = Rs} <- [functype_of(T)]]),
+    %% What production hands the generator, static tables included.
+    TSigs = wasm_jit:tsigs(I),
     ct:log("~s: ~p of ~p functions compiled", [Name, length(Unit), length(Fns)]),
     %% Without this a case whose subject the generator quietly refused still
     %% passes, having compared the interpreter against itself. Two cases below
@@ -1597,6 +1596,46 @@ a_table_call_into_the_unit_is_a_local_dispatch(_) ->
     ?assertNotEqual(nomatch, string:find(Text, "'wasm_i_1'/5 =")),
     ?assertNotEqual(nomatch, string:find(Text, "apply 'wasm_i_1'/5")),
     check_module(fibi, Wat, [[0], [1], [2], [10], [20]]).
+
+%% A table nothing can change after instantiation (not imported or
+%% exported, never written, filled by constant segments) is static: a call
+%% through it reads its target from a literal, with no lookup at run time.
+%% The same table made writable, or exported, is not, and goes through
+%% `wasm_exec:indirect_index/5'. Answers agree with the interpreter either
+%% way, including an empty slot, a slot past the end and a wrong type, and a
+%% slot rewritten before the call.
+a_table_nothing_can_change_is_resolved_when_compiled(_) ->
+    Body = fun(Extra) -> iolist_to_binary([~"
+        (type $t (func (param i32) (result i32)))
+        (type $u (func (param i64) (result i64)))
+        (table $tb 4 funcref)
+        (elem (table $tb) (i32.const 0) func $dbl $neg)
+        (elem (table $tb) (i32.const 3) func $wide)
+        (func $dbl (param i32) (result i32) local.get 0 i32.const 2 i32.mul)
+        (func $neg (param i32) (result i32) i32.const 0 local.get 0 i32.sub)
+        (func $wide (param i64) (result i64) local.get 0)
+        (func (export \"f\") (param i32 i32) (result i32)
+          local.get 1 local.get 0 call_indirect (type $t))", Extra]) end,
+    Static = Body(~""),
+    %% A writer anywhere in the module is enough, called or not.
+    Written = Body(~"(func $w i32.const 1 ref.func $dbl table.set $tb)"),
+    Exported = iolist_to_binary([Body(~""), ~"(export \"tb\" (table $tb))"]),
+    Args = [[Slot, V] || Slot <- [0, 1, 2, 3, 4, -1],
+                         V <- [5, -1, -2147483648]],
+    Dump = fun(Src) ->
+                   Wat = iolist_to_binary(["(module ", Src, ")"]),
+                   {I, _, _, _} = unit_of(Wat),
+                   T = unicode:characters_to_list(wasm_jit:dump(I)),
+                   ok = wasm:destroy(I),
+                   T
+           end,
+    ?assertEqual(nomatch, string:find(Dump(Static), "indirect_index")),
+    ?assertNotEqual(nomatch, string:find(Dump(Written), "indirect_index")),
+    ?assertNotEqual(nomatch, string:find(Dump(Exported), "indirect_index")),
+    [check(Name, Src, Args, same)
+     || {Name, Src} <- [{"static", Static}, {"written", Written},
+                        {"exported", Exported}]],
+    ok.
 
 even_odd(OddExtra) ->
     iolist_to_binary([~"(module

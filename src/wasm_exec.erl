@@ -1812,13 +1812,15 @@ indirect_target(TypeIdx, TableIdx, I, #st{inst = Inst, mut = Mut}) ->
 indirect_target(TypeIdx, TableIdx, I, Inst, Mut) ->
     Table = element(TableIdx + 1, Mut#mut.tables),
     Idx = table_index(I),
-    case Idx < wasm_table:size(Table) of
-        false -> wasm_error:trap(undefined_element, #{index => Idx});
-        true -> ok
-    end,
     Expected = canon_at(TypeIdx, Inst),
-    case wasm_table:get(Table, Idx) of
-        null -> wasm_error:trap(uninitialized_element, #{index => Idx});
+    case wasm_table:lookup(Table, Idx) of
+        out_of_bounds -> wasm_error:trap(undefined_element, #{index => Idx});
+        {ok, null} -> wasm_error:trap(uninitialized_element, #{index => Idx});
+        {ok, Entry} -> indirect_entry(Entry, Expected, Inst)
+    end.
+
+indirect_entry(Entry, Expected, Inst) ->
+    case Entry of
         {funcref, Id, F} when Id =:= element(#inst.id, Inst) ->
             %% The overwhelmingly common case, and it reaches the callee's type
             %% through the running instance rather than resolving anything.
@@ -1840,6 +1842,10 @@ canon_at(Idx, #inst{canon = C}) -> element(Idx + 1, C).
 %% The callee's type must be a *subtype* of the declared one, not equal to it.
 %% Both sides are canonical, and the callee carries its whole supertype chain
 %% because it may come from a module whose type indices mean nothing here.
+%% The exact type first: it is the overwhelmingly common case and one
+%% comparison, where the supertype chain is a list walk.
+check_indirect_type(Expected, {Expected, _, _}) ->
+    ok;
 check_indirect_type(Expected, {_, Supers, Actual}) ->
     case lists:member(Expected, Supers) of
         true -> ok;
@@ -2135,7 +2141,9 @@ heap_test(_, _, _St) -> false.
 %% is also correct for a 32-bit table: the validator has already guaranteed the
 %% value is an i32, and for a negative i32 both interpretations land far above
 %% any table's size, so both trap.
-table_index(V) -> wasm_num:to_u64(V).
+%% `wasm_num:to_u64/1', inline: the index of a 32- or 64-bit table read as
+%% unsigned.
+table_index(V) -> V band 16#FFFFFFFFFFFFFFFF.
 
 %%% ---------------------------------------------------------------- memory ---
 

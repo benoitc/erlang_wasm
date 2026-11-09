@@ -108,7 +108,8 @@ context(#module{types = Types, imports = Imports, funcs = Funcs, tables = Tables
         n_imported_globals = length(ImportedGlobals),
         refs    = declared_refs(M),
         shared_globals = shared_globals(M),
-        shared_mems = shared_mems(M)
+        shared_mems = shared_mems(M),
+        static_tables = static_tables(M)
     }.
 
 %% What `struct.get' and `array.get' need to know about a type, resolved once
@@ -129,6 +130,80 @@ shared_mems(#module{imports = Imports, mems = Mems, exports = Exports}) ->
     Exported = maps:from_keys([I || #export{desc = {mem, I}} <- Exports], true),
     maps:from_keys([I || I <- lists:seq(0, Total - 1), I < NImported orelse maps:is_key(I, Exported)],
                    true).
+
+%% A table is static when nothing can change it after instantiation: neither
+%% imported nor exported (so no other module or host can reach it), no
+%% initialiser expression, no instruction anywhere in the module that writes
+%% it, and every active segment for it at a constant offset, filling it with
+%% `ref.func' or `ref.null'. Its contents are then a property of the module,
+%% which is what lets compiled code resolve a `call_indirect' through it once
+%% instead of at every call. A table larger than `?STATIC_TABLE_MAX' is not
+%% considered: its contents would be a large literal in compiled code.
+-define(STATIC_TABLE_MAX, 4096).
+static_tables(#module{imports = Imports, tables = Tables, exports = Exports,
+                      elems = Elems, funcs = Funcs}) ->
+    NImported = length([1 || #import{desc = {table, _}} <- Imports]),
+    Exported = maps:from_keys([I || #export{desc = {table, I}} <- Exports],
+                              true),
+    Cands = [{NImported + K, Min}
+             || {K, #tabletype{limits = #limits{min = Min}, init = Init}}
+                    <- lists:enumerate(0, Tables),
+                Init =:= undefined, Min =< ?STATIC_TABLE_MAX,
+                not maps:is_key(NImported + K, Exported)],
+    case Cands of
+        [] -> #{};
+        _ ->
+            Written = written_tables(Funcs),
+            maps:from_list(
+              [{T, C} || {T, Min} <- Cands, not maps:is_key(T, Written),
+                         {ok, C} <- [static_contents(T, Min, Elems)]])
+    end.
+
+%% Every table some instruction of the module writes.
+written_tables(Funcs) ->
+    lists:foldl(fun(#func{body = B}, Acc) -> writes(body_of(B), Acc) end,
+                #{}, Funcs).
+
+body_of({validated, Ann}) -> Ann;
+body_of(B) -> B.
+
+writes(Is, Acc) -> lists:foldl(fun write/2, Acc, Is).
+
+write({H, _Base, I}, Acc) when is_integer(H) -> write(I, Acc);
+write({H, I}, Acc) when is_integer(H) -> write(I, Acc);
+write({table_set, T}, Acc) -> Acc#{T => true};
+write({table_grow, T}, Acc) -> Acc#{T => true};
+write({table_fill, T}, Acc) -> Acc#{T => true};
+write({table_copy, D, _}, Acc) -> Acc#{D => true};
+write({table_init, _, T}, Acc) -> Acc#{T => true};
+write({block, _, B}, Acc) -> writes(B, Acc);
+write({loop, _, B}, Acc) -> writes(B, Acc);
+write({if_, _, T, E}, Acc) -> writes(E, writes(T, Acc));
+write({try_table, _, _, B}, Acc) -> writes(B, Acc);
+write(_, Acc) -> Acc.
+
+%% The table's contents after instantiation, or `error' when they depend on
+%% anything but the module.
+static_contents(T, Min, Elems) ->
+    try
+        Slots = lists:foldl(
+                  fun(#elem{mode = {active, Tb, Offset}, init = Init}, Acc)
+                        when Tb =:= T ->
+                          [{i32_const, K}] = Offset,
+                          true = K >= 0 andalso K + length(Init) =< Min,
+                          lists:foldl(fun({I, Item}, A) ->
+                                              A#{K + I => item(Item)}
+                                      end, Acc, lists:enumerate(0, Init));
+                     (_, Acc) -> Acc
+                  end, #{}, Elems),
+        {ok, list_to_tuple([maps:get(I, Slots, null)
+                            || I <- lists:seq(0, Min - 1)])}
+    catch
+        error:_ -> error
+    end.
+
+item([{ref_func, F}]) -> F;
+item([{ref_null, _}]) -> null.
 
 %% A global is shared when a write to it is observable from another module:
 %% mutable, and either imported from somewhere or exported to somewhere.

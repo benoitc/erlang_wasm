@@ -56,7 +56,7 @@ done
 # One copy, compiled once, used by every arm: only the runtime on the code
 # path differs between baseline and candidate.
 wasm-tools parse bench/cross/loop.wat -o bench/cross/loop.wasm
-for f in mem fib bulk nop; do
+for f in mem fib bulk nop fibi f64 blocks; do
   wasm-tools parse "$HARNESS/$f.wat" -o "$HARNESS/$f.wasm"
 done
 erlc -o "$HARNESS" -pa "$TREES/candidate/_build/default/lib/wasm/ebin" \

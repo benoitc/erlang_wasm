@@ -32,8 +32,9 @@ refuse(Fmt, Args) -> throw({refuse, io_lib:format(Fmt, Args)}).
 
 -define(ARMS, [baseline, candidate, erlang, wasmtime]).
 -define(COLD, [baseline, candidate]).
--define(WASM_ROWS, [loop, mem, bulk, fib30, call, plugin, qjs]).
--define(ERLANG_ROWS, [loop, fib30, fib30_idiomatic]).
+-define(WASM_ROWS, [loop, mem, bulk, fib30, fibi30, f64, blocks, call, plugin,
+                    qjs]).
+-define(ERLANG_ROWS, [loop, fib30, fib30_idiomatic, fibi30, f64]).
 
 %%% ------------------------------------------------------------ the checks ---
 
@@ -95,7 +96,7 @@ check_entered(Runs) ->
 
 %% Every row that carries a checksum must carry the same one everywhere.
 check_checksums(Runs) ->
-    Rows = [loop, mem, bulk, fib30, fib30_idiomatic, qjs],
+    Rows = [loop, mem, bulk, fib30, fib30_idiomatic, fibi30, f64, blocks, qjs],
     [case lists:usort(lists:append(
                         [sums(maps:get(checksum, maps:get(Row, T)))
                          || {{arm, _, _}, T} <- maps:to_list(Runs),
@@ -150,6 +151,9 @@ print(Runs, Rounds) ->
     Row("store+load, ns/iter", [mem, ns_per_iter], none, true),
     Row("4 KiB copy, ns", [bulk, ns_per_iter], none, true),
     Row("fib(30), ms", [fib30, ms], [fib30, ms], true),
+    Row("fib(30) through a table, ms", [fibi30, ms], [fibi30, ms], true),
+    Row("f64 loop, ns/iter", [f64, ns_per_iter], [f64, ns_per_iter], true),
+    Row("block result + load, ns/iter", [blocks, ns_per_iter], none, true),
     Row("call from Erlang, ns", [call, ns_per_call], none, true),
     Row("plugin compile+inst, us", [plugin, us], none, true),
     Row("QuickJS compile, ms", [qjs, compile_ms], none, true),

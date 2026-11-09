@@ -17,7 +17,7 @@ the same checksums:
 - `fib/1` is the idiomatic Erlang `fib`, with no wrapping, which agrees with
   `fib32/1` while no value overflows.
 """.
--export([loop/1, n_loop/3, fib/1, fib32/1, signed32/1]).
+-export([loop/1, n_loop/3, fib/1, fib32/1, fibi/1, f64loop/1, signed32/1]).
 -export([entered/0, assert_entered/1, warm/5]).
 
 -define(M32, 16#FFFFFFFF).
@@ -47,6 +47,30 @@ fib32(N) -> signed32(f32(N band ?M32)).
 
 f32(N) when N < 2 -> N;
 f32(N) -> (f32((N - 1) band ?M32) + f32((N - 2) band ?M32)) band ?M32.
+
+-doc """
+`fibi.wat`: `fib32/1` with every recursive call through a fun held in a
+tuple, which is what a call through a table is in Erlang.
+""".
+-spec fibi(non_neg_integer()) -> integer().
+fibi(N) -> signed32(fi(N band ?M32, {fun fi/2})).
+
+fi(N, _T) when N < 2 -> N;
+fi(N, T) ->
+    F = element(1, T),
+    (F((N - 1) band ?M32, T) + F((N - 2) band ?M32, T)) band ?M32.
+
+-doc "`f64.wat`'s `bench(N)`: the same float operations in the same order.".
+-spec f64loop(non_neg_integer()) -> integer().
+f64loop(N) -> f64l(0, N, 1.0, 0).
+
+f64l(I, N, _X, C) when I >= N -> signed32(C);
+f64l(I, N, X0, C) ->
+    X = X0 * 1.000001 + 0.5,
+    case X > 1000.0 of
+        true -> f64l(I + 1, N, X - 999.0, (C + 1) band ?M32);
+        false -> f64l(I + 1, N, X, C)
+    end.
 
 -doc "An unsigned 32-bit value read as the signed i32 a wasm function returns.".
 -spec signed32(non_neg_integer()) -> integer().

@@ -63,7 +63,8 @@ all() ->
      an_i32_crosses_every_boundary_unchanged,
      fib_compiles_to_one_mask_per_result,
      a_frame_holds_its_values_in_the_form_their_type_needs,
-     a_block_result_is_not_converted_on_its_way_out].
+     a_block_result_is_not_converted_on_its_way_out,
+     an_i32_load_gives_its_value_in_the_form_its_readers_need].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -1435,6 +1436,37 @@ a_block_result_is_not_converted_on_its_way_out(_) ->
                              [dotall, {capture, all_but_first, list}]),
     ?assertEqual(nomatch, string:find(Body, "2147483648")),
     check_module(block_result, Wat, [[0], [1], [-1], [-2147483648]]).
+
+%% Every i32 load width and sign, over bytes whose top bit is set, at an
+%% aligned address (the inline path) and one straddling a word (the helper),
+%% in memory 0 (through the translation cache) and through a loop that misses
+%% it. Each value is read by operations that depend on its form: an unsigned
+%% load is held `u32', a signed one `canon', and a value in the wrong form
+%% answers wrongly here even where returning it would hide that.
+an_i32_load_gives_its_value_in_the_form_its_readers_need(_) ->
+    Loads = ["i32.load", "i32.load8_u", "i32.load16_u", "i32.load8_s",
+             "i32.load16_s"],
+    [check(Load, iolist_to_binary(
+                   ["(memory 1)
+                     (data (i32.const 0) \"\\ff\\fe\\80\\81\\7f\\80\\00\\ff\\fd\\fc\\fb\\fa\")
+                     (func (export \"f\") (param i32) (result i64 i32 i32 i32 i64)
+                       (local $v i32) (local $n i32)
+                       local.get 0 ", Load, " local.tee $v
+                       i64.extend_i32_u
+                       local.get $v i32.const 3 i32.shr_u
+                       local.get $v i32.const 5 i32.lt_u
+                       local.get $v i32.const -1 i32.lt_s
+                       i32.const 3 local.set $n
+                       loop $l
+                         local.get 0 local.get $n i32.add ", Load, "
+                         local.get $v i32.add local.set $v
+                         local.get $n i32.const 1 i32.sub local.tee $n
+                         br_if $l
+                       end
+                       local.get $v i64.extend_i32_u)"]),
+           [[0], [1], [2], [3], [4], [5], [6], [7]], same)
+     || Load <- Loads],
+    ok.
 
 even_odd(OddExtra) ->
     iolist_to_binary([~"(module

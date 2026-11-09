@@ -1324,7 +1324,7 @@ instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _, _, _, _}} = G0,
         true ->
             {Base, G4} = pop_raw(G3),
             {V, G5} = var(G4),
-            {load, N, Kind} = wasm_exec:load_spec(Op),
+            {load, N, Kind} = load_spec(Op),
             {Form, Next} =
                 case cache_use(Rest, Exit, length(G0#g.frames)) of
                     must -> {first, New};
@@ -1337,7 +1337,7 @@ instr({Op, {_Align, Offset, 0}}, Rest, #g{tlb = {_, _, _, _, _, _}} = G0,
             join(Form, cached(load, G0#g.mut, N, Kind,
                               address(Base, Offset, G0), undefined, Tlb, Form),
                  [V | tuple_to_list(New)],
-                 seq(Rest, push(V, G5#g{tlb = Next}), Exit));
+                 seq(Rest, push(V, loaded(Kind, V, G5#g{tlb = Next})), Exit));
         false ->
             true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
             {Val, G4} = stored(Op, G3), {Base, G5} = pop_raw(G4),
@@ -1353,10 +1353,10 @@ instr({Op, {_Align, Offset, M}}, Rest, G0, Exit) when is_atom(Op), is_integer(Of
         true ->
             {Base, G1} = pop_raw(G0),
             {V, G2} = var(G1),
-            {load, N, Kind} = wasm_exec:load_spec(Op),
+            {load, N, Kind} = load_spec(Op),
             cerl:c_let([V], access(load, G0#g.mut, M, N, Kind,
                                    address(Base, Offset, G0), undefined),
-                       seq(Rest, push(V, G2), Exit));
+                       seq(Rest, push(V, loaded(Kind, V, G2)), Exit));
         false ->
             true = lists:member(Op, ?STORES) orelse throw({unsupported, Op}),
             {Val, G1} = stored(Op, G0), {Base, G2} = pop_raw(G1),
@@ -2120,8 +2120,7 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
     Ix = cerl:c_var('Ix'), Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'),
     Ci = cerl:c_var('Ci'),
     Slow = case Dir of
-               load -> call_op(load_at, [Mut, cerl:abstract(M), cerl:abstract(N),
-                                         cerl:c_atom(Kind), A]);
+               load -> load_at(Mut, M, N, Kind, A);
                store -> call_op(store_at, [Mut, cerl:abstract(M), cerl:abstract(N),
                                            cerl:c_atom(Kind), A, Val])
            end,
@@ -2221,10 +2220,30 @@ perform(load, _Mut, N, Kind, A, C, I, Bit, _Val) ->
 perform(store, Mut, N, Kind, A, C, I, Bit, Val) ->
     cerl:c_seq(inline_store(N, Kind, A, undefined, I, C, Bit, Val), Mut).
 
+%% An unsigned i32 load, in the generator's own kind: `u32'. Its value is the
+%% loaded bits as they are, which is the `u32' form, so the sign fold every
+%% load used to make and the mask its next reader made are both gone.
+%% `wasm_exec' knows only `i32_u', so the kind is translated back at the two
+%% calls into it, `load_at/5', and the answer, `canon' there, is masked.
+load_spec(Op) ->
+    case wasm_exec:load_spec(Op) of
+        {load, N, i32_u} -> {load, N, u32};
+        Spec -> Spec
+    end.
+
+load_at(Mut, M, N, u32, A) ->
+    mask32(load_at(Mut, M, N, i32_u, A));
+load_at(Mut, M, N, Kind, A) ->
+    call_op(load_at, [Mut, cerl:abstract(M), cerl:abstract(N),
+                      cerl:c_atom(Kind), A]).
+
+%% A load's result `V', marked `u32' when its kind gives that form.
+loaded(u32, V, G) -> mark(V, G);
+loaded(_, _V, G) -> G.
+
 %% The tested implementation, for whatever the inline paths exclude.
 helper(load, Mut, N, Kind, A, _Val) ->
-    call_op(load_at, [Mut, cerl:abstract(0), cerl:abstract(N),
-                      cerl:c_atom(Kind), A]);
+    load_at(Mut, 0, N, Kind, A);
 helper(store, Mut, N, Kind, A, Val) ->
     call_op(store_at, [Mut, cerl:abstract(0), cerl:abstract(N),
                        cerl:c_atom(Kind), A, Val]).
@@ -2296,10 +2315,10 @@ miss_fname(Dir, N, Kind) ->
 %% is written out, so the set is fixed and nothing a guest supplies can add to
 %% it.
 miss_name(load, 1, i32_s) -> wasm_m_load_1_i32_s;
-miss_name(load, 1, i32_u) -> wasm_m_load_1_i32_u;
 miss_name(load, 2, i32_s) -> wasm_m_load_2_i32_s;
-miss_name(load, 2, i32_u) -> wasm_m_load_2_i32_u;
-miss_name(load, 4, i32_u) -> wasm_m_load_4_i32_u;
+miss_name(load, 1, u32) -> wasm_m_load_1_u32;
+miss_name(load, 2, u32) -> wasm_m_load_2_u32;
+miss_name(load, 4, u32) -> wasm_m_load_4_u32;
 miss_name(load, 1, i64_s) -> wasm_m_load_1_i64_s;
 miss_name(load, 1, i64_u) -> wasm_m_load_1_i64_u;
 miss_name(load, 2, i64_s) -> wasm_m_load_2_i64_s;
@@ -2325,7 +2344,7 @@ miss_shapes(Unit) ->
       fold([IR || {_Pos, _Idx, _F, IR} <- Unit],
            fun({Op, {_Align, Offset, 0}}, Acc)
                  when is_atom(Op), is_integer(Offset) ->
-                   case wasm_exec:load_spec(Op) of
+                   case load_spec(Op) of
                        false ->
                            case lists:member(Op, ?STORES) of
                                true -> [wasm_exec:store_spec(Op) | Acc];
@@ -2517,9 +2536,9 @@ image_load(Mem, A, N, Kind, Slow, Keep) ->
                [cerl:c_clause([Bytes], Keep(image_value(Kind, X))),
                 cerl:c_clause([cerl:c_var('_Short')], Slow)])))])).
 
+image_sign(u32, _N) -> unsigned;
 image_sign(i32_s, _N) -> signed;
 image_sign(i64_s, _N) -> signed;
-image_sign(i32_u, 4) -> signed;
 image_sign(i64_u, 8) -> signed;
 image_sign(_Kind, _N) -> unsigned.
 
@@ -2732,7 +2751,7 @@ mask(N) -> wasm_memory:mask(N).
 %% `wasm_core_SUITE:every_memory_access_agrees_with_the_interpreter/1`, which
 %% walks every load and store against a spread of byte patterns. Change either
 %% of these and change that test's expectations at your peril.
-decode(i32_u, _N, Raw) -> wrap(32, Raw);
+decode(u32, _N, Raw) -> Raw;
 decode(i64_u, _N, Raw) -> wrap(64, Raw);
 decode(i32_s, N, Raw) -> wrap(32, sign(N, Raw));
 decode(i64_s, N, Raw) -> wrap(64, sign(N, Raw));

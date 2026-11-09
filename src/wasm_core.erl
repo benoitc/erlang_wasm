@@ -1651,6 +1651,61 @@ emit2_canon(Op, Rest, G0, Exit) ->
 
 %%% ------------------------------------------------------ inline arithmetic ---
 %%
+%% f64 arithmetic and comparison, inline when both operands are floats of a
+%% size whose result cannot overflow; everything else (NaN and the
+%% infinities, which are atoms and tuples, never floats, and the operands
+%% near the top of the range) goes to `wasm_exec:op2/3' as before.
+%%
+%% Inline the answer is `wasm_num_float''s, by construction: on two floats its
+%% `add', `sub' and `mul' compute this same `A op B', `divide' computes
+%% `A / B' once the divisor is not zero, and the comparisons decide on `<',
+%% `>' and neither, which on two floats are `<', `>' and `=='. The bounds only
+%% keep the BEAM's `badarith' on overflow out of reach:
+%%
+%%   add, sub  both below 2^1022, so the sum stays below the largest double
+%%   mul       both below 2^511, so the product stays below 2^1022
+%%   div       a divisor of at least 1.0, so the quotient is no larger than
+%%             the dividend, which is finite
+%%
+%% Inside a function the BEAM keeps such floats unboxed, which is most of
+%% what calling the helper cost.
+-define(F1022, 4.49423283715579e307).
+-define(F511, 6.703903964971299e153).
+
+f64_op(f64_add) -> {'+', add};
+f64_op(f64_sub) -> {'-', add};
+f64_op(f64_mul) -> {'*', mul};
+f64_op(f64_div) -> {'/', 'div'};
+f64_op(f64_eq) -> {'==', cmp};
+f64_op(f64_ne) -> {'/=', cmp};
+f64_op(f64_lt) -> {'<', cmp};
+f64_op(f64_gt) -> {'>', cmp};
+f64_op(f64_le) -> {'=<', cmp};
+f64_op(f64_ge) -> {'>=', cmp};
+f64_op(_) -> false.
+
+f64_inline(Op, Erl, Guard, A, B) ->
+    Floats = [bif(is_float, [A]), bif(is_float, [B])],
+    Below = fun(X, Bound) ->
+                    bif('<', [bif(abs, [X]), cerl:abstract(Bound)])
+            end,
+    Test = case Guard of
+               add -> Floats ++ [Below(A, ?F1022), Below(B, ?F1022)];
+               mul -> Floats ++ [Below(A, ?F511), Below(B, ?F511)];
+               'div' ->
+                   Floats ++ [bif('>=', [bif(abs, [B]), cerl:abstract(1.0)])];
+               cmp -> Floats
+           end,
+    Inline = case Guard of
+                 cmp -> test(Erl, A, B);
+                 _ -> bif(Erl, [A, B])
+             end,
+    %% A guard, so an operand that is not a float makes it false rather than
+    %% raising.
+    cerl:c_case(cerl:c_values([]),
+                [cerl:c_clause([], conj(Test), Inline),
+                 cerl:c_clause([], call_op(op2, [cerl:c_atom(Op), A, B]))]).
+%%
 %% The i32 operations on `u32' values (see `u32/2'). Each takes its operands in
 %% whichever form they arrive, converts what it must, and gives a `u32' result:
 %% wrapping is one `band', which also tells the compiler the result's range.
@@ -1727,6 +1782,12 @@ unop32(_) -> false.
 %% masking to width and then flipping and subtracting the sign bit: three BIFs
 %% and no test, where a comparison would branch.
 binop(Op, A, B, W) ->
+    case f64_op(Op) of
+        false -> binop_int(Op, A, B, W);
+        {Erl, Guard} -> f64_inline(Op, Erl, Guard, A, B)
+    end.
+
+binop_int(Op, A, B, W) ->
     case inline_w(Op) of
         false ->
             case inline(Op) of

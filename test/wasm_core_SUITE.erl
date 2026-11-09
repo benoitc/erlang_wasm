@@ -64,7 +64,8 @@ all() ->
      fib_compiles_to_one_mask_per_result,
      a_frame_holds_its_values_in_the_form_their_type_needs,
      a_block_result_is_not_converted_on_its_way_out,
-     an_i32_load_gives_its_value_in_the_form_its_readers_need].
+     an_i32_load_gives_its_value_in_the_form_its_readers_need,
+     f64_arithmetic_agrees_inline_and_through_the_helper].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -1447,9 +1448,11 @@ an_i32_load_gives_its_value_in_the_form_its_readers_need(_) ->
     Loads = ["i32.load", "i32.load8_u", "i32.load16_u", "i32.load8_s",
              "i32.load16_s"],
     [check(Load, iolist_to_binary(
-                   ["(memory 1)
-                     (data (i32.const 0) \"\\ff\\fe\\80\\81\\7f\\80\\00\\ff\\fd\\fc\\fb\\fa\")
-                     (func (export \"f\") (param i32) (result i64 i32 i32 i32 i64)
+                   ["(memory 1) (data (i32.const 0) ",
+                    "\"\\ff\\fe\\80\\81\\7f\\80\\00\\ff",
+                    "\\fd\\fc\\fb\\fa\")
+                     (func (export \"f\") (param i32)
+                       (result i64 i32 i32 i32 i64)
                        (local $v i32) (local $n i32)
                        local.get 0 ", Load, " local.tee $v
                        i64.extend_i32_u
@@ -1466,6 +1469,49 @@ an_i32_load_gives_its_value_in_the_form_its_readers_need(_) ->
                        local.get $v i64.extend_i32_u)"]),
            [[0], [1], [2], [3], [4], [5], [6], [7]], same)
      || Load <- Loads],
+    ok.
+
+%% f64 add, sub, mul, div and the six comparisons are inline when both
+%% operands are floats below a bound that keeps overflow out of reach, and
+%% call the helper otherwise. Each is checked on both sides of its bound, at
+%% the largest double, at zeros of both signs and subnormals, and against the
+%% infinities and NaNs, which only the helper handles. `=:=' tells -0.0 from
+%% 0.0, so the answers agree bit for bit.
+f64_arithmetic_agrees_inline_and_through_the_helper(_) ->
+    Ops = ["f64.add", "f64.sub", "f64.mul", "f64.div", "f64.eq", "f64.ne",
+           "f64.lt", "f64.gt", "f64.le", "f64.ge"],
+    Edge = [0.0, -0.0, 1.0, -1.5, 0.999, 1.0e-310, -2.5e-320,
+            1.7976931348623157e308, -1.7976931348623157e308,
+            4.49423283715579e307, 4.4942328371557905e307,
+            6.703903964971299e153, 6.7039039649713e153, 3.0e200, -7.0e-200,
+            %% Past each bound by enough to overflow: two of these add, or
+            %% two of the next multiply, past the largest double.
+            9.0e307, -9.0e307, 1.0e155],
+    Pairs = [[A, B] || A <- Edge, B <- Edge],
+    Specials = ["inf", "-inf", "nan", "-nan", "nan:0x1234"],
+    [begin
+         Arith = ["f64.add", "f64.sub", "f64.mul", "f64.div"],
+         R = case lists:member(Op, Arith) of
+                 true -> "f64";
+                 false -> "i32"
+             end,
+         Src = iolist_to_binary(
+                 ["(func (export \"f\") (param f64 f64) (result ", R, " ", R,
+                  " ", R, ")
+                     local.get 0 local.get 1 ", Op,
+                  [[" local.get 0 f64.const ", Sp, " ", Op] || Sp <- ["inf"]],
+                  [[" f64.const ", Sp, " local.get 1 ", Op]
+                   || Sp <- ["nan:0x1234"]],
+                  ")"]),
+         check(Op, Src, Pairs, same),
+         SrcS = iolist_to_binary(
+                  ["(func (export \"f\") (param f64) (result",
+                   [[" ", R, " ", R] || _ <- Specials], ")",
+                   [[" local.get 0 f64.const ", Sp, " ", Op,
+                     " f64.const ", Sp, " local.get 0 ", Op] || Sp <- Specials],
+                   ")"]),
+         check(Op ++ " specials", SrcS, [[V] || V <- Edge], same)
+     end || Op <- Ops],
     ok.
 
 even_odd(OddExtra) ->

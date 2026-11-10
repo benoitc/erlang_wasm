@@ -27,6 +27,7 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [Head to head with erlang-wasmtime, again, on 0.9.x](#head-to-head-with-erlang-wasmtime-again-on-09x)
 - [The comparison harness, run against itself](#the-comparison-harness-run-against-itself)
 - [Compiled calls as cheap as plain Erlang](#compiled-calls-as-cheap-as-plain-erlang)
+- [Typed frames, unsigned loads, inline f64, local table calls](#typed-frames-unsigned-loads-inline-f64-local-table-calls)
 - [Signed words, priced](#signed-words-priced)
 - [Compiled wasm against the same work written in Erlang](#compiled-wasm-against-the-same-work-written-in-erlang)
 - [The second audit's fixes, held against QuickJS](#the-second-audits-fixes-held-against-quickjs)
@@ -2629,6 +2630,73 @@ Raw results: `test/audit/raw/call-protocol/`, one directory per gate run
 (`cp-gates2` Step 1, `cp-gates4` Step 1c, `cp-gates5` Step 2 first,
 `cp-gates6` final), with the candidate tree's manifest, the load log, and the
 request, `perinstr` and `realbench` outputs.
+
+## Typed frames, unsigned loads, inline f64, local table calls
+
+Four gaps the previous section left: block, loop and `if` values travelled
+signed; i32 loads were folded to signed and masked back; f64 arithmetic
+called `wasm_exec`; a `call_indirect` to a function of the same unit went
+back through `invoke/6`. Three harness rows were added first, so both trees
+run them: `fibi30` (`fib(30)` through a table), `f64` (a multiply, add and
+compare per iteration) and `blocks` (an i32 load and a block result per
+iteration); the first two have a plain Erlang reference in
+`bench/paths/gapref.erl`.
+
+Each step against the one before it, on its own kernel, a fresh VM per run,
+ten pairs, both orders, the paired median of candidate over reference:
+
+| step | kernel | paired ratio |
+| --- | --- | ---: |
+| frames hold i32 unsigned | `blocks` | 0.978 (10 of 10 pairs) |
+| unsigned i32 loads | `blocks` / `mem` | 0.979 / **0.893** |
+| inline f64 | `f64` | **0.448** (46.8 to 21.0 ms) |
+| `call_indirect` through a local dispatcher | `fibi` | 0.798 (204 to 163 ms) |
+
+The dispatcher left `fibi` at 163 ms: the target lookup was 55.4 ns a call
+(the table read twice through `atomics` and the process dictionary, an
+`array` walk, the type check). A table nothing can change after
+instantiation is now resolved when compiling, from a literal; other tables
+are read once a call and check the exact type first. The check for writes
+first ran at validation and charged every module loaded 3.5 ms on QuickJS
+(context 0.11 to 3.59 ms); it now runs when the compiler compiles.
+
+**Gate runs against PR #85's head, `ced03e1`, 2026-11-10.** Three runs;
+the last:
+
+| | `ced03e1` | candidate | plain Erlang | Wasmtime | gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `fib(30)` through a table, ms | 210.998 | **7.790** | 5.367 | 4.883 | within 2.5x of Erlang: 1.45x, pass |
+| `f64` loop, ns/iter | 22.813 | **10.304** | 5.102 | 1.432 | within 2.5x of Erlang: 2.02x, pass |
+| block result + load, ns/iter | 39.951 | 39.347 | | | no slower: pass |
+| store+load, ns/iter | 20.313 | 18.222 | | | no slower: pass |
+| QuickJS `_start`, ms | 113.202 | 99.301 | | | |
+| QuickJS `realbench`, paired median | | 1.014 | | | at most 1.03: pass |
+| CPython request p50, ms | 9.793 | 9.029 (0.922x) | | | pass |
+| cold compile / code size | | 0.99x / 0.98x | | | pass |
+| QuickJS module compile, ms | 86.495 | 94.110 (1.09x, paired 1.018) | | | at most 1.03x: **fail** |
+
+Every harness check passed in all three runs. The other rows were within the
+spread the harness showed against itself: plain `fib(30)` read 1.06x, 1.22x
+and 0.89x on byte-identical generated code (4,215 bytes on both trees).
+
+**The QuickJS module compile row, diagnosed.** It read 1.10x, 1.13x and 1.09x
+(paired 1.085, 1.060, 1.018). `wasm:compile` itself does not do more work:
+
+- Fresh VMs, compile alone, eight pairs: paired 0.997
+  (`qjs-compile-fresh-vm.txt`).
+- `cprof` call counts of one compile of QuickJS: 6,742,327 calls on the
+  baseline, 6,744,139 on the candidate, every function called exactly as
+  often except 1,812 calls to the new table check (`table_candidates/1`,
+  `static_contents/3`), 0.06 ms (`qjs-compile-call-counts.diff`).
+- In one VM after the harness's earlier rows, ten pairs: paired 1.027 with
+  nothing run first and 1.052 after the six older rows, each with a spread of
+  0.85 to 1.24 (`compile-probe-*.txt`). No single row reproduces it.
+
+The difference is in the machine's state around the compile, not in the
+compile, and it stays recorded as a failing row rather than a passing one.
+Loads ended above 8 often during these runs, and once at 218.
+
+Raw results: `test/audit/raw/compiled-gaps/`.
 ## Where the tier's compile time goes
 
 Measured to answer "get hot code compiled sooner". QuickJS, the 223-function

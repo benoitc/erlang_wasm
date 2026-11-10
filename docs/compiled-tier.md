@@ -492,6 +492,13 @@ describes the page table, and
   interpreter's signed form at every boundary, so you see no difference.
   [Design notes](design-notes.md#how-compiled-code-holds-an-i32) has the
   details.
+- **f64 arithmetic and table calls run inline.** f64 `add`, `sub`, `mul`,
+  `div` and comparisons on ordinary floats are Erlang float operations, and a
+  `call_indirect` to a function compiled alongside the caller is a local
+  call; through a table that cannot change, the target is known when the
+  code is compiled. [Design
+  notes](design-notes.md#how-a-call-through-a-table-finds-its-target) has
+  the details.
 - **Compiled code can go slightly past `max_depth`.** A chain of calls that
   cannot recurse is not counted, so a compiled call can go deeper than
   `max_depth` by at most the number of functions compiled together. A

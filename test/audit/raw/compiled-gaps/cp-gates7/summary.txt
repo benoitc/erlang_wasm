@@ -1,0 +1,21 @@
+                                  baseline   candidate      erlang    wasmtime   c/base   paired    c/erl     c/wt
+loop, ns/iter                        1.411       1.438       1.623       0.973    1.02x    1.017    0.89x    1.48x
+store+load, ns/iter                 20.178      18.039           -       0.512    0.89x    0.903        -   35.26x
+4 KiB copy, ns                    4889.219    5058.906           -      40.216    1.03x    1.005        -  125.79x
+fib(30), ms                          4.054       4.310       2.420       4.062    1.06x    1.027    1.78x    1.06x
+fib(30) through a table, ms        201.158       7.677       4.752       4.906    0.04x    0.037    1.62x    1.56x
+f64 loop, ns/iter                   22.157      10.005       4.780       1.422    0.45x    0.437    2.09x    7.04x
+block result + load, ns/iter        39.237      38.351           -       0.614    0.98x    0.989        -   62.50x
+call from Erlang, ns               558.300     561.600           -    4963.000    1.01x    1.037        -    0.11x
+plugin compile+inst, us               3648        3714           -        5094    1.02x    1.049        -    0.73x
+QuickJS compile, ms                 83.895      92.235           -      70.517    1.10x    1.085        -    1.31x
+QuickJS instantiate, ms              0.410       0.422           -       0.092    1.03x    0.971        -    4.59x
+QuickJS _start, ms                 109.071     102.213           -       1.088    0.94x    0.909        -   93.95x
+
+plain Erlang fib(30), idiomatic, ms: 3.899
+
+cold compile of QuickJS's hot set (324 functions)
+compile, ms                     104393.649  103610.917    0.99x paired 1.000
+code, bytes                       12151690    11957874    0.98x paired 0.984
+
+all checks passed: 5 rounds, manifests consistent, checksums agree, compiled code entered, same hot set

@@ -1,0 +1,13 @@
+171a172,178
+> wasm_validate:'-static_contents/3-fun-0-'/3 592
+> wasm_validate:'-static_contents/3-fun-1-'/4 1
+> wasm_validate:'-static_contents/3-lc$^2/1-1-'/2 594
+> wasm_validate:'-table_candidates/1-lc$^0/1-0-'/1 24
+> wasm_validate:'-table_candidates/1-lc$^1/1-1-'/1 3
+> wasm_validate:'-table_candidates/1-lc$^2/1-2-'/3 2
+> wasm_validate:'-table_candidates/1-lc$^3/1-3-'/2 2
+199a207
+> wasm_validate:item/1 592
+203a212,213
+> wasm_validate:static_contents/3 1
+> wasm_validate:table_candidates/1 1

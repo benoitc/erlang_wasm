@@ -623,8 +623,13 @@ that holds it; a literal is always `canon`.
 | held `u32` | held `canon` |
 | --- | --- |
 | i32 locals and parameters | i64, f32, f64, v128 and references |
-| i32 results of a function in the unit | block, loop and `if` parameters and results |
-| results of inline i32 operations | anything a `wasm_exec` helper returns |
+| i32 results of a function in the unit | signed i32 loads (`load8_s`, `load16_s`) |
+| i32 parameters and results of a block, loop or `if` | anything a `wasm_exec` helper returns |
+| results of inline i32 operations and unsigned i32 loads | |
+
+A block's types come from the compiler's own IR: `wasm_instance:compiler_ir/2`
+appends each frame's parameter and result types, which the interpreter's IR
+does not carry.
 
 Every boundary takes `canon`: `invoke/6`'s callers, the `wasm_exec` helpers,
 globals, memory, calls to another shard, to the interpreter or to a host, and
@@ -637,7 +642,43 @@ Operations work on `u32` directly: `add`, `sub`, `mul` and `shl` mask their
 result, `and`, `or`, `xor` and `shr_u` need nothing, and a signed comparison
 flips the top bit of both operands (`bxor 2^31`) and compares them unsigned.
 Division, remainder, rotates and conversions go through `wasm_exec` in
-`canon`, as before.
+`canon`, as before. A memory address is taken in `u32` as it is, and an i32
+store writes either form, because every store masks to its width.
+
+### f64 arithmetic inline
+
+f64 `add`, `sub`, `mul`, `div` and the six comparisons are Erlang float
+operations when both operands are floats of a size whose result cannot
+overflow: below 2^1022 for a sum, below 2^511 for a product, a divisor of at
+least 1.0. The BEAM raises `badarith` on overflow rather than answering
+infinity, and these bounds keep that out of reach. Anything else, including
+NaN and the infinities (atoms and tuples, never floats), calls `wasm_exec`.
+On two such floats `wasm_num_float` computes the same thing, so the answer is
+the same bit for bit; inside a function the floats also stay unboxed.
+
+### How a call through a table finds its target
+
+A `call_indirect` whose signature some function of the unit has goes through
+a dispatcher local to the generated module, one per signature
+(`wasm_i_<results>/<4 + params>`), shared by every site. A target in the unit
+is a local call in its own convention; any other target crosses as before.
+
+Where the target comes from depends on the table:
+
+- **A static table** cannot change after instantiation: not imported or
+  exported, no initialiser, never written by any instruction of the module,
+  and filled only by active segments at constant offsets. Its contents are
+  then a property of the module (`#ctx.static_tables`, computed at
+  validation), so the site reads the target from a literal holding, per slot,
+  the unit function whose type is exactly the call's. Nothing is looked up or
+  checked at run time.
+- **Any other table** is resolved by `wasm_exec:indirect_index/5`, which
+  reads the table once and checks the exact type before the supertypes.
+
+A slot the literal cannot settle (empty, another type, a subtype, a function
+outside the unit) and a target in another instance go to
+`wasm_exec:indirect_out/9`, which traps or calls exactly as the interpreter
+does.
 
 ### Bump the ABI when generated code changes shape
 

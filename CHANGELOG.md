@@ -13,6 +13,14 @@ plain Erlang.
   loop runs at the speed of plain Erlang. QuickJS and CPython guests are as
   fast as before or a little faster, and the compiled code is 6% smaller.
   Compiled code saved by an earlier release is compiled again once.
+- **Compiled f64 arithmetic and calls through a table are faster.** f64
+  addition, subtraction, multiplication, division and comparisons on ordinary
+  numbers run inline: a floating-point loop is twice as fast. A call through
+  a table to a function compiled alongside the caller is now a local call,
+  and through a table that cannot change it needs no lookup at all:
+  recursive `fib(30)` through a table went from 211 ms to 7.8 ms. 32-bit
+  loads and block results also avoid needless conversions, and a QuickJS run
+  is about 12% faster.
 - **In compiled code, `max_depth` counts only calls that can recurse.** A
   chain of calls that cannot recurse is not counted, so compiled code can go
   deeper than `max_depth` by at most the number of functions compiled

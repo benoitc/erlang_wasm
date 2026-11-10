@@ -132,9 +132,11 @@ moved, because even with all three a refusal still interprets.
 %% 16: a call inside a unit passes the frames left before the depth limit and
 %% only a call that can recurse checks it; a function that only calls pure or
 %% calls-only siblings takes that count and nothing of the instance; one result
-%% travels bare; an i32 inside the unit is held unsigned. Every function's
-%% arity, return shape and i32 representation changed; an artifact built by 15
-%% would be called with the wrong arguments.
+%% travels bare; an i32 inside the unit is held unsigned, frames and loads
+%% included; f64 arithmetic is inline; a table call reaches the unit through a
+%% local dispatcher. Every function's arity, return shape and i32
+%% representation changed; an artifact built by 15 would be called with the
+%% wrong arguments.
 -define(ABI, 16).
 
 -define(DEFAULT_AFTER, 32).

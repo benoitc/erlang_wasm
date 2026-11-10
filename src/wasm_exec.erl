@@ -2016,8 +2016,13 @@ storage_width(i16) -> 2;
 storage_width(i32) -> 4;
 storage_width(f32) -> 4;
 storage_width(i64) -> 8;
-storage_width(f64) -> 8.
+storage_width(f64) -> 8;
+storage_width(v128) -> 16.
 
+%% A vector element is its sixteen bytes, as a `v128' is everywhere else;
+%% copied, so the array does not keep the whole segment alive.
+decode_elements(Bin, v128, 16) ->
+    [binary:copy(E) || <<E:16/binary>> <= Bin];
 decode_elements(Bin, Ty, W) ->
     [decode_element(E, Ty) || <<E:(W * 8)/little>> <= Bin].
 

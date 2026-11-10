@@ -1,0 +1,9 @@
+#{label => "erlang",
+  loop =>
+      #{checksum => -1803823781,n => 131072000,
+        ns_per_iter => 1.72296142578125},
+  load => "{ 5.23 6.20 8.04 }",kind => "erlang",
+  manifest =>
+      <<"tree reference\nharness e5b05f4f489b7faa07619656c66a579cac3864bd\nwasmtime_binding c3402c2\notp 29\n">>,
+  fib30_idiomatic => #{checksum => 832040,ms => 3.704},
+  fib30 => #{checksum => 832040,ms => 2.458}}.

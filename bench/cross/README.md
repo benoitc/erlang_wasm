@@ -118,19 +118,53 @@ way.
   which is the realistic case for them. Cold start is not comparable without
   saying which of those you mean.
 
-## Compare with Wasmtime called from Erlang
+## Compare a change against a baseline, plain Erlang and Wasmtime
 
-`vs/` measures this runtime against `erlang-wasmtime`, Wasmtime through its
-Erlang binding: compiled loops, `fib(30)`, a call from Erlang into the guest,
-compiling and instantiating a small plugin, and a QuickJS build running a
-script. Each run measures one runtime in a fresh VM, and `run.sh` interleaves
-the two over five rounds:
+`vs/` measures a change to this runtime against a fixed baseline commit, with
+two references beside them: plain Erlang doing the same work with the same
+32-bit wrapping (`bench/paths/gapref.erl`), and `erlang-wasmtime`, Wasmtime
+through its Erlang binding. Use it before claiming that a change to the
+compiled tier is faster, and to see how far it still is from plain Erlang.
+
+What each round runs, one fresh VM per arm, in a rotating order:
+
+| arm | what it is |
+| --- | --- |
+| `baseline` | this runtime at the commit you name, built in its own tree |
+| `candidate` | this runtime as your working tree is now, built in its own tree |
+| `erlang` | the plain-Erlang reference |
+| `wasmtime` | erlang-wasmtime on the same module bytes |
+| `cold-baseline`, `cold-candidate` | QuickJS's hot set compiled from an empty code cache, generation included in the time |
+
+Run it, then read it:
 
 ```sh
-bench/cross/vs/run.sh /path/to/qjs-wasi.wasm /tmp/vs
-escript bench/cross/vs/summary.escript /tmp/vs
+bench/cross/vs/run.sh main /path/to/qjs-wasi.wasm /tmp/vs 5
+escript bench/cross/vs/summary.escript /tmp/vs 5
 ```
 
-The binding's `ebin` is looked for under `~/Projects/erlang-wasmtime`; pass
-another path as the third argument. `test/audit/PERF.md`, "Head to head with
-erlang-wasmtime, again, on 0.9.x", has the last results.
+The CPython request gate uses the same trees:
+
+```sh
+bench/cross/vs/requests.sh /tmp/vs 5
+escript bench/cross/vs/requests.escript /tmp/vs 5
+```
+
+**The harness refuses evidence it cannot trust.** A run stops on any arm that
+fails, and on an overloaded round it cannot redo. The summary exits with an
+error instead of printing when a result is missing or failed, when checksums
+differ between any two runs, when a compiled run never entered generated code,
+when one tree's runs came from different builds, or when the two trees'
+cold compiles saw different hot sets.
+
+Notes:
+
+- A run starts below a one-minute load of 8 and is redone when it ends at 8
+  or more; a round still overloaded is set aside under `rejected/` and run
+  again, three times at most.
+- The binding's `ebin` is looked for under `~/Projects/erlang-wasmtime`; pass
+  another path as the fifth argument.
+- `VS_INTERPRET=1`, `VS_LOAD_LIMIT`, `VS_ARMS` and `VS_COLD=0` exist only to
+  show the checks firing; a summary refuses a directory missing any arm.
+- `test/audit/PERF.md`, "Head to head with erlang-wasmtime, again, on 0.9.x",
+  has the last Wasmtime comparison.

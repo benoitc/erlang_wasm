@@ -1,0 +1,8 @@
+#{label => "baseline",load => "{ 4.21 6.72 6.91 }",kind => "coldcompile",
+  manifest =>
+      <<"tree baseline\ncommit e5b05f4f489b7faa07619656c66a579cac3864bd\notp 29\n">>,
+  coldcompile =>
+      #{checksum => <<"59999">>,compile_ms => 122118.62,
+        interpreted_ms => 5799.695,code_bytes => 12926070,
+        compiled_call_ms => 127918.315,functions_compiled => 324,
+        hot_set_hash => 3140731314,hot_set_size => 324}}.

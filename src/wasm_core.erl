@@ -69,7 +69,6 @@ every other refusal here: interpret it.
 -export([supported/1, can_compile/2, ops/0, module/4, module/6]).
 -export([module/7, module/8, module/9, module/10]).
 -export([forms/5, forms/6, forms/7, forms/8]).
--export([reap/2]).
 
 -include("wasm_exec.hrl").
 -include("wasm_memory.hrl").
@@ -524,7 +523,7 @@ Two things follow from owning it rather than OTP:
   outlives the process that asked for it: today a compiler killed by
   `wasm_jit_sup`'s `brutal_kill`, or by `application:stop(wasm)`, leaves the
   OTP compiler running to completion holding its copy of the forms, with
-  nothing in the tree able to see it. `reap/2` closes that.
+  nothing in the tree able to see it. `wasm_lifetime:bind/1` closes that.
 """.
 run_compiler(Name, Core, Copts, Opts) ->
     Owner = self(),
@@ -536,10 +535,10 @@ run_compiler(Name, Core, Copts, Opts) ->
             unwrap(Name, R);
         %% `killed' says the process was killed and not why. Its pid is
         %% published nowhere and the only kill this module issues comes from
-        %% `reap/2', which fires solely when the owner is already dead and so
-        %% has nobody left to hear an answer. A `killed' seen by a live owner
-        %% is the ceiling, unless a third party is killing pids it did not
-        %% spawn.
+        %% `wasm_lifetime', which fires solely when the owner is already dead
+        %% and so has nobody left to hear an answer. A `killed' seen by a live
+        %% owner is the ceiling, unless a third party is killing pids it did
+        %% not spawn.
         {'DOWN', Ref, process, Pid, killed} ->
             {error, {limit, {compile_memory, maps:get(max_heap_words, Opts, 0)}}};
         {'DOWN', Ref, process, Pid, Why} ->
@@ -549,42 +548,13 @@ run_compiler(Name, Core, Copts, Opts) ->
 %% By message rather than by exit reason, which is how OTP returns it. The
 %% artifact is a refcounted binary, so either way what crosses is a header, and
 %% a message leaves the child exiting `normal'.
-compiler(Owner, Core, Copts) ->
-    %% Bound out here. Inside the fun, `self()` is the *reaper's* pid, so the
-    %% reaper would watch itself, kill itself when the owner died, and leave the
-    %% compiler it exists to stop running to completion.
-    Me = self(),
-    _ = spawn(fun () -> reap(Owner, Me) end),
-    Owner ! {compiled, Me, compile:forms(Core, [no_spawn_compiler_process |
-                                                Copts])},
-    ok.
-
--doc """
-Kill `Child` if `Owner` dies first, and stop as soon as either does.
-
-Exported for `wasm_jit`'s `pmap`, which has the same problem one rung up: its
-shard workers are spawned monitored and unlinked, so a killed coordinator would
-leave them compiling toward slots nobody owns.
-""".
--spec reap(pid(), pid()) -> ok | true.
-%% Spawned *by the child*, which is what makes it window-free: if the owner is
-%% already gone, `monitor/2` answers `noproc` at once and the child is killed
-%% before it has compiled anything. Spawned by the owner there would be a gap
-%% between having the child's pid and telling the reaper about it.
 %%
-%% Not a link, which cannot be used here: a `max_heap_size` kill exits the child
-%% with reason `killed`, and an untrapping owner linked to it dies with `killed`
-%% too, before it can record the outcome. The owner under `compile_sync` is the
-%% embedder's own process and is not ours to kill or to set flags on.
-reap(Owner, Child) ->
-    OwnerRef = monitor(process, Owner),
-    ChildRef = monitor(process, Child),
-    receive
-        {'DOWN', ChildRef, process, Child, _} -> ok;
-        %% `exit/2` on a pid that has already gone is `true`, so losing this
-        %% race costs nothing.
-        {'DOWN', OwnerRef, process, Owner, _} -> exit(Child, kill)
-    end.
+%% The compiler dies with its owner: `wasm_lifetime:bind/1', first thing.
+compiler(Owner, Core, Copts) ->
+    ok = wasm_lifetime:bind(Owner),
+    Owner ! {compiled, self(), compile:forms(Core, [no_spawn_compiler_process |
+                                                    Copts])},
+    ok.
 
 %% `kill` and `error_logger` are set rather than inherited: `+hmaxk false`
 %% node-wide would otherwise turn the ceiling into a suggestion, and the outcome

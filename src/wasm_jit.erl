@@ -1050,7 +1050,7 @@ compile_limits() ->
 %%
 %% Steady-state admission capacity rather than a strict instantaneous maximum.
 %% When a reservation's owner dies, `wasm_code_slots` gives the words back on
-%% its `DOWN` while `wasm_core:reap/2` kills the compiler through a separate
+%% its `DOWN` while `wasm_lifetime` kills the compiler through a separate
 %% monitor, and nothing orders those two, so a newly admitted compiler can
 %% briefly overlap one that is still dying. Making it strict would mean tracking
 %% descendants on the release path for a window that only opens on a crash.
@@ -1278,13 +1278,13 @@ claim_rest(Inst, N, Acc) ->
 
 %% Run the units at once. `compile:forms/2` is the whole of the cost and the
 %% units share nothing, so this is the wall clock the split is for.
-%% Each worker reaps against this process, for the same reason `wasm_core` does
-%% one rung further down: `spawn_monitor/1` does not link, so a coordinator that
-%% is killed leaves its shard workers running, holding their copied units and
-%% compiling toward slots nobody owns. A link would be the ordinary answer and
-%% cannot be used, because a worker killed by the heap ceiling exits `killed`
-%% and would take this untrapping process with it before `collect/1` could
-%% record anything.
+%% Each worker is bound to this process (`wasm_lifetime:bind/1`), as the
+%% compiler is one rung further down: `spawn_monitor/1` does not link, so a
+%% coordinator that is killed leaves its shard workers running, holding their
+%% copied units and compiling toward slots nobody owns. A link would be the
+%% ordinary answer and cannot be used, because a worker killed by the heap
+%% ceiling exits `killed` and would take this untrapping process with it
+%% before `collect/1` could record anything.
 pmap(F, Xs) ->
     Parent = self(),
     Pids = [element(1, spawn_monitor(fun() -> reaped(Parent, F, X) end))
@@ -1293,7 +1293,7 @@ pmap(F, Xs) ->
 
 reaped(Parent, F, X) ->
     Me = self(),
-    _ = spawn(fun() -> wasm_core:reap(Parent, Me) end),
+    ok = wasm_lifetime:bind(Parent),
     Parent ! {Me, F(X)}.
 
 collect(Pid) ->

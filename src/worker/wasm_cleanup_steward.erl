@@ -385,11 +385,16 @@ callback_timeout() ->
     wasm_worker_reaper:setting(Opts, cleanup_timeout).
 
 %% Run a callback in a monitored child, bounded: this process orchestrates and
-%% never runs a closure inline, so a hanging action cannot wedge it.
+%% never runs a closure inline, so a hanging action cannot wedge it. The child
+%% is bound to this process, because the deadline lives here: a killed steward
+%% would otherwise leave the callback running with no deadline at all.
 bounded(F, Timeout) ->
     Parent = self(),
     Ref = make_ref(),
-    {Pid, Mon} = spawn_opt(fun() -> Parent ! {Ref, guarded(F)} end, [monitor]),
+    {Pid, Mon} = spawn_opt(fun() ->
+                                   ok = wasm_lifetime:bind(Parent),
+                                   Parent ! {Ref, guarded(F)}
+                           end, [monitor]),
     receive
         {Ref, _}                       -> erlang:demonitor(Mon, [flush]), ok;
         {'DOWN', Mon, process, Pid, _} -> ok
@@ -406,8 +411,10 @@ guarded(F) -> try F(), ok catch _:_ -> ok end.
 bounded_outcome(F, Timeout) ->
     Parent = self(),
     Ref = make_ref(),
-    {Pid, Mon} = spawn_opt(fun() -> Parent ! {Ref, guarded_outcome(F)} end,
-                           [monitor]),
+    {Pid, Mon} = spawn_opt(fun() ->
+                                   ok = wasm_lifetime:bind(Parent),
+                                   Parent ! {Ref, guarded_outcome(F)}
+                           end, [monitor]),
     receive
         {Ref, Outcome}                 -> erlang:demonitor(Mon, [flush]), Outcome;
         {'DOWN', Mon, process, Pid, _} -> cleanup_failed

@@ -71,6 +71,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -define(TASK_REF, {?MODULE, task_ref}).
 -define(WAIT_HOOK, {?MODULE, wait_hook}).
 -define(WAITS, {?MODULE, waits}).
+-define(OUTER, {?MODULE, outer}).
 -define(PRODUCERS, {?MODULE, producers}).
 -define(CTX(Slot), {?MODULE, context, Slot}).
 -define(WAITABLE(H), {?MODULE, waitable, H}).
@@ -91,6 +92,10 @@ cannot bleed messages into the next.
 """.
 -spec begin_task(wasm:instance(), map()) -> ok.
 begin_task(Inst, Opts) ->
+    %% A task started inside another, from a host function the outer task
+    %% called, sets the outer frame aside rather than clearing it: clearing
+    %% it lost the outer producers, and nothing stopped them afterwards.
+    save_outer(),
     clear_frame(),
     put(?TASK_INST, Inst),
     put(?TASK_REF, make_ref()),
@@ -110,7 +115,37 @@ end_task() ->
     clear_frame(),
     _ = erase(?TASK_INST),
     flush_stale(Ref),
+    restore_outer(),
     ok.
+
+%% The enclosing task's frame, on a stack in the process dictionary.
+save_outer() ->
+    case get(?TASK_REF) of
+        undefined -> ok;
+        _ ->
+            Frame = [{K, V} || {K, V} <- get(),
+                               is_frame_key(K) orelse K =:= ?TASK_INST
+                                   orelse K =:= ?TASK_RETURN],
+            put(?OUTER, [Frame | outer()])
+    end.
+
+restore_outer() ->
+    case outer() of
+        [] -> ok;
+        [Frame | Rest] ->
+            [put(K, V) || {K, V} <- Frame],
+            case Rest of
+                [] -> erase(?OUTER);
+                _ -> put(?OUTER, Rest)
+            end,
+            ok
+    end.
+
+outer() ->
+    case get(?OUTER) of
+        undefined -> [];
+        L -> L
+    end.
 
 %% ?WAITS survives end_task (a test reads it right after the call); the next
 %% begin_task resets it. Everything else per-task is a frame key.
@@ -195,7 +230,12 @@ register_producer(Handle, PFun) ->
     Owner = self(),
     Ref = task_ref(),
     Ctx = #{owner => Owner, task_ref => Ref, handle => Handle},
-    {Pid, Mon} = spawn_monitor(fun() -> PFun(Ctx) end),
+    %% Bound to the owner: `end_task/0' stops producers, but an owner that is
+    %% killed never runs it.
+    {Pid, Mon} = spawn_monitor(fun() ->
+                                       ok = wasm_lifetime:bind(Owner),
+                                       PFun(Ctx)
+                               end),
     put(?PRODUCERS, [{Pid, Mon, Handle} | producers()]),
     ok.
 

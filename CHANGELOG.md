@@ -5,6 +5,10 @@
 A pool of script workers can share one image, and sending an image no longer
 copies its tables.
 
+- **An array of `v128` can be built from a data segment.** `array.new_data`
+  and `array.init_data` on an array whose elements are vectors failed; they
+  now read sixteen bytes per element, as the GC specification's latest tests
+  require.
 - **Prepare one image for a pool.** `wasm_script_worker:prepare/2` loads or
   captures the image once, and every worker started with
   `Opts#{prepared => Prepared}` holds that one image instead of its own copy:

@@ -1,0 +1,36 @@
+== baseline r1
+i32.load                       4.06       1.35
+call (empty func)              3.63       3.63
+i32.load8_u                    3.99       1.33
+i64.load                       4.30       1.43
+f64.load                      22.08       7.36
+== candidate r1
+i32.load                       3.97       1.32
+call (empty func)              0.78       0.78
+i32.load8_u                    4.10       1.37
+i64.load                       4.21       1.40
+f64.load                      22.32       7.44
+== baseline r2
+i32.load                       4.05       1.35
+call (empty func)              3.41       3.41
+i32.load8_u                    4.05       1.35
+i64.load                       4.27       1.42
+f64.load                      22.54       7.51
+== candidate r2
+i32.load                       4.15       1.38
+call (empty func)              0.73       0.73
+i32.load8_u                    4.08       1.36
+i64.load                       4.22       1.41
+f64.load                      21.89       7.30
+== baseline r3
+i32.load                       4.08       1.36
+call (empty func)              3.60       3.60
+i32.load8_u                    4.11       1.37
+i64.load                       4.32       1.44
+f64.load                      22.55       7.52
+== candidate r3
+i32.load                       4.34       1.45
+call (empty func)              0.86       0.86
+i32.load8_u                    4.43       1.48
+i64.load                       4.84       1.61
+f64.load                      25.93       8.64

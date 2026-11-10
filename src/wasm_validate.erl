@@ -20,6 +20,7 @@ start function, and constant expressions.
 -include("wasm_validate.hrl").
 
 -export([module/1, module_unchecked/1, context/1, cached_context/1]).
+-export([written_tables/1]).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -108,7 +109,8 @@ context(#module{types = Types, imports = Imports, funcs = Funcs, tables = Tables
         n_imported_globals = length(ImportedGlobals),
         refs    = declared_refs(M),
         shared_globals = shared_globals(M),
-        shared_mems = shared_mems(M)
+        shared_mems = shared_mems(M),
+        table_candidates = table_candidates(M)
     }.
 
 %% What `struct.get' and `array.get' need to know about a type, resolved once
@@ -129,6 +131,85 @@ shared_mems(#module{imports = Imports, mems = Mems, exports = Exports}) ->
     Exported = maps:from_keys([I || #export{desc = {mem, I}} <- Exports], true),
     maps:from_keys([I || I <- lists:seq(0, Total - 1), I < NImported orelse maps:is_key(I, Exported)],
                    true).
+
+%% A table is static when nothing can change it after instantiation: neither
+%% imported nor exported (so no other module or host can reach it), no
+%% initialiser expression, every active segment for it at a constant offset,
+%% filling it with `ref.func' or `ref.null', and no instruction anywhere in the
+%% module that writes it. Its contents are then a property of the module,
+%% which is what lets compiled code resolve a `call_indirect' through it once
+%% instead of at every call. A table larger than `?STATIC_TABLE_MAX' is not
+%% considered: its contents would be a large literal in compiled code.
+%%
+%% This settles everything but the last condition, from the declarations
+%% alone. The last one means reading every instruction, which costs 3.5 ms on
+%% QuickJS and would be paid by every module loaded, so the compiler checks it
+%% with `written_tables/1' when, and only when, it compiles.
+-define(STATIC_TABLE_MAX, 4096).
+table_candidates(#module{imports = Imports, tables = Tables, exports = Exports,
+                         elems = Elems}) ->
+    NImported = length([1 || #import{desc = {table, _}} <- Imports]),
+    Exported = maps:from_keys([I || #export{desc = {table, I}} <- Exports],
+                              true),
+    Cands = [{NImported + K, Min}
+             || {K, #tabletype{limits = #limits{min = Min}, init = Init}}
+                    <- lists:enumerate(0, Tables),
+                Init =:= undefined, Min =< ?STATIC_TABLE_MAX,
+                not maps:is_key(NImported + K, Exported)],
+    maps:from_list([{T, C} || {T, Min} <- Cands,
+                              {ok, C} <- [static_contents(T, Min, Elems)]]).
+
+-doc """
+Every table some of these function bodies write, raw or validated.
+
+`#ctx.table_candidates` leaves this one condition to the compiler; see
+`table_candidates/1`.
+""".
+-spec written_tables([[term()] | {validated, [term()]}]) ->
+          #{non_neg_integer() => true}.
+written_tables(Bodies) ->
+    lists:foldl(fun(B, Acc) -> writes(body_of(B), Acc) end, #{}, Bodies).
+
+body_of({validated, Ann}) -> Ann;
+body_of(B) -> B.
+
+writes(Is, Acc) -> lists:foldl(fun write/2, Acc, Is).
+
+write({H, _Base, I}, Acc) when is_integer(H) -> write(I, Acc);
+write({H, I}, Acc) when is_integer(H) -> write(I, Acc);
+write({table_set, T}, Acc) -> Acc#{T => true};
+write({table_grow, T}, Acc) -> Acc#{T => true};
+write({table_fill, T}, Acc) -> Acc#{T => true};
+write({table_copy, D, _}, Acc) -> Acc#{D => true};
+write({table_init, _, T}, Acc) -> Acc#{T => true};
+write({block, _, B}, Acc) -> writes(B, Acc);
+write({loop, _, B}, Acc) -> writes(B, Acc);
+write({if_, _, T, E}, Acc) -> writes(E, writes(T, Acc));
+write({try_table, _, _, B}, Acc) -> writes(B, Acc);
+write(_, Acc) -> Acc.
+
+%% The table's contents after instantiation, or `error' when they depend on
+%% anything but the module.
+static_contents(T, Min, Elems) ->
+    try
+        Slots = lists:foldl(
+                  fun(#elem{mode = {active, Tb, Offset}, init = Init}, Acc)
+                        when Tb =:= T ->
+                          [{i32_const, K}] = Offset,
+                          true = K >= 0 andalso K + length(Init) =< Min,
+                          lists:foldl(fun({I, Item}, A) ->
+                                              A#{K + I => item(Item)}
+                                      end, Acc, lists:enumerate(0, Init));
+                     (_, Acc) -> Acc
+                  end, #{}, Elems),
+        {ok, list_to_tuple([maps:get(I, Slots, null)
+                            || I <- lists:seq(0, Min - 1)])}
+    catch
+        error:_ -> error
+    end.
+
+item([{ref_func, F}]) -> F;
+item([{ref_null, _}]) -> null.
 
 %% A global is shared when a write to it is observable from another module:
 %% mutable, and either imported from somewhere or exported to somewhere.

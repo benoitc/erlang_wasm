@@ -26,6 +26,11 @@ Rows, with the same checksum on every arm that has them:
   sizes so the call's fixed cost cancels out.
 - `fib30`: one call of `fib(30)`; the `erlang` arm also reports
   `fib30_idiomatic`, plain Erlang without 32-bit wrapping.
+- `fibi30`: `fib(30)` with every recursive call through a table; the
+  `erlang` arm calls through a fun held in a tuple.
+- `f64`: an f64 multiply, add and compare per iteration, per iteration.
+- `blocks`: an i32 load and an i32 block result per iteration; no `erlang`
+  reference, it is compared against the baseline only.
 - `call`: one call from Erlang into the cheapest export, from 10,000 calls.
 - `plugin`: compile, instantiate and destroy a 46 KB WASI module.
 - `qjs`: a QuickJS build running a 30,000-iteration script.
@@ -72,12 +77,17 @@ run(Kind, Dir, Qjs, _Out) ->
 rows(erlang, _Dir, _Qjs, _Loop, _Bytes) ->
     [{loop, per_iter(fun(N) -> [gapref:loop(N)] end)},
      {fib30, fib30(fun(N) -> [gapref:fib32(N)] end)},
-     {fib30_idiomatic, fib30(fun(N) -> [gapref:fib(N)] end)}];
+     {fib30_idiomatic, fib30(fun(N) -> [gapref:fib(N)] end)},
+     {fibi30, fib30(fun(N) -> [gapref:fibi(N)] end)},
+     {f64, per_iter(fun(N) -> [gapref:f64loop(N)] end)}];
 rows(Kind, Dir, Qjs, Loop, Bytes) ->
     [{loop, per_iter(Kind, Loop, ~"bench")},
      {mem, per_iter(Kind, Bytes("mem"), ~"bench")},
      {bulk, per_iter(Kind, Bytes("bulk"), ~"bench")},
      {fib30, fib30(Kind, Bytes("fib"))},
+     {fibi30, fib30(Kind, Bytes("fibi"))},
+     {f64, per_iter(Kind, Bytes("f64"), ~"bench")},
+     {blocks, per_iter(Kind, Bytes("blocks"), ~"bench")},
      {call, call(Kind, Bytes("nop"))},
      {plugin, plugin(Kind, Dir)},
      {qjs, qjs(Kind, Dir, Qjs)}].

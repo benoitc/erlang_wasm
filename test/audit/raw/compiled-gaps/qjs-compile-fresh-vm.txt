@@ -1,0 +1,16 @@
+baseline context 0.12 ms compile 142.83 ms 
+candidate context 0.18 ms compile 143.35 ms 
+candidate context 0.18 ms compile 136.49 ms 
+baseline context 0.11 ms compile 140.20 ms 
+baseline context 0.12 ms compile 137.75 ms 
+candidate context 0.17 ms compile 137.66 ms 
+candidate context 0.18 ms compile 137.98 ms 
+baseline context 0.11 ms compile 140.18 ms 
+baseline context 0.11 ms compile 136.71 ms 
+candidate context 0.20 ms compile 136.53 ms 
+candidate context 0.19 ms compile 139.00 ms 
+baseline context 0.11 ms compile 138.25 ms 
+baseline context 0.11 ms compile 139.41 ms 
+candidate context 0.17 ms compile 137.45 ms 
+candidate context 0.18 ms compile 142.19 ms 
+baseline context 0.12 ms compile 142.77 ms 

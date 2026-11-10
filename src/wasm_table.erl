@@ -38,6 +38,7 @@ exited, and `call_indirect` through it found nothing.
 
 -include("wasm.hrl").
 
+-export([lookup/2]).
 -export([new/2, new/3, size/1, limits/1, elemtype/1, is_table/1, get/2, set/3,
          grow/3, fill/4, copy/5, init/3, init_funcrefs/3, to_list/1]).
 -export([acquire/3, release/2, resource/1, forget_local/1]).
@@ -161,6 +162,20 @@ elemtype({wasm_table, _Id, _Version, #tabletype{elemtype = ET}}) -> ET.
 
 -spec get(table(), non_neg_integer()) -> term().
 get(T, Idx) -> array:get(Idx, array_of(T)).
+
+-doc """
+The element at `Idx`, or `out_of_bounds`, reading the table once.
+
+`size/1` then `get/2` reads it twice, and a `call_indirect` asks both on every
+call.
+""".
+-spec lookup(table(), non_neg_integer()) -> {ok, term()} | out_of_bounds.
+lookup(T, Idx) ->
+    A = array_of(T),
+    case Idx < array:size(A) of
+        true -> {ok, array:get(Idx, A)};
+        false -> out_of_bounds
+    end.
 
 -spec set(table(), non_neg_integer(), term()) -> ok.
 set(T, Idx, Value) -> store(T, array:set(Idx, Value, array_of(T))).

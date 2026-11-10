@@ -888,6 +888,13 @@ QuickJS run and of a CPython request: 1.3k float operations, 23k depth checks
 and 5k indirect calls a QuickJS run. Worth building when a guest that spends
 its time there turns up, and not before.
 
+The call convention has since been built, together with an unsigned i32,
+to bring compiled code level with plain Erlang rather than for a guest: see
+PERF.md, "Compiled calls as cheap as plain Erlang". As predicted, QuickJS
+and CPython moved by little (0.996x and 0.906x). Inline f64 arithmetic and
+`call_indirect` inside a unit have since been built too: see PERF.md, "Typed
+frames, unsigned loads, inline f64, local table calls".
+
 ## Loading cached compiled code at worker start
 
 **A function-set manifest beside each code-cache artifact, read at worker start

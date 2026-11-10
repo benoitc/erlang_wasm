@@ -69,7 +69,9 @@ to, so the interpreted and compiled paths cannot disagree; `%%% exceptions`,
 %% Read by `wasm_core` at generation time, so the width and signedness of an
 %% access are decided once and in one place.
 -export([load_spec/1, store_spec/1]).
+-export([max_depth/1, depth_exhausted/0]).
 -export([call_out/7, shard_call/8, check_depth/2, indirect_out/9,
+         indirect_index/5,
          unreachable_at/7]).
 -export([memory_size_at/2, memory_grow_at/5, memory_fill_at/6, memory_copy_at/8,
          memory_init_at/8, data_drop_at/3]).
@@ -1101,7 +1103,26 @@ check_depth(Inst, Depth) ->
         false -> ok
     end.
 
+-doc """
+The instance's call-depth limit.
+
+Generated code reads it once per entry, at `invoke/6`, and compares against it
+inline before every call; `check_depth/2` reads the same value.
+""".
+-spec max_depth(#inst{}) -> non_neg_integer().
 max_depth(#inst{limits = L}) -> maps:get(max_depth, L, 1024).
+
+-doc """
+Raise what `check_depth/2` raises when the depth limit is reached.
+
+Generated code calls it only once its inline comparison has found no frames
+left, so this is the error path and never the call path. The context carries
+no depth: generated code counts the frames left, not the depth, and a
+calls-only function does not know the limit.
+""".
+-spec depth_exhausted() -> no_return().
+depth_exhausted() ->
+    wasm_error:exhaustion(call_stack_exhausted, #{}).
 
 -doc """
 Trap `unreachable` from compiled code.
@@ -1116,6 +1137,22 @@ unreachable_at(_Mut, _P1, _A1, _B1, _P2, _A2, _B2) ->
     wasm_error:trap(unreachable).
 
 -doc """
+The function a `call_indirect` reaches when it is in this instance, as its
+index, or `foreign`.
+
+`indirect_target/5` does the resolution, bounds, null and the type check, so
+the traps are the interpreter's. Generated code calls a function of its own
+unit directly from the index, and hands anything else to `indirect_out/9`.
+""".
+-spec indirect_index(non_neg_integer(), non_neg_integer(), term(), #inst{},
+                     #mut{}) -> non_neg_integer() | foreign.
+indirect_index(TypeIdx, TableIdx, I, Inst, Mut) ->
+    case indirect_target(TypeIdx, TableIdx, I, Inst, Mut) of
+        {same, F} -> F;
+        {foreign, _, _} -> foreign
+    end.
+
+-doc """
 An indirect call out of compiled code.
 
 `indirect_target/4` already does the whole resolution -- bounds, null, and the
@@ -1124,9 +1161,9 @@ instance from one in another, so it is reused rather than restated and the three
 traps it raises stay identical. It wants an `#st{}`, and the two fields it reads
 are the two given here.
 
-Every target crosses back into the interpreter, including one that was compiled
-alongside the caller. Turning that into a local call needs a per-module
-dispatcher and is worth its own measurement.
+A target compiled in the caller's own unit does not come here: generated code
+resolves it with `indirect_index/5` and calls it through a dispatcher local to
+the module. This takes what is left, a foreign target, and is the fallback.
 """.
 -spec indirect_out(#inst{}, #mut{}, non_neg_integer(), non_neg_integer(),
                    term(), [term()], non_neg_integer(), module(),
@@ -1775,13 +1812,15 @@ indirect_target(TypeIdx, TableIdx, I, #st{inst = Inst, mut = Mut}) ->
 indirect_target(TypeIdx, TableIdx, I, Inst, Mut) ->
     Table = element(TableIdx + 1, Mut#mut.tables),
     Idx = table_index(I),
-    case Idx < wasm_table:size(Table) of
-        false -> wasm_error:trap(undefined_element, #{index => Idx});
-        true -> ok
-    end,
     Expected = canon_at(TypeIdx, Inst),
-    case wasm_table:get(Table, Idx) of
-        null -> wasm_error:trap(uninitialized_element, #{index => Idx});
+    case wasm_table:lookup(Table, Idx) of
+        out_of_bounds -> wasm_error:trap(undefined_element, #{index => Idx});
+        {ok, null} -> wasm_error:trap(uninitialized_element, #{index => Idx});
+        {ok, Entry} -> indirect_entry(Entry, Expected, Inst)
+    end.
+
+indirect_entry(Entry, Expected, Inst) ->
+    case Entry of
         {funcref, Id, F} when Id =:= element(#inst.id, Inst) ->
             %% The overwhelmingly common case, and it reaches the callee's type
             %% through the running instance rather than resolving anything.
@@ -1803,6 +1842,10 @@ canon_at(Idx, #inst{canon = C}) -> element(Idx + 1, C).
 %% The callee's type must be a *subtype* of the declared one, not equal to it.
 %% Both sides are canonical, and the callee carries its whole supertype chain
 %% because it may come from a module whose type indices mean nothing here.
+%% The exact type first: it is the overwhelmingly common case and one
+%% comparison, where the supertype chain is a list walk.
+check_indirect_type(Expected, {Expected, _, _}) ->
+    ok;
 check_indirect_type(Expected, {_, Supers, Actual}) ->
     case lists:member(Expected, Supers) of
         true -> ok;
@@ -2103,7 +2146,9 @@ heap_test(_, _, _St) -> false.
 %% is also correct for a 32-bit table: the validator has already guaranteed the
 %% value is an i32, and for a negative i32 both interpretations land far above
 %% any table's size, so both trap.
-table_index(V) -> wasm_num:to_u64(V).
+%% `wasm_num:to_u64/1', inline: the index of a 32- or 64-bit table read as
+%% unsigned.
+table_index(V) -> V band 16#FFFFFFFFFFFFFFFF.
 
 %%% ---------------------------------------------------------------- memory ---
 

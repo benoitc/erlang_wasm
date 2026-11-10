@@ -417,6 +417,7 @@ compile_fn(#func{type = TypeIdx, locals = Locals, body = Body}, Ctx, Idx, Lazy) 
     #fn{nparams = length(P),
         nresults = length(R),
         defaults = [default_value(T) || T <- Locals],
+        locals = Locals,
         body = case Lazy of true -> {lazy, Body}; false -> ir(Body, Ctx) end,
         raw = Body,
         idx = Idx,
@@ -575,11 +576,16 @@ Deliberately not cached. It is an intermediate the generator walks once per
 function, and caching it would hold a module's worth of IR for nothing.
 """.
 -spec compiler_ir(#fn{}, #inst{}) -> [term()].
+%% Unfused, and with each block, loop and `if` carrying its parameter and
+%% result types as a last element: the compiler holds an i32 differently from
+%% an i64, and a frame's counts alone cannot say which is which.
 compiler_ir(#fn{raw = Raw}, #inst{ctx = Ctx}) ->
     Prev = get(wasm_no_fuse),
     put(wasm_no_fuse, true),
+    put(wasm_typed_frames, true),
     try ir(Raw, Ctx)
     after
+        erase(wasm_typed_frames),
         case Prev of
             undefined -> erase(wasm_no_fuse);
             _ -> put(wasm_no_fuse, Prev)
@@ -846,16 +852,16 @@ fuse([]) -> [].
 
 ir_instr({block, BT, Body}, Ctx) ->
     {NPar, NRes} = arity(BT, Ctx),
-    {block, NPar, NRes, ir(Body, Ctx)};
+    typed({block, NPar, NRes, ir(Body, Ctx)}, BT, Ctx);
 ir_instr({loop, BT, Body}, Ctx) ->
     {NPar, NRes} = arity(BT, Ctx),
-    {loop, NPar, NRes, ir(Body, Ctx)};
+    typed({loop, NPar, NRes, ir(Body, Ctx)}, BT, Ctx);
 ir_instr({try_table, BT, Catches, Body}, Ctx) ->
     {NPar, NRes} = arity(BT, Ctx),
     {try_table, NPar, NRes, Catches, ir(Body, Ctx)};
 ir_instr({if_, BT, Then, Else}, Ctx) ->
     {NPar, NRes} = arity(BT, Ctx),
-    {if_, NPar, NRes, ir(Then, Ctx), ir(Else, Ctx)};
+    typed({if_, NPar, NRes, ir(Then, Ctx), ir(Else, Ctx)}, BT, Ctx);
 %% Memory instructions carry their memory's address width, resolved here
 %% because the interpreter must not pay a lookup per access. `i32' memories
 %% keep the three-element memarg they already had, so nothing changes for them.
@@ -955,6 +961,19 @@ addr_width(M, #ctx{mems = Ms}) when M < tuple_size(Ms) ->
     #memtype{limits = #limits{index_type = T}} = element(M + 1, Ms),
     case T of i32 -> 32; i64 -> 64 end;
 addr_width(_, _) -> 32.
+
+%% For the compiler only (`compiler_ir/2'), the frame with its types appended.
+typed(Frame, BT, Ctx) ->
+    case get(wasm_typed_frames) of
+        true -> erlang:append_element(Frame, frame_types(BT, Ctx));
+        _ -> Frame
+    end.
+
+frame_types(empty, _Ctx) -> {[], []};
+frame_types({valtype, T}, _Ctx) -> {[], [T]};
+frame_types({typeidx, I}, #ctx{types = Ts}) ->
+    #functype{params = P, results = R} = unwrap_func(element(I + 1, Ts)),
+    {P, R}.
 
 arity(empty, _Ctx) -> {0, 0};
 arity({valtype, _}, _Ctx) -> {0, 1};

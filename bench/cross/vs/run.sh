@@ -56,7 +56,7 @@ done
 # One copy, compiled once, used by every arm: only the runtime on the code
 # path differs between baseline and candidate.
 wasm-tools parse bench/cross/loop.wat -o bench/cross/loop.wasm
-for f in mem fib bulk nop; do
+for f in mem fib bulk nop fibi f64 blocks; do
   wasm-tools parse "$HARNESS/$f.wat" -o "$HARNESS/$f.wasm"
 done
 erlc -o "$HARNESS" -pa "$TREES/candidate/_build/default/lib/wasm/ebin" \
@@ -77,7 +77,8 @@ run() {
   local name=$1 kind=$2 label=$3 paths=$4 man=$5 l0 l1 a
   for a in 1 2 3; do
     wait_quiet; l0=$(load1)
-    rm -f "$OUT/$name.terms"
+    # A cold compile must start from an empty cache, on every attempt.
+    rm -rf "$OUT/$name.terms" "$OUT/$name.cache"
     # shellcheck disable=SC2086
     if ! erl -noshell +S 10:10 $paths -pa "$HARNESS" \
         -run vs main "$kind" "$label" "$QJS" "$OUT/$name.terms" "$man" \
@@ -114,7 +115,6 @@ for r in $(seq 1 "$ROUNDS"); do
     if [ $ok = 1 ] && [ "${VS_COLD:-1}" != 0 ]; then
       if [ $((r % 2)) = 1 ]; then cold="baseline candidate"; else cold="candidate baseline"; fi
       for t in $cold; do
-        rm -rf "$OUT/cold-$t-r$r.cache"
         run "cold-$t-r$r" coldcompile "$t" "$(paths_of "$t")" "$TREES/$t/MANIFEST" || { ok=0; break; }
       done
     fi

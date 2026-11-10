@@ -1161,7 +1161,7 @@ the_miss_path_is_one_function_per_access_shape(_Config) ->
             end,
     %% Defined: these four and nothing else named `wasm_m_'. `i64.store32' and
     %% `i32.store' are one shape, four bytes of an integer.
-    Defs = [{"'wasm_m_load_1_i32_s'/8", 1}, {"'wasm_m_load_4_i32_u'/8", 2},
+    Defs = [{"'wasm_m_load_1_i32_s'/8", 1}, {"'wasm_m_load_4_u32'/8", 2},
             {"'wasm_m_store_4_int'/9", 2}, {"'wasm_m_store_8_int'/9", 1}],
     ?assertEqual([Name || {Name, _} <- Defs],
                  lists:sort([Name || {Name, _} <- Fns,

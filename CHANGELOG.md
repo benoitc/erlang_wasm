@@ -3,7 +3,29 @@
 ## Unreleased
 
 A pool of script workers can share one image, and sending an image no longer
-copies its tables.
+copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
+plain Erlang.
+
+- **Compiled calls and 32-bit arithmetic are much faster.** A call between
+  compiled functions is now a plain local call, and 32-bit integer
+  arithmetic compiles the way you would write it in Erlang. Recursive
+  `fib(30)` runs 4.7 times faster and is level with Wasmtime; an arithmetic
+  loop runs at the speed of plain Erlang. QuickJS and CPython guests are as
+  fast as before or a little faster, and the compiled code is 6% smaller.
+  Compiled code saved by an earlier release is compiled again once.
+- **Compiled f64 arithmetic and calls through a table are faster.** f64
+  addition, subtraction, multiplication, division and comparisons on ordinary
+  numbers run inline: a floating-point loop is twice as fast. A call through
+  a table to a function compiled alongside the caller is now a local call,
+  and through a table that cannot change it needs no lookup at all:
+  recursive `fib(30)` through a table went from 211 ms to 7.8 ms. 32-bit
+  loads and block results also avoid needless conversions, and a QuickJS run
+  is about 12% faster.
+- **In compiled code, `max_depth` counts only calls that can recurse.** A
+  chain of calls that cannot recurse is not counted, so compiled code can go
+  deeper than `max_depth` by at most the number of functions compiled
+  together. A runaway recursion still traps. A depth trap raised by compiled
+  code no longer reports the depth.
 
 - **An array of `v128` can be built from a data segment.** `array.new_data`
   and `array.init_data` on an array whose elements are vectors failed; they

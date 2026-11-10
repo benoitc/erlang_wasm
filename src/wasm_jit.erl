@@ -78,10 +78,11 @@ moved, because even with all three a refusal still interprets.
 -export([compile_limits/0, max_heap_words/0, compile_budget_heap_words/0]).
 -export([reentered/0, ensure_counts/0]).
 -export([compiler_loop/0]).
--export([dump/1, dump/2]).
+-export([dump/1, dump/2, tsigs/1]).
 
 -include("wasm.hrl").
 -include("wasm_exec.hrl").
+-include("wasm_validate.hrl").
 
 %% Bumped whenever the shape of generated code changes, so that code compiled by
 %% an older version of this runtime is never entered by a newer one.
@@ -127,7 +128,16 @@ moved, because even with all three a refusal still interprets.
 %% applies a function local to the module for everything else. An artifact
 %% built by 14 is still correct; the number moves so that its larger code is
 %% rebuilt and not loaded.
--define(ABI, 15).
+%%
+%% 16: a call inside a unit passes the frames left before the depth limit and
+%% only a call that can recurse checks it; a function that only calls pure or
+%% calls-only siblings takes that count and nothing of the instance; one result
+%% travels bare; an i32 inside the unit is held unsigned, frames and loads
+%% included; f64 arithmetic is inline; a table call reaches the unit through a
+%% local dispatcher. Every function's arity, return shape and i32
+%% representation changed; an artifact built by 15 would be called with the
+%% wrong arguments.
+-define(ABI, 16).
 
 -define(DEFAULT_AFTER, 32).
 
@@ -1377,12 +1387,39 @@ sigs(Inst) ->
       [{Idx, sig(F)}
        || {Idx, F} <- lists:enumerate(0, tuple_to_list(Inst#inst.funcs))]).
 
-%% An indirect call is typed by the type it names, not by any function, since
-%% which function it reaches is not known until it runs.
-tsigs(Inst) ->
+-doc """
+What the generator needs to know about indirect calls in `Inst`'s module.
+
+An indirect call is typed by the type it names, not by any function, since
+which function it reaches is not known until it runs: type index =>
+`{NParams, NResults}`. Beside those, `{canon, TypeIdx}` => the type's
+canonical identity, and `{table, TableIdx}` => the contents of each table
+that cannot change after instantiation, so a `call_indirect` through one can
+be resolved once: a candidate from `#ctx.table_candidates` that no function of
+the module writes. All of it follows from the module alone. Exported for
+tests, which build units by hand.
+""".
+-spec tsigs(#inst{}) -> map().
+tsigs(#inst{ctx = Ctx, canon = Canon} = Inst) ->
+    Sigs = [{Idx, S}
+            || {Idx, T} <- lists:enumerate(0, tuple_to_list(Inst#inst.types)),
+               S <- [tsig(T)], S =/= undefined],
     maps:from_list(
-      [{Idx, S} || {Idx, T} <- lists:enumerate(0, tuple_to_list(Inst#inst.types)),
-                   S <- [tsig(T)], S =/= undefined]).
+      Sigs
+      ++ [{{canon, Idx}, element(Idx + 1, Canon)} || {Idx, _} <- Sigs]
+      ++ [{{table, T}, C} || {T, C} <- maps:to_list(static_tables(Inst, Ctx))]).
+
+%% The candidates no function writes. Read here rather than at validation,
+%% so only a module the compiler actually compiles pays for reading every
+%% instruction. Host functions have no body and cannot reach a table that is
+%% neither imported nor exported.
+static_tables(_Inst, #ctx{table_candidates = Cands})
+  when map_size(Cands) =:= 0 ->
+    #{};
+static_tables(#inst{funcs = Funcs}, #ctx{table_candidates = Cands}) ->
+    Written = wasm_validate:written_tables(
+                [F#fn.raw || F <- tuple_to_list(Funcs), is_record(F, fn)]),
+    maps:without(maps:keys(Written), Cands).
 
 %% The type table holds whichever shape the module put there, so both are
 %% matched rather than one assumed: a struct or array type simply has no

@@ -18,7 +18,8 @@ the serve reactors in `test/fixtures/wasmtime-p2-serve` (not vendored).
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
-all() -> [hello_world, with_print, authority_and_scheme, live_over_h1].
+all() -> [hello_world, with_print, authority_and_scheme, live_over_h1,
+          a_listener_serves_past_the_load_rate].
 
 init_per_suite(Config) ->
     case filelib:is_dir(dir()) of
@@ -63,6 +64,43 @@ live_over_h1(_) ->
         ?assertEqual(<<"Hello, WASI!">>, Body)
     after
         wasi_http_listener:stop(Listener)
+    end.
+
+%% Each request instantiates in its own process, and nothing held the
+%% component's four cores between requests, so each one loaded them again.
+%% Past `max_module_loads_per_second' every request was a 500: at the default
+%% 50, about 12 requests a second for this component. At 6, the second request
+%% was already over; the listener now loads the cores once and holds them.
+a_listener_serves_past_the_load_rate(_) ->
+    {ok, Bin} = file:read_file(filename:join(dir(), "p2_cli_serve_hello_world.component.wasm")),
+    with_load_rate(6, fun() ->
+        {ok, Listener} = wasi_http_listener:start(#{component => Bin, port => 0}),
+        try
+            {Host, Port} = split(wasi_http_listener:address(Listener)),
+            Req = #{host => Host, port => Port, method => <<"GET">>,
+                    path => <<"/">>, headers => [], body => <<>>},
+            Statuses = [element(2, wasi_http_h1:request(Req, 5000))
+                        || _ <- lists:seq(1, 10)],
+            ?assertEqual(lists:duplicate(10, 200), Statuses)
+        after
+            wasi_http_listener:stop(Listener)
+        end
+    end).
+
+%% The module cache reads its rate when it starts.
+with_load_rate(Rate, Fun) ->
+    Old = application:get_env(wasm, max_module_loads_per_second),
+    ok = application:stop(wasm),
+    ok = application:set_env(wasm, max_module_loads_per_second, Rate),
+    {ok, _} = application:ensure_all_started(wasm),
+    try Fun()
+    after
+        ok = application:stop(wasm),
+        case Old of
+            {ok, V} -> application:set_env(wasm, max_module_loads_per_second, V);
+            undefined -> application:unset_env(wasm, max_module_loads_per_second)
+        end,
+        {ok, _} = application:ensure_all_started(wasm)
     end.
 
 split(Addr) ->

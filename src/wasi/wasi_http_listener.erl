@@ -13,7 +13,8 @@ This is modelled on the `barrel_mcp` HTTP listener: the wire library owns the
 acceptor pool, framing and one process per request; this module is the translator
 between that process and the component. The component is instantiated per request
 (host resources are per-process, so each request is isolated), which keeps a slow
-or trapping guest from touching any other.
+or trapping guest from touching any other. The listener keeps the component's core
+modules loaded for its life, so instantiating per request does not load them again.
 
 ```erlang
 {ok, L} = wasi_http_listener:start(#{port => 0, component => Bin}),
@@ -27,7 +28,7 @@ wasi_http_listener:stop(L).
 %% The handler runs in the wire library's per-request process; exported for clarity.
 -export([serve_request/6]).
 
--type server() :: {module(), term(), binary()}.
+-type server() :: {module(), term(), binary(), pid()}.
 -export_type([server/0]).
 
 %% Defaults for `request_timeout' and `max_body_bytes'.
@@ -75,23 +76,42 @@ start(#{component := Component} = Opts) ->
     %% Either library answers a body over the ceiling with 413 itself.
     Extra0 = case Transport of h2 -> #{transport => tcp}; _ -> #{} end,
     Extra = Extra0#{max_body_size => MaxBody},
+    Holder = holder(Component),
     case Transport:start_server(maps:get(port, Opts, 0), Extra#{handler => Handler}) of
         {ok, Ref} ->
             Addr = iolist_to_binary(["127.0.0.1:",
                                      integer_to_binary(Transport:server_port(Ref))]),
-            {ok, {Transport, Ref, Addr}};
+            {ok, {Transport, Ref, Addr, Holder}};
         {error, _} = E ->
+            exit(Holder, kill),
             E
     end.
 
+%% Each request instantiates the component in its own process. Nothing else
+%% held its core modules, so each request loaded them again and counted
+%% against the module cache's load rate: past it, every request was a 500.
+%% This process holds them for the listener's life, and dies with the process
+%% that started the listener.
+holder(Component) ->
+    Owner = self(),
+    Ref = make_ref(),
+    Pid = spawn(fun() ->
+                        ok = wasm_lifetime:bind(Owner),
+                        Owner ! {Ref, wasm_component:hold(Component)},
+                        receive stop -> ok end
+                end),
+    %% Loaded before the first request, so none of them races the hold.
+    receive {Ref, _} -> Pid after 30000 -> Pid end.
+
 -doc "The `host:port` the listener is bound to.".
 -spec address(server()) -> binary().
-address({_Transport, _Ref, Addr}) -> Addr.
+address({_Transport, _Ref, Addr, _Holder}) -> Addr.
 
 -doc "Stop a listener and close its socket.".
 -spec stop(server()) -> ok.
-stop({Transport, Ref, _Addr}) ->
+stop({Transport, Ref, _Addr, Holder}) ->
     _ = Transport:stop_server(Ref),
+    Holder ! stop,
     ok.
 
 %% @private Runs in the wire library's per-request process. Collect the body, serve

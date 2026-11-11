@@ -280,9 +280,33 @@ Imports = #{{~"example:store/kv", ~"[constructor]bucket"} =>
 ## The async ABI
 
 `wasm_async` runs the async Canonical ABI on the BEAM's own scheduling. The
-process that runs the call is the task. A wait is a selective `receive`. A
-producer sends a message when its value is ready. All task state is in the
-process dictionary, and there is one task per process.
+process that owns the instance runs its tasks. A wait is a selective
+`receive`. A producer sends a message when its value is ready. All task state
+is in the process dictionary.
+
+A *frame* holds the handles, sets, producers and pending tasks of the
+instance's calls. A call that finds a frame open with work in it, pending tasks
+or ends the host holds, joins it. Otherwise it opens its own, and a call made
+from inside a host function sets the outer frame aside, as before. Ending a
+call tears the frame down only when nothing is pending and the host holds no
+end; `destroy/1` tears it down whatever is left.
+
+A task can resolve (`task.return`) before it finishes. `start_async/5` returns
+at that point and records the task's callback, status, budget and context
+slots. `pump/2` and the host-end calls give pending tasks their turns:
+
+1. Take in what producers have sent.
+2. Give a callback turn to the first task that can take an event, restoring
+   its own context slots first.
+3. Otherwise wait for a producer. With no producer left, nothing can change:
+   `pump/2` answers `idle`, and a host read or write answers
+   `{error, async_deadlock}`.
+
+The host's ends: `host_reader/1` (the default for a started call's returned
+stream) reads with the same 1024-element bound as two guest ends;
+`host_sink/2` passes each write on as it happens; `host_stream/1` and
+`host_future/1` make a pair whose writer the host keeps. The host-end calls
+that run tasks answer `{error, reentrant}` inside a guest call.
 
 `wasm_component:call_async/4`:
 
@@ -377,6 +401,7 @@ provide its `[resource-drop]`.
 | `wasm_component_async_SUITE` | futures, streams, producers, suspend and resume |
 | `wasm_component_async_import_SUITE` | async host imports, immediate and suspending |
 | `wasm_component_async_abi_SUITE` | each async built-in and trap, stackful lifts, typed payloads |
+| `wasm_component_async_tasks_SUITE` | tasks that outlive their call, two at once, the host's ends |
 | `wasm_wasi2_async_SUITE` | `call_async/4` against wasmtime's async fixture |
 | `wasm_component_malformed_SUITE` | truncation and corruption are values |
 | `wasm_component_worker_SUITE` | a component through the worker kernel |

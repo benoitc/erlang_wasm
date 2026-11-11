@@ -6,6 +6,12 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **An async task can keep running after it returns its result.** Call it with
+  `wasm_component:start_async/4`, which returns as soon as the task has a
+  result. Read a returned stream with `wasm_async:host_read/3` while the guest
+  writes it, and run what is left with `wasm_component:pump/2`. Several tasks
+  can run in one instance. A host import can now give the guest a stream or a
+  future of its own. `call_async/4` is unchanged.
 - **A WASI 0.3 import no longer binds a WASI 0.2 function.** Versions were
   removed when matching imports to host functions, so `wasi:cli/stdout@0.3.0`
   reached the 0.2 `stdout`, whose functions differ. A 0.3 import now looks for a

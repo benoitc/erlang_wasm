@@ -153,11 +153,12 @@ a_stalled_body_is_408(Config) ->
         ?assert(Took < 5000)
     end).
 
-%% The guest takes about 10 ms to load and run; 5 ms is past it. The body of
-%% a GET is complete in the request's own packet, so only the guest is late.
-%% Timing-based: very heavy load could delay the body past 5 ms too.
-a_guest_past_the_deadline_is_504(Config) ->
-    with_listener(Config, #{request_timeout => 5}, fun(Port) ->
+%% wasmtime's `sleep' guest never returns from `handle': answered 504 at the
+%% deadline. The body of a GET is complete in the request's own packet, so
+%% only the guest is late.
+a_guest_past_the_deadline_is_504(_Config) ->
+    {ok, Sleep} = file:read_file(serve_fixture("p2_cli_serve_sleep")),
+    with_listener([{component, Sleep}], #{request_timeout => 300}, fun(Port) ->
         ?assertEqual(<<"504">>, status(Port, [?GET]))
     end).
 
@@ -237,7 +238,8 @@ timed(F) ->
     R = F(),
     {erlang:monotonic_time(millisecond) - T0, R}.
 
-hello() ->
+hello() -> serve_fixture("p2_cli_serve_hello_world").
+
+serve_fixture(Name) ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..", "test",
-                   "fixtures", "wasmtime-p2-serve",
-                   "p2_cli_serve_hello_world.component.wasm"]).
+                   "fixtures", "wasmtime-p2-serve", Name ++ ".component.wasm"]).

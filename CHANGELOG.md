@@ -6,6 +6,22 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **Nothing the runtime starts outlives the process responsible for it.**
+  Several helpers ran work in a child whose time limit lived in the process
+  that started it, so killing that process left the work running with nothing
+  to stop it: an async stream producer, a cleanup callback, an image capture
+  whose `init()` never returned, and an artifact load. Each now dies with its
+  owner. `wasm_instance_worker:call/4` also kills a worker that runs past its
+  timeout even when the caller has died.
+- **Killed processes no longer leave memory behind.** A process killed while
+  loading a module could leave the module cached with nobody holding it,
+  counted against `max_resident_modules` for the life of the node; one killed
+  while waiting in `memory.atomic.wait` left its entry in the waiter table.
+  Both are now removed.
+- **An async task no longer takes your process's monitor messages.** Ending
+  an async component call removed every `'DOWN'` message from the calling
+  process's mailbox, including those of monitors the caller had set up
+  itself.
 - **Compiled calls and 32-bit arithmetic are much faster.** A call between
   compiled functions is now a plain local call, and 32-bit integer
   arithmetic compiles the way you would write it in Erlang. Recursive

@@ -74,6 +74,12 @@ jobs:
             https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz
           mkdir -p "$HOME/.local/opt"
           tar xzf /tmp/wasi-sdk.tar.gz -C "$HOME/.local/opt"
+      # The Lua source comes from lua.org, which runners cannot always reach;
+      # the script keeps the checksummed tarball here and uses it when present.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/erlang_wasm
+          key: lua-source-5.4.9-2335b6c582a5
       - name: Build the QuickJS and Lua reactors
         run: |
           export WASI_SDK="$HOME/.local/opt/wasi-sdk-34.0-x86_64-linux"

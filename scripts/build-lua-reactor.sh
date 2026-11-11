@@ -34,15 +34,30 @@ WASI_SDK="${WASI_SDK:-$HOME/.local/opt/wasi-sdk-34.0-arm64-macos}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-echo "fetching Lua $VERSION"
-curl -fsSL -o "$WORK/lua.tar.gz" "https://www.lua.org/ftp/lua-$VERSION.tar.gz"
+# The tarball is kept in a cache directory once its checksum has been checked,
+# so a build needs lua.org only the first time; CI restores the directory.
+CACHE="${LUA_CACHE:-$HOME/.cache/erlang_wasm}"
+TARBALL="$CACHE/lua-$VERSION.tar.gz"
 # The tarball **is** checksummed, unlike the artifacts this script produces: it
 # is fetched rather than built, and lua.org publishes no signature.
-if command -v shasum >/dev/null 2>&1; then
-    echo "$SHA256  $WORK/lua.tar.gz" | shasum -a 256 -c - >/dev/null
+checksum_ok() {
+    if command -v shasum >/dev/null 2>&1; then
+        echo "$SHA256  $1" | shasum -a 256 -c - >/dev/null 2>&1
+    else
+        echo "$SHA256  $1" | sha256sum -c - >/dev/null 2>&1
+    fi
+}
+if [ -f "$TARBALL" ] && checksum_ok "$TARBALL"; then
+    echo "using cached Lua $VERSION"
 else
-    echo "$SHA256  $WORK/lua.tar.gz" | sha256sum -c - >/dev/null
+    echo "fetching Lua $VERSION"
+    mkdir -p "$CACHE"
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 \
+        -o "$WORK/lua.tar.gz" "https://www.lua.org/ftp/lua-$VERSION.tar.gz"
+    checksum_ok "$WORK/lua.tar.gz" || { echo "Lua tarball checksum mismatch" >&2; exit 1; }
+    cp "$WORK/lua.tar.gz" "$TARBALL"
 fi
+cp "$TARBALL" "$WORK/lua.tar.gz"
 tar xzf "$WORK/lua.tar.gz" -C "$WORK"
 
 # Everything but the two entry points: `lua.c` is the interpreter's `main` and

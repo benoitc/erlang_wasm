@@ -1,7 +1,7 @@
 # WASI 0.3
 
 This page is about running a WASI 0.3 component: one that imports `wasi:cli`,
-`wasi:clocks` or `wasi:random` at version `0.3.x`. WASI 0.3 drops `wasi:io`.
+`wasi:clocks`, `wasi:random` or `wasi:filesystem` at version `0.3.x`. WASI 0.3 drops `wasi:io`.
 Data moves through the Component Model's own streams and futures, and a slow
 call is an `async func`. You need this page when a toolchain builds your
 program for 0.3, such as Rust's `wasip3` crate or a target that names
@@ -28,11 +28,17 @@ uses it.
 | `wasi:cli` | stdin, stdout and stderr through streams, the environment, exit, terminals (none) |
 | `wasi:clocks` | the monotonic clock with async `wait-for` and `wait-until`, the system clock, a UTC timezone |
 | `wasi:random` | the same functions as 0.2 |
-| `wasi:filesystem`, `wasi:sockets`, `wasi:http` | not yet: a component that imports them does not link |
+| `wasi:filesystem` | the same mounts as 0.2: reads, writes, appends and directory listings through streams, every other call async |
+| `wasi:sockets`, `wasi:http` | not yet: a component that imports them does not link |
 
 ## Notes
 
 - stdout and stderr take each write as the guest makes it.
+- A file takes at most 64 KiB from one write. A larger write is short, and the
+  guest writes the rest, as the specification allows.
+- `read-via-stream` reads the file from its offset when the guest asks for the
+  stream, so a large file is held in memory while the guest reads it.
+- Mount files with `preopen`, `writable` and `preopens`, as for 0.2.
 - A wait that is already over, such as `wait-until(now)`, completes at once.
 - `resource_limit` also bounds the async calls a guest has waiting at once.
   Past it, the call traps with `resource_limit_reached`.

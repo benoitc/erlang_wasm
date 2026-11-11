@@ -14,6 +14,14 @@ streams a descriptor opens are the `output-stream` and `input-stream` resources
 -include("wasi.hrl").
 
 -export([filesystem/1]).
+%% The operations themselves, for `wasi_p3_filesystem', which serves the same
+%% descriptors through the 0.3 interface. Each answers 0.2-shaped terms.
+-export([mounts_of/1, get_directories/1, open_at/5, create_directory_at/2,
+         unlink_file_at/2, remove_directory_at/2, rename_at/4, symlink_at/3,
+         link_at/5, readlink_at/2, set_size/2, set_times/3, set_times_at/5,
+         sync_fd/1, is_same_object/2, metadata_hash/1, metadata_hash_at/3,
+         type_of/1, stat/1, stat_at/3, get_flags/1, fs_drop/1, write_at/3,
+         readable_file/1, read_all/3, dir_entries/1, errno_name/1]).
 
 %% wasi:filesystem enums, in WIT order (the enum discriminant is the index).
 -define(ERROR_CODE,
@@ -805,6 +813,19 @@ read_directory(Dir) ->
             end;
         _ ->
             {error, <<"bad-descriptor">>}
+    end.
+
+-doc "The entries of directory descriptor `Dir`, each `#{type, name}`.".
+-spec dir_entries(non_neg_integer()) -> {ok, [map()]} | {error, binary()}.
+dir_entries(Dir) ->
+    case wasm_component:host_get(Dir) of
+        {ok, {fs_dir, {Root, _}}} ->
+            case wasi_fs:list(Root) of
+                {ok, Names} -> {ok, [dir_entry(Root, N) || N <- Names]};
+                {error, Errno} -> {error, errno_name(Errno)}
+            end;
+        {ok, {fs_file, _}} -> {error, <<"not-directory">>};
+        _ -> {error, <<"bad-descriptor">>}
     end.
 
 dir_entry(Root, Name) ->

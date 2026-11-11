@@ -22,11 +22,13 @@ also puts the 0.3 programs in `test/fixtures/wasmtime-p3` (not vendored).
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([hello_stdout/1, read_stdin/1, cli/1, clocks_sleep/1, random_imports/1,
          big_random_buf/1, random_limits/1, much_stdout/1,
-         many_tasks_reach_the_resource_limit/1, p3_cases/1]).
+         many_tasks_reach_the_resource_limit/1, file_write_chunked/1,
+         file_truncation_readonly/1, p3_cases/1]).
 
 all() ->
     [hello_stdout, read_stdin, cli, clocks_sleep, random_imports, big_random_buf,
-     random_limits, much_stdout, many_tasks_reach_the_resource_limit, p3_cases].
+     random_limits, much_stdout, many_tasks_reach_the_resource_limit,
+     file_write_chunked, file_truncation_readonly, p3_cases].
 
 %% Programs still failing, by group, and why. Each step of the WASI 0.3 work
 %% lowers its group to 0.
@@ -34,9 +36,9 @@ baseline() ->
     #{~"cli"        => 0,
       ~"clocks"     => 0,
       ~"random"     => 0,
-      %% wasi:filesystem@0.3, wasi:sockets@0.3 and wasi:http@0.3 are not hosted
-      %% yet, so these programs do not link.
-      ~"filesystem" => 7,
+      ~"filesystem" => 0,
+      %% wasi:sockets@0.3 and wasi:http@0.3 are not hosted yet, so these
+      %% programs do not link.
       ~"sockets"    => 17,
       ~"http"       => 15}.
 
@@ -90,6 +92,17 @@ many_tasks_reach_the_resource_limit(_) ->
     {error, E} = run("p3_cli_many_tasks", <<>>,
                      (opts("p3_cli_many_tasks"))#{resource_limit => 100}),
     ?assertMatch(#{ctx := #{reason := resource_limit_reached}}, E).
+
+%% Writes that double until the host takes less than it was offered; a file
+%% taking each write whole let them grow without end.
+file_write_chunked(_) ->
+    ?assertMatch({ok, #{exit_code := 0}},
+                 run("p3_file_write_chunked", <<>>, opts("p3_file_write_chunked"))).
+
+file_truncation_readonly(_) ->
+    ?assertMatch({ok, #{exit_code := 0}},
+                 run("p3_file_truncation_readonly", <<>>,
+                     opts("p3_file_truncation_readonly"))).
 
 p3_cases(_) ->
     Results = [{group(P), filename:basename(P, ".component.wasm"), outcome(P)}
@@ -148,7 +161,18 @@ opts("p3_cli_many_tasks") -> #{resource_limit => 100};
 opts(Name) ->
     #{args => [list_to_binary(Name ++ ".component"), ~"."],
       env => [errno_mode()],
-      preopens => [{~".", scratch(), true}]}.
+      preopens => [{~".", scratch(), true} | readonly(Name)]}.
+
+%% The cross-permission programs also get a read-only mount holding a file
+%% they must not be able to change.
+readonly(Name) when Name =:= "p3_file_truncation_readonly";
+                    Name =:= "p3_file_hardlink_across_perms";
+                    Name =:= "p3_file_rename_across_perms" ->
+    Dir = scratch(),
+    ok = file:write_file(filename:join(Dir, "test.txt"), <<"read only test file\n">>),
+    [{~"readonly", Dir, false}];
+readonly(_) ->
+    [].
 
 %% wasmtime's `wasi_tests_environment()': which errno conventions to expect.
 errno_mode() ->

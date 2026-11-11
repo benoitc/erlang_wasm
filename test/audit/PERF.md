@@ -8679,3 +8679,22 @@ The harness's other rows are reported, not gated: `fib(30)` read 1.08x
 on the execution path.
 
 Scripts and logs: `test/audit/raw/lifetime/`.
+
+## HTTP deadlines and limits: listener throughput (2026-11-11)
+
+The listener now reads each request body to its end with a selective receive
+and runs the guest in a bound child that holds the request's deadline.
+Measured against main (`2718828`): wasmtime's hello-world serve component,
+8 clients of 300 keep-alive requests each, median of three samples per VM, six
+VMs per side, interleaved, both orders, at a one-minute load below 8.
+
+| | main | candidate | ratio | gate |
+| --- | --- | --- | --- | --- |
+| requests a second | 591.5 | 587.2 | 1.007x in time | 1.03x |
+
+Pass. The benchmark raises `max_module_loads_per_second`: every request
+loads the component's cores again, because nothing holds them between
+requests, and the default of 50 loads a second makes every tree answer 500
+after about 12 requests in a second. That cap is on main, unchanged here.
+
+Script and log: `test/audit/raw/http-limits/`.

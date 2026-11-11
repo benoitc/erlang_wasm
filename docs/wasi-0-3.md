@@ -1,8 +1,8 @@
 # WASI 0.3
 
 This page is about running a WASI 0.3 component: one that imports `wasi:cli`,
-`wasi:clocks`, `wasi:random`, `wasi:filesystem` or `wasi:sockets` at version
-`0.3.x`. WASI 0.3 drops `wasi:io`.
+`wasi:clocks`, `wasi:random`, `wasi:filesystem`, `wasi:sockets` or `wasi:http`
+at version `0.3.x`. WASI 0.3 drops `wasi:io`.
 Data moves through the Component Model's own streams and futures, and a slow
 call is an `async func`. You need this page when a toolchain builds your
 program for 0.3, such as Rust's `wasip3` crate or a target that names
@@ -22,6 +22,19 @@ A 0.3 program built through the wasip1 adapter imports 0.2 interfaces as well.
 `wasi_preview3:command/1` is both hosts in one imports map, and this runner
 uses it.
 
+## Serve a 0.3 handler
+
+`wasi_preview3:run_serve/3` serves one request through a 0.2 or a 0.3 handler,
+with the same request map and result as `wasi_preview2:run_serve/3`.
+`wasi_http_listener` serves through it, so a listener takes either kind:
+
+```erlang
+{ok, 200, _Headers, Body} =
+    wasi_preview3:run_serve(Bin, #{method => ~"GET", path => ~"/",
+                                   scheme => ~"http", authority => ~"localhost",
+                                   headers => [], body => <<>>}, #{}).
+```
+
 ## What is there
 
 | package | at 0.3 |
@@ -31,7 +44,7 @@ uses it.
 | `wasi:random` | the same functions as 0.2 |
 | `wasi:filesystem` | the same mounts as 0.2: reads, writes, appends and directory listings through streams, every other call async |
 | `wasi:sockets` | TCP and UDP under the same `network` grant as 0.2: a connection's data through `send` and `receive` streams, `listen` as a stream of accepted sockets, async `connect` and UDP `send` and `receive`, async name lookup |
-| `wasi:http` | not yet: a component that imports it does not link |
+| `wasi:http` | `fields`, `request`, `request-options` and `response`; `client.send` through the same transport and grant as 0.2; a `wasi:http/handler` export served by `run_serve/3` and the listener. Not yet: middleware (a handler that imports another) |
 
 ## Notes
 
@@ -41,6 +54,9 @@ uses it.
 - `read-via-stream` reads the file from its offset when the guest asks for the
   stream, so a large file is held in memory while the guest reads it.
 - Mount files with `preopen`, `writable` and `preopens`, as for 0.2.
+- A request body must match its `content-length`: a write that would go past
+  it is refused, and one that ends short fails with `HTTP-request-body-size`.
+- A handler's response body is read whole before the answer is sent.
 - Grant the network with `network`, as for 0.2. Without it, creating a socket
   is refused with `access-denied`.
 - Binding, connecting and listening are one call each. `connect` and `listen`

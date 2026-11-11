@@ -23,12 +23,14 @@ also puts the 0.3 programs in `test/fixtures/wasmtime-p3` (not vendored).
 -export([hello_stdout/1, read_stdin/1, cli/1, clocks_sleep/1, random_imports/1,
          big_random_buf/1, random_limits/1, much_stdout/1,
          many_tasks_reach_the_resource_limit/1, file_write_chunked/1,
-         file_truncation_readonly/1, p3_cases/1]).
+         file_truncation_readonly/1, serve_hello_world/1, serve_echo/1,
+         serve_post_return/1, p3_cases/1]).
 
 all() ->
     [hello_stdout, read_stdin, cli, clocks_sleep, random_imports, big_random_buf,
      random_limits, much_stdout, many_tasks_reach_the_resource_limit,
-     file_write_chunked, file_truncation_readonly, p3_cases].
+     file_write_chunked, file_truncation_readonly, serve_hello_world, serve_echo,
+     serve_post_return, p3_cases].
 
 %% Programs still failing, by group, and why. Each step of the WASI 0.3 work
 %% lowers its group to 0.
@@ -41,18 +43,24 @@ baseline() ->
       %% after setting them up and before writing to them, so its first send
       %% finds the connection closed. Under investigation.
       ~"sockets"    => 1,
-      %% wasi:http@0.3 is not hosted yet, so these programs do not link.
-      ~"http"       => 15}.
+      ~"http"       => 0}.
 
 init_per_suite(Config) ->
     case programs() of
         [] -> {skip, "no wasmtime p3 fixtures: run scripts/build-wasmtime-p2.sh"};
         _ ->
             {ok, _} = application:ensure_all_started(wasm),
-            Config
+            %% The server the outbound HTTP programs reach, as wasmtime's own
+            %% tests give them through HTTP_SERVER.
+            {ok, Server} = wasi_http_server:start(),
+            persistent_term:put({?MODULE, http}, wasi_http_server:address(Server)),
+            [{http_server, Server} | Config]
     end.
 
-end_per_suite(_) -> ok.
+end_per_suite(Config) ->
+    wasi_http_server:stop(?config(http_server, Config)),
+    persistent_term:erase({?MODULE, http}),
+    ok.
 
 %%% --------------------------------------------------------------- cases ---
 
@@ -105,6 +113,27 @@ file_truncation_readonly(_) ->
     ?assertMatch({ok, #{exit_code := 0}},
                  run("p3_file_truncation_readonly", <<>>,
                      opts("p3_file_truncation_readonly"))).
+
+%% The 0.3 handlers, served through wasi_preview3:run_serve/3.
+serve_hello_world(_) ->
+    ?assertEqual({ok, 200, [], <<"Hello, WASI!">>}, serve("p3_cli_serve_hello_world")).
+
+%% The handler answers with the request's own headers and body.
+serve_echo(_) ->
+    ?assertMatch({ok, 200, [{<<"content-type">>, <<"text/plain">>}], <<"hello body">>},
+                 serve("p3_http_echo")).
+
+
+%% What the handler does after returning its response still runs.
+serve_post_return(_) ->
+    ?assertMatch({ok, 200, _, _}, serve("p3_cli_serve_post_return")).
+
+serve(Name) ->
+    {ok, Bin} = file:read_file(filename:join(dir() ++ "-serve", Name ++ ".component.wasm")),
+    Req = #{method => <<"POST">>, path => <<"/">>, scheme => <<"http">>,
+            authority => <<"localhost">>,
+            headers => [{<<"content-type">>, <<"text/plain">>}], body => <<"hello body">>},
+    bounded(fun() -> wasi_preview3:run_serve(Bin, Req, #{compile => true}) end).
 
 p3_cases(_) ->
     Results = [{group(P), filename:basename(P, ".component.wasm"), outcome(P)}
@@ -165,6 +194,14 @@ opts("p3_cli_deny_listen" = Name) ->
     (base(Name))#{network => (unrestricted())#{listen => []}};
 opts("p3_sockets" ++ _ = Name) ->
     (base(Name))#{network => unrestricted()};
+%% The outbound programs reach the loopback server; the timeout one connects to
+%% an unroutable TEST-NET-3 address and expects the connect to time out.
+opts("p3_http_outbound_request" ++ _ = Name) ->
+    Grant = loopback(),
+    Connect = [{tcp, ~"203.0.113.12", {0, 65535}} | maps:get(connect, Grant)],
+    (base(Name))#{network => Grant#{connect => Connect},
+                  env => [errno_mode(),
+                          {~"HTTP_SERVER", persistent_term:get({?MODULE, http})}]};
 opts(Name) -> base(Name).
 
 base(Name) ->
@@ -187,6 +224,10 @@ readonly(_) ->
 unrestricted() ->
     Any = [{P, R, {0, 65535}} || P <- [tcp, udp], R <- [~"0.0.0.0/0", ~"::/0"]],
     #{connect => Any, listen => Any, resolve => allow}.
+
+loopback() ->
+    Local = [{P, A, {0, 65535}} || P <- [tcp, udp], A <- [~"127.0.0.1", ~"::1"]],
+    #{connect => Local, listen => Local, resolve => allow}.
 
 %% wasmtime's `wasi_tests_environment()': which errno conventions to expect.
 errno_mode() ->

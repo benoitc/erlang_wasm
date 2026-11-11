@@ -9,8 +9,11 @@ plain Erlang.
 - **WASI 0.3 commands run.** `wasi_preview3:run_command/3` runs a component
   built for WASI 0.3 that uses `wasi:cli`, `wasi:clocks` and `wasi:random`:
   stdio through streams, async sleeps, the environment and exit codes. It runs
-  0.2 commands too, and serves `wasi:filesystem` and `wasi:sockets` at 0.3 over
-  the same mounts and network grant. HTTP at 0.3 is not there yet.
+  0.2 commands too, and serves `wasi:filesystem`, `wasi:sockets` and `wasi:http`
+  at 0.3 over the same mounts, network grant and HTTP transport.
+  `wasi_preview3:run_serve/3` and the HTTP listener serve a 0.3 `wasi:http`
+  handler as well as a 0.2 one. Middleware, a handler that imports another, is
+  not supported yet.
   `resource_limit` now also bounds how many async calls a guest has waiting
   at once.
 - **An async task can keep running after it returns its result.** Call it with

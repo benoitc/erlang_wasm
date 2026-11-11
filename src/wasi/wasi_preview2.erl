@@ -37,7 +37,7 @@ in its options. `docs/components.md` shows both from the caller's side.
          filesystem/1, sockets/1, command/1, run_command/2, run_command/3,
          run_serve/3]).
 %% For `wasi_preview3', which builds the 0.3 host on this one.
--export([run_command_with/4, cli_exit/0, command_mounts/1]).
+-export([run_command_with/4, run_serve_with/5, serve/2, cli_exit/0, command_mounts/1]).
 %% The poll_oneoff readiness logic over host pollable handles, and the monotonic
 %% clock its deadlines use, exported so a test can drive poll directly (as
 %% host_new/host_get are).
@@ -547,6 +547,16 @@ options (a `network` grant lets the reactor make its own outbound requests).
                   max_host_calls => non_neg_integer() | infinity}) ->
           {ok, 0..65535, [{binary(), binary()}], binary()} | {error, term()}.
 run_serve(Bin, Request, Extra) ->
+    run_serve_with(Bin, Request, Extra, fun command/1, fun serve/2).
+
+-doc """
+As `run_serve/3`, with the imports built by `Host(Opts)` and the request served
+by `Serve(Instance, Request)`: `wasi_preview3:run_serve/3` serves a 0.3
+handler this way.
+""".
+-spec run_serve_with(binary(), map(), map(), fun((map()) -> map()),
+                     fun((wasm_component:instance(), map()) -> term())) -> term().
+run_serve_with(Bin, Request, Extra, Host, Serve) ->
     _ = erase(?EXIT_STATUS),
     _ = erase(?INSECURE_SEED),
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
@@ -555,9 +565,9 @@ run_serve(Bin, Request, Extra) ->
                  resource_predrop => fun stream_predrop/1,
                  resource_limit => maps:get(resource_limit, Extra, infinity)},
     Opts = maps:without([compile, resource_limit | ?EXEC_LIMITS], Extra),
-    case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
+    case wasm_component:instantiate(Bin, Host(Opts), InstOpts) of
         {ok, Instance} ->
-            try serve(Instance, Request)
+            try Serve(Instance, Request)
             after wasm_component:destroy(Instance, fun close_resource/1) end;
         {error, _} = E ->
             E
@@ -568,6 +578,8 @@ run_serve(Bin, Request, Extra) ->
 %% `fuel' or `max_memory_pages' set here bounded nothing.
 exec_limits(Extra) -> maps:with(?EXEC_LIMITS, Extra).
 
+-doc "Serve `Request` through the 0.2 `incoming-handler` export of `Instance`.".
+-spec serve(wasm_component:instance(), map()) -> term().
 serve(Instance, Request) ->
     case serve_export(wasm_component:exports(Instance)) of
         {ok, Export} ->
@@ -993,6 +1005,11 @@ close_resource({fs_dir, {Root, _}})                          -> _ = wasi_fs:forg
 close_resource({output_stream, {ostream, _P, _C, {file, own, Fh, _}}})     -> _ = wasi_fs:close(Fh), ok;
 close_resource({output_stream, {ostream, _P, _C, {file_append, own, Fh}}}) -> _ = wasi_fs:close(Fh), ok;
 close_resource({input_stream, {file, Handle, _}})       -> _ = wasi_fs:close(Handle), ok;
+%% A 0.3 request or response the guest drops takes its body stream with it, so
+%% a writer still holding the other end sees it gone.
+close_resource({Tag, #{body := {some, S}}}) when Tag =:= p3_http_request;
+                                                 Tag =:= p3_http_response ->
+    ok = wasm_async:host_close(S);
 close_resource({tcp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;
 close_resource({udp_socket, {udp_bound, Sock, _Conn}})  -> _ = wasi_sock2:close(Sock), ok;
 close_resource({udp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;

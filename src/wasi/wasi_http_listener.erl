@@ -2,10 +2,10 @@
 -moduledoc """
 A live HTTP server that serves a `wasi:http` reactor component.
 
-Each request the server accepts is turned into an `incoming-request`, handed to the
-component's `wasi:http/incoming-handler#handle` through
-`wasi_preview2:run_serve/3`, and answered with the response the guest set on its
-outparam. The wire protocol is pluggable, the same seam the outbound path uses: a
+Each request the server accepts is turned into an incoming request, handed to the
+component's handler through `wasi_preview3:run_serve/3` (a 0.2
+`wasi:http/incoming-handler` or a 0.3 `wasi:http/handler`), and answered with the
+response the guest made. The wire protocol is pluggable, the same seam the outbound path uses: a
 listener speaks HTTP/1.1 (`h1`) or cleartext HTTP/2 (`h2`), so one component serves
 either.
 
@@ -154,7 +154,7 @@ run(Component, Request, ServeOpts, Deadline) ->
                    fun() ->
                            ok = wasm_lifetime:bind(Parent),
                            Parent ! {served, self(),
-                                     try wasi_preview2:run_serve(
+                                     try wasi_preview3:run_serve(
                                            Component, Request, ServeOpts)
                                      catch _:Reason -> {error, Reason}
                                      end}

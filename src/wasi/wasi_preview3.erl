@@ -1,8 +1,8 @@
 -module(wasi_preview3).
 -moduledoc """
 The WASI 0.3 host: `wasi:cli`, `wasi:clocks`, `wasi:random`, and
-`wasi:filesystem` and `wasi:sockets` through `wasi_p3_filesystem` and
-`wasi_p3_sockets`.
+`wasi:filesystem`, `wasi:sockets` and `wasi:http` through
+`wasi_p3_filesystem`, `wasi_p3_sockets` and `wasi_p3_http`.
 
 WASI 0.3 replaces `wasi:io`'s streams and pollables with the Component Model's
 own `stream<T>`, `future<T>` and `async func`. Each interface here is keyed
@@ -24,7 +24,7 @@ one together, and `run_command/3` runs a 0.2 or a 0.3 command.
   timer while the instance's other tasks run.
 """.
 
--export([command/1, run_command/3, cli/1, clocks/0, random/0]).
+-export([command/1, run_command/3, run_serve/3, cli/1, clocks/0, random/0]).
 
 -define(STDIO_RESULT, {result, none, {enum, [~"io", ~"illegal-byte-sequence", ~"pipe"]}}).
 
@@ -41,7 +41,8 @@ command(Opts) ->
                 [cli(Opts), clocks(), random(),
                  wasi_p3_filesystem:filesystem(
                    #{mounts => wasi_preview2:command_mounts(Opts)}),
-                 wasi_p3_sockets:sockets(Opts)]).
+                 wasi_p3_sockets:sockets(Opts),
+                 wasi_p3_http:http(Opts)]).
 
 -doc """
 Run a command component, 0.2 or 0.3, as `wasi_preview2:run_command/3` does.
@@ -52,6 +53,36 @@ A 0.3 `wasi:cli/run` export is async, and its task is run to its end.
           {error, term()}.
 run_command(Bin, Stdin, Extra) ->
     wasi_preview2:run_command_with(Bin, Stdin, Extra, fun command/1).
+
+-doc """
+Serve one request through a `wasi:http` handler, 0.2 or 0.3, as
+`wasi_preview2:run_serve/3` does. A 0.3 handler is async: its response is
+taken once it has one, and its body read while the task writes it; what the
+guest does after that runs too, before the instance is destroyed.
+""".
+-spec run_serve(binary(), map(), map()) ->
+          {ok, non_neg_integer(), [{binary(), binary()}], binary()} | {error, term()}.
+run_serve(Bin, Request, Extra) ->
+    wasi_preview2:run_serve_with(Bin, Request, Extra, fun command/1, fun serve/2).
+
+serve(Instance, Request) ->
+    case [E || E <- wasm_component:exports(Instance),
+               binary:match(E, ~"wasi:http/handler@0.3") =/= nomatch] of
+        [Handler | _] -> serve_p3(Instance, <<Handler/binary, "#handle">>, Request);
+        [] -> wasi_preview2:serve(Instance, Request)
+    end.
+
+serve_p3(Instance, Export, Request) ->
+    Req = wasi_p3_http:incoming_request(Request),
+    Sig = {[handle], {result, handle, wasi_http:error_code()}},
+    case wasm_component:start_async(Instance, Export, Sig, [Req]) of
+        {ok, {ok, Resp}} ->
+            Result = wasi_p3_http:take_response(Resp),
+            _ = wasm_component:pump(Instance, 5000),
+            Result;
+        {ok, {error, E}} -> {error, E};
+        {error, _} = E -> E
+    end.
 
 -doc "`wasi:cli` at 0.3: stdio through streams, the environment, exit, terminals.".
 -spec cli(map()) -> host().

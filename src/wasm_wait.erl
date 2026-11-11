@@ -55,6 +55,11 @@ wait(MemId, Addr, Read, TimeoutNs) ->
     %% arriving concurrently, because the notify becomes a message rather than
     %% an event that has to find someone listening.
     true = ets:insert(?TAB, {Key, self(), Ref}),
+    %% The `after' below removes the row, but a killed process runs no
+    %% `after': the engine watches every waiter and removes a dead one's rows,
+    %% which otherwise stayed for ever when nothing notified that address
+    %% again (a memory that is gone, say). A cast, so waiting does not wait.
+    ok = gen_server:cast(wasm_engine, {watch_waiter, self()}),
     Entry = {Key, self(), Ref},
     try
         case Read() of

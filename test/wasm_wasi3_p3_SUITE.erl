@@ -24,13 +24,14 @@ also puts the 0.3 programs in `test/fixtures/wasmtime-p3` (not vendored).
          big_random_buf/1, random_limits/1, much_stdout/1,
          many_tasks_reach_the_resource_limit/1, file_write_chunked/1,
          file_truncation_readonly/1, serve_hello_world/1, serve_echo/1,
-         serve_post_return/1, p3_cases/1]).
+         serve_post_return/1, serve_drops_forbidden_headers/1, serve_proxy/1,
+         p3_cases/1]).
 
 all() ->
     [hello_stdout, read_stdin, cli, clocks_sleep, random_imports, big_random_buf,
      random_limits, much_stdout, many_tasks_reach_the_resource_limit,
      file_write_chunked, file_truncation_readonly, serve_hello_world, serve_echo,
-     serve_post_return, p3_cases].
+     serve_post_return, serve_drops_forbidden_headers, serve_proxy, p3_cases].
 
 %% Programs still failing, by group, and why. Each step of the WASI 0.3 work
 %% lowers its group to 0.
@@ -128,12 +129,32 @@ serve_echo(_) ->
 serve_post_return(_) ->
     ?assertMatch({ok, 200, _, _}, serve("p3_cli_serve_post_return")).
 
+%% The headers a guest may not set do not reach it from outside either, as
+%% wasmtime's forbidden-headers test asserts of what the guest forwards. The
+%% echo handler answers with the request's own headers.
+serve_drops_forbidden_headers(_) ->
+    {ok, 200, Headers, _} =
+        serve("p3_http_echo",
+              [{<<"host">>, <<"victim.internal">>}, {<<"connection">>, <<"close">>},
+               {<<"custom-forbidden-header">>, <<"yes">>}, {<<"foo">>, <<"bar">>}],
+              #{}),
+    ?assertEqual([{<<"foo">>, <<"bar">>}], Headers).
+
+%% The proxy forwards to the URL its `url' header names, here the suite's
+%% server, and answers with that server's response.
+serve_proxy(_) ->
+    Url = <<"http://", (persistent_term:get({?MODULE, http}))/binary, "/">>,
+    ?assertMatch({ok, 200, _, _},
+                 serve("p3_http_proxy", [{<<"url">>, Url}], #{network => loopback()})).
+
 serve(Name) ->
+    serve(Name, [{<<"content-type">>, <<"text/plain">>}], #{}).
+
+serve(Name, Headers, Extra) ->
     {ok, Bin} = file:read_file(filename:join(dir() ++ "-serve", Name ++ ".component.wasm")),
     Req = #{method => <<"POST">>, path => <<"/">>, scheme => <<"http">>,
-            authority => <<"localhost">>,
-            headers => [{<<"content-type">>, <<"text/plain">>}], body => <<"hello body">>},
-    bounded(fun() -> wasi_preview3:run_serve(Bin, Req, #{compile => true}) end).
+            authority => <<"localhost">>, headers => Headers, body => <<"hello body">>},
+    bounded(fun() -> wasi_preview3:run_serve(Bin, Req, Extra#{compile => true}) end).
 
 p3_cases(_) ->
     Results = [{group(P), filename:basename(P, ".component.wasm"), outcome(P)}

@@ -378,6 +378,9 @@ declared_length(#{headers := Headers}) ->
 %% refused whole, and a body that ends short is an error.
 collector(none, _Declared) ->
     collector_with(<<>>, done);
+%% An incoming request sent on as it came: its body was never made a stream.
+collector({bytes, Bin}, _Declared) ->
+    collector_with(Bin, done);
 collector({some, S}, Declared) ->
     Pid = collector_with(<<>>, open),
     Total = counters:new(1, []),
@@ -455,12 +458,21 @@ incoming_request(Request) ->
       #{method => method_variant(Method), path => {some, Path},
         scheme => {some, Scheme},
         authority => {some, maps:get(authority, Request, ~"localhost")},
-        headers => maps:get(headers, Request, []),
+        %% A header the guest may not set (host, connection and the like) does
+        %% not reach it either, so it cannot be forwarded on.
+        headers => [{N, V} || {N, V} <- maps:get(headers, Request, []),
+                              not forbidden(N, V)],
         %% Made into a stream and a future when the guest consumes the body,
         %% inside its task: a stream made before the task starts is cleared
         %% when the task's frame opens.
         body => {bytes, maps:get(body, Request, <<>>)},
         trailers => none_yet, options => none, sent => undefined}).
+
+forbidden(N, V) ->
+    case wasi_http:field_error(N, V) of
+        {~"forbidden", _} -> true;
+        _ -> false
+    end.
 
 method_variant(M) ->
     L = string:lowercase(M),

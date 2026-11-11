@@ -77,6 +77,11 @@ applies. Because of this, `pages_in_use` can be a little above the node
 budget: pages already used are counted even when the budget is exceeded. While
 it is over, every new request for pages is refused.
 
+`max_memory_pages` does not count tables. A table's contents are rows in ETS,
+outside any memory page and outside the owning process's heap, so neither
+`max_memory_pages` nor `max_heap_words` sees them. A table is bounded by the
+maximum its module declares, and its rows are freed with the instance.
+
 `max_rec_groups` limits a table whose rows can never be removed. A type id is
 compared by `ref.eq` and when imports are matched. If a row were removed, two
 different types could become the same for a module that still uses them. A

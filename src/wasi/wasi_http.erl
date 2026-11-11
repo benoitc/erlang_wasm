@@ -84,6 +84,11 @@ slice uses, so a component reaches only a granted authority.
 
 -define(HTTP_TIMEOUT, 30000).
 
+%% The largest response body a guest's request may receive, unless the
+%% embedder sets `max_body_bytes'. The h1 library's own default, so the two
+%% wire versions agree.
+-define(MAX_BODY_BYTES, 8388608).
+
 %% The largest header section a guest may build. Exceeding it is a trap, not a
 %% header-error: the WIT `header-error` variant has no case for an oversized
 %% section, so the only way to report it is the way wasmtime does, by trapping.
@@ -98,7 +103,8 @@ The `wasi:http/types` + `outgoing-handler` import map. `Opts` carries the
 `grant` (a `wasi_net` grant) the outbound request is checked against.
 """.
 -spec http(#{grant => term(), transport => module(),
-             tls => [ssl:tls_client_option()]}) ->
+             tls => [ssl:tls_client_option()],
+             max_body_bytes => pos_integer()}) ->
           #{{binary(), binary()} => fun()}.
 http(Opts) ->
     Grant = wasi_net:grant(maps:get(grant, Opts, none)),
@@ -107,6 +113,7 @@ http(Opts) ->
     %% defaults (verify the peer against the system CA store, hostname/SNI from the
     %% authority). An embedder may override, e.g. a custom CA bundle.
     Tls = maps:get(tls, Opts, []),
+    MaxBody = maps:get(max_body_bytes, Opts, ?MAX_BODY_BYTES),
     T = <<"wasi:http/types">>,
     H = <<"wasi:http/outgoing-handler">>,
     #{%% fields
@@ -311,7 +318,9 @@ http(Opts) ->
           wasm_component:import_fun(
             {[handle, {option, handle}],
              {result, handle, ?ERROR_CODE}},
-            fun([Req, ReqOpts]) -> handle(Req, ReqOpts, Grant, Transport, Tls) end)}.
+            fun([Req, ReqOpts]) ->
+                    handle(Req, ReqOpts, Grant, Transport, Tls, MaxBody)
+            end)}.
 
 %% Store a request-option (a timeout, in nanoseconds) on the options resource.
 set_opt(O, Key, Value) ->
@@ -338,12 +347,15 @@ get_opt(O, Key) ->
 
 %% The timeouts the guest set on its request-options, defaulting to unset.
 req_timeouts(none) ->
-    #{connect_timeout => undefined, first_byte_timeout => undefined};
+    #{connect_timeout => undefined, first_byte_timeout => undefined,
+      between_bytes_timeout => undefined};
 req_timeouts({some, O}) ->
     case wasm_component:host_get(O) of
         {ok, {http_req_opts, Map}} ->
             #{connect_timeout => maps:get(connect_timeout, Map, undefined),
-              first_byte_timeout => maps:get(first_byte_timeout, Map, undefined)};
+              first_byte_timeout => maps:get(first_byte_timeout, Map, undefined),
+              between_bytes_timeout =>
+                  maps:get(between_bytes_timeout, Map, undefined)};
         _ ->
             req_timeouts(none)
     end.
@@ -698,10 +710,11 @@ append_body(B, Bytes) ->
 %% be sent, so `handle` refuses it at once rather than handing back a future that
 %% would only fail on `get`; a well-formed request is deferred, and any connection
 %% failure surfaces when the guest polls the future.
-handle(Req, Opts, Grant, Transport, Tls) ->
+handle(Req, Opts, Grant, Transport, Tls, MaxBody) ->
     case wasm_component:host_get(Req) of
         {ok, {http_out_req, Map0}} ->
-            Map = Map0#{timeouts => req_timeouts(Opts)},
+            Map = Map0#{timeouts => req_timeouts(Opts),
+                        max_body_bytes => MaxBody},
             case request_error(Map) of
                 none  -> {ok, wasm_component:host_new(http_future,
                                                       {pending, Map, Grant, Transport, Tls})};
@@ -732,7 +745,8 @@ perform(#{authority := Authority} = R, Grant, Transport, Tls) ->
                 {error, _} = E ->
                     E;
                 {ok, Address} ->
-                    #{connect_timeout := CT, first_byte_timeout := FBT} =
+                    #{connect_timeout := CT, first_byte_timeout := FBT,
+                      between_bytes_timeout := BBT} =
                         maps:get(timeouts, R, req_timeouts(none)),
                     %% The transport connects to `Address', the one the grant
                     %% admitted, and never resolves the name again: a second
@@ -745,7 +759,11 @@ perform(#{authority := Authority} = R, Grant, Transport, Tls) ->
                         scheme => Scheme, tls => Tls,
                         method => maps:get(method, R), path => maps:get(path, R),
                         headers => Headers, body => maps:get(body, R),
-                        connect_timeout => ms(CT), first_byte_timeout => ms(FBT)},
+                        connect_timeout => ms(CT),
+                        first_byte_timeout => ms(FBT),
+                        between_bytes_timeout => ms(BBT),
+                        max_body_bytes =>
+                            maps:get(max_body_bytes, R, ?MAX_BODY_BYTES)},
                       ?HTTP_TIMEOUT)
             end
     end.

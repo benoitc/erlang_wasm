@@ -61,12 +61,23 @@ all() ->
      cancelling_a_running_subtask_stops_it,
      dropping_a_running_subtask_traps].
 
+%% Each case instantiates in its own process, so without a holder each one
+%% loaded the cores again, and twenty cases in a second went past the module
+%% cache's load rate. A process that lives for the suite holds them.
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
     {ok, Bin} = file:read_file(fixture()),
-    [{component, Bin} | Config].
+    Test = self(),
+    Holder = spawn(fun() ->
+                           Test ! {held, wasm_component:hold(Bin)},
+                           receive stop -> ok end
+                   end),
+    receive {held, ok} -> ok after 30000 -> ct:fail(not_held) end,
+    [{component, Bin}, {holder, Holder} | Config].
 
-end_per_suite(_) -> ok.
+end_per_suite(Config) ->
+    ?config(holder, Config) ! stop,
+    ok.
 
 %% An instance belongs to the process that made it; the case runs in this one.
 init_per_testcase(_, Config) ->

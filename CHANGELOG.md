@@ -6,6 +6,12 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **WASI 0.3 commands run.** `wasi_preview3:run_command/3` runs a component
+  built for WASI 0.3 that uses `wasi:cli`, `wasi:clocks` and `wasi:random`:
+  stdio through streams, async sleeps, the environment and exit codes. It runs
+  0.2 commands too. Filesystem, sockets and HTTP at 0.3 are not there yet.
+  `resource_limit` now also bounds how many async calls a guest has waiting
+  at once.
 - **An async task can keep running after it returns its result.** Call it with
   `wasm_component:start_async/4`, which returns as soon as the task has a
   result. Read a returned stream with `wasm_async:host_read/3` while the guest

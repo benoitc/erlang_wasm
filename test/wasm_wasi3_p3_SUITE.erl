@@ -1,0 +1,186 @@
+-module(wasm_wasi3_p3_SUITE).
+-moduledoc """
+wasmtime's WASI 0.3 test programs (`p3_*`) run through
+`wasi_preview3:run_command/3`.
+
+Each program is a self-asserting command: it exits 0 when every check passed,
+and traps or exits non-zero otherwise. Each imports `wasi:*@0.3.0` and, through
+the wasip1 adapter it was built with, `wasi:*@0.2.12` too, so it needs both
+hosts at once. The first cases name a program and what it must do, from
+wasmtime's own tests of it. `p3_cases` runs every program and keeps, per
+interface group, how many still fail, as `wasm_wasi2_p2_SUITE` does for 0.2: a
+fix lowers a count, a regression that raises one fails, and a count lower than
+the baseline fails until the baseline is lowered with it.
+
+Skipped without the built fixtures: run `scripts/build-wasmtime-p2.sh`, which
+also puts the 0.3 programs in `test/fixtures/wasmtime-p3` (not vendored).
+""".
+
+-include_lib("common_test/include/ct.hrl").
+-include_lib("stdlib/include/assert.hrl").
+
+-export([all/0, init_per_suite/1, end_per_suite/1]).
+-export([hello_stdout/1, read_stdin/1, cli/1, clocks_sleep/1, random_imports/1,
+         big_random_buf/1, random_limits/1, much_stdout/1,
+         many_tasks_reach_the_resource_limit/1, p3_cases/1]).
+
+all() ->
+    [hello_stdout, read_stdin, cli, clocks_sleep, random_imports, big_random_buf,
+     random_limits, much_stdout, many_tasks_reach_the_resource_limit, p3_cases].
+
+%% Programs still failing, by group, and why. Each step of the WASI 0.3 work
+%% lowers its group to 0.
+baseline() ->
+    #{~"cli"        => 0,
+      ~"clocks"     => 0,
+      ~"random"     => 0,
+      %% wasi:filesystem@0.3, wasi:sockets@0.3 and wasi:http@0.3 are not hosted
+      %% yet, so these programs do not link.
+      ~"filesystem" => 7,
+      ~"sockets"    => 17,
+      ~"http"       => 15}.
+
+init_per_suite(Config) ->
+    case programs() of
+        [] -> {skip, "no wasmtime p3 fixtures: run scripts/build-wasmtime-p2.sh"};
+        _ ->
+            {ok, _} = application:ensure_all_started(wasm),
+            Config
+    end.
+
+end_per_suite(_) -> ok.
+
+%%% --------------------------------------------------------------- cases ---
+
+hello_stdout(_) ->
+    ?assertMatch({ok, #{exit_code := 0, stdout := <<"hello, world\n">>}},
+                 run("p3_cli_hello_stdout", <<>>, #{})).
+
+read_stdin(_) ->
+    ?assertMatch({ok, #{exit_code := 0}}, run("p3_cli_read_stdin", <<"hello!">>, #{})).
+
+cli(_) ->
+    ?assertMatch({ok, #{exit_code := 0}}, run("p3_cli", <<>>, opts("p3_cli"))).
+
+%% Waiting until now is ready at once; waiting for a while suspends the task.
+clocks_sleep(_) ->
+    ?assertMatch({ok, #{exit_code := 0}}, run("p3_clocks_sleep", <<>>, #{})).
+
+random_imports(_) ->
+    ?assertMatch({ok, #{exit_code := 0}}, run("p3_random_imports", <<>>, #{})).
+
+big_random_buf(_) ->
+    ?assertMatch({ok, #{exit_code := 0}}, run("p3_big_random_buf", <<>>, #{})).
+
+random_limits(_) ->
+    [?assertMatch({ok, #{exit_code := 0}},
+                  run("p3_cli_random_limits", <<>>,
+                      #{args => [~"p3_cli_random_limits", Which, ~"256"]}))
+     || Which <- [~"random", ~"insecure"]].
+
+%% 1 KiB written 256 times reaches stdout whole.
+much_stdout(_) ->
+    {ok, #{exit_code := 0, stdout := Out}} =
+        run("p3_cli_much_stdout", <<>>, opts("p3_cli_much_stdout")),
+    ?assertEqual(binary:copy(<<"a">>, 1 bsl 18), Out).
+
+%% A thousand waits of 2^60 ns at once: wasmtime runs the program with a limit
+%% of 100 resources and expects it to trap.
+many_tasks_reach_the_resource_limit(_) ->
+    {error, E} = run("p3_cli_many_tasks", <<>>,
+                     (opts("p3_cli_many_tasks"))#{resource_limit => 100}),
+    ?assertMatch(#{ctx := #{reason := resource_limit_reached}}, E).
+
+p3_cases(_) ->
+    Results = [{group(P), filename:basename(P, ".component.wasm"), outcome(P)}
+               || P <- programs()],
+    Failures = [{G, N, O} || {G, N, O} <- Results, O =/= pass],
+    ct:log("~p", [Failures]),
+    Counts = lists:foldl(fun({G, _, _}, M) -> maps:update_with(G, fun(C) -> C + 1 end, 1, M) end,
+                         #{}, Failures),
+    Regressions = [{G, maps:get(G, Counts, 0), Allowed}
+                   || {G, Allowed} <- maps:to_list(baseline()),
+                      maps:get(G, Counts, 0) > Allowed],
+    ?assertEqual([], Regressions),
+    Stale = [{G, maps:get(G, Counts, 0), Allowed}
+             || {G, Allowed} <- maps:to_list(baseline()),
+                maps:get(G, Counts, 0) < Allowed],
+    ?assertEqual([], Stale),
+    ?assert(length(Results) > length(Failures)).
+
+%%% ------------------------------------------------------------- helpers ---
+
+run(Name, Stdin, Opts) ->
+    {ok, Bin} = file:read_file(filename:join(dir(), Name ++ ".component.wasm")),
+    bounded(fun() -> wasi_preview3:run_command(Bin, Stdin, Opts#{compile => true}) end).
+
+%% Each program in its own process, under a deadline.
+bounded(Fun) ->
+    {Pid, Mon} = spawn_monitor(fun() -> exit({done, Fun()}) end),
+    receive
+        {'DOWN', Mon, process, Pid, {done, R}} -> R;
+        {'DOWN', Mon, process, Pid, Other} -> {error, {crashed, Other}}
+    after 60000 ->
+        exit(Pid, kill),
+        {error, timeout}
+    end.
+
+outcome(Path) ->
+    Name = filename:basename(Path, ".component.wasm"),
+    case {Name, run(Name, stdin(Name), opts(Name))} of
+        {_, {ok, #{exit_code := 0}}} -> pass;
+        %% Passes by trapping at the limit, as wasmtime's own test has it.
+        {"p3_cli_many_tasks", {error, #{ctx := #{reason := resource_limit_reached}}}} ->
+            pass;
+        {_, Other} -> Other
+    end.
+
+stdin("p3_cli_read_stdin") -> <<"hello!">>;
+stdin(_) -> <<>>.
+
+%% As wasmtime's own harness runs them: the program's name and "." as its
+%% arguments, its errno environment, and a fresh writable scratch directory
+%% mounted as ".".
+opts("p3_cli_random_limits") -> #{args => [~"p3_cli_random_limits", ~"random", ~"256"]};
+opts("p3_cli_much_stdout") ->
+    #{args => [~"p3_cli_much_stdout", binary:copy(<<"a">>, 1024), ~"256"]};
+opts("p3_cli_many_tasks") -> #{resource_limit => 100};
+opts(Name) ->
+    #{args => [list_to_binary(Name ++ ".component"), ~"."],
+      env => [errno_mode()],
+      preopens => [{~".", scratch(), true}]}.
+
+%% wasmtime's `wasi_tests_environment()': which errno conventions to expect.
+errno_mode() ->
+    case os:type() of
+        {unix, darwin} -> {~"ERRNO_MODE_MACOS", ~"1"};
+        _ -> {~"ERRNO_MODE_UNIX", ~"1"}
+    end.
+
+scratch() ->
+    Dir = filename:join(os:getenv("TMPDIR", "/tmp"),
+                        "wasi3-" ++ integer_to_list(erlang:unique_integer([positive]))),
+    ok = filelib:ensure_path(Dir),
+    Dir.
+
+group(Path) ->
+    case filename:basename(Path) of
+        %% Denies a listen: it needs wasi:sockets.
+        "p3_cli_deny_listen" ++ _ -> ~"sockets";
+        "p3_cli" ++ _ -> ~"cli";
+        "p3_clocks" ++ _ -> ~"clocks";
+        "p3_random" ++ _ -> ~"random";
+        "p3_big_random" ++ _ -> ~"random";
+        "p3_file" ++ _ -> ~"filesystem";
+        "p3_readdir" ++ _ -> ~"filesystem";
+        "p3_sockets" ++ _ -> ~"sockets";
+        "p3_http" ++ _ -> ~"http";
+        _ -> ~"other"
+    end.
+
+programs() ->
+    lists:sort(filelib:wildcard(filename:join(dir(), "p3_*.component.wasm"))).
+
+dir() ->
+    filename:join([code:lib_dir(wasm), "..", "..", "..", "..", "test", "fixtures",
+                   "wasmtime-p3"]).

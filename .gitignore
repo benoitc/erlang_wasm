@@ -41,6 +41,8 @@ priv/*.dSYM/
 # wasmtime p2 interop fixtures (built on demand, not vendored)
 test/fixtures/wasmtime-p2/
 test/fixtures/wasmtime-p2-serve/
+test/fixtures/wasmtime-p3/
+test/fixtures/wasmtime-p3-serve/
 /.wasmtime-src/
 
 # Built from the .wat beside them by bench/cross/vs/run.sh.

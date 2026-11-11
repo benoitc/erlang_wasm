@@ -35,7 +35,8 @@ as a pointer, as the specification says.
 """.
 
 -export([lower_params/3, lift_result/3, size_align/1, flat_types/1]).
--export([lift_params/3, lower_value/3, store_value/4, result_via_memory/1]).
+-export([lift_params/3, lower_value/3, store_value/4, load_value/3,
+         result_via_memory/1]).
 -export([params_spill/1]).
 -export([with_realloc/2, with_string_encoding/2]).
 
@@ -248,6 +249,10 @@ lift_params(Inst, Descs, Flats) ->
 -doc "Lower one value to its flat core representation (`lower_flat`, exported).".
 -spec lower_value(wasm:instance(), desc(), term()) -> [term()].
 lower_value(Inst, Desc, Term) -> lower_flat(Inst, Desc, Term).
+
+-doc "Read a value of `Desc` from linear memory at `Ptr` (`load`, exported).".
+-spec load_value(wasm:instance(), desc(), non_neg_integer()) -> term().
+load_value(Inst, Desc, Ptr) -> load(Inst, Desc, Ptr).
 
 -doc "Write a value into linear memory at `Ptr` (`store`, exported).".
 -spec store_value(wasm:instance(), desc(), non_neg_integer(), term()) -> ok.

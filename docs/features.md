@@ -51,12 +51,16 @@ behind the runtime's design. Build and test instructions are in the README.
 | The async Canonical ABI: `async func`, `stream<T>` and `future<T>` of any element type, callback and stackful lifts, cancellation, subtasks, `error-context`, backpressure, `thread.yield` | complete |
 | WASI 0.2: random, clocks, cli, io, filesystem, sockets | complete |
 | `wasi:http`: outbound requests and serving an incoming-handler | complete |
+| WASI 0.3: cli, clocks, random, filesystem, sockets and `wasi:http`, beside 0.2 in one component ([WASI 0.3](wasi-0-3.md)) | complete, except middleware |
+| An async task that runs on after its call returns, and host imports that take or give a stream or future | complete |
+| Preparing a component once for many instances (`wasm_component:prepare/1`) | complete |
 
 ## Not implemented
 
 | Area | Why |
 | --- | --- |
 | WASI 0.3 http middleware | every 0.3 interface is hosted ([WASI 0.3](wasi-0-3.md)); a handler that imports another handler needs two components linked, which is not done yet |
+| A 0.3 handler's response body streamed to the client | the listener reads the body whole, then answers |
 | The async ABI's `thread.*` built-ins other than `thread.yield` | they belong to the threads proposal; a component that uses one is refused when it is linked |
 | `stream.forward` and `future.forward` | added to the specification after the async ABI; `wasm-tools` does not emit them yet |
 | Snapshots of component instances | `wasm:snapshot/2` captures a core instance; a component's handle tables point to host state that a snapshot image cannot store |

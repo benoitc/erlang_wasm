@@ -191,6 +191,10 @@ Notes on how it behaves:
 
 - The listener creates a new instance for each request. So a slow guest, or
   a guest that traps, affects only its own request.
+- The listener prepares the component once, when it starts: it decodes,
+  checks and parses it, so a request only builds its instance. To do the
+  same in your own server, call `wasm_component:prepare/1` and pass the result
+  wherever you would pass the bytes.
 - The listener loads the component's core modules once, when it starts, and
   keeps them loaded until it stops. Each request's instance uses them, so
   requests do not count against `max_module_loads_per_second`. To do the same

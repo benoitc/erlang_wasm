@@ -64,6 +64,8 @@ start(#{component := Component} = Opts) ->
     ServeOpts = maps:get(serve_opts, Opts, #{}),
     MaxBody = maps:get(max_body_bytes, Opts, ?MAX_BODY_BYTES),
     Config = #{component => Component, scheme => Scheme,
+               %% Built once: nothing in them belongs to one request.
+               imports => wasi_preview3:serve_imports(Component, ServeOpts),
                serve_opts => ServeOpts, max_body_bytes => MaxBody,
                request_timeout => maps:get(request_timeout, Opts,
                                            ?REQUEST_TIMEOUT)},
@@ -119,6 +121,7 @@ stop({Transport, Ref, _Addr, Holder}) ->
 %% traps or a component that fails to link becomes a 500, never a dropped socket.
 serve_request(Transport, Conn, Id, Method, Path, Config) ->
     #{component := Component, scheme := Scheme, serve_opts := ServeOpts,
+      imports := Imports,
       headers := Headers, request_timeout := Timeout} = Config,
     %% Fixed when the request arrives: the body and the guest share it.
     Deadline = erlang:monotonic_time(millisecond) + Timeout,
@@ -127,7 +130,7 @@ serve_request(Transport, Conn, Id, Method, Path, Config) ->
             Request = #{method => Method, path => Path, scheme => Scheme,
                         authority => authority(Headers), headers => Headers,
                         body => Body},
-            case run(Component, Request, ServeOpts, Deadline) of
+            case run(Component, Request, ServeOpts, Imports, Deadline) of
                 {ok, Status, RespHeaders, RespBody} ->
                     answer(Transport, Conn, Id, Status, RespHeaders, RespBody);
                 timeout ->
@@ -148,14 +151,14 @@ serve_request(Transport, Conn, Id, Method, Path, Config) ->
 %% The guest runs in a child bound to this process, which holds the deadline:
 %% a guest that never returns is stopped at it, and a request process killed
 %% by the wire library takes the guest with it.
-run(Component, Request, ServeOpts, Deadline) ->
+run(Component, Request, ServeOpts, Imports, Deadline) ->
     Parent = self(),
     {Pid, Mon} = spawn_monitor(
                    fun() ->
                            ok = wasm_lifetime:bind(Parent),
                            Parent ! {served, self(),
                                      try wasi_preview3:run_serve(
-                                           Component, Request, ServeOpts)
+                                           Component, Request, ServeOpts, Imports)
                                      catch _:Reason -> {error, Reason}
                                      end}
                    end),

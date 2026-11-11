@@ -37,7 +37,8 @@ in its options. `docs/components.md` shows both from the caller's side.
          filesystem/1, sockets/1, command/1, run_command/2, run_command/3,
          run_serve/3]).
 %% For `wasi_preview3', which builds the 0.3 host on this one.
--export([run_command_with/4, run_serve_with/5, serve/2, cli_exit/0, command_mounts/1]).
+-export([run_command_with/4, run_serve_with/5, serve/2, serve_options/1, cli_exit/0,
+         command_mounts/1]).
 %% The poll_oneoff readiness logic over host pollable handles, and the monotonic
 %% clock its deadlines use, exported so a test can drive poll directly (as
 %% host_new/host_get are).
@@ -550,11 +551,11 @@ run_serve(Bin, Request, Extra) ->
     run_serve_with(Bin, Request, Extra, fun command/1, fun serve/2).
 
 -doc """
-As `run_serve/3`, with the imports built by `Host(Opts)` and the request served
-by `Serve(Instance, Request)`: `wasi_preview3:run_serve/3` serves a 0.3
-handler this way.
+As `run_serve/3`, with the imports built by `Host(Opts)`, or given as a map
+built once beforehand, and the request served by `Serve(Instance, Request)`:
+`wasi_preview3:run_serve/3,4` serve a 0.3 handler this way.
 """.
--spec run_serve_with(binary(), map(), map(), fun((map()) -> map()),
+-spec run_serve_with(binary(), map(), map(), fun((map()) -> map()) | map(),
                      fun((wasm_component:instance(), map()) -> term())) -> term().
 run_serve_with(Bin, Request, Extra, Host, Serve) ->
     _ = erase(?EXIT_STATUS),
@@ -564,8 +565,11 @@ run_serve_with(Bin, Request, Extra, Host, Serve) ->
                  loader => Loader, resource_closer => fun close_resource/1,
                  resource_predrop => fun stream_predrop/1,
                  resource_limit => maps:get(resource_limit, Extra, infinity)},
-    Opts = maps:without([compile, resource_limit | ?EXEC_LIMITS], Extra),
-    case wasm_component:instantiate(Bin, Host(Opts), InstOpts) of
+    Imports = case Host of
+                  Map when is_map(Map) -> Map;
+                  Fun -> Fun(serve_options(Extra))
+              end,
+    case wasm_component:instantiate(Bin, Imports, InstOpts) of
         {ok, Instance} ->
             try Serve(Instance, Request)
             after wasm_component:destroy(Instance, fun close_resource/1) end;
@@ -577,6 +581,11 @@ run_serve_with(Bin, Request, Extra, Host, Serve) ->
 %% the WASI import builder with everything else, which ignored them, so a
 %% `fuel' or `max_memory_pages' set here bounded nothing.
 exec_limits(Extra) -> maps:with(?EXEC_LIMITS, Extra).
+
+-doc "The options of `run_serve/3`'s `Extra` that shape its imports, not its instance.".
+-spec serve_options(map()) -> map().
+serve_options(Extra) ->
+    maps:without([compile, resource_limit | ?EXEC_LIMITS], Extra).
 
 -doc "Serve `Request` through the 0.2 `incoming-handler` export of `Instance`.".
 -spec serve(wasm_component:instance(), map()) -> term().

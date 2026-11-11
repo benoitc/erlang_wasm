@@ -24,7 +24,8 @@ one together, and `run_command/3` runs a 0.2 or a 0.3 command.
   timer while the instance's other tasks run.
 """.
 
--export([command/1, run_command/3, run_serve/3, cli/1, clocks/0, random/0]).
+-export([command/1, run_command/3, run_serve/3, run_serve/4, serve_imports/2, cli/1,
+         clocks/0, random/0]).
 
 -define(STDIO_RESULT, {result, none, {enum, [~"io", ~"illegal-byte-sequence", ~"pipe"]}}).
 
@@ -52,7 +53,15 @@ A 0.3 `wasi:cli/run` export is async, and its task is run to its end.
           {ok, #{stdout := binary(), stderr := binary(), exit_code := integer()}} |
           {error, term()}.
 run_command(Bin, Stdin, Extra) ->
-    wasi_preview2:run_command_with(Bin, Stdin, Extra, fun command/1).
+    wasi_preview2:run_command_with(Bin, Stdin, Extra, host(Bin)).
+
+%% A component that names no 0.3 interface gets the 0.2 host alone: the 0.3
+%% maps are built per run, and a 0.2 program would pay for them for nothing.
+host(Bin) ->
+    case binary:match(Bin, ~"@0.3.") of
+        nomatch -> fun wasi_preview2:command/1;
+        _ -> fun command/1
+    end.
 
 -doc """
 Serve one request through a `wasi:http` handler, 0.2 or 0.3, as
@@ -63,7 +72,30 @@ guest does after that runs too, before the instance is destroyed.
 -spec run_serve(binary(), map(), map()) ->
           {ok, non_neg_integer(), [{binary(), binary()}], binary()} | {error, term()}.
 run_serve(Bin, Request, Extra) ->
-    wasi_preview2:run_serve_with(Bin, Request, Extra, fun command/1, fun serve/2).
+    run_serve(Bin, Request, Extra, serve_imports(Bin, Extra)).
+
+-doc """
+As `run_serve/3`, with the imports `serve_imports/2` built: a server that
+serves many requests builds them once, not once per request.
+
+```erlang
+Imports = wasi_preview3:serve_imports(Bin, #{}),
+{ok, 200, _, _} = wasi_preview3:run_serve(Bin, Request, #{}, Imports).
+```
+""".
+-spec run_serve(binary(), map(), map(), map()) ->
+          {ok, non_neg_integer(), [{binary(), binary()}], binary()} | {error, term()}.
+run_serve(Bin, Request, Extra, Imports) ->
+    wasi_preview2:run_serve_with(Bin, Request, Extra, Imports, fun serve/2).
+
+-doc """
+The imports `run_serve/4` serves component `Bin` with, under the options
+`Extra` (as for `run_serve/3`): the 0.2 host, and the 0.3 host too when the
+component names a 0.3 interface. Nothing in them belongs to one request.
+""".
+-spec serve_imports(binary(), map()) -> map().
+serve_imports(Bin, Extra) ->
+    (host(Bin))(wasi_preview2:serve_options(Extra)).
 
 serve(Instance, Request) ->
     case [E || E <- wasm_component:exports(Instance),

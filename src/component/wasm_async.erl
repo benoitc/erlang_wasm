@@ -37,7 +37,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
          async_lower/2, async_lower/3, backpressure/1]).
 %% Tasks that outlive the call that started them, and the host's side of the
 %% streams and futures they use.
--export([resolved/0, suspend_task/4, pending/0, pump/1, close_frame/0,
+-export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
          guest_call/1,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
          host_write/3, host_close/1, host_future_resolve/2,
@@ -161,6 +161,17 @@ begin_task(Inst, Opts) ->
 active() -> case get(?ACTIVE) of undefined -> 0; N -> N end.
 
 call_over() -> put(?ACTIVE, max(0, active() - 1)), ok.
+
+-doc """
+End a started call whose task has finished, leaving the frame as it is: the
+host may still read what the task returned, such as a response's body.
+`pump/1` or `close_frame/0` tears it down once the host is done.
+""".
+-spec leave_call() -> ok.
+leave_call() ->
+    ok = call_over(),
+    _ = erase(?TASK_RETURN),
+    erase_ctx().
 
 open_with_work() ->
     get(?TASK_REF) =/= undefined andalso
@@ -936,23 +947,39 @@ ingest(H, {value, V}) ->
                       R#{buf => [V], writer => closed};
                  (E) -> E
               end);
-ingest(H, {data, Items}) ->
+%% A stream the host has taken as a sink passes what a producer sends straight
+%% on, and its end, as it does what a guest writes.
+ingest(H, Info) ->
+    case {get(?WAITABLE(H)), Info} of
+        {#{sink := Sink}, {data, Items}} ->
+            _ = Sink(Items),
+            ok;
+        {#{sink := Sink}, close} ->
+            forget_waitable(H),
+            ok = release_end(H),
+            _ = Sink(eof),
+            ok;
+        _ ->
+            ingest_state(H, Info)
+    end.
+
+ingest_state(H, {data, Items}) ->
     update(H, fun(#{'end' := read, kind := stream, buf := Buf, map := Map} = R) ->
                       R#{buf => cat(Buf, Map(Items))};
                  (#{'end' := read, kind := stream, buf := Buf} = R) ->
                       R#{buf => cat(Buf, Items)};
                  (E) -> E
               end);
-ingest(H, close) ->
+ingest_state(H, close) ->
     update(H, fun(#{'end' := read} = R) -> R#{writer => closed};
                  (E) -> E
               end);
-ingest(H, subtask_complete) ->
+ingest_state(H, subtask_complete) ->
     update(H, fun(#{'end' := subtask, state := awaiting} = S) -> S#{state => ready};
                  (E) -> E
               end);
 %% The producer has the result, such as the datagram a receive waited for.
-ingest(H, {subtask_complete, Value}) ->
+ingest_state(H, {subtask_complete, Value}) ->
     update(H, fun(#{'end' := subtask, state := awaiting} = S) ->
                       S#{state => ready, value => Value};
                  (E) -> E

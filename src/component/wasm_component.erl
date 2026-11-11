@@ -1006,6 +1006,9 @@ run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts, Mode) ->
     case Outcome of
         %% The task runs on in the frame, which stays open.
         {pending, Value} -> Value;
+        %% A started call's result may hold what the host reads next (a
+        %% response's body); the frame stays until `pump/2' or `destroy/1'.
+        {done, Value} when Mode =:= start -> ok = wasm_async:leave_call(), Value;
         {done, Value}    -> wasm_async:end_task(), Value;
         {error, _} = Failed -> wasm_async:end_task(), Failed
     end.

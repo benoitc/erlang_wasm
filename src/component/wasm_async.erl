@@ -1283,7 +1283,7 @@ next(Id, #{budget := B} = Task, Status, Ctx) ->
     ok.
 
 -doc """
-Run `Fun', a call into the guest, counted as running: the host-end calls answer
+Run `Fun`, a call into the guest, counted as running: the host-end calls answer
 `{error, reentrant}` meanwhile instead of running tasks inside it.
 """.
 -spec guest_call(fun(() -> T)) -> T.

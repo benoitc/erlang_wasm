@@ -62,7 +62,7 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
                          exports := [binary()]}
                       | #{composed := true, sec := binary(),
                           exports := [binary()]}.
-%% A component decoded, checked and parsed once (`prepare/1`), and what its
+%% A component decoded, checked and parsed once by prepare/1, and what its
 %% instantiation derives from the bytes alone.
 -opaque prepared() :: {prepared, #{bin := binary(), decoded := component(),
                                    pre := #{atom() => term()}}}.

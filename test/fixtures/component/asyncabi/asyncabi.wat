@@ -1,6 +1,6 @@
 ;; The async Canonical ABI built-ins, one stackful export per behaviour, for
 ;; `wasm_component_async_abi_SUITE`. Hand-written so each export calls exactly
-;; the built-in under test. Build: `scripts/build-async-abi-fixture.sh`.
+;; the built-in under test. Build: `scripts/build-wat-component-fixtures.sh`.
 (component
   (type $s8 (stream u8))
   (type $s32 (stream u32))

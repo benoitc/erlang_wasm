@@ -45,7 +45,7 @@ finish(Eval) ->
 loop(Bindings, Owners) ->
     receive
         {run, From, Ref, Block, Src, Expect, ExpectExit} ->
-            {Pending, Owners1} = exits(Owners, none, []),
+            {Pending, Owners1} = exits(Owners, none, {unknown, []}, []),
             case Pending of
                 [_ | _] ->
                     From ! {Ref, {error, {abnormal_exit, Pending}}},
@@ -57,13 +57,17 @@ loop(Bindings, Owners) ->
                     Owners2 = maps:merge(Owners1,
                                          maps:from_keys(New,
                                                         {Block, ExpectExit})),
-                    {Late, Owners3} = exits(Owners2, Block, []),
+                    %% A process the block linked and that died before the
+                    %% block returned is no longer among the links: its exit
+                    %% is the block's.
+                    {Late, Owners3} = exits(Owners2, Block, {Block, ExpectExit},
+                                            []),
                     From ! {Ref, merge(Result, Late)},
                     loop(Bindings1, Owners3)
             end;
         {finish, From, Ref} ->
             timer:sleep(200),
-            {Late, _} = exits(Owners, none, []),
+            {Late, _} = exits(Owners, none, {unknown, []}, []),
             From ! {Ref, merge(ok, Late)}
     end.
 
@@ -122,17 +126,18 @@ links() ->
 %% the block that linked the process declared with `expect-exit', whenever it
 %% arrives: a worker killed by a timeout exits just after the call returns, so
 %% it is often seen at the start of the next block. The rest are returned with
-%% the block that linked them and the block they were seen in.
-exits(Owners, Seen, Acc) ->
+%% the block that linked them and the block they were seen in. `Unknown' owns
+%% an exit from a process no block is known to have linked.
+exits(Owners, Seen, Unknown, Acc) ->
     receive
         {'EXIT', Pid, normal} ->
-            exits(maps:remove(Pid, Owners), Seen, Acc);
+            exits(maps:remove(Pid, Owners), Seen, Unknown, Acc);
         {'EXIT', Pid, Why} ->
-            {Origin, Allowed} = maps:get(Pid, Owners, {unknown, []}),
+            {Origin, Allowed} = maps:get(Pid, Owners, Unknown),
             Owners1 = maps:remove(Pid, Owners),
             case lists:member(Why, Allowed) of
-                true  -> exits(Owners1, Seen, Acc);
-                false -> exits(Owners1, Seen,
+                true  -> exits(Owners1, Seen, Unknown, Acc);
+                false -> exits(Owners1, Seen, Unknown,
                                [#{pid => Pid, reason => Why,
                                   linked_by => Origin, seen_in => Seen}
                                 | Acc])

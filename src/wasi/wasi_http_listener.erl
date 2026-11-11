@@ -2,10 +2,10 @@
 -moduledoc """
 A live HTTP server that serves a `wasi:http` reactor component.
 
-Each request the server accepts is turned into an `incoming-request`, handed to the
-component's `wasi:http/incoming-handler#handle` through
-`wasi_preview2:run_serve/3`, and answered with the response the guest set on its
-outparam. The wire protocol is pluggable, the same seam the outbound path uses: a
+Each request the server accepts is turned into an incoming request, handed to the
+component's handler through `wasi_preview3:run_serve/3` (a 0.2
+`wasi:http/incoming-handler` or a 0.3 `wasi:http/handler`), and answered with the
+response the guest made. The wire protocol is pluggable, the same seam the outbound path uses: a
 listener speaks HTTP/1.1 (`h1`) or cleartext HTTP/2 (`h2`), so one component serves
 either.
 
@@ -63,7 +63,15 @@ start(#{component := Component} = Opts) ->
     Scheme = maps:get(scheme, Opts, <<"http">>),
     ServeOpts = maps:get(serve_opts, Opts, #{}),
     MaxBody = maps:get(max_body_bytes, Opts, ?MAX_BODY_BYTES),
-    Config = #{component => Component, scheme => Scheme,
+    %% Decoded and parsed once, as the imports are built once; a component
+    %% that does not prepare fails each request as its bytes would.
+    Prepared = case wasm_component:prepare(Component) of
+                   {ok, P} -> P;
+                   {error, _} -> Component
+               end,
+    Config = #{component => Prepared, scheme => Scheme,
+               %% Built once: nothing in them belongs to one request.
+               imports => wasi_preview3:serve_imports(Component, ServeOpts),
                serve_opts => ServeOpts, max_body_bytes => MaxBody,
                request_timeout => maps:get(request_timeout, Opts,
                                            ?REQUEST_TIMEOUT)},
@@ -76,7 +84,7 @@ start(#{component := Component} = Opts) ->
     %% Either library answers a body over the ceiling with 413 itself.
     Extra0 = case Transport of h2 -> #{transport => tcp}; _ -> #{} end,
     Extra = Extra0#{max_body_size => MaxBody},
-    Holder = holder(Component),
+    Holder = holder(Prepared),
     case Transport:start_server(maps:get(port, Opts, 0), Extra#{handler => Handler}) of
         {ok, Ref} ->
             Addr = iolist_to_binary(["127.0.0.1:",
@@ -119,6 +127,7 @@ stop({Transport, Ref, _Addr, Holder}) ->
 %% traps or a component that fails to link becomes a 500, never a dropped socket.
 serve_request(Transport, Conn, Id, Method, Path, Config) ->
     #{component := Component, scheme := Scheme, serve_opts := ServeOpts,
+      imports := Imports,
       headers := Headers, request_timeout := Timeout} = Config,
     %% Fixed when the request arrives: the body and the guest share it.
     Deadline = erlang:monotonic_time(millisecond) + Timeout,
@@ -127,7 +136,7 @@ serve_request(Transport, Conn, Id, Method, Path, Config) ->
             Request = #{method => Method, path => Path, scheme => Scheme,
                         authority => authority(Headers), headers => Headers,
                         body => Body},
-            case run(Component, Request, ServeOpts, Deadline) of
+            case run(Component, Request, ServeOpts, Imports, Deadline) of
                 {ok, Status, RespHeaders, RespBody} ->
                     answer(Transport, Conn, Id, Status, RespHeaders, RespBody);
                 timeout ->
@@ -148,14 +157,14 @@ serve_request(Transport, Conn, Id, Method, Path, Config) ->
 %% The guest runs in a child bound to this process, which holds the deadline:
 %% a guest that never returns is stopped at it, and a request process killed
 %% by the wire library takes the guest with it.
-run(Component, Request, ServeOpts, Deadline) ->
+run(Component, Request, ServeOpts, Imports, Deadline) ->
     Parent = self(),
     {Pid, Mon} = spawn_monitor(
                    fun() ->
                            ok = wasm_lifetime:bind(Parent),
                            Parent ! {served, self(),
-                                     try wasi_preview2:run_serve(
-                                           Component, Request, ServeOpts)
+                                     try wasi_preview3:run_serve(
+                                           Component, Request, ServeOpts, Imports)
                                      catch _:Reason -> {error, Reason}
                                      end}
                    end),

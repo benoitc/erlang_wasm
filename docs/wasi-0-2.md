@@ -145,6 +145,11 @@ one host answers every `0.2.x` component. In your own import map, also write
 keys without the version. The lookup uses the name without the version, so a
 key with a version never matches.
 
+WASI 0.3 is the one exception. Its interfaces reuse 0.2's names with other
+functions, and one component can import both. So an import at `0.3.x` is looked
+up as `Interface@0.3`, for example `wasi:cli/stdout@0.3`, and never as the bare
+0.2 key.
+
 ## Call a typed export
 
 A component that exports functions, not a command, is instantiated and then

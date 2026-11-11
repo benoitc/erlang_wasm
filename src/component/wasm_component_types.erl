@@ -22,6 +22,11 @@ flags, option, result), resource handles and the async `future`, `stream` and
 
 -export_type([sig/0]).
 
+%% The component instances the type space has walked, and each imported one's
+%% instance type, kept beside the type indices.
+-define(INST_COUNT, {'$component_instances'}).
+-define(INST(N), {'$component_instance', N}).
+
 -type valdesc() :: wasm_canon:desc().
 -type sig() :: {[valdesc()], valdesc() | none}.
 
@@ -96,17 +101,33 @@ type_section(?SEC_TYPE, Content, Idx, Acc) ->
 type_section(?SEC_ALIAS, Content, Idx, Acc) ->
     {Count, Rest} = wasm_leb128:u32(Content),
     each(Count, Rest, {Idx, Acc},
-         fun(Bin, IA) ->
-             {Sort, R} = alias_decl(Bin),
-             {R, other_if_type(Sort, IA)}
+         fun(Bin, {I, A} = IA) ->
+             case alias_export_type(Bin) of
+                 {ok, Inst, Name, R} ->
+                     {R, {I + 1, A#{I => instance_type_export(Inst, Name, A)}}};
+                 error ->
+                     {Sort, R} = alias_decl(Bin),
+                     {R, other_if_type(Sort, IA)}
+             end
          end);
+%% Component instances are numbered as the type space walks them, so an alias
+%% of an instance's exported type can find that instance's type.
+type_section(?SEC_COMP_INSTANCE, Content, Idx, Acc) ->
+    {Count, _} = wasm_leb128:u32(Content),
+    {Idx, Acc#{?INST_COUNT => instances(Acc) + Count}};
 type_section(?SEC_COMP_IMPORT, Content, Idx, Acc) ->
     {Count, Rest} = wasm_leb128:u32(Content),
     each(Count, Rest, {Idx, Acc},
-         fun(Bin, IA) ->
+         fun(Bin, {I, A} = IA) ->
              {_Name, R0} = label(Bin),
              {Extern, R1} = externdesc(R0),
-             {R1, other_if_type(extern_sort(Extern), IA)}
+             case Extern of
+                 {instance, TypeIdx} ->
+                     N = instances(A),
+                     {R1, {I, A#{?INST_COUNT => N + 1, ?INST(N) => TypeIdx}}};
+                 _ ->
+                     {R1, other_if_type(extern_sort(Extern), IA)}
+             end
          end);
 type_section(?SEC_EXPORT, Content, Idx, Acc) ->
     {Count, Rest} = wasm_leb128:u32(Content),
@@ -150,6 +171,29 @@ each(0, _Bin, Acc, _Fun) ->
 each(N, Bin, Acc, Fun) ->
     {Rest, Acc1} = Fun(Bin, Acc),
     each(N - 1, Rest, Acc1, Fun).
+
+instances(A) -> maps:get(?INST_COUNT, A, 0).
+
+%% `alias export <instance> <name>` of sort type: the instance and the name.
+alias_export_type(<<16#03, 16#00, Rest0/binary>>) ->
+    {Inst, Rest1} = wasm_leb128:u32(Rest0),
+    {Name, Rest2} = plain_name(Rest1),
+    {ok, Inst, Name, Rest2};
+alias_export_type(_) ->
+    error.
+
+%% The definition an imported instance's type gives the type it exports as
+%% `Name`, or `other` when it is a resource or the instance's type is unknown.
+instance_type_export(Inst, Name, A) ->
+    case maps:find(?INST(Inst), A) of
+        {ok, TypeIdx} ->
+            case maps:get(TypeIdx, A, other) of
+                {instance, Exports} ->
+                    proplists:get_value({type, Name}, Exports, other);
+                _ -> other
+            end;
+        error -> other
+    end.
 
 other_if_type(type, {I, A}) -> {I + 1, A#{I => other}};
 other_if_type(_Sort, IA)    -> IA.
@@ -328,11 +372,23 @@ instance_decls(N, <<16#04, Rest0/binary>>, Idx, Local, Exports) ->
             %% resolve it against `Local`; a func export does not add a type index.
             Sig = resolve_func(TypeIdx, Local),
             instance_decls(N - 1, Rest2, Idx, Local, [{_Name0, Sig} | Exports]);
-        {type, _Bound} ->
-            %% A type export (e.g. a resource) introduces a type into the instance's type
-            %% index space, so later `own`/`borrow` and function types line up; its shape
-            %% is opaque to a signature (own/borrow lower to an i32 handle).
-            instance_decls(N - 1, Rest2, Idx + 1, Local#{Idx => resource}, Exports);
+        {type, Bound} ->
+            %% A type export introduces a type into the instance's type index space,
+            %% so later `own`/`borrow` and function types line up. An `eq` export
+            %% (a record, variant or alias the interface names) keeps its
+            %% definition, resolved against the instance's own types, so a
+            %% component that aliases it can lay it out; a resource stays opaque
+            %% (own/borrow lower to an i32 handle).
+            Def = case Bound of
+                      {eq, I} -> maps:get(I, Local, resource);
+                      _ -> resource
+                  end,
+            Export = case Def of
+                         {value, D} -> [{{type, _Name0}, {value, resolve(D, Local)}}];
+                         _ -> []
+                     end,
+            instance_decls(N - 1, Rest2, Idx + 1, Local#{Idx => Def},
+                           Export ++ Exports);
         _ ->
             instance_decls(N - 1, Rest2, Idx, Local, Exports)
     end;
@@ -563,7 +619,7 @@ resolve_imports(N, Bin, Types, Acc) ->
 %% For an instance type, the signature of each function it exports. The exports already
 %% carry concrete signatures (resolved against the instance's local types).
 interface_sigs({instance, Exports}, _Types) ->
-    maps:from_list([{Name, sig_of(F)} || {Name, F} <- Exports]);
+    maps:from_list([{Name, sig_of(F)} || {Name, F} <- Exports, is_binary(Name)]);
 interface_sigs(_Other, _Types) ->
     #{}.
 

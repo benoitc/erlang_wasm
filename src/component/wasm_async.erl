@@ -32,9 +32,17 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 
 -export([builtin/2, begin_task/2, end_task/0, take_return/0, task_ref/0, waits/0,
          new_future_readable/2, new_stream_readable/2,
-         new_future_channel/1, new_stream_channel/1,
-         register_producer/2, deliver_before/2, wait_on_set/1, take_produced/1,
+         new_future_channel/1, new_stream_channel/1, new_stream_channel/2,
+         register_producer/2, register_producer/3, deliver_before/2, wait_on_set/1, take_produced/1,
          async_lower/2, async_lower/3, backpressure/1]).
+%% Tasks that outlive the call that started them, and the host's side of the
+%% streams and futures they use.
+-export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
+         guest_call/1,
+         host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
+         on_end/2,
+         host_write/3, host_close/1, host_future_resolve/2,
+         host_read/3, host_future_await/2]).
 
 %% The callee (export/callback) status low nibble: exited (result ready), yielded, or
 %% waiting on the waitable-set packed in the high bits (`code | (set << 4)`).
@@ -93,6 +101,26 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -define(ERRCTX(H), {?MODULE, error_context, H}).
 -define(BACKPRESSURE(Inst), {?MODULE, backpressure, Inst}).
 -define(NEXT, {?MODULE, next_handle}).
+%% Tasks still running after the call that started them returned, by id, and
+%% the host's own ends, which keep the frame open as long as they are held.
+-define(TASKS, {?MODULE, tasks}).
+-define(HOST_ENDS, {?MODULE, host_ends}).
+%% How many callback turns a pending task gets, as `call_async' gives a task.
+%% How many guest calls are running in this process: the host-end calls run
+%% tasks, which must not start inside a guest call.
+-define(RUNNING, {?MODULE, running}).
+%% How the running call hands a returned stream to the host: read whole when
+%% the task finishes (`finish'), or read as it is written (`start').
+-define(MODE, {?MODULE, mode}).
+%% How many calls into the frame are in progress: a call is begun by
+%% `begin_task/2' and over at `end_task/0', or at `suspend_task/4' when its
+%% task runs on after it. The frame is never torn down while one is.
+-define(ACTIVE, {?MODULE, active}).
+%% Set while the frame is being torn down, so the hooks it runs cannot start
+%% another teardown.
+-define(TEARING, {?MODULE, tearing}).
+%% The most subtasks waiting at once: each has a producer, a process.
+-define(LIMIT, {?MODULE, resource_limit}).
 
 %%% --------------------------------------------------------------- task frame ---
 
@@ -106,24 +134,71 @@ cannot bleed messages into the next.
 """.
 -spec begin_task(wasm:instance(), map()) -> ok.
 begin_task(Inst, Opts) ->
-    %% A task started inside another, from a host function the outer task
-    %% called, sets the outer frame aside rather than clearing it: clearing
-    %% it lost the outer producers, and nothing stopped them afterwards.
-    save_outer(),
-    clear_frame(),
-    put(?TASK_INST, Inst),
-    put(?TASK_REF, make_ref()),
-    put(?WAITS, 0),
-    put(?PRODUCERS, []),
+    case open_with_work() of
+        true ->
+            %% A frame with tasks still running or ends the host holds: this
+            %% task joins it, so it shares their handles. Its own context
+            %% slots start empty.
+            erase_ctx(),
+            put(?TASK_INST, Inst);
+        false ->
+            %% A task started inside another, from a host function the outer
+            %% task called, sets the outer frame aside rather than clearing
+            %% it: clearing it lost the outer producers, and nothing stopped
+            %% them afterwards.
+            save_outer(),
+            clear_frame(),
+            put(?TASK_INST, Inst),
+            put(?TASK_REF, make_ref()),
+            put(?WAITS, 0),
+            put(?PRODUCERS, [])
+    end,
     case maps:get(wait_hook, Opts, undefined) of
         undefined -> ok;
         Pid       -> put(?WAIT_HOOK, Pid)
     end,
+    put(?MODE, maps:get(mode, Opts, finish)),
+    put(?LIMIT, maps:get(resource_limit, Opts, infinity)),
+    put(?ACTIVE, active() + 1),
     ok.
+
+active() -> case get(?ACTIVE) of undefined -> 0; N -> N end.
+
+call_over() -> put(?ACTIVE, max(0, active() - 1)), ok.
+
+-doc """
+End a started call whose task has finished, leaving the frame as it is: the
+host may still read what the task returned, such as a response's body.
+`pump/1` or `close_frame/0` tears it down once the host is done.
+""".
+-spec leave_call() -> ok.
+leave_call() ->
+    ok = call_over(),
+    _ = erase(?TASK_RETURN),
+    erase_ctx().
+
+open_with_work() ->
+    get(?TASK_REF) =/= undefined andalso
+        (pending() =/= [] orelse host_ends() =/= []).
 
 -doc "Tear the task frame down: stop producers, clear state, flush stale messages.".
 -spec end_task() -> ok.
 end_task() ->
+    ok = call_over(),
+    case open_with_work() of
+        %% Other tasks still run in this frame, or the host holds an end:
+        %% only this call's own state goes.
+        true -> _ = erase(?TASK_RETURN), erase_ctx(), ok;
+        false -> teardown()
+    end.
+
+teardown() ->
+    %% The host is told about every stream still open, as if the guest had
+    %% let go of it: a sink sees its end, a stream with an `on_end' hook runs
+    %% it. Nothing a stream holds open (a connection) outlives the frame.
+    put(?TEARING, true),
+    _ = [end_hooks(E) || {?WAITABLE(_), E} <- get()],
+    erase(?TEARING),
     stop_producers(),
     Ref = get(?TASK_REF),
     clear_frame(),
@@ -131,6 +206,17 @@ end_task() ->
     flush_stale(Ref),
     restore_outer(),
     ok.
+
+-doc """
+Tear the frame down whatever is still running in it: stop every producer, drop
+every pending task and every end. `wasm_component:destroy/1` calls it.
+""".
+-spec close_frame() -> ok.
+close_frame() ->
+    case get(?TASK_REF) of
+        undefined -> ok;
+        _ -> teardown()
+    end.
 
 %% The enclosing task's frame, on a stack in the process dictionary.
 save_outer() ->
@@ -176,12 +262,25 @@ is_frame_key(?ERRCTX(_))   -> true;
 is_frame_key(?TASK_REF)    -> true;
 is_frame_key(?WAIT_HOOK)   -> true;
 is_frame_key(?PRODUCERS)   -> true;
+is_frame_key(?TASKS)       -> true;
+is_frame_key(?HOST_ENDS)   -> true;
 is_frame_key(_)            -> false.
 
 -doc "The value the task handed back through `task.return`, or `undefined`.".
 -spec take_return() -> {ok, term()} | undefined.
 take_return() ->
     case erase(?TASK_RETURN) of
+        undefined -> undefined;
+        Value     -> {ok, Value}
+    end.
+
+-doc """
+The value the running task has handed to `task.return` so far, left in place,
+or `undefined`. A task can resolve and keep running.
+""".
+-spec resolved() -> {ok, term()} | undefined.
+resolved() ->
+    case get(?TASK_RETURN) of
         undefined -> undefined;
         Value     -> {ok, Value}
     end.
@@ -230,6 +329,19 @@ delivers.
 new_stream_channel(Desc) ->
     new_reader(stream, Desc, empty(Desc), open).
 
+-doc """
+As `new_stream_channel/1`, applying `Map` to each `{data, Items}` a producer
+sends, in the owner's process, before the guest reads it. A producer can then
+send what only the owner can turn into an element, such as a socket it
+accepted, which becomes a resource handle in the owner's table.
+""".
+-spec new_stream_channel(wasm_canon:desc(), fun(([term()]) -> [term()])) ->
+          non_neg_integer().
+new_stream_channel(Desc, Map) ->
+    H = new_stream_channel(Desc),
+    update(H, fun(R) -> R#{map => Map} end),
+    H.
+
 new_reader(Kind, Desc, Buf, Writer) ->
     H = next_handle(),
     put(?WAITABLE(H), #{'end' => read, kind => Kind, elem => Desc, buf => Buf,
@@ -240,13 +352,25 @@ new_reader(Kind, Desc, Buf, Writer) ->
 -doc """
 Spawn and monitor a producer for the channel end `Handle`. `PFun` is called in the new
 process with `#{owner, task_ref, handle}` and sends `{async_ready, TaskRef, Handle,
-Info}` (`Info` = `{value,V} | {data,Elements} | close`) to the owner when it chooses.
+Info}` (`Info` = `{value,V} | {data,Elements} | close`, or for an async import's
+subtask `subtask_complete | {subtask_complete, Result}`) to the owner when it chooses.
+A `Result` of `{in_owner, Make}` is made by `Make()` in the owner when the guest is
+told, for a result that holds a resource handle.
 """.
 -spec register_producer(non_neg_integer(), fun((map()) -> any())) -> ok.
 register_producer(Handle, PFun) ->
+    register_producer(Handle, PFun, #{}).
+
+-doc """
+As `register_producer/2`, with `Extra` merged into the map the producer gets:
+an async host import's producer is given the import's own result as `value`,
+so a timer knows how long to wait.
+""".
+-spec register_producer(non_neg_integer(), fun((map()) -> any()), map()) -> ok.
+register_producer(Handle, PFun, Extra) ->
     Owner = self(),
     Ref = task_ref(),
-    Ctx = #{owner => Owner, task_ref => Ref, handle => Handle},
+    Ctx = Extra#{owner => Owner, task_ref => Ref, handle => Handle},
     %% Bound to the owner: `end_task/0' stops producers, but an owner that is
     %% killed never runs it. The monitor is tagged with the task, so a
     %% producer's `DOWN' can be told from every other in the caller's mailbox:
@@ -431,8 +555,9 @@ task_return_value(Result, Flats) ->
 %% The host reads a returned stream to its end, so a guest writing to it never
 %% waits for room.
 hand_to_host(H) ->
-    case get(?WAITABLE(H)) of
-        #{'end' := read} = R -> put(?WAITABLE(H), R#{host => true}), refill(H);
+    case {get(?WAITABLE(H)), get(?MODE)} of
+        {#{'end' := read}, start} -> ok = host_reader(H);
+        {#{'end' := read} = R, _} -> put(?WAITABLE(H), R#{host => true}), refill(H);
         _ -> ok
     end.
 
@@ -477,6 +602,15 @@ start_copy(write, Kind, W, #{reader := RH} = Wr, Ptr, Count) ->
             put(?WAITABLE(RH), R#{buf => [Value], writer => closed}),
             put(?WAITABLE(W), Wr#{state => done}),
             ?COMPLETED;
+        #{'end' := read, host := sink, sink := Sink, sink_max := Max} ->
+            N = min(Count, Max),
+            Items = load_elems(maps:get(elem, Wr), Ptr, N, stream),
+            case Sink(Items) of
+                ok -> result(stream, ?COMPLETED, N);
+                closed ->
+                    put(?WAITABLE(W), Wr#{state => done}),
+                    result(Kind, ?DROPPED, 0)
+            end;
         #{'end' := read} = R ->
             case min(Count, room(R)) of
                 0 when Count > 0 ->
@@ -548,6 +682,10 @@ drop_end(Dir, Kind, H) ->
         #{'end' := Dir, kind := Kind} = E ->
             forget_waitable(H),
             ok = detach(E),
+            %% Nothing reads it any more, so whatever was filling it stops,
+            %% and its creator is told.
+            ok = stop_producer(H),
+            ok = run_on_end(E),
             {ok, []};
         undefined -> {trap, unknown_waitable};
         _ -> {trap, wrong_end}
@@ -556,7 +694,17 @@ drop_end(Dir, Kind, H) ->
 detach(#{'end' := read, peer := W}) when W =/= undefined ->
     update(W, fun(Wr) -> Wr#{reader => undefined} end);
 detach(#{'end' := write, reader := RH}) when RH =/= undefined ->
-    update(RH, fun(R) -> R#{writer => closed, peer => undefined} end);
+    update(RH, fun(R) -> R#{writer => closed, peer => undefined} end),
+    %% A sink has nothing left to take once the guest's writer is gone; it is
+    %% told, so it can report how the whole stream went.
+    case get(?WAITABLE(RH)) of
+        #{host := sink, sink := Sink} ->
+            forget_waitable(RH),
+            ok = release_end(RH),
+            _ = Sink(eof),
+            ok;
+        _ -> ok
+    end;
 detach(_) ->
     ok.
 
@@ -623,7 +771,8 @@ into the return area, and reports RETURNED at once, with no subtask handle (as t
 specification has it for a call that has already resolved).
 
 The three-argument form is the suspending case: the host function's result is computed
-but delivered later. The lowered call records a pending subtask, spawns a producer
+but delivered later, unless the function answers `{returned, Value}`, which completes
+the call at once. The lowered call records a pending subtask, spawns a producer
 (`PFun`, given the subtask handle) that signals completion when it chooses, and reports
 the subtask STARTED, so the guest suspends. When the completion arrives the executor
 writes the result into the return area and delivers a SUBTASK event to resume the guest.
@@ -633,8 +782,11 @@ writes the result into the return area and delivers a SUBTASK event to resume th
 async_lower({Params, Result}, Fun) ->
     fun(_Ctx, Flats) ->
         Inst = task_instance(),
-        {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
-        Value = Fun(Terms),
+        {Terms, Rest} = wasm_canon:lift_async_params(Inst, Params, Flats),
+        Value = case Fun(Terms) of
+                    {returned, V} -> V;
+                    V -> V
+                end,
         write_return_area(Inst, Result, Rest, Value),
         {ok, [?SUBTASK_RETURNED]}
     end.
@@ -644,15 +796,37 @@ async_lower({Params, Result}, Fun) ->
 async_lower({Params, Result}, Fun, PFun) ->
     fun(_Ctx, Flats) ->
         Inst = task_instance(),
-        {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
-        Value = Fun(Terms),
-        RetPtr = case Rest of [P | _] -> P; [] -> undefined end,
-        H = next_handle(),
-        put(?WAITABLE(H), #{'end' => subtask, result => Result, ret_ptr => RetPtr,
-                            value => Value, state => awaiting}),
-        ok = register_producer(H, PFun),
-        {ok, [(H bsl 4) bor ?SUBTASK_STARTED]}
+        {Terms, Rest} = wasm_canon:lift_async_params(Inst, Params, Flats),
+        case Fun(Terms) of
+            %% Nothing to wait for: the call completes at once, as the
+            %% two-argument form does.
+            {returned, Value} ->
+                write_return_area(Inst, Result, Rest, Value),
+                {ok, [?SUBTASK_RETURNED]};
+            Value ->
+                start_subtask(Result, Rest, Value, PFun)
+        end
     end.
+
+start_subtask(Result, Rest, Value, PFun) ->
+    case get(?LIMIT) of
+        Limit when is_integer(Limit) ->
+            case length(producers()) >= Limit of
+                true -> {trap, resource_limit_reached};
+                false -> start_subtask_1(Result, Rest, Value, PFun)
+            end;
+        _ -> start_subtask_1(Result, Rest, Value, PFun)
+    end.
+
+start_subtask_1(Result, Rest, Value, PFun) ->
+    RetPtr = case Rest of [P | _] -> P; [] -> undefined end,
+    H = next_handle(),
+    %% The return area is in the memory of the instance that made the call,
+    %% which need not be the one running when the result arrives.
+    put(?WAITABLE(H), #{'end' => subtask, result => Result, ret_ptr => RetPtr,
+                        value => Value, state => awaiting, inst => task_instance()}),
+    ok = register_producer(H, PFun, #{value => Value}),
+    {ok, [(H bsl 4) bor ?SUBTASK_STARTED]}.
 
 write_return_area(_Inst, none, _Rest, _Value)      -> ok;
 write_return_area(_Inst, _Result, [undefined | _], _V) -> ok;
@@ -785,17 +959,41 @@ ingest(H, {value, V}) ->
                       R#{buf => [V], writer => closed};
                  (E) -> E
               end);
-ingest(H, {data, Items}) ->
-    update(H, fun(#{'end' := read, kind := stream, buf := Buf} = R) ->
+%% A stream the host has taken as a sink passes what a producer sends straight
+%% on, and its end, as it does what a guest writes.
+ingest(H, Info) ->
+    case {get(?WAITABLE(H)), Info} of
+        {#{sink := Sink}, {data, Items}} ->
+            _ = Sink(Items),
+            ok;
+        {#{sink := Sink}, close} ->
+            forget_waitable(H),
+            ok = release_end(H),
+            _ = Sink(eof),
+            ok;
+        _ ->
+            ingest_state(H, Info)
+    end.
+
+ingest_state(H, {data, Items}) ->
+    update(H, fun(#{'end' := read, kind := stream, buf := Buf, map := Map} = R) ->
+                      R#{buf => cat(Buf, Map(Items))};
+                 (#{'end' := read, kind := stream, buf := Buf} = R) ->
                       R#{buf => cat(Buf, Items)};
                  (E) -> E
               end);
-ingest(H, close) ->
+ingest_state(H, close) ->
     update(H, fun(#{'end' := read} = R) -> R#{writer => closed};
                  (E) -> E
               end);
-ingest(H, subtask_complete) ->
+ingest_state(H, subtask_complete) ->
     update(H, fun(#{'end' := subtask, state := awaiting} = S) -> S#{state => ready};
+                 (E) -> E
+              end);
+%% The producer has the result, such as the datagram a receive waited for.
+ingest_state(H, {subtask_complete, Value}) ->
+    update(H, fun(#{'end' := subtask, state := awaiting} = S) ->
+                      S#{state => ready, value => Value};
                  (E) -> E
               end).
 
@@ -823,8 +1021,15 @@ try_deliver(H) ->
             put(?WAITABLE(H), W#{state => done}),
             {event, write_event(W), H, result(Kind, ?DROPPED, 0)};
         #{'end' := subtask, state := ready, result := Result, ret_ptr := RetPtr,
-          value := Value} = S ->
-            write_return_area(task_instance(), Result, [RetPtr], Value),
+          value := Value0} = S ->
+            %% A producer that needs the owner to make its result, such as a
+            %% resource only the owner's table can hold, sends a fun.
+            Value = case Value0 of
+                        {in_owner, Make} -> Make();
+                        _ -> Value0
+                    end,
+            write_return_area(maps:get(inst, S, task_instance()), Result, [RetPtr],
+                              Value),
             put(?WAITABLE(H), S#{state => returned}),
             {event, ?EV_SUBTASK, H, ?SUBTASK_RETURNED};
         _ ->
@@ -917,9 +1122,436 @@ flush_stale(Ref) ->
         ok
     end.
 
+%%% ---------------------------------------------------- tasks after their call ---
+
+-doc """
+Keep the running task in the frame after its call returns: it has resolved
+(`task.return`) and its callback asked to wait on `Set` (`Code` 2) or to be
+called again (`Code` 1). `pump/1` and the host-end calls give it its turns.
+""".
+-spec suspend_task({wasm:instance(), binary()}, 1 | 2, non_neg_integer(),
+                   non_neg_integer()) -> ok.
+suspend_task(Callback, Code, Set, Budget) ->
+    ok = call_over(),
+    _ = erase(?TASK_RETURN),
+    Status = case Code of 1 -> yield; 2 -> {wait, Set} end,
+    Task = #{callback => Callback, status => Status, ctx => save_ctx(),
+             budget => Budget, inst => task_instance()},
+    put(?TASKS, (tasks())#{make_ref() => Task}),
+    ok.
+
+-doc "How many tasks still run in this process's frame.".
+-spec pending() -> [reference()].
+pending() -> maps:keys(tasks()).
+
+tasks() -> case get(?TASKS) of undefined -> #{}; T -> T end.
+
+host_ends() -> case get(?HOST_ENDS) of undefined -> []; L -> L end.
+
+-doc """
+Run the pending tasks until every one has finished (`finished`), none can make
+progress (`idle`: each waits for something only the host can give, such as room
+in a stream the host reads), or `Timeout` milliseconds pass (`timeout`).
+Answers how it stopped and how many tasks remain, or `{error, Reason}` when a
+task traps. Once nothing is pending and the host holds no end, the frame is
+torn down. `{error, reentrant}` from inside a guest call.
+""".
+-spec pump(timeout()) -> {finished | idle | timeout, non_neg_integer()} |
+                         {error, term()}.
+pump(Timeout) ->
+    outside_guest(fun() -> pump_loop(deadline(Timeout)) end).
+
+outside_guest(Fun) ->
+    case running() of
+        0 -> Fun();
+        _ -> {error, reentrant}
+    end.
+
+pump_loop(Deadline) ->
+    case pending() of
+        [] ->
+            ok = maybe_teardown(),
+            {finished, 0};
+        Tasks ->
+            case step(Deadline) of
+                progress -> pump_loop(Deadline);
+                idle -> {idle, length(Tasks)};
+                timeout -> {timeout, length(Tasks)};
+                {error, _} = E -> E
+            end
+    end.
+
+%% Never inside a guest call, nor while a call is in progress: that call's own
+%% `end_task/0' ends the frame. Nor from inside a teardown.
+maybe_teardown() ->
+    case get(?TASK_REF) =/= undefined andalso running() =:= 0 andalso active() =:= 0
+             andalso get(?TEARING) =:= undefined andalso not open_with_work() of
+        true -> teardown();
+        false -> ok
+    end.
+
+deadline(infinity) -> infinity;
+deadline(Ms) -> erlang:monotonic_time(millisecond) + Ms.
+
+%% One unit of progress: a pending task that can take an event takes it, or a
+%% producer message is taken in. `idle' when nothing can: no task can take an
+%% event and no producer is left to send one.
+step(Deadline) ->
+    case get(?RUNNING) of
+        N when is_integer(N), N > 0 -> {error, reentrant};
+        _ -> step_1(Deadline)
+    end.
+
+step_1(Deadline) ->
+    Ref = task_ref(),
+    ingest_available(Ref, ?POLL_DRAIN),
+    case ready_task(maps:to_list(tasks())) of
+        {Id, Args} -> run_task(Id, Args);
+        none ->
+            case producers() of
+                [] -> idle;
+                _ -> block(Ref, Deadline)
+            end
+    end.
+
+ready_task([]) -> none;
+ready_task([{Id, #{status := yield}} | _]) -> {Id, [0, 0, 0]};
+ready_task([{Id, #{status := {wait, Set}}} | Rest]) ->
+    case deliver_first(Set) of
+        {event, EC, E1, E2} -> {Id, [EC, E1, E2 band 16#FFFFFFFF]};
+        none -> ready_task(Rest)
+    end.
+
+block(Ref, Deadline) ->
+    Left = case Deadline of
+               infinity -> infinity;
+               _ -> max(0, Deadline - erlang:monotonic_time(millisecond))
+           end,
+    receive
+        {async_ready, Ref, H, Info} ->
+            ingest(H, Info),
+            progress;
+        {?DOWN(Ref), _Mon, process, Pid, Reason} ->
+            {value, {Pid, _, H}} = lists:keysearch(Pid, 1, producers()),
+            forget_producer(Pid),
+            ingest_available(Ref, ?POLL_DRAIN),
+            case Reason =:= normal orelse not needed(H) of
+                true -> progress;
+                false -> {error, {producer_failed, Reason}}
+            end
+    after Left ->
+        timeout
+    end.
+
+needed(H) ->
+    case get(?WAITABLE(H)) of
+        #{state := {copying, _, _}} -> true;
+        #{'end' := subtask, state := awaiting} -> true;
+        _ -> false
+    end.
+
+%% Give task `Id' one callback turn.
+run_task(Id, Args) ->
+    #{callback := {CbInst, CbName}, ctx := Ctx, budget := Budget,
+      inst := Inst} = Task = maps:get(Id, tasks()),
+    case Budget of
+        0 -> {error, async_budget_exhausted};
+        _ ->
+            restore_ctx(Ctx),
+            put(?TASK_INST, Inst),
+            Result = guest_call(fun() -> wasm:call(CbInst, CbName, Args) end),
+            %% A task resolves once; anything it hands back again is dropped.
+            _ = erase(?TASK_RETURN),
+            Saved = save_ctx(),
+            case Result of
+                {ok, [Status]} ->
+                    Bits = Status band 16#FFFFFFFF,
+                    case {Bits band 16#F, Bits bsr 4} of
+                        {0, _} -> put(?TASKS, maps:remove(Id, tasks()));
+                        {1, _} -> next(Id, Task, yield, Saved);
+                        {2, Set} -> next(Id, Task, {wait, Set}, Saved)
+                    end,
+                    progress;
+                {ok, _} -> {error, async_bad_result};
+                {error, _} = E -> put(?TASKS, maps:remove(Id, tasks())), E
+            end
+    end.
+
+next(Id, #{budget := B} = Task, Status, Ctx) ->
+    put(?TASKS, (tasks())#{Id => Task#{status => Status, ctx => Ctx,
+                                       budget => B - 1}}),
+    ok.
+
+-doc """
+Run `Fun`, a call into the guest, counted as running: the host-end calls answer
+`{error, reentrant}` meanwhile instead of running tasks inside it.
+""".
+-spec guest_call(fun(() -> T)) -> T.
+guest_call(Fun) ->
+    put(?RUNNING, running() + 1),
+    try Fun()
+    after
+        put(?RUNNING, running() - 1)
+    end.
+
+running() -> case get(?RUNNING) of undefined -> 0; N -> N end.
+
+%% A task's context slots (`context.get'/`set') are its own.
+save_ctx() -> maps:from_list([{K, V} || {?CTX(_) = K, V} <- get()]).
+
+restore_ctx(Ctx) ->
+    erase_ctx(),
+    maps:foreach(fun(K, V) -> put(K, V) end, Ctx).
+
+erase_ctx() ->
+    _ = [erase(K) || {?CTX(_) = K, _} <- get()],
+    ok.
+
+%%% --------------------------------------------------------------- host ends ---
+
+hold_end(H) ->
+    case lists:member(H, host_ends()) of
+        true -> ok;
+        false -> put(?HOST_ENDS, [H | host_ends()]), ok
+    end.
+
+release_end(H) ->
+    put(?HOST_ENDS, lists:delete(H, host_ends())),
+    ok.
+
+-doc """
+Take the guest's readable end `H` as the host's: from now on the host reads it,
+with `host_read/3`, while the guest writes. Its buffer is bounded as between
+two guest ends, so a writer waits until the host reads.
+""".
+-spec host_reader(non_neg_integer()) -> ok | {error, term()}.
+host_reader(H) ->
+    case get(?WAITABLE(H)) of
+        #{'end' := read} = R ->
+            put(?WAITABLE(H), R#{host => reading}),
+            hold_end(H);
+        _ -> {error, unknown_end}
+    end.
+
+-doc """
+Take the guest's readable end `H` as the host's and hand everything the guest
+writes to it to `Sink`, as it is written: `Sink(Elements)` answers `ok`, or
+`closed` to drop the end so the guest's next write sees it gone. When the guest
+drops its writer, `Sink(eof)` is called once. Suits a destination that takes
+data at once, such as stdout or a file.
+""".
+-spec host_sink(non_neg_integer(), fun((binary() | [term()] | eof) -> ok | closed)) ->
+          ok | {error, term()}.
+host_sink(H, Sink) ->
+    host_sink(H, Sink, infinity).
+
+-doc """
+As `host_sink/2`, taking at most `Max` elements from each write: a larger write
+completes with `Max` written, and the guest writes the rest again. A file's sink
+uses it, so a guest learns the host does not take writes of any size at once.
+""".
+-spec host_sink(non_neg_integer(), fun((binary() | [term()] | eof) -> ok | closed),
+                pos_integer() | infinity) -> ok | {error, term()}.
+host_sink(H, Sink, Max) ->
+    case get(?WAITABLE(H)) of
+        #{'end' := read, buf := Buf} = R ->
+            put(?WAITABLE(H), R#{host => sink, sink => Sink, sink_max => Max,
+                                 buf => empty_like(Buf)}),
+            ok = hold_end(H),
+            _ = case is_empty(Buf) of true -> ok; false -> Sink(Buf) end,
+            case R of
+                %% The guest ended the stream before the sink took it: what it
+                %% wrote is in, so the end comes now.
+                #{writer := closed} ->
+                    forget_waitable(H),
+                    ok = release_end(H),
+                    _ = Sink(eof),
+                    ok;
+                _ -> sink_waiting_writer(R, Sink, Max)
+            end;
+        _ -> {error, unknown_end}
+    end.
+
+%% A write that was waiting for room when the sink took over completes into it.
+sink_waiting_writer(#{peer := W}, Sink, Max) when W =/= undefined ->
+    case get(?WAITABLE(W)) of
+        #{state := {copying, Ptr, Count}, elem := D} = Wr ->
+            N = min(Count, Max),
+            Status = case Sink(load_elems(D, Ptr, N, stream)) of
+                         ok -> result(stream, ?COMPLETED, N);
+                         closed -> result(stream, ?DROPPED, 0)
+                     end,
+            put(?WAITABLE(W), Wr#{state => idle, pending => Status}),
+            ok;
+        _ -> ok
+    end;
+sink_waiting_writer(_R, _Sink, _Max) ->
+    ok.
+
+-doc """
+Run `Fun()` once, in the owner, when the guest drops the readable end `H`, or
+when the frame is torn down with it still open: the host that made a stream
+learns when nobody reads it any more, as a socket's receive stream must.
+""".
+-spec on_end(non_neg_integer(), fun(() -> any())) -> ok | {error, term()}.
+on_end(H, Fun) ->
+    case get(?WAITABLE(H)) of
+        #{'end' := read} = R -> put(?WAITABLE(H), R#{on_end => Fun}), ok;
+        _ -> {error, unknown_end}
+    end.
+
+run_on_end(#{on_end := Fun}) -> _ = Fun(), ok;
+run_on_end(_) -> ok.
+
+%% At teardown: a sink's end, and a stream's on_end hook. A hook that fails
+%% does not stop the others, nor the teardown.
+end_hooks(#{'end' := read, host := sink, sink := Sink} = E) ->
+    quietly(fun() -> Sink(eof) end),
+    quietly(fun() -> run_on_end(E) end);
+end_hooks(#{'end' := read} = E) ->
+    quietly(fun() -> run_on_end(E) end);
+end_hooks(_) ->
+    ok.
+
+quietly(Fun) ->
+    try Fun() of _ -> ok
+    catch _:_ -> ok
+    end.
+
+-doc """
+A new stream of `Desc` elements the host writes and the guest reads:
+`{Reader, Writer}`. Give the guest `Reader` (an import result or argument);
+write with `host_write/3` and end it with `host_close/1`.
+""".
+-spec host_stream(wasm_canon:desc()) -> {non_neg_integer(), non_neg_integer()}.
+host_stream(Desc) ->
+    Packed = new_pair(stream, Desc),
+    {R, W} = {Packed band 16#FFFFFFFF, Packed bsr 32},
+    ok = hold_end(W),
+    {R, W}.
+
+-doc "As `host_stream/1`, for a future: resolve it with `host_future_resolve/2`.".
+-spec host_future(wasm_canon:desc()) -> {non_neg_integer(), non_neg_integer()}.
+host_future(Desc) ->
+    Packed = new_pair(future, Desc),
+    {R, W} = {Packed band 16#FFFFFFFF, Packed bsr 32},
+    ok = hold_end(W),
+    {R, W}.
+
+-doc """
+Write `Items` (a binary for `stream<u8>`, else a list) to the host's writer
+`W`, running the pending tasks while the guest's buffer is full. `ok` once all
+is written; `{error, dropped}` if the guest dropped its end; `{error, timeout}`
+past `Timeout` milliseconds.
+""".
+-spec host_write(non_neg_integer(), binary() | [term()], timeout()) ->
+          ok | {error, term()}.
+host_write(W, Items, Timeout) ->
+    write_loop(W, Items, deadline(Timeout)).
+%% (Writing within the room is allowed inside a guest call; only waiting for
+%% room runs tasks, and `step/1' refuses that there.)
+
+write_loop(W, Items, Deadline) ->
+    case get(?WAITABLE(W)) of
+        #{'end' := write, reader := undefined} -> {error, dropped};
+        #{'end' := write, reader := RH} ->
+            R = get(?WAITABLE(RH)),
+            case take(Items, room(R)) of
+                {_, _, 0} when Items =/= <<>>, Items =/= [] ->
+                    case step(Deadline) of
+                        progress -> write_loop(W, Items, Deadline);
+                        idle -> {error, async_deadlock};
+                        timeout -> {error, timeout};
+                        {error, _} = E -> E
+                    end;
+                {Taken, Rest, _} ->
+                    append(RH, R, Taken),
+                    case is_empty(Rest) of
+                        true -> ok;
+                        false -> write_loop(W, Rest, Deadline)
+                    end
+            end;
+        _ -> {error, unknown_end}
+    end.
+
+-doc "End the host's writer `W`: the guest's reader sees the end of the stream.".
+-spec host_close(non_neg_integer()) -> ok.
+host_close(H) ->
+    case get(?WAITABLE(H)) of
+        #{'end' := write} = E -> forget_waitable(H), ok = detach(E);
+        #{'end' := read} = E -> forget_waitable(H), ok = detach(E);
+        _ -> ok
+    end,
+    release_end(H),
+    maybe_teardown().
+
+-doc "Resolve the host's future writer `W` with `Value`.".
+-spec host_future_resolve(non_neg_integer(), term()) -> ok | {error, term()}.
+host_future_resolve(W, Value) ->
+    case get(?WAITABLE(W)) of
+        #{'end' := write, kind := future, reader := RH} = Wr when RH =/= undefined ->
+            update(RH, fun(R) -> R#{buf => [Value], writer => closed} end),
+            put(?WAITABLE(W), Wr#{state => done}),
+            host_close(W);
+        #{'end' := write, kind := future} ->
+            host_close(W);
+        _ -> {error, unknown_end}
+    end.
+
+-doc """
+Read at most `Max` elements from the host's reader `H`, running the pending
+tasks until there are some: `{ok, Elements}`, `eof` once the guest has dropped
+its writer and everything was read, `{error, timeout}` past `Timeout`
+milliseconds, or the error that stopped a task.
+""".
+-spec host_read(non_neg_integer(), pos_integer(), timeout()) ->
+          {ok, binary() | [term()]} | eof | {error, term()}.
+host_read(H, Max, Timeout) ->
+    outside_guest(fun() -> read_loop(H, Max, deadline(Timeout)) end).
+
+read_loop(H, Max, Deadline) ->
+    ingest_available(task_ref(), ?POLL_DRAIN),
+    case get(?WAITABLE(H)) of
+        #{'end' := read, buf := Buf, writer := Writer} = R ->
+            case is_empty(Buf) of
+                false ->
+                    {Taken, Rest, _} = take(Buf, Max),
+                    put(?WAITABLE(H), R#{buf => Rest}),
+                    refill(H),
+                    {ok, Taken};
+                true when Writer =:= closed ->
+                    ok = release_end(H),
+                    eof;
+                true ->
+                    case step(Deadline) of
+                        progress -> read_loop(H, Max, Deadline);
+                        idle -> {error, async_deadlock};
+                        timeout -> {error, timeout};
+                        {error, _} = E -> E
+                    end
+            end;
+        _ -> {error, unknown_end}
+    end.
+
+-doc """
+Wait for the guest to resolve the future whose reader the host holds:
+`{ok, Value}`, `{error, dropped}` if the guest dropped its writer first, or as
+`host_read/3`.
+""".
+-spec host_future_await(non_neg_integer(), timeout()) -> {ok, term()} | {error, term()}.
+host_future_await(H, Timeout) ->
+    case host_read(H, 1, Timeout) of
+        {ok, [V]} -> {ok, V};
+        eof -> {error, dropped};
+        {error, _} = E -> E
+    end.
+
 %%% ------------------------------------------------------------------ buffers ---
 
 %% A `stream<u8>' buffer is a binary, any other a list of values.
+empty_like(Bin) when is_binary(Bin) -> <<>>;
+empty_like(_) -> [].
+
 empty(u8) -> <<>>;
 empty(_) -> [].
 

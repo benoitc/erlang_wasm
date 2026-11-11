@@ -37,7 +37,7 @@ as a pointer, as the specification says.
 -export([lower_params/3, lift_result/3, size_align/1, flat_types/1]).
 -export([lift_params/3, lower_value/3, store_value/4, load_value/3,
          result_via_memory/1]).
--export([params_spill/1]).
+-export([params_spill/1, lift_async_params/3]).
 -export([with_realloc/2, with_string_encoding/2]).
 
 -export_type([desc/0]).
@@ -77,6 +77,9 @@ as a pointer, as the specification says.
 %% Past this many flattened parameters the Canonical ABI passes a single pointer to
 %% the parameters stored contiguously in memory, rather than the flats directly.
 -define(MAX_FLAT_PARAMS, 16).
+%% An async-lowered call passes fewer parameters flat: past this many, they
+%% are in memory behind one pointer.
+-define(MAX_FLAT_ASYNC_PARAMS, 4).
 
 %%% -------------------------------------------------------------- params ---
 
@@ -228,7 +231,18 @@ returned as the second element.
 """.
 -spec lift_params(wasm:instance(), [desc()], [term()]) -> {[term()], [term()]}.
 lift_params(Inst, Descs, Flats) ->
-    case params_spill(Descs) of
+    lift_params(Inst, Descs, Flats, ?MAX_FLAT_PARAMS).
+
+-doc """
+As `lift_params/3`, for an async-lowered call: its parameters are in memory
+behind one pointer once they flatten past four values.
+""".
+-spec lift_async_params(wasm:instance(), [desc()], [term()]) -> {[term()], [term()]}.
+lift_async_params(Inst, Descs, Flats) ->
+    lift_params(Inst, Descs, Flats, ?MAX_FLAT_ASYNC_PARAMS).
+
+lift_params(Inst, Descs, Flats, Max) ->
+    case lists:sum([length(flat_types(D)) || D <- Descs]) > Max of
         false ->
             {Rev, Rest} = lists:foldl(
                             fun(D, {Acc, F0}) ->

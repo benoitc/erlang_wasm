@@ -49,18 +49,23 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
 
 -include("wasm_component.hrl").
 
--export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
-         call_async/4, call_async/5, destroy/1, destroy/2, drop_resource/3]).
--export([import_fun/2, exports/1, hold/1]).
+-export([decode/1, prepare/1, instantiate/1, instantiate/2, instantiate/3, call/4,
+         call_async/4, call_async/5, start_async/4, start_async/5, pump/2,
+         destroy/1, destroy/2, drop_resource/3]).
+-export([import_fun/2, exports/1, hold/1, source/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
--export_type([component/0, instance/0]).
+-export_type([component/0, prepared/0, instance/0]).
 
 -opaque component() :: #{core := binary(), cores := [binary()],
                          sec := binary(), entry_idx := non_neg_integer(),
                          exports := [binary()]}
                       | #{composed := true, sec := binary(),
                           exports := [binary()]}.
+%% A component decoded, checked and parsed once by prepare/1, and what its
+%% instantiation derives from the bytes alone.
+-opaque prepared() :: {prepared, #{bin := binary(), decoded := component(),
+                                   pre := #{atom() => term()}}}.
 -opaque instance() :: #{core := wasm:instance(), exports := [binary()],
                         cores := [wasm:instance()],
                         export_map => #{binary() => binary()},
@@ -104,7 +109,12 @@ as the server: each instantiation then finds the modules already loaded.
 the `wasm` application is not started, since instantiation then compiles in
 the caller and never uses the cache.
 """.
--spec hold(binary()) -> ok | {error, term()}.
+-spec hold(binary() | prepared()) -> ok | {error, term()}.
+hold({prepared, #{decoded := Decoded}}) ->
+    case default_loader() of
+        compile -> ok;
+        load -> hold_cores(maps:get(cores, Decoded, []))
+    end;
 hold(Bin) ->
     case {default_loader(), decode(Bin)} of
         {compile, _} -> ok;
@@ -215,6 +225,83 @@ skip_sortidx(<<_Sort, Rest0/binary>>) ->
 skip_sortidx(Bin) ->
     Bin.
 
+-doc """
+Decode, check and parse component `Bin` once, for many instantiations.
+
+Every instantiation from bytes decodes the component, checks its lifts and
+parses its sections again. A server that instantiates per request prepares
+the component once and passes what `prepare/1` returns wherever it would pass
+the bytes: `instantiate/2,3`, `hold/1`, and the WASI runners.
+
+```erlang
+{ok, Prepared} = wasm_component:prepare(Bin),
+{ok, I} = wasm_component:instantiate(Prepared, #{}).
+```
+""".
+-spec prepare(binary() | prepared()) -> {ok, prepared()} | {error, term()}.
+prepare({prepared, _} = P) ->
+    {ok, P};
+prepare(Bin) ->
+    wasm_error:capture(
+      fun() ->
+          case decode(Bin) of
+              {ok, #{composed := true} = Decoded} ->
+                  {ok, {prepared, #{bin => Bin, decoded => Decoded, pre => #{}}}};
+              {ok, #{core := Core, sec := Sec} = Decoded} ->
+                  Cores = maps:get(cores, Decoded, [Core]),
+                  case wasm_component_link:validate_lifts(Sec, Cores) of
+                      {error, _} = Invalid ->
+                          Invalid;
+                      ok ->
+                          {ok, {prepared, #{bin => Bin, decoded => Decoded,
+                                            pre => derive(Decoded)}}}
+                  end;
+              {error, _} = E ->
+                  E
+          end
+      end).
+
+-doc "The bytes a component was prepared from, or the bytes themselves.".
+-spec source(binary() | prepared()) -> binary().
+source({prepared, #{bin := Bin}}) -> Bin;
+source(Bin) when is_binary(Bin) -> Bin.
+
+%% What instantiation reads from the bytes alone: everything but the cores
+%% themselves, which the module cache or the loader builds.
+derive(#{core := Core, sec := Sec} = Decoded) ->
+    EntryIdx = maps:get(entry_idx, Decoded, 0),
+    Pre = #{valid => ok,
+            res => wasm_component_link:resource_info(Sec, EntryIdx),
+            entry_imports => wasm_component_link:core_imports(Core),
+            export_map => wasm_component_link:export_map(Sec),
+            str_enc => wasm_component_link:export_encodings(Sec),
+            bindings => wasm_component_link:export_bindings(Sec),
+            dtors => wasm_component_types:resource_dtors(Sec)},
+    case wasm_component_link:parse(Sec) of
+        {ok, Graph} ->
+            Pre#{graph => Graph, types => link_types(Graph, Sec)};
+        {error, _} ->
+            %% Linking reports it, if the component ever needs the linker.
+            Pre
+    end.
+
+%% Only the async built-ins read the type space (an element or result type by
+%% index), and walking it is not free: a component with none skips it.
+link_types(Graph, Sec) ->
+    case lists:keymember(canon_async, 1, Graph) of
+        true -> wasm_component_types:type_space(Sec);
+        false -> none
+    end.
+
+%% A value `prepare/1` derived, or the same computed now.
+pre(Key, #{pre := Pre}, Fun) ->
+    case Pre of
+        #{Key := V} -> V;
+        _ -> Fun()
+    end;
+pre(_Key, _Decoded, Fun) ->
+    Fun().
+
 -doc "Decode and instantiate a component, wiring any resource intrinsics.".
 -spec instantiate(binary()) -> {ok, instance()} | {error, term()}.
 instantiate(Bin) ->
@@ -234,7 +321,7 @@ is loaded through its module cache, so the same bytes compile once per node and
 are shared; when it does not, they are compiled inline, as `wasm:compile/1`
 does.
 """.
--spec instantiate(binary(), #{{binary(), binary()} => function()}) ->
+-spec instantiate(binary() | prepared(), #{{binary(), binary()} => function()}) ->
           {ok, instance()} | {error, term()}.
 instantiate(Bin, Imports) ->
     instantiate(Bin, Imports, #{}).
@@ -248,7 +335,7 @@ the worker uses per request.
 (rate-limited, and it needs the `wasm` application), or `compile` inline. Left
 out, it is `load` while the cache runs and `compile` when it does not.
 """.
--spec instantiate(binary(), #{{binary(), binary()} => function()}, map()) ->
+-spec instantiate(binary() | prepared(), #{{binary(), binary()} => function()}, map()) ->
           {ok, instance()} | {error, term()}.
 instantiate(Bin, Imports, Opts0) ->
     %% `loader => compile` builds an inline module with `wasm:compile` instead of
@@ -269,11 +356,16 @@ instantiate(Bin, Imports, Opts0) ->
     %% core decoder uses, while letting an in-flight guest exception pass through.
     wasm_error:capture(
       fun() ->
-          case decode(Bin) of
-              {ok, Decoded} ->
-                  instantiate_decoded(Decoded, Imports, Opts, Limits);
-              {error, _} = E ->
-                  E
+          case Bin of
+              {prepared, #{decoded := Decoded, pre := Pre}} ->
+                  instantiate_decoded(Decoded#{pre => Pre}, Imports, Opts, Limits);
+              _ ->
+                  case decode(Bin) of
+                      {ok, Decoded} ->
+                          instantiate_decoded(Decoded, Imports, Opts, Limits);
+                      {error, _} = E ->
+                          E
+                  end
           end
       end).
 
@@ -290,7 +382,8 @@ instantiate_decoded(#{core := Core, sec := Sec} = Decoded, Imports, Opts, Limits
     %% Reject a component whose `canon lift` declares a type its core function cannot
     %% have (the Canonical ABI derives the core signature from the declared component
     %% type) before any core is built or its start function runs.
-    case wasm_component_link:validate_lifts(Sec, maps:get(cores, Decoded, [Core])) of
+    case pre(valid, Decoded,
+             fun() -> wasm_component_link:validate_lifts(Sec, maps:get(cores, Decoded, [Core])) end) of
         {error, _} = Invalid -> Invalid;
         ok -> instantiate_valid(Decoded, Imports, Opts, Limits)
     end.
@@ -302,14 +395,18 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% What the resource built-ins and the host boundary check handles by: each
     %% export's real signature, the types this component defines, and the type
     %% of each built-in the entry core imports.
-    Res = wasm_component_link:resource_info(Sec, EntryIdx),
-    EntryImports = wasm_component_link:core_imports(Core),
-    Host = resolve_imports(EntryImports, Imports,
-                           resource_imports(EntryImports, Res)),
+    Res = pre(res, Decoded, fun() -> wasm_component_link:resource_info(Sec, EntryIdx) end),
+    EntryImports = pre(entry_imports, Decoded,
+                       fun() -> wasm_component_link:core_imports(Core) end),
+    %% An async host import is bound here as the linker binds it, so a
+    %% component that never reaches the linker can call one too.
+    Host = maps:map(fun(_Key, P) -> provider(P) end,
+                    resolve_imports(EntryImports, Imports,
+                                    resource_imports(EntryImports, Res))),
     %% The export map lets `call/4` reach a core function whose name differs from the
     %% component export name; where they coincide it is the identity and the same-name
     %% fallback in `call/4` covers exports it does not resolve.
-    ExportMap = wasm_component_link:export_map(Sec),
+    ExportMap = pre(export_map, Decoded, fun() -> wasm_component_link:export_map(Sec) end),
     %% Imports the host set does not cover are wired from other cores of this
     %% component (the linker). A multi-core component whose entry is self-sufficient
     %% still takes the linker when an exported lift names a core other than the
@@ -337,8 +434,8 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% Each export's string encoding (only the non-UTF-8 ones are recorded) and its
     %% declared realloc/post-return, so `call/4` marshals strings and allocates/cleans up
     %% the way the component's canon lift asks, rather than by name.
-    StrEnc = wasm_component_link:export_encodings(Sec),
-    Bindings = wasm_component_link:export_bindings(Sec),
+    StrEnc = pre(str_enc, Decoded, fun() -> wasm_component_link:export_encodings(Sec) end),
+    Bindings = pre(bindings, Decoded, fun() -> wasm_component_link:export_bindings(Sec) end),
     with_export_map(Result, ExportMap, StrEnc, Bindings, ResId, Res).
 
 with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings, ResId, Res) ->
@@ -364,24 +461,29 @@ resolve_export(#{core := Inst} = I, Export) ->
 %% export). Interpret the whole core-instance graph: `wasm_component_link:link/4`
 %% builds every core, wiring core-to-core imports and binding lowered WASI imports
 %% to the host set, and returns the entry instance plus every built core.
-link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts) ->
+link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports} = Decoded, Imports, Opts) ->
     Resolve = fun(Imps) ->
                   resolve_imports(Imps, Imports, resource_imports(Imps, #{}))
               end,
-    LinkOpts = Opts#{drop_fun => drop_fun(Opts),
-                     resource_dtors => wasm_component_types:resource_dtors(Sec),
-                     types => wasm_component_types:type_space(Sec)},
-    case wasm_component_link:parse(Sec) of
-        {ok, Graph} ->
+    LinkOpts0 = Opts#{drop_fun => drop_fun(Opts),
+                      resource_dtors => pre(dtors, Decoded,
+                                            fun() -> wasm_component_types:resource_dtors(Sec) end)},
+    case pre(graph, Decoded, fun() -> wasm_component_link:parse(Sec) end) of
+        {error, _} = E ->
+            E;
+        Parsed ->
+            Graph = case Parsed of {ok, G} -> G; G -> G end,
+            LinkOpts = case pre(types, Decoded, fun() -> link_types(Graph, Sec) end) of
+                           none -> LinkOpts0;
+                           Types -> LinkOpts0#{types => Types}
+                       end,
             case wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts) of
                 {ok, #{core := Inst, cores := Cores, export_targets := Targets}} ->
                     {ok, #{core => Inst, exports => Exports, cores => Cores,
                            export_targets => Targets}};
                 {error, _} = E ->
                     E
-            end;
-        {error, _} = E ->
-            E
+            end
     end.
 
 %% A composed component (nested component definitions instantiated and their exports
@@ -625,6 +727,9 @@ destroy(Inst) ->
 -doc "As `destroy/1`, closing each live host resource with `Closer` first.".
 -spec destroy(instance(), fun(({atom(), term()}) -> ok)) -> ok.
 destroy(Inst, Closer) ->
+    %% Tasks still running from `start_async/5' and the ends the host holds go
+    %% first: their producers stop, so nothing writes into what is freed next.
+    ok = wasm_async:close_frame(),
     lists:foreach(fun wasm:destroy/1, cores_of(Inst)),
     lists:foreach(fun wasm_resources:destroy_instance/1, res_ids(Inst)),
     sweep_host(Closer),
@@ -916,16 +1021,53 @@ call_async(#{} = I, Export, {Params, Result}, Args, Opts) ->
     %% Same boundary as `call/4`: the async lift/lower is captured so a malformed
     %% value returns `{error, _}` rather than raising (see `call/4`).
     wasm_error:capture(
-      fun() -> do_call_async(I, Export, {Params, Result}, Args, Opts) end).
+      fun() -> do_call_async(I, Export, {Params, Result}, Args, Opts, finish) end).
 
-do_call_async(I, Export, {Params, Result}, Args, Opts) ->
+-doc """
+Call an async-lifted export and return as soon as it resolves.
+
+`call_async/5` runs the task until it finishes. A task can hand back its result
+(`task.return`) and keep running: a `wasi:http` handler returns its response,
+then writes the body. `start_async/5` returns `{ok, Result}` at that point and
+leaves the task running in the instance. Run it with `pump/2`, or with the
+`wasm_async` host-end calls, which run it until they can answer.
+
+A `stream<T>` or `future<T>` result is the host's end of it: read it with
+`wasm_async:host_read/3` or `wasm_async:host_future_await/2` while the task
+writes. Arguments and `Opts` are as for `call_async/5`.
+""".
+-spec start_async(instance(), binary(),
+                  {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
+          {ok, term()} | {error, term()}.
+start_async(I, Export, Sig, Args) ->
+    start_async(I, Export, Sig, Args, #{}).
+
+-spec start_async(instance(), binary(),
+                  {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()], map()) ->
+          {ok, term()} | {error, term()}.
+start_async(#{} = I, Export, Sig, Args, Opts) ->
+    wasm_error:capture(
+      fun() -> do_call_async(I, Export, Sig, Args, Opts#{mode => start}, start) end).
+
+-doc """
+Run the tasks still pending in the instance (from `start_async/5`) until all
+have finished, none can progress, or `Timeout` milliseconds pass: `{finished,
+0}`, `{idle, Pending}` (each waits for the host, such as for it to read a
+stream), `{timeout, Pending}`, or `{error, Reason}` when a task traps.
+""".
+-spec pump(instance(), timeout()) ->
+          {finished | idle | timeout, non_neg_integer()} | {error, term()}.
+pump(#{}, Timeout) ->
+    wasm_error:capture(fun() -> wasm_async:pump(Timeout) end).
+
+do_call_async(I, Export, {Params, Result}, Args, Opts, Mode) ->
     case async_lift_name(I, Export) of
         {ok, LiftName} ->
             Inst = core_with_export(I, LiftName),
             Callback = async_callback(I, LiftName),
             case wasm_async:backpressure(Inst) of
                 0 -> run_async(Inst, LiftName, Callback, {Params, Result}, Args,
-                               Opts);
+                               Opts, Mode);
                 %% Only a task of this instance can lower it, and a task runs in
                 %% its caller's process: waiting here would wait for ever.
                 _ -> {error, async_backpressure}
@@ -934,23 +1076,39 @@ do_call_async(I, Export, {Params, Result}, Args, Opts) ->
             {error, {no_async_export, Export}}
     end.
 
-run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts) ->
-    ok = wasm_async:begin_task(Inst, Opts),
-    try
-        {Descs, Lowered} = prepare_async_params(Params, Args),
-        CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
-        case {wasm:call(Inst, LiftName, CoreArgs), Callback} of
-            %% A stackful lift: the core function ran the whole task, waiting
-            %% inside `waitable-set.wait' or a synchronous copy, and handed its
-            %% result to `task.return'.
-            {{ok, []}, none} -> finish_async(Result, returned());
-            {{ok, [Status]}, _} -> finish_async(Result,
-                                                drive(Callback, Status, ?ASYNC_BUDGET));
-            {{ok, _}, _}        -> {error, {async_bad_status, LiftName}};
-            {{error, _} = E, _} -> E
-        end
-    after
-        wasm_async:end_task()
+run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts, Mode) ->
+    %% The instance's `resource_limit' bounds the subtasks its tasks start, as
+    %% it bounds host resources.
+    Limit = case get(?HOST_LIMIT) of undefined -> infinity; L -> L end,
+    ok = wasm_async:begin_task(Inst, Opts#{resource_limit => Limit}),
+    Outcome =
+        try
+            {Descs, Lowered} = prepare_async_params(Params, Args),
+            CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
+            case {wasm_async:guest_call(
+                    fun() -> wasm:call(Inst, LiftName, CoreArgs) end), Callback} of
+                %% A stackful lift: the core function ran the whole task,
+                %% waiting inside `waitable-set.wait' or a synchronous copy,
+                %% and handed its result to `task.return'.
+                {{ok, []}, none} -> {done, deliver(Mode, Result, returned())};
+                {{ok, [Status]}, _} ->
+                    drive(Mode, Result, Callback, Status, ?ASYNC_BUDGET);
+                {{ok, _}, _}          -> {error, {async_bad_status, LiftName}};
+                {{error, _} = Err, _} -> Err
+            end
+        catch
+            Class:Reason:Stack ->
+                wasm_async:end_task(),
+                erlang:raise(Class, Reason, Stack)
+        end,
+    case Outcome of
+        %% The task runs on in the frame, which stays open.
+        {pending, Value} -> Value;
+        %% A started call's result may hold what the host reads next (a
+        %% response's body); the frame stays until `pump/2' or `destroy/1'.
+        {done, Value} when Mode =:= start -> ok = wasm_async:leave_call(), Value;
+        {done, Value}    -> wasm_async:end_task(), Value;
+        {error, _} = Failed -> wasm_async:end_task(), Failed
     end.
 
 returned() ->
@@ -958,6 +1116,15 @@ returned() ->
         {ok, Value} -> {ok, Value};
         undefined   -> {ok, undefined}
     end.
+
+%% A finished call reads a returned future or stream to its end before the
+%% frame goes. A started one hands the host its end instead.
+deliver(finish, Result, Res) -> finish_async(Result, Res);
+deliver(start, Result, {ok, H} = Res) when element(1, Result) =:= stream;
+                                           element(1, Result) =:= future ->
+    ok = wasm_async:host_reader(H),
+    Res;
+deliver(start, _Result, Res) -> Res.
 
 %% When the result is itself a `future<T>`/`stream<T>` the guest produced and returned,
 %% `task.return` handed back its readable handle; read the value the guest wrote before
@@ -975,30 +1142,43 @@ produced(Handle) ->
 %% Drive the callback loop from a callee status. The status is an unsigned i32 packing
 %% `code | (waitable_set << 4)`; mask before extracting so a set index with the top bit
 %% set does not read as negative. The budget bounds total turns (a runaway guard, not a
-%% progress check - a stream legitimately takes many turns).
-drive(_Callback, _Status, 0) ->
+%% progress check - a stream legitimately takes many turns). Started, a task that has
+%% resolved and asks to wait or yield is left running in the frame.
+drive(_Mode, _Result, _Callback, _Status, 0) ->
     {error, async_budget_exhausted};
-drive(Callback, Status, Budget) ->
+drive(Mode, Result, Callback, Status, Budget) ->
     Bits = Status band 16#FFFFFFFF,
     case {Bits band 16#F, Bits bsr 4} of
         {0, _} ->
-            returned();
-        {1, _} ->
-            resume(Callback, [0, 0, 0], Budget);
-        {2, Set} ->
-            case wasm_async:wait_on_set(Set) of
-                {event, EC, W, P} -> resume(Callback, [EC, W, P], Budget);
-                {error, _} = Err  -> Err
+            {done, deliver(Mode, Result, returned())};
+        {Code, Set} when Mode =:= start, Code =:= 1 orelse Code =:= 2 ->
+            case wasm_async:resolved() of
+                {ok, _} ->
+                    Res = deliver(start, Result, returned()),
+                    ok = wasm_async:suspend_task(Callback, Code, Set, Budget),
+                    {pending, Res};
+                undefined ->
+                    turn(Mode, Result, Callback, Code, Set, Budget)
             end;
+        {Code, Set} when Code =:= 1; Code =:= 2 ->
+            turn(Mode, Result, Callback, Code, Set, Budget);
         {Other, _} ->
             {error, {async_bad_status, Other}}
     end.
 
+turn(Mode, Result, Callback, 1, _Set, Budget) ->
+    resume(Mode, Result, Callback, [0, 0, 0], Budget);
+turn(Mode, Result, Callback, 2, Set, Budget) ->
+    case wasm_async:wait_on_set(Set) of
+        {event, EC, W, P} -> resume(Mode, Result, Callback, [EC, W, P], Budget);
+        {error, _} = Err  -> Err
+    end.
+
 %% Re-enter the guest through its callback with an event triple. A stackful lift
 %% has no callback and returns no status, so it never reaches here.
-resume({CbInst, CbName}, Args, Budget) ->
-    case wasm:call(CbInst, CbName, Args) of
-        {ok, [Status]} -> drive({CbInst, CbName}, Status, Budget - 1);
+resume(Mode, Result, {CbInst, CbName}, Args, Budget) ->
+    case wasm_async:guest_call(fun() -> wasm:call(CbInst, CbName, Args) end) of
+        {ok, [Status]} -> drive(Mode, Result, {CbInst, CbName}, Status, Budget - 1);
         {ok, _}        -> {error, async_bad_result};
         {error, _} = E -> E
     end.
@@ -1176,10 +1356,13 @@ provides(#{core := _} = I, Export) ->
 
 %% Key each core import to a provider. A real component imports versioned ids
 %% (`wasi:io/streams@0.2.0`) while the host is keyed bare (`wasi:io/streams`), so
-%% resolution strips the version. An explicit provider wins over an auto resource
-%% intrinsic, so a host-owned resource's `[resource-drop]` reaches the host table
-%% rather than the guest's identity table. A core import with no provider is left
-%% out, and instantiation refuses it, as before.
+%% resolution strips the version. WASI 0.3 is the exception: its interfaces have
+%% the names of 0.2's and other functions, and one component imports both (the
+%% wasip1 adapter brings 0.2), so a `0.3.x' import is keyed `Interface@0.3' and
+%% never falls back to the bare 0.2 key. An explicit provider wins over an auto
+%% resource intrinsic, so a host-owned resource's `[resource-drop]` reaches the
+%% host table rather than the guest's identity table. A core import with no
+%% provider is left out, and instantiation refuses it, as before.
 resolve_imports(CoreImports, Explicit, Auto) ->
     maps:from_list(
       lists:filtermap(
@@ -1191,14 +1374,26 @@ resolve_imports(CoreImports, Explicit, Auto) ->
         end, CoreImports)).
 
 find_provider(Mod, Field, Explicit, Auto) ->
-    case maps:find({strip_version(Mod), Field}, Explicit) of
+    case maps:find({host_key(Mod), Field}, Explicit) of
         {ok, Provider} -> Provider;
         error          -> maps:get({Mod, Field}, Auto, undefined)
     end.
 
-%% `namespace:package/interface@version` -> `namespace:package/interface`.
-strip_version(Id) ->
+%% The core function an async host import binds to (`wasm_component_link`
+%% does the same for the cores it builds).
+provider({async_import, Sig, Fun}) -> wasm_async:async_lower(Sig, Fun);
+provider({async_import, Sig, Fun, {producer, PFun}}) ->
+    wasm_async:async_lower(Sig, Fun, PFun);
+provider(Provider) -> Provider.
+
+%% The host-map interface key an imported interface id resolves to:
+%% `namespace:package/interface` with its version removed, except a 0.3
+%% version, which keeps `@0.3`.
+host_key(Id) ->
     case binary:split(Id, <<"@">>) of
+        [Base, <<"0.3", Rest/binary>>] when Rest =:= <<>>;
+                                            binary_part(Rest, 0, 1) =:= <<".">> ->
+            <<Base/binary, "@0.3">>;
         [Base, _Version] -> Base;
         _                -> Id
     end.

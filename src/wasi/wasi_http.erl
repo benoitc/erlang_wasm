@@ -16,6 +16,9 @@ slice uses, so a component reaches only a granted authority.
 """.
 
 -export([http/1, append_body/2, incoming_request/1, read_outparam/1]).
+%% For `wasi_p3_http', which serves the same requests through the 0.3
+%% interface.
+-export([perform/4, field_error/2, request_error/1, error_code/0]).
 
 %%% ---------------------------------------------------------------- types ---
 
@@ -363,6 +366,10 @@ req_timeouts({some, O}) ->
 %% A stored nanosecond timeout as the milliseconds the wire libraries take.
 ms(undefined) -> undefined;
 ms(Ns)        -> max(1, Ns div 1_000_000).
+
+-doc "The `error-code` variant, the same at 0.2 and 0.3.".
+-spec error_code() -> wasm_canon:desc().
+error_code() -> ?ERROR_CODE.
 
 %%% -------------------------------------------------------------- fields ---
 

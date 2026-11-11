@@ -77,6 +77,7 @@ You are running WebAssembly and want to know how.
 | [WASI](wasi.md) | running a `wasm32-wasip1` program, and its capabilities |
 | [Components](components.md) | running and composing Component Model components, and their typed signatures |
 | [WASI 0.2](wasi-0-2.md) | the interfaces a component imports, and how to grant each |
+| [WASI 0.3](wasi-0-3.md) | running a component built for WASI 0.3, and what is hosted |
 | [HTTP](http.md) | outbound requests from a component, and serving one |
 | [Streams](streams.md) | talking to a guest while it runs |
 | [Using workers](worker.md) | running untrusted code one request at a time, with a deadline |

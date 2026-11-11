@@ -7,6 +7,11 @@
 -ifndef(WASI_HRL).
 -define(WASI_HRL, true).
 
+%% A 0.3 TCP connection's state beside its socket (`wasi_p3_sockets'): how
+%% many of its streams are open, whether its socket was dropped (it is closed
+%% once both say so), and whether `send' and `receive' were called.
+-define(P3_TCP(H), {wasi_p3_sockets, conn, H}).
+
 %%% ----------------------------------------------------------------- errno ---
 
 -define(ESUCCESS,      0).

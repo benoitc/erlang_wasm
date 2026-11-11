@@ -6,6 +6,34 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **WASI 0.3 commands run.** `wasi_preview3:run_command/3` runs a component
+  built for WASI 0.3 that uses `wasi:cli`, `wasi:clocks` and `wasi:random`:
+  stdio through streams, async sleeps, the environment and exit codes. It runs
+  0.2 commands too, and serves `wasi:filesystem`, `wasi:sockets` and `wasi:http`
+  at 0.3 over the same mounts, network grant and HTTP transport.
+  `wasi_preview3:run_serve/3` and the HTTP listener serve a 0.3 `wasi:http`
+  handler as well as a 0.2 one. Middleware, a handler that imports another, is
+  not supported yet.
+  `resource_limit` now also bounds how many async calls a guest has waiting
+  at once. A TCP connection stays open while its send or receive stream does,
+  even after the guest drops the socket itself, as Rust guests do.
+- **Prepare a component once for many instances.** `wasm_component:prepare/1`
+  decodes, checks and parses a component once; pass what it returns wherever
+  you pass the bytes. The HTTP listener does this when it starts, so a
+  request no longer decodes the component again.
+- **An async task can keep running after it returns its result.** Call it with
+  `wasm_component:start_async/4`, which returns as soon as the task has a
+  result. Read a returned stream with `wasm_async:host_read/3` while the guest
+  writes it, and run what is left with `wasm_component:pump/2`. Several tasks
+  can run in one instance. A host import can now give the guest a stream or a
+  future of its own. `call_async/4` is unchanged.
+- **A WASI 0.3 import no longer binds a WASI 0.2 function.** Versions were
+  removed when matching imports to host functions, so `wasi:cli/stdout@0.3.0`
+  reached the 0.2 `stdout`, whose functions differ. A 0.3 import now looks for a
+  host key ending in `@0.3` and nothing else, so 0.2 and 0.3 hosts can serve one
+  component side by side. 0.2 keys are unchanged.
+- **Async host imports work on every component.** One with a single core module
+  used to refuse an `{async_import, ...}` host function at instantiation.
 - **The HTTP listener no longer fails after about 12 requests a second.** Each
   request loaded the component's core modules again, because nothing kept
   them loaded between requests, and those loads counted against the module

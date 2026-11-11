@@ -106,10 +106,14 @@ The steps, in order:
 4. `wasm_component_link:resource_info/2` reads each export's real signature,
    the resource types the component defines, the type each resource built-in
    acts on, and each destructor's export name.
-5. Resolve the entry core's imports. `strip_version` turns
+5. Resolve the entry core's imports. `host_key` turns
    `wasi:io/streams@0.2.0` into `wasi:io/streams`, because the host map uses
-   keys without a version. A host function you pass yourself wins over a
-   resource built-in that the runtime adds automatically.
+   keys without a version. A `0.3.x` version is the exception: it becomes
+   `@0.3` (`wasi:cli/stdout@0.3.0` into `wasi:cli/stdout@0.3`), and nothing
+   else, so a 0.3 import never binds a 0.2 function. A host function you pass
+   yourself wins over a resource built-in that the runtime adds
+   automatically. An `{async_import, ...}` value is bound as the linker binds
+   it.
 6. Pick the path. If any import is still unresolved, the component goes to
    the linker. A component with several cores also goes to the linker when
    some of its exports are not on the entry core
@@ -276,9 +280,33 @@ Imports = #{{~"example:store/kv", ~"[constructor]bucket"} =>
 ## The async ABI
 
 `wasm_async` runs the async Canonical ABI on the BEAM's own scheduling. The
-process that runs the call is the task. A wait is a selective `receive`. A
-producer sends a message when its value is ready. All task state is in the
-process dictionary, and there is one task per process.
+process that owns the instance runs its tasks. A wait is a selective
+`receive`. A producer sends a message when its value is ready. All task state
+is in the process dictionary.
+
+A *frame* holds the handles, sets, producers and pending tasks of the
+instance's calls. A call that finds a frame open with work in it, pending tasks
+or ends the host holds, joins it. Otherwise it opens its own, and a call made
+from inside a host function sets the outer frame aside, as before. Ending a
+call tears the frame down only when nothing is pending and the host holds no
+end; `destroy/1` tears it down whatever is left.
+
+A task can resolve (`task.return`) before it finishes. `start_async/5` returns
+at that point and records the task's callback, status, budget and context
+slots. `pump/2` and the host-end calls give pending tasks their turns:
+
+1. Take in what producers have sent.
+2. Give a callback turn to the first task that can take an event, restoring
+   its own context slots first.
+3. Otherwise wait for a producer. With no producer left, nothing can change:
+   `pump/2` answers `idle`, and a host read or write answers
+   `{error, async_deadlock}`.
+
+The host's ends: `host_reader/1` (the default for a started call's returned
+stream) reads with the same 1024-element bound as two guest ends;
+`host_sink/2` passes each write on as it happens; `host_stream/1` and
+`host_future/1` make a pair whose writer the host keeps. The host-end calls
+that run tasks answer `{error, reentrant}` inside a guest call.
 
 `wasm_component:call_async/4`:
 
@@ -365,7 +393,7 @@ provide its `[resource-drop]`.
 | `wasm_canon_prop_SUITE` | generated values round-trip through the Canonical ABI |
 | `wasm_component_string_SUITE` | the utf16 and latin1+utf16 encodings |
 | `wasm_component_import_SUITE` | host imports by `{Interface, Field}`, `import_fun/2`, a missing import |
-| `wasm_component_version_SUITE` | a versioned import resolves to a bare host key |
+| `wasm_component_version_SUITE` | a versioned import resolves to a bare host key, a 0.3 import to its own, an async import off the linker |
 | `wasm_component_link_SUITE` | core-to-core linking, teardown, named link errors |
 | `wasm_component_compose_SUITE` | nested components, bridges, `wac` output with a string and a resource |
 | `wasm_component_resource_SUITE` | handle checks, destructors, `drop_resource/3`, destroy |
@@ -373,6 +401,7 @@ provide its `[resource-drop]`.
 | `wasm_component_async_SUITE` | futures, streams, producers, suspend and resume |
 | `wasm_component_async_import_SUITE` | async host imports, immediate and suspending |
 | `wasm_component_async_abi_SUITE` | each async built-in and trap, stackful lifts, typed payloads |
+| `wasm_component_async_tasks_SUITE` | tasks that outlive their call, two at once, the host's ends |
 | `wasm_wasi2_async_SUITE` | `call_async/4` against wasmtime's async fixture |
 | `wasm_component_malformed_SUITE` | truncation and corruption are values |
 | `wasm_component_worker_SUITE` | a component through the worker kernel |

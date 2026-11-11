@@ -177,6 +177,57 @@ is not called:
 For a runnable version, see [Use a component
 resource](examples/use-a-component-resource.md).
 
+## Async exports
+
+An `async func` export is called with `call_async/4`. It runs the task to its
+end and returns the result:
+
+```erlang
+{ok, Sum} = wasm_component:call_async(I, ~"sum-stream",
+                                      {[{stream, u8}], u32}, [<<1, 2, 3>>]).
+```
+
+Some tasks hand back their result and keep running. A `wasi:http` handler
+returns its response, then writes the body. Use `start_async/4` for these. It
+returns as soon as the task has a result, and the task keeps running in the
+instance. A `stream` or `future` in the result is your end of it: read it, and
+the task runs while you wait.
+
+```erlang
+{ok, Body} = wasm_component:start_async(I, ~"body", {[], {stream, u8}}, []),
+{ok, Chunk} = wasm_async:host_read(Body, 65536, 5000).
+```
+
+- `wasm_async:host_read/3` answers `{ok, Bytes}`, then `eof` once the guest
+  has finished writing.
+- `wasm_async:host_sink/2` takes every write as it happens instead, for a
+  destination such as stdout.
+- `wasm_component:pump/2` runs pending tasks without reading. It answers
+  `{finished, 0}`, or `{idle, N}` when the `N` tasks left wait for you.
+- `destroy/1` stops tasks still running.
+
+A host import can give the guest a stream or a future of its own:
+`wasm_async:host_stream/1` and `host_future/1` return the guest's end and
+yours.
+
+## Instantiate one component many times
+
+Each instantiation from bytes decodes the component, checks it and parses its
+sections again. When you instantiate the same component many times, as a
+server does per request, prepare it once and pass the result instead of the
+bytes:
+
+```erlang
+{ok, Bin} = file:read_file("echo.component.wasm"),
+{ok, Prepared} = wasm_component:prepare(Bin),
+{ok, Inst} = wasm_component:instantiate(Prepared),
+ok = wasm_component:destroy(Inst).
+```
+
+`prepare/1` returns the same errors `instantiate` would. `hold/1` and the WASI
+runners take a prepared component too, and the HTTP listener prepares its
+component when it starts.
+
 ## Notes
 
 - The process that instantiated a component instance owns it. Call it from

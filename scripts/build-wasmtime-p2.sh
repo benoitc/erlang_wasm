@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build wasmtime's native WASI 0.2 test programs (the p2_* command components)
+# Build wasmtime's native WASI 0.2 and 0.3 test programs (the p2_* and p3_* components)
 # for the interop track (test/wasm_wasi2_p2_SUITE). These are wasmtime's own
 # `test-programs`, authored against WASI 0.2 directly (no preview1 adapter), each
 # a self-asserting command component: exit 0 on success, trap or non-zero on
@@ -67,3 +67,25 @@ for f in "$out"/p2_*.component.wasm; do
 done
 echo "built $n command components into $dest ($(du -sh "$dest" | cut -f1))"
 echo "built $s serve reactors into $serve_dest ($(du -sh "$serve_dest" | cut -f1))"
+
+# The same build makes wasmtime's WASI 0.3 programs (p3_*), driven by
+# wasm_wasi3_p3_SUITE. Commands, the outbound HTTP ones included, run through
+# run_command; the handlers (p3_cli_serve_* and the p3_http_* services) are served.
+dest3="$here/test/fixtures/wasmtime-p3"
+serve3="$dest3-serve"
+mkdir -p "$dest3" "$serve3"
+n3=0
+s3=0
+for f in "$out"/p3_*.component.wasm; do
+  base="$(basename "$f")"
+  case "$base" in
+    p3_cli_serve_*|p3_http_echo*|p3_http_middleware*|p3_http_proxy*|p3_http_forbidden_headers*)
+      wasm-tools strip "$f" -o "$serve3/$base"
+      s3=$((s3 + 1))
+      continue ;;
+    p3_api_*|p3_tls_*) continue ;;  # proxy/tls: not yet driven
+  esac
+  wasm-tools strip "$f" -o "$dest3/$base"
+  n3=$((n3 + 1))
+done
+echo "built $n3 WASI 0.3 commands into $dest3, $s3 services into $serve3"

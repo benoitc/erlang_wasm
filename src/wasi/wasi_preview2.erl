@@ -36,6 +36,8 @@ in its options. `docs/components.md` shows both from the caller's side.
 -export([imports/0, random/0, clocks/0, environment/0, environment/3, io/0, io/1,
          filesystem/1, sockets/1, command/1, run_command/2, run_command/3,
          run_serve/3]).
+%% For `wasi_preview3', which builds the 0.3 host on this one.
+-export([run_command_with/4, cli_exit/0]).
 %% The poll_oneoff readiness logic over host pollable handles, and the monotonic
 %% clock its deadlines use, exported so a test can drive poll directly (as
 %% host_new/host_get are).
@@ -435,6 +437,17 @@ give the command a directory to read (a mount), or `network => Grant` to grant t
           {ok, #{stdout := binary(), stderr := binary(),
                  exit_code := integer()}} | {error, term()}.
 run_command(Bin, Stdin, Extra) ->
+    run_command_with(Bin, Stdin, Extra, fun command/1).
+
+-doc """
+As `run_command/3`, with the imports built by `Host(Opts)` instead of
+`command/1`: `wasi_preview3:run_command/3` passes the 0.2 and 0.3 host
+together.
+""".
+-spec run_command_with(binary(), binary(), map(), fun((map()) -> map())) ->
+          {ok, #{stdout := binary(), stderr := binary(),
+                 exit_code := integer()}} | {error, term()}.
+run_command_with(Bin, Stdin, Extra, Host) ->
     _ = erase(?EXIT_STATUS),
     _ = erase(?INSECURE_SEED),
     OutRef = make_ref(),
@@ -464,7 +477,7 @@ run_command(Bin, Stdin, Extra) ->
                  resource_closer => fun close_resource/1,
                  resource_predrop => fun stream_predrop/1,
                  resource_limit => maps:get(resource_limit, Extra, infinity)},
-    case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
+    case wasm_component:instantiate(Bin, Host(Opts), InstOpts) of
         {ok, Instance} ->
             %% Destroy on every path: a run mints stream, pollable and directory
             %% handles that own fds, and a command is one-shot.
@@ -480,8 +493,12 @@ run_command(Bin, Stdin, Extra) ->
 run_collect(Instance, OutRef, ErrRef) ->
     case run_export(wasm_component:exports(Instance)) of
         {ok, Export} ->
-            RunResult = wasm_component:call(
-                          Instance, Export, {[], {result, none, none}}, []),
+            %% A 0.3 `run' is an async export; its task runs to its end.
+            Call = case binary:match(Export, ~"@0.3") of
+                       nomatch -> fun wasm_component:call/4;
+                       _ -> fun wasm_component:call_async/4
+                   end,
+            RunResult = Call(Instance, Export, {[], {result, none, none}}, []),
             Stdout = collect_output(OutRef),
             Stderr = collect_output(ErrRef),
             case exit_outcome(RunResult) of
@@ -579,6 +596,8 @@ collect_output(Ref, Acc) ->
 %% exit(status: result<_,_>) records the status and traps: the code cannot ride a
 %% component trap value (call_host wraps it and reason_kind collapses it), so
 %% run_command reads it from the process dictionary. ok disc 0 -> 0, err disc 1 -> 1.
+-doc "`wasi:cli/exit`: `exit` and `exit-with-code`, which record the code and trap.".
+-spec cli_exit() -> #{{binary(), binary()} => fun()}.
 cli_exit() ->
     #{{<<"wasi:cli/exit">>, <<"exit">>} =>
           fun(_Ctx, [Disc]) ->

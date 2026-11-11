@@ -8698,3 +8698,28 @@ requests, and the default of 50 loads a second makes every tree answer 500
 after about 12 requests in a second. That cap is on main, unchanged here.
 
 Script and log: `test/audit/raw/http-limits/`.
+
+## WASI 0.3: what the 0.2 paths and async calls cost (2026-11-11)
+
+Measured against main (`bd8cf7d`), fresh VMs, interleaved, both orders, six
+VMs per side, at a one-minute load below 8, with the gates fixed in the plan.
+
+| path | main | candidate | ratio | gate | result |
+| --- | --- | --- | --- | --- | --- |
+| `call_async` on asyncval's `read-future`, us | 468.5 | 469.9 | 1.003x | 1.10x | pass |
+| `call_async` on asyncval's `sum-stream` (100 bytes), us | 4436.7 | 4457.5 | 1.005x | 1.10x | pass |
+| 0.2 listener, hello world, requests a second | 4690.9 | 4802.9 | 0.98x in time | 1.03x | pass |
+| 0.2 `run_command`, wasmtime's `p2_cli_hello_stdout`, ms | 1.729 | 1.661 | 0.96x | 1.03x | pass |
+
+Medians. The two faster rows are within the run's noise, not a gain.
+
+The first run of the 0.2 paths failed both gates. The listener served
+through `wasi_preview3`, which built the 0.2 and 0.3 hosts for every request:
+1.22x in time (4029.9 requests a second against 4922.8). A listener now builds
+its imports once, and a component that names no 0.3 interface gets the 0.2
+host alone. `run_command` was 1.07x (1.629 ms against 1.517): resolving every
+type an imported instance exports made the type space dearer, and the linker
+walked it for every component; it now walks it only for a component with async
+built-ins, the only reader.
+
+Scripts and logs: `test/audit/raw/wasi3/`.

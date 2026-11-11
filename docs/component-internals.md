@@ -98,6 +98,11 @@ The steps, in order:
    `resource_limit` are read here. All other options are limits for the core
    instances.
 2. Decode inside `wasm_error:capture/1`, so a malformed component is a value.
+   A component from `prepare/1` was decoded already: it carries what steps 3
+   and 4 and the linker would compute from the bytes (the checked lifts, the
+   resource info, the entry core's imports, the export map, encodings and
+   bindings, the destructors, the parsed graph and, for an async component,
+   the type space), and they are read instead of computed.
 3. `wasm_component_link:validate_lifts/2`. Each `canon lift` declares a
    component type. The Canonical ABI computes a core signature from that type,
    and the core function must have exactly that signature. If it does not,
@@ -305,8 +310,11 @@ slots. `pump/2` and the host-end calls give pending tasks their turns:
 The host's ends: `host_reader/1` (the default for a started call's returned
 stream) reads with the same 1024-element bound as two guest ends;
 `host_sink/2` passes each write on as it happens; `host_stream/1` and
-`host_future/1` make a pair whose writer the host keeps. The host-end calls
-that run tasks answer `{error, reentrant}` inside a guest call.
+`host_future/1` make a pair whose writer the host keeps. `on_end/2` gives a
+readable end the host made a hook, run once when the guest drops it or the
+task's frame ends with it open; `wasi_p3_sockets` closes a connection that
+way once its last stream is gone. The host-end calls that run tasks answer
+`{error, reentrant}` inside a guest call.
 
 `wasm_component:call_async/4`:
 
@@ -319,7 +327,9 @@ that run tasks answer `{error, reentrant}` inside a guest call.
    `task.return` value. YIELD calls the callback again with no event. WAIT
    calls `wasm_async:wait_on_set/1` and calls the callback again with the
    event.
-4. `wasm_async:end_task/0` stops producers and removes old messages.
+4. `wasm_async:end_task/0` ends the frame when no task has work left: every
+   sink still open is told the stream ended, every `on_end` hook runs, then
+   the producers stop and old messages are removed.
 
 The loop stops after a maximum number of turns. A lift with no callback (the
 stackful form) is one call: the core function runs the whole task, waits
@@ -401,7 +411,7 @@ provide its `[resource-drop]`.
 | `wasm_component_async_SUITE` | futures, streams, producers, suspend and resume |
 | `wasm_component_async_import_SUITE` | async host imports, immediate and suspending |
 | `wasm_component_async_abi_SUITE` | each async built-in and trap, stackful lifts, typed payloads |
-| `wasm_component_async_tasks_SUITE` | tasks that outlive their call, two at once, the host's ends |
+| `wasm_component_async_tasks_SUITE` | tasks that outlive their call, two at once, the host's ends, `on_end` on drop and at teardown |
 | `wasm_wasi2_async_SUITE` | `call_async/4` against wasmtime's async fixture |
 | `wasm_component_malformed_SUITE` | truncation and corruption are values |
 | `wasm_component_worker_SUITE` | a component through the worker kernel |

@@ -55,7 +55,9 @@ reach only what you grant.
 
 The Component Model works too: components with resources, composition and the
 async Canonical ABI, on a WASI 0.2 host with filesystem, sockets and
-`wasi:http`. See [docs/components.md](docs/components.md).
+`wasi:http`, and a WASI 0.3 host beside it for components built against the
+ratified 0.3 interfaces. See [docs/components.md](docs/components.md) and
+[docs/wasi-0-3.md](docs/wasi-0-3.md).
 
 The runtime reads both formats: the binary format, and the text format
 (`.wat` modules and `.wast` scripts).

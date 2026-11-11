@@ -49,6 +49,9 @@ in its options. `docs/components.md` shows both from the caller's side.
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle), minted when a file-backed write
 %% fails; a discarding/buffer sink never fails, so it returns ok.
+%% The limits a run's caller may set on the guest it runs.
+-define(EXEC_LIMITS, [fuel, max_depth, max_memory_pages, max_heap_words,
+                      max_host_calls]).
 -define(STREAM_ERROR,
         {variant, [{<<"last-operation-failed">>, handle}, {<<"closed">>, none}]}).
 -define(WRITE_RESULT, {result, none, ?STREAM_ERROR}).
@@ -353,7 +356,8 @@ Options: `stdin` (a binary, default empty), `stdout` and `stderr`
                 initial_cwd => binary(),
                 network => term(),
                 http_transport => module(),
-                http_tls => [ssl:tls_client_option()]}) ->
+                http_tls => [ssl:tls_client_option()],
+                http_max_body_bytes => pos_integer()}) ->
           #{{binary(), binary()} => fun()}.
 command(Opts) ->
     Stdin = maps:get(stdin, Opts, <<>>),
@@ -384,9 +388,14 @@ command(Opts) ->
     %% wasi:http is always present (like the filesystem) so a reactor that imports
     %% its types links with no mount; outbound requests are gated by the grant, so
     %% without a network grant the types work but a request reaches nowhere.
-    Http = [wasi_http:http(#{grant => maps:get(network, Opts, none),
-                             transport => maps:get(http_transport, Opts, wasi_http_h1),
-                             tls => maps:get(http_tls, Opts, [])})],
+    HttpOpts = #{grant => maps:get(network, Opts, none),
+                 transport => maps:get(http_transport, Opts, wasi_http_h1),
+                 tls => maps:get(http_tls, Opts, [])},
+    Http = [wasi_http:http(
+              case maps:find(http_max_body_bytes, Opts) of
+                  {ok, Max} -> HttpOpts#{max_body_bytes => Max};
+                  error -> HttpOpts
+              end)],
     lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net ++ Http).
 
 %% The mounts a command exposes: an explicit named list, or the single preopen.
@@ -444,12 +453,14 @@ run_command(Bin, Stdin, Extra) ->
              end,
     %% Stdin redirected from a directory reads as an operation failure, not bytes.
     Source = case maps:get(stdin_dir, Extra, false) of true -> eisdir; false -> Stdin end,
-    Opts = (maps:without([compile, stdout_limit, stdin_dir], Extra))#{
+    Opts = (maps:without([compile, stdout_limit, stdin_dir, resource_limit
+                          | ?EXEC_LIMITS], Extra))#{
              stdin => Source,
              stdout => Stdout,
              stderr => fun(B) -> Self ! {ErrRef, B}, ok end},
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
-    InstOpts = #{loader => Loader,
+    InstOpts = (exec_limits(Extra))#{
+                 loader => Loader,
                  resource_closer => fun close_resource/1,
                  resource_predrop => fun stream_predrop/1,
                  resource_limit => maps:get(resource_limit, Extra, infinity)},
@@ -508,15 +519,23 @@ set on the outparam as `{ok, Status, Headers, Body}`. `Extra` is the `command/1`
 options (a `network` grant lets the reactor make its own outbound requests).
 """.
 -spec run_serve(binary(), map(),
-                #{network => term(), compile => boolean()}) ->
+                #{network => term(), compile => boolean(),
+                  resource_limit => non_neg_integer() | infinity,
+                  fuel => non_neg_integer() | infinity,
+                  max_depth => pos_integer(),
+                  max_memory_pages => non_neg_integer(),
+                  max_heap_words => pos_integer(),
+                  max_host_calls => non_neg_integer() | infinity}) ->
           {ok, 0..65535, [{binary(), binary()}], binary()} | {error, term()}.
 run_serve(Bin, Request, Extra) ->
     _ = erase(?EXIT_STATUS),
     _ = erase(?INSECURE_SEED),
     Loader = case maps:get(compile, Extra, false) of true -> compile; false -> load end,
-    InstOpts = #{loader => Loader, resource_closer => fun close_resource/1,
-                 resource_predrop => fun stream_predrop/1},
-    Opts = maps:without([compile], Extra),
+    InstOpts = (exec_limits(Extra))#{
+                 loader => Loader, resource_closer => fun close_resource/1,
+                 resource_predrop => fun stream_predrop/1,
+                 resource_limit => maps:get(resource_limit, Extra, infinity)},
+    Opts = maps:without([compile, resource_limit | ?EXEC_LIMITS], Extra),
     case wasm_component:instantiate(Bin, command(Opts), InstOpts) of
         {ok, Instance} ->
             try serve(Instance, Request)
@@ -524,6 +543,11 @@ run_serve(Bin, Request, Extra) ->
         {error, _} = E ->
             E
     end.
+
+%% The execution limits a run passes to instantiation. Before, they went to
+%% the WASI import builder with everything else, which ignored them, so a
+%% `fuel' or `max_memory_pages' set here bounded nothing.
+exec_limits(Extra) -> maps:with(?EXEC_LIMITS, Extra).
 
 serve(Instance, Request) ->
     case serve_export(wasm_component:exports(Instance)) of

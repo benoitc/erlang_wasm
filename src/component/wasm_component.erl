@@ -340,7 +340,8 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts)
                   resolve_imports(Imps, Imports, resource_imports(Imps, #{}))
               end,
     LinkOpts = Opts#{drop_fun => drop_fun(Opts),
-                     resource_dtors => wasm_component_types:resource_dtors(Sec)},
+                     resource_dtors => wasm_component_types:resource_dtors(Sec),
+                     types => wasm_component_types:type_space(Sec)},
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
             case wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts) of
@@ -893,21 +894,40 @@ do_call_async(I, Export, {Params, Result}, Args, Opts) ->
         {ok, LiftName} ->
             Inst = core_with_export(I, LiftName),
             Callback = async_callback(I, LiftName),
-            ok = wasm_async:begin_task(Inst, Opts),
-            try
-                {Descs, Lowered} = prepare_async_params(Params, Args),
-                CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
-                case wasm:call(Inst, LiftName, CoreArgs) of
-                    {ok, [Status]} -> finish_async(Result,
-                                                    drive(Callback, Status, ?ASYNC_BUDGET));
-                    {ok, _}        -> {error, {async_bad_status, LiftName}};
-                    {error, _} = E -> E
-                end
-            after
-                wasm_async:end_task()
+            case wasm_async:backpressure(Inst) of
+                0 -> run_async(Inst, LiftName, Callback, {Params, Result}, Args,
+                               Opts);
+                %% Only a task of this instance can lower it, and a task runs in
+                %% its caller's process: waiting here would wait for ever.
+                _ -> {error, async_backpressure}
             end;
         error ->
             {error, {no_async_export, Export}}
+    end.
+
+run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts) ->
+    ok = wasm_async:begin_task(Inst, Opts),
+    try
+        {Descs, Lowered} = prepare_async_params(Params, Args),
+        CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
+        case {wasm:call(Inst, LiftName, CoreArgs), Callback} of
+            %% A stackful lift: the core function ran the whole task, waiting
+            %% inside `waitable-set.wait' or a synchronous copy, and handed its
+            %% result to `task.return'.
+            {{ok, []}, none} -> finish_async(Result, returned());
+            {{ok, [Status]}, _} -> finish_async(Result,
+                                                drive(Callback, Status, ?ASYNC_BUDGET));
+            {{ok, _}, _}        -> {error, {async_bad_status, LiftName}};
+            {{error, _} = E, _} -> E
+        end
+    after
+        wasm_async:end_task()
+    end.
+
+returned() ->
+    case wasm_async:take_return() of
+        {ok, Value} -> {ok, Value};
+        undefined   -> {ok, undefined}
     end.
 
 %% When the result is itself a `future<T>`/`stream<T>` the guest produced and returned,
@@ -933,10 +953,7 @@ drive(Callback, Status, Budget) ->
     Bits = Status band 16#FFFFFFFF,
     case {Bits band 16#F, Bits bsr 4} of
         {0, _} ->
-            case wasm_async:take_return() of
-                {ok, Value} -> {ok, Value};
-                undefined   -> {ok, undefined}
-            end;
+            returned();
         {1, _} ->
             resume(Callback, [0, 0, 0], Budget);
         {2, Set} ->
@@ -948,10 +965,8 @@ drive(Callback, Status, Budget) ->
             {error, {async_bad_status, Other}}
     end.
 
-%% Re-enter the guest through its callback with an event triple; a lift with no
-%% callback export is the stackful form, which this milestone does not drive.
-resume(none, _Args, _Budget) ->
-    {error, async_stackful_unsupported};
+%% Re-enter the guest through its callback with an event triple. A stackful lift
+%% has no callback and returns no status, so it never reaches here.
 resume({CbInst, CbName}, Args, Budget) ->
     case wasm:call(CbInst, CbName, Args) of
         {ok, [Status]} -> drive({CbInst, CbName}, Status, Budget - 1);

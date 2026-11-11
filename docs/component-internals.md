@@ -294,7 +294,32 @@ process dictionary, and there is one task per process.
 4. `wasm_async:end_task/0` stops producers and removes old messages.
 
 The loop stops after a maximum number of turns. A lift with no callback (the
-stackful form) returns `{error, async_stackful_unsupported}`.
+stackful form) is one call: the core function runs the whole task, waits
+inside `waitable-set.wait` or a copy declared without `async`, and hands its
+result to `task.return`.
+
+Each stream or future end is idle, copying or done, as the specification has
+it. The element type comes from the type the built-in names, and each element
+is lifted and lowered at its size; a `stream<u8>` stays a binary.
+
+- A copy declared `async` that cannot complete returns BLOCKED and is
+  delivered later as an event; one declared without `async` waits in place.
+- A second read of a future, a cancel with no copy pending, and dropping an
+  end while it copies trap. So does dropping a future's writer before it has
+  written.
+- A stream holds at most 1024 elements between a writer and a reader that has
+  not taken them. A write past that blocks until the reader makes room. A
+  stream the guest returned has the host as its reader, which takes each write
+  whole: limit such a guest with `fuel` or a timeout, as you would any loop.
+- A wait that no producer can end traps with `async_deadlock`; there is no
+  time limit. A producer that fails while a copy needs it traps the wait.
+- `subtask.cancel` stops a running subtask's producer; `subtask.drop` needs
+  the subtask resolved. `task.cancel` traps, because the runtime never asks a
+  task to cancel.
+- `backpressure.inc` and `dec` count per instance. A task runs in its caller's
+  process, so a call that arrives while the count is above zero returns
+  `{error, async_backpressure}` instead of waiting for ever.
+- A trap's reason is in the error's `ctx`, under `reason`.
 
 On the import side, the linker binds each async canon built-in with
 `wasm_async:builtin/2`. An imports map value of `{async_import, Sig, Fun}`
@@ -347,6 +372,7 @@ provide its `[resource-drop]`.
 | `wasm_resources_SUITE` | the handle table directly |
 | `wasm_component_async_SUITE` | futures, streams, producers, suspend and resume |
 | `wasm_component_async_import_SUITE` | async host imports, immediate and suspending |
+| `wasm_component_async_abi_SUITE` | each async built-in and trap, stackful lifts, typed payloads |
 | `wasm_wasi2_async_SUITE` | `call_async/4` against wasmtime's async fixture |
 | `wasm_component_malformed_SUITE` | truncation and corruption are values |
 | `wasm_component_worker_SUITE` | a component through the worker kernel |

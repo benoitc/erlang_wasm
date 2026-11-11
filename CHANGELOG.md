@@ -35,6 +35,18 @@ plain Erlang.
   counted against `max_resident_modules` for the life of the node; one killed
   while waiting in `memory.atomic.wait` left its entry in the waiter table.
   Both are now removed.
+- **The async component ABI is complete.** Streams and futures carry any
+  element type, not only bytes; reads and writes can be cancelled; subtasks
+  can be cancelled and dropped; error contexts keep their message; backpressure
+  and `thread.yield` work; and an async export without a callback (the stackful
+  form) runs instead of being refused. A guest that breaks the rules now traps
+  where it used to get a quiet wrong answer: a second read of a future,
+  cancelling a copy that is not pending, dropping a running subtask or an
+  unwritten future. A stream between two ends of a component holds at most
+  1024 elements, where it used to grow without limit. A wait no longer gives
+  up after five seconds, and a wait nothing can end traps at once. While an
+  instance holds backpressure, `call_async` returns
+  `{error, async_backpressure}`.
 - **An async task no longer takes your process's monitor messages.** Ending
   an async component call removed every `'DOWN'` message from the calling
   process's mailbox, including those of monitors the caller had set up

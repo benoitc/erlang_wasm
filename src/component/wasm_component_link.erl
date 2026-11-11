@@ -693,6 +693,18 @@ link(Graph, EntryModIdx, HostResolve, Opts) ->
             {error, Reason}
     end.
 
+%% The element type of the `stream<T>' or `future<T>' a built-in names. A type
+%% the table cannot resolve keeps the byte stream the runtime always assumed.
+async_elem(#{type := Ty} = Meta, S) ->
+    Types = maps:get(types, maps:get(opts, S), #{}),
+    case wasm_component_types:value_desc(Ty, Types) of
+        {ok, {stream, Elem}} -> Meta#{elem => Elem};
+        {ok, {future, Elem}} -> Meta#{elem => Elem};
+        _                    -> Meta
+    end;
+async_elem(Meta, _S) ->
+    Meta.
+
 %% Record which real core instance a core-func alias resolved to, keyed by the
 %% core-func index it takes. A synthetic or as-yet-unbuilt source records nothing;
 %% the export then falls back to name resolution, as before.
@@ -802,7 +814,26 @@ step({canon_lower, CompFuncIdx, ReallocIdx, Enc, Async}, S) ->
 step({canon_async, Which, Meta}, S) ->
     %% Each async built-in is a core function the guest imports; bind it to the
     %% `wasm_async` runtime (a task is a BEAM process, a wait a selective receive).
-    {ok, bump(S, n_cf, core_funcs, wasm_async:builtin(Which, Meta))};
+    %% A stream or future built-in names its type: its element type is what the
+    %% built-in copies.
+    Fun = wasm_async:builtin(Which, async_elem(Meta, S)),
+    %% One that lowers a string (`error-context.debug-message') allocates through
+    %% its own realloc option, in its own encoding.
+    Bound = case Meta of
+                #{realloc := Rl, enc := Enc} when Rl =/= none ->
+                    Realloc = realloc_callable(Rl, S),
+                    fun(Ctx, Flats) ->
+                        wasm_canon:with_realloc(
+                          Realloc,
+                          fun() ->
+                              wasm_canon:with_string_encoding(
+                                Enc, fun() -> Fun(Ctx, Flats) end)
+                          end)
+                    end;
+                _ ->
+                    Fun
+            end,
+    {ok, bump(S, n_cf, core_funcs, Bound)};
 step({canon_resource, drop, Rt}, S) ->
     %% For a resource this component DEFINES, `canon resource.drop` removes the
     %% handle from the instance's table (a double drop, or a handle never minted
@@ -1272,12 +1303,8 @@ canon(<<16#18, R0/binary>>) -> async_ty_flag(future_cancel_read, R0);
 canon(<<16#19, R0/binary>>) -> async_ty_flag(future_cancel_write, R0);
 canon(<<16#1A, R0/binary>>) -> async_ty(future_drop_readable, R0);
 canon(<<16#1B, R0/binary>>) -> async_ty(future_drop_writable, R0);
-canon(<<16#1C, R0/binary>>) ->
-    {_Enc, _Async, R1} = canonopts(R0),
-    {{canon_async, error_context_new, #{}}, R1};
-canon(<<16#1D, R0/binary>>) ->
-    {_Enc, _Async, R1} = canonopts(R0),
-    {{canon_async, error_context_debug_message, #{}}, R1};
+canon(<<16#1C, R0/binary>>) -> async_opts(error_context_new, #{}, R0);
+canon(<<16#1D, R0/binary>>) -> async_opts(error_context_debug_message, #{}, R0);
 canon(<<16#1E, R0/binary>>) -> {{canon_async, error_context_drop, #{}}, R0};
 canon(<<16#1F, R0/binary>>) -> {{canon_async, waitable_set_new, #{}}, R0};
 canon(<<16#20, _Cancellable, R1/binary>>) ->
@@ -1293,20 +1320,26 @@ canon(<<16#25, R0/binary>>) -> {{canon_async, backpressure_dec, #{}}, R0};
 canon(<<Op, _/binary>>) -> error({unsupported_canon_opcode, Op}).
 
 %% Async built-in operand shapes: a bare type index; a type index plus a canonopts
-%% vec (memory/encoding/async, stepped over); a type index plus an async bool flag.
+%% vec; a type index plus an async bool flag. The options a built-in acts on are
+%% kept: whether it is `async' (a copy may return BLOCKED instead of waiting), its
+%% realloc and its string encoding.
 async_ty(Which, R0) ->
     {Ty, R1} = wasm_leb128:u32(R0),
     {{canon_async, Which, #{type => Ty}}, R1}.
 
 async_ty_opts(Which, R0) ->
     {Ty, R1} = wasm_leb128:u32(R0),
-    {_Enc, _Async, R2} = canonopts(R1),
-    {{canon_async, Which, #{type => Ty}}, R2}.
+    async_opts(Which, #{type => Ty}, R1).
+
+async_opts(Which, Meta, R0) ->
+    {Realloc, Enc, Async, R1} = lower_opts(R0),
+    {{canon_async, Which, Meta#{async => Async =/= sync, realloc => Realloc,
+                                enc => Enc}}, R1}.
 
 async_ty_flag(Which, R0) ->
     {Ty, R1} = wasm_leb128:u32(R0),
-    <<_Flag, R2/binary>> = R1,
-    {{canon_async, Which, #{type => Ty}}, R2}.
+    <<Flag, R2/binary>> = R1,
+    {{canon_async, Which, #{type => Ty, async => Flag =:= 1}}, R2}.
 
 %% A canon `task.return` result list: `0x00 valtype` (one result) or `0x01 0x00`
 %% (none). The result type is kept so the built-in lifts the returned value.

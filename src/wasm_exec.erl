@@ -1701,7 +1701,7 @@ call_host(#hostfn{fun_ = Fun, nresults = NRes, name = Name}, Args, St) ->
                             #{host => Name, expected => NRes,
                               got => length(Results)});
         {trap, Reason} ->
-            wasm_error:trap({host_error, Reason}, #{host => Name})
+            wasm_error:trap({host_error, Reason}, #{host => Name, reason => Reason})
     catch
         throw:{wasm_error, _} = E -> erlang:throw(E);
         %% A wasm exception raised by an imported function keeps unwinding in

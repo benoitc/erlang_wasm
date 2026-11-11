@@ -18,7 +18,7 @@ flags, option, result), resource handles and the async `future`, `stream` and
 
 -export([plain_name/1]).
 -export([import_interfaces/1, parse_types/1, type_space/1, func_sig/2,
-         resource_dtors/1]).
+         value_desc/2, resource_dtors/1]).
 
 -export_type([sig/0]).
 
@@ -130,6 +130,18 @@ func_sig(Idx, Types) ->
     case maps:get(Idx, Types, undefined) of
         {func, _Params, _Result} = F -> {ok, global_sig(F, Types)};
         _                            -> error
+    end.
+
+-doc """
+The value descriptor at type index `Idx` of a `type_space/1` table, with every
+type reference in it resolved; `error` when the index holds no value type.
+""".
+-spec value_desc(non_neg_integer(), #{non_neg_integer() => typedef()}) ->
+          {ok, valdesc()} | error.
+value_desc(Idx, Types) ->
+    case resolve({typeref, Idx}, Types) of
+        {typeref, _} -> error;
+        Desc         -> {ok, Desc}
     end.
 
 %% Fold `Fun(Bin, Acc) -> {Rest, Acc}` over a vector of `Count` entries.
@@ -581,4 +593,6 @@ resolve({tuple, Ds}, Types)    -> {tuple, [resolve(D, Types) || D <- Ds]};
 resolve({record, Fs}, Types)   -> {record, [{N, resolve(D, Types)} || {N, D} <- Fs]};
 resolve({variant, Cs}, Types)  -> {variant, [{N, resolve(D, Types)} || {N, D} <- Cs]};
 resolve({result, Ok, Err}, Types) -> {result, resolve(Ok, Types), resolve(Err, Types)};
+resolve({future, D}, Types)    -> {future, resolve(D, Types)};
+resolve({stream, D}, Types)    -> {stream, resolve(D, Types)};
 resolve(Desc, _Types)          -> Desc.

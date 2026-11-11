@@ -1,7 +1,8 @@
 -module(wasi_preview3).
 -moduledoc """
 The WASI 0.3 host: `wasi:cli`, `wasi:clocks`, `wasi:random`, and
-`wasi:filesystem` through `wasi_p3_filesystem`.
+`wasi:filesystem` and `wasi:sockets` through `wasi_p3_filesystem` and
+`wasi_p3_sockets`.
 
 WASI 0.3 replaces `wasi:io`'s streams and pollables with the Component Model's
 own `stream<T>`, `future<T>` and `async func`. Each interface here is keyed
@@ -39,7 +40,8 @@ command(Opts) ->
     lists:foldl(fun maps:merge/2, wasi_preview2:command(Opts),
                 [cli(Opts), clocks(), random(),
                  wasi_p3_filesystem:filesystem(
-                   #{mounts => wasi_preview2:command_mounts(Opts)})]).
+                   #{mounts => wasi_preview2:command_mounts(Opts)}),
+                 wasi_p3_sockets:sockets(Opts)]).
 
 -doc """
 Run a command component, 0.2 or 0.3, as `wasi_preview2:run_command/3` does.

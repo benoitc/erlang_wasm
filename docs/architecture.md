@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the ninety-one modules are, which
+This page is the map of the runtime: what the ninety-two modules are, which
 ones depend on which, and where to start reading. Read it before you change
 anything. Each module documents itself, but no module describes how they fit
 together.
@@ -47,7 +47,7 @@ read. `test/` holds every suite named here.
 | Snapshots | `wasm:snapshot/2`, `wasm:restore/3` | `wasm_snapshot`, `wasm_snapshot_owner`, `wasm_snapshot_file`, `wasm_snapshot_store` | `max_snapshot_bytes` | `snapshot_hooks` | `wasm_snapshot_SUITE` | [Snapshots](snapshots.md) |
 | Module cache | `wasm:load/1` | `wasm_module_cache` | `max_resident_modules` | none | `wasm_module_cache_SUITE` | [Put it in an OTP application](otp.md) |
 | WASI preview 1 | `wasi_preview1:imports/1` | `wasi_preview1`, `wasi_fs`, `wasi_path`, `wasi_net`, `wasi_sock`, `wasi_file_nif` | the WASI options | the optional file NIF | the `wasi_*` suites | [WASI](wasi.md) |
-| Components and WASI 0.2 | `wasm_component:instantiate/2`, `wasm_component:call/4` | `wasm_component`, `wasm_component_link`, `wasm_component_types`, `wasm_canon`, `wasm_async`, `wasm_resources`, `wasi_preview2`, `wasi_p2_filesystem`, `wasi_p2_sockets`, `wasi_sock2`, `wasi_preview3`, `wasi_p3_filesystem` | the imports map | `wasm_component:import_fun/2` | the `wasm_component_*`, `wasm_wasi2_*` and `wasm_wasi3_*` suites | [Components](components.md), [WASI 0.2](wasi-0-2.md), [Component internals](component-internals.md) |
+| Components and WASI 0.2 | `wasm_component:instantiate/2`, `wasm_component:call/4` | `wasm_component`, `wasm_component_link`, `wasm_component_types`, `wasm_canon`, `wasm_async`, `wasm_resources`, `wasi_preview2`, `wasi_p2_filesystem`, `wasi_p2_sockets`, `wasi_sock2`, `wasi_preview3`, `wasi_p3_filesystem`, `wasi_p3_sockets` | the imports map | `wasm_component:import_fun/2` | the `wasm_component_*`, `wasm_wasi2_*` and `wasm_wasi3_*` suites | [Components](components.md), [WASI 0.2](wasi-0-2.md), [Component internals](component-internals.md) |
 | HTTP | `wasi_http:http/1`, `wasi_http_listener:start/1` | `wasi_http`, `wasi_http_h1`, `wasi_http_h2`, `wasi_http_listener` | `http_transport` | the `wasi_http_transport` behaviour | `wasm_wasi2_http_SUITE`, `wasm_wasi2_https_SUITE` | [HTTP](http.md) |
 | Script workers | `wasm_script_worker:start_link/2`, `wasm_script_worker:run/2` | `wasm_script_worker`, the adapters, `wasm_worker_reaper`, `wasm_cleanup_manager`, `wasm_cleanup_steward` | worker options; `scratch_roots`, `reaper_options` | the `wasm_worker_adapter` behaviour | the `wasm_worker_*` and `wasm_cleanup_*` suites | [Using workers](worker.md), [Worker internals](worker-internals.md) |
 | Build, packaging, the NIF | `rebar.config`, `scripts/` | `c_src/` | `WASM_NIF_SANITIZE` | none | `wasm_package_SUITE`, `wasm_scripts_SUITE` | [Changing the NIF](contributing/nif.md) |
@@ -100,7 +100,7 @@ module, not a namespace: names stay `wasm_*` and `wasi_*`.
 ```text
 L10 wasm_javascript  wasm_javascript_command  wasm_python
     wasm_python_command  wasm_lua  wasm_adapter_conformance  wasi_preview3
-    wasi_p3_filesystem
+    wasi_p3_filesystem  wasi_p3_sockets
 L9  wasi  wasm_script_worker  wasi_preview2  wasi_p2_filesystem  wasi_p2_sockets
     wasi_http  wasi_http_transport  wasi_http_h1  wasi_http_h2  wasi_http_listener
 L8  wasi_preview1  wasm_snapshot_store  wasm_instance_worker
@@ -197,7 +197,7 @@ copies and what a restore writes back.
 Cycles are allowed here. What is not allowed is a fourth cycle that appears
 without anyone noticing. You cannot see a cycle by reading one module.
 Everything else about `wasm_memory` you learn inside `wasm_memory`, but a
-cycle you only find by reading all ninety.
+cycle you only find by reading all ninety-one.
 
 It is easy to add one by mistake. One call from `wasm_error`, at level 0, up
 into `wasm` would merge fourteen modules into one cycle, and only the test

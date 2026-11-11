@@ -13,6 +13,16 @@ the UDP grant and peer checks.
 
 -include("wasi.hrl").
 
+%% The operations themselves, for `wasi_p3_sockets', which serves the same
+%% sockets through the 0.3 interface. Each answers 0.2-shaped terms.
+-export([create_tcp_socket/2, tcp_start_connect/3, tcp_start_bind/3, finish/4,
+         tcp_start_listen/1, inherit_sockopts/2, tcp_local/1, tcp_remote/1,
+         tcp_is_listening/1, tcp_family/1, tcp_set_nonzero/2, opt_get/2,
+         opt_set/3, opt_set_nonzero/3, tcp_drop/1, socket_room/1,
+         create_udp_socket/2, udp_start_bind/3, udp_finish_bind/1, udp_connect/3,
+         udp_local/1, udp_remote_addr/1, udp_family/1, udp_drop/1,
+         resolve_addresses/2, endpoint_udp/1, ip_sockaddr/2,
+         ip_address/1]).
 -export([sockets/1, udp_pump/4, sock2_errno/1, datagram_allowed/3,
          peer_matches/3]).
 

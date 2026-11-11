@@ -1,7 +1,8 @@
 # WASI 0.3
 
 This page is about running a WASI 0.3 component: one that imports `wasi:cli`,
-`wasi:clocks`, `wasi:random` or `wasi:filesystem` at version `0.3.x`. WASI 0.3 drops `wasi:io`.
+`wasi:clocks`, `wasi:random`, `wasi:filesystem` or `wasi:sockets` at version
+`0.3.x`. WASI 0.3 drops `wasi:io`.
 Data moves through the Component Model's own streams and futures, and a slow
 call is an `async func`. You need this page when a toolchain builds your
 program for 0.3, such as Rust's `wasip3` crate or a target that names
@@ -29,7 +30,8 @@ uses it.
 | `wasi:clocks` | the monotonic clock with async `wait-for` and `wait-until`, the system clock, a UTC timezone |
 | `wasi:random` | the same functions as 0.2 |
 | `wasi:filesystem` | the same mounts as 0.2: reads, writes, appends and directory listings through streams, every other call async |
-| `wasi:sockets`, `wasi:http` | not yet: a component that imports them does not link |
+| `wasi:sockets` | TCP and UDP under the same `network` grant as 0.2: a connection's data through `send` and `receive` streams, `listen` as a stream of accepted sockets, async `connect` and UDP `send` and `receive`, async name lookup |
+| `wasi:http` | not yet: a component that imports it does not link |
 
 ## Notes
 
@@ -39,6 +41,11 @@ uses it.
 - `read-via-stream` reads the file from its offset when the guest asks for the
   stream, so a large file is held in memory while the guest reads it.
 - Mount files with `preopen`, `writable` and `preopens`, as for 0.2.
+- Grant the network with `network`, as for 0.2. Without it, creating a socket
+  is refused with `access-denied`.
+- Binding, connecting and listening are one call each. `connect` and `listen`
+  on a socket that is not bound bind it to any address first, and so does a
+  UDP `send` with an address.
 - A wait that is already over, such as `wait-until(now)`, completes at once.
 - `resource_limit` also bounds the async calls a guest has waiting at once.
   Past it, the call traps with `resource_limit_reached`.

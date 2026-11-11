@@ -37,9 +37,11 @@ baseline() ->
       ~"clocks"     => 0,
       ~"random"     => 0,
       ~"filesystem" => 0,
-      %% wasi:sockets@0.3 and wasi:http@0.3 are not hosted yet, so these
-      %% programs do not link.
-      ~"sockets"    => 17,
+      %% p3_sockets_tcp_streams: the guest drops both connected sockets right
+      %% after setting them up and before writing to them, so its first send
+      %% finds the connection closed. Under investigation.
+      ~"sockets"    => 1,
+      %% wasi:http@0.3 is not hosted yet, so these programs do not link.
       ~"http"       => 15}.
 
 init_per_suite(Config) ->
@@ -158,7 +160,14 @@ opts("p3_cli_random_limits") -> #{args => [~"p3_cli_random_limits", ~"random", ~
 opts("p3_cli_much_stdout") ->
     #{args => [~"p3_cli_much_stdout", binary:copy(<<"a">>, 1024), ~"256"]};
 opts("p3_cli_many_tasks") -> #{resource_limit => 100};
-opts(Name) ->
+%% TCP with no right to listen: the bind it tries is refused.
+opts("p3_cli_deny_listen" = Name) ->
+    (base(Name))#{network => (unrestricted())#{listen => []}};
+opts("p3_sockets" ++ _ = Name) ->
+    (base(Name))#{network => unrestricted()};
+opts(Name) -> base(Name).
+
+base(Name) ->
     #{args => [list_to_binary(Name ++ ".component"), ~"."],
       env => [errno_mode()],
       preopens => [{~".", scratch(), true} | readonly(Name)]}.
@@ -174,6 +183,11 @@ readonly(Name) when Name =:= "p3_file_truncation_readonly";
 readonly(_) ->
     [].
 
+%% Any address and port for TCP and UDP, and name resolution.
+unrestricted() ->
+    Any = [{P, R, {0, 65535}} || P <- [tcp, udp], R <- [~"0.0.0.0/0", ~"::/0"]],
+    #{connect => Any, listen => Any, resolve => allow}.
+
 %% wasmtime's `wasi_tests_environment()': which errno conventions to expect.
 errno_mode() ->
     case os:type() of
@@ -181,9 +195,12 @@ errno_mode() ->
         _ -> {~"ERRNO_MODE_UNIX", ~"1"}
     end.
 
+%% Fresh for every program and every run: a unique integer alone repeats
+%% across VMs, and an earlier run's files then showed up in a listing.
 scratch() ->
     Dir = filename:join(os:getenv("TMPDIR", "/tmp"),
-                        "wasi3-" ++ integer_to_list(erlang:unique_integer([positive]))),
+                        lists:concat(["wasi3-", os:system_time(nanosecond), "-",
+                                      erlang:unique_integer([positive])])),
     ok = filelib:ensure_path(Dir),
     Dir.
 

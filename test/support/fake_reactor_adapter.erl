@@ -26,6 +26,11 @@ the defect.
 %% snapshot's provenance **is** the module-cache handle, and an inline module
 %% has none. That is why this fixture is a binary while every other adapter in
 %% this directory is WAT.
+%% `artifact_hang => Pid' reports this process to `Pid' and never returns, for
+%% the case that a load which never finishes dies with its caller.
+artifact(#{artifact_hang := Pid}) ->
+    Pid ! {artifact_hang, self()},
+    receive after infinity -> ok end;
 artifact(Opts) ->
     Path = maps:get(path, Opts, default_path()),
     {ok, Bytes} = file:read_file(Path),

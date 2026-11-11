@@ -388,9 +388,10 @@ orphan() ->
 -doc """
 Create the waiter table if it is not there.
 
-`wasm_sup` calls this so the table belongs to the supervisor: an engine restart
-would otherwise strand every parked agent, since a wait is a `receive` that
-only a row in this table can be found by.
+`wasm_store` calls this from its own process, so the table belongs to it and
+survives an engine restart, which would otherwise strand every parked agent: a
+wait is a `receive` that only a row in this table can be found by. Without the
+application the engine itself is the owner.
 """.
 -spec ensure_waiter_table() -> ok.
 ensure_waiter_table() -> ensure_waiters_table().
@@ -450,8 +451,35 @@ handle_call(stats, _From, State) ->
 handle_call(_Req, _From, State) ->
     {reply, {error, unknown_call}, State}.
 
+%% Every waiter, watched once, so a killed one's rows go with it: `wasm_wait'
+%% removes its own row in an `after', which a killed process never runs.
+handle_cast({watch_waiter, Pid}, State) ->
+    Watched = maps:get(waiters, State, #{}),
+    case maps:is_key(Pid, Watched) of
+        true -> {noreply, State};
+        false ->
+            Mon = monitor(process, Pid),
+            {noreply, State#{waiters => Watched#{Pid => Mon}}}
+    end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info({'DOWN', Mon, process, Pid, _}, #{waiters := Watched} = State)
+  when map_get(Pid, Watched) =:= Mon ->
+    ok = forget_waiter(Pid),
+    {noreply, State#{waiters => maps:remove(Pid, Watched)}};
 handle_info(_Info, State) ->
     {noreply, State}.
+
+%% Its parked rows, and the claim a notifier may have left naming one of them.
+forget_waiter(Pid) ->
+    case ets:whereis(?WAITERS_TAB) of
+        undefined -> ok;
+        _ ->
+            Rows = ets:match_object(?WAITERS_TAB, {'_', Pid, '_'}),
+            _ = [begin
+                     ets:delete_object(?WAITERS_TAB, Row),
+                     ets:delete(?WAITERS_TAB, {claimed, Ref})
+                 end || {_, _, Ref} = Row <- Rows],
+            ok
+    end.

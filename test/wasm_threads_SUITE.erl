@@ -255,11 +255,11 @@ two_notifiers_never_both_claim_one_waiter(_Config) ->
 one_contested_wakeup() ->
     MemId = make_ref(),
     Self = self(),
-    %% The row is inserted before `Read' is called, so signalling from inside it
-    %% is what makes the waiter known to be registered.
+    %% The row is inserted before `Read' is called the second time, so
+    %% signalling from inside that call makes the waiter known to be registered.
     Waiter = spawn(fun() ->
                        R = wasm_wait:wait(MemId, 0,
-                                          fun() -> Self ! ready, equal end,
+                                          registered_read(Self),
                                           5000000000),
                        Self ! {woke, R}
                    end),
@@ -311,7 +311,7 @@ one_raced_timeout() ->
                        %% the timeout fires while the notifier is holding the
                        %% window open.
                        R = wasm_wait:wait(MemId, 0,
-                                          fun() -> Self ! ready, equal end,
+                                          registered_read(Self),
                                           10000000),
                        {message_queue_len, N} =
                            process_info(self(), message_queue_len),
@@ -345,7 +345,7 @@ a_notifier_that_dies_holding_a_wakeup_does_not_fake_one(_Config) ->
         MemId = make_ref(),
         Waiter = spawn(fun() ->
                            R = wasm_wait:wait(MemId, 0,
-                                              fun() -> Self ! ready, equal end,
+                                              registered_read(Self),
                                               10000000),
                            Self ! {woke, R}
                        end),
@@ -497,3 +497,13 @@ memory_import_flags(Flags) ->
 
 %% local.get 0; i32.const 1; i32.sub; local.tee 0; br_if 0
 countdown() -> <<16#20, 0, 16#41, 1, 16#6B, 16#22, 0, 16#0D, 0>>.
+
+%% A read that says "equal" and, from its second call on (the one made after
+%% the waiter's row is in the table), tells `Test' the waiter is registered.
+registered_read(Test) ->
+    fun() ->
+        case get(registered_read) of
+            undefined -> put(registered_read, first), equal;
+            _ -> Test ! ready, equal
+        end
+    end.

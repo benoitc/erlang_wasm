@@ -119,7 +119,11 @@ static file_handle *new_handle(int fd, int is_dir) {
     h->dirp = NULL;
     h->lock = enif_mutex_create("wasi_file");
     if (!h->lock) {
-        /* The descriptor goes with it; the caller has no handle to close. */
+        /* The descriptor stays the caller's. Both failures return NULL and
+         * every caller closes `fd` on NULL, so the destructor must not close
+         * it too: by the second close the number may already belong to
+         * another thread's file. */
+        h->fd = -1;
         enif_release_resource(h);
         return NULL;
     }

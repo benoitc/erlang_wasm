@@ -38,6 +38,7 @@ the ordering bugs in guest programs unreproducible.
 -export([wait/4, notify/3]).
 
 -define(TAB, wasm_waiters).
+-define(WATCHED, {?MODULE, watched_by}).
 
 -doc """
 Park until notified, the value changes, or the timeout expires.
@@ -48,13 +49,27 @@ Answers 0 if woken, 1 if the value at the address was not the expected one, and
 -spec wait(term(), non_neg_integer(), fun(() -> integer()), integer()) ->
           0 | 1 | 2.
 wait(MemId, Addr, Read, TimeoutNs) ->
+    %% A value that already differs answers at once, with nothing registered:
+    %% this is the common case, and it costs one read.
+    case Read() of
+        not_equal -> 1;
+        equal -> register_and_park(MemId, Addr, Read, TimeoutNs)
+    end.
+
+register_and_park(MemId, Addr, Read, TimeoutNs) ->
     ensure_table(),
     Key = {MemId, Addr},
     Ref = make_ref(),
-    %% Registered first. Everything after this point is safe against a notify
-    %% arriving concurrently, because the notify becomes a message rather than
-    %% an event that has to find someone listening.
+    %% Registered, then read again. The second read is where the wait takes
+    %% effect: a notify after it finds the row, and its message waits in the
+    %% mailbox; one before it found no waiter, which is a correct answer for a
+    %% wait that had not yet begun, and the value this read sees decides.
     true = ets:insert(?TAB, {Key, self(), Ref}),
+    %% The `after' below removes the row, but a killed process runs no
+    %% `after': the engine watches every waiter and removes a dead one's rows,
+    %% which otherwise stayed for ever when nothing notified that address
+    %% again (a memory that is gone, say).
+    ok = watched(),
     Entry = {Key, self(), Ref},
     try
         case Read() of
@@ -68,6 +83,21 @@ wait(MemId, Addr, Read, TimeoutNs) ->
         %% removed by it.
         ets:delete(?TAB, {claimed, Ref}),
         flush(Ref)
+    end.
+
+%% Tell the engine about this process once, by a cast so waiting does not
+%% wait. The process remembers which engine it told: one restarted since has
+%% lost its monitors and is told again.
+watched() ->
+    case whereis(wasm_engine) of
+        undefined -> ok;
+        Engine ->
+            case get(?WATCHED) of
+                Engine -> ok;
+                _ ->
+                    put(?WATCHED, Engine),
+                    gen_server:cast(Engine, {watch_waiter, self()})
+            end
     end.
 
 park(Entry, Ref, TimeoutNs) ->

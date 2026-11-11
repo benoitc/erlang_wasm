@@ -643,9 +643,15 @@ an_engine_restart_keeps_the_store_and_the_waiters(_Config) ->
     MemId = make_ref(),
     Self = self(),
     Waiter = spawn(fun() ->
-                       R = wasm_wait:wait(MemId, 0,
-                                          fun() -> Self ! parked, equal end,
-                                          10000000000),
+                       %% Told from the second read, the one made once the
+                       %% waiter's row is in the table.
+                       Read = fun() ->
+                                      case get(read_once) of
+                                          undefined -> put(read_once, true), equal;
+                                          _ -> Self ! parked, equal
+                                      end
+                              end,
+                       R = wasm_wait:wait(MemId, 0, Read, 10000000000),
                        Self ! {woke, R}
                    end),
     receive parked -> ok after 5000 -> ct:fail(never_parked) end,

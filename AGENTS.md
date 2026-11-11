@@ -21,7 +21,7 @@ src/    Front end: wasm_decode(+_code/_simd/_gc/_atomic), wasm_leb128,
         Runtime: wasm (public facade), wasm_instance, wasm_exec,
         wasm_memory, wasm_table, wasm_global, wasm_heap, wasm_keeper,
         wasm_engine, wasm_error, wasm_wait, wasm_types, wasm_module_cache,
-        wasm_snapshot(+_owner/_file/_store)
+        wasm_lifetime, wasm_snapshot(+_owner/_file/_store)
         Compiled tier: wasm_jit, wasm_core, wasm_code_slots,
         wasm_code_cache, wasm_jit_sup
         Numerics: wasm_num(+_float/_trunc), wasm_simd

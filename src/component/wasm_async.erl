@@ -71,6 +71,9 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -define(TASK_REF, {?MODULE, task_ref}).
 -define(WAIT_HOOK, {?MODULE, wait_hook}).
 -define(WAITS, {?MODULE, waits}).
+-define(OUTER, {?MODULE, outer}).
+%% The tag on a producer's monitor: its `DOWN' arrives as `{?DOWN(Ref), ...}'.
+-define(DOWN(Ref), {?MODULE, down, Ref}).
 -define(PRODUCERS, {?MODULE, producers}).
 -define(CTX(Slot), {?MODULE, context, Slot}).
 -define(WAITABLE(H), {?MODULE, waitable, H}).
@@ -91,6 +94,10 @@ cannot bleed messages into the next.
 """.
 -spec begin_task(wasm:instance(), map()) -> ok.
 begin_task(Inst, Opts) ->
+    %% A task started inside another, from a host function the outer task
+    %% called, sets the outer frame aside rather than clearing it: clearing
+    %% it lost the outer producers, and nothing stopped them afterwards.
+    save_outer(),
     clear_frame(),
     put(?TASK_INST, Inst),
     put(?TASK_REF, make_ref()),
@@ -110,7 +117,37 @@ end_task() ->
     clear_frame(),
     _ = erase(?TASK_INST),
     flush_stale(Ref),
+    restore_outer(),
     ok.
+
+%% The enclosing task's frame, on a stack in the process dictionary.
+save_outer() ->
+    case get(?TASK_REF) of
+        undefined -> ok;
+        _ ->
+            Frame = [{K, V} || {K, V} <- get(),
+                               is_frame_key(K) orelse K =:= ?TASK_INST
+                                   orelse K =:= ?TASK_RETURN],
+            put(?OUTER, [Frame | outer()])
+    end.
+
+restore_outer() ->
+    case outer() of
+        [] -> ok;
+        [Frame | Rest] ->
+            [put(K, V) || {K, V} <- Frame],
+            case Rest of
+                [] -> erase(?OUTER);
+                _ -> put(?OUTER, Rest)
+            end,
+            ok
+    end.
+
+outer() ->
+    case get(?OUTER) of
+        undefined -> [];
+        L -> L
+    end.
 
 %% ?WAITS survives end_task (a test reads it right after the call); the next
 %% begin_task resets it. Everything else per-task is a frame key.
@@ -195,7 +232,14 @@ register_producer(Handle, PFun) ->
     Owner = self(),
     Ref = task_ref(),
     Ctx = #{owner => Owner, task_ref => Ref, handle => Handle},
-    {Pid, Mon} = spawn_monitor(fun() -> PFun(Ctx) end),
+    %% Bound to the owner: `end_task/0' stops producers, but an owner that is
+    %% killed never runs it. The monitor is tagged with the task, so a
+    %% producer's `DOWN' can be told from every other in the caller's mailbox:
+    %% this runs in the embedder's own process, whose monitors are not ours.
+    {Pid, Mon} = spawn_opt(fun() ->
+                                   ok = wasm_lifetime:bind(Owner),
+                                   PFun(Ctx)
+                           end, [{monitor, [{tag, ?DOWN(Ref)}]}]),
     put(?PRODUCERS, [{Pid, Mon, Handle} | producers()]),
     ok.
 
@@ -532,7 +576,7 @@ block_wait(Set, Ref, Deadline) ->
                 {event, EC, E1, E2} -> {EC, E1, E2};
                 none                -> block_wait(Set, Ref, Deadline)
             end;
-        {'DOWN', _Mon, process, Pid, Reason} ->
+        {?DOWN(Ref), _Mon, process, Pid, Reason} ->
             on_producer_down(Pid, Reason, Set, Ref, Deadline)
     after Timeout ->
         {error, async_wait_timeout}
@@ -666,11 +710,12 @@ stop_producers() ->
                   end, producers()),
     ok.
 
-%% Drop any completion / DOWN messages left over for this task ref after teardown.
+%% Drop any completion or producer `DOWN' left over for this task after
+%% teardown. Only this task's: the caller's own monitors stay in its mailbox.
 flush_stale(Ref) ->
     receive
-        {async_ready, Ref, _, _}     -> flush_stale(Ref);
-        {'DOWN', _, process, _, _}   -> flush_stale(Ref)
+        {async_ready, Ref, _, _}          -> flush_stale(Ref);
+        {?DOWN(Ref), _, process, _, _}    -> flush_stale(Ref)
     after 0 ->
         ok
     end.

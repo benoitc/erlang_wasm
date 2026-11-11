@@ -8648,3 +8648,34 @@ at the top, `rerun/` and `rerun2/` hold the later sets, and `memory-diag/`,
 diagnostics behind the fixes, `plain-load-10/` settles gate 5's last clause,
 and `final/` holds gates 1 to 4 on the final code (`final/ten/` the ten-round
 cells).
+
+## Nothing outlives its owner: what the lifetime fixes cost (2026-11-11)
+
+The lifetime fixes put a process or a message on three paths. Each was
+measured against main (`2718828`), fresh VMs, interleaved, both orders, at a
+one-minute load below 8, with the gates fixed before the runs.
+
+| path | main | candidate | ratio | gate | result |
+| --- | --- | --- | --- | --- | --- |
+| `wasm_instance_worker:call/4`, finite timeout, us | 7.57 | 7.91 | 1.05x | 1.10x | pass |
+| `wasm_wait:wait/4` that returns at once, us | 0.251 | 0.007 | 0.03x | 1.10x | pass |
+| `wasm_wait:wait/4` that registers and parks, us | 0.457 | 0.470 | 1.03x | 1.10x | pass |
+| QuickJS realbench, minimum ms, per-round ratio median | 284.3 | 281.1 | 1.008x | 1.03x | pass |
+| CPython compiled request, p50 ms | 8.638 | 8.635 | 1.000x | 1.03x | pass |
+
+Medians of six runs per side, except realbench (five rounds of three runs) and
+the CPython request (five VMs).
+
+The first versions failed. A guard process spawned for each `call/4` cost
+1.39x (10.2 us against 7.3); one guard per worker, armed by a timer per call,
+costs 1.05x. A cast to the engine on every wait cost 1.87x on a wait that
+returns at once and 1.44x on one that parks; a wait that returns at once now
+registers nothing, and a process tells the engine about itself once per
+engine, which also makes the fast path cheaper than main's, which inserted and
+deleted a row.
+
+The harness's other rows are reported, not gated: `fib(30)` read 1.08x
+(paired 1.039) and the rest between 0.97x and 1.06x. Nothing in these fixes is
+on the execution path.
+
+Scripts and logs: `test/audit/raw/lifetime/`.

@@ -178,14 +178,19 @@ call(Request) ->
     end.
 
 %% Tell the server this caller is no longer waiting, so it is not given a claim
-%% it has no handle for and will never release. Only `acquire' can leave one
-%% behind, and a failure here leaves exactly the behaviour that was there before
-%% the message existed, so it is not worth raising over.
+%% it has no handle for and will never release. Only `acquire' and `stored' can
+%% leave one behind, and a failure here leaves exactly the behaviour that was
+%% there before the message existed, so it is not worth raising over.
 gave_up({acquire, Hash}) ->
     try gen_server:call(?SERVER, {gave_up, Hash}, 5000) of
         _ -> ok
     catch exit:_ -> ok
     end;
+%% A `stored' that timed out may still be handled, and would claim for this
+%% caller, which erases its publication and returns an error, so has no handle
+%% to release. The same message drops that claim.
+gave_up({stored, Hash, _Size}) ->
+    gave_up({acquire, Hash});
 gave_up(_Other) ->
     ok.
 
@@ -376,7 +381,12 @@ handle_call({stored, Hash, Size}, {Pid, _}, State0) ->
                          claim_if_alive(Pid, Hash, State1),
                          Waiting),
     _ = [gen_server:reply(W, {ok, already_resident}) || W <- Waiting],
-    {reply, ok, State2};
+    %% Nobody left to hold it: the loader was killed after sending this, and
+    %% every waiter is gone too. Kept, the entry would be published, counted
+    %% against the limit and never released, because no process holds a claim
+    %% it could drop. `drop_holders/3' with nothing to drop evicts an entry
+    %% with no holders and erases its publication.
+    {reply, ok, drop_holders(Hash, 0, State2)};
 
 handle_call({abandon, Hash, Error}, {Pid, _}, State) ->
     %% Everybody waiting on this compile asked for the same bytes, so they get
@@ -551,6 +561,11 @@ fail_compiles(Pid, State) ->
                       msg => <<"the process compiling this module exited">>,
                       ctx => #{}}},
     _ = [gen_server:reply(W, Error) || {_, Ws} <- Dead, W <- Ws],
+    %% `publish/2' puts the module before it sends `stored', so a compiler that
+    %% dies between the two leaves a publication nothing tracks. Only this
+    %% compiler could have published under these hashes.
+    _ = [persistent_term:erase(?PT_KEY(H))
+         || {H, _} <- Dead, not maps:is_key(H, State#state.resident)],
     State#state{compiling = maps:without([H || {H, _} <- Dead],
                                          State#state.compiling)}.
 

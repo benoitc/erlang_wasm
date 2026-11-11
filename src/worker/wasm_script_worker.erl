@@ -356,8 +356,13 @@ unsupported() ->
 %% `T' waits until the caller has acquired before it exits.
 prepare_in(Adapter, Opts) ->
     Parent = self(),
+    %% Bound to the caller: the capture runs in here, and a killed caller
+    %% would otherwise leave it, and the image it is building, running.
     {Pid, Mon} = spawn_monitor(
-                   fun() -> prepare_proc(Parent, Adapter, Opts) end),
+                   fun() ->
+                           ok = wasm_lifetime:bind(Parent),
+                           prepare_proc(Parent, Adapter, Opts)
+                   end),
     receive
         {prepared, Pid, {ok, Image, Key, M}} ->
             Held = wasm:acquire(Image),
@@ -663,8 +668,13 @@ loaded(Adapter, Opts) ->
 %% here, so a start fails exactly as it did when it ran here.
 artifact_elsewhere(Adapter, Opts) ->
     Parent = self(),
+    %% Bound to the caller: a load that never finishes would otherwise go on
+    %% holding the file and the claims it took after the caller has gone.
     {Pid, Mon} = spawn_monitor(
-                   fun() -> artifact_proc(Parent, Adapter, Opts) end),
+                   fun() ->
+                           ok = wasm_lifetime:bind(Parent),
+                           artifact_proc(Parent, Adapter, Opts)
+                   end),
     receive
         {artifact, Pid, {raised, C, R, St}} ->
             reap(Pid, Mon),
@@ -843,7 +853,12 @@ image_key(_Other, _Cap, _ImportSet) ->
 %% `start_link/2` that never comes back.
 capture_elsewhere(Cap, #{timeout := Timeout, words := Words, floor := Floor}) ->
     Parent = self(),
-    {Pid, Mon} = spawn_opt(fun() -> capture_proc(Parent, Cap) end,
+    %% Bound to the parent, which holds `capture_timeout': a killed parent
+    %% would otherwise leave a guest `init()' that never returns running.
+    {Pid, Mon} = spawn_opt(fun() ->
+                                   ok = wasm_lifetime:bind(Parent),
+                                   capture_proc(Parent, Cap)
+                           end,
                            [monitor, {max_heap_size, #{size => Words, kill => true,
                                                        error_logger => true}}
                             | heap_floor(Floor)]),
@@ -896,9 +911,9 @@ died_why(Reason, _Words, _Floor) ->
     #{reason => reason_of(Reason)}.
 
 %% Sends, then holds its own holder open until the parent has one of its own.
-%% `reap/2` is what releases it, and a parent that died instead is covered by
-%% the timeout: this process is not linked, so it would otherwise wait for
-%% ever.
+%% `reap/2` is what releases it. A parent that dies, here or while the guest's
+%% `init()' runs, is seen by `wasm_lifetime', which kills this process: it is
+%% not linked, and the parent holds the only deadline.
 capture_proc(Parent, Cap) ->
     Parent ! {captured, self(), run_capture(Cap)},
     receive {'EXIT', Parent, _} -> ok

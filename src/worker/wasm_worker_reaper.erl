@@ -1205,13 +1205,17 @@ remove_dirs(#req{ops = Ops}, Roots) ->
 
 %% Each callback in its own monitored child with its own deadline. The parent
 %% kills a child that overruns, records it, and carries on: one hanging action
-%% must not block the rest of the LIFO chain.
+%% must not block the rest of the LIFO chain. The child is bound to the parent,
+%% which holds the deadline: a killed parent would otherwise leave it running.
 run_bounded(_F, Timeout) when Timeout =< 0 ->
     {error, deadline_spent};
 run_bounded(F, Timeout) ->
     Parent = self(),
     Ref = make_ref(),
-    {Pid, Mon} = spawn_opt(fun() -> Parent ! {Ref, guard(F)} end, [monitor]),
+    {Pid, Mon} = spawn_opt(fun() ->
+                                   ok = wasm_lifetime:bind(Parent),
+                                   Parent ! {Ref, guard(F)}
+                           end, [monitor]),
     receive
         {Ref, ok} ->
             erlang:demonitor(Mon, [flush]),

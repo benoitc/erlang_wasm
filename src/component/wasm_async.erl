@@ -111,6 +111,10 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% How the running call hands a returned stream to the host: read whole when
 %% the task finishes (`finish'), or read as it is written (`start').
 -define(MODE, {?MODULE, mode}).
+%% How many calls into the frame are in progress: a call is begun by
+%% `begin_task/2' and over at `end_task/0', or at `suspend_task/4' when its
+%% task runs on after it. The frame is never torn down while one is.
+-define(ACTIVE, {?MODULE, active}).
 %% The most subtasks waiting at once: each has a producer, a process.
 -define(LIMIT, {?MODULE, resource_limit}).
 
@@ -151,7 +155,12 @@ begin_task(Inst, Opts) ->
     end,
     put(?MODE, maps:get(mode, Opts, finish)),
     put(?LIMIT, maps:get(resource_limit, Opts, infinity)),
+    put(?ACTIVE, active() + 1),
     ok.
+
+active() -> case get(?ACTIVE) of undefined -> 0; N -> N end.
+
+call_over() -> put(?ACTIVE, max(0, active() - 1)), ok.
 
 open_with_work() ->
     get(?TASK_REF) =/= undefined andalso
@@ -160,6 +169,7 @@ open_with_work() ->
 -doc "Tear the task frame down: stop producers, clear state, flush stale messages.".
 -spec end_task() -> ok.
 end_task() ->
+    ok = call_over(),
     case open_with_work() of
         %% Other tasks still run in this frame, or the host holds an end:
         %% only this call's own state goes.
@@ -323,6 +333,8 @@ Spawn and monitor a producer for the channel end `Handle`. `PFun` is called in t
 process with `#{owner, task_ref, handle}` and sends `{async_ready, TaskRef, Handle,
 Info}` (`Info` = `{value,V} | {data,Elements} | close`, or for an async import's
 subtask `subtask_complete | {subtask_complete, Result}`) to the owner when it chooses.
+A `Result` of `{in_owner, Make}` is made by `Make()` in the owner when the guest is
+told, for a result that holds a resource handle.
 """.
 -spec register_producer(non_neg_integer(), fun((map()) -> any())) -> ok.
 register_producer(Handle, PFun) ->
@@ -786,8 +798,10 @@ start_subtask(Result, Rest, Value, PFun) ->
 start_subtask_1(Result, Rest, Value, PFun) ->
     RetPtr = case Rest of [P | _] -> P; [] -> undefined end,
     H = next_handle(),
+    %% The return area is in the memory of the instance that made the call,
+    %% which need not be the one running when the result arrives.
     put(?WAITABLE(H), #{'end' => subtask, result => Result, ret_ptr => RetPtr,
-                        value => Value, state => awaiting}),
+                        value => Value, state => awaiting, inst => task_instance()}),
     ok = register_producer(H, PFun, #{value => Value}),
     {ok, [(H bsl 4) bor ?SUBTASK_STARTED]}.
 
@@ -968,8 +982,15 @@ try_deliver(H) ->
             put(?WAITABLE(H), W#{state => done}),
             {event, write_event(W), H, result(Kind, ?DROPPED, 0)};
         #{'end' := subtask, state := ready, result := Result, ret_ptr := RetPtr,
-          value := Value} = S ->
-            write_return_area(task_instance(), Result, [RetPtr], Value),
+          value := Value0} = S ->
+            %% A producer that needs the owner to make its result, such as a
+            %% resource only the owner's table can hold, sends a fun.
+            Value = case Value0 of
+                        {in_owner, Make} -> Make();
+                        _ -> Value0
+                    end,
+            write_return_area(maps:get(inst, S, task_instance()), Result, [RetPtr],
+                              Value),
             put(?WAITABLE(H), S#{state => returned}),
             {event, ?EV_SUBTASK, H, ?SUBTASK_RETURNED};
         _ ->
@@ -1072,6 +1093,7 @@ called again (`Code` 1). `pump/1` and the host-end calls give it its turns.
 -spec suspend_task({wasm:instance(), binary()}, 1 | 2, non_neg_integer(),
                    non_neg_integer()) -> ok.
 suspend_task(Callback, Code, Set, Budget) ->
+    ok = call_over(),
     _ = erase(?TASK_RETURN),
     Status = case Code of 1 -> yield; 2 -> {wait, Set} end,
     Task = #{callback => Callback, status => Status, ctx => save_ctx(),
@@ -1120,9 +1142,10 @@ pump_loop(Deadline) ->
             end
     end.
 
-%% Never inside a guest call: the call's own `end_task/0' ends the frame.
+%% Never inside a guest call, nor while a call is in progress: that call's own
+%% `end_task/0' ends the frame.
 maybe_teardown() ->
-    case get(?TASK_REF) =/= undefined andalso running() =:= 0
+    case get(?TASK_REF) =/= undefined andalso running() =:= 0 andalso active() =:= 0
              andalso not open_with_work() of
         true -> teardown();
         false -> ok
@@ -1297,7 +1320,16 @@ host_sink(H, Sink, Max) ->
                                  buf => empty_like(Buf)}),
             ok = hold_end(H),
             _ = case is_empty(Buf) of true -> ok; false -> Sink(Buf) end,
-            sink_waiting_writer(R, Sink, Max);
+            case R of
+                %% The guest ended the stream before the sink took it: what it
+                %% wrote is in, so the end comes now.
+                #{writer := closed} ->
+                    forget_waitable(H),
+                    ok = release_end(H),
+                    _ = Sink(eof),
+                    ok;
+                _ -> sink_waiting_writer(R, Sink, Max)
+            end;
         _ -> {error, unknown_end}
     end.
 

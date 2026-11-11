@@ -25,7 +25,8 @@ import could neither take nor give one.
          an_import_gives_the_guest_a_future/1,
          a_host_end_call_inside_an_import_is_refused/1,
          call_async_still_runs_to_the_end/1,
-         a_call_that_ends_leaves_a_pending_task_alone/1]).
+         a_call_that_ends_leaves_a_pending_task_alone/1,
+         a_sink_on_an_ended_stream_gets_the_end/1]).
 
 all() ->
     [a_task_resolves_and_keeps_writing,
@@ -37,7 +38,8 @@ all() ->
      an_import_gives_the_guest_a_future,
      a_host_end_call_inside_an_import_is_refused,
      call_async_still_runs_to_the_end,
-     a_call_that_ends_leaves_a_pending_task_alone].
+     a_call_that_ends_leaves_a_pending_task_alone,
+     a_sink_on_an_ended_stream_gets_the_end].
 
 -define(BODY, {[], {stream, u8}}).
 
@@ -132,6 +134,13 @@ a_call_that_ends_leaves_a_pending_task_alone(Config) ->
     ?assertEqual(1, length(wasm_async:pending())),
     ?assertEqual(binary:copy(<<1>>, 3000), read_all(H)).
 
+%% The guest wrote "abc" and ended the stream before the host took it: the
+%% sink gets the bytes, then the end (it used to wait for an end that had
+%% already happened). `take' answers bytes * 10 + 1 once it saw the end.
+a_sink_on_an_ended_stream_gets_the_end(Config) ->
+    ?assertEqual({ok, 31},
+                 wasm_component:call_async(inst(Config), ~"ended", {[], u32}, [])).
+
 %%% ------------------------------------------------------------- helpers ---
 
 inst(Config) -> ?config(inst, Config).
@@ -154,6 +163,17 @@ imports() ->
                     {R, W} = wasm_async:host_future(u32),
                     ok = wasm_async:host_future_resolve(W, 42),
                     R
+            end),
+      {Host, ~"take"} =>
+          wasm_component:import_fun(
+            {[{stream, u8}], u32},
+            fun([S]) ->
+                    Got = counters:new(2, []),
+                    ok = wasm_async:host_sink(
+                           S, fun(eof) -> counters:put(Got, 2, 1), ok;
+                                 (B) -> counters:add(Got, 1, byte_size(B)), ok
+                              end),
+                    counters:get(Got, 1) * 10 + counters:get(Got, 2)
             end),
       {Host, ~"reenter"} =>
           wasm_component:import_fun(

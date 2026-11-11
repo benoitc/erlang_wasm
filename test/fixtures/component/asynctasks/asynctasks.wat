@@ -15,10 +15,12 @@
     (export "f32" (type (eq $f32)))
     (export "feed" (func (result $s8)))
     (export "fut" (func (result $f32)))
-    (export "reenter" (func (result u32)))))
+    (export "reenter" (func (result u32)))
+    (export "take" (func (param "s" $s8) (result u32)))))
   (alias export $host "feed" (func $feed))
   (alias export $host "fut" (func $fut))
   (alias export $host "reenter" (func $reenter))
+  (alias export $host "take" (func $take))
 
   (core module $libc (memory (export "memory") 1))
   (core instance $libc (instantiate $libc))
@@ -38,6 +40,7 @@
   (core func $feed_l (canon lower (func $feed)))
   (core func $fut_l (canon lower (func $fut)))
   (core func $reenter_l (canon lower (func $reenter)))
+  (core func $take_l (canon lower (func $take)))
 
   (core module $m
     (import "" "memory" (memory 1))
@@ -55,6 +58,7 @@
     (import "" "feed" (func $feed (result i32)))
     (import "" "fut" (func $fut (result i32)))
     (import "" "reenter" (func $reenter (result i32)))
+    (import "" "take" (func $take (param i32) (result i32)))
     (global $tasks (mut i32) (i32.const 0))
 
     ;; State block P: writer +0, bytes left +4, waitable-set +8, data +12.
@@ -134,7 +138,18 @@
       (call $ret (i32.load (i32.const 64))))
 
     (func (export "[async-lift]reenter")
-      (call $ret (call $reenter))))
+      (call $ret (call $reenter)))
+
+    ;; ended() -> u32: writes "abc" to a new stream, ends it, then hands the
+    ;; reader to `take', which answers what it got.
+    (func (export "[async-lift]ended")
+      (local $pair i64)
+      (local.set $pair (call $new8))
+      (i32.store (i32.const 128) (i32.const 0x00636261))
+      (drop (call $write8 (i32.wrap_i64 (i64.shr_u (local.get $pair) (i64.const 32)))
+                          (i32.const 128) (i32.const 3)))
+      (call $dropw8 (i32.wrap_i64 (i64.shr_u (local.get $pair) (i64.const 32))))
+      (call $ret (call $take (i32.wrap_i64 (local.get $pair))))))
 
   (core instance $i (instantiate $m (with "" (instance
     (export "memory" (memory $mem))
@@ -144,7 +159,8 @@
     (export "ret" (func $ret)) (export "ws_new" (func $ws_new))
     (export "join" (func $join)) (export "ctx_get" (func $ctx_get))
     (export "ctx_set" (func $ctx_set)) (export "feed" (func $feed_l))
-    (export "fut" (func $fut_l)) (export "reenter" (func $reenter_l))))))
+    (export "fut" (func $fut_l)) (export "reenter" (func $reenter_l))
+    (export "take" (func $take_l))))))
 
   (func (export "body") async (result $s8)
     (canon lift (core func $i "[async-lift]body") async
@@ -154,4 +170,6 @@
   (func (export "take-future") async (result u32)
     (canon lift (core func $i "[async-lift]take-future") async))
   (func (export "reenter") async (result u32)
-    (canon lift (core func $i "[async-lift]reenter") async)))
+    (canon lift (core func $i "[async-lift]reenter") async))
+  (func (export "ended") async (result u32)
+    (canon lift (core func $i "[async-lift]ended") async)))

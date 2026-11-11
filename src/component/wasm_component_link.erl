@@ -695,6 +695,16 @@ link(Graph, EntryModIdx, HostResolve, Opts) ->
 
 %% The element type of the `stream<T>' or `future<T>' a built-in names. A type
 %% the table cannot resolve keeps the byte stream the runtime always assumed.
+%% `task.return' names its result by type index when it is a compound type;
+%% resolve it, except a stream or future, which crosses as its handle.
+async_elem(#{result := {type, Ty}} = Meta, S) ->
+    Types = maps:get(types, maps:get(opts, S), #{}),
+    case wasm_component_types:value_desc(Ty, Types) of
+        {ok, {stream, _}} -> Meta;
+        {ok, {future, _}} -> Meta;
+        {ok, Desc} -> Meta#{result => Desc};
+        error -> Meta
+    end;
 async_elem(#{type := Ty} = Meta, S) ->
     Types = maps:get(types, maps:get(opts, S), #{}),
     case wasm_component_types:value_desc(Ty, Types) of

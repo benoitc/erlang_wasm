@@ -63,7 +63,13 @@ start(#{component := Component} = Opts) ->
     Scheme = maps:get(scheme, Opts, <<"http">>),
     ServeOpts = maps:get(serve_opts, Opts, #{}),
     MaxBody = maps:get(max_body_bytes, Opts, ?MAX_BODY_BYTES),
-    Config = #{component => Component, scheme => Scheme,
+    %% Decoded and parsed once, as the imports are built once; a component
+    %% that does not prepare fails each request as its bytes would.
+    Prepared = case wasm_component:prepare(Component) of
+                   {ok, P} -> P;
+                   {error, _} -> Component
+               end,
+    Config = #{component => Prepared, scheme => Scheme,
                %% Built once: nothing in them belongs to one request.
                imports => wasi_preview3:serve_imports(Component, ServeOpts),
                serve_opts => ServeOpts, max_body_bytes => MaxBody,
@@ -78,7 +84,7 @@ start(#{component := Component} = Opts) ->
     %% Either library answers a body over the ceiling with 413 itself.
     Extra0 = case Transport of h2 -> #{transport => tcp}; _ -> #{} end,
     Extra = Extra0#{max_body_size => MaxBody},
-    Holder = holder(Component),
+    Holder = holder(Prepared),
     case Transport:start_server(maps:get(port, Opts, 0), Extra#{handler => Handler}) of
         {ok, Ref} ->
             Addr = iolist_to_binary(["127.0.0.1:",

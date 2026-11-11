@@ -8723,3 +8723,28 @@ walked it for every component; it now walks it only for a component with async
 built-ins, the only reader.
 
 Scripts and logs: `test/audit/raw/wasi3/`.
+
+### Decode a component once per listener (2026-11-11)
+
+`wasm_component:prepare/1` decodes, checks and parses a component once; the
+listener prepares its component when it starts. A profile of the 0.2 hello
+world served per request had component decoding and linking at the top
+(`wasm_component_link` 19.9%, `wasm_leb128` 10.3%, `wasm_component_types`
+8.4%).
+
+| path | from bytes | prepared | ratio |
+| --- | --- | --- | --- |
+| 0.2 hello world, one request in a fresh process, us | 1135.8 | 733.5 | 0.65x |
+| 0.3 hello world, one request in a fresh process, us | 5281.2 | 3940.7 | 0.75x |
+| 0.2 listener, hello world, requests a second | 4948.4 | 6200.5 | 1.25x faster |
+
+The first two rows: one VM, seven interleaved rounds of 200, medians
+(`lprep.erl`). The listener row: four VMs per side against `5e1235b`, both
+orders, medians (`prepare-listener.log`). The one-minute load was 40 to 48
+throughout, above the protocol's 8, so these are relative figures only; every
+prepared round beat every round from bytes.
+
+`p3_sockets_tcp_streams` passes, in 430 s at a load of 40: its last case reads
+2 MB a byte at a time through a debug build, once over IPv4 and once over IPv6,
+all interpreted. It is past the sweep's 60 s bound, so the suite lists it as
+slow and does not run it.

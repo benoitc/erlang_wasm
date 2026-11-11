@@ -30,7 +30,9 @@ all() ->
      an_ill_typed_lift_is_rejected,
      a_double_drop_traps,
      a_destructor_runs_once_on_drop,
-     a_wrong_type_handle_traps].
+     a_wrong_type_handle_traps,
+     a_prepared_component_instantiates_like_its_bytes,
+     preparing_checks_what_instantiating_checks].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -97,6 +99,31 @@ a_renamed_export_is_called_through_its_wiring(_Config) ->
     ?assertEqual({ok, 1}, wasm_component:call(I, <<"step">>, {[], u32}, [])),
     ?assertEqual({ok, 2}, wasm_component:call(I, <<"step">>, {[], u32}, [])),
     wasm_component:destroy(I).
+
+%% Prepared once, instantiated twice: each instance answers as one from the
+%% bytes, on the single-core path and through an export's wiring.
+a_prepared_component_instantiates_like_its_bytes(Config) ->
+    {ok, P} = wasm_component:prepare(?config(component, Config)),
+    ?assertEqual({ok, P}, wasm_component:prepare(P)),
+    [begin
+         {ok, I} = wasm_component:instantiate(P),
+         ?assertEqual({ok, {ok, <<"HELLO">>}},
+                      wasm_component:call(I, <<"run">>, sig(), [<<"hello">>])),
+         wasm_component:destroy(I)
+     end || _ <- [1, 2]],
+    {ok, Bin} = file:read_file(component_fixture("renamedexport.component.wasm")),
+    {ok, R} = wasm_component:prepare(Bin),
+    {ok, J} = wasm_component:instantiate(R),
+    ?assertEqual({ok, 1}, wasm_component:call(J, <<"step">>, {[], u32}, [])),
+    wasm_component:destroy(J),
+    ?assertEqual(Bin, wasm_component:source(R)).
+
+preparing_checks_what_instantiating_checks(_Config) ->
+    ?assertEqual({error, not_a_component},
+                 wasm_component:prepare(<<16#00, 16#61, 16#73, 16#6d,
+                                          16#01, 16#00, 16#00, 16#00>>)),
+    {ok, Bin} = file:read_file(component_fixture("audit/invalid_lift.wasm")),
+    ?assertMatch({error, {invalid_lift_type, _}}, wasm_component:prepare(Bin)).
 
 fixture_path() ->
     component_fixture("echo.component.wasm").

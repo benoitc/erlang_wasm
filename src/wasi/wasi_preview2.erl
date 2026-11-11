@@ -447,7 +447,7 @@ As `run_command/3`, with the imports built by `Host(Opts)` instead of
 `command/1`: `wasi_preview3:run_command/3` passes the 0.2 and 0.3 host
 together.
 """.
--spec run_command_with(binary(), binary(), map(), fun((map()) -> map())) ->
+-spec run_command_with(wasi_preview3:component(), binary(), map(), fun((map()) -> map())) ->
           {ok, #{stdout := binary(), stderr := binary(),
                  exit_code := integer()}} | {error, term()}.
 run_command_with(Bin, Stdin, Extra, Host) ->
@@ -555,7 +555,7 @@ As `run_serve/3`, with the imports built by `Host(Opts)`, or given as a map
 built once beforehand, and the request served by `Serve(Instance, Request)`:
 `wasi_preview3:run_serve/3,4` serve a 0.3 handler this way.
 """.
--spec run_serve_with(binary(), map(), map(), fun((map()) -> map()) | map(),
+-spec run_serve_with(wasi_preview3:component(), map(), map(), fun((map()) -> map()) | map(),
                      fun((wasm_component:instance(), map()) -> term())) -> term().
 run_serve_with(Bin, Request, Extra, Host, Serve) ->
     _ = erase(?EXIT_STATUS),

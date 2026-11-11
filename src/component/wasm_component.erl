@@ -49,19 +49,23 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
 
 -include("wasm_component.hrl").
 
--export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
+-export([decode/1, prepare/1, instantiate/1, instantiate/2, instantiate/3, call/4,
          call_async/4, call_async/5, start_async/4, start_async/5, pump/2,
          destroy/1, destroy/2, drop_resource/3]).
--export([import_fun/2, exports/1, hold/1]).
+-export([import_fun/2, exports/1, hold/1, source/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
--export_type([component/0, instance/0]).
+-export_type([component/0, prepared/0, instance/0]).
 
 -opaque component() :: #{core := binary(), cores := [binary()],
                          sec := binary(), entry_idx := non_neg_integer(),
                          exports := [binary()]}
                       | #{composed := true, sec := binary(),
                           exports := [binary()]}.
+%% A component decoded, checked and parsed once (`prepare/1`), and what its
+%% instantiation derives from the bytes alone.
+-opaque prepared() :: {prepared, #{bin := binary(), decoded := component(),
+                                   pre := #{atom() => term()}}}.
 -opaque instance() :: #{core := wasm:instance(), exports := [binary()],
                         cores := [wasm:instance()],
                         export_map => #{binary() => binary()},
@@ -105,7 +109,12 @@ as the server: each instantiation then finds the modules already loaded.
 the `wasm` application is not started, since instantiation then compiles in
 the caller and never uses the cache.
 """.
--spec hold(binary()) -> ok | {error, term()}.
+-spec hold(binary() | prepared()) -> ok | {error, term()}.
+hold({prepared, #{decoded := Decoded}}) ->
+    case default_loader() of
+        compile -> ok;
+        load -> hold_cores(maps:get(cores, Decoded, []))
+    end;
 hold(Bin) ->
     case {default_loader(), decode(Bin)} of
         {compile, _} -> ok;
@@ -216,6 +225,83 @@ skip_sortidx(<<_Sort, Rest0/binary>>) ->
 skip_sortidx(Bin) ->
     Bin.
 
+-doc """
+Decode, check and parse component `Bin` once, for many instantiations.
+
+Every instantiation from bytes decodes the component, checks its lifts and
+parses its sections again. A server that instantiates per request prepares
+the component once and passes what `prepare/1` returns wherever it would pass
+the bytes: `instantiate/2,3`, `hold/1`, and the WASI runners.
+
+```erlang
+{ok, Prepared} = wasm_component:prepare(Bin),
+{ok, I} = wasm_component:instantiate(Prepared, #{}).
+```
+""".
+-spec prepare(binary() | prepared()) -> {ok, prepared()} | {error, term()}.
+prepare({prepared, _} = P) ->
+    {ok, P};
+prepare(Bin) ->
+    wasm_error:capture(
+      fun() ->
+          case decode(Bin) of
+              {ok, #{composed := true} = Decoded} ->
+                  {ok, {prepared, #{bin => Bin, decoded => Decoded, pre => #{}}}};
+              {ok, #{core := Core, sec := Sec} = Decoded} ->
+                  Cores = maps:get(cores, Decoded, [Core]),
+                  case wasm_component_link:validate_lifts(Sec, Cores) of
+                      {error, _} = Invalid ->
+                          Invalid;
+                      ok ->
+                          {ok, {prepared, #{bin => Bin, decoded => Decoded,
+                                            pre => derive(Decoded)}}}
+                  end;
+              {error, _} = E ->
+                  E
+          end
+      end).
+
+-doc "The bytes a component was prepared from, or the bytes themselves.".
+-spec source(binary() | prepared()) -> binary().
+source({prepared, #{bin := Bin}}) -> Bin;
+source(Bin) when is_binary(Bin) -> Bin.
+
+%% What instantiation reads from the bytes alone: everything but the cores
+%% themselves, which the module cache or the loader builds.
+derive(#{core := Core, sec := Sec} = Decoded) ->
+    EntryIdx = maps:get(entry_idx, Decoded, 0),
+    Pre = #{valid => ok,
+            res => wasm_component_link:resource_info(Sec, EntryIdx),
+            entry_imports => wasm_component_link:core_imports(Core),
+            export_map => wasm_component_link:export_map(Sec),
+            str_enc => wasm_component_link:export_encodings(Sec),
+            bindings => wasm_component_link:export_bindings(Sec),
+            dtors => wasm_component_types:resource_dtors(Sec)},
+    case wasm_component_link:parse(Sec) of
+        {ok, Graph} ->
+            Pre#{graph => Graph, types => link_types(Graph, Sec)};
+        {error, _} ->
+            %% Linking reports it, if the component ever needs the linker.
+            Pre
+    end.
+
+%% Only the async built-ins read the type space (an element or result type by
+%% index), and walking it is not free: a component with none skips it.
+link_types(Graph, Sec) ->
+    case lists:keymember(canon_async, 1, Graph) of
+        true -> wasm_component_types:type_space(Sec);
+        false -> none
+    end.
+
+%% A value `prepare/1` derived, or the same computed now.
+pre(Key, #{pre := Pre}, Fun) ->
+    case Pre of
+        #{Key := V} -> V;
+        _ -> Fun()
+    end;
+pre(_Key, _Decoded, Fun) ->
+    Fun().
+
 -doc "Decode and instantiate a component, wiring any resource intrinsics.".
 -spec instantiate(binary()) -> {ok, instance()} | {error, term()}.
 instantiate(Bin) ->
@@ -235,7 +321,7 @@ is loaded through its module cache, so the same bytes compile once per node and
 are shared; when it does not, they are compiled inline, as `wasm:compile/1`
 does.
 """.
--spec instantiate(binary(), #{{binary(), binary()} => function()}) ->
+-spec instantiate(binary() | prepared(), #{{binary(), binary()} => function()}) ->
           {ok, instance()} | {error, term()}.
 instantiate(Bin, Imports) ->
     instantiate(Bin, Imports, #{}).
@@ -249,7 +335,7 @@ the worker uses per request.
 (rate-limited, and it needs the `wasm` application), or `compile` inline. Left
 out, it is `load` while the cache runs and `compile` when it does not.
 """.
--spec instantiate(binary(), #{{binary(), binary()} => function()}, map()) ->
+-spec instantiate(binary() | prepared(), #{{binary(), binary()} => function()}, map()) ->
           {ok, instance()} | {error, term()}.
 instantiate(Bin, Imports, Opts0) ->
     %% `loader => compile` builds an inline module with `wasm:compile` instead of
@@ -270,11 +356,16 @@ instantiate(Bin, Imports, Opts0) ->
     %% core decoder uses, while letting an in-flight guest exception pass through.
     wasm_error:capture(
       fun() ->
-          case decode(Bin) of
-              {ok, Decoded} ->
-                  instantiate_decoded(Decoded, Imports, Opts, Limits);
-              {error, _} = E ->
-                  E
+          case Bin of
+              {prepared, #{decoded := Decoded, pre := Pre}} ->
+                  instantiate_decoded(Decoded#{pre => Pre}, Imports, Opts, Limits);
+              _ ->
+                  case decode(Bin) of
+                      {ok, Decoded} ->
+                          instantiate_decoded(Decoded, Imports, Opts, Limits);
+                      {error, _} = E ->
+                          E
+                  end
           end
       end).
 
@@ -291,7 +382,8 @@ instantiate_decoded(#{core := Core, sec := Sec} = Decoded, Imports, Opts, Limits
     %% Reject a component whose `canon lift` declares a type its core function cannot
     %% have (the Canonical ABI derives the core signature from the declared component
     %% type) before any core is built or its start function runs.
-    case wasm_component_link:validate_lifts(Sec, maps:get(cores, Decoded, [Core])) of
+    case pre(valid, Decoded,
+             fun() -> wasm_component_link:validate_lifts(Sec, maps:get(cores, Decoded, [Core])) end) of
         {error, _} = Invalid -> Invalid;
         ok -> instantiate_valid(Decoded, Imports, Opts, Limits)
     end.
@@ -303,8 +395,9 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% What the resource built-ins and the host boundary check handles by: each
     %% export's real signature, the types this component defines, and the type
     %% of each built-in the entry core imports.
-    Res = wasm_component_link:resource_info(Sec, EntryIdx),
-    EntryImports = wasm_component_link:core_imports(Core),
+    Res = pre(res, Decoded, fun() -> wasm_component_link:resource_info(Sec, EntryIdx) end),
+    EntryImports = pre(entry_imports, Decoded,
+                       fun() -> wasm_component_link:core_imports(Core) end),
     %% An async host import is bound here as the linker binds it, so a
     %% component that never reaches the linker can call one too.
     Host = maps:map(fun(_Key, P) -> provider(P) end,
@@ -313,7 +406,7 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% The export map lets `call/4` reach a core function whose name differs from the
     %% component export name; where they coincide it is the identity and the same-name
     %% fallback in `call/4` covers exports it does not resolve.
-    ExportMap = wasm_component_link:export_map(Sec),
+    ExportMap = pre(export_map, Decoded, fun() -> wasm_component_link:export_map(Sec) end),
     %% Imports the host set does not cover are wired from other cores of this
     %% component (the linker). A multi-core component whose entry is self-sufficient
     %% still takes the linker when an exported lift names a core other than the
@@ -341,8 +434,8 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% Each export's string encoding (only the non-UTF-8 ones are recorded) and its
     %% declared realloc/post-return, so `call/4` marshals strings and allocates/cleans up
     %% the way the component's canon lift asks, rather than by name.
-    StrEnc = wasm_component_link:export_encodings(Sec),
-    Bindings = wasm_component_link:export_bindings(Sec),
+    StrEnc = pre(str_enc, Decoded, fun() -> wasm_component_link:export_encodings(Sec) end),
+    Bindings = pre(bindings, Decoded, fun() -> wasm_component_link:export_bindings(Sec) end),
     with_export_map(Result, ExportMap, StrEnc, Bindings, ResId, Res).
 
 with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings, ResId, Res) ->
@@ -368,20 +461,21 @@ resolve_export(#{core := Inst} = I, Export) ->
 %% export). Interpret the whole core-instance graph: `wasm_component_link:link/4`
 %% builds every core, wiring core-to-core imports and binding lowered WASI imports
 %% to the host set, and returns the entry instance plus every built core.
-link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts) ->
+link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports} = Decoded, Imports, Opts) ->
     Resolve = fun(Imps) ->
                   resolve_imports(Imps, Imports, resource_imports(Imps, #{}))
               end,
     LinkOpts0 = Opts#{drop_fun => drop_fun(Opts),
-                      resource_dtors => wasm_component_types:resource_dtors(Sec)},
-    case wasm_component_link:parse(Sec) of
-        {ok, Graph} ->
-            %% Only the async built-ins read the type space (an element or
-            %% result type by index), and walking it is not free: a component
-            %% with none skips it.
-            LinkOpts = case lists:keymember(canon_async, 1, Graph) of
-                           true -> LinkOpts0#{types => wasm_component_types:type_space(Sec)};
-                           false -> LinkOpts0
+                      resource_dtors => pre(dtors, Decoded,
+                                            fun() -> wasm_component_types:resource_dtors(Sec) end)},
+    case pre(graph, Decoded, fun() -> wasm_component_link:parse(Sec) end) of
+        {error, _} = E ->
+            E;
+        Parsed ->
+            Graph = case Parsed of {ok, G} -> G; G -> G end,
+            LinkOpts = case pre(types, Decoded, fun() -> link_types(Graph, Sec) end) of
+                           none -> LinkOpts0;
+                           Types -> LinkOpts0#{types => Types}
                        end,
             case wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts) of
                 {ok, #{core := Inst, cores := Cores, export_targets := Targets}} ->
@@ -389,9 +483,7 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts)
                            export_targets => Targets}};
                 {error, _} = E ->
                     E
-            end;
-        {error, _} = E ->
-            E
+            end
     end.
 
 %% A composed component (nested component definitions instantiated and their exports

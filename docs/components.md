@@ -210,6 +210,24 @@ A host import can give the guest a stream or a future of its own:
 `wasm_async:host_stream/1` and `host_future/1` return the guest's end and
 yours.
 
+## Instantiate one component many times
+
+Each instantiation from bytes decodes the component, checks it and parses its
+sections again. When you instantiate the same component many times, as a
+server does per request, prepare it once and pass the result instead of the
+bytes:
+
+```erlang
+{ok, Bin} = file:read_file("echo.component.wasm"),
+{ok, Prepared} = wasm_component:prepare(Bin),
+{ok, Inst} = wasm_component:instantiate(Prepared),
+ok = wasm_component:destroy(Inst).
+```
+
+`prepare/1` returns the same errors `instantiate` would. `hold/1` and the WASI
+runners take a prepared component too, and the HTTP listener prepares its
+component when it starts.
+
 ## Notes
 
 - The process that instantiated a component instance owns it. Call it from

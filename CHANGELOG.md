@@ -17,6 +17,10 @@ plain Erlang.
   `resource_limit` now also bounds how many async calls a guest has waiting
   at once. A TCP connection stays open while its send or receive stream does,
   even after the guest drops the socket itself, as Rust guests do.
+- **Prepare a component once for many instances.** `wasm_component:prepare/1`
+  decodes, checks and parses a component once; pass what it returns wherever
+  you pass the bytes. The HTTP listener does this when it starts, so a
+  request no longer decodes the component again.
 - **An async task can keep running after it returns its result.** Call it with
   `wasm_component:start_async/4`, which returns as soon as the task has a
   result. Read a returned stream with `wasm_async:host_read/3` while the guest

@@ -979,7 +979,10 @@ do_call_async(I, Export, {Params, Result}, Args, Opts, Mode) ->
     end.
 
 run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts, Mode) ->
-    ok = wasm_async:begin_task(Inst, Opts),
+    %% The instance's `resource_limit' bounds the subtasks its tasks start, as
+    %% it bounds host resources.
+    Limit = case get(?HOST_LIMIT) of undefined -> infinity; L -> L end,
+    ok = wasm_async:begin_task(Inst, Opts#{resource_limit => Limit}),
     Outcome =
         try
             {Descs, Lowered} = prepare_async_params(Params, Args),

@@ -33,7 +33,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -export([builtin/2, begin_task/2, end_task/0, take_return/0, task_ref/0, waits/0,
          new_future_readable/2, new_stream_readable/2,
          new_future_channel/1, new_stream_channel/1,
-         register_producer/2, deliver_before/2, wait_on_set/1, take_produced/1,
+         register_producer/2, register_producer/3, deliver_before/2, wait_on_set/1, take_produced/1,
          async_lower/2, async_lower/3, backpressure/1]).
 %% Tasks that outlive the call that started them, and the host's side of the
 %% streams and futures they use.
@@ -111,6 +111,8 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% How the running call hands a returned stream to the host: read whole when
 %% the task finishes (`finish'), or read as it is written (`start').
 -define(MODE, {?MODULE, mode}).
+%% The most subtasks waiting at once: each has a producer, a process.
+-define(LIMIT, {?MODULE, resource_limit}).
 
 %%% --------------------------------------------------------------- task frame ---
 
@@ -148,6 +150,7 @@ begin_task(Inst, Opts) ->
         Pid       -> put(?WAIT_HOOK, Pid)
     end,
     put(?MODE, maps:get(mode, Opts, finish)),
+    put(?LIMIT, maps:get(resource_limit, Opts, infinity)),
     ok.
 
 open_with_work() ->
@@ -309,9 +312,18 @@ Info}` (`Info` = `{value,V} | {data,Elements} | close`) to the owner when it cho
 """.
 -spec register_producer(non_neg_integer(), fun((map()) -> any())) -> ok.
 register_producer(Handle, PFun) ->
+    register_producer(Handle, PFun, #{}).
+
+-doc """
+As `register_producer/2`, with `Extra` merged into the map the producer gets:
+an async host import's producer is given the import's own result as `value`,
+so a timer knows how long to wait.
+""".
+-spec register_producer(non_neg_integer(), fun((map()) -> any()), map()) -> ok.
+register_producer(Handle, PFun, Extra) ->
     Owner = self(),
     Ref = task_ref(),
-    Ctx = #{owner => Owner, task_ref => Ref, handle => Handle},
+    Ctx = Extra#{owner => Owner, task_ref => Ref, handle => Handle},
     %% Bound to the owner: `end_task/0' stops producers, but an owner that is
     %% killed never runs it. The monitor is tagged with the task, so a
     %% producer's `DOWN' can be told from every other in the caller's mailbox:
@@ -630,7 +642,12 @@ drop_end(Dir, Kind, H) ->
 detach(#{'end' := read, peer := W}) when W =/= undefined ->
     update(W, fun(Wr) -> Wr#{reader => undefined} end);
 detach(#{'end' := write, reader := RH}) when RH =/= undefined ->
-    update(RH, fun(R) -> R#{writer => closed, peer => undefined} end);
+    update(RH, fun(R) -> R#{writer => closed, peer => undefined} end),
+    %% A sink has nothing left to take once the guest's writer is gone.
+    case get(?WAITABLE(RH)) of
+        #{host := sink} -> forget_waitable(RH), release_end(RH);
+        _ -> ok
+    end;
 detach(_) ->
     ok.
 
@@ -697,7 +714,8 @@ into the return area, and reports RETURNED at once, with no subtask handle (as t
 specification has it for a call that has already resolved).
 
 The three-argument form is the suspending case: the host function's result is computed
-but delivered later. The lowered call records a pending subtask, spawns a producer
+but delivered later, unless the function answers `{returned, Value}`, which completes
+the call at once. The lowered call records a pending subtask, spawns a producer
 (`PFun`, given the subtask handle) that signals completion when it chooses, and reports
 the subtask STARTED, so the guest suspends. When the completion arrives the executor
 writes the result into the return area and delivers a SUBTASK event to resume the guest.
@@ -719,14 +737,34 @@ async_lower({Params, Result}, Fun, PFun) ->
     fun(_Ctx, Flats) ->
         Inst = task_instance(),
         {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
-        Value = Fun(Terms),
-        RetPtr = case Rest of [P | _] -> P; [] -> undefined end,
-        H = next_handle(),
-        put(?WAITABLE(H), #{'end' => subtask, result => Result, ret_ptr => RetPtr,
-                            value => Value, state => awaiting}),
-        ok = register_producer(H, PFun),
-        {ok, [(H bsl 4) bor ?SUBTASK_STARTED]}
+        case Fun(Terms) of
+            %% Nothing to wait for: the call completes at once, as the
+            %% two-argument form does.
+            {returned, Value} ->
+                write_return_area(Inst, Result, Rest, Value),
+                {ok, [?SUBTASK_RETURNED]};
+            Value ->
+                start_subtask(Result, Rest, Value, PFun)
+        end
     end.
+
+start_subtask(Result, Rest, Value, PFun) ->
+    case get(?LIMIT) of
+        Limit when is_integer(Limit) ->
+            case length(producers()) >= Limit of
+                true -> {trap, resource_limit_reached};
+                false -> start_subtask_1(Result, Rest, Value, PFun)
+            end;
+        _ -> start_subtask_1(Result, Rest, Value, PFun)
+    end.
+
+start_subtask_1(Result, Rest, Value, PFun) ->
+    RetPtr = case Rest of [P | _] -> P; [] -> undefined end,
+    H = next_handle(),
+    put(?WAITABLE(H), #{'end' => subtask, result => Result, ret_ptr => RetPtr,
+                        value => Value, state => awaiting}),
+    ok = register_producer(H, PFun, #{value => Value}),
+    {ok, [(H bsl 4) bor ?SUBTASK_STARTED]}.
 
 write_return_area(_Inst, none, _Rest, _Value)      -> ok;
 write_return_area(_Inst, _Result, [undefined | _], _V) -> ok;
@@ -1335,6 +1373,7 @@ read_loop(H, Max, Deadline) ->
                     refill(H),
                     {ok, Taken};
                 true when Writer =:= closed ->
+                    ok = release_end(H),
                     eof;
                 true ->
                     case step(Deadline) of

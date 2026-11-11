@@ -6,6 +6,13 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **A WASI 0.3 import no longer binds a WASI 0.2 function.** Versions were
+  removed when matching imports to host functions, so `wasi:cli/stdout@0.3.0`
+  reached the 0.2 `stdout`, whose functions differ. A 0.3 import now looks for a
+  host key ending in `@0.3` and nothing else, so 0.2 and 0.3 hosts can serve one
+  component side by side. 0.2 keys are unchanged.
+- **Async host imports work on every component.** One with a single core module
+  used to refuse an `{async_import, ...}` host function at instantiation.
 - **The HTTP listener no longer fails after about 12 requests a second.** Each
   request loaded the component's core modules again, because nothing kept
   them loaded between requests, and those loads counted against the module

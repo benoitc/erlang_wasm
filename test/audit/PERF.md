@@ -8748,3 +8748,25 @@ prepared round beat every round from bytes.
 2 MB a byte at a time through a debug build, once over IPv4 and once over IPv6,
 all interpreted. It is past the sweep's 60 s bound, so the suite lists it as
 slow and does not run it.
+
+### Sharing without an option (2026-11-12)
+
+`prepare/2` and the `prepared` option are gone: workers with the same
+adapter, options and store key share one image through `wasm_worker_images`.
+Gates 1 to 3 above, held fixed, against main (`35c982a`), which runs a pool
+through `prepare/2`. Five rounds, odd rounds main first, each run in a fresh
+VM at `+S 10:10`, started at a one-minute load below 8 (7.93 at most).
+
+| guest | images, 50 workers, main / cand | charged, main / cand | captures and images, 4 on an empty store, main / cand | capture wall, main / cand | pool of 10 on a filed image, main / cand, ms | cand / main |
+| --- | --- | --- | --- | --- | --- | --- |
+| py_entry | 1 / 1 | 8.2 MB / 8.2 MB | 1 and 1 / 1 and 1 | 17.3 s / 17.1 s | 80 / 59 | 0.738 |
+| py | 1 / 1 | 8.2 MB / 8.2 MB | 1 and 1 / 1 and 1 | 17.2 s / 17.2 s | 77 / 55 | 0.696 |
+| qjs | 1 / 1 | 0.39 MB / 0.39 MB | 1 and 1 / 1 and 1 | 115 ms / 115 ms | 3 / 2 | 0.667 |
+| lua | 1 / 1 | 0.20 MB / 0.20 MB | 1 and 1 / 1 and 1 | 75 ms / 76 ms | 2 / 1 | 0.500 |
+
+Medians; counts identical in all five rounds. Every gate passes. The pool
+start is faster because nothing is prepared first: on main the time includes
+`prepare/2`. qjs and lua are at the clock's resolution. On main the image has
+one more holder, the caller of `prepare/2`.
+
+Script and log: `test/audit/raw/auto-share/`.

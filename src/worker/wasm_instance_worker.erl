@@ -61,7 +61,9 @@ pool and check one out per request.
     isolation = fresh :: fresh | reuse,
     instance,
     served = 0 :: non_neg_integer(),
-    name :: term()
+    name :: term(),
+    guard :: pid() | undefined,    % holds the deadline of the call running
+    running :: atomics:atomics_ref() | undefined
 }).
 
 %%% ------------------------------------------------------------------ api ---
@@ -85,9 +87,9 @@ The timeout is enforced on both sides: `gen_server:call` stops waiting, and the
 worker is killed so the work actually stops. Giving up without killing would
 leave a runaway module burning a scheduler with nobody watching.
 
-The kill does not depend on you: a guard process holds the deadline, so a
-worker still running when it passes is killed even if the process that called
-has died.
+The kill does not depend on you: the worker's guard process holds the
+deadline, so a worker still running when it passes is killed even if the
+process that called has died.
 
 `call/3` uses `worker_timeout`, five seconds unless you set it:
 
@@ -106,40 +108,58 @@ default_timeout() ->
     application:get_env(wasm, worker_timeout, ?DEFAULT_TIMEOUT).
 
 -spec call(pid(), binary(), [term()], timeout()) -> {ok, [term()]} | {error, term()}.
+call(Pid, Function, Args, infinity) ->
+    run(Pid, {run, Function, Args}, infinity, infinity);
 call(Pid, Function, Args, Timeout) ->
-    Request = case Timeout of
-                  infinity -> {run, Function, Args};
-                  _ -> {run, Function, Args, guard(Pid, Timeout)}
-              end,
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    run(Pid, {run, Function, Args, Deadline}, Timeout, Deadline).
+
+run(Pid, Request, Timeout, Deadline) ->
     try
         gen_server:call(Pid, Request, Timeout)
     catch
         exit:{timeout, _} ->
             exit(Pid, kill),
-            {error, #{class => exhaustion, kind => timeout,
-                      msg => ~"request timed out", ctx => #{timeout => Timeout}}};
+            timed_out(Timeout);
         exit:{noproc, _} ->
             {error, #{class => link, kind => no_worker,
                       msg => ~"worker is gone", ctx => #{}}};
         exit:{Reason, _} ->
-            {error, #{class => trap, kind => worker_died,
-                      msg => ~"worker died", ctx => #{reason => Reason}}}
+            %% The guard kills at the same deadline the call waits for, and
+            %% often first: a worker killed then has timed out.
+            case Deadline =/= infinity andalso
+                     erlang:monotonic_time(millisecond) >= Deadline of
+                true -> timed_out(Timeout);
+                false -> {error, #{class => trap, kind => worker_died,
+                                   msg => ~"worker died",
+                                   ctx => #{reason => Reason}}}
+            end
     end.
 
-%% The deadline's own owner. The caller's `catch' above kills the worker too,
-%% but a caller that is killed first never reaches it; this process does not
-%% depend on the caller. It ends when the worker reports the call done, when
-%% the worker goes, or at the deadline, when it kills the worker.
-guard(Worker, Timeout) ->
-    spawn(fun() ->
-                  Mon = monitor(process, Worker),
-                  receive
-                      {done, Worker} -> ok;
-                      {'DOWN', Mon, process, Worker, _} -> ok
-                  after Timeout ->
-                      exit(Worker, kill)
-                  end
-          end).
+timed_out(Timeout) ->
+    {error, #{class => exhaustion, kind => timeout,
+              msg => ~"request timed out", ctx => #{timeout => Timeout}}}.
+
+%% The deadline's own owner, one per worker. The caller's `catch' above kills
+%% the worker too, but a caller that is killed first never reaches it; this
+%% process does not depend on the caller. The worker arms a timer to it for
+%% each call and writes the call's number to `Running' while it runs; a timer
+%% that fires for the call still running kills the worker. A stale timer, one
+%% whose call has finished, finds another number and is ignored.
+guard(Worker, Running) ->
+    Mon = monitor(process, Worker),
+    guard_loop(Worker, Mon, Running).
+
+guard_loop(Worker, Mon, Running) ->
+    receive
+        {timeout, _TRef, Call} ->
+            case atomics:get(Running, 1) of
+                Call -> exit(Worker, kill);
+                _ -> ok
+            end,
+            guard_loop(Worker, Mon, Running);
+        {'DOWN', Mon, process, Worker, _} -> ok
+    end.
 
 -spec stop(pid()) -> ok.
 stop(Pid) -> gen_server:stop(Pid).
@@ -167,11 +187,15 @@ init({Module, Opts}) ->
     %% Makes the worker identifiable in `observer`, `recon` and crash dumps
     %% instead of being an anonymous pid.
     proc_lib:set_label({wasm_instance_worker, Name}),
+    Worker = self(),
+    Running = atomics:new(1, []),
     State = #state{module = Module,
                    imports = maps:get(imports, Opts, #{}),
                    limits = Limits,
                    isolation = maps:get(isolation, Opts, fresh),
-                   name = Name},
+                   name = Name,
+                   guard = spawn(fun() -> guard(Worker, Running) end),
+                   running = Running},
     %% Instantiating in `handle_continue` keeps a large module from blocking
     %% the supervisor's start, and reports failure the same way as any other.
     {ok, State, {continue, instantiate}}.
@@ -182,9 +206,14 @@ handle_continue(instantiate, State) ->
         {error, Reason} -> {stop, {instantiate_failed, Reason}, State}
     end.
 
-handle_call({run, F, A, Guard}, From, State) ->
+handle_call({run, F, A, Deadline}, From,
+            #state{guard = Guard, running = Running} = State) ->
+    Call = erlang:unique_integer([positive]),
+    TRef = erlang:start_timer(Deadline, Guard, Call, [{abs, true}]),
+    ok = atomics:put(Running, 1, Call),
     Reply = handle_call({run, F, A}, From, State),
-    Guard ! {done, self()},
+    ok = atomics:put(Running, 1, 0),
+    _ = erlang:cancel_timer(TRef, [{async, true}, {info, false}]),
     Reply;
 handle_call({run, _F, _A}, _From, #state{instance = undefined} = State) ->
     {reply, {error, #{class => link, kind => no_instance,

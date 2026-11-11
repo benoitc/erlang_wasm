@@ -191,6 +191,11 @@ Notes on how it behaves:
 
 - The listener creates a new instance for each request. So a slow guest, or
   a guest that traps, affects only its own request.
+- The listener loads the component's core modules once, when it starts, and
+  keeps them loaded until it stops. Each request's instance uses them, so
+  requests do not count against `max_module_loads_per_second`. To do the same
+  in your own server, call `wasm_component:hold/1` from a process that lives
+  as long as it does.
 - A trap, a link failure or an error result is answered with a 500 and the
   body `wasi:http reactor error`. The socket is not dropped.
 - The request body is read to its end, chunked or not, within

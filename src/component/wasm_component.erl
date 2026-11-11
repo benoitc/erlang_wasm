@@ -51,7 +51,7 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
 
 -export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
          call_async/4, call_async/5, destroy/1, destroy/2, drop_resource/3]).
--export([import_fun/2, exports/1]).
+-export([import_fun/2, exports/1, hold/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
 -export_type([component/0, instance/0]).
@@ -89,6 +89,35 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
 %% Max total callback turns `call_async` drives before giving up (a runaway guard, not
 %% a progress check): a legitimate stream takes one turn per read round.
 -define(ASYNC_BUDGET, 1000000).
+
+-doc """
+Keep a component's core modules loaded while the calling process lives.
+
+Instantiating loads each core module through the module cache, and a module
+nobody holds is evicted when its last instance's process exits. A server that
+instantiates per request, each in its own process, so loads every core again
+on every request, and every one of those loads counts against
+`max_module_loads_per_second`. Call `hold/1` from a process that lives as long
+as the server: each instantiation then finds the modules already loaded.
+
+`ok` once every core module is loaded, or the first error. Does nothing when
+the `wasm` application is not started, since instantiation then compiles in
+the caller and never uses the cache.
+""".
+-spec hold(binary()) -> ok | {error, term()}.
+hold(Bin) ->
+    case {default_loader(), decode(Bin)} of
+        {compile, _} -> ok;
+        {load, {ok, #{cores := Cores}}} -> hold_cores(Cores);
+        {load, {error, _} = E} -> E
+    end.
+
+hold_cores([]) -> ok;
+hold_cores([Core | Rest]) ->
+    case wasm:load(Core) of
+        {ok, _Handle} -> hold_cores(Rest);
+        {error, _} = E -> E
+    end.
 
 -doc """
 Decode a component binary into its embedded core module and export names.

@@ -6,6 +6,12 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **The HTTP listener no longer fails after about 12 requests a second.** Each
+  request loaded the component's core modules again, because nothing kept
+  them loaded between requests, and those loads counted against the module
+  cache's limit of 50 a second: past it, every request was answered 500. The
+  listener now loads them once when it starts. `wasm_component:hold/1` does the
+  same for your own server.
 - **HTTP requests from a guest now have a real deadline and a size limit.**
   The 30-second deadline restarted with every chunk of the response, so a
   server trickling bytes could keep a request open for ever; it now counts

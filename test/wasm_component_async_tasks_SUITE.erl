@@ -90,9 +90,13 @@ pump_stops_when_only_the_host_can_help(Config) ->
 a_sink_takes_writes_as_they_come(Config) ->
     Test = self(),
     {ok, H} = wasm_component:start_async(inst(Config), ~"body", ?BODY, []),
-    ok = wasm_async:host_sink(H, fun(B) -> Test ! {bytes, B}, ok end),
+    ok = wasm_async:host_sink(H, fun(eof) -> Test ! eof, ok;
+                                    (B) -> Test ! {bytes, B}, ok
+                                 end),
     ?assertEqual({finished, 0}, wasm_component:pump(inst(Config), 5000)),
-    ?assertEqual(3000, byte_size(collect(<<>>))).
+    ?assertEqual(3000, byte_size(collect(<<>>))),
+    %% Told once the guest dropped its writer.
+    receive eof -> ok after 0 -> ct:fail(no_eof) end.
 
 destroy_ends_a_pending_task(Config) ->
     {ok, _H} = wasm_component:start_async(inst(Config), ~"body", ?BODY, []),

@@ -39,7 +39,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% streams and futures they use.
 -export([resolved/0, suspend_task/4, pending/0, pump/1, close_frame/0,
          guest_call/1,
-         host_reader/1, host_sink/2, host_stream/1, host_future/1,
+         host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
          host_write/3, host_close/1, host_future_resolve/2,
          host_read/3, host_future_await/2]).
 
@@ -555,10 +555,11 @@ start_copy(write, Kind, W, #{reader := RH} = Wr, Ptr, Count) ->
             put(?WAITABLE(RH), R#{buf => [Value], writer => closed}),
             put(?WAITABLE(W), Wr#{state => done}),
             ?COMPLETED;
-        #{'end' := read, host := sink, sink := Sink} ->
-            Items = load_elems(maps:get(elem, Wr), Ptr, Count, stream),
+        #{'end' := read, host := sink, sink := Sink, sink_max := Max} ->
+            N = min(Count, Max),
+            Items = load_elems(maps:get(elem, Wr), Ptr, N, stream),
             case Sink(Items) of
-                ok -> result(stream, ?COMPLETED, Count);
+                ok -> result(stream, ?COMPLETED, N);
                 closed ->
                     put(?WAITABLE(W), Wr#{state => done}),
                     result(Kind, ?DROPPED, 0)
@@ -643,9 +644,14 @@ detach(#{'end' := read, peer := W}) when W =/= undefined ->
     update(W, fun(Wr) -> Wr#{reader => undefined} end);
 detach(#{'end' := write, reader := RH}) when RH =/= undefined ->
     update(RH, fun(R) -> R#{writer => closed, peer => undefined} end),
-    %% A sink has nothing left to take once the guest's writer is gone.
+    %% A sink has nothing left to take once the guest's writer is gone; it is
+    %% told, so it can report how the whole stream went.
     case get(?WAITABLE(RH)) of
-        #{host := sink} -> forget_waitable(RH), release_end(RH);
+        #{host := sink, sink := Sink} ->
+            forget_waitable(RH),
+            ok = release_end(RH),
+            _ = Sink(eof),
+            ok;
         _ -> ok
     end;
 detach(_) ->
@@ -725,7 +731,7 @@ writes the result into the return area and delivers a SUBTASK event to resume th
 async_lower({Params, Result}, Fun) ->
     fun(_Ctx, Flats) ->
         Inst = task_instance(),
-        {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
+        {Terms, Rest} = wasm_canon:lift_async_params(Inst, Params, Flats),
         Value = Fun(Terms),
         write_return_area(Inst, Result, Rest, Value),
         {ok, [?SUBTASK_RETURNED]}
@@ -736,7 +742,7 @@ async_lower({Params, Result}, Fun) ->
 async_lower({Params, Result}, Fun, PFun) ->
     fun(_Ctx, Flats) ->
         Inst = task_instance(),
-        {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
+        {Terms, Rest} = wasm_canon:lift_async_params(Inst, Params, Flats),
         case Fun(Terms) of
             %% Nothing to wait for: the call completes at once, as the
             %% two-argument form does.
@@ -1241,34 +1247,47 @@ host_reader(H) ->
 -doc """
 Take the guest's readable end `H` as the host's and hand everything the guest
 writes to it to `Sink`, as it is written: `Sink(Elements)` answers `ok`, or
-`closed` to drop the end so the guest's next write sees it gone. Suits a
-destination that takes data at once, such as stdout.
+`closed` to drop the end so the guest's next write sees it gone. When the guest
+drops its writer, `Sink(eof)` is called once. Suits a destination that takes
+data at once, such as stdout or a file.
 """.
--spec host_sink(non_neg_integer(), fun((binary() | [term()]) -> ok | closed)) ->
+-spec host_sink(non_neg_integer(), fun((binary() | [term()] | eof) -> ok | closed)) ->
           ok | {error, term()}.
 host_sink(H, Sink) ->
+    host_sink(H, Sink, infinity).
+
+-doc """
+As `host_sink/2`, taking at most `Max` elements from each write: a larger write
+completes with `Max` written, and the guest writes the rest again. A file's sink
+uses it, so a guest learns the host does not take writes of any size at once.
+""".
+-spec host_sink(non_neg_integer(), fun((binary() | [term()] | eof) -> ok | closed),
+                pos_integer() | infinity) -> ok | {error, term()}.
+host_sink(H, Sink, Max) ->
     case get(?WAITABLE(H)) of
         #{'end' := read, buf := Buf} = R ->
-            put(?WAITABLE(H), R#{host => sink, sink => Sink, buf => empty_like(Buf)}),
+            put(?WAITABLE(H), R#{host => sink, sink => Sink, sink_max => Max,
+                                 buf => empty_like(Buf)}),
             ok = hold_end(H),
             _ = case is_empty(Buf) of true -> ok; false -> Sink(Buf) end,
-            sink_waiting_writer(R, Sink);
+            sink_waiting_writer(R, Sink, Max);
         _ -> {error, unknown_end}
     end.
 
 %% A write that was waiting for room when the sink took over completes into it.
-sink_waiting_writer(#{peer := W}, Sink) when W =/= undefined ->
+sink_waiting_writer(#{peer := W}, Sink, Max) when W =/= undefined ->
     case get(?WAITABLE(W)) of
         #{state := {copying, Ptr, Count}, elem := D} = Wr ->
-            Status = case Sink(load_elems(D, Ptr, Count, stream)) of
-                         ok -> result(stream, ?COMPLETED, Count);
+            N = min(Count, Max),
+            Status = case Sink(load_elems(D, Ptr, N, stream)) of
+                         ok -> result(stream, ?COMPLETED, N);
                          closed -> result(stream, ?DROPPED, 0)
                      end,
             put(?WAITABLE(W), Wr#{state => idle, pending => Status}),
             ok;
         _ -> ok
     end;
-sink_waiting_writer(_R, _Sink) ->
+sink_waiting_writer(_R, _Sink, _Max) ->
     ok.
 
 -doc """

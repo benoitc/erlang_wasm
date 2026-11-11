@@ -35,6 +35,13 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
          new_future_channel/1, new_stream_channel/1,
          register_producer/2, deliver_before/2, wait_on_set/1, take_produced/1,
          async_lower/2, async_lower/3, backpressure/1]).
+%% Tasks that outlive the call that started them, and the host's side of the
+%% streams and futures they use.
+-export([resolved/0, suspend_task/4, pending/0, pump/1, close_frame/0,
+         guest_call/1,
+         host_reader/1, host_sink/2, host_stream/1, host_future/1,
+         host_write/3, host_close/1, host_future_resolve/2,
+         host_read/3, host_future_await/2]).
 
 %% The callee (export/callback) status low nibble: exited (result ready), yielded, or
 %% waiting on the waitable-set packed in the high bits (`code | (set << 4)`).
@@ -93,6 +100,17 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -define(ERRCTX(H), {?MODULE, error_context, H}).
 -define(BACKPRESSURE(Inst), {?MODULE, backpressure, Inst}).
 -define(NEXT, {?MODULE, next_handle}).
+%% Tasks still running after the call that started them returned, by id, and
+%% the host's own ends, which keep the frame open as long as they are held.
+-define(TASKS, {?MODULE, tasks}).
+-define(HOST_ENDS, {?MODULE, host_ends}).
+%% How many callback turns a pending task gets, as `call_async' gives a task.
+%% How many guest calls are running in this process: the host-end calls run
+%% tasks, which must not start inside a guest call.
+-define(RUNNING, {?MODULE, running}).
+%% How the running call hands a returned stream to the host: read whole when
+%% the task finishes (`finish'), or read as it is written (`start').
+-define(MODE, {?MODULE, mode}).
 
 %%% --------------------------------------------------------------- task frame ---
 
@@ -106,24 +124,47 @@ cannot bleed messages into the next.
 """.
 -spec begin_task(wasm:instance(), map()) -> ok.
 begin_task(Inst, Opts) ->
-    %% A task started inside another, from a host function the outer task
-    %% called, sets the outer frame aside rather than clearing it: clearing
-    %% it lost the outer producers, and nothing stopped them afterwards.
-    save_outer(),
-    clear_frame(),
-    put(?TASK_INST, Inst),
-    put(?TASK_REF, make_ref()),
-    put(?WAITS, 0),
-    put(?PRODUCERS, []),
+    case open_with_work() of
+        true ->
+            %% A frame with tasks still running or ends the host holds: this
+            %% task joins it, so it shares their handles. Its own context
+            %% slots start empty.
+            erase_ctx(),
+            put(?TASK_INST, Inst);
+        false ->
+            %% A task started inside another, from a host function the outer
+            %% task called, sets the outer frame aside rather than clearing
+            %% it: clearing it lost the outer producers, and nothing stopped
+            %% them afterwards.
+            save_outer(),
+            clear_frame(),
+            put(?TASK_INST, Inst),
+            put(?TASK_REF, make_ref()),
+            put(?WAITS, 0),
+            put(?PRODUCERS, [])
+    end,
     case maps:get(wait_hook, Opts, undefined) of
         undefined -> ok;
         Pid       -> put(?WAIT_HOOK, Pid)
     end,
+    put(?MODE, maps:get(mode, Opts, finish)),
     ok.
+
+open_with_work() ->
+    get(?TASK_REF) =/= undefined andalso
+        (pending() =/= [] orelse host_ends() =/= []).
 
 -doc "Tear the task frame down: stop producers, clear state, flush stale messages.".
 -spec end_task() -> ok.
 end_task() ->
+    case open_with_work() of
+        %% Other tasks still run in this frame, or the host holds an end:
+        %% only this call's own state goes.
+        true -> _ = erase(?TASK_RETURN), erase_ctx(), ok;
+        false -> teardown()
+    end.
+
+teardown() ->
     stop_producers(),
     Ref = get(?TASK_REF),
     clear_frame(),
@@ -131,6 +172,17 @@ end_task() ->
     flush_stale(Ref),
     restore_outer(),
     ok.
+
+-doc """
+Tear the frame down whatever is still running in it: stop every producer, drop
+every pending task and every end. `wasm_component:destroy/1` calls it.
+""".
+-spec close_frame() -> ok.
+close_frame() ->
+    case get(?TASK_REF) of
+        undefined -> ok;
+        _ -> teardown()
+    end.
 
 %% The enclosing task's frame, on a stack in the process dictionary.
 save_outer() ->
@@ -176,12 +228,25 @@ is_frame_key(?ERRCTX(_))   -> true;
 is_frame_key(?TASK_REF)    -> true;
 is_frame_key(?WAIT_HOOK)   -> true;
 is_frame_key(?PRODUCERS)   -> true;
+is_frame_key(?TASKS)       -> true;
+is_frame_key(?HOST_ENDS)   -> true;
 is_frame_key(_)            -> false.
 
 -doc "The value the task handed back through `task.return`, or `undefined`.".
 -spec take_return() -> {ok, term()} | undefined.
 take_return() ->
     case erase(?TASK_RETURN) of
+        undefined -> undefined;
+        Value     -> {ok, Value}
+    end.
+
+-doc """
+The value the running task has handed to `task.return` so far, left in place,
+or `undefined`. A task can resolve and keep running.
+""".
+-spec resolved() -> {ok, term()} | undefined.
+resolved() ->
+    case get(?TASK_RETURN) of
         undefined -> undefined;
         Value     -> {ok, Value}
     end.
@@ -431,8 +496,9 @@ task_return_value(Result, Flats) ->
 %% The host reads a returned stream to its end, so a guest writing to it never
 %% waits for room.
 hand_to_host(H) ->
-    case get(?WAITABLE(H)) of
-        #{'end' := read} = R -> put(?WAITABLE(H), R#{host => true}), refill(H);
+    case {get(?WAITABLE(H)), get(?MODE)} of
+        {#{'end' := read}, start} -> ok = host_reader(H);
+        {#{'end' := read} = R, _} -> put(?WAITABLE(H), R#{host => true}), refill(H);
         _ -> ok
     end.
 
@@ -477,6 +543,14 @@ start_copy(write, Kind, W, #{reader := RH} = Wr, Ptr, Count) ->
             put(?WAITABLE(RH), R#{buf => [Value], writer => closed}),
             put(?WAITABLE(W), Wr#{state => done}),
             ?COMPLETED;
+        #{'end' := read, host := sink, sink := Sink} ->
+            Items = load_elems(maps:get(elem, Wr), Ptr, Count, stream),
+            case Sink(Items) of
+                ok -> result(stream, ?COMPLETED, Count);
+                closed ->
+                    put(?WAITABLE(W), Wr#{state => done}),
+                    result(Kind, ?DROPPED, 0)
+            end;
         #{'end' := read} = R ->
             case min(Count, room(R)) of
                 0 when Count > 0 ->
@@ -917,9 +991,381 @@ flush_stale(Ref) ->
         ok
     end.
 
+%%% ---------------------------------------------------- tasks after their call ---
+
+-doc """
+Keep the running task in the frame after its call returns: it has resolved
+(`task.return`) and its callback asked to wait on `Set` (`Code` 2) or to be
+called again (`Code` 1). `pump/1` and the host-end calls give it its turns.
+""".
+-spec suspend_task({wasm:instance(), binary()}, 1 | 2, non_neg_integer(),
+                   non_neg_integer()) -> ok.
+suspend_task(Callback, Code, Set, Budget) ->
+    _ = erase(?TASK_RETURN),
+    Status = case Code of 1 -> yield; 2 -> {wait, Set} end,
+    Task = #{callback => Callback, status => Status, ctx => save_ctx(),
+             budget => Budget, inst => task_instance()},
+    put(?TASKS, (tasks())#{make_ref() => Task}),
+    ok.
+
+-doc "How many tasks still run in this process's frame.".
+-spec pending() -> [reference()].
+pending() -> maps:keys(tasks()).
+
+tasks() -> case get(?TASKS) of undefined -> #{}; T -> T end.
+
+host_ends() -> case get(?HOST_ENDS) of undefined -> []; L -> L end.
+
+-doc """
+Run the pending tasks until every one has finished (`finished`), none can make
+progress (`idle`: each waits for something only the host can give, such as room
+in a stream the host reads), or `Timeout` milliseconds pass (`timeout`).
+Answers how it stopped and how many tasks remain, or `{error, Reason}` when a
+task traps. Once nothing is pending and the host holds no end, the frame is
+torn down. `{error, reentrant}` from inside a guest call.
+""".
+-spec pump(timeout()) -> {finished | idle | timeout, non_neg_integer()} |
+                         {error, term()}.
+pump(Timeout) ->
+    outside_guest(fun() -> pump_loop(deadline(Timeout)) end).
+
+outside_guest(Fun) ->
+    case running() of
+        0 -> Fun();
+        _ -> {error, reentrant}
+    end.
+
+pump_loop(Deadline) ->
+    case pending() of
+        [] ->
+            ok = maybe_teardown(),
+            {finished, 0};
+        Tasks ->
+            case step(Deadline) of
+                progress -> pump_loop(Deadline);
+                idle -> {idle, length(Tasks)};
+                timeout -> {timeout, length(Tasks)};
+                {error, _} = E -> E
+            end
+    end.
+
+%% Never inside a guest call: the call's own `end_task/0' ends the frame.
+maybe_teardown() ->
+    case get(?TASK_REF) =/= undefined andalso running() =:= 0
+             andalso not open_with_work() of
+        true -> teardown();
+        false -> ok
+    end.
+
+deadline(infinity) -> infinity;
+deadline(Ms) -> erlang:monotonic_time(millisecond) + Ms.
+
+%% One unit of progress: a pending task that can take an event takes it, or a
+%% producer message is taken in. `idle' when nothing can: no task can take an
+%% event and no producer is left to send one.
+step(Deadline) ->
+    case get(?RUNNING) of
+        N when is_integer(N), N > 0 -> {error, reentrant};
+        _ -> step_1(Deadline)
+    end.
+
+step_1(Deadline) ->
+    Ref = task_ref(),
+    ingest_available(Ref, ?POLL_DRAIN),
+    case ready_task(maps:to_list(tasks())) of
+        {Id, Args} -> run_task(Id, Args);
+        none ->
+            case producers() of
+                [] -> idle;
+                _ -> block(Ref, Deadline)
+            end
+    end.
+
+ready_task([]) -> none;
+ready_task([{Id, #{status := yield}} | _]) -> {Id, [0, 0, 0]};
+ready_task([{Id, #{status := {wait, Set}}} | Rest]) ->
+    case deliver_first(Set) of
+        {event, EC, E1, E2} -> {Id, [EC, E1, E2 band 16#FFFFFFFF]};
+        none -> ready_task(Rest)
+    end.
+
+block(Ref, Deadline) ->
+    Left = case Deadline of
+               infinity -> infinity;
+               _ -> max(0, Deadline - erlang:monotonic_time(millisecond))
+           end,
+    receive
+        {async_ready, Ref, H, Info} ->
+            ingest(H, Info),
+            progress;
+        {?DOWN(Ref), _Mon, process, Pid, Reason} ->
+            {value, {Pid, _, H}} = lists:keysearch(Pid, 1, producers()),
+            forget_producer(Pid),
+            ingest_available(Ref, ?POLL_DRAIN),
+            case Reason =:= normal orelse not needed(H) of
+                true -> progress;
+                false -> {error, {producer_failed, Reason}}
+            end
+    after Left ->
+        timeout
+    end.
+
+needed(H) ->
+    case get(?WAITABLE(H)) of
+        #{state := {copying, _, _}} -> true;
+        #{'end' := subtask, state := awaiting} -> true;
+        _ -> false
+    end.
+
+%% Give task `Id' one callback turn.
+run_task(Id, Args) ->
+    #{callback := {CbInst, CbName}, ctx := Ctx, budget := Budget,
+      inst := Inst} = Task = maps:get(Id, tasks()),
+    case Budget of
+        0 -> {error, async_budget_exhausted};
+        _ ->
+            restore_ctx(Ctx),
+            put(?TASK_INST, Inst),
+            Result = guest_call(fun() -> wasm:call(CbInst, CbName, Args) end),
+            %% A task resolves once; anything it hands back again is dropped.
+            _ = erase(?TASK_RETURN),
+            Saved = save_ctx(),
+            case Result of
+                {ok, [Status]} ->
+                    Bits = Status band 16#FFFFFFFF,
+                    case {Bits band 16#F, Bits bsr 4} of
+                        {0, _} -> put(?TASKS, maps:remove(Id, tasks()));
+                        {1, _} -> next(Id, Task, yield, Saved);
+                        {2, Set} -> next(Id, Task, {wait, Set}, Saved)
+                    end,
+                    progress;
+                {ok, _} -> {error, async_bad_result};
+                {error, _} = E -> put(?TASKS, maps:remove(Id, tasks())), E
+            end
+    end.
+
+next(Id, #{budget := B} = Task, Status, Ctx) ->
+    put(?TASKS, (tasks())#{Id => Task#{status => Status, ctx => Ctx,
+                                       budget => B - 1}}),
+    ok.
+
+-doc """
+Run `Fun', a call into the guest, counted as running: the host-end calls answer
+`{error, reentrant}` meanwhile instead of running tasks inside it.
+""".
+-spec guest_call(fun(() -> T)) -> T.
+guest_call(Fun) ->
+    put(?RUNNING, running() + 1),
+    try Fun()
+    after
+        put(?RUNNING, running() - 1)
+    end.
+
+running() -> case get(?RUNNING) of undefined -> 0; N -> N end.
+
+%% A task's context slots (`context.get'/`set') are its own.
+save_ctx() -> maps:from_list([{K, V} || {?CTX(_) = K, V} <- get()]).
+
+restore_ctx(Ctx) ->
+    erase_ctx(),
+    maps:foreach(fun(K, V) -> put(K, V) end, Ctx).
+
+erase_ctx() ->
+    _ = [erase(K) || {?CTX(_) = K, _} <- get()],
+    ok.
+
+%%% --------------------------------------------------------------- host ends ---
+
+hold_end(H) ->
+    case lists:member(H, host_ends()) of
+        true -> ok;
+        false -> put(?HOST_ENDS, [H | host_ends()]), ok
+    end.
+
+release_end(H) ->
+    put(?HOST_ENDS, lists:delete(H, host_ends())),
+    ok.
+
+-doc """
+Take the guest's readable end `H` as the host's: from now on the host reads it,
+with `host_read/3`, while the guest writes. Its buffer is bounded as between
+two guest ends, so a writer waits until the host reads.
+""".
+-spec host_reader(non_neg_integer()) -> ok | {error, term()}.
+host_reader(H) ->
+    case get(?WAITABLE(H)) of
+        #{'end' := read} = R ->
+            put(?WAITABLE(H), R#{host => reading}),
+            hold_end(H);
+        _ -> {error, unknown_end}
+    end.
+
+-doc """
+Take the guest's readable end `H` as the host's and hand everything the guest
+writes to it to `Sink`, as it is written: `Sink(Elements)` answers `ok`, or
+`closed` to drop the end so the guest's next write sees it gone. Suits a
+destination that takes data at once, such as stdout.
+""".
+-spec host_sink(non_neg_integer(), fun((binary() | [term()]) -> ok | closed)) ->
+          ok | {error, term()}.
+host_sink(H, Sink) ->
+    case get(?WAITABLE(H)) of
+        #{'end' := read, buf := Buf} = R ->
+            put(?WAITABLE(H), R#{host => sink, sink => Sink, buf => empty_like(Buf)}),
+            ok = hold_end(H),
+            _ = case is_empty(Buf) of true -> ok; false -> Sink(Buf) end,
+            sink_waiting_writer(R, Sink);
+        _ -> {error, unknown_end}
+    end.
+
+%% A write that was waiting for room when the sink took over completes into it.
+sink_waiting_writer(#{peer := W}, Sink) when W =/= undefined ->
+    case get(?WAITABLE(W)) of
+        #{state := {copying, Ptr, Count}, elem := D} = Wr ->
+            Status = case Sink(load_elems(D, Ptr, Count, stream)) of
+                         ok -> result(stream, ?COMPLETED, Count);
+                         closed -> result(stream, ?DROPPED, 0)
+                     end,
+            put(?WAITABLE(W), Wr#{state => idle, pending => Status}),
+            ok;
+        _ -> ok
+    end;
+sink_waiting_writer(_R, _Sink) ->
+    ok.
+
+-doc """
+A new stream of `Desc` elements the host writes and the guest reads:
+`{Reader, Writer}`. Give the guest `Reader` (an import result or argument);
+write with `host_write/3` and end it with `host_close/1`.
+""".
+-spec host_stream(wasm_canon:desc()) -> {non_neg_integer(), non_neg_integer()}.
+host_stream(Desc) ->
+    Packed = new_pair(stream, Desc),
+    {R, W} = {Packed band 16#FFFFFFFF, Packed bsr 32},
+    ok = hold_end(W),
+    {R, W}.
+
+-doc "As `host_stream/1`, for a future: resolve it with `host_future_resolve/2`.".
+-spec host_future(wasm_canon:desc()) -> {non_neg_integer(), non_neg_integer()}.
+host_future(Desc) ->
+    Packed = new_pair(future, Desc),
+    {R, W} = {Packed band 16#FFFFFFFF, Packed bsr 32},
+    ok = hold_end(W),
+    {R, W}.
+
+-doc """
+Write `Items` (a binary for `stream<u8>`, else a list) to the host's writer
+`W`, running the pending tasks while the guest's buffer is full. `ok` once all
+is written; `{error, dropped}` if the guest dropped its end; `{error, timeout}`
+past `Timeout` milliseconds.
+""".
+-spec host_write(non_neg_integer(), binary() | [term()], timeout()) ->
+          ok | {error, term()}.
+host_write(W, Items, Timeout) ->
+    write_loop(W, Items, deadline(Timeout)).
+%% (Writing within the room is allowed inside a guest call; only waiting for
+%% room runs tasks, and `step/1' refuses that there.)
+
+write_loop(W, Items, Deadline) ->
+    case get(?WAITABLE(W)) of
+        #{'end' := write, reader := undefined} -> {error, dropped};
+        #{'end' := write, reader := RH} ->
+            R = get(?WAITABLE(RH)),
+            case take(Items, room(R)) of
+                {_, _, 0} when Items =/= <<>>, Items =/= [] ->
+                    case step(Deadline) of
+                        progress -> write_loop(W, Items, Deadline);
+                        idle -> {error, async_deadlock};
+                        timeout -> {error, timeout};
+                        {error, _} = E -> E
+                    end;
+                {Taken, Rest, _} ->
+                    append(RH, R, Taken),
+                    case is_empty(Rest) of
+                        true -> ok;
+                        false -> write_loop(W, Rest, Deadline)
+                    end
+            end;
+        _ -> {error, unknown_end}
+    end.
+
+-doc "End the host's writer `W`: the guest's reader sees the end of the stream.".
+-spec host_close(non_neg_integer()) -> ok.
+host_close(H) ->
+    case get(?WAITABLE(H)) of
+        #{'end' := write} = E -> forget_waitable(H), ok = detach(E);
+        #{'end' := read} = E -> forget_waitable(H), ok = detach(E);
+        _ -> ok
+    end,
+    release_end(H),
+    maybe_teardown().
+
+-doc "Resolve the host's future writer `W` with `Value`.".
+-spec host_future_resolve(non_neg_integer(), term()) -> ok | {error, term()}.
+host_future_resolve(W, Value) ->
+    case get(?WAITABLE(W)) of
+        #{'end' := write, kind := future, reader := RH} = Wr when RH =/= undefined ->
+            update(RH, fun(R) -> R#{buf => [Value], writer => closed} end),
+            put(?WAITABLE(W), Wr#{state => done}),
+            host_close(W);
+        #{'end' := write, kind := future} ->
+            host_close(W);
+        _ -> {error, unknown_end}
+    end.
+
+-doc """
+Read at most `Max` elements from the host's reader `H`, running the pending
+tasks until there are some: `{ok, Elements}`, `eof` once the guest has dropped
+its writer and everything was read, `{error, timeout}` past `Timeout`
+milliseconds, or the error that stopped a task.
+""".
+-spec host_read(non_neg_integer(), pos_integer(), timeout()) ->
+          {ok, binary() | [term()]} | eof | {error, term()}.
+host_read(H, Max, Timeout) ->
+    outside_guest(fun() -> read_loop(H, Max, deadline(Timeout)) end).
+
+read_loop(H, Max, Deadline) ->
+    ingest_available(task_ref(), ?POLL_DRAIN),
+    case get(?WAITABLE(H)) of
+        #{'end' := read, buf := Buf, writer := Writer} = R ->
+            case is_empty(Buf) of
+                false ->
+                    {Taken, Rest, _} = take(Buf, Max),
+                    put(?WAITABLE(H), R#{buf => Rest}),
+                    refill(H),
+                    {ok, Taken};
+                true when Writer =:= closed ->
+                    eof;
+                true ->
+                    case step(Deadline) of
+                        progress -> read_loop(H, Max, Deadline);
+                        idle -> {error, async_deadlock};
+                        timeout -> {error, timeout};
+                        {error, _} = E -> E
+                    end
+            end;
+        _ -> {error, unknown_end}
+    end.
+
+-doc """
+Wait for the guest to resolve the future whose reader the host holds:
+`{ok, Value}`, `{error, dropped}` if the guest dropped its writer first, or as
+`host_read/3`.
+""".
+-spec host_future_await(non_neg_integer(), timeout()) -> {ok, term()} | {error, term()}.
+host_future_await(H, Timeout) ->
+    case host_read(H, 1, Timeout) of
+        {ok, [V]} -> {ok, V};
+        eof -> {error, dropped};
+        {error, _} = E -> E
+    end.
+
 %%% ------------------------------------------------------------------ buffers ---
 
 %% A `stream<u8>' buffer is a binary, any other a list of values.
+empty_like(Bin) when is_binary(Bin) -> <<>>;
+empty_like(_) -> [].
+
 empty(u8) -> <<>>;
 empty(_) -> [].
 

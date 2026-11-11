@@ -50,7 +50,8 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
 -include("wasm_component.hrl").
 
 -export([decode/1, instantiate/1, instantiate/2, instantiate/3, call/4,
-         call_async/4, call_async/5, destroy/1, destroy/2, drop_resource/3]).
+         call_async/4, call_async/5, start_async/4, start_async/5, pump/2,
+         destroy/1, destroy/2, drop_resource/3]).
 -export([import_fun/2, exports/1, hold/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
@@ -628,6 +629,9 @@ destroy(Inst) ->
 -doc "As `destroy/1`, closing each live host resource with `Closer` first.".
 -spec destroy(instance(), fun(({atom(), term()}) -> ok)) -> ok.
 destroy(Inst, Closer) ->
+    %% Tasks still running from `start_async/5' and the ends the host holds go
+    %% first: their producers stop, so nothing writes into what is freed next.
+    ok = wasm_async:close_frame(),
     lists:foreach(fun wasm:destroy/1, cores_of(Inst)),
     lists:foreach(fun wasm_resources:destroy_instance/1, res_ids(Inst)),
     sweep_host(Closer),
@@ -919,16 +923,53 @@ call_async(#{} = I, Export, {Params, Result}, Args, Opts) ->
     %% Same boundary as `call/4`: the async lift/lower is captured so a malformed
     %% value returns `{error, _}` rather than raising (see `call/4`).
     wasm_error:capture(
-      fun() -> do_call_async(I, Export, {Params, Result}, Args, Opts) end).
+      fun() -> do_call_async(I, Export, {Params, Result}, Args, Opts, finish) end).
 
-do_call_async(I, Export, {Params, Result}, Args, Opts) ->
+-doc """
+Call an async-lifted export and return as soon as it resolves.
+
+`call_async/5` runs the task until it finishes. A task can hand back its result
+(`task.return`) and keep running: a `wasi:http` handler returns its response,
+then writes the body. `start_async/5` returns `{ok, Result}` at that point and
+leaves the task running in the instance. Run it with `pump/2`, or with the
+`wasm_async` host-end calls, which run it until they can answer.
+
+A `stream<T>` or `future<T>` result is the host's end of it: read it with
+`wasm_async:host_read/3` or `wasm_async:host_future_await/2` while the task
+writes. Arguments and `Opts` are as for `call_async/5`.
+""".
+-spec start_async(instance(), binary(),
+                  {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
+          {ok, term()} | {error, term()}.
+start_async(I, Export, Sig, Args) ->
+    start_async(I, Export, Sig, Args, #{}).
+
+-spec start_async(instance(), binary(),
+                  {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()], map()) ->
+          {ok, term()} | {error, term()}.
+start_async(#{} = I, Export, Sig, Args, Opts) ->
+    wasm_error:capture(
+      fun() -> do_call_async(I, Export, Sig, Args, Opts#{mode => start}, start) end).
+
+-doc """
+Run the tasks still pending in the instance (from `start_async/5`) until all
+have finished, none can progress, or `Timeout` milliseconds pass: `{finished,
+0}`, `{idle, Pending}` (each waits for the host, such as for it to read a
+stream), `{timeout, Pending}`, or `{error, Reason}` when a task traps.
+""".
+-spec pump(instance(), timeout()) ->
+          {finished | idle | timeout, non_neg_integer()} | {error, term()}.
+pump(#{}, Timeout) ->
+    wasm_error:capture(fun() -> wasm_async:pump(Timeout) end).
+
+do_call_async(I, Export, {Params, Result}, Args, Opts, Mode) ->
     case async_lift_name(I, Export) of
         {ok, LiftName} ->
             Inst = core_with_export(I, LiftName),
             Callback = async_callback(I, LiftName),
             case wasm_async:backpressure(Inst) of
                 0 -> run_async(Inst, LiftName, Callback, {Params, Result}, Args,
-                               Opts);
+                               Opts, Mode);
                 %% Only a task of this instance can lower it, and a task runs in
                 %% its caller's process: waiting here would wait for ever.
                 _ -> {error, async_backpressure}
@@ -937,23 +978,33 @@ do_call_async(I, Export, {Params, Result}, Args, Opts) ->
             {error, {no_async_export, Export}}
     end.
 
-run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts) ->
+run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts, Mode) ->
     ok = wasm_async:begin_task(Inst, Opts),
-    try
-        {Descs, Lowered} = prepare_async_params(Params, Args),
-        CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
-        case {wasm:call(Inst, LiftName, CoreArgs), Callback} of
-            %% A stackful lift: the core function ran the whole task, waiting
-            %% inside `waitable-set.wait' or a synchronous copy, and handed its
-            %% result to `task.return'.
-            {{ok, []}, none} -> finish_async(Result, returned());
-            {{ok, [Status]}, _} -> finish_async(Result,
-                                                drive(Callback, Status, ?ASYNC_BUDGET));
-            {{ok, _}, _}        -> {error, {async_bad_status, LiftName}};
-            {{error, _} = E, _} -> E
-        end
-    after
-        wasm_async:end_task()
+    Outcome =
+        try
+            {Descs, Lowered} = prepare_async_params(Params, Args),
+            CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
+            case {wasm_async:guest_call(
+                    fun() -> wasm:call(Inst, LiftName, CoreArgs) end), Callback} of
+                %% A stackful lift: the core function ran the whole task,
+                %% waiting inside `waitable-set.wait' or a synchronous copy,
+                %% and handed its result to `task.return'.
+                {{ok, []}, none} -> {done, deliver(Mode, Result, returned())};
+                {{ok, [Status]}, _} ->
+                    drive(Mode, Result, Callback, Status, ?ASYNC_BUDGET);
+                {{ok, _}, _}          -> {error, {async_bad_status, LiftName}};
+                {{error, _} = Err, _} -> Err
+            end
+        catch
+            Class:Reason:Stack ->
+                wasm_async:end_task(),
+                erlang:raise(Class, Reason, Stack)
+        end,
+    case Outcome of
+        %% The task runs on in the frame, which stays open.
+        {pending, Value} -> Value;
+        {done, Value}    -> wasm_async:end_task(), Value;
+        {error, _} = Failed -> wasm_async:end_task(), Failed
     end.
 
 returned() ->
@@ -961,6 +1012,15 @@ returned() ->
         {ok, Value} -> {ok, Value};
         undefined   -> {ok, undefined}
     end.
+
+%% A finished call reads a returned future or stream to its end before the
+%% frame goes. A started one hands the host its end instead.
+deliver(finish, Result, Res) -> finish_async(Result, Res);
+deliver(start, Result, {ok, H} = Res) when element(1, Result) =:= stream;
+                                           element(1, Result) =:= future ->
+    ok = wasm_async:host_reader(H),
+    Res;
+deliver(start, _Result, Res) -> Res.
 
 %% When the result is itself a `future<T>`/`stream<T>` the guest produced and returned,
 %% `task.return` handed back its readable handle; read the value the guest wrote before
@@ -978,30 +1038,43 @@ produced(Handle) ->
 %% Drive the callback loop from a callee status. The status is an unsigned i32 packing
 %% `code | (waitable_set << 4)`; mask before extracting so a set index with the top bit
 %% set does not read as negative. The budget bounds total turns (a runaway guard, not a
-%% progress check - a stream legitimately takes many turns).
-drive(_Callback, _Status, 0) ->
+%% progress check - a stream legitimately takes many turns). Started, a task that has
+%% resolved and asks to wait or yield is left running in the frame.
+drive(_Mode, _Result, _Callback, _Status, 0) ->
     {error, async_budget_exhausted};
-drive(Callback, Status, Budget) ->
+drive(Mode, Result, Callback, Status, Budget) ->
     Bits = Status band 16#FFFFFFFF,
     case {Bits band 16#F, Bits bsr 4} of
         {0, _} ->
-            returned();
-        {1, _} ->
-            resume(Callback, [0, 0, 0], Budget);
-        {2, Set} ->
-            case wasm_async:wait_on_set(Set) of
-                {event, EC, W, P} -> resume(Callback, [EC, W, P], Budget);
-                {error, _} = Err  -> Err
+            {done, deliver(Mode, Result, returned())};
+        {Code, Set} when Mode =:= start, Code =:= 1 orelse Code =:= 2 ->
+            case wasm_async:resolved() of
+                {ok, _} ->
+                    Res = deliver(start, Result, returned()),
+                    ok = wasm_async:suspend_task(Callback, Code, Set, Budget),
+                    {pending, Res};
+                undefined ->
+                    turn(Mode, Result, Callback, Code, Set, Budget)
             end;
+        {Code, Set} when Code =:= 1; Code =:= 2 ->
+            turn(Mode, Result, Callback, Code, Set, Budget);
         {Other, _} ->
             {error, {async_bad_status, Other}}
     end.
 
+turn(Mode, Result, Callback, 1, _Set, Budget) ->
+    resume(Mode, Result, Callback, [0, 0, 0], Budget);
+turn(Mode, Result, Callback, 2, Set, Budget) ->
+    case wasm_async:wait_on_set(Set) of
+        {event, EC, W, P} -> resume(Mode, Result, Callback, [EC, W, P], Budget);
+        {error, _} = Err  -> Err
+    end.
+
 %% Re-enter the guest through its callback with an event triple. A stackful lift
 %% has no callback and returns no status, so it never reaches here.
-resume({CbInst, CbName}, Args, Budget) ->
-    case wasm:call(CbInst, CbName, Args) of
-        {ok, [Status]} -> drive({CbInst, CbName}, Status, Budget - 1);
+resume(Mode, Result, {CbInst, CbName}, Args, Budget) ->
+    case wasm_async:guest_call(fun() -> wasm:call(CbInst, CbName, Args) end) of
+        {ok, [Status]} -> drive(Mode, Result, {CbInst, CbName}, Status, Budget - 1);
         {ok, _}        -> {error, async_bad_result};
         {error, _} = E -> E
     end.

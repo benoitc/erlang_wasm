@@ -117,7 +117,7 @@ a_callback_run_for_a_missing_reaper_dies_with_its_caller(_) ->
 an_image_capture_dies_with_the_process_that_started_it(_) ->
     Before = processes(),
     Caller = spawn(fun() ->
-                           wasm_script_worker:prepare(
+                           wasm_script_worker:start_link(
                              fake_reactor_adapter,
                              #{init_call => ~"spin",
                                capture_timeout => 600_000})
@@ -133,8 +133,8 @@ an_image_capture_dies_with_the_process_that_started_it(_) ->
 an_artifact_load_dies_with_the_process_that_started_it(_) ->
     Test = self(),
     Caller = spawn(fun() ->
-                           wasm_script_worker:prepare(fake_reactor_adapter,
-                                                      #{artifact_hang => Test})
+                           wasm_script_worker:start_link(fake_reactor_adapter,
+                                                         #{artifact_hang => Test})
                    end),
     Load = receive {artifact_hang, P} -> P after 5000 -> ct:fail(no_load) end,
     exit(Caller, kill),

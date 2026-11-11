@@ -82,10 +82,9 @@ instead of a `start_link/2` that never returns. It limits the capture and
 nothing before it: loading the artifact and looking for the image in
 `snapshot_dir` have no time limit.
 
-If you start several workers with the same options, prepare the image once
-with `wasm_script_worker:prepare/2` and start each worker from it. Then the
-pool holds one image, charged once, and captures at most once. "Run a pool
-from one image" in [Using workers](worker.md) shows how.
+If you start several workers with the same adapter and options, they share
+one image: the pool holds it once, is charged once, and captures at most once.
+"Run a pool from one image" in [Using workers](worker.md) has the details.
 
 In `validate`, ask the runtime whether it started correctly. Do not only check
 what the module exports. The return value of `init` never reaches the kernel,
@@ -396,10 +395,9 @@ space. The charge stays while the image is held, **or** while any memory
 restored from it still exists, including one that another instance imported,
 because those memories read its pages.
 
-It counts images, not workers. Each worker started without `prepared` loads
-its own copy and is charged for it, so fifty workers on one file are charged
-fifty times. Workers started from one `wasm_script_worker:prepare/2` share one
-image, charged once.
+It counts images, not workers. Workers started with the same adapter and
+options share one image, charged once. A worker with other options loads its
+own copy and is charged for it.
 
 A restore is not charged again. What a restored memory allocates (its page
 table and the pages it writes) is charged to the node page budget, and

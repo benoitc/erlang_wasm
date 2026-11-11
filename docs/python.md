@@ -158,9 +158,8 @@ Notes:
   per worker, not once per request. Start your workers before you accept
   traffic. The example raises `capture_timeout` above its 60 s default,
   because a capture can take longer: 91 to 95 s without the floor, in the
-  measurements below. A pool that prepares its image once with
-  `wasm_script_worker:prepare/2` starts the interpreter once for the whole
-  pool; see [Using workers](worker.md).
+  measurements below. Workers started with the same options share one image, so a pool starts
+  the interpreter once; see [Using workers](worker.md).
 - **Isolation does not change.** A restore builds a *fresh* instance, so the
   module-level state of one request never reaches the next.
 - **You give two paths.** The module needs its standard library next to it,

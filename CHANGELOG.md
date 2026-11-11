@@ -110,13 +110,10 @@ plain Erlang.
   and `array.init_data` on an array whose elements are vectors failed; they
   now read sixteen bytes per element, as the GC specification's latest tests
   require.
-- **Prepare one image for a pool.** `wasm_script_worker:prepare/2` loads or
-  captures the image once, and every worker started with
-  `Opts#{prepared => Prepared}` holds that one image instead of its own copy:
-  one capture on a missing image, one charge to `max_snapshot_bytes`. Release
-  the caller's hold with `wasm_script_worker:release_prepared/1`. A worker
-  started without `prepared` is unchanged. An adapter without snapshots
-  answers the new `wasm_worker_error` kind `unsupported`. "Run a pool from one
+- **A pool of workers shares one image.** Workers started with the same
+  adapter and the same options now hold one image instead of a copy each:
+  one capture on a missing image, even when they start together, and one
+  charge to `max_snapshot_bytes`. You set nothing for it. "Run a pool from one
   image" in `docs/worker.md` shows a supervised pool.
 - **A table of functions travels as one binary.** An image's table holding
   only `null` and the module's own functions is packed at capture and at load,

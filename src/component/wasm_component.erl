@@ -304,8 +304,11 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% of each built-in the entry core imports.
     Res = wasm_component_link:resource_info(Sec, EntryIdx),
     EntryImports = wasm_component_link:core_imports(Core),
-    Host = resolve_imports(EntryImports, Imports,
-                           resource_imports(EntryImports, Res)),
+    %% An async host import is bound here as the linker binds it, so a
+    %% component that never reaches the linker can call one too.
+    Host = maps:map(fun(_Key, P) -> provider(P) end,
+                    resolve_imports(EntryImports, Imports,
+                                    resource_imports(EntryImports, Res))),
     %% The export map lets `call/4` reach a core function whose name differs from the
     %% component export name; where they coincide it is the identity and the same-name
     %% fallback in `call/4` covers exports it does not resolve.
@@ -1176,10 +1179,13 @@ provides(#{core := _} = I, Export) ->
 
 %% Key each core import to a provider. A real component imports versioned ids
 %% (`wasi:io/streams@0.2.0`) while the host is keyed bare (`wasi:io/streams`), so
-%% resolution strips the version. An explicit provider wins over an auto resource
-%% intrinsic, so a host-owned resource's `[resource-drop]` reaches the host table
-%% rather than the guest's identity table. A core import with no provider is left
-%% out, and instantiation refuses it, as before.
+%% resolution strips the version. WASI 0.3 is the exception: its interfaces have
+%% the names of 0.2's and other functions, and one component imports both (the
+%% wasip1 adapter brings 0.2), so a `0.3.x' import is keyed `Interface@0.3' and
+%% never falls back to the bare 0.2 key. An explicit provider wins over an auto
+%% resource intrinsic, so a host-owned resource's `[resource-drop]` reaches the
+%% host table rather than the guest's identity table. A core import with no
+%% provider is left out, and instantiation refuses it, as before.
 resolve_imports(CoreImports, Explicit, Auto) ->
     maps:from_list(
       lists:filtermap(
@@ -1191,14 +1197,26 @@ resolve_imports(CoreImports, Explicit, Auto) ->
         end, CoreImports)).
 
 find_provider(Mod, Field, Explicit, Auto) ->
-    case maps:find({strip_version(Mod), Field}, Explicit) of
+    case maps:find({host_key(Mod), Field}, Explicit) of
         {ok, Provider} -> Provider;
         error          -> maps:get({Mod, Field}, Auto, undefined)
     end.
 
-%% `namespace:package/interface@version` -> `namespace:package/interface`.
-strip_version(Id) ->
+%% The core function an async host import binds to (`wasm_component_link`
+%% does the same for the cores it builds).
+provider({async_import, Sig, Fun}) -> wasm_async:async_lower(Sig, Fun);
+provider({async_import, Sig, Fun, {producer, PFun}}) ->
+    wasm_async:async_lower(Sig, Fun, PFun);
+provider(Provider) -> Provider.
+
+%% The host-map interface key an imported interface id resolves to:
+%% `namespace:package/interface` with its version removed, except a 0.3
+%% version, which keeps `@0.3`.
+host_key(Id) ->
     case binary:split(Id, <<"@">>) of
+        [Base, <<"0.3", Rest/binary>>] when Rest =:= <<>>;
+                                            binary_part(Rest, 0, 1) =:= <<".">> ->
+            <<Base/binary, "@0.3">>;
         [Base, _Version] -> Base;
         _                -> Id
     end.

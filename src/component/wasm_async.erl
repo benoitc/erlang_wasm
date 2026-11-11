@@ -32,7 +32,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 
 -export([builtin/2, begin_task/2, end_task/0, take_return/0, task_ref/0, waits/0,
          new_future_readable/2, new_stream_readable/2,
-         new_future_channel/1, new_stream_channel/1,
+         new_future_channel/1, new_stream_channel/1, new_stream_channel/2,
          register_producer/2, register_producer/3, deliver_before/2, wait_on_set/1, take_produced/1,
          async_lower/2, async_lower/3, backpressure/1]).
 %% Tasks that outlive the call that started them, and the host's side of the
@@ -298,6 +298,19 @@ delivers.
 new_stream_channel(Desc) ->
     new_reader(stream, Desc, empty(Desc), open).
 
+-doc """
+As `new_stream_channel/1`, applying `Map` to each `{data, Items}` a producer
+sends, in the owner's process, before the guest reads it. A producer can then
+send what only the owner can turn into an element, such as a socket it
+accepted, which becomes a resource handle in the owner's table.
+""".
+-spec new_stream_channel(wasm_canon:desc(), fun(([term()]) -> [term()])) ->
+          non_neg_integer().
+new_stream_channel(Desc, Map) ->
+    H = new_stream_channel(Desc),
+    update(H, fun(R) -> R#{map => Map} end),
+    H.
+
 new_reader(Kind, Desc, Buf, Writer) ->
     H = next_handle(),
     put(?WAITABLE(H), #{'end' => read, kind => Kind, elem => Desc, buf => Buf,
@@ -308,7 +321,8 @@ new_reader(Kind, Desc, Buf, Writer) ->
 -doc """
 Spawn and monitor a producer for the channel end `Handle`. `PFun` is called in the new
 process with `#{owner, task_ref, handle}` and sends `{async_ready, TaskRef, Handle,
-Info}` (`Info` = `{value,V} | {data,Elements} | close`) to the owner when it chooses.
+Info}` (`Info` = `{value,V} | {data,Elements} | close`, or for an async import's
+subtask `subtask_complete | {subtask_complete, Result}`) to the owner when it chooses.
 """.
 -spec register_producer(non_neg_integer(), fun((map()) -> any())) -> ok.
 register_producer(Handle, PFun) ->
@@ -635,6 +649,8 @@ drop_end(Dir, Kind, H) ->
         #{'end' := Dir, kind := Kind} = E ->
             forget_waitable(H),
             ok = detach(E),
+            %% Nothing reads it any more, so whatever was filling it stops.
+            ok = stop_producer(H),
             {ok, []};
         undefined -> {trap, unknown_waitable};
         _ -> {trap, wrong_end}
@@ -732,7 +748,10 @@ async_lower({Params, Result}, Fun) ->
     fun(_Ctx, Flats) ->
         Inst = task_instance(),
         {Terms, Rest} = wasm_canon:lift_async_params(Inst, Params, Flats),
-        Value = Fun(Terms),
+        Value = case Fun(Terms) of
+                    {returned, V} -> V;
+                    V -> V
+                end,
         write_return_area(Inst, Result, Rest, Value),
         {ok, [?SUBTASK_RETURNED]}
     end.
@@ -904,7 +923,9 @@ ingest(H, {value, V}) ->
                  (E) -> E
               end);
 ingest(H, {data, Items}) ->
-    update(H, fun(#{'end' := read, kind := stream, buf := Buf} = R) ->
+    update(H, fun(#{'end' := read, kind := stream, buf := Buf, map := Map} = R) ->
+                      R#{buf => cat(Buf, Map(Items))};
+                 (#{'end' := read, kind := stream, buf := Buf} = R) ->
                       R#{buf => cat(Buf, Items)};
                  (E) -> E
               end);
@@ -914,6 +935,12 @@ ingest(H, close) ->
               end);
 ingest(H, subtask_complete) ->
     update(H, fun(#{'end' := subtask, state := awaiting} = S) -> S#{state => ready};
+                 (E) -> E
+              end);
+%% The producer has the result, such as the datagram a receive waited for.
+ingest(H, {subtask_complete, Value}) ->
+    update(H, fun(#{'end' := subtask, state := awaiting} = S) ->
+                      S#{state => ready, value => Value};
                  (E) -> E
               end).
 

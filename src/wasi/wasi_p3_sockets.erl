@@ -12,6 +12,9 @@ sockets, and UDP `send` and `receive` are async.
 
 -export([sockets/1]).
 
+-include("wasi.hrl").
+
+
 -define(TYPES, ~"wasi:sockets/types@0.3").
 -define(LOOKUP, ~"wasi:sockets/ip-name-lookup@0.3").
 -define(ERRORS,
@@ -204,18 +207,19 @@ accepted(Listener, Conn, _Grant) ->
 %% shuts the connection for writing, and the future reports how it went.
 send(S, Data) ->
     {R, W} = wasm_async:host_future(?UNIT),
-    case connected(S) of
+    case connected(S, sent) of
         {ok, Conn} ->
+            ok = hold(Conn),
             Sink = fun(eof) ->
                            _ = wasi_sock2:shutdown(Conn, write),
                            _ = wasm_async:host_future_resolve(W, {ok, undefined}),
-                           ok;
+                           release(Conn);
                       (Bytes) ->
                            case wasi_sock2:send(Conn, Bytes) of
                                ok -> ok;
                                {error, E} ->
                                    _ = wasm_async:host_future_resolve(
-                                         W, {error, code(wasi_p2_sockets:sock2_errno(E))}),
+                                         W, {error, code(send_errno(E))}),
                                    closed
                            end
                    end,
@@ -229,10 +233,12 @@ send(S, Data) ->
 %% The connection's incoming bytes, as a stream a producer fills until the
 %% peer closes.
 receive_stream(S) ->
-    case connected(S) of
+    case connected(S, received) of
         {ok, Conn} ->
             R = wasm_async:new_stream_channel(u8),
             ok = wasm_async:register_producer(R, fun(Ctx) -> recv_loop(Conn, Ctx) end),
+            ok = hold(Conn),
+            ok = wasm_async:on_end(R, fun() -> release(Conn) end),
             {R, resolved({ok, undefined})};
         {error, E} ->
             R = wasm_async:new_stream_channel(u8),
@@ -248,6 +254,57 @@ recv_loop(Conn, #{owner := O, task_ref := Ref, handle := H} = Ctx) ->
         {ok, Bin} -> O ! {async_ready, Ref, H, {data, Bin}}, recv_loop(Conn, Ctx);
         {error, timeout} -> recv_loop(Conn, Ctx);
         _ -> O ! {async_ready, Ref, H, close}
+    end.
+
+%% 0.3 names a write to a connection the peer has shut, which 0.2 has no
+%% code for.
+send_errno(epipe) -> ~"connection-broken";
+send_errno(E) -> wasi_p2_sockets:sock2_errno(E).
+
+%% A guest may drop its socket while the streams it made from it are still
+%% open, and those streams keep the connection: each holds it, and the last to
+%% let go closes it once the socket was dropped (`wasi_preview2' marks that).
+hold(Conn) ->
+    C = conn(Conn),
+    put(?P3_TCP(Conn), C#{users := maps:get(users, C) + 1}),
+    ok.
+
+release(Conn) ->
+    case conn(Conn) of
+        #{users := N} = C when N > 1 ->
+            put(?P3_TCP(Conn), C#{users := N - 1}),
+            ok;
+        #{dropped := true} ->
+            _ = erase(?P3_TCP(Conn)),
+            _ = wasi_sock2:close(Conn),
+            ok;
+        C ->
+            put(?P3_TCP(Conn), C#{users := 0}),
+            ok
+    end.
+
+%% `send' and `receive' each succeed once on a connection.
+once(Conn, What) ->
+    case conn(Conn) of
+        #{What := true} -> {error, ~"invalid-state"};
+        C -> put(?P3_TCP(Conn), C#{What => true}), ok
+    end.
+
+conn(Conn) ->
+    case get(?P3_TCP(Conn)) of
+        undefined -> #{users => 0, dropped => false};
+        C -> C
+    end.
+
+connected(S, What) ->
+    case connected(S) of
+        {ok, Conn} = Ok ->
+            case once(Conn, What) of
+                ok -> Ok;
+                Error -> Error
+            end;
+        Error ->
+            Error
     end.
 
 connected(S) ->

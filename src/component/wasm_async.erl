@@ -40,6 +40,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
          guest_call/1,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
+         on_end/2,
          host_write/3, host_close/1, host_future_resolve/2,
          host_read/3, host_future_await/2]).
 
@@ -115,6 +116,9 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% `begin_task/2' and over at `end_task/0', or at `suspend_task/4' when its
 %% task runs on after it. The frame is never torn down while one is.
 -define(ACTIVE, {?MODULE, active}).
+%% Set while the frame is being torn down, so the hooks it runs cannot start
+%% another teardown.
+-define(TEARING, {?MODULE, tearing}).
 %% The most subtasks waiting at once: each has a producer, a process.
 -define(LIMIT, {?MODULE, resource_limit}).
 
@@ -189,6 +193,12 @@ end_task() ->
     end.
 
 teardown() ->
+    %% The host is told about every stream still open, as if the guest had
+    %% let go of it: a sink sees its end, a stream with an `on_end' hook runs
+    %% it. Nothing a stream holds open (a connection) outlives the frame.
+    put(?TEARING, true),
+    _ = [end_hooks(E) || {?WAITABLE(_), E} <- get()],
+    erase(?TEARING),
     stop_producers(),
     Ref = get(?TASK_REF),
     clear_frame(),
@@ -672,8 +682,10 @@ drop_end(Dir, Kind, H) ->
         #{'end' := Dir, kind := Kind} = E ->
             forget_waitable(H),
             ok = detach(E),
-            %% Nothing reads it any more, so whatever was filling it stops.
+            %% Nothing reads it any more, so whatever was filling it stops,
+            %% and its creator is told.
             ok = stop_producer(H),
+            ok = run_on_end(E),
             {ok, []};
         undefined -> {trap, unknown_waitable};
         _ -> {trap, wrong_end}
@@ -1170,10 +1182,10 @@ pump_loop(Deadline) ->
     end.
 
 %% Never inside a guest call, nor while a call is in progress: that call's own
-%% `end_task/0' ends the frame.
+%% `end_task/0' ends the frame. Nor from inside a teardown.
 maybe_teardown() ->
     case get(?TASK_REF) =/= undefined andalso running() =:= 0 andalso active() =:= 0
-             andalso not open_with_work() of
+             andalso get(?TEARING) =:= undefined andalso not open_with_work() of
         true -> teardown();
         false -> ok
     end.
@@ -1375,6 +1387,36 @@ sink_waiting_writer(#{peer := W}, Sink, Max) when W =/= undefined ->
     end;
 sink_waiting_writer(_R, _Sink, _Max) ->
     ok.
+
+-doc """
+Run `Fun()` once, in the owner, when the guest drops the readable end `H`, or
+when the frame is torn down with it still open: the host that made a stream
+learns when nobody reads it any more, as a socket's receive stream must.
+""".
+-spec on_end(non_neg_integer(), fun(() -> any())) -> ok | {error, term()}.
+on_end(H, Fun) ->
+    case get(?WAITABLE(H)) of
+        #{'end' := read} = R -> put(?WAITABLE(H), R#{on_end => Fun}), ok;
+        _ -> {error, unknown_end}
+    end.
+
+run_on_end(#{on_end := Fun}) -> _ = Fun(), ok;
+run_on_end(_) -> ok.
+
+%% At teardown: a sink's end, and a stream's on_end hook. A hook that fails
+%% does not stop the others, nor the teardown.
+end_hooks(#{'end' := read, host := sink, sink := Sink} = E) ->
+    quietly(fun() -> Sink(eof) end),
+    quietly(fun() -> run_on_end(E) end);
+end_hooks(#{'end' := read} = E) ->
+    quietly(fun() -> run_on_end(E) end);
+end_hooks(_) ->
+    ok.
+
+quietly(Fun) ->
+    try Fun() of _ -> ok
+    catch _:_ -> ok
+    end.
 
 -doc """
 A new stream of `Desc` elements the host writes and the guest reads:

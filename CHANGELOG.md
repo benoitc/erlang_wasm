@@ -15,7 +15,8 @@ plain Erlang.
   handler as well as a 0.2 one. Middleware, a handler that imports another, is
   not supported yet.
   `resource_limit` now also bounds how many async calls a guest has waiting
-  at once.
+  at once. A TCP connection stays open while its send or receive stream does,
+  even after the guest drops the socket itself, as Rust guests do.
 - **An async task can keep running after it returns its result.** Call it with
   `wasm_component:start_async/4`, which returns as soon as the task has a
   result. Read a returned stream with `wasm_async:host_read/3` while the guest

@@ -59,6 +59,8 @@ with the same request map and result as `wasi_preview2:run_serve/3`.
 - A handler's response body is read whole before the answer is sent.
 - Grant the network with `network`, as for 0.2. Without it, creating a socket
   is refused with `access-denied`.
+- A TCP connection stays open while its `send` or `receive` stream is open,
+  even after the guest drops the socket.
 - Binding, connecting and listening are one call each. `connect` and `listen`
   on a socket that is not bound bind it to any address first, and so does a
   UDP `send` with an address.

@@ -1019,6 +1019,18 @@ close_resource({input_stream, {file, Handle, _}})       -> _ = wasi_fs:close(Han
 close_resource({Tag, #{body := {some, S}}}) when Tag =:= p3_http_request;
                                                  Tag =:= p3_http_response ->
     ok = wasm_async:host_close(S);
+close_resource({tcp_socket, {connected, Handle}}) ->
+    case get(?P3_TCP(Handle)) of
+        #{users := N} = C when N > 0 ->
+            %% A 0.3 connection whose streams are still open stays open; the
+            %% last of them closes it (`wasi_p3_sockets').
+            put(?P3_TCP(Handle), C#{dropped => true}),
+            ok;
+        _ ->
+            _ = erase(?P3_TCP(Handle)),
+            _ = wasi_sock2:close(Handle),
+            ok
+    end;
 close_resource({tcp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;
 close_resource({udp_socket, {udp_bound, Sock, _Conn}})  -> _ = wasi_sock2:close(Sock), ok;
 close_resource({udp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;

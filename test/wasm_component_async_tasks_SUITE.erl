@@ -26,7 +26,9 @@ import could neither take nor give one.
          a_host_end_call_inside_an_import_is_refused/1,
          call_async_still_runs_to_the_end/1,
          a_call_that_ends_leaves_a_pending_task_alone/1,
-         a_sink_on_an_ended_stream_gets_the_end/1]).
+         a_sink_on_an_ended_stream_gets_the_end/1,
+         dropping_a_host_stream_tells_its_maker/1,
+         a_host_stream_open_at_the_end_tells_its_maker/1]).
 
 all() ->
     [a_task_resolves_and_keeps_writing,
@@ -39,7 +41,9 @@ all() ->
      a_host_end_call_inside_an_import_is_refused,
      call_async_still_runs_to_the_end,
      a_call_that_ends_leaves_a_pending_task_alone,
-     a_sink_on_an_ended_stream_gets_the_end].
+     a_sink_on_an_ended_stream_gets_the_end,
+     dropping_a_host_stream_tells_its_maker,
+     a_host_stream_open_at_the_end_tells_its_maker].
 
 -define(BODY, {[], {stream, u8}}).
 
@@ -141,7 +145,27 @@ a_sink_on_an_ended_stream_gets_the_end(Config) ->
     ?assertEqual({ok, 31},
                  wasm_component:call_async(inst(Config), ~"ended", {[], u32}, [])).
 
+%% A host that made a stream learns when the guest lets go of it, as a
+%% socket's receive stream must to close the connection: `drop-feed' drops
+%% the stream `feed' made, unread.
+dropping_a_host_stream_tells_its_maker(Config) ->
+    ?assertEqual({ok, 7},
+                 wasm_component:call_async(inst(Config), ~"drop-feed", {[], u32}, [])),
+    ?assertEqual(1, ended()).
+
+%% `sum-feed' reads the stream and returns without dropping it: the end of
+%% the task lets go of it, and tells the host once.
+a_host_stream_open_at_the_end_tells_its_maker(Config) ->
+    ?assertEqual({ok, 15},
+                 wasm_component:call_async(inst(Config), ~"sum-feed", {[], u32}, [])),
+    ?assertEqual(1, ended()).
+
 %%% ------------------------------------------------------------- helpers ---
+
+ended() ->
+    receive {ended, _} -> 1 + ended()
+    after 0 -> 0
+    end.
 
 inst(Config) -> ?config(inst, Config).
 
@@ -154,6 +178,8 @@ imports() ->
                     {R, W} = wasm_async:host_stream(u8),
                     ok = wasm_async:host_write(W, <<1, 2, 3, 4, 5>>, 0),
                     ok = wasm_async:host_close(W),
+                    Maker = self(),
+                    ok = wasm_async:on_end(R, fun() -> Maker ! {ended, R} end),
                     R
             end),
       {Host, ~"fut"} =>

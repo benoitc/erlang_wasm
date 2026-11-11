@@ -5,7 +5,8 @@
 ;; its state in its own block, found through context slot 0, so two tasks
 ;; interleaving each write their own bytes. The stackful exports read what a
 ;; host import hands them: a stream (`sum-feed'), a future (`take-future'), and
-;; whether a host-end call inside an import is refused (`reenter').
+;; whether a host-end call inside an import is refused (`reenter'). `drop-feed'
+;; drops the stream `feed' returns unread.
 ;; Build: `scripts/build-wat-component-fixtures.sh`.
 (component
   (type $s8 (stream u8))
@@ -30,6 +31,7 @@
   (core func $write8 (canon stream.write $s8 async (memory $mem)))
   (core func $dropw8 (canon stream.drop-writable $s8))
   (core func $read8 (canon stream.read $s8 (memory $mem)))
+  (core func $dropr8 (canon stream.drop-readable $s8))
   (core func $fread (canon future.read $f32 (memory $mem)))
   (core func $ret_s8 (canon task.return (result $s8)))
   (core func $ret (canon task.return (result u32)))
@@ -48,6 +50,7 @@
     (import "" "write8" (func $write8 (param i32 i32 i32) (result i32)))
     (import "" "dropw8" (func $dropw8 (param i32)))
     (import "" "read8" (func $read8 (param i32 i32 i32) (result i32)))
+    (import "" "dropr8" (func $dropr8 (param i32)))
     (import "" "fread" (func $fread (param i32 i32) (result i32)))
     (import "" "ret_s8" (func $ret_s8 (param i32)))
     (import "" "ret" (func $ret (param i32)))
@@ -132,6 +135,12 @@
           (br $more)))
       (call $ret (local.get $sum)))
 
+    ;; drop-feed() -> u32: drops the stream `feed' returns, unread, then
+    ;; answers 7.
+    (func (export "[async-lift]drop-feed")
+      (call $dropr8 (call $feed))
+      (call $ret (i32.const 7)))
+
     ;; take-future() -> u32: the value of the future `fut' returns.
     (func (export "[async-lift]take-future")
       (drop (call $fread (call $fut) (i32.const 64)))
@@ -155,6 +164,7 @@
     (export "memory" (memory $mem))
     (export "new8" (func $new8)) (export "write8" (func $write8))
     (export "dropw8" (func $dropw8)) (export "read8" (func $read8))
+    (export "dropr8" (func $dropr8))
     (export "fread" (func $fread)) (export "ret_s8" (func $ret_s8))
     (export "ret" (func $ret)) (export "ws_new" (func $ws_new))
     (export "join" (func $join)) (export "ctx_get" (func $ctx_get))
@@ -167,6 +177,8 @@
       (callback (func $i "[callback][async-lift]body"))))
   (func (export "sum-feed") async (result u32)
     (canon lift (core func $i "[async-lift]sum-feed") async))
+  (func (export "drop-feed") async (result u32)
+    (canon lift (core func $i "[async-lift]drop-feed") async))
   (func (export "take-future") async (result u32)
     (canon lift (core func $i "[async-lift]take-future") async))
   (func (export "reenter") async (result u32)

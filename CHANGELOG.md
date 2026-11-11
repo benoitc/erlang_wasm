@@ -6,6 +6,23 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **HTTP requests from a guest now have a real deadline and a size limit.**
+  The 30-second deadline restarted with every chunk of the response, so a
+  server trickling bytes could keep a request open for ever; it now counts
+  from the start of the request. `between-bytes-timeout` is applied, HTTP/2
+  requests apply the connect and first-byte timeouts too, and a response
+  body over 8 MiB fails with `HTTP-response-body-size`. Set the limit with
+  `max_body_bytes`, or `http_max_body_bytes` on the runners.
+- **The HTTP listener bounds every request.** A request body is read to its
+  end within `request_timeout` (60 s by default), chunked or not: a chunked
+  body used to reach the guest empty, and a stalled one reached it truncated.
+  A body that does not arrive in time is answered 408, one over
+  `max_body_bytes` (8 MiB) is answered 413, and a guest still running at the
+  deadline is stopped and answered 504.
+- **Execution limits reach the guest.** `fuel`, `max_depth`,
+  `max_memory_pages`, `max_heap_words` and `max_host_calls` passed to
+  `wasi_preview2:run_serve/3` or `run_command/3`, or in a listener's
+  `serve_opts`, were ignored. They now apply, as `resource_limit` does.
 - **Nothing the runtime starts outlives the process responsible for it.**
   Several helpers ran work in a child whose time limit lived in the process
   that started it, so killing that process left the work running with nothing

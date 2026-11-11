@@ -11,9 +11,8 @@ linker, and the preview2 host.
 Per directory, and known-failing counts rather than case lists, exactly like the
 preview1 suite: a fix may lower a count freely, a regression that raises one fails
 the build, and lowering a count without updating the baseline fails too. The
-failures are programs that reach a preview2 function this host does not implement
-yet (mostly the fuller filesystem surface); each is a stub that traps only when
-called, and the count shrinks as the host grows.
+whole filesystem and clocks surface is implemented; what still fails is the
+assemblyscript directory, for the adapter reason the counts below explain.
 
 Skipped without a wasi-testsuite checkout or without `wasm-tools` and the adapter.
 """.

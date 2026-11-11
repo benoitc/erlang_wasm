@@ -30,7 +30,9 @@ wasi_http_listener:stop(L).
 -type server() :: {module(), term(), binary()}.
 -export_type([server/0]).
 
--define(BODY_TIMEOUT, 60000).
+%% Defaults for `request_timeout' and `max_body_bytes'.
+-define(REQUEST_TIMEOUT, 60000).
+-define(MAX_BODY_BYTES, 8388608).
 
 -doc """
 Start a listener for one reactor component.
@@ -39,23 +41,40 @@ Start a listener for one reactor component.
 `transport` (`h1`, the default, or `h2`), the `port` (0 for an ephemeral one), the
 `scheme` reported to the guest (`http` by default), and `serve_opts` passed through
 to `run_serve/3` (a `network` grant lets the reactor make its own outbound
-requests).
+requests, and execution limits such as `fuel` bound each request's guest).
+
+Two limits bound each request:
+
+- `request_timeout`, the most milliseconds from the request's arrival to its
+  answer, body and guest included (60 s by default). A body not received in
+  time is answered 408 and never reaches the guest; a guest still running is
+  stopped and the request answered 504.
+- `max_body_bytes`, the largest request body (8 MiB by default). A larger one
+  is answered 413 and never reaches the guest.
 """.
 -spec start(#{component := binary(), transport => h1 | h2, port => inet:port_number(),
-              scheme => binary(), serve_opts => map()}) ->
+              scheme => binary(), serve_opts => map(),
+              request_timeout => pos_integer(),
+              max_body_bytes => pos_integer()}) ->
           {ok, server()} | {error, term()}.
 start(#{component := Component} = Opts) ->
     Transport = maps:get(transport, Opts, h1),
     Scheme = maps:get(scheme, Opts, <<"http">>),
     ServeOpts = maps:get(serve_opts, Opts, #{}),
+    MaxBody = maps:get(max_body_bytes, Opts, ?MAX_BODY_BYTES),
+    Config = #{component => Component, scheme => Scheme,
+               serve_opts => ServeOpts, max_body_bytes => MaxBody,
+               request_timeout => maps:get(request_timeout, Opts,
+                                           ?REQUEST_TIMEOUT)},
     {ok, _} = application:ensure_all_started(Transport),
     Handler = fun(Conn, Id, Method, Path, Headers) ->
                   serve_request(Transport, Conn, Id, Method, Path,
-                                #{component => Component, scheme => Scheme,
-                                  serve_opts => ServeOpts, headers => Headers})
+                                Config#{headers => Headers})
               end,
     %% h2 serves over TLS by default; a reactor endpoint runs cleartext (h2c).
-    Extra = case Transport of h2 -> #{transport => tcp}; _ -> #{} end,
+    %% Either library answers a body over the ceiling with 413 itself.
+    Extra0 = case Transport of h2 -> #{transport => tcp}; _ -> #{} end,
+    Extra = Extra0#{max_body_size => MaxBody},
     case Transport:start_server(maps:get(port, Opts, 0), Extra#{handler => Handler}) of
         {ok, Ref} ->
             Addr = iolist_to_binary(["127.0.0.1:",
@@ -79,21 +98,58 @@ stop({Transport, Ref, _Addr}) ->
 %% it through the component, and answer once. Nothing here raises: a guest that
 %% traps or a component that fails to link becomes a 500, never a dropped socket.
 serve_request(Transport, Conn, Id, Method, Path, Config) ->
-    #{component := Component, scheme := Scheme,
-      serve_opts := ServeOpts, headers := Headers} = Config,
-    Body = read_body(Transport, Conn, Id, Headers),
-    Request = #{method => Method, path => Path, scheme => Scheme,
-                authority => authority(Headers), headers => Headers, body => Body},
-    case run(Component, Request, ServeOpts) of
-        {ok, Status, RespHeaders, RespBody} ->
-            answer(Transport, Conn, Id, Status, RespHeaders, RespBody);
-        {error, _Reason} ->
-            answer(Transport, Conn, Id, 500, [], <<"wasi:http reactor error">>)
+    #{component := Component, scheme := Scheme, serve_opts := ServeOpts,
+      headers := Headers, request_timeout := Timeout} = Config,
+    %% Fixed when the request arrives: the body and the guest share it.
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    case read_body(Transport, Conn, Id, Config, Deadline) of
+        {ok, Body} ->
+            Request = #{method => Method, path => Path, scheme => Scheme,
+                        authority => authority(Headers), headers => Headers,
+                        body => Body},
+            case run(Component, Request, ServeOpts, Deadline) of
+                {ok, Status, RespHeaders, RespBody} ->
+                    answer(Transport, Conn, Id, Status, RespHeaders, RespBody);
+                timeout ->
+                    answer(Transport, Conn, Id, 504, [],
+                           <<"wasi:http reactor timed out">>);
+                {error, _Reason} ->
+                    answer(Transport, Conn, Id, 500, [],
+                           <<"wasi:http reactor error">>)
+            end;
+        timeout ->
+            answer(Transport, Conn, Id, 408, [], <<"request body timed out">>);
+        too_large ->
+            answer(Transport, Conn, Id, 413, [], <<"request body too large">>);
+        gone ->
+            ok
     end.
 
-run(Component, Request, ServeOpts) ->
-    try wasi_preview2:run_serve(Component, Request, ServeOpts)
-    catch _:Reason -> {error, Reason}
+%% The guest runs in a child bound to this process, which holds the deadline:
+%% a guest that never returns is stopped at it, and a request process killed
+%% by the wire library takes the guest with it.
+run(Component, Request, ServeOpts, Deadline) ->
+    Parent = self(),
+    {Pid, Mon} = spawn_monitor(
+                   fun() ->
+                           ok = wasm_lifetime:bind(Parent),
+                           Parent ! {served, self(),
+                                     try wasi_preview2:run_serve(
+                                           Component, Request, ServeOpts)
+                                     catch _:Reason -> {error, Reason}
+                                     end}
+                   end),
+    Left = max(0, Deadline - erlang:monotonic_time(millisecond)),
+    receive
+        {served, Pid, Result} ->
+            erlang:demonitor(Mon, [flush]),
+            Result;
+        {'DOWN', Mon, process, Pid, Reason} ->
+            {error, Reason}
+    after Left ->
+        exit(Pid, kill),
+        erlang:demonitor(Mon, [flush]),
+        timeout
     end.
 
 answer(Transport, Conn, Id, Status, Headers, Body) ->
@@ -102,39 +158,52 @@ answer(Transport, Conn, Id, Status, Headers, Body) ->
     _ = Transport:send_data(Conn, Id, Body, true),
     ok.
 
-%% Read the request body to completion when the request declares one; the wire
-%% library delivers body frames to this process, tagged by stream id (h1) or by
-%% connection and stream id (h2).
-read_body(Transport, Conn, Id, Headers) ->
+%% Read the request body to its end, chunked or not: both libraries end every
+%% request, a bodyless one included, with a final data frame. Only this
+%% request's frames are taken from the mailbox; anything else stays there.
+%% Answers `{ok, Body}', `timeout', `too_large', or `gone' when the peer reset
+%% the request or left.
+read_body(Transport, Conn, Id, #{max_body_bytes := Max, headers := Headers},
+          Deadline) ->
     case content_length(Headers) of
-        0 -> <<>>;
-        _ -> read_body(Transport, Conn, Id, <<>>, ?BODY_TIMEOUT)
+        N when is_integer(N), N > Max -> too_large;
+        _ -> read_body(Transport, Conn, Id, <<>>, Max, Deadline)
     end.
 
-read_body(Transport, Conn, Id, Acc, Timeout) ->
+read_body(h1, Conn, Id, Acc, Max, Deadline) ->
     receive
-        Msg ->
-            case body_frame(Transport, Conn, Id, Msg) of
-                {data, Data, false} ->
-                    read_body(Transport, Conn, Id, <<Acc/binary, Data/binary>>, Timeout);
-                {data, Data, true}  -> <<Acc/binary, Data/binary>>;
-                done                -> Acc;
-                other               -> read_body(Transport, Conn, Id, Acc, Timeout)
-            end
-    after Timeout ->
-        Acc
+        {h1_stream, Id, {data, Data, End}} ->
+            more(h1, Conn, Id, <<Acc/binary, Data/binary>>, End, Max, Deadline);
+        {h1_stream, Id, {trailers, _}} -> {ok, Acc};
+        {h1_stream, Id, {stream_reset, _}} -> gone
+    after left(Deadline) -> timeout
+    end;
+read_body(h2, Conn, Id, Acc, Max, Deadline) ->
+    receive
+        {h2, Conn, {data, Id, Data, End}} ->
+            more(h2, Conn, Id, <<Acc/binary, Data/binary>>, End, Max, Deadline);
+        {h2, Conn, {trailers, Id, _}} -> {ok, Acc};
+        {h2, Conn, {stream_reset, Id, _}} -> gone;
+        {h2, Conn, {closed, _}} -> gone
+    after left(Deadline) -> timeout
     end.
 
-body_frame(h1, _Conn, Id, {h1_stream, Id, {data, Data, End}}) -> {data, Data, End};
-body_frame(h1, _Conn, Id, {h1_stream, Id, {trailers, _}})     -> done;
-body_frame(h2, Conn, Id, {h2, Conn, {data, Id, Data, Fin}})   -> {data, Data, Fin};
-body_frame(h2, Conn, Id, {h2, Conn, {trailers, Id, _}})       -> done;
-body_frame(_, _, _, _)                                        -> other.
+more(_Transport, _Conn, _Id, Body, _End, Max, _Deadline)
+  when byte_size(Body) > Max ->
+    too_large;
+more(_Transport, _Conn, _Id, Body, true, _Max, _Deadline) ->
+    {ok, Body};
+more(Transport, Conn, Id, Body, false, Max, Deadline) ->
+    read_body(Transport, Conn, Id, Body, Max, Deadline).
 
+left(Deadline) -> max(0, Deadline - erlang:monotonic_time(millisecond)).
+
+%% The declared length, or `undefined' when there is none or it is not a
+%% number (the wire library has already refused a malformed one).
 content_length(Headers) ->
     case header(<<"content-length">>, Headers) of
-        undefined -> 0;
-        V         -> try binary_to_integer(V) catch _:_ -> 0 end
+        undefined -> undefined;
+        V         -> try binary_to_integer(V) catch _:_ -> undefined end
     end.
 
 authority(Headers) ->

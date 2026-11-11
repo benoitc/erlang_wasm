@@ -60,17 +60,22 @@ Failures reach the guest as `wasi:http` error codes:
 | no path, or an empty or malformed authority | `HTTP-request-URI-invalid` |
 | a scheme other than `http` or `https` | `HTTP-protocol-error` |
 | the grant refuses the address | `HTTP-request-denied` |
-| the connect times out (`wasi_http_h1`) | `connection-timeout` |
+| the connect times out | `connection-timeout` |
 | any other connect failure | `connection-refused` |
 | no response line within the first-byte timeout | `connection-read-timeout` |
-| the body stalls past the overall deadline | `HTTP-response-timeout` |
-| the server closes before responding | `HTTP-response-incomplete` |
+| the body pauses longer than the between-bytes timeout, or is not complete by the overall deadline | `HTTP-response-timeout` |
+| the response body is larger than `max_body_bytes` | `HTTP-response-body-size` |
+| the server closes before the response is complete | `HTTP-response-incomplete` |
 
-The overall deadline is 30 seconds. You cannot change it. The guest can set
-`connect-timeout` and `first-byte-timeout` in its `request-options`.
-`wasi_http_h1` applies both. `wasi_http_h2` applies neither.
-The host stores `between-bytes-timeout` and returns it when read, but does
-not apply it.
+The overall deadline is 30 seconds, counted from the start of the request to
+the last byte of the response. You cannot change it. The guest can set
+`connect-timeout`, `first-byte-timeout` and `between-bytes-timeout` in its
+`request-options`; both transports apply all three, each within the overall
+deadline.
+
+A response body is limited to 8 MiB. To change it, pass `max_body_bytes` to
+`wasi_http:http/1`, or `http_max_body_bytes` in the options of
+`wasi_preview2:run_command/3` and `run_serve/3`.
 
 The host enforces two limits on the request the guest builds. Headers larger
 than 64 KiB in total cause a trap, because the WIT type `header-error` has no
@@ -149,7 +154,9 @@ response from the *outparam* (the response-outparam resource where the guest
 sets its answer), and destroys the instance. The third argument takes the
 options of `wasi_preview2:command/1`. Pass `network` so the reactor can send
 its own requests, and `compile => true` to use the
-[compiled tier](compiled-tier.md).
+[compiled tier](compiled-tier.md). Execution limits (`fuel`, `max_depth`,
+`max_memory_pages`, `max_heap_words`, `max_host_calls`) and `resource_limit`
+apply to the guest, as they do for `wasm:instantiate/3`.
 
 The other results:
 
@@ -176,7 +183,9 @@ ok = wasi_http_listener:stop(L).
 | `port` | the port to listen on; `0` picks one | `0` |
 | `transport` | `h1`, or `h2` for cleartext HTTP/2 | `h1` |
 | `scheme` | the scheme the guest is told | `~"http"` |
-| `serve_opts` | the options passed to `run_serve/3` | `#{}` |
+| `serve_opts` | the options passed to `run_serve/3`, execution limits included | `#{}` |
+| `request_timeout` | milliseconds from a request's arrival to its answer, body and guest included | `60000` |
+| `max_body_bytes` | the largest request body | 8 MiB |
 
 Notes on how it behaves:
 
@@ -184,9 +193,12 @@ Notes on how it behaves:
   a guest that traps, affects only its own request.
 - A trap, a link failure or an error result is answered with a 500 and the
   body `wasi:http reactor error`. The socket is not dropped.
-- The request body is read only when `content-length` is set and non-zero,
-  and for at most 60 seconds. A chunked request reaches the guest with an
-  empty body.
+- The request body is read to its end, chunked or not, within
+  `request_timeout`. A body that does not arrive in time is answered 408,
+  and one larger than `max_body_bytes` is answered 413; the guest does not
+  run for either.
+- A guest still running at `request_timeout` is stopped, and the request is
+  answered 504.
 - The response gets a `content-length` unless the guest set one or a
   `transfer-encoding`.
 - `address/1` returns `127.0.0.1:Port`. The listener passes no bind address to
@@ -212,9 +224,11 @@ request(#{host := Host, port := Port, method := Method,
 ```
 
 The request map carries `host`, `port`, `method`, `path`, `headers` and
-`body`, plus `scheme`, `tls`, `connect_timeout` and `first_byte_timeout`
-(milliseconds, or `undefined` when the guest set none). `Timeout` is the
-overall deadline. Return `{ok, Status, Headers, Body}` with binary header
+`body`, plus `scheme`, `tls`, `connect_timeout`, `first_byte_timeout` and
+`between_bytes_timeout` (milliseconds, or `undefined` when the guest set
+none), and `max_body_bytes`. `Timeout` is the overall deadline: fix it when
+the request starts, and do not start it again with each message.
+`wasi_http_transport:deadline/1` and `within/2` do that for you. Return `{ok, Status, Headers, Body}` with binary header
 pairs, or `{error, {ErrorCodeName, Payload}}` naming a `wasi:http` error code,
 such as `{error, {~"connection-refused", none}}`. Then select it:
 

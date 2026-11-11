@@ -85,6 +85,10 @@ The timeout is enforced on both sides: `gen_server:call` stops waiting, and the
 worker is killed so the work actually stops. Giving up without killing would
 leave a runaway module burning a scheduler with nobody watching.
 
+The kill does not depend on you: a guard process holds the deadline, so a
+worker still running when it passes is killed even if the process that called
+has died.
+
 `call/3` uses `worker_timeout`, five seconds unless you set it:
 
 ```erlang
@@ -103,8 +107,12 @@ default_timeout() ->
 
 -spec call(pid(), binary(), [term()], timeout()) -> {ok, [term()]} | {error, term()}.
 call(Pid, Function, Args, Timeout) ->
+    Request = case Timeout of
+                  infinity -> {run, Function, Args};
+                  _ -> {run, Function, Args, guard(Pid, Timeout)}
+              end,
     try
-        gen_server:call(Pid, {run, Function, Args}, Timeout)
+        gen_server:call(Pid, Request, Timeout)
     catch
         exit:{timeout, _} ->
             exit(Pid, kill),
@@ -117,6 +125,21 @@ call(Pid, Function, Args, Timeout) ->
             {error, #{class => trap, kind => worker_died,
                       msg => ~"worker died", ctx => #{reason => Reason}}}
     end.
+
+%% The deadline's own owner. The caller's `catch' above kills the worker too,
+%% but a caller that is killed first never reaches it; this process does not
+%% depend on the caller. It ends when the worker reports the call done, when
+%% the worker goes, or at the deadline, when it kills the worker.
+guard(Worker, Timeout) ->
+    spawn(fun() ->
+                  Mon = monitor(process, Worker),
+                  receive
+                      {done, Worker} -> ok;
+                      {'DOWN', Mon, process, Worker, _} -> ok
+                  after Timeout ->
+                      exit(Worker, kill)
+                  end
+          end).
 
 -spec stop(pid()) -> ok.
 stop(Pid) -> gen_server:stop(Pid).
@@ -159,6 +182,10 @@ handle_continue(instantiate, State) ->
         {error, Reason} -> {stop, {instantiate_failed, Reason}, State}
     end.
 
+handle_call({run, F, A, Guard}, From, State) ->
+    Reply = handle_call({run, F, A}, From, State),
+    Guard ! {done, self()},
+    Reply;
 handle_call({run, _F, _A}, _From, #state{instance = undefined} = State) ->
     {reply, {error, #{class => link, kind => no_instance,
                       msg => ~"worker has no instance", ctx => #{}}}, State};

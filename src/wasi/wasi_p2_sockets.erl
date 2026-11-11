@@ -1049,4 +1049,3 @@ ip_address({A, B, C, D}) ->
     {<<"ipv4">>, {A, B, C, D}};
 ip_address({A, B, C, D, E, F, G, H}) ->
     {<<"ipv6">>, {A, B, C, D, E, F, G, H}}.
-

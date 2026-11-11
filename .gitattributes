@@ -1,0 +1,3 @@
+# Captured command output: kept byte for byte as the tool printed it, so
+# whitespace checks do not apply.
+test/audit/raw/** -whitespace

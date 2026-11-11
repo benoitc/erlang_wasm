@@ -372,11 +372,17 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports}, Imports, Opts)
     Resolve = fun(Imps) ->
                   resolve_imports(Imps, Imports, resource_imports(Imps, #{}))
               end,
-    LinkOpts = Opts#{drop_fun => drop_fun(Opts),
-                     resource_dtors => wasm_component_types:resource_dtors(Sec),
-                     types => wasm_component_types:type_space(Sec)},
+    LinkOpts0 = Opts#{drop_fun => drop_fun(Opts),
+                      resource_dtors => wasm_component_types:resource_dtors(Sec)},
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
+            %% Only the async built-ins read the type space (an element or
+            %% result type by index), and walking it is not free: a component
+            %% with none skips it.
+            LinkOpts = case lists:keymember(canon_async, 1, Graph) of
+                           true -> LinkOpts0#{types => wasm_component_types:type_space(Sec)};
+                           false -> LinkOpts0
+                       end,
             case wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts) of
                 {ok, #{core := Inst, cores := Cores, export_targets := Targets}} ->
                     {ok, #{core => Inst, exports => Exports, cores => Cores,

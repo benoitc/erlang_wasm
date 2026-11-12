@@ -441,7 +441,16 @@ init([]) ->
         _ -> ok
     end,
     process_flag(trap_exit, true),
-    {ok, #{}}.
+    {ok, #{waiters => watch_parked()}}.
+
+%% The waiter table outlives this process, and its monitors do not. A waiter
+%% asks to be watched again only on its next wait, so one parked across a
+%% restart and killed there left its rows for good. Each one in the table is
+%% watched here instead; one already dead is told apart by an immediate `DOWN'.
+watch_parked() ->
+    Pids = lists:usort([Pid || {_, Pid, _} <- ets:tab2list(?WAITERS_TAB),
+                               is_pid(Pid)]),
+    maps:from_list([{Pid, monitor(process, Pid)} || Pid <- Pids]).
 
 handle_call(ensure_waiters, _From, State) ->
     ok = ensure_waiters_table(),

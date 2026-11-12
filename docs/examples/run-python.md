@@ -40,9 +40,9 @@ ran the script, with the CPython adapter. Each limit above was measured;
 [Python](../python.md) explains each value.
 
 The reactor build, `wasm_python`, starts CPython once and restores a snapshot
-for each request. A request then takes about a third of a second instead of a
-minute or more. It takes under 100 ms once you add the heap floors (minimum
-process heap sizes) that [Python](../python.md) describes.
+for each request. A request then takes under 100 ms instead of a minute or
+more, with the heap floor (a minimum process heap size) the adapter sets by
+default; [Python](../python.md) describes it.
 
 **Clean up:**
 

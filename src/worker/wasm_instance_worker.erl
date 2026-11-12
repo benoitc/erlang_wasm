@@ -2,7 +2,7 @@
 -moduledoc """
 A worker owning one WebAssembly instance, in the Cloudflare-Workers shape.
 
-This is an example, not part of the library. Copy it, change it, or ignore it.
+It is installed with the application; use it as it is, or copy and change it.
 It exists because the controls a worker gives you are exactly the ones an
 inline call cannot, and because getting them subtly wrong is easy.
 

@@ -41,9 +41,10 @@ maps:with([compiled, entered], wasm_jit:counts()).
 compiled the module in the background. `await/2` waited for the compile. The
 next call ran the generated code, as `counts/0` shows.
 
-`fuel => infinity` is required. Generated code cannot count fuel, so an
-instance with a fuel limit stays interpreted, and no error tells you. Limit
-compiled code by time instead, in a worker.
+`fuel => infinity` is the default for `wasm:instantiate/3`, written out here
+so you see it. Generated code cannot count fuel, so an instance with a finite
+`fuel` stays interpreted, and no error tells you. Limit compiled code by time
+instead, in a worker.
 
 The tier helps a guest that runs for a long time, such as an interpreter. For
 a small plugin it changes nothing measurable. Measure your own module;

@@ -16,7 +16,8 @@ guest may do.
 
 This page is WASI Preview 1 (`wasm32-wasip1`). For WASI 0.2 (`wasm32-wasip2`,
 the Component Model), read [WASI 0.2](wasi-0-2.md), or go straight to
-[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
+[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md). For WASI 0.3,
+read [WASI 0.3](wasi-0-3.md).
 
 ## The words on this page
 
@@ -52,18 +53,19 @@ Result = wasm:call(Inst, ~"_start", []).
 
 ## Grant capabilities
 
-If you leave a key out, the module does not get that capability. The
-syscall then returns `ENOTCAPABLE`. This error is different from `EACCES` on
-purpose. The module can tell "you did not get this permission" apart from "the
-operating system refused".
+If you leave a key out, the module does not get that capability, except
+`clocks` and `random`, which default to both clocks and `strong`. A syscall
+without its capability returns `ENOTCAPABLE`. This error is different from
+`EACCES` on purpose. The module can tell "you did not get this permission"
+apart from "the operating system refused".
 
 | key | grants | leaving it out means |
 | --- | --- | --- |
 | `args` | `env::args()` | zero arguments |
 | `env` | environment variables | zero variables, **not** the host's |
 | `dirs` | preopened directories | **no filesystem at all** |
-| `clocks` | `[monotonic]`, `[realtime]`, or both; `monotonic` counts nanoseconds since the node started | that clock returns `ENOTCAPABLE` |
-| `random` | `strong`, or `{seed, N}` for reproducibility | `random_get` refused |
+| `clocks` | `[monotonic]`, `[realtime]`, or both; `monotonic` counts nanoseconds since the node started | both; a clock missing from the list returns `ENOTCAPABLE` |
+| `random` | `strong`, `{seed, N}` for reproducibility, or `none` | `strong`; `none` refuses `random_get` |
 | `stdout`, `stderr` | a pid, fun, or io device | output discarded |
 | `stdin` | a binary or a fun | end of file |
 | `net` | sockets, to the addresses named | **no network at all** |
@@ -312,7 +314,8 @@ link's own timestamps, or a timestamp finer than one second.
 
 A component built for `wasm32-wasip2` is answered by a different host,
 `wasi_preview2`. Its grants, interfaces and `wasi:http` are in
-[WASI 0.2](wasi-0-2.md) and [HTTP](http.md).
+[WASI 0.2](wasi-0-2.md) and [HTTP](http.md). A component built for WASI 0.3
+runs through `wasi_preview3`; see [WASI 0.3](wasi-0-3.md).
 
 ## Check it against the official suite
 

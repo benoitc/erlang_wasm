@@ -133,10 +133,11 @@ program may reach:
 wasi:run(Mod, #{net => #{connect => [{tcp, ~"10.0.0.0/8", 443}]}}).
 ```
 
-You grant each capability (each permission) explicitly, and nothing is
-granted by default. Without `dirs`, the module has no filesystem at all. It
-does not get your working directory. Without `net`, it has no network. See
-[wasi.md](wasi.md).
+You grant each capability (each permission) explicitly. Files and the
+network are never granted by default; clocks and random data are, unless you
+narrow `clocks` or `random`. Without `dirs`, the module has no filesystem at
+all. It does not get your working directory. Without `net`, it has no network.
+See [wasi.md](wasi.md).
 
 ## Handle failure
 

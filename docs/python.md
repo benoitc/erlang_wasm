@@ -154,12 +154,12 @@ out, the same capabilities.
 Notes:
 
 - **`start_link/2` takes about 14 seconds**, or 5 with the capture heap floor
-  described below, because it starts the interpreter once. This happens once
-  per worker, not once per request. Start your workers before you accept
-  traffic. The example raises `capture_timeout` above its 60 s default,
-  because a capture can take longer: 91 to 95 s without the floor, in the
-  measurements below. Workers started with the same options share one image, so a pool starts
-  the interpreter once; see [Using workers](worker.md).
+  described below, because it starts the interpreter once. Workers started
+  with the same options share that image, so it happens once per pool, not
+  once per worker or per request; see [Using workers](worker.md). Start your
+  workers before you accept traffic. The example raises `capture_timeout`
+  above its 60 s default, because a capture can take longer: 91 to 95 s
+  without the floor, in the measurements below.
 - **Isolation does not change.** A restore builds a *fresh* instance, so the
   module-level state of one request never reaches the next.
 - **You give two paths.** The module needs its standard library next to it,

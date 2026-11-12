@@ -58,9 +58,10 @@ fun(Ctx, [OutPtr, OutLen]) ->
 end
 ```
 
-Every read and write checks its bounds, and traps if it goes outside the
-memory. So a module cannot use your host function to read outside its own
-sandbox.
+Every read and write checks its bounds. Out of bounds, it returns
+`{error, #{class := trap, kind := out_of_bounds_memory_access}}`; return
+`{trap, Reason}`, or let the match fail, to stop the call. So a module cannot
+use your host function to read outside its own sandbox.
 
 ## Block, if you have to
 

@@ -58,7 +58,7 @@ changed in place, so writing a field does not change the instance state.
 ```text
   objects   ets set
     struct  {Id, s, TypeIdx, F0, F1, ...}     one element per field
-    array   {Id, a, TypeIdx, Len, Default}    the header only
+    array   {Id, a | n, TypeIdx, Len, Default}  the header only; n: numbers only
   elements  ets ordered_set, keyed {Id, Index}
     array elements that have been written, and the write barrier's
     remembered set

@@ -26,7 +26,8 @@ uses it.
 
 `wasi_preview3:run_serve/3` serves one request through a 0.2 or a 0.3 handler,
 with the same request map and result as `wasi_preview2:run_serve/3`.
-`wasi_http_listener` serves through it, so a listener takes either kind:
+`wasi_http_listener` serves through `run_serve/4`, with its imports built once,
+so a listener takes either kind:
 
 ```erlang
 {ok, 200, _Headers, Body} =
@@ -56,7 +57,9 @@ with the same request map and result as `wasi_preview2:run_serve/3`.
 - Mount files with `preopen`, `writable` and `preopens`, as for 0.2.
 - A request body must match its `content-length`: a write that would go past
   it is refused, and one that ends short fails with `HTTP-request-body-size`.
-- A handler's response body is read whole before the answer is sent.
+- A handler's response body is read whole before the answer is sent. What
+  the guest still does after that gets at most 5 seconds, then the instance
+  is destroyed.
 - Grant the network with `network`, as for 0.2. Without it, creating a socket
   is refused with `access-denied`.
 - A TCP connection stays open while its `send` or `receive` stream is open,
@@ -68,7 +71,8 @@ with the same request map and result as `wasi_preview2:run_serve/3`.
 - `resource_limit` also bounds the async calls a guest has waiting at once.
   Past it, the call traps with `resource_limit_reached`.
 - A 0.3 import is matched to host functions keyed `Interface@0.3`, never to
-  the 0.2 ones of the same name. See [Versioned imports](wasi-0-2.md).
+  the 0.2 ones of the same name. See [Versioned
+  imports](wasi-0-2.md#versioned-imports).
 
 ## Read this next
 

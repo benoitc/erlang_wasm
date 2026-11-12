@@ -200,7 +200,7 @@ terms come first, for readers new to Erlang.
 | **fuel** | a work budget: the guest stops after it has done that much work; compiled code does not count it | [Embedding](embedding.md) |
 | **guardian** | the process that owns one worker request: its deadline, its files and its runner | [Worker internals](worker-internals.md) |
 | **host**, **guest** | Erlang, and the WebAssembly code it runs | above |
-| **image** | the stored copy of a snapshot, in memory or in a file; restores read it without copying it | [Snapshots](snapshots.md) |
+| **image** | the stored copy of a snapshot, in memory or in a file; restores read it without copying it, and workers with the same adapter and options share one | [Snapshots](snapshots.md) |
 | **interpreted** | run by the interpreter, which reads the guest's instructions one by one | [The compiled tier](compiled-tier.md) |
 | **keeper**, **holder** | `wasm_keeper` records which processes hold each memory, table or image (the holders), and frees it when the last holder is gone | [Memory](memory.md) |
 | **limits** | the maximum values for one instance: fuel, memory pages, call depth, heap; start from `wasm_limits:untrusted/0` or `trusted/0` | [Embedding](embedding.md) |
@@ -211,7 +211,7 @@ terms come first, for readers new to Erlang.
 | **page** | a linear-memory page is 64 KiB; a snapshot image is copied in smaller pages of 4 KiB | [Memory](memory.md) |
 | **page budget** | the maximum number of linear-memory pages for the whole node, kept by `wasm_engine` | [Memory](memory.md) |
 | **page table** | for each restored memory, one entry per 4 KiB page, saying whether the page is still the image's or a copy in the arena | [Memory](memory.md) |
-| **preview 1**, **0.2**, **0.3** | the WASI versions: preview 1 for core modules, 0.2 for components; 0.3 is not provided | [WASI](wasi.md), [Components](components.md) |
+| **preview 1**, **0.2**, **0.3** | the WASI versions: preview 1 for core modules, 0.2 and 0.3 for components | [WASI](wasi.md), [WASI 0.3](wasi-0-3.md) |
 | **profile** | `plugin` or `script`: one name that sets the compile options for a kind of workload | [The compiled tier](compiled-tier.md) |
 | **reaper** | the process, one per node, that removes what finished requests left on disk | [Worker internals](worker-internals.md) |
 | **resource**, **`own`**, **`borrow`** | a component-level object behind a handle; `own` gives it away, `borrow` lends it for one call | [Components](components.md) |

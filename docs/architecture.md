@@ -84,9 +84,9 @@ modules a module may call. It says nothing about how you use them. If you run
 WebAssembly and do not change the runtime, start at
 [Getting started](getting-started.md) instead.
 
-There are eleven levels, computed from the code and not drawn by hand. A
-module sits one level above the highest module it calls. The modules of each
-of the three cycles below share one level. So a module only ever calls
+There are twelve levels (L0 to L11), computed from the code and not drawn by
+hand. A module sits one level above the highest module it calls. The modules
+of each of the three cycles below share one level. So a module only ever calls
 **downward**, and level 0 depends on nothing else in the project: you can
 start reading there and understand it completely. The worker modules, in
 `src/worker/`, sit on top of the runtime they use: the adapters at L10, the
@@ -95,8 +95,8 @@ kernel below them.
 The folders follow the same split. `src/` is the core runtime: the front
 end, instances, the interpreter, memory, snapshots and the compiled tier.
 `src/component/` is the Component Model, `src/wasi/` is WASI preview 1,
-0.2 with HTTP, and 0.3, and `src/worker/` is the workers. A folder is for finding a
-module, not a namespace: names stay `wasm_*` and `wasi_*`.
+0.2 with HTTP, and 0.3, and `src/worker/` is the workers. A folder is for
+finding a module, not a namespace: names stay `wasm_*` and `wasi_*`.
 
 ```text
 L11 wasi_http_listener
@@ -200,7 +200,7 @@ copies and what a restore writes back.
 Cycles are allowed here. What is not allowed is a fourth cycle that appears
 without anyone noticing. You cannot see a cycle by reading one module.
 Everything else about `wasm_memory` you learn inside `wasm_memory`, but a
-cycle you only find by reading all ninety-two.
+cycle you only find by reading all ninety-four.
 
 It is easy to add one by mistake. One call from `wasm_error`, at level 0, up
 into `wasm` would merge fourteen modules into one cycle, and only the test
@@ -265,10 +265,10 @@ Then build a `digraph` from `Calls` restricted to `Mods` and ask
 `digraph_utils:strong_components/1`. `test/wasm_architecture_SUITE.erl` does
 exactly this.
 
-Do not derive the graph by grepping the sources. Module documentation refers to
-other modules as `` `wasm_exec:call/3` `` and a grep counts every one of those as
-a dependency. On this code that turns three cycles into one cycle of fourteen
-modules, which is completely wrong.
+Do not derive the graph by grepping the sources. Module documentation refers
+to other modules as `` `wasm_exec:call/3` `` and a grep counts every one of
+those as a dependency. On this code that turns three cycles into one cycle of
+fourteen modules, which is completely wrong.
 
 ## Short notes
 

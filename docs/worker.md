@@ -150,8 +150,6 @@ work.
 
 What it changes:
 
-What it changes:
-
 - Each worker has one runner that lives for many requests. It restores the
   instance and runs the request. The request's imports (preopened directories,
   output sinks, host calls) are the ones the adapter's `prepare/3` built for
@@ -163,8 +161,9 @@ What it changes:
 - An idle worker holds one restored instance. For CPython that is about 42 MB
   of linear memory per worker.
 - It needs an adapter that supports snapshots, and imports that are all
-  functions. If one is missing, the worker logs a warning and restores for each
-  request, as without the option.
+  functions. An adapter without snapshots ignores the option. If an import is
+  not a function, the worker logs a warning and restores for each request, as
+  without the option.
 
 It makes a request shorter only when the worker was idle long enough to finish
 the restore. A pool that always gives the next request to the worker that just
@@ -181,6 +180,11 @@ holds that worker's image instead of loading or capturing its own. A pool of N
 workers holds one copy, counts it once against `max_snapshot_bytes`, and
 captures once when no image is stored yet, even when the N workers start at
 the same moment.
+
+Sharing needs the adapter's snapshot capability to name a module loaded from
+bytes, so it has a content hash, and to give a `compatibility_key`. The
+shipped adapters (`wasm_python`, `wasm_javascript`, `wasm_lua`) do. Without
+either, each worker captures its own image, as a worker with no store does.
 
 Put the workers under a supervisor of your own:
 

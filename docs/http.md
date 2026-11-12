@@ -7,7 +7,9 @@ run calls `wasi:http/outgoing-handler` to reach a server; a component exports
 wire protocol that the host does not include. The component only sees
 requests and responses. The host chooses the wire protocol (HTTP/1.1 or
 HTTP/2), does TLS, and decides which addresses the component may reach. For
-running components in general, read [WASI 0.2](wasi-0-2.md) first.
+running components in general, read [WASI 0.2](wasi-0-2.md) first. A WASI
+0.3 handler (`wasi:http/handler`) is served the same way; see
+[WASI 0.3](wasi-0-3.md).
 
 The host side has these modules:
 
@@ -153,10 +155,10 @@ Each call instantiates the component, calls its `handle` function, reads the
 response from the *outparam* (the response-outparam resource where the guest
 sets its answer), and destroys the instance. The third argument takes the
 options of `wasi_preview2:command/1`. Pass `network` so the reactor can send
-its own requests, and `compile => true` to use the
-[compiled tier](compiled-tier.md). Execution limits (`fuel`, `max_depth`,
-`max_memory_pages`, `max_heap_words`, `max_host_calls`) and `resource_limit`
-apply to the guest, as they do for `wasm:instantiate/3`.
+its own requests, and `compile => true` to build the core modules in the
+calling process instead of through the module cache. Execution limits (`fuel`,
+`max_depth`, `max_memory_pages`, `max_heap_words`, `max_host_calls`) and
+`resource_limit` apply to the guest, as they do for `wasm:instantiate/3`.
 
 The other results:
 
@@ -169,7 +171,8 @@ The other results:
 ## Run a live server
 
 `wasi_http_listener` accepts connections and serves each request through
-`run_serve/3`:
+`wasi_preview3:run_serve/4`, with its imports built once when it starts, so a
+listener takes a 0.2 `incoming-handler` or a 0.3 `handler` component:
 
 ```erlang
 {ok, L} = wasi_http_listener:start(#{component => Bin, port => 8080}),
@@ -179,7 +182,7 @@ ok = wasi_http_listener:stop(L).
 
 | option | meaning | default |
 | --- | --- | --- |
-| `component` | the reactor's bytes | required |
+| `component` | the reactor's bytes, or a component from `wasm_component:prepare/1` | required |
 | `port` | the port to listen on; `0` picks one | `0` |
 | `transport` | `h1`, or `h2` for cleartext HTTP/2 | `h1` |
 | `scheme` | the scheme the guest is told | `~"http"` |
@@ -237,9 +240,10 @@ The request map carries `host`, `port`, `method`, `path`, `headers` and
 `between_bytes_timeout` (milliseconds, or `undefined` when the guest set
 none), and `max_body_bytes`. `Timeout` is the overall deadline: fix it when
 the request starts, and do not start it again with each message.
-`wasi_http_transport:deadline/1` and `within/2` do that for you. Return `{ok, Status, Headers, Body}` with binary header
-pairs, or `{error, {ErrorCodeName, Payload}}` naming a `wasi:http` error code,
-such as `{error, {~"connection-refused", none}}`. Then select it:
+`wasi_http_transport:deadline/1` and `within/2` do that for you. Return
+`{ok, Status, Headers, Body}` with binary header pairs, or
+`{error, {ErrorCodeName, Payload}}` naming a `wasi:http` error code, such as
+`{error, {~"connection-refused", none}}`. Then select it:
 
 ```erlang
 #{network => Grant, http_transport => my_http_transport}

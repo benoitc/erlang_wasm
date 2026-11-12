@@ -20,8 +20,8 @@ each core module goes through its module cache, so the same bytes are
 compiled once per node. When it is not started, each core module is compiled
 in the calling process, as `wasm:compile/1` does. The async Canonical ABI
 (`async func`, `stream<T>`, `future<T>`) is supported: call an async export
-with `wasm_component:call_async/4`. The WASI 0.3 interfaces that use it are
-not provided. A 0.2 component never needs them.
+with `wasm_component:call_async/4`. A component built for WASI 0.3, whose
+interfaces use it, runs through `wasi_preview3`; see [WASI 0.3](wasi-0-3.md).
 
 ## The words on this page
 
@@ -202,8 +202,9 @@ the task runs while you wait.
   has finished writing.
 - `wasm_async:host_sink/2` takes every write as it happens instead, for a
   destination such as stdout.
-- `wasm_component:pump/2` runs pending tasks without reading. It answers
-  `{finished, 0}`, or `{idle, N}` when the `N` tasks left wait for you.
+- `wasm_component:pump(Inst, Timeout)` runs pending tasks without reading.
+  It answers `{finished, 0}`, `{idle, N}` when the `N` tasks left wait for
+  you, `{timeout, N}`, or `{error, Reason}` when a task traps.
 - `destroy/1` stops tasks still running.
 
 A host import can give the guest a stream or a future of its own:

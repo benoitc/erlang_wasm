@@ -63,7 +63,8 @@ file:read_file(filename:join(Dir, "out.txt")).
 ```
 
 **What happened.** Each component imported the WASI 0.2 interfaces. The host
-answered every import from Erlang: the same host that answers Preview 1.
+answered every import from Erlang, through the same path and grant checks
+(`wasi_fs`, `wasi_net`) that Preview 1 uses.
 
 - The first component had no capabilities and only moved bytes.
 - The second read a file through a read-only preopen, and could reach nothing

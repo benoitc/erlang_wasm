@@ -116,8 +116,9 @@ Implement the `wasi_http_transport` behaviour, one `request/2` callback, as
 
 1. Read the error value: `class` says which stage failed, `kind` is
    machine-readable, `ctx` says where.
-2. If the compiled tier is on, ask it: `wasm_jit:diagnostics/0` for what is
-   resident and why, `wasm_jit:dump/1` for an instance's generated code.
+2. If the compiled tier is on, ask it: `wasm_jit:diagnostics/0` for why recent
+   compiles were refused or failed, `wasm_jit:dump/1` for an instance's
+   generated code.
 3. Rerun with a `fuel` limit. Compiled code never runs under fuel, so the
    call is interpreted end to end: a trap that goes away is a generator bug.
 4. Pin it with a case, in `wasm_trap_effects_SUITE` if the trap leaves state

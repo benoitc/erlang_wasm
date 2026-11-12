@@ -56,6 +56,7 @@ One task per page, each run as written by the test suite.
 | [Call Erlang from a guest](examples/call-erlang-from-a-guest.md) | give a guest a host function |
 | [Pass bytes](examples/pass-bytes.md) | send a binary through linear memory and read it back |
 | [Run a WASI command](examples/run-a-wasi-command.md) | a Rust program with one read-only directory |
+| [Run a WASI 0.2 component](examples/run-a-wasi-2-component.md) | a component through the WASI 0.2 host |
 | [Stop a runaway](examples/stop-a-runaway.md) | a fuel budget, and a deadline in a worker |
 | [A plugin per request](examples/plugin-per-request.md) | a fresh instance for every request |
 | [Use a component resource](examples/use-a-component-resource.md) | construct, use and drop a resource, and pass one between composed components |

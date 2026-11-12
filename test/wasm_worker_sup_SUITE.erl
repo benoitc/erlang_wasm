@@ -388,9 +388,16 @@ orphaned_request(Config) ->
         ok
     end),
     [#{id := Id}] = on(H, fun() -> some_requests(50) end),
+    %% The request is in the operator view before its record and its
+    %% directory are on disk, and halting then left nothing for `plant/2' to
+    %% move: an intermittent `enoent' in CI. Both are what the case needs.
+    Orphan = #{dir => Dir, id => Id},
+    ok = until(fun() -> has_record(Dir, Id)
+                            andalso filelib:is_dir(request_dir(Orphan, Dir))
+               end),
     quiet(fun() -> peer:call(Peer, erlang, halt, [0], 2000) end),
     quiet(fun() -> peer:stop(Peer) end),
-    #{dir => Dir, id => Id}.
+    Orphan.
 
 %% Moves an orphaned request into another root. The record names the root by
 %% id and the path relative to it, so it is valid there as it was.

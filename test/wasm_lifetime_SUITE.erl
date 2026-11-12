@@ -22,6 +22,7 @@ its fix: the child was left running with nothing able to see it.
          a_worker_deadline_holds_after_its_caller_dies/1,
          a_worker_start_that_never_returns_is_stopped/1,
          ending_a_task_leaves_the_callers_own_monitors_alone/1,
+         ending_a_task_leaves_nothing_its_producers_sent/1,
          a_module_stored_by_a_dead_loader_is_not_kept/1,
          a_module_published_by_a_dead_loader_is_unpublished/1,
          a_killed_waiter_leaves_no_row/1,
@@ -39,6 +40,7 @@ all() ->
      a_worker_deadline_holds_after_its_caller_dies,
      a_worker_start_that_never_returns_is_stopped,
      ending_a_task_leaves_the_callers_own_monitors_alone,
+     ending_a_task_leaves_nothing_its_producers_sent,
      a_module_stored_by_a_dead_loader_is_not_kept,
      a_module_published_by_a_dead_loader_is_unpublished,
      a_killed_waiter_leaves_no_row,
@@ -211,6 +213,28 @@ ending_a_task_leaves_the_callers_own_monitors_alone(_) ->
         {'DOWN', Mon, process, Pid, _} -> ok
     after 0 -> ct:fail(own_monitor_lost)
     end.
+
+%% A producer killed at the end of its task could still have messages on the
+%% way, and the mailbox was emptied of the task's messages without waiting
+%% for them. They carry the finished task's own reference, so nothing ever
+%% read them: a long-lived caller collected them by the hundred.
+ending_a_task_leaves_nothing_its_producers_sent(_) ->
+    Flood = fun F(#{owner := O, task_ref := R, handle := H} = Ctx) ->
+                    O ! {async_ready, R, H, {data, <<1>>}},
+                    F(Ctx)
+            end,
+    _ = [begin
+             ok = wasm_async:begin_task(undefined, #{}),
+             ok = wasm_async:register_producer(1, Flood),
+             erlang:yield(),
+             ok = wasm_async:end_task()
+         end || _ <- lists:seq(1, 1000)],
+    timer:sleep(100),
+    {messages, Left} = process_info(self(), messages),
+    Stale = [M || M <- Left, element(1, M) =:= async_ready
+                             orelse is_tuple(element(1, M))
+                                    andalso element(1, element(1, M)) =:= wasm_async],
+    ?assertEqual(0, length(Stale)).
 
 %% The module cache's own protocol, driven by a loader that dies at the two
 %% points the server cannot see from outside: after sending `stored' (the

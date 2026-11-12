@@ -6,6 +6,11 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **Ending an async task no longer leaves messages in your mailbox.** When a
+  task ended, the processes feeding its streams were stopped without waiting,
+  and a message one of them was still sending could arrive afterwards and stay
+  in the calling process's mailbox for good. A long-lived process calling
+  async exports collected hundreds. The task now waits for them to stop first.
 - **A module whose start function never returns no longer keeps a worker
   spinning.** `wasm_instance_worker` ran the start function with no deadline,
   so a module that looped there kept the worker busy for good, even after

@@ -48,6 +48,7 @@ the API boundary, so no throw ever reaches you.
                      | undefined_element
                      | uninitialized_element
                      | indirect_call_type_mismatch
+                     | runtime_stopped
                      | {host_error, term()}.
 
 %%% ---------------------------------------------------------- constructors ---
@@ -190,6 +191,8 @@ trap_msg(out_of_bounds_table_access)     -> <<"out of bounds table access">>;
 trap_msg(undefined_element)              -> <<"undefined element">>;
 trap_msg(uninitialized_element)          -> <<"uninitialized element">>;
 trap_msg(indirect_call_type_mismatch)    -> <<"indirect call type mismatch">>;
+trap_msg(runtime_stopped)                ->
+    <<"the wasm application that made this instance has stopped">>;
 trap_msg({host_error, _})                -> <<"host error">>;
 trap_msg(Other) when is_atom(Other)      -> atom_to_binary(Other);
 trap_msg(_)                              -> <<"trap">>.

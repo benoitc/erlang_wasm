@@ -23,7 +23,8 @@ its fix: the child was left running with nothing able to see it.
          ending_a_task_leaves_the_callers_own_monitors_alone/1,
          a_module_stored_by_a_dead_loader_is_not_kept/1,
          a_module_published_by_a_dead_loader_is_unpublished/1,
-         a_killed_waiter_leaves_no_row/1]).
+         a_killed_waiter_leaves_no_row/1,
+         a_waiter_parked_before_an_engine_restart_leaves_no_row/1]).
 
 all() ->
     [a_bound_child_dies_with_its_owner,
@@ -38,7 +39,8 @@ all() ->
      ending_a_task_leaves_the_callers_own_monitors_alone,
      a_module_stored_by_a_dead_loader_is_not_kept,
      a_module_published_by_a_dead_loader_is_unpublished,
-     a_killed_waiter_leaves_no_row].
+     a_killed_waiter_leaves_no_row,
+     a_waiter_parked_before_an_engine_restart_leaves_no_row].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -249,6 +251,29 @@ a_killed_waiter_leaves_no_row(_) ->
     [exit(W, kill) || W <- Waiters],
     eventually(fun() -> Rows() =:= 0 end).
 
+%% The engine that watched them restarts while they wait. A waiter asks to be
+%% watched again only on its next wait, and these never get one, so the new
+%% engine has to find them in the table. It started with no monitors, and the
+%% rows of every one killed afterwards stayed for good.
+a_waiter_parked_before_an_engine_restart_leaves_no_row(_) ->
+    MemId = make_ref(),
+    Test = self(),
+    Waiters = [spawn(fun() ->
+                             Test ! {parked, self()},
+                             wasm_wait:wait(MemId, 0, fun() -> equal end, -1)
+                     end) || _ <- lists:seq(1, 100)],
+    [receive {parked, W} -> ok after 5000 -> ct:fail(not_parked) end
+     || W <- Waiters],
+    Rows = fun() -> length(ets:lookup(wasm_waiters, {MemId, 0})) end,
+    eventually(fun() -> Rows() =:= 100 end),
+    Old = whereis(wasm_engine),
+    exit(Old, kill),
+    ok = restarted(wasm_engine, Old, 100),
+    %% The new engine has started: its `init/1' has run once it answers.
+    _ = sys:get_state(wasm_engine),
+    [exit(W, kill) || W <- Waiters],
+    eventually(fun() -> Rows() =:= 0 end).
+
 guest(P) ->
     case erlang:process_info(P, current_function) of
         {current_function, {wasm_exec, _, _}} -> true;
@@ -268,6 +293,13 @@ report_and_hang(Test) -> fun(_) -> report(Test), hang() end.
 
 gone(Pid) ->
     eventually(fun() -> not is_process_alive(Pid) end).
+
+restarted(Name, _Old, 0) -> ct:fail({not_restarted, Name});
+restarted(Name, Old, N) ->
+    case whereis(Name) of
+        Pid when is_pid(Pid), Pid =/= Old -> ok;
+        _ -> timer:sleep(20), restarted(Name, Old, N - 1)
+    end.
 
 eventually(Pred) -> eventually(Pred, 100).
 

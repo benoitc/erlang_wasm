@@ -59,6 +59,13 @@ memory. So:
 - if another process must be able to stop an instance, put the instance in a
   worker.
 
+Stopping the `wasm` application stops what it made: its store and its page
+accounting go with it. After you start it again, an instance made before the
+stop can no longer grow its memory, and a call that reaches its wasm tables or
+shared globals traps with `runtime_stopped`. Make new instances after the
+restart, and drop the old ones: their memory is freed when nothing refers to
+them.
+
 ## Supervise workers
 
 `wasm_instance_worker` is one instance in one process, with a deadline for

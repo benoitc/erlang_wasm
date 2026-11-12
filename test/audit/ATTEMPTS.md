@@ -1154,3 +1154,32 @@ allocation and redundant work, the copy-on-write unit size, skipping the old
 copy when a bulk write covers a whole page, an idle preparation that records
 pages at fault time and starts only after observed idle, and sharing one loaded
 image across workers.
+
+## Refusing every call to an instance from before an application restart
+
+`restart-state` branch, 2026-11-12. After `application:stop(wasm)` and a new
+start, an instance made before the stop is no longer counted against the page
+budget and has lost its wasm tables, but it went on running. The first fix
+stamped each instance with the start of the application it was made under
+(`wasm_app:current/0`) and refused a top-level `wasm:call/3` from an older
+start with `runtime_stopped`.
+
+**Reverted: it cost 29 ns a call.** A call of a function that returns a
+constant went from 193 ns to 222 ns, 1.142x as the median of five interleaved
+pairs, against a gate of 1.03x. QuickJS through `realbench` was unchanged
+(0.998x). The time was in reading the generation: `wasm_app:current/0` 22.1 ns,
+of which `persistent_term:get/1` with a tuple key 13.9 ns and `atomics:get/2`
+6.4 ns.
+
+**What replaced it.** No check on the call path. An old instance already could
+not grow, because the keeper has no row for its memory. A read through its wasm
+tables, shared globals or the cells of a restored memory now traps with
+`runtime_stopped` (`wasm_engine:table_get/1`) instead of crashing with
+`badarg`. An old instance that only uses its own memory still runs.
+
+**What would reopen it.** A need to stop such an instance outright. The cheaper
+form, the generation's `atomics` reference kept in `#inst{}` and one slot read
+per call, measured about 5 ns in isolation, at the edge of the gate; it was not
+built.
+
+Script and log: `test/audit/raw/generation/`.

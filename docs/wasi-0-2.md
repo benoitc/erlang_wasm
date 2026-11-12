@@ -178,12 +178,12 @@ the checkout, `wasm-tools` or the adapter is missing. Its baseline lists how
 many cases are known to fail in each directory. The suite header explains each
 one.
 
-## What is not provided
+## WASI 0.3
 
-WASI 0.3 is not provided. Its interfaces use `stream` and `future` from the
-async Canonical ABI (see the [glossary](concepts.md#glossary)). A 0.2
-component never needs them. The async ABI itself is supported; see
-[Components](components.md).
+A component built for WASI 0.3 uses `stream` and `future` from the async
+Canonical ABI (see the [glossary](concepts.md#glossary)). Run it with
+`wasi_preview3`, which hosts 0.3 beside this 0.2 host; see
+[WASI 0.3](wasi-0-3.md).
 
 ## Short notes
 

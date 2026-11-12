@@ -16,7 +16,8 @@ guest may do.
 
 This page is WASI Preview 1 (`wasm32-wasip1`). For WASI 0.2 (`wasm32-wasip2`,
 the Component Model), read [WASI 0.2](wasi-0-2.md), or go straight to
-[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md).
+[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md). For WASI 0.3,
+read [WASI 0.3](wasi-0-3.md).
 
 ## The words on this page
 
@@ -312,7 +313,8 @@ link's own timestamps, or a timestamp finer than one second.
 
 A component built for `wasm32-wasip2` is answered by a different host,
 `wasi_preview2`. Its grants, interfaces and `wasi:http` are in
-[WASI 0.2](wasi-0-2.md) and [HTTP](http.md).
+[WASI 0.2](wasi-0-2.md) and [HTTP](http.md). A component built for WASI 0.3
+runs through `wasi_preview3`; see [WASI 0.3](wasi-0-3.md).
 
 ## Check it against the official suite
 

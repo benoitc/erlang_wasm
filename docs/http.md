@@ -7,7 +7,9 @@ run calls `wasi:http/outgoing-handler` to reach a server; a component exports
 wire protocol that the host does not include. The component only sees
 requests and responses. The host chooses the wire protocol (HTTP/1.1 or
 HTTP/2), does TLS, and decides which addresses the component may reach. For
-running components in general, read [WASI 0.2](wasi-0-2.md) first.
+running components in general, read [WASI 0.2](wasi-0-2.md) first. A WASI
+0.3 handler (`wasi:http/handler`) is served the same way; see
+[WASI 0.3](wasi-0-3.md).
 
 The host side has these modules:
 
@@ -169,7 +171,8 @@ The other results:
 ## Run a live server
 
 `wasi_http_listener` accepts connections and serves each request through
-`run_serve/3`:
+`wasi_preview3:run_serve/3`, so a listener takes a 0.2 `incoming-handler` or a
+0.3 `handler` component:
 
 ```erlang
 {ok, L} = wasi_http_listener:start(#{component => Bin, port => 8080}),

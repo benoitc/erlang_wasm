@@ -421,7 +421,8 @@ what it wrote to standard output. Instantiates with `command/1`, calls the
 `wasi:cli/run.run` export, and collects the output stream. This is the
 byte-in/byte-out entry: a real component reads stdin and writes stdout.
 """.
--spec run_command(binary(), binary()) -> {ok, binary()} | {error, term()}.
+-spec run_command(wasi_preview3:component(), binary()) ->
+          {ok, binary()} | {error, term()}.
 run_command(Bin, Stdin) ->
     run_command(Bin, Stdin, #{}).
 
@@ -430,7 +431,7 @@ As `run_command/2` with extra `command/1` options, such as `preopen => Dir` to
 give the command a directory to read (a mount), or `network => Grant` to grant the
 `wasi:sockets` slice (opt-in; without it a command imports no sockets).
 """.
--spec run_command(binary(), binary(),
+-spec run_command(wasi_preview3:component(), binary(),
                   #{args => [binary()], env => [{binary(), binary()}],
                     preopen => file:filename_all(), writable => boolean(),
                     preopens => [{binary(), file:filename_all(), boolean()}],
@@ -538,7 +539,7 @@ incoming-request, calls the guest's `handle`, and returns the response the guest
 set on the outparam as `{ok, Status, Headers, Body}`. `Extra` is the `command/1`
 options (a `network` grant lets the reactor make its own outbound requests).
 """.
--spec run_serve(binary(), map(),
+-spec run_serve(wasi_preview3:component(), map(),
                 #{network => term(), compile => boolean(),
                   resource_limit => non_neg_integer() | infinity,
                   fuel => non_neg_integer() | infinity,

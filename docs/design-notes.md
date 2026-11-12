@@ -297,7 +297,9 @@ Wasi = #{ stdout => self(),
 {ok, Inst} = wasm:instantiate(Mod, wasi_preview1:imports(Wasi)).
 ```
 
-An absent key is an absent capability and the syscall returns `ENOTCAPABLE`.
+An absent key is an absent capability and the syscall returns `ENOTCAPABLE`,
+except `clocks` and `random`, which default to both clocks and strong
+randomness.
 No `dirs` means no filesystem at all, not one rooted at the working directory.
 No `net` means no network at all, not one restricted to somewhere sensible.
 No `env` means zero variables rather than the host's. `ENOTCAPABLE` is kept
@@ -345,7 +347,7 @@ cannot yield a writable descriptor whatever flags the module passes.
 **The time-of-check to time-of-use window.** Resolving a path and then opening
 it leaves a gap in which a component can be swapped for a symlink. Erlang's
 `file` module exposes neither `openat` nor `O_NOFOLLOW`, so closing it needed
-the project's one NIF: a six-function capability-safe file API that walks each
+the project's one NIF: a small capability-safe file API that walks each
 path component `openat(..., O_NOFOLLOW)` relative to the previous directory
 descriptor, so no name is resolved twice and no symlink is followed.
 
@@ -464,12 +466,13 @@ QuickJS took 107 s in the first run that measured it, against 15.2 s for the
 functions each, so it is affordable there and nowhere else.
 
 **Nowhere else means nowhere else.** CPython 3.12 has 11,447 eligible
-functions, few enough that the four-unit limit does not refuse it, although
-one request only *reaches* 971 of them. With `compile_whole` it used 33 GB of
-memory on a 48 GB machine in eleven minutes, produced nothing, and spent that
-time swapping to disk instead of compiling. The four-unit limit bounds the
-names a unit can use. It does not promise that everything under it will
-compile.
+functions, although one request only *reaches* 971 of them. With
+`compile_whole` it used 33 GB of memory on a 48 GB machine in eleven minutes,
+produced nothing, and spent that time swapping to disk instead of compiling.
+That run is why a request over 8,192 functions is now refused with
+`{too_many_functions, N}`, whatever `compile_whole` asks. The four-unit limit
+bounds the names a unit can use. It does not promise that everything under it
+will compile.
 
 
 ### The translation cache
@@ -544,7 +547,7 @@ that is seven values. As a tuple it is an allocation on every access, about
 the access site takes it apart into the list. The hit on the first entry,
 generated at the site, builds the list directly. The value list is used only
 where it is safe, because of a defect in the OTP compiler. Under `no_ssa_opt`
-(the `baseline` quality, which is what `compiled => true` asks for), a value
+(the `baseline` quality, which a worker's `compiled => true` asks for), a value
 of a multi-value `let` that nothing uses can share a register with a value
 that is used, because the compiler thinks it is live for zero instructions.
 Where the paths join, the unused copy can overwrite the used one. Real guests
@@ -668,10 +671,11 @@ Where the target comes from depends on the table:
 - **A static table** cannot change after instantiation: not imported or
   exported, no initialiser, never written by any instruction of the module,
   and filled only by active segments at constant offsets. Its contents are
-  then a property of the module (`#ctx.static_tables`, computed at
-  validation), so the site reads the target from a literal holding, per slot,
-  the unit function whose type is exactly the call's. Nothing is looked up or
-  checked at run time.
+  then a property of the module: validation records the candidates in
+  `#ctx.table_candidates`, and the tier drops any a function writes
+  (`static_tables/2` in `wasm_jit`), so the site reads the target from a
+  literal holding, per slot, the unit function whose type is exactly the
+  call's. Nothing is looked up or checked at run time.
 - **Any other table** is resolved by `wasm_exec:indirect_index/5`, which
   reads the table once and checks the exact type before the supertypes.
 

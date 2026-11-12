@@ -432,6 +432,8 @@ for s in wasm_component_SUITE \
          wasm_resources_SUITE \
          wasm_component_async_SUITE \
          wasm_component_async_import_SUITE \
+         wasm_component_async_abi_SUITE \
+         wasm_component_async_tasks_SUITE \
          wasm_component_malformed_SUITE; do
     rebar3 ct --suite="test/$s" || break
 done

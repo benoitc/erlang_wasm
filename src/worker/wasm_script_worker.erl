@@ -30,7 +30,7 @@ These are covered by compatibility and the release notes:
 
 | module | what it is |
 | --- | --- |
-| `wasm_script_worker` | this module: start, prepare, run, submit, await, cancel, stop, and the operator view (`cleanup_stats/0`, `cleanup_requests/0`) |
+| `wasm_script_worker` | this module: start, run, submit, await, cancel, stop, and the operator view (`cleanup_stats/0`, `cleanup_requests/0`) |
 | `wasm_worker_adapter` | the behaviour an adapter implements, and every type its callbacks name |
 | `wasm_worker_error` | the errors a worker answers with, and the constructors an adapter builds its own with |
 | `wasm_javascript`, `wasm_javascript_command`, `wasm_python`, `wasm_python_command`, `wasm_lua` | the shipped adapters |
@@ -287,9 +287,9 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 -doc """
 Start a worker for one adapter.
 
-`Opts` takes `root` (a root id the reaper was started with, required),
-`timeout`, `trusted` and a `limits` map merged over the defaults. Everything in
-it is also handed to `Adapter:artifact/1`.
+`Opts` takes `root` (a root id the reaper was started with, `scratch` when
+left out), `timeout`, `trusted` and a `limits` map merged over the defaults.
+Everything in it is also handed to `Adapter:artifact/1`.
 """.
 -spec start_link(module(), map()) -> {ok, pid()} | {error, term()}.
 start_link(Adapter, Opts) ->

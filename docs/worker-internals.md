@@ -145,8 +145,9 @@ is removed at a clean shutdown, and only when no reservation is left and its
 journal is empty.
 
 Several cases in `wasm_adapter_conformance` stop and restart a reaper by
-hand. For them, `suspend_reaper/0` stops the supervised reaper and prevents a
-worker start from starting another one, until `resume_reaper/0`.
+hand. For them, `wasm_worker_sup:suspend_reaper/0` stops the supervised
+reaper and prevents a worker start from starting another one, until
+`wasm_worker_sup:resume_reaper/0`.
 
 ## Why `max_heap_words` is applied at spawn
 

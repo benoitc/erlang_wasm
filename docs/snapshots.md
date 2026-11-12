@@ -83,7 +83,8 @@ nothing before it: loading the artifact and looking for the image in
 `snapshot_dir` have no time limit.
 
 If you start several workers with the same adapter and options, they share
-one image: the pool holds it once, is charged once, and captures at most once.
+one image: the pool holds it once, is charged once, and captures once when
+the workers start together and the capture succeeds.
 "Run a pool from one image" in [Using workers](worker.md) has the details.
 
 In `validate`, ask the runtime whether it started correctly. Do not only check
@@ -288,7 +289,7 @@ ok = wasm:save_snapshot(Image, Path),
 
 You pass the module as an argument; the file does not name it. This is the
 same protection `restore/3` has, from the other side. Each failure is refused
-with a name: `snapshot_corrupt`, `snapshot_truncated`,
+with a name, among them `snapshot_corrupt`, `snapshot_truncated`,
 `snapshot_wrong_module`, `snapshot_wrong_shape`, `snapshot_too_large`,
 `snapshot_unknown_atom`, `snapshot_abi_mismatch`. A worker treats all of them
 as "no image" and captures. A table that decodes to neither a list of entries

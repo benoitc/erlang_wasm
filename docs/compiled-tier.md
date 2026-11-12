@@ -49,7 +49,9 @@ ok = wasm_jit:await(I, 60000).
 To see what happened on the node:
 
 ```erlang
-wasm_jit:counts().    %% #{compiled => N, entered => M, reentered => K, cached => C}
+wasm_jit:counts().
+%% #{compiled => N, entered => M, reentered => K, cached => C,
+%%   refused => R, failed => F, crashed => X}
 ```
 
 ## How the pieces fit
@@ -503,8 +505,9 @@ describes the page table, and
   cannot recurse is not counted, so a compiled call can go deeper than
   `max_depth` by at most the number of functions compiled together. A
   recursion is counted exactly, and a runaway one still traps. The trap from
-  compiled code does not report the depth. [Design notes](design-notes.md#how-a-compiled-function-calls-another)
-  has the details.
+  compiled code does not report the depth. [Design
+  notes](design-notes.md#how-a-compiled-function-calls-another) has the
+  details.
 - **`baseline` avoids an OTP compiler bug.** Without its optimisation pass,
   OTP 29.0.3 to at least 29.1.1 can overwrite a value it still needs in one
   rare code shape. The generator avoids that shape; [Design

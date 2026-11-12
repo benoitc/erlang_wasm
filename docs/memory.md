@@ -243,8 +243,10 @@ wasm_engine:set_page_limit(16384),          % 1 GiB, the default
 #{pages_in_use := N} = wasm_engine:stats().
 ```
 
-- It counts every kind of memory the BEAM cannot see: linear memory, the
-  object store of the garbage collector (see [GC](gc.md)), and table cells.
+- It counts the memory the BEAM cannot see that grows with the guest: linear
+  memory and the object store of the garbage collector (see [GC](gc.md)).
+  Tables are bounded by their declared maximum and `table_grow_limit`, not by
+  the budget.
 - It is for the whole node, not for each instance, because a thousand small
   instances are as dangerous as one large one.
 - Reading it is a lock-free `atomics:get`. It changes only inside a keeper

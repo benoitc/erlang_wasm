@@ -202,8 +202,9 @@ the task runs while you wait.
   has finished writing.
 - `wasm_async:host_sink/2` takes every write as it happens instead, for a
   destination such as stdout.
-- `wasm_component:pump/2` runs pending tasks without reading. It answers
-  `{finished, 0}`, or `{idle, N}` when the `N` tasks left wait for you.
+- `wasm_component:pump(Inst, Timeout)` runs pending tasks without reading.
+  It answers `{finished, 0}`, `{idle, N}` when the `N` tasks left wait for
+  you, `{timeout, N}`, or `{error, Reason}` when a task traps.
 - `destroy/1` stops tasks still running.
 
 A host import can give the guest a stream or a future of its own:

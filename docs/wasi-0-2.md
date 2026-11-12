@@ -33,8 +33,9 @@ get back the exit code and everything it wrote:
 `run_command/3` instantiates the component with `command/1`, calls its
 `wasi:cli/run` export and collects stdout and stderr. It always destroys the
 instance, also on errors. A component without a `wasi:cli/run` export returns
-`{error, no_run_export}`. Pass `compile => true` to load its core modules
-through the compiled tier.
+`{error, no_run_export}`. Pass `compile => true` to build its core modules in
+the calling process instead of through the module cache, which limits how
+many modules it loads a second.
 
 The exit code is 0 when `run` returns `ok` and 1 when it returns `err`.
 `wasi:cli/exit.exit` works the same way. `exit-with-code` reports the code
@@ -42,7 +43,7 @@ it was given. A trap that is not an exit is `{error, Reason}`.
 
 ## Grant capabilities
 
-The options are grants, plus two options for outgoing HTTP. If you leave a
+The options are grants, plus three options for outgoing HTTP. If you leave a
 grant out, the component does not get that capability.
 
 | key | grants | left out |
@@ -56,6 +57,7 @@ grant out, the component does not get that capability.
 | `network` | `wasi:sockets` and outbound `wasi:http` | no network |
 | `http_transport` | the module that performs outbound HTTP | `wasi_http_h1` |
 | `http_tls` | `ssl` client options for `https` | verify against system CAs |
+| `http_max_body_bytes` | the largest response body an outbound request reads | 8 MiB |
 
 `args` is returned exactly as you pass it. Nothing is added in front.
 

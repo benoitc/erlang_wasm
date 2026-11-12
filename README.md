@@ -5,7 +5,7 @@ A WebAssembly runtime written in Erlang/OTP.
 This project implements every part itself: decoding, validation,
 instantiation, execution, linear memory and WASI. It is not a binding to
 Wasmtime, Wasmer, WAMR or wasm3. The only native code is an optional file NIF
-of 900 lines. It closes one specific security gap, and the runtime works
+of about 1,200 lines. It closes one specific security gap, and the runtime works
 without it.
 
 ```erlang

@@ -51,8 +51,8 @@ The scripts are in the repository and in the Hex package, under `scripts/`.
 
 `scratch_roots` is where request files live. When a node restarts after a
 crash, it cleans up there what the crashed node left behind. `code_cache_dir`
-keeps compiled code across restarts. [Workers](worker.md) lists every other
-setting.
+keeps compiled code across restarts. [Worker configuration](worker-reference.md)
+lists every other setting.
 
 ## Read this next
 

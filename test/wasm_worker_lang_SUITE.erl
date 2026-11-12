@@ -86,26 +86,37 @@ groups() ->
 %% cases means building its artifact, which for a real engine means loading a
 %% module and therefore a started application. Idempotent, and the alternative
 %% was a kit that returns an empty list when it cannot tell.
+%% `groups/0' runs before any group can skip, and listing an adapter's
+%% capability cases builds its artifact, which needs the guest file. Without it
+%% the whole suite failed in `groups/0', reported as an error nobody counted,
+%% rather than skipping as the base cases do. So the capability cases are only
+%% listed when the guest is there.
+kit_cases(Adapter, Opts) ->
+    case filelib:is_regular(maps:get(path, Opts)) of
+        true  -> ?KIT:base_cases() ++ ?KIT:capability_cases(Adapter, Opts);
+        false -> ?KIT:base_cases()
+    end.
+
 cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_javascript_command, artifact_opts()).
+    kit_cases(wasm_javascript_command, artifact_opts()).
 
 reactor_cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_javascript,
+    kit_cases(wasm_javascript,
                                                reactor_opts()).
 
 python_cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_python_command, python_opts()).
+    kit_cases(wasm_python_command, python_opts()).
 
 lua_cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_lua, lua_opts()).
+    kit_cases(wasm_lua, lua_opts()).
 
 python_reactor_cases() ->
     {ok, _} = application:ensure_all_started(wasm),
-    ?KIT:base_cases() ++ ?KIT:capability_cases(wasm_python,
+    kit_cases(wasm_python,
                                                python_reactor_opts()).
 
 artifact_opts() -> #{path => engine()}.

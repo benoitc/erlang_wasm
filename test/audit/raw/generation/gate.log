@@ -1,0 +1,20 @@
+r=1 parent callk load=7.43 callk_ns 199.5 
+r=1 cand callk load=7.43 callk_ns 224.4 
+r=1 parent qjs load=7.43 qjs-30k-js-iterations run 1	12534.0 ms qjs-30k-js-iterations run 2	13575.6 ms qjs-30k-js-iterations run 3	12718.0 ms 
+r=1 cand qjs load=6.84 qjs-30k-js-iterations run 1	13857.8 ms qjs-30k-js-iterations run 2	12512.1 ms qjs-30k-js-iterations run 3	13920.4 ms 
+r=2 cand callk load=6.42 callk_ns 222.0 
+r=2 parent callk load=6.42 callk_ns 193.0 
+r=2 cand qjs load=6.42 qjs-30k-js-iterations run 1	14644.5 ms qjs-30k-js-iterations run 2	13596.8 ms qjs-30k-js-iterations run 3	12774.7 ms 
+r=2 parent qjs load=6.78 qjs-30k-js-iterations run 1	12483.0 ms qjs-30k-js-iterations run 2	13377.6 ms qjs-30k-js-iterations run 3	14296.8 ms 
+r=3 parent callk load=7.04 callk_ns 202.9 
+r=3 cand callk load=6.95 callk_ns 231.8 
+r=3 parent qjs load=6.95 qjs-30k-js-iterations run 1	12521.0 ms qjs-30k-js-iterations run 2	12754.5 ms qjs-30k-js-iterations run 3	13652.5 ms 
+r=3 cand qjs load=7.85 qjs-30k-js-iterations run 1	13813.5 ms qjs-30k-js-iterations run 2	13255.4 ms qjs-30k-js-iterations run 3	13379.0 ms 
+r=4 cand callk load=7.91 callk_ns 224.4 
+r=4 parent callk load=7.91 callk_ns 206.8 
+r=4 cand qjs load=7.91 qjs-30k-js-iterations run 1	12138.8 ms qjs-30k-js-iterations run 2	13192.8 ms qjs-30k-js-iterations run 3	13131.0 ms 
+r=4 parent qjs load=7.71 qjs-30k-js-iterations run 1	13715.7 ms qjs-30k-js-iterations run 2	12668.0 ms qjs-30k-js-iterations run 3	13967.4 ms 
+r=5 parent callk load=7.15 callk_ns 199.1 
+r=5 cand callk load=7.15 callk_ns 233.8 
+r=5 parent qjs load=7.15 qjs-30k-js-iterations run 1	14388.3 ms qjs-30k-js-iterations run 2	13268.6 ms qjs-30k-js-iterations run 3	14249.3 ms 
+r=5 cand qjs load=7.93 qjs-30k-js-iterations run 1	12447.4 ms qjs-30k-js-iterations run 2	12354.8 ms qjs-30k-js-iterations run 3	13545.5 ms 

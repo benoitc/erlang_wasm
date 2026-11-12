@@ -40,7 +40,8 @@ the node's life.
          a_tree_death_does_not_leak_the_page_budget/1,
          each_subsystem_has_its_own_restart_budget/1,
          a_table_owner_crash_does_not_lose_the_tables/1,
-         restarts_under_traffic_leave_nothing_behind/1]).
+         restarts_under_traffic_leave_nothing_behind/1,
+         an_instance_from_before_a_restart_cannot_reach_its_store/1]).
 
 all() ->
     [destroying_the_exporter_leaves_the_memory_to_the_importer,
@@ -69,7 +70,8 @@ all() ->
      a_tree_death_does_not_leak_the_page_budget,
      each_subsystem_has_its_own_restart_budget,
      a_table_owner_crash_does_not_lose_the_tables,
-     restarts_under_traffic_leave_nothing_behind].
+     restarts_under_traffic_leave_nothing_behind,
+     an_instance_from_before_a_restart_cannot_reach_its_store].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -710,7 +712,9 @@ each_subsystem_has_its_own_restart_budget(_Config) ->
 a_tree_death_does_not_leak_the_page_budget(_Config) ->
     ok = application:stop(wasm),
     {ok, _} = application:ensure_all_started(wasm),
-    Mod = compile(~"(module (memory (export \"m\") 8))"),
+    Mod = compile(~"(module (memory (export \"m\") 8)
+                     (func (export \"grow\") (result i32)
+                       (memory.grow (i32.const 1))))"),
     Insts = [begin {ok, I} = wasm:instantiate(Mod, #{}), I end
              || _ <- lists:seq(1, 4)],
     ?assert(wasm_engine:pages_in_use() >= 32),
@@ -731,13 +735,16 @@ a_tree_death_does_not_leak_the_page_budget(_Config) ->
     ?assertEqual(registry_pages(), wasm_engine:pages_in_use()),
     ?assertEqual(0, registry_pages()),
 
+    %% The four this process still holds were made before the tree died. They
+    %% are no longer counted, so they cannot grow either.
+    [?assertEqual({ok, [-1]}, wasm:call(I, ~"grow", [])) || I <- Insts],
+
     %% And the node still allocates the full budget afterwards, which is the
     %% thing the leak took away.
     {ok, Fresh} = wasm:instantiate(Mod, #{}),
     ?assertEqual(8, wasm_engine:pages_in_use()),
     ok = wasm:destroy(Fresh),
     ?assertEqual(0, wasm_engine:pages_in_use()),
-    _ = Insts,
     ok.
 
 %% What the registry says is charged, summed per resource row. Not per holder:
@@ -840,6 +847,34 @@ traffic(Mod, N) ->
             ok
     end,
     traffic(Mod, N - 1).
+
+%% Stopping the application stops what it made. Its store goes with it, so an
+%% instance made before the stop cannot grow (its pages are no longer counted)
+%% and cannot reach the wasm table it held there. Reading through that table
+%% used to crash with a bare `badarg'; it is a trap that says what happened.
+an_instance_from_before_a_restart_cannot_reach_its_store(_Config) ->
+    Mod = compile(~"(module
+        (type $t (func (result i32)))
+        (memory 1)
+        (table (export \"t\") 1 funcref)
+        (elem (i32.const 0) $seven)
+        (func $seven (result i32) (i32.const 7))
+        (func (export \"call\") (result i32)
+          (call_indirect (type $t) (i32.const 0)))
+        (func (export \"grow\") (result i32) (memory.grow (i32.const 1))))"),
+    {ok, Old} = wasm:instantiate(Mod, #{}),
+    ?assertEqual({ok, [7]}, wasm:call(Old, ~"call", [])),
+    ok = application:stop(wasm),
+    {ok, _} = application:ensure_all_started(wasm),
+    ?assertEqual({ok, [-1]}, wasm:call(Old, ~"grow", [])),
+    %% This process keeps its own copy of each table it has called through;
+    %% dropped here, the call reads the table from the store.
+    _ = [erase(K) || {{wasm_table_cache, _} = K, _} <- get()],
+    ?assertMatch({error, #{class := trap, kind := runtime_stopped}},
+                 wasm:call(Old, ~"call", [])),
+    {ok, New} = wasm:instantiate(Mod, #{}),
+    ?assertEqual({ok, [7]}, wasm:call(New, ~"call", [])),
+    ok = wasm:destroy(New).
 
 %%% --------------------------------------------------------------- fixtures ---
 

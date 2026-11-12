@@ -6,6 +6,16 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **An instance made before the application stopped now says so.** After
+  `application:stop(wasm)` and a new start, a call through such an instance's
+  wasm tables or shared globals crashed with a bare `badarg`, because they
+  went with the application. It now traps with `runtime_stopped`. The
+  instance already could not grow, since its memory is no longer counted. If
+  you stop and start `wasm`, make your instances again after the start.
+- **A thread killed while waiting no longer leaves its entry behind after an
+  engine restart.** A thread parked in `memory.atomic.wait` when the engine
+  restarted, and killed afterwards, left its entry in the waiter table for
+  good.
 - **WASI 0.3 commands run.** `wasi_preview3:run_command/3` runs a component
   built for WASI 0.3 that uses `wasi:cli`, `wasi:clocks` and `wasi:random`:
   stdio through streams, async sleeps, the environment and exit codes. It runs

@@ -345,8 +345,15 @@ table_put(Id, Array) ->
     true = ets:insert(?TABLES_TAB, {Id, Array}),
     ok.
 
+%% A row that is not there belongs to an instance made before the `wasm'
+%% application stopped: the store went with the application, and the instance
+%% lives on in its owner's hands. Reading through it is a trap that says so,
+%% not a crash.
 -spec table_get(reference()) -> term().
-table_get(Id) -> ets:lookup_element(?TABLES_TAB, Id, 2).
+table_get(Id) ->
+    try ets:lookup_element(?TABLES_TAB, Id, 2)
+    catch error:badarg -> wasm_error:trap(runtime_stopped)
+    end.
 
 -spec table_forget(reference()) -> ok.
 table_forget(Id) ->

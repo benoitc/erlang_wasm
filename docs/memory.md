@@ -234,6 +234,11 @@ harmless. The resource is freed when the set is empty.
 The node page counter and the snapshot byte counter are only caches. The
 keeper rebuilds them from the rows every time it starts.
 
+The rows go when the `wasm` application stops, and an instance made before the
+stop is no longer counted. So after the next start it cannot grow, and a call
+that reaches its wasm tables or shared globals traps with `runtime_stopped`.
+Its memory is freed when its owner drops it.
+
 ## The node page budget
 
 `wasm_engine` holds the node-wide counter and the cap:

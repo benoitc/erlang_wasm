@@ -31,6 +31,9 @@ all() ->
      shutdown_ends_the_stream,
      poll_reports_a_socket_with_data_waiting,
      poll_waits_and_the_clock_fires,
+     a_poll_reports_only_the_clocks_that_are_due,
+     a_clock_never_fires_before_its_time,
+     beside_a_quiet_socket_only_the_due_clock_fires,
      poll_reports_a_hangup,
      poll_does_not_consume_what_it_found,
      poll_on_a_file_reports_ready,
@@ -369,6 +372,40 @@ poll_waits_and_the_clock_fires(Config) ->
     Waited = erlang:monotonic_time(millisecond) - Before,
     ?assertEqual([{22, ?ESUCCESS, ?EVENTTYPE_CLOCK, 0, 0}], events(I, 1)),
     ?assert(Waited >= 45),
+    ok = gen_tcp:close(Peer).
+
+%% Two timers, 10 ms and 10 s: once the first is due, the second is not. Every
+%% clock was reported once the shortest was due, so a guest using the long one
+%% as a timeout timed out at once.
+a_poll_reports_only_the_clocks_that_are_due(Config) ->
+    I = instance(Config, none),
+    N = put_subs(I, [clock_sub(1, 10000000), clock_sub(2, 10000000000)]),
+    Before = erlang:monotonic_time(millisecond),
+    ?assertEqual({ok, [?ESUCCESS]}, wasm:call(I, ~"poll", [N])),
+    Waited = erlang:monotonic_time(millisecond) - Before,
+    ?assertEqual({ok, [1]}, wasm:call(I, ~"count", [])),
+    ?assertEqual([{1, ?ESUCCESS, ?EVENTTYPE_CLOCK, 0, 0}], events(I, 1)),
+    ?assert(Waited < 5000).
+
+%% The wait was the delay in milliseconds rounded down, so a 10.9 ms timer
+%% fired after 10.
+a_clock_never_fires_before_its_time(Config) ->
+    I = instance(Config, none),
+    N = put_subs(I, [clock_sub(1, 10900000)]),
+    Before = erlang:monotonic_time(microsecond),
+    ?assertEqual({ok, [?ESUCCESS]}, wasm:call(I, ~"poll", [N])),
+    Waited = erlang:monotonic_time(microsecond) - Before,
+    ?assert(Waited >= 10900, Waited).
+
+%% The same with a socket that has nothing to read: the wait ends at the first
+%% clock, and only that clock fired.
+beside_a_quiet_socket_only_the_due_clock_fires(Config) ->
+    {I, Peer, Conn} = accepted(Config),
+    N = put_subs(I, [fd_sub(11, ?EVENTTYPE_FD_READ, Conn),
+                     clock_sub(22, 10000000), clock_sub(33, 10000000000)]),
+    ?assertEqual({ok, [?ESUCCESS]}, wasm:call(I, ~"poll", [N])),
+    ?assertEqual({ok, [1]}, wasm:call(I, ~"count", [])),
+    ?assertEqual([{22, ?ESUCCESS, ?EVENTTYPE_CLOCK, 0, 0}], events(I, 1)),
     ok = gen_tcp:close(Peer).
 
 %% A closed peer is ready, not quiet. Without the hangup flag a module cannot

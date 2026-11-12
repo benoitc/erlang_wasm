@@ -1733,13 +1733,26 @@ subscription(<<UserData:64/little, Tag:8, _:7/binary, Fd:32/little, _/binary>>)
 subscription(<<UserData:64/little, Tag:8, _/binary>>) ->
     {unknown, UserData, Tag}.
 
-%% Sleeping the whole subscription set means waiting for the earliest deadline,
-%% since that is the first that could fire.
-shortest_delay(Subs) ->
-    Ns = [delay_ns(D) || {clock, _, D} <- Subs],
-    case Ns of
-        [] -> 0;
-        _ -> lists:min(Ns) div 1000000
+%% Each clock's due time, on one time base read once: a poll waits for the
+%% earliest and reports the ones whose time has come. Reporting every clock
+%% once the earliest was due made a long timer used as a timeout fire at once.
+due_clocks(Clocks) ->
+    Now = erlang:monotonic_time(nanosecond),
+    [{Id, Now + delay_ns(D)} || {clock, Id, D} <- Clocks].
+
+earliest(Dues) -> lists:min([Due || {_, Due} <- Dues]).
+
+fired(Dues) ->
+    Now = erlang:monotonic_time(nanosecond),
+    [clock_event(Id) || {Id, Due} <- Dues, Due =< Now].
+
+%% Milliseconds until `Due', rounded up: rounded down, a 10.9 ms timer fired
+%% after 10.
+ms_until(Due) ->
+    Ns = Due - erlang:monotonic_time(nanosecond),
+    case Ns > 0 of
+        true -> (Ns + 999999) div 1000000;
+        false -> 0
     end.
 
 %% A relative subscription waits its timeout. An absolute one waits until its
@@ -1756,9 +1769,13 @@ delay_ns({ClockId, Deadline, 1}) ->
 
 %% Blocking the instance process is acceptable here and nowhere else: the
 %% module asked to wait. It stays interruptible, so a timeout still kills it.
-sleep_ms(0) -> ok;
-sleep_ms(Ms) when Ms > 0 -> timer:sleep(erlang:min(Ms, 60000)), ok;
-sleep_ms(_) -> ok.
+%% In sleeps of at most a minute, until the time has come: one sleep used to
+%% be the whole wait, so a two-minute timer fired after one.
+sleep_until(Due) ->
+    case ms_until(Due) of
+        0 -> ok;
+        Ms -> ok = timer:sleep(erlang:min(Ms, 60000)), sleep_until(Due)
+    end.
 
 %% An `event' is 32 bytes: userdata, errno, type, and a union left zeroed for
 %% the clock case.
@@ -1777,21 +1794,18 @@ fd_event(UserData, Type, Errno, NBytes, Flags) ->
 %% How long a wait is broken into when more than one socket is being watched.
 -define(POLL_SLICE_MS, 10).
 
+poll(Ctx, OutPtr, NEventsPtr, [], [], _Config, St) ->
+    emit_events(Ctx, OutPtr, NEventsPtr, [], St);
 poll(Ctx, OutPtr, NEventsPtr, Clocks, [], _Config, St) ->
-    ok = sleep_ms(shortest_delay(Clocks)),
-    emit_events(Ctx, OutPtr, NEventsPtr,
-                [clock_event(Id) || {clock, Id, _} <- Clocks], St);
+    Dues = due_clocks(Clocks),
+    ok = sleep_until(earliest(Dues)),
+    emit_events(Ctx, OutPtr, NEventsPtr, fired(Dues), St);
 poll(Ctx, OutPtr, NEventsPtr, Clocks, Fds, Config, St) ->
     %% Every subscription resolves: an unknown descriptor becomes a `bad' entry
     %% that reports EBADF as its own event, rather than failing the whole poll.
     case resolve_subs(Fds, St, []) of
         {ok, Resolved} ->
-            {Events, St1} = wait_ready(Resolved, poll_deadline(Clocks, Config), St),
-            %% Nothing became ready, so the wait ended at its deadline, and the
-            %% clocks that set it are what fired.
-            Out = case Events of
-                      [] -> [clock_event(Id) || {clock, Id, _} <- Clocks]; _ -> Events
-                  end,
+            {Out, St1} = wait_fds(Resolved, due_clocks(Clocks), Config, St),
             emit_events(Ctx, OutPtr, NEventsPtr, Out, St1)
     end.
 
@@ -1827,8 +1841,18 @@ resolve_subs([{fd, UserData, Tag, Fd} | Rest], St, Acc) ->
             resolve_subs(Rest, St, [{Kind, UserData, Fd} | Acc])
     end.
 
-poll_deadline([], Config) -> net_timeout(Config);
-poll_deadline(Clocks, _Config) -> shortest_delay(Clocks).
+%% With no clock, the wait is the network timeout, as for a blocking read. With
+%% clocks, it lasts until the earliest is due; what is reported is the ready
+%% descriptors and the clocks whose time has come. A wait cut short by the
+%% minute cap, with nothing ready and nothing due, is waited again.
+wait_fds(Resolved, [], Config, St) ->
+    wait_ready(Resolved, net_timeout(Config), St);
+wait_fds(Resolved, Dues, Config, St) ->
+    {Events, St1} = wait_ready(Resolved, ms_until(earliest(Dues)), St),
+    case Events ++ fired(Dues) of
+        [] -> wait_fds(Resolved, Dues, Config, St1);
+        Out -> {Out, St1}
+    end.
 
 %% One socket and nothing else to watch: wait on it directly. This is the
 %% common case and it is exact, with no polling interval in it.

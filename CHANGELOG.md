@@ -6,6 +6,13 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **A WASI program waiting on several timers now wakes for the first one
+  only.** `poll_oneoff` reported every timer as fired once the shortest was
+  due, so a program using a long timer as a timeout timed out at once. It now
+  reports only the timers whose time has come, never wakes before a timer is
+  due (a delay used to be rounded down to whole milliseconds), and waits the
+  full time for a timer longer than a minute, where it used to stop after one
+  minute.
 - **Ending an async task no longer leaves messages in your mailbox.** When a
   task ended, the processes feeding its streams were stopped without waiting,
   and a message one of them was still sending could arrive afterwards and stay

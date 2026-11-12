@@ -72,6 +72,9 @@ pool and check one out per request.
 Start a worker over an already-loaded module.
 
 `Opts` accepts `imports`, `limits`, `isolation` (`fresh` | `reuse`) and `name`.
+The module's start function runs when the worker instantiates it, under a
+deadline of its own: `timeout` in `limits` (milliseconds, or `infinity`), or
+`worker_timeout` as for `call/3`. A start that runs past it kills the worker.
 """.
 -spec start_link(wasm:module_()) -> {ok, pid()} | {error, term()}.
 start_link(Module) -> start_link(Module, #{}).
@@ -201,20 +204,13 @@ init({Module, Opts}) ->
     {ok, State, {continue, instantiate}}.
 
 handle_continue(instantiate, State) ->
-    case new_instance(State) of
+    case guarded(start_deadline(State), fun() -> new_instance(State) end, State) of
         {ok, Inst} -> {noreply, State#state{instance = Inst}};
         {error, Reason} -> {stop, {instantiate_failed, Reason}, State}
     end.
 
-handle_call({run, F, A, Deadline}, From,
-            #state{guard = Guard, running = Running} = State) ->
-    Call = erlang:unique_integer([positive]),
-    TRef = erlang:start_timer(Deadline, Guard, Call, [{abs, true}]),
-    ok = atomics:put(Running, 1, Call),
-    Reply = handle_call({run, F, A}, From, State),
-    ok = atomics:put(Running, 1, 0),
-    _ = erlang:cancel_timer(TRef, [{async, true}, {info, false}]),
-    Reply;
+handle_call({run, F, A, Deadline}, From, State) ->
+    guarded(Deadline, fun() -> handle_call({run, F, A}, From, State) end, State);
 handle_call({run, _F, _A}, _From, #state{instance = undefined} = State) ->
     {reply, {error, #{class => link, kind => no_instance,
                       msg => ~"worker has no instance", ctx => #{}}}, State};
@@ -235,6 +231,28 @@ terminate(_Reason, #state{instance = undefined}) -> ok;
 terminate(_Reason, #state{instance = Inst}) -> wasm:destroy(Inst).
 
 %%% ---------------------------------------------------------------- helpers ---
+
+%% Run `Fun' under an absolute deadline the guard holds: past it, the guard
+%% kills this process, whether or not anybody is still waiting for it.
+guarded(infinity, Fun, _State) ->
+    Fun();
+guarded(Deadline, Fun, #state{guard = Guard, running = Running}) ->
+    Call = erlang:unique_integer([positive]),
+    TRef = erlang:start_timer(Deadline, Guard, Call, [{abs, true}]),
+    ok = atomics:put(Running, 1, Call),
+    Result = Fun(),
+    ok = atomics:put(Running, 1, 0),
+    _ = erlang:cancel_timer(TRef, [{async, true}, {info, false}]),
+    Result.
+
+%% The module's start function runs when it is instantiated, before any
+%% request, so it gets a deadline of its own: the `timeout' in the worker's
+%% limits, or `worker_timeout' as for `call/3'.
+start_deadline(#state{limits = Limits}) ->
+    case maps:get(timeout, Limits, default_timeout()) of
+        infinity -> infinity;
+        Ms -> erlang:monotonic_time(millisecond) + Ms
+    end.
 
 new_instance(#state{module = Module, imports = Imports, limits = Limits}) ->
     wasm:instantiate(Module, Imports, Limits).

@@ -1097,20 +1097,34 @@ forget_producer(Pid) ->
 stop_producer(H) ->
     case lists:keytake(H, 3, producers()) of
         {value, {Pid, Mon, H}, Rest} ->
-            erlang:demonitor(Mon, [flush]),
             exit(Pid, kill),
+            ok = dead(Mon),
             put(?PRODUCERS, Rest),
             ok;
         false ->
             ok
     end.
 
+%% Killed, then waited for: a `kill' does not wait, and a producer still running
+%% can send after it. Messages from one process arrive in the order it sent
+%% them and its `DOWN' after the last, so once every `DOWN' is in, everything
+%% the producers sent is in the mailbox for `flush_stale/1' to take. Without
+%% the wait some arrived after it and stayed, tagged with a task nobody reads.
 stop_producers() ->
-    lists:foreach(fun({Pid, Mon, _H}) ->
-                      erlang:demonitor(Mon, [flush]),
-                      exit(Pid, kill)
-                  end, producers()),
+    Ps = producers(),
+    _ = [exit(Pid, kill) || {Pid, _Mon, _H} <- Ps],
+    _ = [dead(Mon) || {_Pid, Mon, _H} <- Ps],
     ok.
+
+%% A killed process cannot refuse to die, so this is short; it is bounded all
+%% the same, so a teardown never hangs.
+dead(Mon) ->
+    receive
+        {?DOWN(_), Mon, process, _, _} -> ok
+    after 5000 ->
+        erlang:demonitor(Mon, [flush]),
+        ok
+    end.
 
 %% Drop any completion or producer `DOWN' left over for this task after
 %% teardown. Only this task's: the caller's own monitors stay in its mailbox.

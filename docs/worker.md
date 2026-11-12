@@ -106,6 +106,10 @@ not continue with nobody waiting for the result. `call/3` uses the
 `worker_timeout` application setting, which is five seconds unless you change
 it. If you know the right deadline, pass it to `call/4` instead.
 
+The module's start function runs when the worker instantiates it, before any
+request, and has a deadline too: `timeout` in the worker's `limits`, or
+`worker_timeout`. A start that runs past it kills the worker.
+
 [Stop a runaway](examples/stop-a-runaway.md) shows both limits stopping a
 guest.
 

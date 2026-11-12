@@ -20,6 +20,7 @@ its fix: the child was left running with nothing able to see it.
          an_artifact_load_dies_with_the_process_that_started_it/1,
          a_nested_task_leaves_the_outer_tasks_producers_in_its_care/1,
          a_worker_deadline_holds_after_its_caller_dies/1,
+         a_worker_start_that_never_returns_is_stopped/1,
          ending_a_task_leaves_the_callers_own_monitors_alone/1,
          a_module_stored_by_a_dead_loader_is_not_kept/1,
          a_module_published_by_a_dead_loader_is_unpublished/1,
@@ -36,6 +37,7 @@ all() ->
      an_artifact_load_dies_with_the_process_that_started_it,
      a_nested_task_leaves_the_outer_tasks_producers_in_its_care,
      a_worker_deadline_holds_after_its_caller_dies,
+     a_worker_start_that_never_returns_is_stopped,
      ending_a_task_leaves_the_callers_own_monitors_alone,
      a_module_stored_by_a_dead_loader_is_not_kept,
      a_module_published_by_a_dead_loader_is_unpublished,
@@ -177,6 +179,22 @@ a_worker_deadline_holds_after_its_caller_dies(_) ->
     {ok, W} = wasm_instance_worker:start_link(M),
     unlink(W),
     Caller = spawn(fun() -> wasm_instance_worker:call(W, ~"spin", [], 200) end),
+    timer:sleep(50),
+    exit(Caller, kill),
+    gone(W).
+
+%% A module's start function runs when the worker instantiates it, before any
+%% request, and nothing bounded it: the deadline was armed only when a request
+%% began to run. A request queued behind the start, from a caller then killed,
+%% left the worker spinning for good.
+a_worker_start_that_never_returns_is_stopped(_) ->
+    {ok, P} = wasm_wat:module(
+                ~"(module (func $s loop br 0 end) (start $s)
+                          (func (export \"f\")))"),
+    {ok, M} = wasm_validate:module(P),
+    {ok, W} = wasm_instance_worker:start_link(M, #{limits => #{timeout => 200}}),
+    unlink(W),
+    Caller = spawn(fun() -> wasm_instance_worker:call(W, ~"f", [], 100) end),
     timer:sleep(50),
     exit(Caller, kill),
     gone(W).

@@ -6,6 +6,11 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **A module whose start function never returns no longer keeps a worker
+  spinning.** `wasm_instance_worker` ran the start function with no deadline,
+  so a module that looped there kept the worker busy for good, even after
+  every caller had given up. The start now has a deadline: `timeout` in the
+  worker's `limits`, or `worker_timeout`, five seconds unless you set it.
 - **An instance made before the application stopped now says so.** After
   `application:stop(wasm)` and a new start, a call through such an instance's
   wasm tables or shared globals crashed with a bare `badarg`, because they

@@ -175,77 +175,27 @@ has to run.
 ## Run a pool from one image
 
 This section is also about `wasm_script_worker`. Use it when you start several
-workers with the same adapter and options. If you start them one by one, each
-worker loads or captures its own copy of the image. A pool of N workers then
-holds N copies, counts N times against `max_snapshot_bytes`, and captures up to
-N times when no image is stored yet. Instead, prepare the image once and start
-every worker from it:
+workers with the same adapter and options. You do nothing to share the image:
+a worker started with the same adapter and the same options as a live worker
+holds that worker's image instead of loading or capturing its own. A pool of N
+workers holds one copy, counts it once against `max_snapshot_bytes`, and
+captures once when no image is stored yet, even when the N workers start at
+the same moment.
 
-<!-- check: modules my_adapter -->
-```erlang
-{ok, P} = wasm_script_worker:prepare(my_adapter, Opts),
-{ok, W} = wasm_script_worker:start_link(my_adapter, Opts#{prepared => P}),
-ok = wasm_script_worker:release_prepared(P).
-```
+Put the workers under a supervisor of your own:
 
-Put it under a supervisor, with a small holder process started first. If the
-holder restarts, the pool prepares the image again. The holder prepares the
-image in `init/1` and releases it in `terminate/2`:
-
-<!-- check: modules my_pool_sup my_pool_holder -->
-```erlang
--module(my_pool_holder).
--behaviour(gen_server).
--export([start_link/2, start_worker/0]).
--export([init/1, handle_call/3, handle_cast/2, terminate/2]).
-
-start_link(Adapter, Opts) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, {Adapter, Opts}, []).
-
-%% A worker's start function: fetch the prepared image and start from it.
-start_worker() ->
-    {Adapter, Opts, P} = gen_server:call(?MODULE, prepared),
-    wasm_script_worker:start_link(Adapter, Opts#{prepared => P}).
-
-init({Adapter, Opts}) ->
-    process_flag(trap_exit, true),
-    case wasm_script_worker:prepare(Adapter, Opts) of
-        {ok, P} -> {ok, {Adapter, Opts, P}};
-        {error, Reason} -> {stop, Reason}
-    end.
-
-handle_call(prepared, _From, State) ->
-    {reply, State, State}.
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-terminate(_Reason, {_Adapter, _Opts, P}) ->
-    wasm_script_worker:release_prepared(P).
-```
-
-The supervisor uses `rest_for_one`. The holder comes first, then a supervisor
-for the workers. So a new image restarts every worker, and a crashed worker
-restarts alone:
-
-<!-- check: modules my_pool_sup my_pool_holder -->
+<!-- check: modules my_pool_sup -->
 ```erlang
 -module(my_pool_sup).
 -behaviour(supervisor).
 -export([start_link/3, init/1]).
 
 start_link(Adapter, Opts, N) ->
-    supervisor:start_link(?MODULE, {pool, Adapter, Opts, N}).
+    supervisor:start_link(?MODULE, {Adapter, Opts, N}).
 
-init({pool, Adapter, Opts, N}) ->
-    Holder = #{id => holder,
-               start => {my_pool_holder, start_link, [Adapter, Opts]}},
-    Workers = #{id => workers, type => supervisor,
-                start => {supervisor, start_link, [?MODULE, {workers, N}]}},
-    {ok, {#{strategy => rest_for_one}, [Holder, Workers]}};
-init({workers, N}) ->
+init({Adapter, Opts, N}) ->
     Children = [#{id => {worker, I},
-                  start => {my_pool_holder, start_worker, []}}
+                  start => {wasm_script_worker, start_link, [Adapter, Opts]}}
                 || I <- lists:seq(1, N)],
     {ok, {#{strategy => one_for_one, intensity => 10, period => 10},
           Children}}.
@@ -260,25 +210,22 @@ Start it with the adapter, the options every worker shares, and the pool size:
 
 What it changes:
 
-- The image is loaded from the snapshot store, or captured and stored, only
-  once, in a temporary process. The pool holds one copy and counts it once. The
-  copy is freed when the holder and the last worker have released it.
+- The image is loaded from the snapshot store, or captured and stored, by the
+  first worker. The workers that start while it does wait for it, and then
+  hold the same image. It is freed with the last worker that holds it; the next
+  worker to start loads or captures it again.
+- The options must be equal, as `=:=` compares them. A worker with other
+  options, another adapter, or an artifact whose module changed has its own
+  image.
 - Each worker still loads its own artifact (what the adapter loads once at
-  start, such as the guest module). It checks that its options, without `prepared`, are equal to the ones you
-  prepared with. It checks that its adapter is the same, and that the image's
-  store key and module hash are the ones it would have used. If anything
-  differs, the start fails with `{error, {bad_option, prepared, Why}}`.
-- If you kill the holder, every worker restarts on a new image. If you kill one
-  worker, only that worker restarts, on the image the others hold. A worker
-  started from an image that no holder keeps any more refuses to start with
-  `snapshot_invalidated`.
+  start, such as the guest module). A crashed worker restarts alone, on the
+  image the others hold.
 - Isolation does not change: every request still gets its own instance,
   restored from the image and used once.
 
-`capture_timeout` limits only the capture, as in a normal start. Loading the
-artifact and reading the store have no time limit. An adapter without
-snapshots returns `{error, #{kind := unsupported}}`; start its workers without
-`prepared`.
+`capture_timeout` limits the capture, as before. A worker waits for another
+worker's capture at most `capture_timeout` and 30 seconds; past that, it
+captures its own.
 
 ## Know what a crash leaves
 

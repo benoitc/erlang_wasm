@@ -130,7 +130,14 @@ validator(Opts) ->
                                 adapter_failure, ~"refused on purpose", #{})}
             end;
         ready ->
-            fun ready/1
+            fun ready/1;
+        %% Held until the case says go: a capture still running, for as long
+        %% as a case needs one.
+        {gate, Pid} ->
+            fun(Inst) ->
+                    Pid ! {gate, self()},
+                    receive go -> ready(Inst) end
+            end
     end.
 
 %% Asking the guest whether it came up, rather than asking the module what it

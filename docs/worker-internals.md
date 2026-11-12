@@ -185,10 +185,14 @@ Two things a change here has to keep:
   keeper (`wasm_keeper`) records which processes hold each image. It counts
   each restored memory as a holder. So when a worker stops while a runner is
   still finishing, the pages the runner reads are not freed.
-- **One image per pool, when the pool prepares it.** `prepare/2` loads or
-  captures the image once, in its own process. Every worker started with
-  `prepared` takes a hold on that one image. A worker started without it
-  loads its own copy, so fifty such workers on one file hold fifty copies.
+- **One image per adapter, options and store key.** `wasm_worker_images`
+  keeps the live images node-wide. A worker whose adapter, options and store
+  key match a live image takes a hold on it. Workers that start while the
+  first one loads or captures it wait for that build; a build that fails, or
+  a builder that dies, passes to the next worker waiting. The registry holds
+  no image: it watches each image's owner and forgets the image when the
+  owner exits, after its last holder. Each worker restores the shared image
+  with its own capability, so its bindings stay its own.
 
 ## Why sending an image copies almost nothing
 
@@ -230,11 +234,8 @@ Two things a change here has to keep:
 - **Only claims pass to the worker.** Anything else the adapter tied to the
   calling process, such as an ETS table or a link, ends with that process.
   [Writing an adapter](worker-contract.md) says so too.
-- **`prepare/2` runs the same steps.** In one temporary process, it loads the
-  artifact, looks up the image, and captures it if it is not found. The
-  process waits until the caller holds the image, then exits. A worker
-  started from the result still loads its own artifact this way. It shares
-  only the image.
+- **A worker on a shared image still loads its own artifact** this way. It
+  shares only the image.
 
 ## Read this next
 

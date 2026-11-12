@@ -68,11 +68,12 @@ a short-lived process.
 Image duplication is reported apart, from the snapshot byte budget: what the
 workers added to `wasm_snapshot_owner:charged/0`, over one image's bytes.
 
-**A pool where the build has one.** On a build that exports
+**A pool, as the build runs one.** On a build that exports
 `wasm_script_worker:prepare/2` the N workers start from one prepared image,
-which is how a pool is meant to be run there; on one that does not, the first
-worker starts alone so the image is filed and the rest start together, as
-before. Every pool mode below makes the same choice, read from the code.
+which is how a pool is run there. On one that does not, the workers start
+together: a build that shares images node-wide shares one between them, and
+an older one gives each its own. Every pool mode below makes the same choice,
+read from the code.
 
 ## `pool`: a pool started on a filed image
 

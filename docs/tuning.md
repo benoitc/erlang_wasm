@@ -261,15 +261,13 @@ a second to answer. Two other settings do:
 - `code_cache_dir` keeps generated code across restarts. See [the compiled
   tier guide](compiled-tier.md).
 
-If you start a pool one worker at a time and no image is stored yet, each
-worker may capture its own image. After that, each worker holds its own copy,
-and each copy is charged to `max_snapshot_bytes`. Instead, prepare the image
-once with `wasm_script_worker:prepare/2` and start the pool from it: one
-capture, one image, one charge. Then `max_snapshot_bytes` limits the number of
-different images on the node, not the number of workers. "Run a pool from one
-image" in [Using workers](worker.md) shows how. Four CPython workers with no
-stored image started in 16 s this way, against 40 s when started together
-(`test/audit/PERF.md`, "One image for a pool").
+Workers started with the same adapter and options share one image: one
+capture, one image, one charge, whether they start one at a time or together.
+So `max_snapshot_bytes` limits the number of different images on the node,
+not the number of workers. "Run a pool from one image" in
+[Using workers](worker.md) has the details. Four CPython workers with no
+stored image started in 16 s on one capture, against 40 s when each captured
+its own (`test/audit/PERF.md`, "One image for a pool").
 
 ## How it scales, and what it costs
 

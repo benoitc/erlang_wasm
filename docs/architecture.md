@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the ninety-three modules are, which
+This page is the map of the runtime: what the ninety-four modules are, which
 ones depend on which, and where to start reading. Read it before you change
 anything. Each module documents itself, but no module describes how they fit
 together.
@@ -49,7 +49,7 @@ read. `test/` holds every suite named here.
 | WASI preview 1 | `wasi_preview1:imports/1` | `wasi_preview1`, `wasi_fs`, `wasi_path`, `wasi_net`, `wasi_sock`, `wasi_file_nif` | the WASI options | the optional file NIF | the `wasi_*` suites | [WASI](wasi.md) |
 | Components and WASI 0.2 | `wasm_component:instantiate/2`, `wasm_component:call/4` | `wasm_component`, `wasm_component_link`, `wasm_component_types`, `wasm_canon`, `wasm_async`, `wasm_resources`, `wasi_preview2`, `wasi_p2_filesystem`, `wasi_p2_sockets`, `wasi_sock2`, `wasi_preview3`, `wasi_p3_filesystem`, `wasi_p3_sockets`, `wasi_p3_http` | the imports map | `wasm_component:import_fun/2` | the `wasm_component_*`, `wasm_wasi2_*` and `wasm_wasi3_*` suites | [Components](components.md), [WASI 0.2](wasi-0-2.md), [Component internals](component-internals.md) |
 | HTTP | `wasi_http:http/1`, `wasi_http_listener:start/1` | `wasi_http`, `wasi_http_h1`, `wasi_http_h2`, `wasi_http_listener` | `http_transport` | the `wasi_http_transport` behaviour | `wasm_wasi2_http_SUITE`, `wasm_wasi2_https_SUITE` | [HTTP](http.md) |
-| Script workers | `wasm_script_worker:start_link/2`, `wasm_script_worker:run/2` | `wasm_script_worker`, the adapters, `wasm_worker_reaper`, `wasm_cleanup_manager`, `wasm_cleanup_steward` | worker options; `scratch_roots`, `reaper_options` | the `wasm_worker_adapter` behaviour | the `wasm_worker_*` and `wasm_cleanup_*` suites | [Using workers](worker.md), [Worker internals](worker-internals.md) |
+| Script workers | `wasm_script_worker:start_link/2`, `wasm_script_worker:run/2` | `wasm_script_worker`, the adapters, `wasm_worker_images`, `wasm_worker_reaper`, `wasm_cleanup_manager`, `wasm_cleanup_steward` | worker options; `scratch_roots`, `reaper_options` | the `wasm_worker_adapter` behaviour | the `wasm_worker_*` and `wasm_cleanup_*` suites | [Using workers](worker.md), [Worker internals](worker-internals.md) |
 | Build, packaging, the NIF | `rebar.config`, `scripts/` | `c_src/` | `WASM_NIF_SANITIZE` | none | `wasm_package_SUITE`, `wasm_scripts_SUITE` | [Changing the NIF](contributing/nif.md) |
 | These docs | `docs/`, the module docs | none | `rebar.config` `ex_doc` | none | `wasm_docs_SUITE`, `wasm_architecture_SUITE` | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Benchmarks and evidence | `bench/paths/` | none | none | none | `wasm_bench_SUITE` | `test/audit/PERF.md` |
@@ -67,7 +67,8 @@ wasm_sup                one_for_one
   +-- wasm_engine_sup   the node-wide page budget          wasm_engine
   +-- wasm_keeper_sup   who holds each shared resource     wasm_keeper
   +-- wasm_code_sup     generated code, the compilers      wasm_code_slots, wasm_jit_sup
-  +-- wasm_cache_sup    modules by content hash            wasm_module_cache
+  +-- wasm_cache_sup    modules by content hash, and       wasm_module_cache,
+                        the images workers share           wasm_worker_images
   +-- wasm_worker_sup   request cleanup for workers        wasm_cleanup_steward_sup,
                                                            wasm_cleanup_manager,
                                                            wasm_worker_reaper
@@ -106,6 +107,7 @@ L9  wasi  wasm_script_worker  wasi_preview2  wasi_p2_filesystem  wasi_p2_sockets
     wasi_http  wasi_http_transport  wasi_http_h1  wasi_http_h2
 L8  wasi_preview1  wasm_snapshot_store  wasm_instance_worker
     wasm_component  wasm_component_link  wasm_canon  wasm_async  wasm_component_types
+    wasm_worker_images
 L7  wasm  wasm_module_cache  wasm_snapshot_owner  wasm_jit_sup
 L6  wasm_exec  wasm_core  wasm_jit  wasm_snapshot
 L5  wasm_instance  wasm_wat

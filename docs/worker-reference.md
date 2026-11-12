@@ -41,11 +41,10 @@ key.
 | --- | ---: | --- |
 | `root` | `scratch` | which of the reaper's roots the worker's request directories go under |
 | `trusted` | `false` | whether a `mode => write` mount is allowed at all |
-| `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2` or `prepare/2`, and nothing before it. CPython needs about 90 s and so must raise it |
+| `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2`, and nothing before it. CPython needs about 90 s and so must raise it |
 | `runner_min_heap_words` | the adapter's | a heap floor for each request's runner: 200,000 words for `wasm_lua` and `wasm_javascript`, 1,500,000 for `wasm_python` on the compiled tier and 1,000,000 on the interpreter, none for an adapter without `defaults/1`. `0` turns it off; see [How a heap floor works](tuning.md#how-a-heap-floor-works) |
 | `capture_min_heap_words` | the adapter's | the same, for the process that captures the snapshot. No shipped adapter sets one; see [How a heap floor works](tuning.md#how-a-heap-floor-works) |
 | `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and imports that are all functions. Each idle worker holds one restored instance: its page table (a list of the image's pages it reads), not a copy of the image |
-| `prepared` | unset | an image from `wasm_script_worker:prepare/2`, to start from instead of loading or capturing one. The other options must equal the ones it was prepared with; see [Using workers](worker.md) |
 | `compiled` | `false` | `true` runs requests in the compiled tier: it sets `fuel => infinity`, `compile => true`, `compile_after => 1` and `compile_quality => baseline` under your own `limits`. Only the deadline stops a runaway; see [Hosting scripting languages](scripting.md) |
 
 `start_link/2,3` refuses to start in these cases:
@@ -53,31 +52,16 @@ key.
 - a `root` the reaper does not have: `{error, {unknown_root, Root, Known}}`;
 - `compiled => true` with a finite `fuel` in `limits`:
   `{error, {bad_option, compiled, #{fuel => N}}}`;
-- a `prepared` image made for other options, another adapter or another
-  image: `{error, {bad_option, prepared, Why}}`, where `Why` is
-  `options_differ`, `adapter_differs`, `image_differs` or `not_prepared`;
-- a `prepared` image that every holder (a process that keeps the image
-  alive) has released: the `snapshot_invalidated` error that
-  `wasm:acquire/1` returns.
 
-### Prepare one image for a pool
+### One image for a pool
 
-`wasm_script_worker:prepare(Adapter, Opts)` runs the same steps as a worker
-start, in a temporary process. It loads the artifact (the WebAssembly
-module the adapter runs) and looks for the image in the snapshot store. If the image is
-not there, it captures it and saves it in the store.
-
-It returns `{ok, Prepared}`, and the caller holds the image. On failure it
-returns the error that `start_link/2` would have returned. An adapter without
-snapshots returns `{error, #{class := worker, kind := unsupported}}`.
-
-`wasm_script_worker:release_prepared(Prepared)` releases the caller's hold
-and always returns `ok`. Workers started from the image keep their own
-hold.
-
-The limits are the same as for a normal start: `capture_timeout` limits the
-capture only. Loading the artifact and reading the store happen before it,
-and no setting limits them.
+Workers started with the same adapter and equal options share one image: a
+worker whose artifact gives the same store key as a live worker's holds that
+worker's image instead of loading or capturing its own. Workers that start
+while the first one loads or captures wait for it, at most `capture_timeout`
+and 30 seconds, then capture their own. The image is freed with the last
+worker that holds it. See "Run a pool from one image" in
+[Using workers](worker.md).
 
 ## Per node, for the reaper
 

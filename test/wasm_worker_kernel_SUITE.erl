@@ -71,11 +71,11 @@ groups() ->
      %% it is handed, since the kernel never looks inside one.
      {wrappers, [], [run_3_hands_the_adapter_source_and_context,
                      submit_3_can_be_awaited_and_cancelled]},
-     %% One image prepared for many workers: `prepare/2', the checks a worker
-     %% makes before it takes the image, and the pool the guide shows.
+     %% One image for many workers: shared with nothing asked for it, and
+     %% the pool the guide shows.
      {pool, [], pool_cases()},
-     %% Every case the kit has, on workers started from a prepared image:
-     %% sharing the image must not share anything a request can see.
+     %% Every case the kit has, on workers holding an image another worker
+     %% built: sharing the image must not share anything a request can see.
      {reactor_pooled, [],
       cases(fake_reactor_adapter) ++ [a_request_starts_from_the_image]},
      %% The artifact is loaded in a process of its own, which hands its module
@@ -183,14 +183,13 @@ start(Config, _Root, Opts) ->
         true  -> start_pooled(Adapter, All)
     end.
 
-%% A worker from a prepared image, the caller's hold let go at once: what is
-%% left is the worker's own hold, which is the pool after its holder restarted.
+%% A worker on the image a sibling built, the sibling stopped at once: what
+%% is left is the worker's own hold on a shared image.
 start_pooled(Adapter, Opts) ->
-    case wasm_script_worker:prepare(Adapter, Opts) of
-        {ok, P} ->
-            Started = wasm_script_worker:start_link(
-                        Adapter, Opts#{prepared => P}),
-            ok = wasm_script_worker:release_prepared(P),
+    case wasm_script_worker:start_link(Adapter, Opts) of
+        {ok, Sibling} ->
+            Started = wasm_script_worker:start_link(Adapter, Opts),
+            ok = wasm_script_worker:stop(Sibling),
             Started;
         {error, _} = E ->
             E
@@ -643,14 +642,15 @@ a_worker_starts_from_a_filed_image(Config) ->
                         "images-" ++ integer_to_list(
                                        erlang:unique_integer([positive]))),
     with_store(Dir, fun() ->
+        Own = own(),
         Start = maps:get(start, ctx(Config)),
         ok = fake_reactor_adapter:reset_captures(),
-        {ok, W1} = Start(#{}),
+        {ok, W1} = Start(Own),
         First = wasm_script_worker:run(W1, #{}),
         ok = wasm_script_worker:stop(W1),
         ?assertEqual(1, fake_reactor_adapter:captures()),
         ?assertMatch([_], filelib:wildcard(filename:join(Dir, "*.img"))),
-        {ok, W2} = Start(#{}),
+        {ok, W2} = Start(Own),
         ?assertEqual(First, wasm_script_worker:run(W2, #{})),
         %% Still one. The second worker read the file.
         ?assertEqual(1, fake_reactor_adapter:captures()),
@@ -663,15 +663,16 @@ a_worker_starts_from_a_filed_image(Config) ->
 a_worker_ignores_an_image_it_cannot_read(Config) ->
     Dir = filename:join(?config(priv_dir, Config), "bad-images"),
     with_store(Dir, fun() ->
+        Own = own(),
         Start = maps:get(start, ctx(Config)),
-        {ok, W1} = Start(#{}),
+        {ok, W1} = Start(Own),
         First = wasm_script_worker:run(W1, #{}),
         ok = wasm_script_worker:stop(W1),
         [File] = filelib:wildcard(filename:join(Dir, "*.img")),
         {ok, <<H:40/binary, B, R/binary>>} = file:read_file(File),
         ok = file:write_file(File, <<H/binary, (B bxor 255), R/binary>>),
         Before = fake_reactor_adapter:captures(),
-        {ok, W2} = Start(#{}),
+        {ok, W2} = Start(Own),
         ?assertEqual(First, wasm_script_worker:run(W2, #{})),
         %% It captured, which is what a miss must cost and all it must cost.
         ?assertEqual(Before + 1, fake_reactor_adapter:captures()),
@@ -680,205 +681,178 @@ a_worker_ignores_an_image_it_cannot_read(Config) ->
 
 %%% ------------------------------------------------- one image for a pool ---
 %%
-%% `prepare/2' loads or captures the image once, in a process of its own, and
-%% every worker started with `prepared' takes a hold on that one image. These
-%% count what a pool holds from outside: captures through the adapter, files
-%% in the store, holders through the image's owner, and the node's charge.
+%% Workers started with the same adapter and options share one image, with
+%% nothing asked for it: the first loads or captures it, the others hold it.
+%% These count what a pool holds from outside: captures through the adapter,
+%% files in the store, holders through the image's owner, and the node's
+%% charge.
 
 pool_cases() ->
-    [a_pool_prepares_one_image,
-     prepare_leaves_no_process_and_no_claim,
-     a_failed_prepare_leaves_nothing,
-     prepare_needs_an_adapter_with_snapshots,
-     a_worker_refuses_an_image_it_would_not_build,
-     a_released_image_cannot_start_a_worker,
-     workers_outlive_the_holder,
+    [a_pool_started_at_once_captures_once,
+     a_pool_started_one_by_one_shares_one_image,
+     other_options_or_another_module_get_their_own_image,
+     the_image_goes_with_its_last_worker,
+     a_failed_capture_is_tried_again_by_the_next_worker,
+     a_dead_worker_leaves_the_rest_sharing,
      the_documented_pool_restarts_as_supervised].
 
-%% Four workers on a missing image: one capture, one file, one image held by
-%% the caller and the four workers, and one image's bytes charged.
-a_pool_prepares_one_image(Config) ->
+%% Four workers on a missing image, started together: one capture, one file,
+%% one image held by the four, and one image's bytes charged.
+a_pool_started_at_once_captures_once(Config) ->
+    Own = own(),
     Dir = fresh_dir(Config, "pool-images"),
     with_store(Dir, fun() ->
         ok = fake_reactor_adapter:reset_captures(),
         Before = wasm_snapshot_owner:charged(),
-        {ok, P} = wasm_script_worker:prepare(fake_reactor_adapter, #{}),
-        Ws = [start_from(P, #{}) || _ <- lists:seq(1, 4)],
-        Image = image_of(P),
+        Ws = start_together(fake_reactor_adapter, Own, 4),
+        [Image] = lists:usort([worker_image(W) || W <- Ws]),
         ?assertEqual(1, fake_reactor_adapter:captures()),
         ?assertMatch([_], filelib:wildcard(filename:join(Dir, "*.img"))),
-        ?assertEqual(5, holders_of(Image)),
+        ?assertEqual(4, holders_of(Image)),
         ?assertEqual(wasm_snapshot:bytes(Image),
                      wasm_snapshot_owner:charged() - Before),
         Answers = [wasm_script_worker:run(W, #{}) || W <- Ws],
         ?assertEqual([{ok, #{values => [1235]}}], lists:usort(Answers)),
-        ok = wasm_script_worker:release_prepared(P),
         [ok = wasm_script_worker:stop(W) || W <- Ws],
         ok = charge_back_to(Before)
     end).
 
-%% The temporary process is gone once `prepare/2' answers, and with it its
-%% claim on the module and its hold on the image: the caller holds the image
-%% and nothing else.
-prepare_leaves_no_process_and_no_claim(_Config) ->
-    {Got, Spawned} = spawned_by(fun() ->
-                         wasm_script_worker:prepare(fake_reactor_adapter, #{})
-                     end),
-    {ok, P} = Got,
-    ?assertNotEqual([], Spawned),
-    ?assertEqual([], [Pid || Pid <- Spawned, is_process_alive(Pid)]),
-    ok = no_claims(Spawned),
-    ?assertEqual(1, holders_of(image_of(P))),
-    ok = wasm_script_worker:release_prepared(P).
+%% Without a store, one by one: the second worker holds the first's image
+%% rather than capturing again.
+a_pool_started_one_by_one_shares_one_image(_Config) ->
+    Own = own(),
+    ok = fake_reactor_adapter:reset_captures(),
+    {ok, W1} = wasm_script_worker:start_link(fake_reactor_adapter, Own),
+    {ok, W2} = wasm_script_worker:start_link(fake_reactor_adapter, Own),
+    Image = worker_image(W1),
+    ?assertEqual(Image, worker_image(W2)),
+    ?assertEqual(1, fake_reactor_adapter:captures()),
+    ?assertEqual(2, holders_of(Image)),
+    [ok = wasm_script_worker:stop(W) || W <- [W1, W2]].
 
-%% A capture that never finishes, a validator that refuses and a bad option
-%% each answer what a plain start stops with, and leave no process, no claim,
-%% no hold and no charge behind. The caller is still alive to read it.
-a_failed_prepare_leaves_nothing(_Config) ->
-    Before = wasm_snapshot_owner:charged(),
-    Cases = [{#{init_call => ~"spin", capture_timeout => 300},
-              fun(E) -> ?assertMatch({error, #{class := worker,
-                                               kind := timeout}}, E) end},
-             {#{validate => refuse},
-              fun(E) -> ?assertMatch({error, #{class := adapter,
-                                               kind := adapter_failure}}, E)
-              end},
-             {#{compiled => yes},
-              fun(E) -> ?assertEqual({error, {bad_option, compiled, yes}}, E)
-              end}],
-    [begin
-         {Got, Spawned} = spawned_by(fun() ->
-                              wasm_script_worker:prepare(fake_reactor_adapter,
-                                                         Opts)
-                          end),
-         Check(Got),
-         ?assertEqual([], [Pid || Pid <- Spawned, is_process_alive(Pid)]),
-         ok = no_claims(Spawned)
-     end || {Opts, Check} <- Cases],
-    ok = charge_back_to(Before).
-
-prepare_needs_an_adapter_with_snapshots(_Config) ->
-    ?assertMatch({error, #{class := worker, kind := unsupported}},
-                 wasm_script_worker:prepare(fake_typed_adapter, #{})).
-
-%% Other options, another adapter, a module whose bytes changed under the same
-%% path, and something that is not a prepared image: each refused, and the
-%% image still held by the caller alone.
-a_worker_refuses_an_image_it_would_not_build(Config) ->
+%% Other options, another adapter, and a module whose bytes changed under the
+%% same path: each gets an image of its own.
+other_options_or_another_module_get_their_own_image(Config) ->
     Path = filename:join(?config(priv_dir, Config), "changing.wasm"),
     {ok, Bytes} = file:read_file(
                     filename:join([wasm_spec_runner:fixtures_dir(),
                                    "snapshot", "reactor.wasm"])),
     ok = file:write_file(Path, Bytes),
-    {ok, P} = wasm_script_worker:prepare(fake_reactor_adapter, #{path => Path}),
-    Image = image_of(P),
-    ?assertEqual({error, {bad_option, prepared, options_differ}},
-                 wasm_script_worker:start_link(
-                   fake_reactor_adapter,
-                   #{path => Path, lib => "other", prepared => P})),
-    ?assertEqual({error, {bad_option, prepared, adapter_differs}},
-                 wasm_script_worker:start_link(
-                   fake_floor_adapter, #{path => Path, prepared => P})),
-    ?assertEqual({error, {bad_option, prepared, not_prepared}},
-                 wasm_script_worker:start_link(
-                   fake_reactor_adapter, #{path => Path, prepared => Image})),
+    Base = (own())#{path => Path},
+    {ok, W} = wasm_script_worker:start_link(fake_reactor_adapter, Base),
+    Image = worker_image(W),
+    {ok, Other} = wasm_script_worker:start_link(
+                    fake_reactor_adapter, Base#{lib => "other"}),
+    {ok, Floor} = wasm_script_worker:start_link(fake_floor_adapter,
+                                                Base),
     %% The same module with a custom section after it: the same behaviour,
     %% another hash, so another store key.
     ok = file:write_file(Path, <<Bytes/binary, 0, 2, 1, $x>>),
-    ?assertEqual({error, {bad_option, prepared, image_differs}},
-                 wasm_script_worker:start_link(
-                   fake_reactor_adapter, #{path => Path, prepared => P})),
-    ok = file:write_file(Path, Bytes),
-    %% The same artifact, checked against a prepared value naming another key
-    %% or another module: each check refuses on its own.
-    {prepared, A, O, Image, Key, M} = P,
-    ?assertEqual({error, {bad_option, prepared, image_differs}},
-                 wasm_script_worker:start_link(
-                   fake_reactor_adapter,
-                   #{path => Path,
-                     prepared => {prepared, A, O, Image, other_key, M}})),
-    ?assertEqual({error, {bad_option, prepared, image_differs}},
-                 wasm_script_worker:start_link(
-                   fake_reactor_adapter,
-                   #{path => Path,
-                     prepared => {prepared, A, O, Image, Key,
-                                  {wasm_module, <<0:256>>}}})),
+    {ok, Changed} = wasm_script_worker:start_link(fake_reactor_adapter,
+                                                  Base),
+    Images = [worker_image(X) || X <- [Other, Floor, Changed]],
+    ?assertEqual([], [I || I <- Images, I =:= Image]),
     ?assertEqual(1, holders_of(Image)),
-    W = start_from(P, #{path => Path}),
-    ?assertEqual(2, holders_of(Image)),
-    ok = wasm_script_worker:stop(W),
-    ok = wasm_script_worker:release_prepared(P).
+    [ok = wasm_script_worker:stop(X) || X <- [W, Other, Floor, Changed]].
 
-%% Once the caller and every worker have let go the image is freed, and a
-%% worker handed the stale value refuses to start rather than serve from it.
-a_released_image_cannot_start_a_worker(_Config) ->
-    {ok, P} = wasm_script_worker:prepare(fake_reactor_adapter, #{}),
-    W = start_from(P, #{}),
-    ok = wasm_script_worker:release_prepared(P),
-    ok = wasm_script_worker:stop(W),
-    ok = gone(image_of(P)),
-    ?assertMatch({error, #{kind := snapshot_invalidated}},
-                 wasm_script_worker:start_link(fake_reactor_adapter,
-                                               #{prepared => P})).
-
-%% The holder lets go while workers serve: they keep serving, and the charge
-%% comes back only when the last of them stops.
-workers_outlive_the_holder(_Config) ->
+%% The image is freed with the last worker that holds it, and the next start
+%% builds another rather than reaching for the freed one.
+the_image_goes_with_its_last_worker(_Config) ->
+    Own = own(),
     Before = wasm_snapshot_owner:charged(),
-    {ok, P} = wasm_script_worker:prepare(fake_reactor_adapter, #{}),
-    Image = image_of(P),
-    Bytes = wasm_snapshot:bytes(Image),
-    [W1, W2] = [start_from(P, #{}) || _ <- [1, 2]],
-    ok = wasm_script_worker:release_prepared(P),
-    ?assertEqual(2, holders_of(Image)),
-    ?assertEqual({ok, #{values => [1235]}}, wasm_script_worker:run(W1, #{})),
+    [W1, W2] = start_together(fake_reactor_adapter, Own, 2),
+    Image = worker_image(W1),
     ok = wasm_script_worker:stop(W1),
     ?assertEqual({ok, #{values => [1235]}}, wasm_script_worker:run(W2, #{})),
-    ?assertEqual(Bytes, wasm_snapshot_owner:charged() - Before),
     ok = wasm_script_worker:stop(W2),
+    ok = gone(Image),
+    ok = charge_back_to(Before),
+    {ok, W3} = wasm_script_worker:start_link(fake_reactor_adapter, Own),
+    ?assertNotEqual(wasm_snapshot:owner(Image),
+                    wasm_snapshot:owner(worker_image(W3))),
+    ?assertEqual({ok, #{values => [1235]}}, wasm_script_worker:run(W3, #{})),
+    ok = wasm_script_worker:stop(W3).
+
+%% A capture that does not finish fails its own start only: the next worker
+%% captures again, and nothing is left held.
+a_failed_capture_is_tried_again_by_the_next_worker(_Config) ->
+    Before = wasm_snapshot_owner:charged(),
+    Opts = (own())#{init_call => ~"spin", capture_timeout => 300},
+    process_flag(trap_exit, true),
+    ?assertMatch({error, #{class := worker, kind := timeout}},
+                 wasm_script_worker:start_link(fake_reactor_adapter, Opts)),
+    ?assertMatch({error, #{class := worker, kind := timeout}},
+                 wasm_script_worker:start_link(fake_reactor_adapter, Opts)),
+    process_flag(trap_exit, false),
     ok = charge_back_to(Before).
 
+%% Three workers on one capture, held at its gate. A waiting worker killed
+%% takes nothing with it, and a builder killed hands its build to a worker
+%% still waiting: the rest capture once and share the image.
+a_dead_worker_leaves_the_rest_sharing(_Config) ->
+    ok = fake_reactor_adapter:reset_captures(),
+    Opts = (own())#{validate => {gate, self()}},
+    Test = self(),
+    Start = fun() ->
+                    spawn(fun() ->
+                                  Test ! {started, self(),
+                                          wasm_script_worker:start_link(
+                                            fake_reactor_adapter, Opts)},
+                                  receive stop -> ok end
+                          end)
+            end,
+    Builder = Start(),
+    Gate1 = receive {gate, G1} -> G1 after 10000 -> ct:fail(no_capture) end,
+    [Waiter, Last] = [Start(), Start()],
+    ok = queued(2),
+    exit(Waiter, kill),
+    ok = queued(1),
+    exit(Builder, kill),
+    Gate2 = receive {gate, G2} -> G2 after 10000 -> ct:fail(no_handover) end,
+    ?assertNotEqual(Gate1, Gate2),
+    Next = Start(),
+    ok = queued(1),
+    Gate2 ! go,
+    Ws = [receive {started, P, {ok, W}} -> W after 10000 -> ct:fail(no_start) end
+          || P <- [Last, Next]],
+    [Image] = lists:usort([worker_image(W) || W <- Ws]),
+    ?assertEqual(1, fake_reactor_adapter:captures()),
+    ?assertEqual(2, holders_of(Image)),
+    [ok = wasm_script_worker:stop(W) || W <- Ws],
+    [P ! stop || P <- [Last, Next]],
+    ok = gone(Image).
+
+%% Until the one build in the image registry has `N' workers waiting on it.
+queued(N) -> queued(N, 500).
+
+queued(N, 0) -> ct:fail({not_queued, N, sys:get_state(wasm_worker_images)});
+queued(N, Left) ->
+    {s, Keys, _Mons} = sys:get_state(wasm_worker_images),
+    case [length(Ws) || {building, _, _, Ws} <- maps:values(Keys)] of
+        [N] -> ok;
+        _   -> timer:sleep(10), queued(N, Left - 1)
+    end.
+
 %% The pool `docs/worker.md' shows, compiled from the guide itself so the
-%% example cannot drift from what is tested. Killing the holder restarts the
-%% workers after it on a new image; killing one worker restarts that worker
-%% alone, on the image the others hold.
+%% example cannot drift from what is tested: three workers on one image, and
+%% a killed worker restarts alone, on the image the others hold.
 the_documented_pool_restarts_as_supervised(_Config) ->
-    ok = load_guide_modules("worker.md", [my_pool_holder, my_pool_sup]),
+    ok = load_guide_modules("worker.md", [my_pool_sup]),
     {ok, Sup} = my_pool_sup:start_link(fake_reactor_adapter,
-                                       #{root => scratch}, 3),
+                                       (own())#{root => scratch}, 3),
     unlink(Sup),
     try
-        Holder1 = child(Sup, holder),
-        Pool1 = child(Sup, workers),
-        Ws1 = [child(Pool1, {worker, I}) || I <- [1, 2, 3]],
-        Image1 = image_of(element(3, sys:get_state(Holder1))),
-        ?assertEqual(4, holders_of(Image1)),
-        [?assertEqual({ok, #{values => [1235]}},
-                      wasm_script_worker:run(W, #{})) || W <- Ws1],
-        %% One worker: only it restarts, and on the same image.
-        [Wa, Wb, Wc] = Ws1,
+        Ws = [child(Sup, {worker, I}) || I <- [1, 2, 3]],
+        [Image] = lists:usort([worker_image(W) || W <- Ws]),
+        ?assertEqual(3, holders_of(Image)),
+        [Wa, Wb, Wc] = Ws,
         exit(Wb, kill),
-        Wb2 = restarted(Pool1, {worker, 2}, Wb),
-        ?assertEqual({Holder1, Pool1, Wa, Wc},
-                     {child(Sup, holder), child(Sup, workers),
-                      child(Pool1, {worker, 1}), child(Pool1, {worker, 3})}),
-        ?assertEqual(4, holders_of(Image1)),
-        ?assertEqual({ok, #{values => [1235]}},
-                     wasm_script_worker:run(Wb2, #{})),
-        %% The holder: every worker restarts, on a new image, and the old one
-        %% is freed with its last holder.
-        exit(Holder1, kill),
-        Holder2 = restarted(Sup, holder, Holder1),
-        Pool2 = restarted(Sup, workers, Pool1),
-        Ws2 = [child(Pool2, {worker, I}) || I <- [1, 2, 3]],
-        ?assertEqual([], [W || W <- Ws2, lists:member(W, [Wa, Wb2, Wc])]),
-        Image2 = image_of(element(3, sys:get_state(Holder2))),
-        ?assertNotEqual(wasm_snapshot:owner(Image1),
-                        wasm_snapshot:owner(Image2)),
-        ok = gone(Image1),
-        ?assertEqual(4, holders_of(Image2)),
+        Wb2 = restarted(Sup, {worker, 2}, Wb),
+        ?assertEqual({Wa, Wc}, {child(Sup, {worker, 1}), child(Sup, {worker, 3})}),
+        ?assertEqual(Image, worker_image(Wb2)),
+        ?assertEqual(3, holders_of(Image)),
         [?assertEqual({ok, #{values => [1235]}},
-                      wasm_script_worker:run(W, #{})) || W <- Ws2]
+                      wasm_script_worker:run(W, #{})) || W <- [Wa, Wb2, Wc]]
     after
         Mon = erlang:monitor(process, Sup),
         exit(Sup, shutdown),
@@ -897,19 +871,17 @@ loader_cases() ->
      the_worker_holds_the_module_claim,
      a_failed_artifact_load_leaves_no_claim].
 
-%% A plain start, a start from a prepared image and a start with no image at
+%% A plain start, a start on a shared image and a start with no image at
 %% all: none of the workers references the file once it is up.
 a_worker_keeps_no_module_file(Config) ->
     {Path, Size} = padded_module(Config),
     Opts = #{path => Path},
     {ok, Plain} = wasm_script_worker:start_link(fake_reactor_adapter, Opts),
-    {ok, P} = wasm_script_worker:prepare(fake_reactor_adapter, Opts),
-    Pooled = start_from(P, Opts),
+    {ok, Pooled} = wasm_script_worker:start_link(fake_reactor_adapter, Opts),
     {ok, Bare} = wasm_script_worker:start_link(fake_recording_adapter, Opts),
     Ws = [Plain, Pooled, Bare],
     ?assertEqual([], [W || W <- Ws, references_binary_of(W, Size)]),
     [?assertMatch({ok, _}, wasm_script_worker:run(W, #{})) || W <- Ws],
-    ok = wasm_script_worker:release_prepared(P),
     [ok = wasm_script_worker:stop(W) || W <- Ws].
 
 %% With no image to hold the module for it, the worker's own claim is all that
@@ -960,14 +932,26 @@ a_failed_artifact_load_leaves_no_claim(Config) ->
 
 %%% ---------------------------------------------------------- pool helpers ---
 
-start_from(P, Opts) ->
-    {ok, W} = wasm_script_worker:start_link(fake_reactor_adapter,
-                                            Opts#{prepared => P}),
-    W.
+%% N workers started at the same moment, each from a process of its own.
+start_together(Adapter, Opts, N) ->
+    Test = self(),
+    Ps = [spawn(fun() ->
+                        Got = wasm_script_worker:start_link(Adapter, Opts),
+                        Test ! {started, self(), Got},
+                        receive stop -> ok end
+                end) || _ <- lists:seq(1, N)],
+    %% A worker outlives a starter that exits normally.
+    [receive {started, P, {ok, W}} -> P ! stop, W
+     after 30000 -> ct:fail(no_start)
+     end || P <- Ps].
 
-%% The image inside a prepared value, read by position: it is opaque to
-%% callers, and this suite is looking at what it holds.
-image_of({prepared, _Adapter, _Opts, Image, _Key, _M}) -> Image.
+%% Options no other worker in the suite has, so a case's workers share an
+%% image with each other and with nothing else.
+own() -> #{case_tag => erlang:unique_integer([positive])}.
+
+%% The image a worker holds, read from its state by position: this suite is
+%% looking at what it holds.
+worker_image(W) -> element(10, sys:get_state(W)).
 
 holders_of(Image) ->
     wasm_snapshot_owner:holders(wasm_snapshot:owner(Image)).
@@ -1455,7 +1439,7 @@ settings() ->
     Worker ++ wasm_worker_reaper:setting_keys() ++
         [trusted, capture_timeout, runner_min_heap_words,
          capture_min_heap_words, restore_ahead,
-         root, compiled, prepared,
+         root, compiled,
          %% Node-wide, and each one turns something substantial on or off.
          max_snapshot_bytes, max_snapshot_dir_bytes, snapshot_dir,
          code_cache_dir, scratch_roots, reaper_options, worker_timeout].

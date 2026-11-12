@@ -1774,7 +1774,7 @@ delay_ns({ClockId, Deadline, 1}) ->
 sleep_until(Due) ->
     case ms_until(Due) of
         0 -> ok;
-        Ms -> ok = timer:sleep(erlang:min(Ms, 60000)), sleep_until(Due)
+        Ms -> ok = timer:sleep(erlang:min(Ms, wait_cap())), sleep_until(Due)
     end.
 
 %% An `event' is 32 bytes: userdata, errno, type, and a union left zeroed for
@@ -1861,8 +1861,16 @@ wait_ready([{read, _UserData, _Fd, _H}] = One, Deadline, St) when Deadline > 0 -
 wait_ready(Resolved, Deadline, St) ->
     poll_loop(Resolved, capped(Deadline), St).
 
-capped(infinity) -> 60000;
-capped(Ms) when is_integer(Ms), Ms > 0 -> erlang:min(Ms, 60000);
+%% The longest single wait, a minute. A test build can lower it, so the loop
+%% that waits past it can be seen to work without waiting a minute.
+-ifdef(TEST).
+wait_cap() -> application:get_env(wasm, poll_wait_cap_ms, 60000).
+-else.
+wait_cap() -> 60000.
+-endif.
+
+capped(infinity) -> wait_cap();
+capped(Ms) when is_integer(Ms), Ms > 0 -> erlang:min(Ms, wait_cap());
 capped(_) -> 0.
 
 %% More than one socket, so they are checked in turn and the wait is broken

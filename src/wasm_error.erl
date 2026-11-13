@@ -206,4 +206,5 @@ exhaustion_msg(out_of_fuel)          -> <<"out of fuel">>;
 exhaustion_msg(memory_limit)         -> <<"memory limit exceeded">>;
 exhaustion_msg(table_limit)          -> <<"table limit exceeded">>;
 exhaustion_msg(host_call_limit)      -> <<"host call limit exceeded">>;
+exhaustion_msg(module_too_large)     -> <<"module too large">>;
 exhaustion_msg(Other)                -> atom_to_binary(Other).

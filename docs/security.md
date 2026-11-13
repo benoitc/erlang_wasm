@@ -62,6 +62,8 @@ sandbox as a call inside a worker.
 | `max_memory_pages` | every memory one instance can reach, imports included, and the object store it shares |
 | node page budget | linear memory and object stores across every instance; for a restored memory, its page table and the pages it has written |
 | `max_rec_groups` | distinct recursive type groups stored for the whole node |
+| `max_module_bytes` | the size of one module's input, binary or text, checked before it is decoded or hashed; 64 MiB by default |
+| `max_resident_module_bytes` | the memory the module cache holds across all its modules, as measured when each is stored; 2 GiB by default |
 
 `max_memory_pages` counts an imported memory, because a module that imports a
 memory can use every page of it. A memory is counted once, even if several
@@ -81,6 +83,18 @@ it is over, every new request for pages is refused.
 outside any memory page and outside the owning process's heap, so neither
 `max_memory_pages` nor `max_heap_words` sees them. A table is bounded by the
 maximum its module declares, and its rows are freed with the instance.
+
+`max_module_bytes` is an application setting. A module larger than it is
+refused with `module_too_large` by `wasm:compile/1` and `wasm:load/1`, and so
+is a core module inside a component, before anything reads it. It does not
+limit how many modules your callers decode at the same time with
+`wasm:compile/1`; if you accept modules from outside, limit that yourself.
+
+`max_resident_module_bytes` is an application setting too. Once the modules the
+cache holds reach it, `wasm:load/1` of a new module is refused with
+`{module_cache_full, Max}` until some are unloaded. A module takes several
+times its input size once decoded: CPython 3.12 is 26 MB of input and 182 MB
+in the cache.
 
 `max_rec_groups` limits a table whose rows can never be removed. A type id is
 compared by `ref.eq` and when imports are matched. If a row were removed, two

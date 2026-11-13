@@ -8770,3 +8770,21 @@ start is faster because nothing is prepared first: on main the time includes
 one more holder, the caller of `prepare/2`.
 
 Script and log: `test/audit/raw/auto-share/`.
+
+## What a module takes in the module cache (2026-11-13)
+
+Sets the default for `max_resident_module_bytes`. Each module loaded once with
+`wasm:load/1` into a running cache; the stored size is what the cache measures
+when it stores the module (`erts_debug:size_shared/1` of the published entry),
+read as the change in `wasm_module_cache:stats()`'s `bytes`.
+
+| module | input | stored | stored / input |
+| --- | ---: | ---: | ---: |
+| `lua_reactor.wasm` | 0.6 MB | 7.0 MB | 12.1x |
+| `qjs_reactor.wasm` | 1.4 MB | 25.2 MB | 19.6x |
+| `qjs.wasm` | 1.8 MB | 35.9 MB | 20.4x |
+| `py_reactor.wasm` | 30.9 MB | 118.5 MB | 4.0x |
+| `python.wasm` | 26.3 MB | 181.6 MB | 7.2x |
+
+The default budget, 2 GiB, holds eleven of the largest. The default
+`max_module_bytes`, 64 MiB, is twice the largest input.

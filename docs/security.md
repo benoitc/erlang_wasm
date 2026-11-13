@@ -257,18 +257,41 @@ yourself.
 {ok, R}   = wasm_instance_worker:call(W, ~"handle", [Req], 500).
 ```
 
-Check all five before you ship it:
+The runtime's limits are opted into: an instance made with no limits has
+unlimited fuel and depth. Before you run code you do not trust, set all of
+these:
 
-- `isolation => fresh`, so no state survives a request
-- a timeout that kills the worker, not one that only stops waiting for it
-- the smallest import set that does the job
-- `wasm_engine:set_page_limit/1` set for the node
-- a bounded pool, so concurrency is capped
+- **The limits.** `wasm_limits:untrusted()` on the worker, as above. See
+  [What limits bound](#what-limits-bound).
+- **A deadline that kills.** `wasm_instance_worker:call/4` with a timeout,
+  which kills the worker rather than only stopping waiting for it, and
+  `isolation => fresh`, so no state survives a request.
+- **The node's budgets.** `wasm_engine:set_page_limit/1` for the node, and a
+  bounded pool of workers, so concurrency is capped.
+- **Module size.** `max_module_bytes` (64 MiB by default). If you accept
+  modules from outside, also limit how many you compile at the same time.
+- **The smallest imports.** Only the imports the module needs, narrow file
+  preopens, and the native file backend: `wasi_fs:backend()` answers `native`.
+  The fallback has a race between checking a path and opening it; see
+  [What you are still responsible for](#what-you-are-still-responsible-for).
+- **Narrow network grants.** Name the addresses and ports a module may reach.
+  Never grant `0.0.0.0/0` to code you do not trust: it includes loopback,
+  private networks and cloud metadata addresses.
+- **HTTP.** `http_max_body_bytes` (8 MiB by default) bounds every HTTP body
+  the host holds. Keep `wasi_http_listener` on loopback, its default, unless
+  a proxy in front of it limits requests. See [HTTP](http.md).
+- **Trusted directories.** `snapshot_dir` and `code_cache_dir` writable only
+  by the node's user; see below.
+- **Separate processes for separate trust.** Tenants that must not affect
+  each other at all, including through timing, belong in separate operating
+  system processes or containers. One node shares its memory, its schedulers
+  and its page budget.
 
 ## Reporting
 
-Found something? Open an issue marked security, or contact the maintainer
-directly.
+Report a vulnerability privately, through the repository's **Security** tab,
+never in a public issue. [SECURITY.md](../SECURITY.md) says how, and what
+counts as one.
 
 ## The compiled tier's artifact cache is executable code
 
@@ -304,6 +327,15 @@ already inside.
 If you need to trust files written by someone who may **not** run code in
 your node, this is not enough. You would need to authenticate the files, and
 this runtime does not do that.
+
+## Snapshot images are trusted the same way
+
+`snapshot_dir` holds saved images of started guests. An image is not code for
+the node, but a restored image is a guest's whole starting state: its memory,
+globals and tables. Its file is checksummed, which detects damage, not a
+writer who puts a well-formed image there. Anyone who can write into
+`snapshot_dir` can choose the state every restored guest starts from. Make it
+writable only by the node's user, as you do `code_cache_dir`.
 
 ## Read this next
 

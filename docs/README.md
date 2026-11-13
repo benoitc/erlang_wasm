@@ -98,6 +98,7 @@ You have it working and want it fast, bounded and safe.
 | [The compiled tier](compiled-tier.md) | compiling hot functions to BEAM code |
 | [Tuning](tuning.md) | when requests are slower than you expected |
 | [Security](security.md) | the threat model, and what is yours to hold |
+| [Security policy](../SECURITY.md) | how to report a vulnerability privately |
 
 ## Reference
 

@@ -22,7 +22,7 @@ jobs:
         with:
           otp-version: ${{ env.OTP }}
           rebar3-version: ${{ env.REBAR3 }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/rebar3
@@ -51,7 +51,7 @@ jobs:
         with:
           otp-version: ${{ env.OTP }}
           rebar3-version: ${{ env.REBAR3 }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/rebar3
@@ -81,7 +81,7 @@ jobs:
           tar xzf /tmp/wasi-sdk.tar.gz -C "$HOME/.local/opt"
       # The Lua source comes from lua.org, which runners cannot always reach;
       # the script keeps the checksummed tarball here and uses it when present.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/erlang_wasm
           key: lua-source-5.4.9-2335b6c582a5
@@ -127,7 +127,7 @@ jobs:
         with:
           otp-version: ${{ env.OTP }}
           rebar3-version: ${{ env.REBAR3 }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/rebar3
@@ -159,7 +159,7 @@ jobs:
         with:
           otp-version: ${{ env.OTP }}
           rebar3-version: ${{ env.REBAR3 }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/rebar3
@@ -178,7 +178,7 @@ jobs:
         with:
           otp-version: ${{ env.OTP }}
           rebar3-version: ${{ env.REBAR3 }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/rebar3
@@ -217,7 +217,7 @@ jobs:
         with:
           otp-version: ${{ env.OTP }}
           rebar3-version: ${{ env.REBAR3 }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/rebar3
@@ -236,14 +236,14 @@ jobs:
         with:
           otp-version: ${{ env.OTP }}
           rebar3-version: ${{ env.REBAR3 }}
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/rebar3
             _build
           key: ${{ runner.os }}-rebar3-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
           restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: _build/default/*_plt
           key: ${{ runner.os }}-plt-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}

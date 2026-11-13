@@ -6,6 +6,12 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **The HTTP listener now listens on this machine only, unless you say
+  otherwise.** `wasi_http_listener:start/1` listened on every network
+  interface while `address/1` reported `127.0.0.1`, so a listener started for
+  local use was reachable from the network. It now listens on `127.0.0.1` by
+  default and reports the address it really uses. To accept connections from
+  other machines, pass `ip => {0, 0, 0, 0}`.
 - **A guest can no longer make the host hold an HTTP body of any size.** A
   body a WASI component wrote without declaring `content-length` was kept in
   host memory with no limit, outside the component's own memory limits. Every

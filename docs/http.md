@@ -186,6 +186,7 @@ ok = wasi_http_listener:stop(L).
 | option | meaning | default |
 | --- | --- | --- |
 | `component` | the reactor's bytes, or a component from `wasm_component:prepare/1` | required |
+| `ip` | the address to listen on; `{0, 0, 0, 0}` listens on every interface | `{127, 0, 0, 1}`, this machine only |
 | `port` | the port to listen on; `0` picks one | `0` |
 | `transport` | `h1`, or `h2` for cleartext HTTP/2 | `h1` |
 | `scheme` | the scheme the guest is told | `~"http"` |

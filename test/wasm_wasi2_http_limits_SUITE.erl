@@ -26,6 +26,7 @@ The listener cases need the wasmtime serve reactors
 -export([all/0, groups/0, init_per_suite/1, end_per_suite/1,
          init_per_group/2, end_per_group/2]).
 -export([a_trickling_body_ends_at_the_deadline/1,
+         a_listener_listens_on_loopback_unless_told/1,
          a_guest_body_without_a_length_stops_at_the_ceiling/1,
          a_response_body_over_the_limit_fails/1,
          a_pause_between_bytes_ends_the_response/1,
@@ -47,6 +48,7 @@ groups() ->
                      a_trickling_body_ends_at_the_deadline_over_h2,
                      a_response_body_over_the_limit_fails_over_h2]},
      {listener, [], [a_declared_body_over_the_limit_is_413,
+                     a_listener_listens_on_loopback_unless_told,
                      a_chunked_body_is_read_and_limited,
                      a_stalled_body_is_408,
                      a_guest_past_the_deadline_is_504,
@@ -142,6 +144,44 @@ a_response_body_over_the_limit_fails_over_h2(_) ->
     end).
 
 %%% ------------------------------------------------------------ listener ---
+
+%% With no address given, both HTTP libraries listened on every interface
+%% while `address/1' said 127.0.0.1: a listener started for local use was on
+%% the network. It now listens on loopback unless told otherwise, and says
+%% where it is.
+a_listener_listens_on_loopback_unless_told(Config) ->
+    Bin = ?config(component, Config),
+    Other = non_loopback(),
+    {ok, L} = wasi_http_listener:start(#{component => Bin, port => 0}),
+    try
+        [~"127.0.0.1", P] = binary:split(wasi_http_listener:address(L), ~":"),
+        Port = binary_to_integer(P),
+        Other =:= none orelse
+            ?assertEqual({error, econnrefused},
+                         gen_tcp:connect(Other, Port, [], 2000))
+    after
+        wasi_http_listener:stop(L)
+    end,
+    {ok, A} = wasi_http_listener:start(#{component => Bin, port => 0,
+                                         ip => {0, 0, 0, 0}}),
+    try
+        [~"0.0.0.0", Q] = binary:split(wasi_http_listener:address(A), ~":"),
+        Other =:= none orelse
+            begin
+                {ok, S} = gen_tcp:connect(Other, binary_to_integer(Q), [], 2000),
+                ok = gen_tcp:close(S)
+            end
+    after
+        wasi_http_listener:stop(A)
+    end.
+
+%% An IPv4 address of this machine that is not loopback, or `none'.
+non_loopback() ->
+    {ok, Ifs} = inet:getifaddrs(),
+    case [A || {_, Props} <- Ifs, {addr, {B, _, _, _} = A} <- Props, B =/= 127] of
+        [A | _] -> A;
+        [] -> none
+    end.
 
 a_declared_body_over_the_limit_is_413(Config) ->
     with_listener(Config, #{max_body_bytes => 100}, fun(Port) ->

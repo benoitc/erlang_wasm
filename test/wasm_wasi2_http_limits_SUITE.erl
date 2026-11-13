@@ -26,6 +26,7 @@ The listener cases need the wasmtime serve reactors
 -export([all/0, groups/0, init_per_suite/1, end_per_suite/1,
          init_per_group/2, end_per_group/2]).
 -export([a_trickling_body_ends_at_the_deadline/1,
+         a_guest_body_without_a_length_stops_at_the_ceiling/1,
          a_response_body_over_the_limit_fails/1,
          a_pause_between_bytes_ends_the_response/1,
          a_trickling_body_ends_at_the_deadline_over_h2/1,
@@ -40,6 +41,7 @@ all() -> [{group, outbound}, {group, listener}].
 
 groups() ->
     [{outbound, [], [a_trickling_body_ends_at_the_deadline,
+                     a_guest_body_without_a_length_stops_at_the_ceiling,
                      a_response_body_over_the_limit_fails,
                      a_pause_between_bytes_ends_the_response,
                      a_trickling_body_ends_at_the_deadline_over_h2,
@@ -73,6 +75,27 @@ end_per_group(_, _) -> ok.
 
 %% A server that sends a chunk every 30 ms for ever: the overall deadline of
 %% 300 ms ends the exchange; it used to restart with every chunk.
+%% A guest's outgoing body is host memory until it is sent. With no
+%% content-length declared, nothing bounded it: every write was appended to a
+%% binary the host held, without a network grant needed to build it. The
+%% ceiling that bounds a body the host reads now bounds this one too.
+a_guest_body_without_a_length_stops_at_the_ceiling(_) ->
+    Res = wasm_resources:new_instance(),
+    try
+        wasm_resources:with_instance(Res, fun() ->
+            B = wasi_http:outgoing_body([], 10),
+            ?assertEqual(ok, wasi_http:append_body(B, <<"123456">>)),
+            ?assertEqual({error, {http_body_size, 12}},
+                         wasi_http:append_body(B, <<"789012">>)),
+            %% A declared length under the ceiling still bounds the body.
+            D = wasi_http:outgoing_body([{~"content-length", ~"4"}], 10),
+            ?assertEqual({error, {http_body_size, 6}},
+                         wasi_http:append_body(D, <<"123456">>))
+        end)
+    after
+        wasm_resources:destroy_instance(Res)
+    end.
+
 a_trickling_body_ends_at_the_deadline(_) ->
     with_h1(fun trickle_h1/5, fun(Port) ->
         {Took, Got} = timed(fun() ->

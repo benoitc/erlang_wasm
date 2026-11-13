@@ -6,6 +6,12 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **A guest can no longer make the host hold an HTTP body of any size.** A
+  body a WASI component wrote without declaring `content-length` was kept in
+  host memory with no limit, outside the component's own memory limits. Every
+  HTTP body the host holds is now limited by `http_max_body_bytes`, 8 MiB
+  unless you set it: a request a guest sends, a response a 0.2 handler
+  writes, and a 0.3 handler's response.
 - **A WASI program waiting on several timers now wakes for the first one
   only.** `poll_oneoff` reported every timer as fired once the shortest was
   due, so a program using a long timer as a timeout timed out at once. It now

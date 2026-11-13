@@ -27,6 +27,9 @@ one together, and `run_command/3` runs a 0.2 or a 0.3 command.
 -export([command/1, run_command/3, run_serve/3, run_serve/4, serve_imports/2, cli/1,
          clocks/0, random/0]).
 
+%% The largest HTTP body the host holds, as `wasi_http' has it.
+-define(MAX_BODY_BYTES, 8388608).
+
 %% The bytes, or what `wasm_component:prepare/1` made of them.
 -type component() :: binary() | wasm_component:prepared().
 -export_type([component/0]).
@@ -90,7 +93,9 @@ Imports = wasi_preview3:serve_imports(Bin, #{}),
 -spec run_serve(component(), map(), map(), map()) ->
           {ok, non_neg_integer(), [{binary(), binary()}], binary()} | {error, term()}.
 run_serve(Bin, Request, Extra, Imports) ->
-    wasi_preview2:run_serve_with(Bin, Request, Extra, Imports, fun serve/2).
+    MaxBody = maps:get(http_max_body_bytes, Extra, ?MAX_BODY_BYTES),
+    wasi_preview2:run_serve_with(Bin, Request, Extra, Imports,
+                                 fun(I, R) -> serve(I, R, MaxBody) end).
 
 -doc """
 The imports `run_serve/4` serves component `Bin` with, under the options
@@ -101,19 +106,20 @@ component names a 0.3 interface. Nothing in them belongs to one request.
 serve_imports(Bin, Extra) ->
     (host(Bin))(wasi_preview2:serve_options(Extra)).
 
-serve(Instance, Request) ->
+serve(Instance, Request, MaxBody) ->
     case [E || E <- wasm_component:exports(Instance),
                binary:match(E, ~"wasi:http/handler@0.3") =/= nomatch] of
-        [Handler | _] -> serve_p3(Instance, <<Handler/binary, "#handle">>, Request);
+        [Handler | _] ->
+            serve_p3(Instance, <<Handler/binary, "#handle">>, Request, MaxBody);
         [] -> wasi_preview2:serve(Instance, Request)
     end.
 
-serve_p3(Instance, Export, Request) ->
+serve_p3(Instance, Export, Request, MaxBody) ->
     Req = wasi_p3_http:incoming_request(Request),
     Sig = {[handle], {result, handle, wasi_http:error_code()}},
     case wasm_component:start_async(Instance, Export, Sig, [Req]) of
         {ok, {ok, Resp}} ->
-            Result = wasi_p3_http:take_response(Resp),
+            Result = wasi_p3_http:take_response(Resp, MaxBody),
             _ = wasm_component:pump(Instance, 5000),
             Result;
         {ok, {error, E}} -> {error, E};

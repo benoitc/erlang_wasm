@@ -24,6 +24,7 @@ also puts the 0.3 programs in `test/fixtures/wasmtime-p3` (not vendored).
          big_random_buf/1, random_limits/1, much_stdout/1,
          many_tasks_reach_the_resource_limit/1, file_write_chunked/1,
          file_truncation_readonly/1, serve_hello_world/1, serve_echo/1,
+         a_response_body_past_the_ceiling_fails/1,
          serve_post_return/1, serve_drops_forbidden_headers/1, serve_proxy/1,
          p3_cases/1]).
 
@@ -31,6 +32,7 @@ all() ->
     [hello_stdout, read_stdin, cli, clocks_sleep, random_imports, big_random_buf,
      random_limits, much_stdout, many_tasks_reach_the_resource_limit,
      file_write_chunked, file_truncation_readonly, serve_hello_world, serve_echo,
+     a_response_body_past_the_ceiling_fails,
      serve_post_return, serve_drops_forbidden_headers, serve_proxy, p3_cases].
 
 %% Programs still failing, by group, and why. Each step of the WASI 0.3 work
@@ -121,6 +123,14 @@ serve_echo(_) ->
     ?assertMatch({ok, 200, [{<<"content-type">>, <<"text/plain">>}], <<"hello body">>},
                  serve("p3_http_echo")).
 
+
+%% A served response body is read whole before it is answered, so the host
+%% holds it; nothing bounded it. The echo handler answers with the request's
+%% ten bytes, past a four-byte ceiling.
+a_response_body_past_the_ceiling_fails(_) ->
+    ?assertMatch({error, {~"HTTP-response-body-size", {some, _}}},
+                 serve("p3_http_echo", [{<<"content-type">>, <<"text/plain">>}],
+                       #{http_max_body_bytes => 4})).
 
 %% What the handler does after returning its response still runs.
 serve_post_return(_) ->

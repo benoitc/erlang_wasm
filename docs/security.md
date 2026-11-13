@@ -267,8 +267,9 @@ Check all five before you ship it:
 
 ## Reporting
 
-Found something? Open an issue marked security, or contact the maintainer
-directly.
+Report a vulnerability privately, through the repository's **Security** tab,
+never in a public issue. [SECURITY.md](../SECURITY.md) says how, and what
+counts as one.
 
 ## The compiled tier's artifact cache is executable code
 

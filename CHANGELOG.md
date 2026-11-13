@@ -6,6 +6,9 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **Report a vulnerability privately.** The security guide used to say to open
+  an issue, which is public. `SECURITY.md` now says how to report one through
+  the repository's Security tab, privately, and what counts as one.
 - **The module cache now has a memory budget.** It limited how many modules
   it held, 256, but not how much memory they took, and 256 large modules can
   take more than a node has. Once the modules it holds reach

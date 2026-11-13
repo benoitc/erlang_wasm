@@ -37,11 +37,7 @@ bench:
 # Neither upstream suite is vendored. Both are skipped when absent, so a
 # conformance run without them proves nothing.
 suites:
-	@test -d testsuite || \
-	    git clone --depth 1 https://github.com/WebAssembly/testsuite.git
-	@test -d wasi-testsuite || \
-	    git clone --depth 1 --branch prod/testsuite-base \
-	        https://github.com/WebAssembly/wasi-testsuite.git
+	./scripts/fetch-suites.sh
 
 # wasmtime's native WASI 0.2 test programs for the interop track
 # (wasm_wasi2_p2_SUITE). Not vendored: built on demand, skipped when absent.

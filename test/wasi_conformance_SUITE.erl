@@ -8,8 +8,7 @@
 %% Skipped entirely without a checkout, the same way `wasm_spec_SUITE' is:
 %%
 %% ```
-%% git clone --depth 1 --branch prod/testsuite-base \
-%%     https://github.com/WebAssembly/wasi-testsuite.git
+%% scripts/fetch-suites.sh
 %% '''
 %%
 %% Per directory rather than one total, so a fix in the filesystem cases cannot
@@ -59,9 +58,7 @@ baseline() ->
 init_per_suite(Config) ->
     case wasi_testsuite_runner:dirs() of
         [] ->
-            {skip, "no wasi-testsuite checkout: git clone --depth 1 --branch "
-                   "prod/testsuite-base "
-                   "https://github.com/WebAssembly/wasi-testsuite.git"};
+            {skip, "no wasi-testsuite checkout: run scripts/fetch-suites.sh"};
         _ ->
             {ok, _} = application:ensure_all_started(wasm),
             Config

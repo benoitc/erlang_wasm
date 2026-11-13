@@ -63,9 +63,9 @@ The benchmarks are not among them: `wasm_bench_SUITE` and
 `rebar3 ct` runs only what can fail and `rebar3 bench` runs the numbers.
 
 `make check` runs the four that matter. CI (`.github/workflows/ci.yml`) runs
-them as separate jobs gated on `compile`, and clones both upstream test suites
-first, because they are not vendored and every suite that needs one *skips*
-when it is absent.
+them as separate jobs gated on `compile`, and fetches both upstream test suites
+first, at the commits `scripts/fetch-suites.sh` names, because they are not
+vendored and every suite that needs one *skips* when it is absent.
 
 ## Build & Development Commands
 
@@ -73,7 +73,7 @@ when it is absent.
 rebar3 compile
 rebar3 shell
 rebar3 ct --suite=test/wasm_spec_SUITE
-make suites                                   # clone the upstream suites
+make suites                                   # the upstream suites, pinned
 make bench                                    # the benchmark arms
 rebar3 ex_doc                                 # docs into doc/
 ```

@@ -125,14 +125,15 @@ A C compiler is optional. Without one, the WASI path resolver uses pure
 Erlang. A small race condition then remains, and the documentation describes
 it.
 
-The conformance tests are read directly from the upstream sources. Clone them
-next to the project and `rebar3 ct` finds them:
+The conformance tests are read directly from the upstream sources. Fetch them
+next to the project, at the commits it is tested against, and `rebar3 ct`
+finds them:
 
 ```sh
-git clone --depth 1 https://github.com/WebAssembly/testsuite.git
+scripts/fetch-suites.sh
 ```
 
-Nothing is generated and you need no other tool. Without the clone, the
+Nothing is generated and you need no other tool. Without them, the
 conformance suite is skipped with a message, and every other test still runs.
 
 ## Why it is built this way

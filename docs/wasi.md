@@ -325,8 +325,7 @@ here that can show a capability follows the specification exactly, and not
 only our understanding of it.
 
 ```sh
-git clone --depth 1 --branch prod/testsuite-base \
-    https://github.com/WebAssembly/wasi-testsuite.git
+scripts/fetch-suites.sh
 rebar3 ct --suite=test/wasi_conformance_SUITE
 ```
 

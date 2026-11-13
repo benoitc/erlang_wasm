@@ -113,8 +113,7 @@ a_malformed_module_does_not_stop_the_script(_Config) ->
 %% read is a gap in the reader rather than in the runtime.
 replays_every_suite_the_specification_ships(_Config) ->
     case suite_checkout() of
-        false -> {skip, "no suite checkout: git clone --depth 1 "
-                        "https://github.com/WebAssembly/testsuite.git"};
+        false -> {skip, "no suite checkout: run scripts/fetch-suites.sh"};
         Dir -> read_every_suite(Dir)
     end.
 

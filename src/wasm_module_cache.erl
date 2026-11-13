@@ -61,6 +61,10 @@ compiled artefact, with no coordination. It also means either of you can call
 %% that loading and unloading trigger.
 -define(DEFAULT_MAX_RESIDENT, 256).
 -define(DEFAULT_MAX_LOADS_PER_SECOND, 50).
+%% The total the resident modules may take, as measured when each is stored.
+%% CPython 3.12, the largest module this project runs, is 182 MB stored, so
+%% this holds eleven of them.
+-define(DEFAULT_MAX_RESIDENT_BYTES, 2 * 1024 * 1024 * 1024).
 
 %% Every call here is a map update; nothing expensive happens inside the
 %% server any more, so a timeout means the node is in trouble rather than that
@@ -86,6 +90,7 @@ compiled artefact, with no coordination. It also means either of you can call
     window_start = 0 :: integer(),
     window_count = 0 :: non_neg_integer(),
     max_resident :: pos_integer(),
+    max_resident_bytes :: pos_integer(),
     max_rate :: pos_integer(),
     %% {hash, fuse} => {pending, pid()} | stored: who is publishing a module's
     %% lowered bodies, or that they are published. See `publish_ir/2'.
@@ -296,6 +301,9 @@ init([]) ->
     ok = purge(),
     {ok, #state{max_resident = application:get_env(wasm, max_resident_modules,
                                                    ?DEFAULT_MAX_RESIDENT),
+                max_resident_bytes =
+                    application:get_env(wasm, max_resident_module_bytes,
+                                        ?DEFAULT_MAX_RESIDENT_BYTES),
                 max_rate = application:get_env(wasm, max_module_loads_per_second,
                                                ?DEFAULT_MAX_LOADS_PER_SECOND)}}.
 
@@ -422,9 +430,9 @@ handle_call({ir_stored, Hash, Fuse}, {Pid, _}, State) ->
 handle_call(resident, _From, State) ->
     {reply, maps:size(State#state.resident), State};
 handle_call(stats, _From, State) ->
-    Bytes = lists:sum([maps:get(size, E) || E <- maps:values(State#state.resident)]),
     {reply, #{resident => maps:size(State#state.resident),
-              bytes => Bytes,
+              bytes => resident_bytes(State),
+              max_resident_bytes => State#state.max_resident_bytes,
               max_resident => State#state.max_resident,
               max_loads_per_second => State#state.max_rate}, State};
 handle_call(_Req, _From, State) ->
@@ -613,9 +621,24 @@ admit(State) ->
     %% counting them enough concurrent first loads walk straight past the cap.
     InUse = maps:size(State#state.resident) + maps:size(State#state.compiling),
     case InUse >= State#state.max_resident of
-        true -> {error, {too_many_modules, State#state.max_resident}};
-        false -> rate_limit(State)
+        true ->
+            {error, {too_many_modules, State#state.max_resident}};
+        false ->
+            %% The count bounded modules, not their size: 256 large ones held
+            %% far more than a node has. A module is measured once stored, so
+            %% the total can pass this by the one being compiled, itself
+            %% bounded by `max_module_bytes'.
+            case resident_bytes(State) >= State#state.max_resident_bytes of
+                true -> {error, {module_cache_full,
+                                 State#state.max_resident_bytes}};
+                false -> rate_limit(State)
+            end
     end.
+
+%% At most `max_resident' entries, so summing them is cheap and cannot drift
+%% the way a running total can.
+resident_bytes(State) ->
+    lists:sum([maps:get(size, E) || E <- maps:values(State#state.resident)]).
 
 rate_limit(State) ->
     Now = erlang:monotonic_time(second),

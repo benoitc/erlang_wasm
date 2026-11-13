@@ -38,7 +38,8 @@ all() ->
      two_destroys_at_once_publish_once,
      a_publish_racing_an_eviction_leaves_nothing,
      claims_name_what_a_process_holds_and_hand_over,
-     a_module_past_the_size_limit_is_refused_before_any_work].
+     a_module_past_the_size_limit_is_refused_before_any_work,
+     the_cache_refuses_a_load_past_its_byte_budget].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -68,6 +69,31 @@ a_module_past_the_size_limit_is_refused_before_any_work(Config) ->
     after
         application:unset_env(wasm, max_module_bytes)
     end.
+
+%% The cache counted modules, never their size: 256 large modules held far
+%% more memory than a node has. With a budget of one byte, the first module is
+%% admitted (nothing is resident yet), the second is refused, and once the
+%% first has gone the second loads.
+the_cache_refuses_a_load_past_its_byte_budget(Config) ->
+    ok = application:set_env(wasm, max_resident_module_bytes, 1),
+    try
+        ok = restart_cache(),
+        A = unique(?config(small, Config)),
+        B = unique(?config(small, Config)),
+        {ok, HA} = wasm:load(A),
+        ?assertMatch({error, {module_cache_full, 1}}, wasm:load(B)),
+        ok = wasm:unload(HA),
+        ?assertMatch({ok, _}, wasm:load(B))
+    after
+        application:unset_env(wasm, max_resident_module_bytes),
+        ok = restart_cache()
+    end.
+
+restart_cache() ->
+    Old = whereis(wasm_module_cache),
+    exit(Old, kill),
+    wait_for_restart(Old, 2000),
+    ok.
 
 %% Distinct bytes per case, so cases cannot inherit each other's residency.
 %% A custom section carries the difference: the decoder skips it, so the module

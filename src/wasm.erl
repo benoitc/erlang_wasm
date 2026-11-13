@@ -84,6 +84,9 @@ context to diagnose it.
 -export([acquire/1, release/1]).
 -export([read_memory/3, write_memory/3, memory_size/1]).
 -export([format_error/1]).
+-export([check_module_bytes/1]).
+
+-define(MAX_MODULE_BYTES, 64 * 1024 * 1024).
 
 -export_type([module_/0, instance/0, source/0, extern/0, snapshot/0]).
 %% `module_()` is a `#module{}`, so everything its fields are typed with is part
@@ -189,12 +192,32 @@ compile(Bin, Opts) -> compile_with(Bin, Opts, fun wasm_decode:module/1).
 %% two lines either way and neither path raises.
 compile_with(Src, Opts, Front) ->
     Identity = maps:get(identity, Opts, undefined),
-    with_room(byte_size(Src), fun() ->
-        case Front(Src) of
-            {error, _} = E -> E;
-            {ok, M} -> wasm_validate:module(M#module{identity = Identity})
-        end
-    end).
+    Bytes = byte_size(Src),
+    case check_module_bytes(Bytes) of
+        {error, _} = Refused ->
+            Refused;
+        ok ->
+            with_room(Bytes, fun() ->
+                case Front(Src) of
+                    {error, _} = E -> E;
+                    {ok, M} -> wasm_validate:module(M#module{identity = Identity})
+                end
+            end)
+    end.
+
+%% Refused before any work: decoding, validating and, in the module cache,
+%% hashing all cost memory and time in proportion to the input, and nothing
+%% bounded it. `max_module_bytes', 64 MiB unless set, is twice the largest
+%% real module this project runs (the CPython reactor, 31 MB).
+-doc false.
+-spec check_module_bytes(non_neg_integer()) -> ok | {error, wasm_error:error()}.
+check_module_bytes(Bytes) ->
+    Max = application:get_env(wasm, max_module_bytes, ?MAX_MODULE_BYTES),
+    case Bytes > Max of
+        false -> ok;
+        true -> {error, err(exhaustion, module_too_large, ~"module too large",
+                            #{bytes => Bytes, limit => Max})}
+    end.
 
 %% Size the heap for the module before building it.
 %%

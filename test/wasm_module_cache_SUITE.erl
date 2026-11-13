@@ -37,7 +37,8 @@ all() ->
      only_the_cached_module_shares,
      two_destroys_at_once_publish_once,
      a_publish_racing_an_eviction_leaves_nothing,
-     claims_name_what_a_process_holds_and_hand_over].
+     claims_name_what_a_process_holds_and_hand_over,
+     a_module_past_the_size_limit_is_refused_before_any_work].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -49,6 +50,24 @@ end_per_suite(_) -> ok.
 
 init_per_testcase(_, Config) -> wasm_test_slots:reset(), Config.
 end_per_testcase(_, _) -> wasm_test_slots:reset(), ok.
+
+%% Nothing bounded a module's size: decoding, validating and, through the
+%% cache, hashing all ran on whatever arrived. Past `max_module_bytes' both
+%% ways in refuse it before any of that, and a module under it still loads.
+a_module_past_the_size_limit_is_refused_before_any_work(Config) ->
+    Bin = unique(?config(small, Config)),
+    ok = application:set_env(wasm, max_module_bytes, byte_size(Bin) - 1),
+    try
+        ?assertMatch({error, #{class := exhaustion, kind := module_too_large,
+                               ctx := #{bytes := _, limit := _}}},
+                     wasm:compile(Bin)),
+        ?assertMatch({error, #{kind := module_too_large}}, wasm:load(Bin)),
+        ok = application:set_env(wasm, max_module_bytes, byte_size(Bin)),
+        ?assertMatch({ok, _}, wasm:compile(Bin)),
+        ?assertMatch({ok, _}, wasm:load(Bin))
+    after
+        application:unset_env(wasm, max_module_bytes)
+    end.
 
 %% Distinct bytes per case, so cases cannot inherit each other's residency.
 %% A custom section carries the difference: the decoder skips it, so the module

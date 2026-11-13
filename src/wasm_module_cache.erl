@@ -108,6 +108,13 @@ load(Binary) -> load(Binary, #{}).
 
 -spec load(binary(), map()) -> {ok, handle()} | {error, term()}.
 load(Binary, _Opts) when is_binary(Binary) ->
+    %% Before the hash, which reads every byte.
+    case wasm:check_module_bytes(byte_size(Binary)) of
+        ok -> load_checked(Binary);
+        {error, _} = Refused -> Refused
+    end.
+
+load_checked(Binary) ->
     Hash = crypto:hash(sha256, Binary),
     case call({acquire, Hash}) of
         {ok, already_resident} ->

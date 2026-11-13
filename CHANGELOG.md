@@ -6,6 +6,11 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **A module's size is now limited.** Nothing bounded the size of a module
+  given to `wasm:compile/1` or `wasm:load/1`: it was read, hashed and decoded
+  in full whatever its size. A module larger than `max_module_bytes`, 64 MiB
+  unless you set it, is now refused with `module_too_large` before any of
+  that.
 - **The HTTP listener now listens on this machine only, unless you say
   otherwise.** `wasi_http_listener:start/1` listened on every network
   interface while `address/1` reported `127.0.0.1`, so a listener started for

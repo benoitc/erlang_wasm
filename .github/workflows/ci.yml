@@ -68,10 +68,15 @@ jobs:
       # emits different bytes on macOS and Linux, so a hash would pin a
       # machine. The build failing is the check; verify-fixtures.sh only
       # confirms the file arrived.
+      # Checked before it is used: a replaced release asset would otherwise
+      # build the reactors with someone else's compiler. The checksum is the
+      # one GitHub reports for the asset, and what it hashed to when pinned.
       - name: Install the pinned WASI SDK
         run: |
           curl -fsSL -o /tmp/wasi-sdk.tar.gz \
             https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz
+          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  /tmp/wasi-sdk.tar.gz" \
+            | sha256sum -c -
           mkdir -p "$HOME/.local/opt"
           tar xzf /tmp/wasi-sdk.tar.gz -C "$HOME/.local/opt"
       # The Lua source comes from lua.org, which runners cannot always reach;

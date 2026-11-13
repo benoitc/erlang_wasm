@@ -57,7 +57,7 @@ grant out, the component does not get that capability.
 | `network` | `wasi:sockets` and outbound `wasi:http` | no network |
 | `http_transport` | the module that performs outbound HTTP | `wasi_http_h1` |
 | `http_tls` | `ssl` client options for `https` | verify against system CAs |
-| `http_max_body_bytes` | the largest response body an outbound request reads | 8 MiB |
+| `http_max_body_bytes` | the largest HTTP body the host holds: a response an outbound request reads, and a body the guest writes | 8 MiB |
 
 `args` is returned exactly as you pass it. Nothing is added in front.
 

@@ -16,6 +16,7 @@ slice uses, so a component reaches only a granted authority.
 """.
 
 -export([http/1, append_body/2, incoming_request/1, read_outparam/1]).
+-export([outgoing_body/2]).
 %% For `wasi_p3_http', which serves the same requests through the 0.3
 %% interface.
 -export([perform/4, field_error/2, request_error/1, error_code/0]).
@@ -213,7 +214,8 @@ http(Opts) ->
             {[handle], handle}, fun([R]) -> out_req_headers(R) end),
       {T, <<"[method]outgoing-request.body">>} =>
           wasm_component:import_fun(
-            {[handle], {result, handle, none}}, fun([R]) -> request_body(R) end),
+            {[handle], {result, handle, none}},
+            fun([R]) -> request_body(R, MaxBody) end),
       {T, <<"[resource-drop]outgoing-request">>} => drop(),
       %% outgoing-body
       {T, <<"[method]outgoing-body.write">>} =>
@@ -302,7 +304,8 @@ http(Opts) ->
             {[handle], handle}, fun([R]) -> out_resp_headers(R) end),
       {T, <<"[method]outgoing-response.body">>} =>
           wasm_component:import_fun(
-            {[handle], {result, handle, none}}, fun([R]) -> response_body(R) end),
+            {[handle], {result, handle, none}},
+            fun([R]) -> response_body(R, MaxBody) end),
       {T, <<"[resource-drop]outgoing-response">>} => drop(),
       %% response-outparam (the reactor sets its response here)
       {T, <<"[static]response-outparam.set">>} =>
@@ -633,17 +636,26 @@ ro_fields(List) -> wasm_component:host_new(http_fields_ro, List).
 %% handle (the guest writes the body after handing the request to the handler). A
 %% declared content-length bounds the body: writing past it, or finishing short of
 %% it, is an HTTP-request-body-size error.
-request_body(R) ->
+request_body(R, MaxBody) ->
     case wasm_component:host_get(R) of
         {ok, {http_out_req, #{headers := H} = Req}} ->
-            BodyH = wasm_component:host_new(http_out_body, new_body(content_length(H))),
+            BodyH = outgoing_body(H, MaxBody),
             _ = wasm_component:host_update(R, Req#{body_handle => BodyH}),
             {ok, BodyH};
         _ ->
             {error, undefined}
     end.
 
-new_body(Limit) -> #{data => <<>>, limit => Limit, over => undefined}.
+%% A guest's outgoing body is held by the host until it is sent, so its size is
+%% host memory, outside the guest's own limits. A declared content-length
+%% bounds it; without one, nothing did. `MaxBody' bounds it either way: the
+%% `http_max_body_bytes' that already bounds a body the host reads.
+-doc false.
+-spec outgoing_body([{binary(), binary()}], pos_integer()) -> term().
+outgoing_body(Headers, MaxBody) ->
+    wasm_component:host_new(
+      http_out_body, #{data => <<>>, limit => content_length(Headers),
+                       max => MaxBody, over => undefined}).
 
 %% The declared content-length of a header list, or `undefined` when unset.
 content_length(Headers) ->
@@ -687,15 +699,17 @@ body_size(N) -> {<<"HTTP-request-body-size">>, {some, N}}.
 
 -doc """
 Append bytes to an outgoing-body's buffer (its write stream). A write that would
-carry the body past its declared content-length fails with an io-error the guest
-recovers through `http-error-code` as HTTP-request-body-size.
+carry the body past its declared content-length, or past `http_max_body_bytes`,
+fails with an io-error the guest recovers through `http-error-code` as
+HTTP-request-body-size.
 """.
 -spec append_body(term(), binary()) -> ok | {error, {http_body_size, non_neg_integer()}}.
 append_body(B, Bytes) ->
     case wasm_component:host_get(B) of
         {ok, {http_out_body, #{data := Data, limit := Limit} = Body}} ->
             Total = byte_size(Data) + byte_size(Bytes),
-            case Limit =/= undefined andalso Total > Limit of
+            Max = maps:get(max, Body, infinity),
+            case Limit =/= undefined andalso Total > Limit orelse Total > Max of
                 true ->
                     _ = wasm_component:host_update(B, Body#{over => Total}),
                     {error, {http_body_size, Total}};
@@ -929,10 +943,10 @@ out_resp_headers(R) ->
         _                                      -> ro_fields([])
     end.
 
-response_body(R) ->
+response_body(R, MaxBody) ->
     case wasm_component:host_get(R) of
         {ok, {http_out_resp, #{headers := H} = Resp}} ->
-            BodyH = wasm_component:host_new(http_out_body, new_body(content_length(H))),
+            BodyH = outgoing_body(H, MaxBody),
             _ = wasm_component:host_update(R, Resp#{body_handle => BodyH}),
             {ok, BodyH};
         _ ->

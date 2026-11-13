@@ -11,7 +11,7 @@ collector process takes the body as the guest writes it, so the exchange runs
 outside the guest's process while the guest keeps writing.
 """.
 
--export([http/1, incoming_request/1, take_response/1]).
+-export([http/1, incoming_request/1, take_response/2]).
 
 -define(TYPES, ~"wasi:http/types@0.3").
 -define(CLIENT, ~"wasi:http/client@0.3").
@@ -322,7 +322,8 @@ start_send(R, MaxBody) ->
             _ = wasm_component:host_drop(R),
             case target(M, MaxBody) of
                 {ok, Target} ->
-                    Collector = collector(maps:get(body, M), declared_length(M)),
+                    Collector = collector(maps:get(body, M), declared_length(M),
+                                          MaxBody),
                     #{target => Target, collector => Collector, sent => maps:get(sent, M)};
                 {error, E} ->
                     ok = wasm_async:host_future_resolve(maps:get(sent, M), {error, E}),
@@ -376,18 +377,21 @@ declared_length(#{headers := Headers}) ->
 %% once the guest has ended the stream. A body that does not match the length
 %% the request declares is never sent: a write that would go past it is
 %% refused whole, and a body that ends short is an error.
-collector(none, _Declared) ->
+collector(none, _Declared, _MaxBody) ->
     collector_with(<<>>, done);
 %% An incoming request sent on as it came: its body was never made a stream.
-collector({bytes, Bin}, _Declared) ->
+collector({bytes, Bin}, _Declared, _MaxBody) ->
     collector_with(Bin, done);
-collector({some, S}, Declared) ->
+%% The body is host memory until it is sent. A declared content-length bounds
+%% it, and without one nothing did; `MaxBody' bounds it either way.
+collector({some, S}, Declared, MaxBody) ->
     Pid = collector_with(<<>>, open),
     Total = counters:new(1, []),
     Sink = fun(eof) -> Pid ! eof, ok;
               (B) ->
                    N = counters:get(Total, 1) + byte_size(B),
-                   case Declared =/= none andalso N > Declared of
+                   case Declared =/= none andalso N > Declared
+                       orelse N > MaxBody of
                        true -> Pid ! {too_long, N}, closed;
                        false -> ok = counters:put(Total, 1, N), Pid ! {body, B}, ok
                    end
@@ -485,13 +489,13 @@ method_variant(M) ->
 The status, headers and whole body of the response a handler returned,
 running its task while it writes the body.
 """.
--spec take_response(non_neg_integer()) ->
+-spec take_response(non_neg_integer(), pos_integer()) ->
           {ok, non_neg_integer(), [{binary(), binary()}], binary()} | {error, term()}.
-take_response(R) ->
+take_response(R, MaxBody) ->
     case message(R) of
         {p3_http_response, #{status := Status, headers := Headers, body := Body,
                              sent := Sent}} ->
-            case read_body(Body) of
+            case read_body(Body, MaxBody) of
                 {ok, Bin} ->
                     _ = Sent =/= undefined andalso
                         wasm_async:host_future_resolve(Sent, {ok, undefined}),
@@ -501,14 +505,19 @@ take_response(R) ->
         _ -> {error, not_a_response}
     end.
 
-read_body(none) -> {ok, <<>>};
-read_body({some, S}) ->
+read_body(none, _MaxBody) -> {ok, <<>>};
+read_body({some, S}, MaxBody) ->
     ok = wasm_async:host_reader(S),
-    read_all(S, <<>>).
+    read_all(S, <<>>, MaxBody).
 
-read_all(S, Acc) ->
+%% A served response body is read whole before it is answered, so it is held
+%% by the host: past `MaxBody' the reading stops and the request fails.
+read_all(S, Acc, MaxBody) ->
     case wasm_async:host_read(S, 65536, 60000) of
-        {ok, B} -> read_all(S, <<Acc/binary, B/binary>>);
+        {ok, B} when byte_size(Acc) + byte_size(B) > MaxBody ->
+            {error, {~"HTTP-response-body-size",
+                     {some, byte_size(Acc) + byte_size(B)}}};
+        {ok, B} -> read_all(S, <<Acc/binary, B/binary>>, MaxBody);
         eof -> {ok, Acc};
         {error, _} = E -> E
     end.

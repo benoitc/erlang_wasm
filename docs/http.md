@@ -75,7 +75,10 @@ the last byte of the response. You cannot change it. The guest can set
 `request-options`; both transports apply all three, each within the overall
 deadline.
 
-A response body is limited to 8 MiB. To change it, pass `max_body_bytes` to
+Every HTTP body the host holds is limited to 8 MiB: a response an outgoing
+request reads, and a body the guest writes, whether it declares a
+`content-length` or not. A write past the limit fails with
+`HTTP-request-body-size`. To change it, pass `max_body_bytes` to
 `wasi_http:http/1`, or `http_max_body_bytes` in the options of
 `wasi_preview2:run_command/3` and `run_serve/3`.
 
@@ -183,6 +186,7 @@ ok = wasi_http_listener:stop(L).
 | option | meaning | default |
 | --- | --- | --- |
 | `component` | the reactor's bytes, or a component from `wasm_component:prepare/1` | required |
+| `ip` | the address to listen on; `{0, 0, 0, 0}` listens on every interface | `{127, 0, 0, 1}`, this machine only |
 | `port` | the port to listen on; `0` picks one | `0` |
 | `transport` | `h1`, or `h2` for cleartext HTTP/2 | `h1` |
 | `scheme` | the scheme the guest is told | `~"http"` |

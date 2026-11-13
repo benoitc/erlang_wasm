@@ -39,7 +39,9 @@ wasi_http_listener:stop(L).
 Start a listener for one reactor component.
 
 `Opts` carries the `component` (the reactor's bytes) and, optionally, the
-`transport` (`h1`, the default, or `h2`), the `port` (0 for an ephemeral one), the
+`transport` (`h1`, the default, or `h2`), the `ip` to listen on (`{127, 0, 0,
+1}` by default, so only this machine can connect; `{0, 0, 0, 0}` listens on
+every interface), the `port` (0 for an ephemeral one), the
 `scheme` reported to the guest (`http` by default), and `serve_opts` passed through
 to `run_serve/3` (a `network` grant lets the reactor make its own outbound
 requests, and execution limits such as `fuel` bound each request's guest).
@@ -53,7 +55,8 @@ Two limits bound each request:
 - `max_body_bytes`, the largest request body (8 MiB by default). A larger one
   is answered 413 and never reaches the guest.
 """.
--spec start(#{component := binary(), transport => h1 | h2, port => inet:port_number(),
+-spec start(#{component := binary(), transport => h1 | h2,
+              ip => inet:ip_address(), port => inet:port_number(),
               scheme => binary(), serve_opts => map(),
               request_timeout => pos_integer(),
               max_body_bytes => pos_integer()}) ->
@@ -83,11 +86,14 @@ start(#{component := Component} = Opts) ->
     %% h2 serves over TLS by default; a reactor endpoint runs cleartext (h2c).
     %% Either library answers a body over the ceiling with 413 itself.
     Extra0 = case Transport of h2 -> #{transport => tcp}; _ -> #{} end,
-    Extra = Extra0#{max_body_size => MaxBody},
+    %% Loopback unless told otherwise: with no address both libraries listened
+    %% on every interface, while `address/1' said 127.0.0.1.
+    IP = maps:get(ip, Opts, {127, 0, 0, 1}),
+    Extra = Extra0#{max_body_size => MaxBody, ip => IP},
     Holder = holder(Prepared),
     case Transport:start_server(maps:get(port, Opts, 0), Extra#{handler => Handler}) of
         {ok, Ref} ->
-            Addr = iolist_to_binary(["127.0.0.1:",
+            Addr = iolist_to_binary([host(IP), ":",
                                      integer_to_binary(Transport:server_port(Ref))]),
             {ok, {Transport, Ref, Addr, Holder}};
         {error, _} = E ->
@@ -110,6 +116,10 @@ holder(Component) ->
                 end),
     %% Loaded before the first request, so none of them races the hold.
     receive {Ref, _} -> Pid after 30000 -> Pid end.
+
+%% The address as a URL authority writes it: an IPv6 one in brackets.
+host({_, _, _, _} = IP) -> inet:ntoa(IP);
+host(IP) -> ["[", inet:ntoa(IP), "]"].
 
 -doc "The `host:port` the listener is bound to.".
 -spec address(server()) -> binary().

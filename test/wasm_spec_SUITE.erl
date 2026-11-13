@@ -6,7 +6,7 @@
 %% Nothing is generated and no tool is needed:
 %%
 %% ```
-%% git clone --depth 1 https://github.com/WebAssembly/testsuite.git
+%% scripts/fetch-suites.sh
 %% '''
 %%
 %% Each phase runs the core suites (see `wasm_spec_manifest') and compares the
@@ -78,8 +78,7 @@ validate_baseline() -> #{}.
 init_per_suite(Config) ->
     case filelib:is_regular(filename:join(wasm_spec_runner:suite_dir(), "i32.wast")) of
         false ->
-            {skip, "no suite checkout: git clone --depth 1 "
-                   "https://github.com/WebAssembly/testsuite.git"};
+            {skip, "no suite checkout: run scripts/fetch-suites.sh"};
         true ->
             %% The three interpreter phases run without the application, which
             %% is why this was missing for as long as it was. `compiled_phase'

@@ -75,11 +75,11 @@ Off by default. See [the compiled tier](compiled-tier.md).
 The tests are read directly from the [upstream test
 suite](https://github.com/WebAssembly/testsuite). `wasm_wast` turns a `.wast`
 script into a list of commands, and `wasm_spec_runner` runs them. Nothing is
-generated and no other tool is needed. To run the conformance tests, you only
-clone the suite:
+generated and no other tool is needed. To run the conformance tests, fetch
+the suite at the commit this project is tested against:
 
 ```sh
-git clone --depth 1 https://github.com/WebAssembly/testsuite.git
+scripts/fetch-suites.sh
 ```
 
 The checkout is not copied into this repository. When it is missing,

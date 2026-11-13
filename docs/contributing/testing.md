@@ -15,9 +15,10 @@ rebar3 ct --suite=test/wasm_spec_SUITE            # one suite
 rebar3 ct --suite=test/wasi_SUITE --case=parent_traversal_is_refused
 ```
 
-The upstream conformance suites are not vendored. Clone them once beside the
-project; a suite that needs one skips when it is absent, so a run without them
-proves nothing about conformance:
+The upstream conformance suites are not vendored. Fetch them once beside the
+project, at the commits `scripts/fetch-suites.sh` names; to move to newer
+ones, change the commits there. A suite that needs one skips when it is
+absent, so a run without them proves nothing about conformance:
 
 ```sh
 make suites

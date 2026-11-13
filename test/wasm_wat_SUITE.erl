@@ -305,8 +305,7 @@ without_customs(M) -> setelement(tuple_size(M), M, []).
 %% `WASM_TESTSUITE` says.
 parses_the_specification_corpus(Config) ->
     case suite_checkout() of
-        false -> {skip, "no suite checkout: git clone --depth 1 "
-                        "https://github.com/WebAssembly/testsuite.git"};
+        false -> {skip, "no suite checkout: run scripts/fetch-suites.sh"};
         Dir -> corpus(Dir, ?config(priv_dir, Config))
     end.
 

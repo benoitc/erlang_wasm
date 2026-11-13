@@ -138,12 +138,10 @@ jobs:
       # conformance run proves nothing. `wasm_spec_SUITE' asserts a floor of
       # 65,481 executed assertions and an empty skip list, so this is what
       # makes the run mean something.
-      - name: Fetch the specification test suite
-        run: git clone --depth 1 https://github.com/WebAssembly/testsuite.git
-      - name: Fetch the WASI test suite
-        run: |
-          git clone --depth 1 --branch prod/testsuite-base \
-            https://github.com/WebAssembly/wasi-testsuite.git
+      # At the commits `scripts/fetch-suites.sh' names: a moving branch made
+      # the same commit of this project pass on one run and fail the next.
+      - name: Fetch the specification and WASI test suites
+        run: scripts/fetch-suites.sh
       # 1.8 MB of somebody else's program, fetched rather than committed. The
       # suites that read it skip without it, and a skipping suite proves
       # nothing.

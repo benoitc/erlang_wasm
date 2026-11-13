@@ -47,9 +47,7 @@ baseline() ->
 init_per_suite(Config) ->
     case wasi_testsuite_runner:dirs() of
         [] ->
-            {skip, "no wasi-testsuite checkout: git clone --depth 1 --branch "
-                   "prod/testsuite-base "
-                   "https://github.com/WebAssembly/wasi-testsuite.git"};
+            {skip, "no wasi-testsuite checkout: run scripts/fetch-suites.sh"};
         _ ->
             case wasi2_testsuite_runner:have_tools() of
                 false ->

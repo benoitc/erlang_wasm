@@ -140,6 +140,10 @@ phys(Res) ->
     {_, _, _, _, #{phys := Phys}} = row(Res),
     Phys.
 
+txn(Res) ->
+    {_, _, _, _, #{txn := Txn}} = row(Res),
+    Txn.
+
 %% A memory over a bare image, without a snapshot, as only a test build makes.
 paged(Bin, Max) ->
     {ok, M} = wasm_memory:create(#limits{min = byte_size(Bin) div ?PAGE,
@@ -374,6 +378,10 @@ published_chunks_finish_a_growth_whose_grower_died(_Config) ->
     exit(P, kill),
     application:unset_env(wasm, keeper_hook),
     restarted(Old),
+    %% Recovery finishes the growth at the keeper's start if the grower is
+    %% already dead, or at its `DOWN' if the restart came first; which one
+    %% depends on how the kill races the restart. Read only once it has.
+    wait_until(fun() -> txn(Res) =:= none end),
     {_, {memory, CRef, PagesRef, _, _, _}, L, _, #{txn := Txn}} = row(Res),
     Published = wasm_engine:cell_get(CRef),
     ?assertEqual({17, 17, none}, {L, atomics:get(PagesRef, 1), Txn}),

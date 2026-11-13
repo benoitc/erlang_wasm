@@ -34,6 +34,7 @@ all() ->
      a_poll_reports_only_the_clocks_that_are_due,
      a_clock_never_fires_before_its_time,
      beside_a_quiet_socket_only_the_due_clock_fires,
+     a_timer_longer_than_one_wait_still_waits_its_time,
      poll_reports_a_hangup,
      poll_does_not_consume_what_it_found,
      poll_on_a_file_reports_ready,
@@ -407,6 +408,33 @@ beside_a_quiet_socket_only_the_due_clock_fires(Config) ->
     ?assertEqual({ok, [1]}, wasm:call(I, ~"count", [])),
     ?assertEqual([{22, ?ESUCCESS, ?EVENTTYPE_CLOCK, 0, 0}], events(I, 1)),
     ok = gen_tcp:close(Peer).
+
+%% A single wait lasts at most a minute, and the poll used to return after one,
+%% so a two-minute timer fired after one. With the wait lowered to 20 ms for
+%% the test, a 150 ms timer must still wait its 150 ms, alone and beside a
+%% quiet socket.
+a_timer_longer_than_one_wait_still_waits_its_time(Config) ->
+    ok = application:set_env(wasm, poll_wait_cap_ms, 20),
+    try
+        I = instance(Config, none),
+        N = put_subs(I, [clock_sub(1, 150000000)]),
+        Waited = waited(fun() -> wasm:call(I, ~"poll", [N]) end),
+        ?assert(Waited >= 150, Waited),
+        {J, Peer, Conn} = accepted(Config),
+        M = put_subs(J, [fd_sub(11, ?EVENTTYPE_FD_READ, Conn),
+                         clock_sub(22, 150000000)]),
+        Waited2 = waited(fun() -> wasm:call(J, ~"poll", [M]) end),
+        ?assert(Waited2 >= 150, Waited2),
+        ?assertEqual([{22, ?ESUCCESS, ?EVENTTYPE_CLOCK, 0, 0}], events(J, 1)),
+        ok = gen_tcp:close(Peer)
+    after
+        application:unset_env(wasm, poll_wait_cap_ms)
+    end.
+
+waited(F) ->
+    Before = erlang:monotonic_time(millisecond),
+    {ok, [?ESUCCESS]} = F(),
+    erlang:monotonic_time(millisecond) - Before.
 
 %% A closed peer is ready, not quiet. Without the hangup flag a module cannot
 %% tell "nothing yet" from "nothing ever again", and spins on the difference.

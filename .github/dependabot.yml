@@ -1,0 +1,8 @@
+# The actions CI runs are pinned by commit, so a moved tag cannot change what
+# runs. This keeps the pins current: each update is a pull request to review.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

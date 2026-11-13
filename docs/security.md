@@ -328,6 +328,15 @@ If you need to trust files written by someone who may **not** run code in
 your node, this is not enough. You would need to authenticate the files, and
 this runtime does not do that.
 
+## Snapshot images are trusted the same way
+
+`snapshot_dir` holds saved images of started guests. An image is not code for
+the node, but a restored image is a guest's whole starting state: its memory,
+globals and tables. Its file is checksummed, which detects damage, not a
+writer who puts a well-formed image there. Anyone who can write into
+`snapshot_dir` can choose the state every restored guest starts from. Make it
+writable only by the node's user, as you do `code_cache_dir`.
+
 ## Read this next
 
 [WASI](wasi.md), for the capabilities you grant.

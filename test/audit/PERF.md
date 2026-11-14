@@ -8854,3 +8854,19 @@ interleaved, both orders, each round started at a one-minute load below 8
 Medians. The faster rows are within the run's noise, not a gain.
 
 Scripts and log: `test/audit/raw/stackful-fibers/`.
+
+## An async export found by its declaration (2026-11-14)
+
+An async call now finds its lift and callback in a map the linker built,
+instead of scanning every core's exports by name. Measured against main
+(`ceb141f`), each sample a fresh VM at `+S 10:10`, six rounds interleaved,
+both orders, each round started at a one-minute load below 8 (7.98 at most),
+with the gates fixed in the plan.
+
+| path | main | candidate | ratio | gate | result |
+| --- | --- | --- | --- | --- | --- |
+| `call_async` on asyncval's `read-future`, us | 500.4 | 497.9 | 0.995x | 1.03x | pass |
+| `call_async` on asyncval's `sum-stream` (100 bytes), us | 5170.9 | 5149.9 | 0.996x | 1.03x | pass |
+| 0.3 listener, hello world, requests a second | 1610.9 | 1612.7 | 0.999x in time | 1.03x | pass |
+
+Medians. Scripts and log: `test/audit/raw/async-targets/`.

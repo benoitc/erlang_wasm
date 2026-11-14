@@ -29,7 +29,9 @@ import could neither take nor give one.
          a_sink_on_an_ended_stream_gets_the_end/1,
          dropping_a_host_stream_tells_its_maker/1,
          a_host_stream_open_at_the_end_tells_its_maker/1,
-         a_producer_feeds_a_sink_through_the_guest/1]).
+         a_producer_feeds_a_sink_through_the_guest/1,
+         a_lift_is_found_by_its_declaration/1,
+         a_stackful_lift_is_found_by_its_declaration/1]).
 
 all() ->
     [a_task_resolves_and_keeps_writing,
@@ -45,7 +47,9 @@ all() ->
      a_sink_on_an_ended_stream_gets_the_end,
      dropping_a_host_stream_tells_its_maker,
      a_host_stream_open_at_the_end_tells_its_maker,
-     a_producer_feeds_a_sink_through_the_guest].
+     a_producer_feeds_a_sink_through_the_guest,
+     a_lift_is_found_by_its_declaration,
+     a_stackful_lift_is_found_by_its_declaration].
 
 -define(BODY, {[], {stream, u8}}).
 -define(CHUNKS, [<<"first ">>, <<"second ">>, <<>>, <<"third">>]).
@@ -172,6 +176,18 @@ a_producer_feeds_a_sink_through_the_guest(Config) ->
                  wasm_component:call_async(inst(Config), ~"pipe", {[], u32}, [])),
     ?assertEqual(iolist_to_binary(?CHUNKS), collect(<<>>)),
     receive eof -> ok after 0 -> ct:fail(no_eof) end.
+
+%% `renamed' lifts core function `go' with callback `resume', neither named
+%% after the export: they are what the lift declares, not what a toolchain
+%% would call them. Before, both were looked up by name: `no_async_export'.
+a_lift_is_found_by_its_declaration(Config) ->
+    ?assertEqual({ok, 9},
+                 wasm_component:call_async(inst(Config), ~"renamed", {[], u32}, [])).
+
+a_stackful_lift_is_found_by_its_declaration(Config) ->
+    ?assertEqual({ok, 11},
+                 wasm_component:call_async(inst(Config), ~"renamed-stackful",
+                                           {[], u32}, [])).
 
 %%% ------------------------------------------------------------- helpers ---
 

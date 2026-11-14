@@ -478,9 +478,10 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports} = Decoded, Impo
                            Types -> LinkOpts0#{types => Types}
                        end,
             case wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts) of
-                {ok, #{core := Inst, cores := Cores, export_targets := Targets}} ->
+                {ok, #{core := Inst, cores := Cores, export_targets := Targets,
+                       async_targets := Async}} ->
                     {ok, #{core => Inst, exports => Exports, cores => Cores,
-                           export_targets => Targets}};
+                           export_targets => Targets, async_targets => Async}};
                 {error, _} = E ->
                     E
             end
@@ -618,8 +619,8 @@ bridge(Provider, FuncName, {Params, Result} = Sig) ->
 %% A provider export lifted async is called as one: the consumer lowers its
 %% import async, and the call is a subtask.
 bridge_any(Provider, FuncName, Sig) ->
-    case async_lift_name(Provider, FuncName) of
-        {ok, _} -> bridge_async(Provider, FuncName, Sig);
+    case async_entry(Provider, FuncName) of
+        {ok, _, _, _} -> bridge_async(Provider, FuncName, Sig);
         error -> bridge(Provider, FuncName, Sig)
     end.
 
@@ -1148,10 +1149,8 @@ pump(#{}, Timeout) ->
     wasm_error:capture(fun() -> wasm_async:pump(Timeout) end).
 
 do_call_async(I, Export, {Params, Result}, Args, Opts, Mode) ->
-    case async_lift_name(I, Export) of
-        {ok, LiftName} ->
-            Inst = core_with_export(I, LiftName),
-            Callback = async_callback(I, LiftName),
+    case async_entry(I, Export) of
+        {ok, Inst, LiftName, Callback} ->
             Comp = maps:get(res_id, I, undefined),
             case {wasm_async:backpressure(Inst), wasm_async:fiber_waiting(Comp)} of
                 %% The instance's stackful task waits in the middle of its call:
@@ -1338,6 +1337,24 @@ prepare_async_param({stream, Desc}, Elements) ->
     {handle, wasm_async:new_stream_readable(Desc, Elements)};
 prepare_async_param(Desc, Value) ->
     {Desc, Value}.
+
+%% The core function an async export lifts and the callback that resumes its
+%% task (`none' for a stackful lift): the ones its `canon lift' declares, as
+%% the linker resolved them, else found by the names toolchains give them.
+async_entry(#{composed := true}, _Export) ->
+    error;
+async_entry(I, Export) ->
+    case maps:find(Export, maps:get(async_targets, I, #{})) of
+        {ok, #{lift := {Inst, LiftName}, callback := Cb}} ->
+            {ok, Inst, LiftName, Cb};
+        error ->
+            case async_lift_name(I, Export) of
+                {ok, LiftName} ->
+                    {ok, core_with_export(I, LiftName), LiftName,
+                     async_callback(I, LiftName)};
+                error -> error
+            end
+    end.
 
 %% The `[callback]<lift>` core function that resumes the async task, on whichever core
 %% carries it; `none` when the lift has no callback (the stackful form).

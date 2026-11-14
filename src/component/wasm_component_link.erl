@@ -50,7 +50,7 @@ an atom.
          export_bindings/1, exports_resolve_on_entry/2, validate_lifts/2,
          resource_info/2]).
 
--export_type([graph/0, item/0]).
+-export_type([async_target/0, graph/0, item/0]).
 
 %% One entry of an index space, in the order the sections define it. The
 %% interpreter folds over this list assigning indices per kind.
@@ -82,6 +82,9 @@ an atom.
 -type async_mark() :: sync | {async, non_neg_integer() | none}.
 
 -type graph() :: [item()].
+%% An async export's lift and callback core functions, as `{Instance, Name}'.
+-type async_target() :: #{lift := {wasm:instance(), binary()},
+                          callback := {wasm:instance(), binary()} | none}.
 
 %% A resource built-in an entry core imports, and the type it acts on.
 -type intrinsic() :: {new | drop | rep, non_neg_integer() | undefined}.
@@ -664,7 +667,8 @@ that exports `wasi:cli/run...#run` (a command) or, failing that, the largest cor
 -spec link(graph(), non_neg_integer(),
            fun(([{binary(), binary()}]) -> map()), map()) ->
           {ok, #{core := wasm:instance(), cores := [wasm:instance()],
-                 export_targets := #{binary() => {wasm:instance(), binary()}}}}
+                 export_targets := #{binary() => {wasm:instance(), binary()}},
+                 async_targets := #{binary() => async_target()}}}
           | {error, term()}.
 link(Graph, EntryModIdx, HostResolve, Opts) ->
     S0 = #{mods => list_to_tuple([B || {core_module, B} <- Graph]),
@@ -674,7 +678,7 @@ link(Graph, EntryModIdx, HostResolve, Opts) ->
            core_globals => #{}, n_cg => 0, comp_insts => #{}, n_pi => 0,
            comp_funcs => #{}, n_pf => 0, built => [], entry_mod => EntryModIdx,
            entry_by_mod => undefined, run_inst => undefined,
-           core_func_target => #{},
+           core_func_target => #{}, lift_async => #{},
            %% The resource types this component DEFINES (a `resource.new` names
            %% only a defined type). Liveness is enforced on drop/rep of these; an
            %% imported or host resource (a WASI stream) is not a defined type and
@@ -685,7 +689,8 @@ link(Graph, EntryModIdx, HostResolve, Opts) ->
             Built = lists:reverse(maps:get(built, S)),
             case entry(S) of
                 {ok, Core}     -> {ok, #{core => Core, cores => Built,
-                                         export_targets => export_targets(Graph, S)}};
+                                         export_targets => export_targets(Graph, S),
+                                         async_targets => async_targets(Graph, S)}};
                 {error, _} = E -> destroy_built(S), E
             end;
         {error, Reason, S} ->
@@ -741,6 +746,70 @@ export_targets(Graph, S) ->
           Target <- [maps:get(CFI, Targets, undefined)],
           Target =/= undefined]).
 
+%% Each async export, a function or an exported interface's (`<iface>#<fn>'),
+%% resolved to the core function its lift declares and to the callback that
+%% lift names, or `none' for a stackful lift. An export either one could not
+%% be pinned to a real instance for is omitted: the caller finds it by name.
+async_targets(Graph, S) ->
+    CompFuncs = maps:get(comp_funcs, S),
+    LiftAsync = maps:get(lift_async, S),
+    Targets = maps:get(core_func_target, S),
+    maps:from_list(
+      [{Name, #{lift => Lift, callback => Cb}}
+       || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
+          {lift, CFI} <- [maps:get(Idx, CompFuncs, undefined)],
+          {async, CbIdx} <- [maps:get(Idx, LiftAsync, undefined)],
+          Lift <- [maps:get(CFI, Targets, undefined)],
+          Cb <- [case CbIdx of
+                     none -> none;
+                     _ -> maps:get(CbIdx, Targets, undefined)
+                 end],
+          Lift =/= undefined, Cb =/= undefined]).
+
+%% The component function each export is: a function export under its name,
+%% and each function of an exported inline instance as `<iface>#<fn>'.
+%% Component instances are numbered in section order, as the index space has
+%% them.
+%% An exported instance is an inline one, or, as wit-component writes it, a
+%% nested component instantiated with the lifted functions as arguments, which
+%% it exports again under the interface's names.
+export_funcs(Graph) ->
+    {_, _, _, Funcs} = lists:foldl(fun export_funcs_step/2, {[], 0, #{}, #{}}, Graph),
+    Funcs.
+
+export_funcs_step({component_def, Bytes}, {Comps, N, Insts, Funcs}) ->
+    {Comps ++ [Bytes], N, Insts, Funcs};
+export_funcs_step({comp_inst_exports, Exports}, {Comps, N, Insts, Funcs}) ->
+    {Comps, N + 1, Insts#{N => [{F, Idx} || {F, 1, Idx} <- Exports]}, Funcs};
+export_funcs_step({comp_instantiate, CompIdx, Args}, {Comps, N, Insts, Funcs}) ->
+    Passed = case CompIdx < length(Comps) of
+                 true -> passed_funcs(lists:nth(CompIdx + 1, Comps), Args);
+                 false -> []
+             end,
+    {Comps, N + 1, Insts#{N => Passed}, Funcs};
+export_funcs_step({comp_import_instance, _}, {Comps, N, Insts, Funcs}) ->
+    {Comps, N + 1, Insts, Funcs};
+export_funcs_step({comp_instance_alias, _, _}, {Comps, N, Insts, Funcs}) ->
+    {Comps, N + 1, Insts, Funcs};
+export_funcs_step({comp_export, Name, 1, Idx}, {Comps, N, Insts, Funcs}) ->
+    {Comps, N, Insts, Funcs#{Name => Idx}};
+%% An export introduces a new index in its sort's space.
+export_funcs_step({comp_export, Name, 5, Idx}, {Comps, N, Insts, Funcs}) ->
+    Fs = maps:from_list([{<<Name/binary, "#", F/binary>>, FIdx}
+                         || {F, FIdx} <- maps:get(Idx, Insts, [])]),
+    {Comps, N + 1, Insts, maps:merge(Funcs, Fs)};
+export_funcs_step(_Other, Acc) ->
+    Acc.
+
+%% The functions a nested component exports that are functions it was given:
+%% `[{ExportName, OuterFuncIdx}]'. Anything it cannot read gives nothing.
+passed_funcs(<<_:8/binary, Sec/binary>>, Args) ->
+    [{F, OuterIdx}
+     || {F, ImpName} <- maps:to_list(wasm_component_types:forwarded_funcs(Sec)),
+        {ArgName, 1, OuterIdx} <- Args, ArgName =:= ImpName];
+passed_funcs(_, _Args) ->
+    [].
+
 %% A partial link that failed still built some cores; free them so a mid-graph
 %% error leaks nothing.
 destroy_built(S) ->
@@ -795,9 +864,13 @@ step({comp_import_func, Name}, S) ->
 step({comp_func_alias, InstIdx, Field}, S) ->
     Iface = maps:get(InstIdx, maps:get(comp_insts, S)),
     {ok, bump(S, n_pf, comp_funcs, {host, Iface, Field})};
-step({canon_lift, CoreFuncIdx, Enc, _Async, _Rl, _P, _Ft}, S) ->
+step({canon_lift, CoreFuncIdx, Enc, Async, _Rl, _P, _Ft}, S) ->
     case supported_encoding(Enc) of
-        ok             -> {ok, bump(S, n_pf, comp_funcs, {lift, CoreFuncIdx})};
+        ok ->
+            %% Its async form, `{async, Callback}', says which core function
+            %% resumes the task: the runtime calls that one, whatever its name.
+            LA = maps:put(maps:get(n_pf, S), Async, maps:get(lift_async, S)),
+            {ok, bump(S#{lift_async => LA}, n_pf, comp_funcs, {lift, CoreFuncIdx})};
         {error, _} = E -> E
     end;
 step({canon_lower, CompFuncIdx, ReallocIdx, Enc, Async}, S) ->

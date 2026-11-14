@@ -640,6 +640,11 @@ bridge_async(Provider, FuncName, {Params, Result} = Sig) ->
                     fun() -> start_nested(Provider, FuncName, Sig, Args) end) of
                  {ok, Value} ->
                      {returned, from_provider(Result, Value, Provider, ProviderId)};
+                 {pending_task, Id} ->
+                     {pending_task, Id,
+                      fun(Value) ->
+                              from_provider(Result, Value, Provider, ProviderId)
+                      end};
                  {error, _} = E ->
                      throw({wasm_bridge_failed, FuncName, E})
              end
@@ -1234,8 +1239,13 @@ drive(Mode, Result, Callback, Status, Budget) ->
             case wasm_async:resolved() of
                 {ok, _} ->
                     Res = deliver(Mode, Result, returned()),
-                    ok = wasm_async:suspend_task(Callback, Code, Set, Budget),
+                    _ = wasm_async:suspend_task(Callback, Code, Set, Budget),
                     {pending, Res};
+                %% Called by another component and not resolved: the task
+                %% waits in the frame, and the call is a subtask for it.
+                undefined when Mode =:= nested ->
+                    Id = wasm_async:suspend_task(Callback, Code, Set, Budget),
+                    {pending, {pending_task, Id}};
                 undefined ->
                     turn(Mode, Result, Callback, Code, Set, Budget)
             end;

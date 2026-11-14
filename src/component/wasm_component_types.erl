@@ -16,7 +16,7 @@ flags, option, result), resource handles and the async `future`, `stream` and
 
 -include("wasm_component.hrl").
 
--export([plain_name/1]).
+-export([plain_name/1, label/1]).
 -export([import_interfaces/1, parse_types/1, type_space/1, func_sig/2,
          value_desc/2, resource_dtors/1]).
 
@@ -624,7 +624,8 @@ opt_valtype(<<16#00, R/binary>>) ->
 opt_valtype(<<16#01, R0/binary>>) ->
     valtype(R0).
 
-%% An import/export/instance-export name: a leading kind byte, a u32 length, the bytes.
+-doc "An import, export or instance-export name: a kind byte, a u32 length, the bytes.".
+-spec label(binary()) -> {binary(), binary()}.
 label(<<_Kind, Rest0/binary>>) ->
     {Len, Rest1} = wasm_leb128:u32(Rest0),
     <<Name:Len/binary, Rest2/binary>> = Rest1,

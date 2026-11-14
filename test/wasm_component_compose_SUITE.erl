@@ -22,7 +22,8 @@ all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           a_wac_composed_component_passes_a_resource,
           an_async_interface_signature_is_decoded,
           an_async_call_passes_a_stream_and_a_future,
-          a_component_cannot_copy_a_tuple_to_itself].
+          a_component_cannot_copy_a_tuple_to_itself,
+          a_call_that_waits_is_a_subtask_from_a_callback].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -123,7 +124,8 @@ an_async_interface_signature_is_decoded(_Config) ->
     Consumer = lists:nth(2, nested_components(Sec)),
     <<_:8/binary, CSec/binary>> = Consumer,
     ?assertEqual({ok, #{<<"local:pipe/svc">> =>
-                            #{<<"sum">> => {[{stream, u8}, {future, u32}], u32}}}},
+                            #{<<"sum">> => {[{stream, u8}, {future, u32}], u32},
+                              <<"later">> => {[{future, u32}], u32}}}},
                  wasm_component_types:import_interfaces(CSec)).
 
 %% A call into another component's async export: the consumer writes "abc" to
@@ -149,6 +151,28 @@ a_component_cannot_copy_a_tuple_to_itself(_Config) ->
     try
         ?assertMatch({error, #{class := trap, kind := intra_component_copy}},
                      wasm_component:call_async(Inst, <<"self">>, {[], u32}, []))
+    after
+        wasm_component:destroy(Inst)
+    end.
+
+%% `later' reads a future the caller writes only after the call, so it waits
+%% before it resolves. The call answers STARTED, the caller writes 41 and
+%% waits on the subtask, and gets 42 once `later' resolves. Before, the
+%% callee waited inside the call for a write that could not come yet:
+%% `async_deadlock'. From a callback lift, the wait is between guest calls.
+a_call_that_waits_is_a_subtask_from_a_callback(_Config) ->
+    later(<<"run-later-cb">>).
+
+%% The same from a stackful lift, which waits inside its guest call: the
+%% other component's task runs while it does.
+a_call_that_waits_is_a_subtask_from_a_stackful_task(_Config) ->
+    later(<<"run-later">>).
+
+later(Export) ->
+    {ok, Bin} = file:read_file(fixture_path("composedasync")),
+    {ok, Inst} = wasm_component:instantiate(Bin, #{}, #{loader => compile}),
+    try
+        ?assertEqual({ok, 42}, wasm_component:call_async(Inst, Export, {[], u32}, []))
     after
         wasm_component:destroy(Inst)
     end.

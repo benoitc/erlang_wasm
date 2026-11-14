@@ -8815,3 +8815,21 @@ On main the listener held the whole body before it sent anything; it now sends
 the head when the handler returns it and each piece as the guest writes it.
 
 Scripts and log: `test/audit/raw/wasi3-serving/`.
+
+## A composed async call that waits (2026-11-14)
+
+A waiter now looks for a ready pending task before it blocks, and a pending
+task records its mode and an optional link to a caller's subtask. Measured
+against main (`cefb336`), each sample a fresh VM at `+S 10:10`, six rounds
+interleaved, both orders, each round started at a one-minute load below 8
+(7.45 at most), with the gates fixed in the plan.
+
+| path | main | candidate | ratio | gate | result |
+| --- | --- | --- | --- | --- | --- |
+| `call_async` on asyncval's `read-future`, us | 478.8 | 483.8 | 1.010x | 1.03x | pass |
+| `call_async` on asyncval's `sum-stream` (100 bytes), us | 4798.1 | 4766.9 | 0.994x | 1.03x | pass |
+| 0.3 listener, hello world, requests a second | 1665.0 | 1694.0 | 0.983x in time | 1.03x | pass |
+
+Medians. The faster rows are within the run's noise, not a gain.
+
+Scripts and log: `test/audit/raw/async-subtasks/`.

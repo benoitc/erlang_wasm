@@ -6,6 +6,12 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **A composed component's async call can wait.** When a component called
+  another component's async export and that one waited for something before
+  returning, the caller was held inside the call. If it waited for something
+  the caller did next, the call failed with `async_deadlock`. The call now
+  goes on in the background, as the Component Model specifies, and the caller
+  is told when it returns.
 - **Composed components can call each other's async exports.** A component
   composed with another could only call its synchronous functions, so a WASI
   0.3 HTTP middleware composed with the handler it forwards to did not

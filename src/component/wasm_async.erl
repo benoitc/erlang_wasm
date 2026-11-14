@@ -128,6 +128,9 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% How many calls from one component into another are in progress: each joins
 %% the frame of the call that made it (`nested/1').
 -define(NESTED, {?MODULE, nested}).
+%% Set by `task.return': the running task has resolved (its value may be
+%% `undefined', for a function with no result).
+-define(RESOLVED, {?MODULE, resolved}).
 
 %%% --------------------------------------------------------------- task frame ---
 
@@ -192,13 +195,21 @@ keeps for itself (its instance, context slots and options) is put back after.
 """.
 -spec nested(fun(() -> T)) -> T.
 nested(Fun) ->
-    Keys = [?TASK_INST, ?TASK_COMP, ?TASK_RETURN, ?MODE, ?LIMIT, ?WAIT_HOOK],
+    put(?NESTED, nested() + 1),
+    try with_saved(Fun)
+    after put(?NESTED, nested() - 1)
+    end.
+
+%% Run `Fun', which runs another task, and put back what the running one
+%% keeps for itself: its instance, component, return, options and context
+%% slots.
+with_saved(Fun) ->
+    Keys = [?TASK_INST, ?TASK_COMP, ?TASK_RETURN, ?RESOLVED, ?MODE, ?LIMIT,
+            ?WAIT_HOOK],
     Saved = [{K, get(K)} || K <- Keys],
     Ctx = save_ctx(),
-    put(?NESTED, nested() + 1),
     try Fun()
     after
-        put(?NESTED, nested() - 1),
         restore_ctx(Ctx),
         lists:foreach(fun({K, undefined}) -> erase(K);
                          ({K, V}) -> put(K, V)
@@ -457,6 +468,7 @@ wait in place.
 builtin(task_return, #{result := Result}) ->
     fun(_Ctx, Flats) ->
         put(?TASK_RETURN, task_return_value(Result, Flats)),
+        put(?RESOLVED, true),
         {ok, []}
     end;
 %% The runtime never asks a task to cancel, and the specification traps a
@@ -791,6 +803,11 @@ subtask_cancel(H) ->
             {ok, [State]};
         {#{'end' := subtask, state := awaiting} = S, _} ->
             stop_producer(H),
+            %% A linked task goes with it, unresolved: nothing waits for it.
+            _ = case S of
+                    #{task := Id} -> put(?TASKS, maps:remove(Id, tasks()));
+                    _ -> ok
+                end,
             put(?WAITABLE(H), S#{state => cancelled}),
             {ok, [?SUBTASK_CANCELLED]};
         {#{'end' := subtask}, _} ->
@@ -834,13 +851,29 @@ async_lower({Params, Result}, Fun) ->
     fun(_Ctx, Flats) ->
         Inst = task_instance(),
         {Terms, Rest} = wasm_canon:lift_async_params(Inst, Params, Flats),
-        Value = case Fun(Terms) of
-                    {returned, V} -> V;
-                    V -> V
-                end,
-        write_return_area(Inst, Result, Rest, Value),
-        {ok, [?SUBTASK_RETURNED]}
+        case Fun(Terms) of
+            %% A task of another component that has not resolved: the call
+            %% is a subtask that completes when that task does.
+            {pending_task, Id, Finish} ->
+                link_subtask(Result, Rest, Id, Finish);
+            {returned, V} ->
+                write_return_area(Inst, Result, Rest, V),
+                {ok, [?SUBTASK_RETURNED]};
+            V ->
+                write_return_area(Inst, Result, Rest, V),
+                {ok, [?SUBTASK_RETURNED]}
+        end
     end.
+
+link_subtask(Result, Rest, Id, Finish) ->
+    RetPtr = case Rest of [P | _] -> P; [] -> undefined end,
+    H = next_handle(),
+    put(?WAITABLE(H), #{'end' => subtask, result => Result, ret_ptr => RetPtr,
+                        value => undefined, state => awaiting,
+                        inst => task_instance(), task => Id}),
+    put(?TASKS, maps:update_with(Id, fun(T) -> T#{link => {H, Finish}} end,
+                                 tasks())),
+    {ok, [(H bsl 4) bor ?SUBTASK_STARTED]}.
 
 -spec async_lower({[wasm_canon:desc()], wasm_canon:desc() | none},
                   fun(([term()]) -> term()), fun((map()) -> any())) -> function().
@@ -955,6 +988,13 @@ wait_core(Ready, Mode) ->
 %% Every completion comes from a producer; with none left, nothing can end the
 %% wait, which would otherwise hang the task for ever.
 block_wait(Ready, Ref) ->
+    case run_other() of
+        progress -> again(Ready, Ref);
+        {error, _} = E -> E;
+        none -> block_wait_1(Ready, Ref)
+    end.
+
+block_wait_1(Ready, Ref) ->
     case producers() of
         [] -> {error, async_deadlock};
         _ ->
@@ -965,6 +1005,31 @@ block_wait(Ready, Ref) ->
                 {?DOWN(Ref), _Mon, process, Pid, Reason} ->
                     on_producer_down(Pid, Reason, Ready, Ref)
             end
+    end.
+
+%% A waiter lets the frame's other tasks run: the one it waits for may be one
+%% of them, such as a task of another component its subtask stands for.
+%% Between guest calls any task may run. Inside one (a stackful wait), only
+%% another component's: the waiting instance is never entered again.
+run_other() ->
+    case runnable(maps:to_list(tasks())) of
+        [] -> none;
+        Tasks ->
+            with_saved(fun() ->
+                               case ready_task(Tasks) of
+                                   {Id, Args} -> run_task(Id, Args);
+                                   none -> none
+                               end
+                       end)
+    end.
+
+runnable([]) -> [];
+runnable(Tasks) ->
+    case {running(), comp()} of
+        {0, _} -> Tasks;
+        {_, undefined} -> [];
+        {_, Mine} -> [T || {_, #{comp := C}} = T <- Tasks,
+                           C =/= undefined, C =/= Mine]
     end.
 
 again(Ready, Ref) ->
@@ -1214,15 +1279,17 @@ Keep the running task in the frame after its call returns: it has resolved
 called again (`Code` 1). `pump/1` and the host-end calls give it its turns.
 """.
 -spec suspend_task({wasm:instance(), binary()}, 1 | 2, non_neg_integer(),
-                   non_neg_integer()) -> ok.
+                   non_neg_integer()) -> reference().
 suspend_task(Callback, Code, Set, Budget) ->
     ok = call_over(),
     _ = erase(?TASK_RETURN),
     Status = case Code of 1 -> yield; 2 -> {wait, Set} end,
     Task = #{callback => Callback, status => Status, ctx => save_ctx(),
-             budget => Budget, inst => task_instance(), comp => comp()},
-    put(?TASKS, (tasks())#{make_ref() => Task}),
-    ok.
+             budget => Budget, inst => task_instance(), comp => comp(),
+             mode => get(?MODE)},
+    Id = make_ref(),
+    put(?TASKS, (tasks())#{Id => Task}),
+    Id.
 
 -doc "How many tasks still run in this process's frame.".
 -spec pending() -> [reference()].
@@ -1348,23 +1415,55 @@ run_task(Id, Args) ->
             restore_ctx(Ctx),
             put(?TASK_INST, Inst),
             put_comp(Task#{component => maps:get(comp, Task, undefined)}),
+            put_mode(Task),
+            _ = erase(?RESOLVED),
             Result = guest_call(fun() -> wasm:call(CbInst, CbName, Args) end),
+            Task1 = resolve_link(Task),
             %% A task resolves once; anything it hands back again is dropped.
             _ = erase(?TASK_RETURN),
+            _ = erase(?RESOLVED),
             Saved = save_ctx(),
             case Result of
                 {ok, [Status]} ->
                     Bits = Status band 16#FFFFFFFF,
                     case {Bits band 16#F, Bits bsr 4} of
-                        {0, _} -> put(?TASKS, maps:remove(Id, tasks()));
-                        {1, _} -> next(Id, Task, yield, Saved);
-                        {2, Set} -> next(Id, Task, {wait, Set}, Saved)
-                    end,
-                    progress;
+                        {0, _} -> finished(Id, Task1);
+                        {1, _} -> next(Id, Task1, yield, Saved), progress;
+                        {2, Set} -> next(Id, Task1, {wait, Set}, Saved), progress
+                    end;
                 {ok, _} -> {error, async_bad_result};
                 {error, _} = E -> put(?TASKS, maps:remove(Id, tasks())), E
             end
     end.
+
+put_mode(#{mode := M}) when M =/= undefined -> put(?MODE, M);
+put_mode(_) -> ok.
+
+%% A linked task that has resolved completes the subtask that stands for it
+%% in its caller, with the value the caller gets (`Finish'). It no longer
+%% stands for one: anything it resolves to again is dropped.
+resolve_link(#{link := {H, Finish}} = Task) ->
+    case get(?RESOLVED) of
+        true ->
+            V = Finish(get(?TASK_RETURN)),
+            update(H, fun(#{'end' := subtask, state := awaiting} = S) ->
+                              S#{state => ready, value => V};
+                         (E) -> E
+                      end),
+            maps:remove(link, Task);
+        _ -> Task
+    end;
+resolve_link(Task) ->
+    Task.
+
+%% A linked task that ends without resolving leaves its caller waiting for
+%% ever: the call fails instead.
+finished(Id, #{link := _}) ->
+    put(?TASKS, maps:remove(Id, tasks())),
+    {error, task_never_resolved};
+finished(Id, _Task) ->
+    put(?TASKS, maps:remove(Id, tasks())),
+    progress.
 
 next(Id, #{budget := B} = Task, Status, Ctx) ->
     put(?TASKS, (tasks())#{Id => Task#{status => Status, ctx => Ctx,

@@ -1172,8 +1172,11 @@ comp_inline_exports(Bin) ->
 
 comp_inline_exports(0, Rest, Acc) ->
     {lists:reverse(Acc), Rest};
+%% Each is an export name, which starts with its kind byte like any export
+%% name, then a sort-indexed reference. Read as a plain name, the kind byte
+%% was taken for an empty name and the next export was misread.
 comp_inline_exports(N, Bin, Acc) ->
-    {Name, Rest0} = name(Bin),
+    {Name, Rest0} = wasm_component_types:label(Bin),
     <<Sort, Rest1/binary>> = Rest0,
     {Idx, Rest2} = wasm_leb128:u32(Rest1),
     comp_inline_exports(N - 1, Rest2, [{Name, Sort, Idx} | Acc]).

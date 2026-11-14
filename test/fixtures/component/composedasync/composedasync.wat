@@ -6,7 +6,11 @@
 ;; readers to `sum' through an async lowering, and answers its result: 301
 ;; (97 + 98 + 99 + 7) only if the provider reads the very ends the consumer
 ;; wrote. `self' writes a tuple to a future the consumer itself reads, which a
-;; component may not do with a payload that is not a number.
+;; component may not do with a payload that is not a number. `later' reads a
+;; future the caller writes only after the call, so it waits before it
+;; resolves: the call is a subtask the caller waits on, and `run-later' (a
+;; stackful lift) and `run-later-cb' (a callback lift) answer 42 once it
+;; returns 41 + 1.
 ;; Build: `scripts/build-wat-component-fixtures.sh`.
 (component
   (component $provider
@@ -17,12 +21,31 @@
     (alias core export $libc "memory" (core memory $mem))
     (core func $read8 (canon stream.read $s8 (memory $mem)))
     (core func $fread (canon future.read $f32 (memory $mem)))
+    (core func $freada (canon future.read $f32 async (memory $mem)))
+    (core func $ws_new (canon waitable-set.new))
+    (core func $join (canon waitable.join))
     (core func $ret (canon task.return (result u32)))
     (core module $pm
       (import "" "memory" (memory 1))
       (import "" "read8" (func $read8 (param i32 i32 i32) (result i32)))
       (import "" "fread" (func $fread (param i32 i32) (result i32)))
       (import "" "ret" (func $ret (param i32)))
+      (import "" "freada" (func $freada (param i32 i32) (result i32)))
+      (import "" "ws_new" (func $ws_new (result i32)))
+      (import "" "join" (func $join (param i32 i32)))
+      ;; later(f) -> u32: the value of `f' plus one, waiting for it.
+      (func (export "[async-lift]local:pipe/svc#later") (param $f i32) (result i32)
+        (local $set i32)
+        (if (i32.ne (call $freada (local.get $f) (i32.const 256)) (i32.const -1))
+          (then (call $ret (i32.add (i32.load (i32.const 256)) (i32.const 1)))
+                (return (i32.const 0))))
+        (local.set $set (call $ws_new))
+        (call $join (local.get $f) (local.get $set))
+        (i32.or (i32.const 2) (i32.shl (local.get $set) (i32.const 4))))
+      (func (export "[callback][async-lift]local:pipe/svc#later")
+            (param i32 i32 i32) (result i32)
+        (call $ret (i32.add (i32.load (i32.const 256)) (i32.const 1)))
+        (i32.const 0))
       (func (export "[async-lift]local:pipe/svc#sum") (param $s i32) (param $f i32)
         (local $r i32) (local $n i32) (local $i i32) (local $sum i32)
         (block $done
@@ -42,10 +65,15 @@
         (call $ret (i32.add (local.get $sum) (i32.load (i32.const 128))))))
     (core instance $pmi (instantiate $pm (with "" (instance
       (export "memory" (memory $mem)) (export "read8" (func $read8))
-      (export "fread" (func $fread)) (export "ret" (func $ret))))))
+      (export "fread" (func $fread)) (export "ret" (func $ret))
+      (export "freada" (func $freada)) (export "ws_new" (func $ws_new))
+      (export "join" (func $join))))))
     (func $sum async (param "s" $s8) (param "f" $f32) (result u32)
       (canon lift (core func $pmi "[async-lift]local:pipe/svc#sum") async))
-    (instance $svc (export "sum" (func $sum)))
+    (func $later async (param "f" $f32) (result u32)
+      (canon lift (core func $pmi "[async-lift]local:pipe/svc#later") async
+        (callback (func $pmi "[callback][async-lift]local:pipe/svc#later"))))
+    (instance $svc (export "sum" (func $sum)) (export "later" (func $later)))
     (export "local:pipe/svc" (instance $svc)))
 
   (component $consumer
@@ -58,8 +86,10 @@
     (import "local:pipe/svc" (instance $svc
       (alias outer $consumer $s8 (type $os8))
       (export "sum" (func async (param "s" $os8) (param "f" (future u32))
-                    (result u32)))))
+                    (result u32)))
+      (export "later" (func async (param "f" (future u32)) (result u32)))))
     (alias export $svc "sum" (func $sum))
+    (alias export $svc "later" (func $later))
     (core module $libc (memory (export "memory") 1))
     (core instance $libc (instantiate $libc))
     (alias core export $libc "memory" (core memory $mem))
@@ -73,6 +103,10 @@
     (core func $pread (canon future.read $fpair (memory $mem)))
     (core func $ret (canon task.return (result u32)))
     (core func $sum_l (canon lower (func $sum) async (memory $mem)))
+    (core func $later_l (canon lower (func $later) async (memory $mem)))
+    (core func $ws_new (canon waitable-set.new))
+    (core func $join (canon waitable.join))
+    (core func $wait (canon waitable-set.wait (memory $mem)))
     (core module $cm
       (import "" "memory" (memory 1))
       (import "" "new8" (func $new8 (result i64)))
@@ -85,6 +119,41 @@
       (import "" "pread" (func $pread (param i32 i32) (result i32)))
       (import "" "ret" (func $ret (param i32)))
       (import "" "sum" (func $sum (param i32 i32 i32) (result i32)))
+      (import "" "later" (func $later (param i32 i32) (result i32)))
+      (import "" "ws_new" (func $ws_new (result i32)))
+      (import "" "join" (func $join (param i32 i32)))
+      (import "" "wait" (func $wait (param i32 i32) (result i32)))
+      ;; Calls `later' with a future it writes 41 to after the call, and
+      ;; answers `later''s result. Answers the waitable set to wait on, or 0
+      ;; once the call has returned at once.
+      (func $start_later (result i32)
+        (local $f i64) (local $st i32) (local $set i32)
+        (local.set $f (call $newf))
+        (local.set $st (call $later (i32.wrap_i64 (local.get $f)) (i32.const 300)))
+        (i32.store (i32.const 308) (i32.const 41))
+        (drop (call $fwrite (i32.wrap_i64 (i64.shr_u (local.get $f) (i64.const 32)))
+                            (i32.const 308)))
+        (if (i32.eq (i32.and (local.get $st) (i32.const 15)) (i32.const 2))
+          (then (return (i32.const 0))))
+        (local.set $set (call $ws_new))
+        (call $join (i32.shr_u (local.get $st) (i32.const 4)) (local.get $set))
+        (local.get $set))
+      (func (export "[async-lift]run-later")
+        (local $set i32)
+        (local.set $set (call $start_later))
+        (if (local.get $set)
+          (then (drop (call $wait (local.get $set) (i32.const 320)))))
+        (call $ret (i32.load (i32.const 300))))
+      (func (export "[async-lift]run-later-cb") (result i32)
+        (local $set i32)
+        (local.set $set (call $start_later))
+        (if (i32.eqz (local.get $set))
+          (then (call $ret (i32.load (i32.const 300))) (return (i32.const 0))))
+        (i32.or (i32.const 2) (i32.shl (local.get $set) (i32.const 4))))
+      (func (export "[callback][async-lift]run-later-cb") (param i32 i32 i32)
+            (result i32)
+        (call $ret (i32.load (i32.const 300)))
+        (i32.const 0))
       (func (export "[async-lift]run")
         (local $s i64) (local $f i64)
         (local.set $s (call $new8))
@@ -113,16 +182,27 @@
       (export "newf" (func $newf)) (export "fwrite" (func $fwrite))
       (export "newp" (func $newp)) (export "pwrite" (func $pwrite))
       (export "pread" (func $pread)) (export "ret" (func $ret))
-      (export "sum" (func $sum_l))))))
+      (export "sum" (func $sum_l)) (export "later" (func $later_l))
+      (export "ws_new" (func $ws_new)) (export "join" (func $join))
+      (export "wait" (func $wait))))))
     (func (export "run") async (result u32)
       (canon lift (core func $cmi "[async-lift]run") async))
     (func (export "self") async (result u32)
-      (canon lift (core func $cmi "[async-lift]self") async)))
+      (canon lift (core func $cmi "[async-lift]self") async))
+    (func (export "run-later") async (result u32)
+      (canon lift (core func $cmi "[async-lift]run-later") async))
+    (func (export "run-later-cb") async (result u32)
+      (canon lift (core func $cmi "[async-lift]run-later-cb") async
+        (callback (func $cmi "[callback][async-lift]run-later-cb")))))
 
   (instance $p (instantiate $provider))
   (instance $c (instantiate $consumer
     (with "local:pipe/svc" (instance $p "local:pipe/svc"))))
   (alias export $c "run" (func $run))
   (alias export $c "self" (func $self))
+  (alias export $c "run-later" (func $run_later))
+  (alias export $c "run-later-cb" (func $run_later_cb))
   (export "run" (func $run))
-  (export "self" (func $self)))
+  (export "self" (func $self))
+  (export "run-later" (func $run_later))
+  (export "run-later-cb" (func $run_later_cb)))

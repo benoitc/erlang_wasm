@@ -38,6 +38,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% Tasks that outlive the call that started them, and the host's side of the
 %% streams and futures they use.
 -export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
+         nested/1,
          guest_call/1,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
          on_end/2,
@@ -87,6 +88,9 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 
 -define(TASK_RETURN, {?MODULE, task_return}).
 -define(TASK_INST, {?MODULE, task_instance}).
+%% The component instance the running task belongs to, which owns the stream
+%% and future ends it makes or is given.
+-define(TASK_COMP, {?MODULE, task_component}).
 -define(TASK_REF, {?MODULE, task_ref}).
 -define(WAIT_HOOK, {?MODULE, wait_hook}).
 -define(WAITS, {?MODULE, waits}).
@@ -121,6 +125,9 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -define(TEARING, {?MODULE, tearing}).
 %% The most subtasks waiting at once: each has a producer, a process.
 -define(LIMIT, {?MODULE, resource_limit}).
+%% How many calls from one component into another are in progress: each joins
+%% the frame of the call that made it (`nested/1').
+-define(NESTED, {?MODULE, nested}).
 
 %%% --------------------------------------------------------------- task frame ---
 
@@ -134,13 +141,14 @@ cannot bleed messages into the next.
 """.
 -spec begin_task(wasm:instance(), map()) -> ok.
 begin_task(Inst, Opts) ->
-    case open_with_work() of
+    case open_with_work() orelse joining() of
         true ->
             %% A frame with tasks still running or ends the host holds: this
             %% task joins it, so it shares their handles. Its own context
             %% slots start empty.
             erase_ctx(),
-            put(?TASK_INST, Inst);
+            put(?TASK_INST, Inst),
+            put_comp(Opts);
         false ->
             %% A task started inside another, from a host function the outer
             %% task called, sets the outer frame aside rather than clearing
@@ -149,6 +157,7 @@ begin_task(Inst, Opts) ->
             save_outer(),
             clear_frame(),
             put(?TASK_INST, Inst),
+            put_comp(Opts),
             put(?TASK_REF, make_ref()),
             put(?WAITS, 0),
             put(?PRODUCERS, [])
@@ -163,6 +172,38 @@ begin_task(Inst, Opts) ->
     ok.
 
 active() -> case get(?ACTIVE) of undefined -> 0; N -> N end.
+
+put_comp(#{component := C}) when C =/= undefined -> put(?TASK_COMP, C);
+put_comp(_) -> erase(?TASK_COMP).
+
+comp() -> get(?TASK_COMP).
+
+nested() -> case get(?NESTED) of undefined -> 0; N -> N end.
+
+%% A call one component makes into another joins the frame of the call that
+%% made it, which is still running.
+joining() -> nested() > 0 andalso get(?TASK_REF) =/= undefined.
+
+-doc """
+Run `Fun`, a call from inside a guest call into another component's async
+export, in the running call's frame: the two share their streams, futures and
+tasks, so an end one hands the other is the same end. What the running call
+keeps for itself (its instance, context slots and options) is put back after.
+""".
+-spec nested(fun(() -> T)) -> T.
+nested(Fun) ->
+    Keys = [?TASK_INST, ?TASK_COMP, ?TASK_RETURN, ?MODE, ?LIMIT, ?WAIT_HOOK],
+    Saved = [{K, get(K)} || K <- Keys],
+    Ctx = save_ctx(),
+    put(?NESTED, nested() + 1),
+    try Fun()
+    after
+        put(?NESTED, nested() - 1),
+        restore_ctx(Ctx),
+        lists:foreach(fun({K, undefined}) -> erase(K);
+                         ({K, V}) -> put(K, V)
+                      end, Saved)
+    end.
 
 call_over() -> put(?ACTIVE, max(0, active() - 1)), ok.
 
@@ -185,7 +226,7 @@ open_with_work() ->
 -spec end_task() -> ok.
 end_task() ->
     ok = call_over(),
-    case open_with_work() of
+    case open_with_work() orelse joining() of
         %% Other tasks still run in this frame, or the host holds an end:
         %% only this call's own state goes.
         true -> _ = erase(?TASK_RETURN), erase_ctx(), ok;
@@ -203,6 +244,7 @@ teardown() ->
     Ref = get(?TASK_REF),
     clear_frame(),
     _ = erase(?TASK_INST),
+    _ = erase(?TASK_COMP),
     flush_stale(Ref),
     restore_outer(),
     ok.
@@ -225,6 +267,7 @@ save_outer() ->
         _ ->
             Frame = [{K, V} || {K, V} <- get(),
                                is_frame_key(K) orelse K =:= ?TASK_INST
+                                   orelse K =:= ?TASK_COMP
                                    orelse K =:= ?TASK_RETURN],
             put(?OUTER, [Frame | outer()])
     end.
@@ -557,6 +600,8 @@ task_return_value(Result, Flats) ->
 hand_to_host(H) ->
     case {get(?WAITABLE(H)), get(?MODE)} of
         {#{'end' := read}, start} -> ok = host_reader(H);
+        %% Returned to another component, which reads it as a guest.
+        {_, nested} -> ok;
         {#{'end' := read} = R, _} -> put(?WAITABLE(H), R#{host => true}), refill(H);
         _ -> ok
     end.
@@ -582,7 +627,9 @@ copy(Dir, Kind, Meta, H, Ptr, Count) ->
         _ -> {trap, wrong_end}
     end.
 
-start_copy(read, Kind, H, #{buf := Buf, writer := Writer} = R, Ptr, Count) ->
+start_copy(read, Kind, H, #{buf := Buf, writer := Writer} = R0, Ptr, Count) ->
+    %% Only the instance that holds an end can use it: the caller owns it.
+    R = R0#{owner => comp()},
     case is_empty(Buf) of
         false ->
             put(?WAITABLE(H), R#{state => {copying, Ptr, Count}}),
@@ -599,7 +646,8 @@ start_copy(write, Kind, W, #{reader := RH} = Wr, Ptr, Count) ->
     case get(?WAITABLE(RH)) of
         #{'end' := read} = R when Kind =:= future ->
             Value = load_elems(maps:get(elem, Wr), Ptr, 1, future),
-            put(?WAITABLE(RH), R#{buf => [Value], writer => closed}),
+            put(?WAITABLE(RH), R#{buf => [Value], writer => closed,
+                                  src => comp()}),
             put(?WAITABLE(W), Wr#{state => done}),
             ?COMPLETED;
         #{'end' := read, host := sink, sink := Sink, sink_max := Max} ->
@@ -614,10 +662,12 @@ start_copy(write, Kind, W, #{reader := RH} = Wr, Ptr, Count) ->
         #{'end' := read} = R ->
             case min(Count, room(R)) of
                 0 when Count > 0 ->
-                    put(?WAITABLE(W), Wr#{state => {copying, Ptr, Count}}),
+                    put(?WAITABLE(W), Wr#{state => {copying, Ptr, Count},
+                                          owner => comp()}),
                     blocked;
                 N ->
-                    append(RH, R, load_elems(maps:get(elem, Wr), Ptr, N, stream)),
+                    append(RH, R#{src => comp()},
+                           load_elems(maps:get(elem, Wr), Ptr, N, stream)),
                     result(stream, ?COMPLETED, N)
             end;
         _ ->
@@ -642,7 +692,8 @@ refill(RH) ->
                     case min(Count, room(R)) of
                         0 -> ok;
                         N ->
-                            append(RH, R, load_elems(D, Ptr, N, stream)),
+                            append(RH, R#{src => owner(Wr)},
+                                   load_elems(D, Ptr, N, stream)),
                             put(?WAITABLE(W),
                                 Wr#{state => idle,
                                     pending => result(stream, ?COMPLETED, N)})
@@ -977,9 +1028,9 @@ ingest(H, Info) ->
 
 ingest_state(H, {data, Items}) ->
     update(H, fun(#{'end' := read, kind := stream, buf := Buf, map := Map} = R) ->
-                      R#{buf => cat(Buf, Map(Items))};
+                      (maps:remove(src, R))#{buf => cat(Buf, Map(Items))};
                  (#{'end' := read, kind := stream, buf := Buf} = R) ->
-                      R#{buf => cat(Buf, Items)};
+                      (maps:remove(src, R))#{buf => cat(Buf, Items)};
                  (E) -> E
               end);
 ingest_state(H, close) ->
@@ -1040,6 +1091,7 @@ deliver_read(H, #{kind := Kind, elem := D, buf := Buf, writer := Writer} = R,
              Ptr, Count) ->
     case is_empty(Buf) of
         false ->
+            ok = check_owners(R),
             {Taken, Rest, N} = take(Buf, Count),
             ok = store_elems(D, Ptr, Taken, Kind),
             Next = case Kind of future -> done; stream -> idle end,
@@ -1052,6 +1104,24 @@ deliver_read(H, #{kind := Kind, elem := D, buf := Buf, writer := Writer} = R,
         true ->
             none
     end.
+
+%% A copy between two ends one component instance owns traps unless what it
+%% copies is a number: the specification's temporary same-instance stream and
+%% future restriction (Canonical ABI, `End.copy'). An end is used only by the
+%% instance that holds it, so its owner is the component whose task made the
+%% read (`owner') or the write (`src'); the host owns no end.
+check_owners(#{owner := O, src := O, elem := D}) when O =/= undefined ->
+    case numeric(D) of
+        true -> ok;
+        false -> wasm_error:trap(intra_component_copy, #{})
+    end;
+check_owners(_) ->
+    ok.
+
+numeric(D) ->
+    lists:member(D, [none, u8, u16, u32, u64, s8, s16, s32, s64, f32, f64]).
+
+owner(E) -> maps:get(owner, E, undefined).
 
 read_event(future) -> ?EV_FUTURE_READ;
 read_event(stream) -> ?EV_STREAM_READ.
@@ -1150,7 +1220,7 @@ suspend_task(Callback, Code, Set, Budget) ->
     _ = erase(?TASK_RETURN),
     Status = case Code of 1 -> yield; 2 -> {wait, Set} end,
     Task = #{callback => Callback, status => Status, ctx => save_ctx(),
-             budget => Budget, inst => task_instance()},
+             budget => Budget, inst => task_instance(), comp => comp()},
     put(?TASKS, (tasks())#{make_ref() => Task}),
     ok.
 
@@ -1230,7 +1300,11 @@ step_1(Deadline) ->
 
 ready_task([]) -> none;
 ready_task([{Id, #{status := yield}} | _]) -> {Id, [0, 0, 0]};
-ready_task([{Id, #{status := {wait, Set}}} | Rest]) ->
+%% Delivering an event copies into the waiting task's memory, so its instance
+%% is current first: tasks of two composed components wait in one frame.
+ready_task([{Id, #{status := {wait, Set}} = Task} | Rest]) ->
+    put(?TASK_INST, maps:get(inst, Task)),
+    put_comp(#{component => maps:get(comp, Task, undefined)}),
     case deliver_first(Set) of
         {event, EC, E1, E2} -> {Id, [EC, E1, E2 band 16#FFFFFFFF]};
         none -> ready_task(Rest)
@@ -1273,6 +1347,7 @@ run_task(Id, Args) ->
         _ ->
             restore_ctx(Ctx),
             put(?TASK_INST, Inst),
+            put_comp(Task#{component => maps:get(comp, Task, undefined)}),
             Result = guest_call(fun() -> wasm:call(CbInst, CbName, Args) end),
             %% A task resolves once; anything it hands back again is dropped.
             _ = erase(?TASK_RETURN),
@@ -1479,7 +1554,7 @@ write_loop(W, Items, Deadline) ->
                         {error, _} = E -> E
                     end;
                 {Taken, Rest, _} ->
-                    append(RH, R, Taken),
+                    append(RH, maps:remove(src, R), Taken),
                     case is_empty(Rest) of
                         true -> ok;
                         false -> write_loop(W, Rest, Deadline)

@@ -6,6 +6,16 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **Composed components can call each other's async exports.** A component
+  composed with another could only call its synchronous functions, so a WASI
+  0.3 HTTP middleware composed with the handler it forwards to did not
+  instantiate. Async calls between composed components now work, with the
+  streams and futures they pass shared between them. As the Component Model
+  requires, a component that reads and writes the same stream or future of
+  non-numeric elements now traps.
+- **Fixed: stream and future types were read the wrong way round** in a
+  component's type section, and an async function type or a type an
+  interface takes from the enclosing component was not read at all.
 - **The HTTP listener streams WASI 0.3 responses.** It read a 0.3 handler's
   whole response body before sending anything, so the client waited for the
   end and the host held the whole body, up to `http_max_body_bytes`. The

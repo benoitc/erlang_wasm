@@ -127,6 +127,24 @@ keeps its own memory.
 ok = wasm_component:destroy(Inst).
 ```
 
+An inner component can call another's `async func` export, such as a
+`wasi:http` middleware that imports `wasi:http/handler` and forwards each
+request to the handler composed with it. The two pass streams and futures to
+each other: the ends are shared, not copied, so what one writes the other
+reads. Call the composed component's async exports with `call_async/4` or
+`start_async/4`, as for any component.
+
+Notes:
+
+- The called component runs until it returns its result, then the call
+  completes. What it does after that, such as writing a response body, runs
+  with the caller's other tasks. If it waits for something before it returns,
+  the caller waits inside the call.
+- A component may not read and write the same stream or future when its
+  elements are not numbers, as the specification requires for now. Doing so
+  traps with `intra_component_copy`. A middleware that hands its own future
+  back to itself through the handler it calls does this.
+
 ## Resources
 
 A component may give you a *resource*: a handle to state that the component

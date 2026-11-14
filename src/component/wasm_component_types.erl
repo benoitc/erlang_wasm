@@ -52,10 +52,28 @@ with a single `FuncName` equal to the import name.
 import_interfaces(Sec) ->
     wasm_error:capture(
       fun() ->
-          Types = types_table(collect(?SEC_TYPE, Sec)),
-          Imports = collect(?SEC_COMP_IMPORT, Sec),
-          {ok, resolve_imports(Imports, Types)}
+          %% Types and imports can each come in several sections, a type an
+          %% import names in a later one: every section counts its own
+          %% entries, and the type space numbers them all in order.
+          Types = type_space(Sec),
+          {ok, lists:foldl(fun(Imports, Acc) ->
+                                   maps:merge(Acc, resolve_imports(Imports, Types))
+                           end, #{}, sections(?SEC_COMP_IMPORT, Sec))}
       end).
+
+%% The content of every section with id `Id', each on its own.
+sections(Id, Sec) ->
+    sections(Id, Sec, []).
+
+sections(_Id, <<>>, Acc) ->
+    lists:reverse(Acc);
+sections(Id, <<SecId, Rest0/binary>>, Acc) ->
+    {Size, Rest1} = wasm_leb128:u32(Rest0),
+    <<Content:Size/binary, Rest2/binary>> = Rest1,
+    case SecId of
+        Id -> sections(Id, Rest2, [Content | Acc]);
+        _  -> sections(Id, Rest2, Acc)
+    end.
 
 -doc "Decode the first type section in `Sec` into a map of type index to `typedef()`.".
 -spec parse_types(binary()) -> #{non_neg_integer() => typedef()}.
@@ -95,7 +113,7 @@ type_section(?SEC_TYPE, Content, Idx, Acc) ->
     {Count, Rest} = wasm_leb128:u32(Content),
     each(Count, Rest, {Idx, Acc},
          fun(Bin, {I, A}) ->
-             {Def, R} = deftype(Bin),
+             {Def, R} = deftype(Bin, A),
              {R, {I + 1, A#{I => Def}}}
          end);
 type_section(?SEC_ALIAS, Content, Idx, Acc) ->
@@ -262,28 +280,37 @@ types_table(N, Bin, Idx, Acc) ->
 %% A `deftype`: `0x40` functype, `0x42` instancetype, or a value type (a primitive byte
 %% or an aggregate). Component/resource type forms are consumed only enough to model them
 %% as `other` where composition does not need their shape.
-deftype(<<16#40, Rest0/binary>>) ->
+deftype(Bin) ->
+    deftype(Bin, #{}).
+
+%% `Outer' is the enclosing component's type space so far, which an instance
+%% type's `alias outer' declarations name.
+%% An async function type (`0x43') has the same parameters and result: whether
+%% a call suspends is the lowering's to say, not the signature's.
+deftype(<<Tag, Rest0/binary>>, _Outer) when Tag =:= 16#40; Tag =:= 16#43 ->
     {Params, Rest1} = func_params(Rest0),
     {Result, Rest2} = func_result(Rest1),
     {{func, Params, Result}, Rest2};
-deftype(<<16#42, Rest0/binary>>) ->
-    {Decls, Rest1} = instance_decls(Rest0),
+deftype(<<16#42, Rest0/binary>>, Outer) ->
+    {Decls, Rest1} = instance_decls(Rest0, Outer),
     {{instance, Decls}, Rest1};
+deftype(Bin, _Outer) ->
+    deftype_1(Bin).
 %% A component type: the same declarations as an instance type, plus imports.
 %% Only its extent matters here (a component type is not a value or function
 %% type).
-deftype(<<16#41, Rest0/binary>>) ->
+deftype_1(<<16#41, Rest0/binary>>) ->
     {_Decls, Rest1} = instance_decls(Rest0),
     {other, Rest1};
 %% A resource type: `0x3f`, a one-byte core rep valtype, then `0x00` (no
 %% destructor) or `0x01` and the destructor's core-func index. The index lets the
 %% runtime run the destructor when an owned handle of this type is dropped.
-deftype(<<16#3f, _Rep, 16#00, Rest/binary>>) ->
+deftype_1(<<16#3f, _Rep, 16#00, Rest/binary>>) ->
     {{resource, none}, Rest};
-deftype(<<16#3f, _Rep, 16#01, Rest0/binary>>) ->
+deftype_1(<<16#3f, _Rep, 16#01, Rest0/binary>>) ->
     {Dtor, Rest1} = wasm_leb128:u32(Rest0),
     {{resource, Dtor}, Rest1};
-deftype(Bin) ->
+deftype_1(Bin) ->
     {Desc, Rest} = valtype(Bin),
     {{value, Desc}, Rest}.
 
@@ -354,15 +381,31 @@ skip_results(N, Bin) ->
 %% (0x04, a name and an externdesc), or a form consumed and ignored. A local type index
 %% space accrues so an export's `func <idx>` resolves against the types declared here.
 instance_decls(Bin) ->
-    {Count, Rest} = wasm_leb128:u32(Bin),
-    instance_decls(Count, Rest, 0, #{}, []).
+    instance_decls(Bin, #{}).
 
-instance_decls(0, Rest, _Idx, _Local, Exports) ->
+instance_decls(Bin, Outer) ->
+    {Count, Rest} = wasm_leb128:u32(Bin),
+    instance_decls(Count, Rest, 0, #{}, [], Outer).
+
+instance_decls(0, Rest, _Idx, _Local, Exports, _Outer) ->
     {lists:reverse(Exports), Rest};
-instance_decls(N, <<16#01, Rest0/binary>>, Idx, Local, Exports) ->
+instance_decls(N, <<16#01, Rest0/binary>>, Idx, Local, Exports, Outer) ->
     {Def, Rest1} = deftype(Rest0),
-    instance_decls(N - 1, Rest1, Idx + 1, Local#{Idx => Def}, Exports);
-instance_decls(N, <<16#04, Rest0/binary>>, Idx, Local, Exports) ->
+    instance_decls(N - 1, Rest1, Idx + 1, Local#{Idx => Def}, Exports, Outer);
+%% `alias outer 1 I' of a type: the enclosing component's type I, which an
+%% interface uses for a type it takes from another (`error-code' from
+%% `wasi:http/types'). Resolved in the enclosing space, so its own references
+%% do not read as this instance's.
+instance_decls(N, <<16#02, 16#03, 16#02, Rest0/binary>>, Idx, Local, Exports, Outer) ->
+    {Ct, Rest1} = wasm_leb128:u32(Rest0),
+    {OuterIdx, Rest2} = wasm_leb128:u32(Rest1),
+    Def = case {Ct, maps:get(OuterIdx, Outer, other)} of
+              {1, {value, D}} -> {value, resolve(D, Outer)};
+              {1, Other} -> Other;
+              _ -> other
+          end,
+    instance_decls(N - 1, Rest2, Idx + 1, Local#{Idx => Def}, Exports, Outer);
+instance_decls(N, <<16#04, Rest0/binary>>, Idx, Local, Exports, Outer) ->
     {_Name0, Rest1} = label(Rest0),
     {Extern, Rest2} = externdesc(Rest1),
     case Extern of
@@ -371,7 +414,8 @@ instance_decls(N, <<16#04, Rest0/binary>>, Idx, Local, Exports) ->
             %% space and its parameter/result types reference other local types, so
             %% resolve it against `Local`; a func export does not add a type index.
             Sig = resolve_func(TypeIdx, Local),
-            instance_decls(N - 1, Rest2, Idx, Local, [{_Name0, Sig} | Exports]);
+            instance_decls(N - 1, Rest2, Idx, Local, [{_Name0, Sig} | Exports],
+                           Outer);
         {type, Bound} ->
             %% A type export introduces a type into the instance's type index space,
             %% so later `own`/`borrow` and function types line up. An `eq` export
@@ -388,24 +432,24 @@ instance_decls(N, <<16#04, Rest0/binary>>, Idx, Local, Exports) ->
                          _ -> []
                      end,
             instance_decls(N - 1, Rest2, Idx + 1, Local#{Idx => Def},
-                           Export ++ Exports);
+                           Export ++ Exports, Outer);
         _ ->
-            instance_decls(N - 1, Rest2, Idx, Local, Exports)
+            instance_decls(N - 1, Rest2, Idx, Local, Exports, Outer)
     end;
 %% An alias declaration (`alias outer` to a type of the enclosing component, as
 %% the toolchain emits for a type one interface takes from another) takes a type
 %% index when its sort is a type, so the declarations after it stay aligned.
-instance_decls(N, <<16#02, Rest0/binary>>, Idx, Local, Exports) ->
+instance_decls(N, <<16#02, Rest0/binary>>, Idx, Local, Exports, Outer) ->
     {Sort, Rest1} = alias_decl(Rest0),
     {Idx1, Local1} = other_if_type(Sort, {Idx, Local}),
-    instance_decls(N - 1, Rest1, Idx1, Local1, Exports);
+    instance_decls(N - 1, Rest1, Idx1, Local1, Exports, Outer);
 %% An import declaration, which only a component type holds.
-instance_decls(N, <<16#03, Rest0/binary>>, Idx, Local, Exports) ->
+instance_decls(N, <<16#03, Rest0/binary>>, Idx, Local, Exports, Outer) ->
     {_Name, Rest1} = label(Rest0),
     {Extern, Rest2} = externdesc(Rest1),
     {Idx1, Local1} = other_if_type(extern_sort(Extern), {Idx, Local}),
-    instance_decls(N - 1, Rest2, Idx1, Local1, Exports);
-instance_decls(_N, <<Tag, _/binary>>, _Idx, _Local, _Exports) ->
+    instance_decls(N - 1, Rest2, Idx1, Local1, Exports, Outer);
+instance_decls(_N, <<Tag, _/binary>>, _Idx, _Local, _Exports, _Outer) ->
     %% A core type declaration: not decoded, so the walk stops here rather than
     %% misread what follows (every caller is tolerant).
     error({unsupported_instance_decl, Tag}).
@@ -514,10 +558,10 @@ valtype(<<16#68, R0/binary>>) ->
 %% ABI.
 valtype(<<16#66, R0/binary>>) ->
     {Elem, R1} = opt_valtype(R0),
-    {{future, Elem}, R1};
+    {{stream, Elem}, R1};
 valtype(<<16#65, R0/binary>>) ->
     {Elem, R1} = opt_valtype(R0),
-    {{stream, Elem}, R1};
+    {{future, Elem}, R1};
 valtype(<<16#64, R/binary>>) ->
     {error_context, R};
 valtype(Bin) ->

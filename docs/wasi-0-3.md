@@ -62,7 +62,7 @@ chunk of a chunked body.
 | `wasi:random` | the same functions as 0.2 |
 | `wasi:filesystem` | the same mounts as 0.2: reads, writes, appends and directory listings through streams, every other call async |
 | `wasi:sockets` | TCP and UDP under the same `network` grant as 0.2: a connection's data through `send` and `receive` streams, `listen` as a stream of accepted sockets, async `connect` and UDP `send` and `receive`, async name lookup |
-| `wasi:http` | `fields`, `request`, `request-options` and `response`; `client.send` through the same transport and grant as 0.2; a `wasi:http/handler` export served by `run_serve/3` and the listener. Not yet: middleware (a handler that imports another) |
+| `wasi:http` | `fields`, `request`, `request-options` and `response`; `client.send` through the same transport and grant as 0.2; a `wasi:http/handler` export served by `run_serve/3` and the listener, alone or composed with a middleware that imports `wasi:http/handler` |
 
 ## Notes
 

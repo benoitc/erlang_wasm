@@ -546,6 +546,14 @@ compose_step({comp_export, Name, 1, Idx}, #{funcs := Funcs, dispatch := D} = S) 
         {ok, Target} -> S#{dispatch => D#{Name => Target}};
         error        -> S
     end;
+%% An instance export (sort 5) re-exports a nested component's interface: its
+%% functions, named `<interface>#<func>', dispatch to that component's own.
+compose_step({comp_export, Name, 5, Idx}, #{insts := Insts, dispatch := D} = S) ->
+    case maps:find(Idx, Insts) of
+        {ok, {iface_ref, SrcInst, ProvExport}} ->
+            S#{dispatch => D#{{iface, Name} => {SrcInst, ProvExport}}};
+        _ -> S
+    end;
 compose_step(_Other, S) ->
     S.
 
@@ -573,7 +581,10 @@ bridge_imports(Args, Bytes, Insts) ->
                         %% The provider exposes an interface function under the
                         %% interface-qualified core export name `<interface>#<func>`.
                         Target = <<ProvExport/binary, "#", FuncName/binary>>,
-                        A#{{ArgName, FuncName} => bridge(Provider, Target, Sig)}
+                        %% Keyed as the host map is, so a versioned
+                        %% interface finds it as a host import would.
+                        A#{{host_key(ArgName), FuncName} =>
+                               bridge_any(Provider, Target, Sig)}
                     end, Acc, Funcs);
               _ ->
                   Acc
@@ -603,6 +614,47 @@ bridge(Provider, FuncName, {Params, Result} = Sig) ->
                            throw({wasm_bridge_failed, FuncName, E})
                    end
                end).
+
+%% A provider export lifted async is called as one: the consumer lowers its
+%% import async, and the call is a subtask.
+bridge_any(Provider, FuncName, Sig) ->
+    case async_lift_name(Provider, FuncName) of
+        {ok, _} -> bridge_async(Provider, FuncName, Sig);
+        error -> bridge(Provider, FuncName, Sig)
+    end.
+
+%% One cross-component async call. The provider's task starts in the caller's
+%% frame (`wasm_async:nested/1'), so the streams and futures the two pass each
+%% other are the same ends, and runs until it resolves: a handler returns its
+%% response, then writes the body as a task of the frame, which the caller's
+%% reads run. The call completes with what it resolved to. A provider that
+%% waits before it resolves waits inside the caller's call.
+bridge_async(Provider, FuncName, {Params, Result} = Sig) ->
+    ProviderId = maps:get(res_id, Provider, undefined),
+    {async_import, Sig,
+     fun(Terms) ->
+             Args = [as_end(P, A)
+                     || {P, A} <- lists:zip(Params,
+                                            to_provider(Params, Terms, ProviderId))],
+             case wasm_async:nested(
+                    fun() -> start_nested(Provider, FuncName, Sig, Args) end) of
+                 {ok, Value} ->
+                     {returned, from_provider(Result, Value, Provider, ProviderId)};
+                 {error, _} = E ->
+                     throw({wasm_bridge_failed, FuncName, E})
+             end
+     end}.
+
+%% A stream or future the caller passes is its end, handed over as it is.
+as_end({Kind, _}, H) when Kind =:= stream; Kind =:= future -> {'end', H};
+as_end(_Desc, Term) -> Term.
+
+start_nested(#{composed := true} = I, Export, Sig, Args) ->
+    composed(I, Export,
+             fun(Sub, SubExport) -> start_nested(Sub, SubExport, Sig, Args) end);
+start_nested(I, Export, Sig, Args) ->
+    wasm_error:capture(
+      fun() -> do_call_async(I, Export, Sig, Args, #{mode => nested}, nested) end).
 
 %% A consumer handle that stands for one of this provider's resources becomes
 %% the provider's handle; an own leaves the consumer's table as it goes.
@@ -777,21 +829,8 @@ lifted.
 -spec call(instance(), binary(),
            {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()]) ->
           {ok, term()} | {error, term()}.
-call(#{composed := true, dispatch := Dispatch, insts := Insts}, Export, Sig, Args) ->
-    %% A composed component has no core of its own: an export is provided by one of the
-    %% instantiated nested components, so dispatch the call to that sub-instance's export.
-    case maps:find(Export, Dispatch) of
-        {ok, {InstIdx, SubExport}} ->
-            %% The export must resolve to an instantiated sub-component. An export backed
-            %% only by an imported interface (a re-export) or an unresolved index is a
-            %% value, not a crash; full import-re-export wiring is a composition follow-up.
-            case maps:get(InstIdx, Insts, undefined) of
-                {instance, Sub} -> call(Sub, SubExport, Sig, Args);
-                _               -> {error, {unresolved_export, Export}}
-            end;
-        error ->
-            {error, {unknown_export, Export}}
-    end;
+call(#{composed := true} = I, Export, Sig, Args) ->
+    composed(I, Export, fun(Sub, SubExport) -> call(Sub, SubExport, Sig, Args) end);
 call(#{} = I, Export, {Params, Result}, Args) ->
     %% Lifting the result and lowering the arguments cross the Canonical ABI, where
     %% malformed guest output (a bad char, invalid UTF-8, an out-of-range discriminant)
@@ -804,6 +843,37 @@ call(#{} = I, Export, {Params, Result}, Args) ->
           wasm_canon:with_string_encoding(
             Enc, fun() -> do_call(I, Export, {Params, Result}, Args) end)
       end).
+
+%% A composed component has no core of its own: an export is provided by one of
+%% the instantiated nested components, so the call goes to that sub-instance's
+%% export, found by its name or, for a function of a re-exported interface, by
+%% the interface. An export backed only by an imported interface, or an
+%% unresolved index, is a value, not a crash.
+composed(#{dispatch := Dispatch, insts := Insts}, Export, Fun) ->
+    Target = case maps:find(Export, Dispatch) of
+                 {ok, T} -> {ok, T};
+                 error -> iface_target(Export, Dispatch)
+             end,
+    case Target of
+        {ok, {InstIdx, SubExport}} ->
+            case maps:get(InstIdx, Insts, undefined) of
+                {instance, Sub} -> Fun(Sub, SubExport);
+                _               -> {error, {unresolved_export, Export}}
+            end;
+        error ->
+            {error, {unknown_export, Export}}
+    end.
+
+iface_target(Export, Dispatch) ->
+    case binary:split(Export, <<"#">>) of
+        [Iface, Fn] ->
+            case maps:find({iface, Iface}, Dispatch) of
+                {ok, {InstIdx, ProvExport}} ->
+                    {ok, {InstIdx, <<ProvExport/binary, "#", Fn/binary>>}};
+                error -> error
+            end;
+        _ -> error
+    end.
 
 do_call(I, Export, Sig, Args) ->
     %% Run with this component instance's resource handle table current, so the
@@ -1017,6 +1087,9 @@ call_async(I, Export, Sig, Args) ->
 -spec call_async(instance(), binary(),
                  {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()], map()) ->
           {ok, term()} | {error, term()}.
+call_async(#{composed := true} = I, Export, Sig, Args, Opts) ->
+    composed(I, Export,
+             fun(Sub, SubExport) -> call_async(Sub, SubExport, Sig, Args, Opts) end);
 call_async(#{} = I, Export, {Params, Result}, Args, Opts) ->
     %% Same boundary as `call/4`: the async lift/lower is captured so a malformed
     %% value returns `{error, _}` rather than raising (see `call/4`).
@@ -1045,6 +1118,9 @@ start_async(I, Export, Sig, Args) ->
 -spec start_async(instance(), binary(),
                   {[wasm_canon:desc()], wasm_canon:desc() | none}, [term()], map()) ->
           {ok, term()} | {error, term()}.
+start_async(#{composed := true} = I, Export, Sig, Args, Opts) ->
+    composed(I, Export,
+             fun(Sub, SubExport) -> start_async(Sub, SubExport, Sig, Args, Opts) end);
 start_async(#{} = I, Export, Sig, Args, Opts) ->
     wasm_error:capture(
       fun() -> do_call_async(I, Export, Sig, Args, Opts#{mode => start}, start) end).
@@ -1067,7 +1143,8 @@ do_call_async(I, Export, {Params, Result}, Args, Opts, Mode) ->
             Callback = async_callback(I, LiftName),
             case wasm_async:backpressure(Inst) of
                 0 -> run_async(Inst, LiftName, Callback, {Params, Result}, Args,
-                               Opts, Mode);
+                               Opts#{component => maps:get(res_id, I, undefined)},
+                               Mode);
                 %% Only a task of this instance can lower it, and a task runs in
                 %% its caller's process: waiting here would wait for ever.
                 _ -> {error, async_backpressure}
@@ -1106,7 +1183,7 @@ run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts, Mode) ->
         {pending, Value} -> Value;
         %% A started call's result may hold what the host reads next (a
         %% response's body); the frame stays until `pump/2' or `destroy/1'.
-        {done, Value} when Mode =:= start -> ok = wasm_async:leave_call(), Value;
+        {done, Value} when Mode =/= finish -> ok = wasm_async:leave_call(), Value;
         {done, Value}    -> wasm_async:end_task(), Value;
         {error, _} = Failed -> wasm_async:end_task(), Failed
     end.
@@ -1124,7 +1201,9 @@ deliver(start, Result, {ok, H} = Res) when element(1, Result) =:= stream;
                                            element(1, Result) =:= future ->
     ok = wasm_async:host_reader(H),
     Res;
-deliver(start, _Result, Res) -> Res.
+deliver(start, _Result, Res) -> Res;
+%% A call from another component: what it returns is the caller's.
+deliver(nested, _Result, Res) -> Res.
 
 %% When the result is itself a `future<T>`/`stream<T>` the guest produced and returned,
 %% `task.return` handed back its readable handle; read the value the guest wrote before
@@ -1151,10 +1230,10 @@ drive(Mode, Result, Callback, Status, Budget) ->
     case {Bits band 16#F, Bits bsr 4} of
         {0, _} ->
             {done, deliver(Mode, Result, returned())};
-        {Code, Set} when Mode =:= start, Code =:= 1 orelse Code =:= 2 ->
+        {Code, Set} when Mode =/= finish, Code =:= 1 orelse Code =:= 2 ->
             case wasm_async:resolved() of
                 {ok, _} ->
-                    Res = deliver(start, Result, returned()),
+                    Res = deliver(Mode, Result, returned()),
                     ok = wasm_async:suspend_task(Callback, Code, Set, Budget),
                     {pending, Res};
                 undefined ->
@@ -1189,6 +1268,9 @@ resume(Mode, Result, {CbInst, CbName}, Args, Budget) ->
 prepare_async_params(Params, Args) ->
     lists:unzip([prepare_async_param(P, A) || {P, A} <- lists:zip(Params, Args)]).
 
+%% An end that already exists, passed from one component to another.
+prepare_async_param({Kind, _}, {'end', H}) when Kind =:= future; Kind =:= stream ->
+    {handle, H};
 prepare_async_param({future, Desc}, {producer, PFun}) ->
     H = wasm_async:new_future_channel(Desc),
     ok = wasm_async:register_producer(H, PFun),

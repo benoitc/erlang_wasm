@@ -6,6 +6,13 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **A stackful async component can wait for its caller.** A component whose
+  async export has no callback runs its whole call on one stack. Called from
+  another component, it waited on the caller's stack, so it could never see
+  what the caller did next and the call failed with `async_deadlock`. It now
+  gets a process of its own for that call. A second call into it while it
+  waits starts once the first returns, instead of running on the same
+  memory.
 - **A composed component's async call can wait.** When a component called
   another component's async export and that one waited for something before
   returning, the caller was held inside the call. If it waited for something

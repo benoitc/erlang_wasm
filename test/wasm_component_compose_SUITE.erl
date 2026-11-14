@@ -27,7 +27,9 @@ all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           a_call_that_waits_is_a_subtask_from_a_stackful_task,
           a_stackful_callee_that_waits_releases_its_caller,
           a_stackful_callee_that_waits_releases_a_callback_caller,
-          a_call_into_a_waiting_fiber_starts_when_it_returns].
+          a_call_into_a_waiting_fiber_starts_when_it_returns,
+          destroy_leaves_no_fiber_behind,
+          a_trap_after_the_wait_fails_the_call].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -190,6 +192,31 @@ a_stackful_callee_that_waits_releases_a_callback_caller(_Config) ->
 %% value: 42 and 43.
 a_call_into_a_waiting_fiber_starts_when_it_returns(_Config) ->
     ?assertEqual(85, element(2, later_value(<<"run-twice">>))).
+
+%% `leave-waiting' returns with its call to `later-sync' still waiting for a
+%% future nobody writes: its fiber lives in the frame until `destroy/1', which
+%% takes it down rather than leave it waiting for ever.
+destroy_leaves_no_fiber_behind(_Config) ->
+    {ok, Bin} = file:read_file(fixture_path("composedasync")),
+    {ok, Inst} = wasm_component:instantiate(Bin, tick(), #{loader => compile}),
+    ?assertEqual({ok, 7},
+                 wasm_component:call_async(Inst, <<"leave-waiting">>, {[], u32}, [])),
+    ?assertEqual(1, length(fibers())),
+    ok = wasm_component:destroy(Inst),
+    ?assertEqual([], fibers()).
+
+%% `later-trap' traps once its wait is over, in its fiber: the caller's call
+%% fails with that trap.
+a_trap_after_the_wait_fails_the_call(_Config) ->
+    {error, E} = later_value(<<"run-later-trap">>),
+    ?assertNotEqual(nomatch, string:find(io_lib:format("~p", [E]), "unreachable")).
+
+%% The live processes running a fiber of this process.
+fibers() ->
+    Me = self(),
+    [P || P <- processes(),
+          {dictionary, D} <- [erlang:process_info(P, dictionary)],
+          {{wasm_async, fiber}, {Owner, _}} <- D, Owner =:= Me].
 
 later_value(Export) ->
     {ok, Bin} = file:read_file(fixture_path("composedasync")),

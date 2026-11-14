@@ -1692,6 +1692,11 @@ run_fiber(Id, #{fiber := #{pid := Pid, ref := Ref, finish := Finish} = F} = Task
         {waiting, F1} ->
             put(?TASKS, (tasks())#{Id => Task1#{fiber => F1, ctx => save_ctx()}}),
             progress;
+        %% The fiber's call ended in a trap or another error: so does the
+        %% task, with it.
+        {done, {error, _} = E} ->
+            put(?TASKS, maps:remove(Id, tasks())),
+            E;
         {done, _} ->
             case finished(Id, Task1) of
                 progress -> start_deferred(maps:get(comp, Task1, undefined));

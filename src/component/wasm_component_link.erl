@@ -192,8 +192,9 @@ Map each component func export name to the core function that implements it.
 Resolves the export section (name -> component-func index) through the graph
 (component-func index -> `canon lift` of a core-func index -> the core alias'
 export name), so an export renamed from its core function is callable by its
-component name. An export that does not resolve to a lifted core function (an
-instance export, an imported function) is omitted, and the caller falls back to the
+component name. A function an exported interface holds is keyed
+`<interface>#<function>`. An export that does not resolve to a lifted core
+function (an imported function) is omitted, and the caller falls back to the
 name it was given.
 """.
 -spec export_map(binary()) -> #{binary() => binary()}.
@@ -206,7 +207,7 @@ export_map(Sec) ->
                 {CompFuncs, CoreNames} = index_spaces(Graph),
                 maps:from_list(
                   [{Name, CoreName}
-                   || {comp_export, Name, 1, Idx} <- Graph,
+                   || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
                       {lift, CFI} <- [maps:get(Idx, CompFuncs, undefined)],
                       CoreName <- [maps:get(CFI, CoreNames, undefined)],
                       is_binary(CoreName)]);
@@ -234,12 +235,12 @@ exports_resolve_on_entry(Sec, EntryModIdx) ->
             {ok, Graph} ->
                 {CompFuncs, AliasInst} = alias_spaces(Graph),
                 InstMods = inst_modules(Graph),
+                %% Every exported function, an interface's included: one
+                %% lifted from another core needs that core built.
                 lists:all(
-                  fun({comp_export, _Name, 1, Idx}) ->
-                          export_on_entry(Idx, CompFuncs, AliasInst, InstMods, EntryModIdx);
-                     (_Other) ->
-                          true
-                  end, Graph);
+                  fun(Idx) ->
+                          export_on_entry(Idx, CompFuncs, AliasInst, InstMods, EntryModIdx)
+                  end, maps:values(export_funcs(Graph)));
             {error, _} ->
                 true
         end
@@ -398,7 +399,7 @@ export_encodings(Sec) ->
                 Encs = comp_func_encodings(Graph),
                 maps:from_list(
                   [{Name, Enc}
-                   || {comp_export, Name, 1, Idx} <- Graph,
+                   || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
                       Enc <- [maps:get(Idx, Encs, utf8)],
                       Enc =/= utf8]);
             {error, _} ->
@@ -437,7 +438,7 @@ export_bindings(Sec) ->
                 Lifts = lift_bindings(Graph),
                 maps:from_list(
                   [{Name, binding_of(maps:get(Idx, Lifts), CoreNames)}
-                   || {comp_export, Name, 1, Idx} <- Graph,
+                   || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
                       maps:is_key(Idx, Lifts),
                       binding_of(maps:get(Idx, Lifts), CoreNames) =/=
                           #{realloc => none, post_return => none}]);
@@ -517,7 +518,7 @@ lift_sigs(Graph, Types) ->
                  {ok, Sig} <- [wasm_component_types:func_sig(
                                  maps:get(PF, Fts), Types)]],
     ByExport = [{Name, Sig}
-                || {comp_export, Name, 1, Idx} <- Graph,
+                || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
                    maps:is_key(Idx, Fts),
                    {ok, Sig} <- [wasm_component_types:func_sig(
                                    maps:get(Idx, Fts), Types)]],
@@ -741,7 +742,7 @@ export_targets(Graph, S) ->
     Targets = maps:get(core_func_target, S),
     maps:from_list(
       [{Name, Target}
-       || {comp_export, Name, 1, Idx} <- Graph,
+       || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
           {lift, CFI} <- [maps:get(Idx, CompFuncs, undefined)],
           Target <- [maps:get(CFI, Targets, undefined)],
           Target =/= undefined]).

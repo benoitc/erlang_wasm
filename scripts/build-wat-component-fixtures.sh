@@ -8,7 +8,8 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 dir="$here/test/fixtures/component"
 for src in asyncabi/asyncabi wasi3keys/wasi3keys wasi3keys/asyncping \
-           asynctasks/asynctasks composedasync/composedasync; do
+           asynctasks/asynctasks composedasync/composedasync \
+           ifaceexports/ifaceexports; do
   out="$dir/$(basename "$src").component.wasm"
   wasm-tools parse "$dir/$src.wat" -o "$out"
   wasm-tools validate --features all "$out"

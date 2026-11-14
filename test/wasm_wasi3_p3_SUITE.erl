@@ -174,17 +174,20 @@ serve_echo_trailers_host_to_host(_) ->
                  echo([{~"foo", ~"bar"}, {~"x-host-to-host", ~"true"}])).
 
 %% Through the listener: the client sends the body chunked with a trailer
-%% section, and reads the trailers after the echoed body.
+%% section, and reads the trailers after the echoed body. It asked to close,
+%% and the response ending with trailers still closes the connection.
 listener_echo_trailers_h1(_) ->
     with_listener(h1, "p3_http_echo", fun(Port) ->
         {ok, S} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}]),
         Len = integer_to_binary(byte_size(?ECHO_BODY), 16),
         ok = gen_tcp:send(S, [<<"POST / HTTP/1.1\r\nhost: localhost\r\n"
                                 "foo: bar\r\ntransfer-encoding: chunked\r\n"
-                                "\r\n">>,
+                                "connection: close\r\n\r\n">>,
                               Len, ~"\r\n", ?ECHO_BODY, ~"\r\n",
                               ~"0\r\nfizz: buzz\r\n\r\n"]),
         {Head, Body, Trailers} = recv_chunked(S, <<>>),
+        %% The response that ends with trailers is the last one asked for.
+        ?assertEqual({error, closed}, gen_tcp:recv(S, 0, 5000)),
         ok = gen_tcp:close(S),
         ?assertMatch(<<"HTTP/1.1 200", _/binary>>, Head),
         ?assertNotEqual(nomatch, binary:match(string:lowercase(Head), ~"foo: bar")),

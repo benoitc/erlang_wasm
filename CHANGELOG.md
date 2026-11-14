@@ -17,6 +17,9 @@ plain Erlang.
   the listener over HTTP/1.1 and HTTP/2. `wasi_preview3:run_serve/3,4`
   answer `{ok, Status, Headers, Body, Trailers}` for such a response; one
   without trailers still answers the 4-tuple.
+- **Now uses h1 0.11.0 and h2 0.17.0.** With h1 0.10.0, a response ending with
+  trailers kept the connection open when the client had asked to close it,
+  and left one entry behind per request on a kept-alive connection.
 - **You can refuse file access without the native file backend.** When the
   optional file NIF does not build or load, WASI file access falls back to
   pure Erlang, which checks a path and opens it in two steps, so a symlink

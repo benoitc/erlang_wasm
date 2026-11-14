@@ -6,6 +6,11 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **Fixed: an async export is called as the component declares it.** The
+  runtime found an async export's core function and its callback by the names
+  toolchains give them, not by what the component's lift declares. A
+  component that named them otherwise could not be called, and one whose
+  callback had another name ran down the wrong path.
 - **A stackful async component can wait for its caller.** A component whose
   async export has no callback runs its whole call on one stack. Called from
   another component, it waited on the caller's stack, so it could never see

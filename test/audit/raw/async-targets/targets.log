@@ -1,0 +1,30 @@
+round 1 load 6.88
+main async 500.367 5276.012
+main listen03 1654.6
+cand async 496.713 5431.357
+cand listen03 1530.0
+round 2 load 7.86
+cand async 497.413 5309.624
+cand listen03 1642.0
+main async 495.498 6109.864
+main listen03 1268.9
+round 3 load 7.41
+main async 502.634 5181.912
+main listen03 1680.8
+cand async 491.942 5090.976
+cand listen03 1597.2
+round 4 load 7.63
+cand async 509.683 5089.707
+cand listen03 1628.1
+main async 500.337 5138.946
+main listen03 1619.5
+round 5 load 7.60
+main async 502.115 5159.882
+main listen03 1595.1
+cand async 516.446 5208.875
+cand listen03 1574.1
+round 6 load 7.98
+cand async 498.468 5052.118
+cand listen03 1670.6
+main async 493.249 5071.630
+main listen03 1602.2

@@ -11,7 +11,7 @@ collector process takes the body as the guest writes it, so the exchange runs
 outside the guest's process while the guest keeps writing.
 """.
 
--export([http/1, incoming_request/1, take_response/2]).
+-export([http/1, incoming_request/1, take_response/2, stream_response/2]).
 
 -define(TYPES, ~"wasi:http/types@0.3").
 -define(CLIENT, ~"wasi:http/client@0.3").
@@ -378,7 +378,9 @@ timeouts({some, O}) ->
 declared_length(#{headers := Headers}) ->
     case [V || {K, V} <- Headers, same(K, ~"content-length")] of
         [V | _] ->
-            try binary_to_integer(V) of N when N >= 0 -> N
+            try binary_to_integer(V) of
+                N when N >= 0 -> N;
+                _ -> none
             catch _:_ -> none
             end;
         [] -> none
@@ -530,6 +532,60 @@ take_response(R, MaxBody) ->
             end;
         _ -> {error, not_a_response}
     end.
+
+-doc false.
+%% The response a handler returned, handed to `Emit' as the guest makes it:
+%% `{head, Status, Headers}' first, then `{chunk, Bin}' for each write, which
+%% returns once the chunk is sent on, so one chunk at a time is held here, then
+%% `{done, Trailers}'. Nothing bounds the whole body, since it is never held;
+%% a body that goes past the content-length it declares, or ends short of it,
+%% ends with `HTTP-response-body-size'. Answers `streamed', or the error that
+%% ended it, before or after the head.
+-spec stream_response(non_neg_integer(), fun((tuple()) -> ok)) ->
+          streamed | {error, term()}.
+stream_response(R, Emit) ->
+    case message(R) of
+        {p3_http_response, #{status := Status, headers := Headers, body := Body,
+                             trailers := Trailers, sent := Sent} = M} ->
+            ok = Emit({head, Status, Headers}),
+            case stream_body(Body, declared_length(M), Emit) of
+                ok ->
+                    case read_trailers(Trailers) of
+                        {ok, Ts} ->
+                            _ = Sent =/= undefined andalso
+                                wasm_async:host_future_resolve(Sent, {ok, undefined}),
+                            ok = Emit({done, Ts}),
+                            streamed;
+                        {error, _} = E -> E
+                    end;
+                {error, _} = E -> E
+            end;
+        _ -> {error, not_a_response}
+    end.
+
+stream_body(none, Declared, _Emit) -> body_done(0, Declared);
+stream_body({some, S}, Declared, Emit) ->
+    ok = wasm_async:host_reader(S),
+    stream_chunks(S, 0, Declared, Emit).
+
+stream_chunks(S, N, Declared, Emit) ->
+    case wasm_async:host_read(S, 65536, 60000) of
+        {ok, B} when Declared =/= none, N + byte_size(B) > Declared ->
+            {error, response_size(N + byte_size(B))};
+        {ok, <<>>} -> stream_chunks(S, N, Declared, Emit);
+        {ok, B} ->
+            ok = Emit({chunk, B}),
+            stream_chunks(S, N + byte_size(B), Declared, Emit);
+        eof -> body_done(N, Declared);
+        {error, _} = E -> E
+    end.
+
+body_done(N, Declared) when Declared =/= none, N < Declared ->
+    {error, response_size(N)};
+body_done(_N, _Declared) ->
+    ok.
+
+response_size(N) -> {~"HTTP-response-body-size", {some, N}}.
 
 %% The response's trailers, once the guest resolves their future: a future it
 %% dropped unresolved is no trailers, an error ends the response with it.

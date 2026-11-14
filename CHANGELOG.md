@@ -6,6 +6,13 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **The HTTP listener streams WASI 0.3 responses.** It read a 0.3 handler's
+  whole response body before sending anything, so the client waited for the
+  end and the host held the whole body, up to `http_max_body_bytes`. The
+  status and headers now go out as soon as the handler returns them, and the
+  body as the guest writes it. A client that reads slowly makes the guest
+  wait. Without a `content-length` from the guest, an HTTP/1.1 client now
+  gets the body chunked where it got a `content-length`.
 - **The HTTP listener serves HTTP/2 requests.** With `transport => h2`, every
   request waited for a body that never arrived and was answered 408 once
   `request_timeout` passed. HTTP/2 requests are now served, and the guest no

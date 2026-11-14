@@ -30,6 +30,8 @@ also puts the 0.3 programs in `test/fixtures/wasmtime-p3` (not vendored).
          serve_post_return/1, serve_drops_forbidden_headers/1, serve_proxy/1,
          serve_echo_trailers/1, serve_echo_trailers_host_to_host/1,
          listener_echo_trailers_h1/1, listener_echo_trailers_h2/1,
+         listener_streams_past_the_ceiling_h1/1,
+         listener_streams_past_the_ceiling_h2/1,
          p3_cases/1]).
 
 all() ->
@@ -39,7 +41,9 @@ all() ->
      a_response_body_past_the_ceiling_fails,
      serve_post_return, serve_drops_forbidden_headers, serve_proxy,
      serve_echo_trailers, serve_echo_trailers_host_to_host,
-     listener_echo_trailers_h1, listener_echo_trailers_h2, p3_cases].
+     listener_echo_trailers_h1, listener_echo_trailers_h2,
+     listener_streams_past_the_ceiling_h1, listener_streams_past_the_ceiling_h2,
+     p3_cases].
 
 %% Programs still failing, by group, and why. Each step of the WASI 0.3 work
 %% lowers its group to 0.
@@ -212,6 +216,31 @@ listener_echo_trailers_h2(_) ->
         ?assertEqual([{~"fizz", ~"buzz"}], Trailers)
     end).
 
+%% The listener streams a 0.3 response as the guest writes it, so the host
+%% never holds it whole and `http_max_body_bytes' does not bound it: the echo
+%% handler answers with a 200 KiB body past a 1 KiB ceiling. `run_serve/3',
+%% which answers one value, still holds it and refuses it.
+listener_streams_past_the_ceiling_h1(_) ->
+    with_listener(h1, "p3_http_echo", #{http_max_body_bytes => 1024},
+                  fun(Port) ->
+        Req = #{host => ~"127.0.0.1", port => Port, method => ~"POST",
+                path => ~"/", headers => [], body => big_body()},
+        {ok, 200, _, Body} = wasi_http_h1:request(Req, 30000),
+        ?assertEqual(big_body(), Body)
+    end).
+
+listener_streams_past_the_ceiling_h2(_) ->
+    with_listener(h2, "p3_http_echo", #{http_max_body_bytes => 1024},
+                  fun(Port) ->
+        Req = #{host => ~"127.0.0.1", port => Port, method => ~"POST",
+                path => ~"/", headers => [], body => big_body()},
+        {ok, 200, _, Body} = wasi_http_h2:request(Req, 30000),
+        ?assertEqual(big_body(), Body)
+    end).
+
+big_body() ->
+    << <<(I rem 251)>> || I <- lists:seq(1, 204800) >>.
+
 echo(Headers) ->
     {ok, Bin} = file:read_file(serve_path("p3_http_echo")),
     Req = #{method => ~"GET", path => ~"/", scheme => ~"http",
@@ -220,9 +249,12 @@ echo(Headers) ->
     bounded(fun() -> wasi_preview3:run_serve(Bin, Req, #{compile => true}) end).
 
 with_listener(Transport, Name, Fun) ->
+    with_listener(Transport, Name, #{}, Fun).
+
+with_listener(Transport, Name, ServeOpts, Fun) ->
     {ok, Bin} = file:read_file(serve_path(Name)),
     {ok, L} = wasi_http_listener:start(#{component => Bin, transport => Transport,
-                                         serve_opts => #{compile => true}}),
+                                         serve_opts => ServeOpts#{compile => true}}),
     [_, Port] = binary:split(wasi_http_listener:address(L), ~":"),
     try Fun(binary_to_integer(Port)) after wasi_http_listener:stop(L) end.
 

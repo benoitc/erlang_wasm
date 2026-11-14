@@ -73,8 +73,10 @@ chunk of a chunked body.
   stream, so a large file is held in memory while the guest reads it.
 - Mount files with `preopen`, `writable` and `preopens`, as for 0.2.
 - Every HTTP body the host holds is limited by `http_max_body_bytes`, 8 MiB
-  by default: a request body the guest sends, and a handler's response body,
-  which fails with `HTTP-response-body-size` past it.
+  by default: a request body the guest sends, and a handler's response body
+  read by `run_serve/3,4`, which fails with `HTTP-response-body-size` past it.
+  The listener streams a handler's response instead of holding it, so the
+  limit does not apply there.
 - A request body must match its `content-length`: a write that would go past
   it is refused, and one that ends short fails with `HTTP-request-body-size`.
 - A handler's response body is read whole before the answer is sent. What

@@ -215,9 +215,20 @@ Notes on how it behaves:
   run for either.
 - A guest still running at `request_timeout` is stopped, and the request is
   answered 504.
-- The response gets a `content-length` unless the guest set one or a
-  `transfer-encoding`. A 0.3 response with trailers has none over HTTP/1.1:
-  its body is sent chunked, with the trailers after the last chunk.
+- A 0.2 response is sent once the guest has written all of it, and gets a
+  `content-length` unless the guest set one.
+- A 0.3 response is sent as the guest writes it: the status and headers as
+  soon as the handler returns them, then each piece of the body as the guest
+  writes it, then the trailers. The listener holds one piece at a time, so
+  `http_max_body_bytes` does not limit it, and a client that reads slowly
+  makes the guest wait. Without a `content-length` from the guest, HTTP/1.1
+  sends the body chunked. A body that does not match the `content-length` the
+  guest set, a guest that fails once the headers are out, and a response
+  still unfinished at `request_timeout` all reset the stream (HTTP/2) or
+  close the connection (HTTP/1.1), so the client does not take what it got
+  for the whole response.
+- Over HTTP/1.1, trailers need a chunked body: a 0.3 response that set a
+  `content-length` is sent without its trailers.
 - `address/1` returns the address the listener listens on, `127.0.0.1:Port`
   unless you passed `ip`.
 

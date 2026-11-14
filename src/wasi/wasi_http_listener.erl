@@ -147,12 +147,12 @@ serve_request(Transport, Conn, Id, Method, Path, Config) ->
                         authority => authority(Headers),
                         headers => fields(Headers), body => Body,
                         trailers => fields(Trailers)},
-            case run(Component, Request, ServeOpts, Imports, Deadline) of
+            Out = {Transport, Conn, Id},
+            case run(Component, Request, ServeOpts, Imports, Deadline, Out) of
+                streamed ->
+                    ok;
                 {ok, Status, RespHeaders, RespBody} ->
                     answer(Transport, Conn, Id, Status, RespHeaders, RespBody);
-                {ok, Status, RespHeaders, RespBody, RespTrailers} ->
-                    answer(Transport, Conn, Id, Status, RespHeaders, RespBody,
-                           RespTrailers);
                 timeout ->
                     answer(Transport, Conn, Id, 504, [],
                            <<"wasi:http reactor timed out">>);
@@ -171,47 +171,108 @@ serve_request(Transport, Conn, Id, Method, Path, Config) ->
 %% The guest runs in a child bound to this process, which holds the deadline:
 %% a guest that never returns is stopped at it, and a request process killed
 %% by the wire library takes the guest with it.
-run(Component, Request, ServeOpts, Imports, Deadline) ->
+%%
+%% A 0.3 response is streamed: the child sends its head, then each chunk the
+%% guest writes, then its end, and this process writes them out. The child
+%% waits for each chunk to be written before it reads the next, so one chunk
+%% at a time is in flight and a slow client slows the guest. Once the head is
+%% out, a failure can no longer be answered with a status: the stream is
+%% reset instead. Answers `streamed' once a streamed response has ended,
+%% whichever way, or the whole result of a 0.2 handler.
+run(Component, Request, ServeOpts, Imports, Deadline, Out) ->
     Parent = self(),
+    Emit = fun(Event) ->
+                   Parent ! {stream, self(), Event},
+                   case Event of
+                       {chunk, _} -> receive {written, Parent} -> ok end;
+                       _ -> ok
+                   end
+           end,
     {Pid, Mon} = spawn_monitor(
                    fun() ->
                            ok = wasm_lifetime:bind(Parent),
                            Parent ! {served, self(),
-                                     try wasi_preview3:run_serve(
-                                           Component, Request, ServeOpts, Imports)
+                                     try wasi_preview3:run_serve_stream(
+                                           Component, Request, ServeOpts, Imports,
+                                           Emit)
                                      catch _:Reason -> {error, Reason}
                                      end}
                    end),
-    Left = max(0, Deadline - erlang:monotonic_time(millisecond)),
+    wait(Pid, Mon, Deadline, Out, none).
+
+%% `Head' is `none' until the head is written, then the framing it set.
+wait(Pid, Mon, Deadline, {Transport, Conn, Id} = Out, Head) ->
     receive
+        {stream, Pid, {head, Status, Headers}} ->
+            _ = Transport:send_response(Conn, Id, Status, Headers),
+            wait(Pid, Mon, Deadline, Out, framing(Transport, Headers));
+        {stream, Pid, {chunk, Bin}} ->
+            case send_chunk(Transport, Conn, Id, Bin, Deadline) of
+                ok ->
+                    Pid ! {written, self()},
+                    wait(Pid, Mon, Deadline, Out, Head);
+                {error, _} ->
+                    exit(Pid, kill),
+                    erlang:demonitor(Mon, [flush]),
+                    served(gone, Out, Head)
+            end;
+        {stream, Pid, {done, Trailers}} ->
+            _ = finish(Out, Head, Trailers),
+            wait(Pid, Mon, Deadline, Out, done);
         {served, Pid, Result} ->
             erlang:demonitor(Mon, [flush]),
-            Result;
+            served(Result, Out, Head);
         {'DOWN', Mon, process, Pid, Reason} ->
-            {error, Reason}
-    after Left ->
+            served({error, Reason}, Out, Head)
+    after left(Deadline) ->
         exit(Pid, kill),
         erlang:demonitor(Mon, [flush]),
-        timeout
+        served(timeout, Out, Head)
     end.
+
+%% A chunk waits for the client to take it: h2 holds data the client's window
+%% has no room for up to a cap, and past it refuses more unless asked to wait.
+%% A client that takes nothing before the deadline, or has gone, ends the
+%% response.
+send_chunk(h2, Conn, Id, Bin, Deadline) ->
+    catch_send(fun() -> h2:send_data(Conn, Id, Bin, false, #{block => left(Deadline)}) end);
+send_chunk(Transport, Conn, Id, Bin, _Deadline) ->
+    catch_send(fun() -> Transport:send_data(Conn, Id, Bin, false) end).
+
+catch_send(Send) ->
+    try Send() of
+        ok -> ok;
+        {error, _} = E -> E
+    catch exit:Reason -> {error, Reason}
+    end.
+
+served(Result, _Out, none) -> Result;
+served(_Result, _Out, done) -> streamed;
+%% The head is out but the response did not end: the client must not take
+%% what it got for the whole response.
+served(_Result, {Transport, Conn, Id}, _Framing) ->
+    _ = Transport:cancel(Conn, Id),
+    streamed.
+
+%% h1 can send trailers only after a chunked body: a response that declared
+%% its length is sent with that length, and its trailers are dropped.
+framing(h1, Headers) ->
+    case content_length(Headers) of
+        undefined -> chunked;
+        _ -> length
+    end;
+framing(_, _Headers) -> frames.
+
+finish({Transport, Conn, Id}, Framing, Trailers) when Trailers =:= [];
+                                                     Framing =:= length ->
+    Transport:send_data(Conn, Id, <<>>, true);
+finish({Transport, Conn, Id}, _Framing, Trailers) ->
+    Transport:send_trailers(Conn, Id, Trailers).
 
 answer(Transport, Conn, Id, Status, Headers, Body) ->
     Hdrs = ensure_length(Headers, byte_size(Body)),
     _ = Transport:send_response(Conn, Id, Status, Hdrs),
     _ = Transport:send_data(Conn, Id, Body, true),
-    ok.
-
-%% Trailers end the response: h2 sends them as a last HEADERS frame, h1 after
-%% the last chunk, so h1 frames the body chunked, without a content-length.
-answer(Transport, Conn, Id, Status, Headers, Body, Trailers) ->
-    Hdrs = case Transport of
-               h1 -> [{N, V} || {N, V} <- Headers,
-                                string:lowercase(N) =/= <<"content-length">>];
-               _ -> Headers
-           end,
-    _ = Transport:send_response(Conn, Id, Status, Hdrs),
-    _ = Transport:send_data(Conn, Id, Body, false),
-    _ = Transport:send_trailers(Conn, Id, Trailers),
     ok.
 
 %% Read the request body to its end, chunked or not: both libraries end every

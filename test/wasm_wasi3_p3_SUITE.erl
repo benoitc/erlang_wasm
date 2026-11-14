@@ -12,8 +12,13 @@ interface group, how many still fail, as `wasm_wasi2_p2_SUITE` does for 0.2: a
 fix lowers a count, a regression that raises one fails, and a count lower than
 the baseline fails until the baseline is lowered with it.
 
+The handlers are served as wasmtime's own tests serve them: the echo test
+with its header and trailer, the two middleware programs composed with the
+echo handler, and the frame tests through the listener over HTTP/2.
+
 Skipped without the built fixtures: run `scripts/build-wasmtime-p2.sh`, which
-also puts the 0.3 programs in `test/fixtures/wasmtime-p3` (not vendored).
+also puts the 0.3 programs in `test/fixtures/wasmtime-p3` and composes the
+middleware ones (not vendored).
 """.
 
 -include_lib("common_test/include/ct.hrl").
@@ -32,6 +37,10 @@ also puts the 0.3 programs in `test/fixtures/wasmtime-p3` (not vendored).
          listener_echo_trailers_h1/1, listener_echo_trailers_h2/1,
          listener_streams_past_the_ceiling_h1/1,
          listener_streams_past_the_ceiling_h2/1,
+         middleware/1, middleware_host_to_host/1,
+         middleware_with_chain/1, middleware_with_chain_host_to_host/1,
+         empty_frame_at_end_of_stream/1, data_frame_at_end_of_stream/1,
+         empty_frames_interleaved/1, chunks_over_h1/1,
          p3_cases/1]).
 
 all() ->
@@ -43,6 +52,10 @@ all() ->
      serve_echo_trailers, serve_echo_trailers_host_to_host,
      listener_echo_trailers_h1, listener_echo_trailers_h2,
      listener_streams_past_the_ceiling_h1, listener_streams_past_the_ceiling_h2,
+     middleware, middleware_host_to_host,
+     middleware_with_chain, middleware_with_chain_host_to_host,
+     empty_frame_at_end_of_stream, data_frame_at_end_of_stream,
+     empty_frames_interleaved, chunks_over_h1,
      p3_cases].
 
 %% Programs still failing, by group, and why. Each step of the WASI 0.3 work
@@ -238,6 +251,91 @@ listener_streams_past_the_ceiling_h2(_) ->
         ?assertEqual(big_body(), Body)
     end).
 
+%% wasmtime's middleware tests: the middleware, composed with the echo handler
+%% it imports as `wasi:http/handler', inflates a deflated request body, the
+%% echo answers it, and the middleware deflates the answer because the client
+%% accepts deflate. The header and the trailer come back as for the echo
+%% alone, and no content-length, since the body's length changed.
+middleware(_) ->
+    check_middleware(middleware("p3_http_middleware_composed", [])).
+
+%% With `x-host-to-host' the echo answers with the request's own trailers
+%% future, which the middleware made: the middleware then reads a future it
+%% also writes, which a component may not do with a resource in it. wasmtime
+%% fails this test the same way.
+middleware_host_to_host(_) ->
+    ?assertMatch({error, #{kind := intra_component_copy}},
+                 middleware("p3_http_middleware_composed", [{~"x-host-to-host", ~"true"}])).
+
+%% The chain middleware waits 10 ms, then forwards the request as it came to
+%% the echo through its own `chain-http' import: the body stays deflated.
+middleware_with_chain(_) ->
+    check_middleware(middleware("p3_http_middleware_with_chain_composed", [])).
+
+middleware_with_chain_host_to_host(_) ->
+    check_middleware(middleware("p3_http_middleware_with_chain_composed",
+                                [{~"x-host-to-host", ~"true"}])).
+
+check_middleware(Result) ->
+    ?assertMatch({ok, 200, _, _, [{~"fizz", ~"buzz"}]}, Result),
+    {ok, 200, Headers, Body, _} = Result,
+    ?assertEqual(~"bar", proplists:get_value(~"foo", Headers)),
+    ?assertEqual(~"deflate", proplists:get_value(~"content-encoding", Headers)),
+    ?assertEqual(undefined, proplists:get_value(~"content-length", Headers)),
+    ?assertEqual(?ECHO_BODY, zlib:unzip(Body)).
+
+middleware(Name, Extra) ->
+    {ok, Bin} = file:read_file(serve_path(Name)),
+    Req = #{method => ~"GET", path => ~"/", scheme => ~"http",
+            authority => ~"localhost",
+            headers => [{~"foo", ~"bar"}, {~"content-encoding", ~"deflate"},
+                        {~"accept-encoding", ~"nonexistent-encoding, deflate"}
+                        | Extra],
+            body => zlib:zip(?ECHO_BODY), trailers => [{~"fizz", ~"buzz"}]},
+    bounded(fun() -> wasi_preview3:run_serve(Bin, Req, #{compile => true}) end).
+
+%% wasmtime's frame tests, through the listener over HTTP/2, whose DATA frames
+%% can be empty: the echo handler answers with the body the frames carry.
+empty_frame_at_end_of_stream(_) ->
+    ?assertEqual(~"test", h2_echo([{~"test", false}, {<<>>, true}])).
+
+data_frame_at_end_of_stream(_) ->
+    ?assertEqual(~"hello world",
+                 h2_echo([{~"hello ", false}, {~"world", true}])).
+
+empty_frames_interleaved(_) ->
+    ?assertEqual(~"hello world",
+                 h2_echo([{<<>>, false}, {<<>>, false}, {~"hello ", false},
+                          {<<>>, false}, {<<>>, false}, {~"world", false},
+                          {<<>>, true}])).
+
+%% HTTP/1.1 has no empty chunk but the last; the body in several chunks.
+chunks_over_h1(_) ->
+    with_listener(h1, "p3_http_echo", fun(Port) ->
+        {ok, S} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}]),
+        ok = gen_tcp:send(S, [<<"POST / HTTP/1.1\r\nhost: localhost\r\n"
+                                "transfer-encoding: chunked\r\n\r\n">>,
+                              ~"6\r\nhello \r\n", ~"5\r\nworld\r\n",
+                              ~"0\r\n\r\n"]),
+        {Head, Body, _} = recv_chunked(S, <<>>),
+        ok = gen_tcp:close(S),
+        ?assertMatch(<<"HTTP/1.1 200", _/binary>>, Head),
+        ?assertEqual(~"hello world", Body)
+    end).
+
+h2_echo(Frames) ->
+    with_listener(h2, "p3_http_echo", fun(Port) ->
+        {ok, C} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+        {ok, Sid} = h2:request(C, [{~":method", ~"POST"}, {~":path", ~"/"},
+                                   {~":scheme", ~"http"},
+                                   {~":authority", ~"localhost"}],
+                               #{end_stream => false}),
+        _ = [ok = h2:send_data(C, Sid, D, Fin) || {D, Fin} <- Frames],
+        {200, _, Body, _} = h2_response(C, Sid, undefined, [], <<>>),
+        ok = h2:close(C),
+        Body
+    end).
+
 big_body() ->
     << <<(I rem 251)>> || I <- lists:seq(1, 204800) >>.
 
@@ -279,9 +377,13 @@ dechunk(Bin, Acc) ->
         [SizeLine, Rest] ->
             case binary_to_integer(hd(binary:split(SizeLine, ~";")), 16) of
                 0 ->
-                    case binary:split(Rest, ~"\r\n\r\n") of
-                        [Trailers, _] -> {Acc, Trailers};
-                        [_] -> more
+                    case Rest of
+                        <<"\r\n", _/binary>> -> {Acc, <<>>};
+                        _ ->
+                            case binary:split(Rest, ~"\r\n\r\n") of
+                                [Trailers, _] -> {Acc, Trailers};
+                                [_] -> more
+                            end
                     end;
                 N ->
                     case Rest of

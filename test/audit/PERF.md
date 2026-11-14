@@ -8788,3 +8788,30 @@ read as the change in `wasm_module_cache:stats()`'s `bytes`.
 
 The default budget, 2 GiB, holds eleven of the largest. The default
 `max_module_bytes`, 64 MiB, is twice the largest input.
+
+## WASI 0.3 serving: trailers, streamed responses, middleware (2026-11-14)
+
+Measured against main (`cf67a00`), each sample a fresh VM at `+S 10:10`, six
+rounds interleaved, both orders, each round started at a one-minute load below
+8 (6.58 at most), with the gates fixed in the plan.
+
+| path | main | candidate | ratio | gate | result |
+| --- | --- | --- | --- | --- | --- |
+| 0.2 `run_serve/4`, hello world, us a request | 733.5 | 730.0 | 0.995x | 1.03x | pass |
+| 0.2 listener, hello world, requests a second | 6454.2 | 6363.3 | 1.014x in time | 1.03x | pass |
+| 0.3 listener, hello world, requests a second | 1665.0 | 1721.6 | 0.967x in time | 1.03x | pass |
+
+Medians. The faster 0.3 row is within the run's noise, not a gain.
+
+Reported, not gated: wasmtime's echo handler answering a 4 MiB body over
+HTTP/1.1, milliseconds from the end of the request.
+
+| | main | candidate |
+| --- | --- | --- |
+| to the first byte of the response | 4334.0 | 10.4 |
+| to its last byte | 4337.7 | 4096.7 |
+
+On main the listener held the whole body before it sent anything; it now sends
+the head when the handler returns it and each piece as the guest writes it.
+
+Scripts and log: `test/audit/raw/wasi3-serving/`.

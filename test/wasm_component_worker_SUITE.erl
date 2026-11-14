@@ -23,11 +23,18 @@ all() ->
      the_multi_core_linker_runs_through_the_worker,
      each_request_gets_a_fresh_component_instance].
 
+%% Each case starts a reaper of its own. Starting a worker can also start the
+%% supervised one, and whichever came first made the other's start fail with
+%% `already_started': an automatic skip, which fails the run. The supervised
+%% reaper is suspended for the suite, as the adapter conformance kit does.
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
+    ok = wasm_worker_sup:suspend_reaper(),
     Config.
 
-end_per_suite(_Config) -> ok.
+end_per_suite(_Config) ->
+    _ = wasm_worker_sup:resume_reaper(),
+    ok.
 
 init_per_testcase(TC, Config) ->
     process_flag(trap_exit, true),

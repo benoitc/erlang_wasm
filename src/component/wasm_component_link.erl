@@ -808,13 +808,13 @@ step({canon_lower, CompFuncIdx, ReallocIdx, Enc, Async}, S) ->
             case host_fun(maps:get(CompFuncIdx, maps:get(comp_funcs, S)), S) of
                 {ok, {async_import, Sig, Fun, {producer, PFun}}} ->
                     %% A suspending async import: completes later via a subtask event.
-                    {ok, bump(S, n_cf, core_funcs, wasm_async:async_lower(Sig, Fun, PFun))};
+                    {ok, host_side(S, wasm_async:async_lower(Sig, Fun, PFun))};
                 {ok, {async_import, Sig, Fun}} ->
                     %% An async import: the guest calls it expecting a subtask status.
-                    {ok, bump(S, n_cf, core_funcs, wasm_async:async_lower(Sig, Fun))};
+                    {ok, host_side(S, wasm_async:async_lower(Sig, Fun))};
                 {ok, Fun} when Async =:= sync ->
                     Realloc = realloc_callable(ReallocIdx, S),
-                    {ok, bump(S, n_cf, core_funcs, lowered(Fun, Realloc, Enc, S))};
+                    {ok, host_side(S, lowered(Fun, Realloc, Enc, S))};
                 {ok, _Fun} ->
                     {error, {async_import_not_registered, CompFuncIdx}};
                 {error, _} = E ->
@@ -843,7 +843,7 @@ step({canon_async, Which, Meta}, S) ->
                 _ ->
                     Fun
             end,
-    {ok, bump(S, n_cf, core_funcs, Bound)};
+    {ok, host_side(S, Bound)};
 step({canon_resource, drop, Rt}, S) ->
     %% For a resource this component DEFINES, `canon resource.drop` removes the
     %% handle from the instance's table (a double drop, or a handle never minted
@@ -858,19 +858,19 @@ step({canon_resource, drop, Rt}, S) ->
     %% aliased before the drop in graph order), run when an owned handle is dropped.
     Dtor = resource_dtor(Rt, S),
     Fun = fun(_Ctx, [H]) -> resource_drop(Defined, Rt, Dtor, H, Drop) end,
-    {ok, bump(S, n_cf, core_funcs, Fun)};
+    {ok, host_side(S, Fun)};
 step({canon_resource, new, Rt}, S) ->
     %% A defined resource: mint a handle for the representation in the current
     %% instance's table; the guest gets the handle, never its own
     %% representation.
     Fun = fun(_Ctx, [Rep]) -> {ok, [wasm_resources:new(Rt, Rep)]} end,
-    {ok, bump(S, n_cf, core_funcs, Fun)};
+    {ok, host_side(S, Fun)};
 step({canon_resource, rep, Rt}, S) ->
     %% `canon resource.rep Rt` is always on a type this component defines, so the
     %% handle must be live, the guest's and of that type: a dropped or bogus
     %% handle, or one of a different resource type, traps.
     Fun = fun(_Ctx, [H]) -> {ok, [wasm_resources:rep(Rt, H)]} end,
-    {ok, bump(S, n_cf, core_funcs, Fun)};
+    {ok, host_side(S, Fun)};
 step({core_alias, func, InstIdx, Name}, S) ->
     case export_val(S, InstIdx, Name) of
         {ok, Val} ->
@@ -964,10 +964,20 @@ realloc_callable(none, _S) ->
     undefined;
 realloc_callable(Idx, S) ->
     case maps:get(Idx, maps:get(core_funcs, S), undefined) of
-        {wasm_func, Fun, _Type}    -> Fun;
-        Fun when is_function(Fun)  -> Fun;
+        {wasm_func, Fun, _Type}    -> guest_side(Fun);
+        Fun when is_function(Fun)  -> guest_side(Fun);
         _                          -> undefined
     end.
+
+%% A core function the host provides, which a fiber has the owner run
+%% (`wasm_async:owner_side/1').
+host_side(S, Fun) ->
+    bump(S, n_cf, core_funcs, wasm_async:owner_side(Fun)).
+
+%% A call back into the guest from the host, which runs where the guest's
+%% call is: in the fiber the owner is serving, if any.
+guest_side(Fun) ->
+    fun(Ctx, Args) -> wasm_async:reenter(fun() -> Fun(Ctx, Args) end) end.
 
 %% An import the host set does not cover is a link-time error naming the interface
 %% and function, so an unresolved import is a clean value at link time rather than a
@@ -1011,7 +1021,7 @@ resource_dtor(Rt, S) ->
 apply_resource_dtor(none, _Rep) ->
     ok;
 apply_resource_dtor({wasm_func, Fun, _Type}, Rep) ->
-    _ = Fun(#{}, [Rep]), ok;
+    _ = (guest_side(Fun))(#{}, [Rep]), ok;
 apply_resource_dtor(Fun, Rep) when is_function(Fun, 2) ->
     _ = Fun(#{}, [Rep]), ok;
 apply_resource_dtor(_Other, _Rep) ->

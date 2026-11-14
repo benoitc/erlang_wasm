@@ -1063,7 +1063,7 @@ target_for(I, Export) ->
 realloc_fun(_Inst, none) ->
     undefined;
 realloc_fun(Inst, Name) ->
-    fun(_Ctx, Args) -> wasm:call(Inst, Name, Args) end.
+    fun(_Ctx, Args) -> wasm_async:reenter(fun() -> wasm:call(Inst, Name, Args) end) end.
 
 -doc """
 Call an async-lifted export, lowering `Args` and lifting the result by `Sig`.
@@ -1167,8 +1167,20 @@ run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts, Mode) ->
         try
             {Descs, Lowered} = prepare_async_params(Params, Args),
             CoreArgs = wasm_canon:lower_params(Inst, Descs, Lowered),
-            case {wasm_async:guest_call(
-                    fun() -> wasm:call(Inst, LiftName, CoreArgs) end), Callback} of
+            case {call_lift(Inst, LiftName, CoreArgs, Callback, Mode), Callback} of
+                %% A stackful task called from another component, run in a
+                %% fiber, that waits: it stays in the frame, and the caller
+                %% goes on, with its result if it has resolved, else with a
+                %% subtask for it.
+                {{waiting, Fiber}, none} ->
+                    case wasm_async:resolved() of
+                        {ok, _} ->
+                            Res = deliver(Mode, Result, returned()),
+                            _ = wasm_async:suspend_fiber(Fiber),
+                            {pending, Res};
+                        undefined ->
+                            {pending, {pending_task, wasm_async:suspend_fiber(Fiber)}}
+                    end;
                 %% A stackful lift: the core function ran the whole task,
                 %% waiting inside `waitable-set.wait' or a synchronous copy,
                 %% and handed its result to `task.return'.
@@ -1192,6 +1204,17 @@ run_async(Inst, LiftName, Callback, {Params, Result}, Args, Opts, Mode) ->
         {done, Value}    -> wasm_async:end_task(), Value;
         {error, _} = Failed -> wasm_async:end_task(), Failed
     end.
+
+%% A stackful lift runs its whole task in one core call. Called from another
+%% component it gets a stack of its own, a fiber, so that it can wait for what
+%% its caller does next; any other call runs here.
+call_lift(Inst, LiftName, CoreArgs, none, nested) ->
+    case wasm_async:start_fiber(fun() -> wasm:call(Inst, LiftName, CoreArgs) end) of
+        {done, Result} -> Result;
+        Other -> Other
+    end;
+call_lift(Inst, LiftName, CoreArgs, _Callback, _Mode) ->
+    wasm_async:guest_call(fun() -> wasm:call(Inst, LiftName, CoreArgs) end).
 
 returned() ->
     case wasm_async:take_return() of

@@ -1,0 +1,42 @@
+round 1 load 4.89
+main cmd02 1.546
+main serve02 772.6
+main listen02 6522.8
+cand cmd02 1.510
+cand serve02 776.7
+cand listen02 6785.2
+round 2 load 5.06
+cand cmd02 1.532
+cand serve02 804.7
+cand listen02 6814.2
+main cmd02 1.562
+main serve02 840.7
+main listen02 6480.8
+round 3 load 5.30
+main cmd02 1.583
+main serve02 788.7
+main listen02 6369.4
+cand cmd02 1.572
+cand serve02 808.5
+cand listen02 6563.1
+round 4 load 6.00
+cand cmd02 1.610
+cand serve02 825.2
+cand listen02 6510.4
+main cmd02 1.619
+main serve02 759.8
+main listen02 6641.4
+round 5 load 6.05
+main cmd02 1.606
+main serve02 755.8
+main listen02 6262.6
+cand cmd02 1.554
+cand serve02 795.4
+cand listen02 6978.5
+round 6 load 6.05
+cand cmd02 1.603
+cand serve02 794.7
+cand listen02 6678.4
+main cmd02 1.560
+main serve02 777.1
+main listen02 6590.9

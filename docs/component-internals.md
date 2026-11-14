@@ -121,12 +121,16 @@ The steps, in order:
    it.
 6. Pick the path. If any import is still unresolved, the component goes to
    the linker. A component with several cores also goes to the linker when
-   some of its exports are not on the entry core
-   (`wasm_component_link:exports_resolve_on_entry/2`).
+   one of its functions is lifted from another core
+   (`wasm_component_link:exports_resolve_on_entry/3`). For an interface's
+   function, that counts only when the entry core exports a function of the
+   same name, since a call by name would then reach the wrong one. This is
+   decided once, when the component is prepared.
 7. Build the cores with a new `wasm_resources` table set as current. So when a
    start function creates a handle, the handle belongs to this instance.
 8. Record per-export string encodings (`export_encodings/1`) and the declared
-   realloc and post-return (`export_bindings/1`) on the instance.
+   realloc and post-return (`export_bindings/1`) on the instance, for
+   functions exported on their own and for an interface's functions.
 
 A failed build destroys the resource table it created.
 

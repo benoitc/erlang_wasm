@@ -276,7 +276,8 @@ derive(#{core := Core, sec := Sec} = Decoded) ->
             export_map => wasm_component_link:export_map(Sec),
             str_enc => wasm_component_link:export_encodings(Sec),
             bindings => wasm_component_link:export_bindings(Sec),
-            dtors => wasm_component_types:resource_dtors(Sec)},
+            dtors => wasm_component_types:resource_dtors(Sec),
+            on_entry => on_entry(Decoded)},
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
             Pre#{graph => Graph, types => link_types(Graph, Sec)};
@@ -284,6 +285,13 @@ derive(#{core := Core, sec := Sec} = Decoded) ->
             %% Linking reports it, if the component ever needs the linker.
             Pre
     end.
+
+%% Whether every export resolves on the entry core, so it alone is built: read
+%% from the bytes, so a prepared component reads it once.
+on_entry(#{core := Core, sec := Sec} = Decoded) ->
+    length(maps:get(cores, Decoded, [Core])) =:= 1
+        orelse wasm_component_link:exports_resolve_on_entry(
+                 Sec, maps:get(entry_idx, Decoded, 0), Core).
 
 %% Only the async built-ins read the type space (an element or result type by
 %% index), and walking it is not free: a component with none skips it.
@@ -413,11 +421,9 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% largest, so every core is built and the export reaches the core its lift names
     %% rather than the largest by size. A lone core, or one whose exports all resolve
     %% on the entry, stays on the single-core path unchanged.
-    Cores = maps:get(cores, Decoded, [Core]),
     Leftovers = [K || K <- EntryImports, not maps:is_key(K, Host)],
     UseSimple = Leftovers =:= []
-        andalso (length(Cores) =:= 1
-                 orelse wasm_component_link:exports_resolve_on_entry(Sec, EntryIdx)),
+        andalso pre(on_entry, Decoded, fun() -> on_entry(Decoded) end),
     %% This instance's own resource handle table (see wasm_resources). It is
     %% current while the cores are built, so a start function that mints a
     %% handle mints it here; guest calls run with it current, and destroy frees

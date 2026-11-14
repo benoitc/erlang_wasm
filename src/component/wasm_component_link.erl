@@ -47,7 +47,7 @@ an atom.
 
 -export([fold_sections/3, skip_export_desc/1, load_core/2]).
 -export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
-         export_bindings/1, exports_resolve_on_entry/2, validate_lifts/2,
+         export_bindings/1, exports_resolve_on_entry/3, validate_lifts/2,
          resource_info/2]).
 
 -export_type([async_target/0, graph/0, item/0]).
@@ -92,6 +92,7 @@ an atom.
 %% The import section id inside a *core* module's own section stream (not a
 %% component section).
 -define(CORE_SEC_IMPORT, 2).
+-define(CORE_SEC_EXPORT, 7).
 
 -doc """
 Parse a component's top-level sections into an ordered item list.
@@ -192,8 +193,9 @@ Map each component func export name to the core function that implements it.
 Resolves the export section (name -> component-func index) through the graph
 (component-func index -> `canon lift` of a core-func index -> the core alias'
 export name), so an export renamed from its core function is callable by its
-component name. An export that does not resolve to a lifted core function (an
-instance export, an imported function) is omitted, and the caller falls back to the
+component name. A function an exported interface holds is keyed
+`<interface>#<function>`. An export that does not resolve to a lifted core
+function (an imported function) is omitted, and the caller falls back to the
 name it was given.
 """.
 -spec export_map(binary()) -> #{binary() => binary()}.
@@ -206,7 +208,7 @@ export_map(Sec) ->
                 {CompFuncs, CoreNames} = index_spaces(Graph),
                 maps:from_list(
                   [{Name, CoreName}
-                   || {comp_export, Name, 1, Idx} <- Graph,
+                   || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
                       {lift, CFI} <- [maps:get(Idx, CompFuncs, undefined)],
                       CoreName <- [maps:get(CFI, CoreNames, undefined)],
                       is_binary(CoreName)]);
@@ -220,26 +222,38 @@ export_map(Sec) ->
 -doc """
 Whether the largest-core fast path resolves every exported function correctly.
 
-`true` only when every exported lift that names a core-func alias targets a core
-instance of the entry module `EntryModIdx`. When it is `false`, an export's lift
-names a core other than the largest, so the caller must interpret the full graph
-(build every core, dispatch each export to the instance its lift names) rather
-than call the largest core by export name. Tolerant: a graph it cannot read, or a
-lift it cannot pin to an alias, yields `true` (the fast path, unchanged).
+`true` only when every exported function's lift that names a core-func alias
+targets a core instance of the entry module `EntryModIdx`, except an interface
+function's lift on another core whose name the entry core (`EntryBytes`) does not
+export: called by name it is not found, rather than found in the wrong core. When
+it is `false`, the caller must interpret the full graph (build every core,
+dispatch each export to the instance its lift names) rather than call the largest
+core by export name. Tolerant: a graph it cannot read, or a lift it cannot pin to
+an alias, yields `true` (the fast path, unchanged).
 """.
--spec exports_resolve_on_entry(binary(), non_neg_integer()) -> boolean().
-exports_resolve_on_entry(Sec, EntryModIdx) ->
+-spec exports_resolve_on_entry(binary(), non_neg_integer(), binary()) -> boolean().
+exports_resolve_on_entry(Sec, EntryModIdx, EntryBytes) ->
     try
         case parse(Sec) of
             {ok, Graph} ->
                 {CompFuncs, AliasInst} = alias_spaces(Graph),
                 InstMods = inst_modules(Graph),
-                lists:all(
-                  fun({comp_export, _Name, 1, Idx}) ->
-                          export_on_entry(Idx, CompFuncs, AliasInst, InstMods, EntryModIdx);
-                     (_Other) ->
-                          true
-                  end, Graph);
+                OnEntry = fun(Idx) ->
+                                  export_on_entry(Idx, CompFuncs, AliasInst, InstMods,
+                                                  EntryModIdx)
+                          end,
+                %% An interface function lifted from another core needs that
+                %% core built only when the entry core exports a function of
+                %% the same name: a call by name would reach the wrong one.
+                %% Otherwise a call by name finds nothing, as before, and
+                %% every request of a proxy component (`run' in a shim core,
+                %% `handle' in the main one) would build all its cores.
+                Top = [Idx || {comp_export, _, 1, Idx} <- Graph],
+                Iface = [Idx || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
+                                binary:match(Name, <<"#">>) =/= nomatch],
+                Off = [Idx || Idx <- Iface, not OnEntry(Idx)],
+                lists:all(OnEntry, Top) andalso
+                    (Off =:= [] orelse no_collision(Off, CompFuncs, Graph, EntryBytes));
             {error, _} ->
                 true
         end
@@ -342,6 +356,19 @@ derive_lift_sig(Params, Result) ->
                  end,
     {ExpParams, ExpResults}.
 
+%% No interface function lifted from another core shares its core name with a
+%% function the entry core exports.
+no_collision(Off, CompFuncs, Graph, EntryBytes) ->
+    {_, CoreNames} = index_spaces(Graph),
+    Entry = core_exports(EntryBytes),
+    not lists:any(fun(Idx) ->
+                          case maps:get(Idx, CompFuncs, undefined) of
+                              {lift, CFI} -> lists:member(maps:get(CFI, CoreNames, none),
+                                                          Entry);
+                              _ -> false
+                          end
+                  end, Off).
+
 export_on_entry(Idx, CompFuncs, AliasInst, InstMods, EntryModIdx) ->
     case maps:get(Idx, CompFuncs, undefined) of
         {lift, CFI} ->
@@ -398,7 +425,7 @@ export_encodings(Sec) ->
                 Encs = comp_func_encodings(Graph),
                 maps:from_list(
                   [{Name, Enc}
-                   || {comp_export, Name, 1, Idx} <- Graph,
+                   || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
                       Enc <- [maps:get(Idx, Encs, utf8)],
                       Enc =/= utf8]);
             {error, _} ->
@@ -437,7 +464,7 @@ export_bindings(Sec) ->
                 Lifts = lift_bindings(Graph),
                 maps:from_list(
                   [{Name, binding_of(maps:get(Idx, Lifts), CoreNames)}
-                   || {comp_export, Name, 1, Idx} <- Graph,
+                   || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
                       maps:is_key(Idx, Lifts),
                       binding_of(maps:get(Idx, Lifts), CoreNames) =/=
                           #{realloc => none, post_return => none}]);
@@ -517,7 +544,7 @@ lift_sigs(Graph, Types) ->
                  {ok, Sig} <- [wasm_component_types:func_sig(
                                  maps:get(PF, Fts), Types)]],
     ByExport = [{Name, Sig}
-                || {comp_export, Name, 1, Idx} <- Graph,
+                || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
                    maps:is_key(Idx, Fts),
                    {ok, Sig} <- [wasm_component_types:func_sig(
                                    maps:get(Idx, Fts), Types)]],
@@ -741,7 +768,7 @@ export_targets(Graph, S) ->
     Targets = maps:get(core_func_target, S),
     maps:from_list(
       [{Name, Target}
-       || {comp_export, Name, 1, Idx} <- Graph,
+       || {Name, Idx} <- maps:to_list(export_funcs(Graph)),
           {lift, CFI} <- [maps:get(Idx, CompFuncs, undefined)],
           Target <- [maps:get(CFI, Targets, undefined)],
           Target =/= undefined]).
@@ -1641,6 +1668,31 @@ skip_limits(<<1, Rest/binary>>) ->
     {_Min, R1} = wasm_leb128:u32(Rest),
     {_Max, R2} = wasm_leb128:u32(R1),
     R2.
+
+%% The names of the functions a core module exports.
+core_exports(<<16#00, 16#61, 16#73, 16#6d, _:4/binary, Rest/binary>>) ->
+    core_export_sections(Rest);
+core_exports(_) ->
+    [].
+
+core_export_sections(<<>>) ->
+    [];
+core_export_sections(<<Id, Rest0/binary>>) ->
+    {Size, Rest1} = wasm_leb128:u32(Rest0),
+    <<Content:Size/binary, Rest2/binary>> = Rest1,
+    case Id of
+        ?CORE_SEC_EXPORT ->
+            {Count, R} = wasm_leb128:u32(Content),
+            export_names(Count, R, []);
+        _ -> core_export_sections(Rest2)
+    end.
+
+export_names(0, _Bin, Acc) ->
+    Acc;
+export_names(N, Bin, Acc) ->
+    {Name, <<Kind, R0/binary>>} = name(Bin),
+    {_Idx, R1} = wasm_leb128:u32(R0),
+    export_names(N - 1, R1, case Kind of 16#00 -> [Name | Acc]; _ -> Acc end).
 
 %%% ------------------------------------------------------------------ helpers ---
 

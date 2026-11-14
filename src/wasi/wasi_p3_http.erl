@@ -280,7 +280,10 @@ consume_body(H) ->
                  {bytes, Bin} -> feed(Bin);
                  none -> feed(<<>>)
              end,
-    {Stream, case Trailers of none_yet -> no_trailers(); T -> T end}.
+    {Stream, case Trailers of
+                 {fields, Es} -> trailers(Es);
+                 T -> T
+             end}.
 
 %% A stream the guest reads: a producer sends `Bin' and ends it.
 feed(Bin) ->
@@ -293,8 +296,16 @@ feed(Bin) ->
     R.
 
 no_trailers() ->
+    resolved_trailers({ok, none}).
+
+%% The trailers a request arrived with, which the guest may read but not
+%% change, as it may not change its headers.
+trailers([]) -> no_trailers();
+trailers(Entries) -> resolved_trailers({ok, {some, new_fields(Entries, false)}}).
+
+resolved_trailers(Value) ->
     {R, W} = wasm_async:host_future({result, {option, handle}, ?ERROR}),
-    ok = wasm_async:host_future_resolve(W, {ok, none}),
+    ok = wasm_async:host_future_resolve(W, Value),
     R.
 
 %%% ------------------------------------------------------------- options ---
@@ -448,7 +459,9 @@ response({error, E}, Sent) ->
 
 -doc """
 An incoming request for a 0.3 handler: `Request` as for
-`wasi_preview2:run_serve/3`, the body fed to the guest as a stream.
+`wasi_preview2:run_serve/3`, the body fed to the guest as a stream, and its
+`trailers`, a header list (none by default), resolving the request's trailers
+future.
 """.
 -spec incoming_request(map()) -> non_neg_integer().
 incoming_request(Request) ->
@@ -470,7 +483,9 @@ incoming_request(Request) ->
         %% inside its task: a stream made before the task starts is cleared
         %% when the task's frame opens.
         body => {bytes, maps:get(body, Request, <<>>)},
-        trailers => none_yet, options => none, sent => undefined}).
+        trailers => {fields, [{N, V} || {N, V} <- maps:get(trailers, Request, []),
+                                        not forbidden(N, V)]},
+        options => none, sent => undefined}).
 
 forbidden(N, V) ->
     case wasi_http:field_error(N, V) of
@@ -486,23 +501,49 @@ method_variant(M) ->
     end.
 
 -doc """
-The status, headers and whole body of the response a handler returned,
-running its task while it writes the body.
+The status, headers, whole body and trailers of the response a handler
+returned, running its task while it writes the body and then resolves the
+trailers. A response without trailers answers the 4-tuple.
 """.
 -spec take_response(non_neg_integer(), pos_integer()) ->
-          {ok, non_neg_integer(), [{binary(), binary()}], binary()} | {error, term()}.
+          {ok, non_neg_integer(), [{binary(), binary()}], binary()} |
+          {ok, non_neg_integer(), [{binary(), binary()}], binary(),
+           [{binary(), binary()}]} |
+          {error, term()}.
 take_response(R, MaxBody) ->
     case message(R) of
         {p3_http_response, #{status := Status, headers := Headers, body := Body,
-                             sent := Sent}} ->
+                             trailers := Trailers, sent := Sent}} ->
             case read_body(Body, MaxBody) of
                 {ok, Bin} ->
-                    _ = Sent =/= undefined andalso
-                        wasm_async:host_future_resolve(Sent, {ok, undefined}),
-                    {ok, Status, Headers, Bin};
+                    case read_trailers(Trailers) of
+                        {ok, Ts} ->
+                            _ = Sent =/= undefined andalso
+                                wasm_async:host_future_resolve(Sent, {ok, undefined}),
+                            case Ts of
+                                [] -> {ok, Status, Headers, Bin};
+                                _ -> {ok, Status, Headers, Bin, Ts}
+                            end;
+                        {error, _} = E -> E
+                    end;
                 {error, _} = E -> E
             end;
         _ -> {error, not_a_response}
+    end.
+
+%% The response's trailers, once the guest resolves their future: a future it
+%% dropped unresolved is no trailers, an error ends the response with it.
+read_trailers(T) ->
+    ok = wasm_async:host_reader(T),
+    case wasm_async:host_future_await(T, 60000) of
+        {ok, {ok, none}} -> {ok, []};
+        {ok, {ok, {some, H}}} ->
+            Es = entries(H),
+            _ = wasm_component:host_drop(H),
+            {ok, Es};
+        {ok, {error, E}} -> {error, E};
+        {error, dropped} -> {ok, []};
+        {error, _} = E -> E
     end.
 
 read_body(none, _MaxBody) -> {ok, <<>>};

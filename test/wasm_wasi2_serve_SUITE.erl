@@ -19,7 +19,7 @@ the serve reactors in `test/fixtures/wasmtime-p2-serve` (not vendored).
 -include_lib("stdlib/include/assert.hrl").
 
 all() -> [hello_world, with_print, authority_and_scheme, live_over_h1,
-          a_listener_serves_past_the_load_rate].
+          live_over_h2, a_listener_serves_past_the_load_rate].
 
 init_per_suite(Config) ->
     case filelib:is_dir(dir()) of
@@ -60,6 +60,25 @@ live_over_h1(_) ->
         Req = #{host => Host, port => Port, method => <<"GET">>,
                 path => <<"/">>, headers => [], body => <<>>},
         {ok, Status, _Headers, Body} = wasi_http_h1:request(Req, 5000),
+        ?assertEqual(200, Status),
+        ?assertEqual(<<"Hello, WASI!">>, Body)
+    after
+        wasi_http_listener:stop(Listener)
+    end.
+
+%% The same over cleartext HTTP/2. h2 holds a stream's events until a process
+%% asks for them, and the listener never asked: every h2 request waited for a
+%% body that never came, and was answered 408.
+live_over_h2(_) ->
+    {ok, Bin} = file:read_file(filename:join(dir(), "p2_cli_serve_hello_world.component.wasm")),
+    {ok, Listener} = wasi_http_listener:start(#{component => Bin, port => 0,
+                                                transport => h2,
+                                                request_timeout => 5000}),
+    try
+        {Host, Port} = split(wasi_http_listener:address(Listener)),
+        Req = #{host => Host, port => Port, method => <<"GET">>,
+                path => <<"/">>, headers => [], body => <<>>},
+        {ok, Status, _Headers, Body} = wasi_http_h2:request(Req, 10000),
         ?assertEqual(200, Status),
         ?assertEqual(<<"Hello, WASI!">>, Body)
     after

@@ -20,12 +20,16 @@ also puts the 0.3 programs in `test/fixtures/wasmtime-p3` (not vendored).
 -include_lib("stdlib/include/assert.hrl").
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
+
+-define(ECHO_BODY, ~"And the mome raths outgrabe").
 -export([hello_stdout/1, read_stdin/1, cli/1, clocks_sleep/1, random_imports/1,
          big_random_buf/1, random_limits/1, much_stdout/1,
          many_tasks_reach_the_resource_limit/1, file_write_chunked/1,
          file_truncation_readonly/1, serve_hello_world/1, serve_echo/1,
          a_response_body_past_the_ceiling_fails/1,
          serve_post_return/1, serve_drops_forbidden_headers/1, serve_proxy/1,
+         serve_echo_trailers/1, serve_echo_trailers_host_to_host/1,
+         listener_echo_trailers_h1/1, listener_echo_trailers_h2/1,
          p3_cases/1]).
 
 all() ->
@@ -33,7 +37,9 @@ all() ->
      random_limits, much_stdout, many_tasks_reach_the_resource_limit,
      file_write_chunked, file_truncation_readonly, serve_hello_world, serve_echo,
      a_response_body_past_the_ceiling_fails,
-     serve_post_return, serve_drops_forbidden_headers, serve_proxy, p3_cases].
+     serve_post_return, serve_drops_forbidden_headers, serve_proxy,
+     serve_echo_trailers, serve_echo_trailers_host_to_host,
+     listener_echo_trailers_h1, listener_echo_trailers_h2, p3_cases].
 
 %% Programs still failing, by group, and why. Each step of the WASI 0.3 work
 %% lowers its group to 0.
@@ -153,6 +159,117 @@ serve_proxy(_) ->
     Url = <<"http://", (persistent_term:get({?MODULE, http}))/binary, "/">>,
     ?assertMatch({ok, 200, _, _},
                  serve("p3_http_proxy", [{<<"url">>, Url}], #{network => loopback()})).
+
+%% wasmtime's `p3_http_echo': the request's header `foo', body and trailer
+%% `fizz' come back in the response. Without `x-host-to-host' the guest copies
+%% the body and the trailers itself; with it, it answers with the request's own
+%% stream and future.
+serve_echo_trailers(_) ->
+    ?assertEqual({ok, 200, [{~"foo", ~"bar"}], ?ECHO_BODY, [{~"fizz", ~"buzz"}]},
+                 echo([{~"foo", ~"bar"}])).
+
+serve_echo_trailers_host_to_host(_) ->
+    ?assertEqual({ok, 200, [{~"foo", ~"bar"}, {~"x-host-to-host", ~"true"}],
+                  ?ECHO_BODY, [{~"fizz", ~"buzz"}]},
+                 echo([{~"foo", ~"bar"}, {~"x-host-to-host", ~"true"}])).
+
+%% Through the listener: the client sends the body chunked with a trailer
+%% section, and reads the trailers after the echoed body.
+listener_echo_trailers_h1(_) ->
+    with_listener(h1, "p3_http_echo", fun(Port) ->
+        {ok, S} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}]),
+        Len = integer_to_binary(byte_size(?ECHO_BODY), 16),
+        ok = gen_tcp:send(S, [<<"POST / HTTP/1.1\r\nhost: localhost\r\n"
+                                "foo: bar\r\ntransfer-encoding: chunked\r\n"
+                                "\r\n">>,
+                              Len, ~"\r\n", ?ECHO_BODY, ~"\r\n",
+                              ~"0\r\nfizz: buzz\r\n\r\n"]),
+        {Head, Body, Trailers} = recv_chunked(S, <<>>),
+        ok = gen_tcp:close(S),
+        ?assertMatch(<<"HTTP/1.1 200", _/binary>>, Head),
+        ?assertNotEqual(nomatch, binary:match(string:lowercase(Head), ~"foo: bar")),
+        ?assertEqual(?ECHO_BODY, Body),
+        ?assertEqual(~"fizz: buzz", string:lowercase(Trailers))
+    end).
+
+listener_echo_trailers_h2(_) ->
+    with_listener(h2, "p3_http_echo", fun(Port) ->
+        {ok, C} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+        {ok, Sid} = h2:request(C, [{~":method", ~"POST"}, {~":path", ~"/"},
+                                   {~":scheme", ~"http"},
+                                   {~":authority", ~"localhost"},
+                                   {~"foo", ~"bar"}], #{end_stream => false}),
+        ok = h2:send_data(C, Sid, ?ECHO_BODY, false),
+        ok = h2:send_trailers(C, Sid, [{~"fizz", ~"buzz"}]),
+        {Status, Headers, Body, Trailers} = h2_response(C, Sid, undefined, [], <<>>),
+        ok = h2:close(C),
+        ?assertEqual(200, Status),
+        ?assertEqual(~"bar", proplists:get_value(~"foo", Headers)),
+        ?assertEqual(?ECHO_BODY, Body),
+        ?assertEqual([{~"fizz", ~"buzz"}], Trailers)
+    end).
+
+echo(Headers) ->
+    {ok, Bin} = file:read_file(serve_path("p3_http_echo")),
+    Req = #{method => ~"GET", path => ~"/", scheme => ~"http",
+            authority => ~"localhost", headers => Headers, body => ?ECHO_BODY,
+            trailers => [{~"fizz", ~"buzz"}]},
+    bounded(fun() -> wasi_preview3:run_serve(Bin, Req, #{compile => true}) end).
+
+with_listener(Transport, Name, Fun) ->
+    {ok, Bin} = file:read_file(serve_path(Name)),
+    {ok, L} = wasi_http_listener:start(#{component => Bin, transport => Transport,
+                                         serve_opts => #{compile => true}}),
+    [_, Port] = binary:split(wasi_http_listener:address(L), ~":"),
+    try Fun(binary_to_integer(Port)) after wasi_http_listener:stop(L) end.
+
+%% A response's head, its chunked body and the trailer section after the
+%% last chunk, read until that section ends.
+recv_chunked(S, Acc) ->
+    case binary:split(Acc, ~"\r\n\r\n") of
+        [Head, Chunked] ->
+            case dechunk(Chunked, <<>>) of
+                {Body, Trailers} -> {Head, Body, Trailers};
+                more -> recv_more(S, Acc)
+            end;
+        [_] -> recv_more(S, Acc)
+    end.
+
+recv_more(S, Acc) ->
+    {ok, B} = gen_tcp:recv(S, 0, 30000),
+    recv_chunked(S, <<Acc/binary, B/binary>>).
+
+dechunk(Bin, Acc) ->
+    case binary:split(Bin, ~"\r\n") of
+        [SizeLine, Rest] ->
+            case binary_to_integer(hd(binary:split(SizeLine, ~";")), 16) of
+                0 ->
+                    case binary:split(Rest, ~"\r\n\r\n") of
+                        [Trailers, _] -> {Acc, Trailers};
+                        [_] -> more
+                    end;
+                N ->
+                    case Rest of
+                        <<Chunk:N/binary, "\r\n", More/binary>> ->
+                            dechunk(More, <<Acc/binary, Chunk/binary>>);
+                        _ -> more
+                    end
+            end;
+        [_] -> more
+    end.
+
+h2_response(C, Sid, Status, Headers, Body) ->
+    receive
+        {h2, C, {response, Sid, St, Hs}} -> h2_response(C, Sid, St, Hs, Body);
+        {h2, C, {data, Sid, D, true}} -> {Status, Headers, <<Body/binary, D/binary>>, []};
+        {h2, C, {data, Sid, D, false}} ->
+            h2_response(C, Sid, Status, Headers, <<Body/binary, D/binary>>);
+        {h2, C, {trailers, Sid, Ts}} -> {Status, Headers, Body, Ts}
+    after 30000 -> {timeout, Status, Headers, Body}
+    end.
+
+serve_path(Name) ->
+    filename:join(dir() ++ "-serve", Name ++ ".component.wasm").
 
 serve(Name) ->
     serve(Name, [{<<"content-type">>, <<"text/plain">>}], #{}).

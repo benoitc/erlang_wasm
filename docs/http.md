@@ -216,10 +216,10 @@ Notes on how it behaves:
 - A guest still running at `request_timeout` is stopped, and the request is
   answered 504.
 - The response gets a `content-length` unless the guest set one or a
-  `transfer-encoding`.
-- `address/1` returns `127.0.0.1:Port`. The listener passes no bind address to
-  the network library, so with `h1` it listens on every interface. If that is
-  a problem, block the port with a firewall or put a proxy in front.
+  `transfer-encoding`. A 0.3 response with trailers has none over HTTP/1.1:
+  its body is sent chunked, with the trailers after the last chunk.
+- `address/1` returns the address the listener listens on, `127.0.0.1:Port`
+  unless you passed `ip`.
 
 ## Write a transport
 

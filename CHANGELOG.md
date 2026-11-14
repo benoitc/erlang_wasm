@@ -6,6 +6,17 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **The HTTP listener serves HTTP/2 requests.** With `transport => h2`, every
+  request waited for a body that never arrived and was answered 408 once
+  `request_timeout` passed. HTTP/2 requests are now served, and the guest no
+  longer sees the HTTP/2 pseudo-headers (`:path`, `:scheme` and the like)
+  among the request's headers.
+- **WASI 0.3 handlers get and send trailers.** Header fields sent after the
+  body were dropped both ways. A request's `trailers` now reach the handler,
+  and a handler that sets response trailers gets them to the client, through
+  the listener over HTTP/1.1 and HTTP/2. `wasi_preview3:run_serve/3,4`
+  answer `{ok, Status, Headers, Body, Trailers}` for such a response; one
+  without trailers still answers the 4-tuple.
 - **You can refuse file access without the native file backend.** When the
   optional file NIF does not build or load, WASI file access falls back to
   pure Erlang, which checks a path and opens it in two steps, so a symlink

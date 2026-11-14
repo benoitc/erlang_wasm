@@ -36,6 +36,23 @@ so a listener takes either kind:
                                    headers => [], body => <<>>}, #{}).
 ```
 
+A 0.3 request and response can carry *trailers*: header fields sent after the
+body. Give the request's as `trailers`, a list of `{Name, Value}` pairs. A
+handler that sets trailers on its response answers a 5-tuple:
+
+```erlang
+{ok, 200, _Headers, Body, [{~"fizz", ~"buzz"}]} =
+    wasi_preview3:run_serve(Bin, #{method => ~"POST", path => ~"/",
+                                   scheme => ~"http", authority => ~"localhost",
+                                   headers => [], body => ~"hello",
+                                   trailers => [{~"fizz", ~"buzz"}]}, #{}).
+```
+
+A response without trailers answers the 4-tuple, as before. The listener
+passes the trailers a client sends to the handler, and sends the handler's
+back: over HTTP/2 as a last `HEADERS` frame, over HTTP/1.1 after the last
+chunk of a chunked body.
+
 ## What is there
 
 | package | at 0.3 |

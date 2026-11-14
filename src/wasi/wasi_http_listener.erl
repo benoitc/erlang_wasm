@@ -142,13 +142,17 @@ serve_request(Transport, Conn, Id, Method, Path, Config) ->
     %% Fixed when the request arrives: the body and the guest share it.
     Deadline = erlang:monotonic_time(millisecond) + Timeout,
     case read_body(Transport, Conn, Id, Config, Deadline) of
-        {ok, Body} ->
+        {ok, Body, Trailers} ->
             Request = #{method => Method, path => Path, scheme => Scheme,
-                        authority => authority(Headers), headers => Headers,
-                        body => Body},
+                        authority => authority(Headers),
+                        headers => fields(Headers), body => Body,
+                        trailers => fields(Trailers)},
             case run(Component, Request, ServeOpts, Imports, Deadline) of
                 {ok, Status, RespHeaders, RespBody} ->
                     answer(Transport, Conn, Id, Status, RespHeaders, RespBody);
+                {ok, Status, RespHeaders, RespBody, RespTrailers} ->
+                    answer(Transport, Conn, Id, Status, RespHeaders, RespBody,
+                           RespTrailers);
                 timeout ->
                     answer(Transport, Conn, Id, 504, [],
                            <<"wasi:http reactor timed out">>);
@@ -197,23 +201,49 @@ answer(Transport, Conn, Id, Status, Headers, Body) ->
     _ = Transport:send_data(Conn, Id, Body, true),
     ok.
 
+%% Trailers end the response: h2 sends them as a last HEADERS frame, h1 after
+%% the last chunk, so h1 frames the body chunked, without a content-length.
+answer(Transport, Conn, Id, Status, Headers, Body, Trailers) ->
+    Hdrs = case Transport of
+               h1 -> [{N, V} || {N, V} <- Headers,
+                                string:lowercase(N) =/= <<"content-length">>];
+               _ -> Headers
+           end,
+    _ = Transport:send_response(Conn, Id, Status, Hdrs),
+    _ = Transport:send_data(Conn, Id, Body, false),
+    _ = Transport:send_trailers(Conn, Id, Trailers),
+    ok.
+
 %% Read the request body to its end, chunked or not: both libraries end every
 %% request, a bodyless one included, with a final data frame. Only this
 %% request's frames are taken from the mailbox; anything else stays there.
-%% Answers `{ok, Body}', `timeout', `too_large', or `gone' when the peer reset
-%% the request or left.
+%% Answers `{ok, Body, Trailers}', `timeout', `too_large', or `gone' when the
+%% peer reset the request or left. Trailers end the body.
 read_body(Transport, Conn, Id, #{max_body_bytes := Max, headers := Headers},
           Deadline) ->
     case content_length(Headers) of
         N when is_integer(N), N > Max -> too_large;
-        _ -> read_body(Transport, Conn, Id, <<>>, Max, Deadline)
+        _ ->
+            ok = take_stream(Transport, Conn, Id),
+            read_body(Transport, Conn, Id, <<>>, Max, Deadline)
     end.
+
+%% h2 holds a stream's events until a process asks for them, and its server
+%% does not ask for the request process: without this, the body never came
+%% and every h2 request ended at the deadline. h1 sends them here already.
+take_stream(h2, Conn, Id) ->
+    case h2:set_stream_handler(Conn, Id, self()) of
+        ok -> ok;
+        {error, _} -> ok
+    end;
+take_stream(_, _Conn, _Id) ->
+    ok.
 
 read_body(h1, Conn, Id, Acc, Max, Deadline) ->
     receive
         {h1_stream, Id, {data, Data, End}} ->
             more(h1, Conn, Id, <<Acc/binary, Data/binary>>, End, Max, Deadline);
-        {h1_stream, Id, {trailers, _}} -> {ok, Acc};
+        {h1_stream, Id, {trailers, Trailers}} -> {ok, Acc, Trailers};
         {h1_stream, Id, {stream_reset, _}} -> gone
     after left(Deadline) -> timeout
     end;
@@ -221,7 +251,7 @@ read_body(h2, Conn, Id, Acc, Max, Deadline) ->
     receive
         {h2, Conn, {data, Id, Data, End}} ->
             more(h2, Conn, Id, <<Acc/binary, Data/binary>>, End, Max, Deadline);
-        {h2, Conn, {trailers, Id, _}} -> {ok, Acc};
+        {h2, Conn, {trailers, Id, Trailers}} -> {ok, Acc, Trailers};
         {h2, Conn, {stream_reset, Id, _}} -> gone;
         {h2, Conn, {closed, _}} -> gone
     after left(Deadline) -> timeout
@@ -231,7 +261,7 @@ more(_Transport, _Conn, _Id, Body, _End, Max, _Deadline)
   when byte_size(Body) > Max ->
     too_large;
 more(_Transport, _Conn, _Id, Body, true, _Max, _Deadline) ->
-    {ok, Body};
+    {ok, Body, []};
 more(Transport, Conn, Id, Body, false, Max, Deadline) ->
     read_body(Transport, Conn, Id, Body, Max, Deadline).
 
@@ -245,11 +275,25 @@ content_length(Headers) ->
         V         -> try binary_to_integer(V) catch _:_ -> undefined end
     end.
 
+%% h2 gives the authority as `:authority', h1 as `host'.
 authority(Headers) ->
-    case header(<<"host">>, Headers) of
-        undefined -> <<>>;
-        V         -> V
+    case header(<<":authority">>, Headers) of
+        undefined ->
+            case header(<<"host">>, Headers) of
+                undefined -> <<>>;
+                V         -> V
+            end;
+        V -> V
     end.
+
+%% The request's fields, without h2's pseudo-headers: the method, path,
+%% scheme and authority reach the guest as themselves, and a pseudo-header
+%% the guest echoed would be a malformed response.
+fields(Headers) ->
+    [{N, V} || {N, V} <- Headers, not is_pseudo(N)].
+
+is_pseudo(<<":", _/binary>>) -> true;
+is_pseudo(_) -> false.
 
 header(Name, Headers) ->
     case [V || {N, V} <- Headers, string:lowercase(N) =:= Name] of

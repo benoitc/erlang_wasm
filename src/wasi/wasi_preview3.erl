@@ -32,7 +32,12 @@ one together, and `run_command/3` runs a 0.2 or a 0.3 command.
 
 %% The bytes, or what `wasm_component:prepare/1` made of them.
 -type component() :: binary() | wasm_component:prepared().
--export_type([component/0]).
+-type fields() :: [{binary(), binary()}].
+-type serve_result() ::
+        {ok, 0..65535, fields(), binary()} |
+        {ok, 0..65535, fields(), binary(), Trailers :: fields()} |
+        {error, term()}.
+-export_type([component/0, serve_result/0]).
 
 -define(STDIO_RESULT, {result, none, {enum, [~"io", ~"illegal-byte-sequence", ~"pipe"]}}).
 
@@ -75,9 +80,13 @@ Serve one request through a `wasi:http` handler, 0.2 or 0.3, as
 `wasi_preview2:run_serve/3` does. A 0.3 handler is async: its response is
 taken once it has one, and its body read while the task writes it; what the
 guest does after that runs too, before the instance is destroyed.
+
+A 0.3 request can carry `trailers`, a header list, which the handler reads
+from the request's trailers future. A 0.3 response that sets trailers answers
+`{ok, Status, Headers, Body, Trailers}`; one that sets none answers the
+4-tuple.
 """.
--spec run_serve(component(), map(), map()) ->
-          {ok, non_neg_integer(), [{binary(), binary()}], binary()} | {error, term()}.
+-spec run_serve(component(), map(), map()) -> serve_result().
 run_serve(Bin, Request, Extra) ->
     run_serve(Bin, Request, Extra, serve_imports(Bin, Extra)).
 
@@ -90,8 +99,7 @@ Imports = wasi_preview3:serve_imports(Bin, #{}),
 {ok, 200, _, _} = wasi_preview3:run_serve(Bin, Request, #{}, Imports).
 ```
 """.
--spec run_serve(component(), map(), map(), map()) ->
-          {ok, non_neg_integer(), [{binary(), binary()}], binary()} | {error, term()}.
+-spec run_serve(component(), map(), map(), map()) -> serve_result().
 run_serve(Bin, Request, Extra, Imports) ->
     MaxBody = maps:get(http_max_body_bytes, Extra, ?MAX_BODY_BYTES),
     wasi_preview2:run_serve_with(Bin, Request, Extra, Imports,

@@ -136,10 +136,16 @@ reads. Call the composed component's async exports with `call_async/4` or
 
 Notes:
 
-- The called component runs until it returns its result, then the call
-  completes. What it does after that, such as writing a response body, runs
-  with the caller's other tasks. If it waits for something before it returns,
-  the caller waits inside the call.
+- The called component runs until it returns its result or waits. If it
+  returns, the call completes at once. If it waits first, the call is a
+  *subtask*: the caller goes on, and the subtask reports that it has returned
+  once the called component returns. What the called component does after it
+  returns, such as writing a response body, runs with the caller's other
+  tasks.
+- A called component lifted without a callback (a stackful lift) runs on the
+  caller's stack: if it waits for something its caller does next, the call
+  cannot finish. Rust and C components built with `wit-bindgen` use
+  callbacks.
 - A component may not read and write the same stream or future when its
   elements are not numbers, as the specification requires for now. Doing so
   traps with `intra_component_copy`. A middleware that hands its own future

@@ -73,19 +73,43 @@ operations continue against the directory that was opened, and a swapped
 -nominal root() :: {native, term()} | {fallback, string()}.
 -export_type([handle/0, root/0]).
 
--doc "Open a preopen root, once, for every path that will be resolved under it.".
+-doc """
+Open a preopen root, once, for every path that will be resolved under it.
+
+With the `require_native_fs` application setting on, the fallback backend
+grants nothing: this answers `ENOTCAPABLE`, so the guest gets no file system
+rather than one whose paths are checked and opened in two steps.
+""".
 -spec preopen(file:filename_all()) -> {ok, root()} | {error, non_neg_integer()}.
 preopen(Host) ->
     Str = unicode:characters_to_list(Host),
     case backend() of
         fallback ->
-            {ok, {fallback, Str}};
+            case application:get_env(wasm, require_native_fs, false) of
+                true -> refuse_fallback();
+                _ -> {ok, {fallback, Str}}
+            end;
         native ->
             case wasi_file_nif:open_dir(Str) of
                 {ok, H} -> {ok, {native, H}};
                 {error, E} -> {error, map_posix(E)}
             end
     end.
+
+%% An embedder that set `require_native_fs' relied on paths being resolved in
+%% one step, and a release whose NIF did not load would otherwise run without
+%% it unnoticed. Logged once per node, so a pool of workers does not flood it.
+refuse_fallback() ->
+    case persistent_term:get({?MODULE, refused_logged}, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put({?MODULE, refused_logged}, true),
+            logger:error("wasm: require_native_fs is set and the native file "
+                         "backend is not loaded, so no directory is granted; "
+                         "build it with scripts/build-nif.sh")
+    end,
+    {error, ?ENOTCAPABLE}.
 
 -doc "Release a root. A preopen holds one for the life of the instance.".
 -spec forget(root()) -> ok.

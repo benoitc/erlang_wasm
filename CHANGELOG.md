@@ -6,6 +6,12 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **You can refuse file access without the native file backend.** When the
+  optional file NIF does not build or load, WASI file access falls back to
+  pure Erlang, which checks a path and opens it in two steps, so a symlink
+  swapped in between can lead outside the grant. Nothing told you, and nothing
+  let you refuse it. With the new `require_native_fs` setting on, the
+  fallback grants no directory at all, and the refusal is logged once.
 - **Report a vulnerability privately.** The security guide used to say to open
   an issue, which is public. `SECURITY.md` now says how to report one through
   the repository's Security tab, privately, and what counts as one.

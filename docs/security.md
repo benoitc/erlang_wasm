@@ -191,7 +191,9 @@ security boundary.
    `fallback` backend, someone can replace a path component with a symlink
    between the check and the open. Check `wasi_fs:backend()`. On `fallback`,
    do not use a preopen on a directory that a hostile party can write to at
-   the same time.
+   the same time. To make it a rule, set the `require_native_fs` application
+   setting: on the fallback, no directory is then granted at all, and the
+   refusal is logged once.
 
    On the native backend, a preopen is a directory, not a name. It is opened
    once, when you grant it. So if someone replaces the host directory while an
@@ -271,7 +273,8 @@ these:
 - **Module size.** `max_module_bytes` (64 MiB by default). If you accept
   modules from outside, also limit how many you compile at the same time.
 - **The smallest imports.** Only the imports the module needs, narrow file
-  preopens, and the native file backend: `wasi_fs:backend()` answers `native`.
+  preopens, and the native file backend: `wasi_fs:backend()` answers `native`,
+  and `require_native_fs` set so that a missing NIF means no file access.
   The fallback has a race between checking a path and opening it; see
   [What you are still responsible for](#what-you-are-still-responsible-for).
 - **Narrow network grants.** Name the addresses and ports a module may reach.

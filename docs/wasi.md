@@ -310,6 +310,11 @@ wasi_fs:backend().   %% native | fallback
 Check it if your guests use symlinks. Only the native backend can set a
 link's own timestamps, or a timestamp finer than one second.
 
+To refuse file access when the native backend is not loaded, set the
+`require_native_fs` application setting to `true`. On the fallback, no
+directory is then granted, so a guest has no file system rather than one
+whose paths are checked and opened in two steps. The refusal is logged once.
+
 ## WASI 0.2
 
 A component built for `wasm32-wasip2` is answered by a different host,

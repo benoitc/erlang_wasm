@@ -27,7 +27,8 @@ all() ->
      a_root_replaced_after_it_was_opened_is_not_followed,
      a_duplicated_handle_reads_after_the_original_is_closed,
      a_fallback_handle_is_not_duplicated_by_reopening,
-     path_operations_refuse_what_the_walk_refuses].
+     path_operations_refuse_what_the_walk_refuses,
+     requiring_the_native_backend_grants_nothing_on_the_fallback].
 
 init_per_testcase(_Case, Config) ->
     Priv = ?config(priv_dir, Config),
@@ -44,6 +45,46 @@ init_per_testcase(_Case, Config) ->
     [{data, Data}, {secret, Secret} | Config].
 
 end_per_testcase(_, _) -> ok.
+
+%% A release whose NIF did not load runs on the fallback, whose paths are
+%% checked and then opened in two steps, and nothing let an embedder refuse
+%% that. With `require_native_fs' on, the fallback grants no directory, so a
+%% guest gets no file system rather than a weaker one. The native backend, or
+%% the setting off, grants as before.
+requiring_the_native_backend_grants_nothing_on_the_fallback(Config) ->
+    Data = ?config(data, Config),
+    Available = wasi_file_nif:available(),
+    try
+        ok = application:set_env(wasm, require_native_fs, true),
+        persistent_term:put({wasi_file_nif, available}, false),
+        ?assertEqual({error, ?ENOTCAPABLE}, wasi_fs:preopen(Data)),
+        ?assertEqual(?EBADF, prestat(Data)),
+        ok = application:set_env(wasm, require_native_fs, false),
+        ?assertMatch({ok, {fallback, _}}, wasi_fs:preopen(Data)),
+        ?assertEqual(?ESUCCESS, prestat(Data)),
+        persistent_term:put({wasi_file_nif, available}, Available),
+        ok = application:set_env(wasm, require_native_fs, true),
+        Available andalso
+            ?assertMatch({ok, {native, _}}, wasi_fs:preopen(Data))
+    after
+        persistent_term:put({wasi_file_nif, available}, Available),
+        application:unset_env(wasm, require_native_fs)
+    end.
+
+%% What `fd_prestat_get' answers for descriptor 3, the first preopen, in a
+%% preview 1 instance granted `Dir'.
+prestat(Dir) ->
+    {ok, M} = wasm:compile({wat, ~"(module
+        (import \"wasi_snapshot_preview1\" \"fd_prestat_get\"
+          (func $p (param i32 i32) (result i32)))
+        (memory (export \"memory\") 1)
+        (func (export \"prestat\") (result i32)
+          (call $p (i32.const 3) (i32.const 0))))"}),
+    {ok, I} = wasm:instantiate(
+                M, wasi_preview1:imports(#{dirs => [{~"/data", list_to_binary(Dir), read}]})),
+    {ok, [Errno]} = wasm:call(I, ~"prestat", []),
+    ok = wasm:destroy(I),
+    Errno.
 
 %% A duplicated handle owns its own descriptor: it reads the same file and keeps
 %% working after the original is closed. A read-via-stream uses this so the stream

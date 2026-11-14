@@ -1,0 +1,54 @@
+round 1 load 6.97
+main cmd02 1.548
+main serve02 793.4
+main async 478.348 4915.272
+main listen03 1614.3
+cand cmd02 1.535
+cand serve02 763.5
+cand async 489.634 4888.075
+cand listen03 1655.0
+round 2 load 7.34
+cand cmd02 1.573
+cand serve02 787.7
+cand async 499.148 4875.169
+cand listen03 1727.6
+main cmd02 1.599
+main serve02 754.8
+main async 497.711 5059.039
+main listen03 1705.1
+round 3 load 7.01
+main cmd02 1.561
+main serve02 773.4
+main async 488.893 4748.277
+main listen03 1644.7
+cand cmd02 1.580
+cand serve02 768.9
+cand async 489.101 4807.764
+cand listen03 1714.4
+round 4 load 6.11
+cand cmd02 1.527
+cand serve02 767.2
+cand async 482.346 4778.516
+cand listen03 1684.2
+main cmd02 1.562
+main serve02 759.4
+main async 483.166 4905.303
+main listen03 1665.1
+round 5 load 5.30
+main cmd02 1.667
+main serve02 817.3
+main async 501.725 5192.165
+main listen03 1628.4
+cand cmd02 1.554
+cand serve02 803.9
+cand async 497.662 4982.359
+cand listen03 1714.7
+round 6 load 7.27
+cand cmd02 1.543
+cand serve02 769.0
+cand async 483.097 4728.489
+cand listen03 1666.9
+main cmd02 1.697
+main serve02 782.8
+main async 483.204 4742.797
+main listen03 1620.1

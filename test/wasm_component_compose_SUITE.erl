@@ -24,7 +24,12 @@ all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           an_async_call_passes_a_stream_and_a_future,
           a_component_cannot_copy_a_tuple_to_itself,
           a_call_that_waits_is_a_subtask_from_a_callback,
-          a_call_that_waits_is_a_subtask_from_a_stackful_task].
+          a_call_that_waits_is_a_subtask_from_a_stackful_task,
+          a_stackful_callee_that_waits_releases_its_caller,
+          a_stackful_callee_that_waits_releases_a_callback_caller,
+          a_call_into_a_waiting_fiber_starts_when_it_returns,
+          destroy_leaves_no_fiber_behind,
+          a_trap_after_the_wait_fails_the_call].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -126,7 +131,9 @@ an_async_interface_signature_is_decoded(_Config) ->
     <<_:8/binary, CSec/binary>> = Consumer,
     ?assertEqual({ok, #{<<"local:pipe/svc">> =>
                             #{<<"sum">> => {[{stream, u8}, {future, u32}], u32},
-                              <<"later">> => {[{future, u32}], u32}}}},
+                              <<"later">> => {[{future, u32}], u32},
+                              <<"later-sync">> => {[{future, u32}], u32},
+                              <<"later-trap">> => {[{future, u32}], u32}}}},
                  wasm_component_types:import_interfaces(CSec)).
 
 %% A call into another component's async export: the consumer writes "abc" to
@@ -135,7 +142,7 @@ an_async_interface_signature_is_decoded(_Config) ->
 %% provider's task runs in the consumer's frame, where those ends are.
 an_async_call_passes_a_stream_and_a_future(_Config) ->
     {ok, Bin} = file:read_file(fixture_path("composedasync")),
-    {ok, Inst} = wasm_component:instantiate(Bin, #{}, #{loader => compile}),
+    {ok, Inst} = wasm_component:instantiate(Bin, tick(), #{loader => compile}),
     try
         ?assertEqual({ok, 301},
                      wasm_component:call_async(Inst, <<"run">>, {[], u32}, []))
@@ -148,7 +155,7 @@ an_async_call_passes_a_stream_and_a_future(_Config) ->
 %% `self' writes a tuple to a future it reads itself.
 a_component_cannot_copy_a_tuple_to_itself(_Config) ->
     {ok, Bin} = file:read_file(fixture_path("composedasync")),
-    {ok, Inst} = wasm_component:instantiate(Bin, #{}, #{loader => compile}),
+    {ok, Inst} = wasm_component:instantiate(Bin, tick(), #{loader => compile}),
     try
         ?assertMatch({error, #{class := trap, kind := intra_component_copy}},
                      wasm_component:call_async(Inst, <<"self">>, {[], u32}, []))
@@ -169,9 +176,64 @@ a_call_that_waits_is_a_subtask_from_a_callback(_Config) ->
 a_call_that_waits_is_a_subtask_from_a_stackful_task(_Config) ->
     later(<<"run-later">>).
 
+%% `later-sync' is a stackful lift: it waits for the caller's future on its
+%% own stack, so it runs in a process of its own, and its call to the host's
+%% `tick' reaches the owner's imports from there. Before, it waited on the
+%% caller's stack, under which the caller could not write: `async_deadlock'.
+a_stackful_callee_that_waits_releases_its_caller(_Config) ->
+    later(<<"run-later-sync">>).
+
+a_stackful_callee_that_waits_releases_a_callback_caller(_Config) ->
+    later(<<"run-later-sync-cb">>).
+
+%% A component instance whose stackful task waits is in the middle of a call:
+%% a second call into it would run on the same globals and memory. It answers
+%% STARTED and starts once the first has returned, so each gets its own
+%% value: 42 and 43.
+a_call_into_a_waiting_fiber_starts_when_it_returns(_Config) ->
+    ?assertEqual(85, element(2, later_value(<<"run-twice">>))).
+
+%% `leave-waiting' returns with its call to `later-sync' still waiting for a
+%% future nobody writes: its fiber lives in the frame until `destroy/1', which
+%% takes it down rather than leave it waiting for ever.
+destroy_leaves_no_fiber_behind(_Config) ->
+    {ok, Bin} = file:read_file(fixture_path("composedasync")),
+    {ok, Inst} = wasm_component:instantiate(Bin, tick(), #{loader => compile}),
+    ?assertEqual({ok, 7},
+                 wasm_component:call_async(Inst, <<"leave-waiting">>, {[], u32}, [])),
+    ?assertEqual(1, length(fibers())),
+    ok = wasm_component:destroy(Inst),
+    ?assertEqual([], fibers()).
+
+%% `later-trap' traps once its wait is over, in its fiber: the caller's call
+%% fails with that trap.
+a_trap_after_the_wait_fails_the_call(_Config) ->
+    {error, E} = later_value(<<"run-later-trap">>),
+    ?assertNotEqual(nomatch, string:find(io_lib:format("~p", [E]), "unreachable")).
+
+%% The live processes running a fiber of this process.
+fibers() ->
+    Me = self(),
+    [P || P <- processes(),
+          {dictionary, D} <- [erlang:process_info(P, dictionary)],
+          {{wasm_async, fiber}, {Owner, _}} <- D, Owner =:= Me].
+
+later_value(Export) ->
+    {ok, Bin} = file:read_file(fixture_path("composedasync")),
+    {ok, Inst} = wasm_component:instantiate(Bin, tick(), #{loader => compile}),
+    try wasm_component:call_async(Inst, Export, {[], u32}, [])
+    after wasm_component:destroy(Inst)
+    end.
+
+%% The host's `local:host/tick', which the composition imports for its
+%% provider: 1.
+tick() ->
+    #{{<<"local:host/tick">>, <<"tick">>} =>
+          wasm_component:import_fun({[], u32}, fun([]) -> 1 end)}.
+
 later(Export) ->
     {ok, Bin} = file:read_file(fixture_path("composedasync")),
-    {ok, Inst} = wasm_component:instantiate(Bin, #{}, #{loader => compile}),
+    {ok, Inst} = wasm_component:instantiate(Bin, tick(), #{loader => compile}),
     try
         ?assertEqual({ok, 42}, wasm_component:call_async(Inst, Export, {[], u32}, []))
     after

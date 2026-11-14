@@ -8833,3 +8833,24 @@ interleaved, both orders, each round started at a one-minute load below 8
 Medians. The faster rows are within the run's noise, not a gain.
 
 Scripts and log: `test/audit/raw/async-subtasks/`.
+
+## A stackful async callee in a fiber (2026-11-14)
+
+Every host-side core function a component's linker builds now checks one
+process-dictionary key, which says whether it runs in a fiber, and a
+realloc or destructor called from the host checks another. Measured against
+main (`95bda38`), each sample a fresh VM at `+S 10:10`, six rounds
+interleaved, both orders, each round started at a one-minute load below 8
+(7.34 at most), with the gates fixed in the plan.
+
+| path | main | candidate | ratio | gate | result |
+| --- | --- | --- | --- | --- | --- |
+| 0.2 `run_command`, `p2_cli_hello_stdout`, ms | 1.581 | 1.549 | 0.980x | 1.03x | pass |
+| 0.2 `run_serve/4`, hello world, us a request | 778.1 | 769.0 | 0.988x | 1.03x | pass |
+| `call_async` on asyncval's `read-future`, us | 486.0 | 489.4 | 1.007x | 1.03x | pass |
+| `call_async` on asyncval's `sum-stream` (100 bytes), us | 4910.3 | 4841.5 | 0.986x | 1.03x | pass |
+| 0.3 listener, hello world, requests a second | 1636.6 | 1699.3 | 0.963x in time | 1.03x | pass |
+
+Medians. The faster rows are within the run's noise, not a gain.
+
+Scripts and log: `test/audit/raw/stackful-fibers/`.

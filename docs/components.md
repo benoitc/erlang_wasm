@@ -142,10 +142,10 @@ Notes:
   once the called component returns. What the called component does after it
   returns, such as writing a response body, runs with the caller's other
   tasks.
-- A called component lifted without a callback (a stackful lift) runs on the
-  caller's stack: if it waits for something its caller does next, the call
-  cannot finish. Rust and C components built with `wit-bindgen` use
-  callbacks.
+- A called component lifted without a callback (a stackful lift) runs its
+  whole call on one stack. Called from another component, it gets a process
+  of its own for that call, so it can wait for what its caller does next. A
+  call into it while it waits starts once it returns.
 - A component may not read and write the same stream or future when its
   elements are not numbers, as the specification requires for now. Doing so
   traps with `intra_component_copy`. A middleware that hands its own future

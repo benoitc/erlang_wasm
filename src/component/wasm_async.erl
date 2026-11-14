@@ -38,7 +38,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% Tasks that outlive the call that started them, and the host's side of the
 %% streams and futures they use.
 -export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
-         nested/1,
+         nested/1, owner_side/1, fiber_waiting/1, reenter/1, start_fiber/1, suspend_fiber/1,
          guest_call/1,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
          on_end/2,
@@ -131,6 +131,15 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% Set by `task.return': the running task has resolved (its value may be
 %% `undefined', for a function with no result).
 -define(RESOLVED, {?MODULE, resolved}).
+%% In a fiber: `{Owner, Ref}'. In the owner, while it serves one: `{Pid, Ref}'.
+-define(FIBER, {?MODULE, fiber}).
+-define(SERVING, {?MODULE, serving}).
+%% The frame's fibers, `[{Pid, Mon}]', and the tag on their monitors.
+-define(FIBERS, {?MODULE, fibers}).
+-define(FIBER_DOWN, {?MODULE, fiber_down}).
+%% Calls into a component instance whose fiber waits, started once it returns:
+%% `[{Comp, Subtask, Start, Finish}]', oldest first.
+-define(DEFERRED, {?MODULE, deferred}).
 
 %%% --------------------------------------------------------------- task frame ---
 
@@ -252,6 +261,7 @@ teardown() ->
     _ = [end_hooks(E) || {?WAITABLE(_), E} <- get()],
     erase(?TEARING),
     stop_producers(),
+    stop_fibers(),
     Ref = get(?TASK_REF),
     clear_frame(),
     _ = erase(?TASK_INST),
@@ -318,6 +328,8 @@ is_frame_key(?WAIT_HOOK)   -> true;
 is_frame_key(?PRODUCERS)   -> true;
 is_frame_key(?TASKS)       -> true;
 is_frame_key(?HOST_ENDS)   -> true;
+is_frame_key(?FIBERS)      -> true;
+is_frame_key(?DEFERRED)    -> true;
 is_frame_key(_)            -> false.
 
 -doc "The value the task handed back through `task.return`, or `undefined`.".
@@ -856,6 +868,9 @@ async_lower({Params, Result}, Fun) ->
             %% is a subtask that completes when that task does.
             {pending_task, Id, Finish} ->
                 link_subtask(Result, Rest, Id, Finish);
+            %% The callee's instance is busy: the call starts later.
+            {pending_start, Comp, Start, Finish} ->
+                defer_subtask(Result, Rest, Comp, Start, Finish);
             {returned, V} ->
                 write_return_area(Inst, Result, Rest, V),
                 {ok, [?SUBTASK_RETURNED]};
@@ -863,6 +878,51 @@ async_lower({Params, Result}, Fun) ->
                 write_return_area(Inst, Result, Rest, V),
                 {ok, [?SUBTASK_RETURNED]}
         end
+    end.
+
+defer_subtask(Result, Rest, Comp, Start, Finish) ->
+    H = new_subtask(Result, Rest),
+    put(?DEFERRED, deferred() ++ [{Comp, H, Start, Finish}]),
+    {ok, [(H bsl 4) bor ?SUBTASK_STARTED]}.
+
+new_subtask(Result, Rest) ->
+    RetPtr = case Rest of [P | _] -> P; [] -> undefined end,
+    H = next_handle(),
+    put(?WAITABLE(H), #{'end' => subtask, result => Result, ret_ptr => RetPtr,
+                        value => undefined, state => awaiting,
+                        inst => task_instance()}),
+    H.
+
+deferred() -> case get(?DEFERRED) of undefined -> []; L -> L end.
+
+-doc "Whether a fiber of component instance `Comp` waits in the frame.".
+-spec fiber_waiting(term()) -> boolean().
+fiber_waiting(undefined) -> false;
+fiber_waiting(Comp) ->
+    lists:any(fun(#{status := fiber, comp := C}) -> C =:= Comp;
+                 (_) -> false
+              end, maps:values(tasks())).
+
+%% A fiber of `Comp' has returned: the oldest call that waited for it starts,
+%% and completes its subtask, now or once it returns in turn.
+start_deferred(Comp) ->
+    case lists:keytake(Comp, 1, deferred()) of
+        {value, {Comp, H, Start, Finish}, Rest} ->
+            put(?DEFERRED, Rest),
+            case with_saved(Start) of
+                {ok, V} ->
+                    update(H, fun(S) -> S#{state => ready, value => Finish(V)} end),
+                    start_deferred(Comp);
+                {pending_task, Id} ->
+                    put(?TASKS, maps:update_with(
+                                  Id, fun(T) -> T#{link => {H, Finish}} end, tasks())),
+                    progress;
+                {busy, Comp} ->
+                    put(?DEFERRED, [{Comp, H, Start, Finish} | Rest]),
+                    progress;
+                {error, _} = E -> E
+            end;
+        false -> progress
     end.
 
 link_subtask(Result, Rest, Id, Finish) ->
@@ -954,24 +1014,39 @@ wait_on_set(Set) ->
 wait_write(_Set, Ptr, _Mode) when Ptr rem 4 =/= 0 ->
     {trap, unaligned_event_pointer};
 wait_write(Set, Ptr, Mode) ->
-    case wait_core(fun() -> deliver_first(Set) end, Mode) of
-        {event, EC, E1, E2} ->
-            ok = wasm:write_memory(task_instance(), Ptr,
-                                   <<E1:32/little, (E2 band 16#FFFFFFFF):32/little>>),
-            {ok, [EC]};
-        none ->
-            ok = wasm:write_memory(task_instance(), Ptr, <<0:64>>),
-            {ok, [?EV_NONE]};
-        {error, Reason} ->
-            {trap, Reason}
-    end.
+    Finish = fun({event, EC, E1, E2}) ->
+                     ok = wasm:write_memory(
+                            task_instance(), Ptr,
+                            <<E1:32/little, (E2 band 16#FFFFFFFF):32/little>>),
+                     {ok, [EC]};
+                (none) ->
+                     ok = wasm:write_memory(task_instance(), Ptr, <<0:64>>),
+                     {ok, [?EV_NONE]};
+                ({error, Reason}) ->
+                     {trap, Reason}
+             end,
+    wait_or_block(fun() -> deliver_first(Set) end, Mode, Finish).
 
 %% A copy declared without `async' waits for its own end's event and returns its
 %% payload, as the built-in's result.
 wait_own(H) ->
-    case wait_core(fun() -> try_deliver(H) end, blocking) of
-        {event, _, _, Payload} -> {ok, [Payload]};
-        {error, Reason} -> {trap, Reason}
+    wait_or_block(fun() -> try_deliver(H) end, blocking,
+                  fun({event, _, _, Payload}) -> {ok, [Payload]};
+                     ({error, Reason}) -> {trap, Reason}
+                  end).
+
+%% A blocking wait the owner makes for a fiber does not block the owner: the
+%% fiber waits instead, as a task of the frame, and `Finish' answers it once
+%% `Ready' has its event (`serve_fiber/2').
+wait_or_block(Ready, Mode, Finish) ->
+    case {Mode, get(?SERVING)} of
+        {blocking, {_, _}} ->
+            case wait_core(Ready, nonblocking) of
+                none -> throw({?MODULE, fiber_block, Ready, Finish});
+                Event -> Finish(Event)
+            end;
+        _ ->
+            Finish(wait_core(Ready, Mode))
     end.
 
 %% Ingest what is already queued and deliver if `Ready' finds an event; otherwise
@@ -1366,6 +1441,13 @@ step_1(Deadline) ->
     end.
 
 ready_task([]) -> none;
+ready_task([{Id, #{status := fiber, fiber := #{ready := Ready}} = Task} | Rest]) ->
+    put(?TASK_INST, maps:get(inst, Task)),
+    put_comp(#{component => maps:get(comp, Task, undefined)}),
+    case Ready() of
+        {event, _, _, _} = E -> {Id, {fiber_event, E}};
+        none -> ready_task(Rest)
+    end;
 ready_task([{Id, #{status := yield}} | _]) -> {Id, [0, 0, 0]};
 %% Delivering an event copies into the waiting task's memory, so its instance
 %% is current first: tasks of two composed components wait in one frame.
@@ -1406,6 +1488,8 @@ needed(H) ->
     end.
 
 %% Give task `Id' one callback turn.
+run_task(Id, {fiber_event, Event}) ->
+    run_fiber(Id, maps:get(Id, tasks()), Event);
 run_task(Id, Args) ->
     #{callback := {CbInst, CbName}, ctx := Ctx, budget := Budget,
       inst := Inst} = Task = maps:get(Id, tasks()),
@@ -1464,6 +1548,172 @@ finished(Id, #{link := _}) ->
 finished(Id, _Task) ->
     put(?TASKS, maps:remove(Id, tasks())),
     progress.
+
+%%% ------------------------------------------------------------------ fibers ---
+
+-doc """
+Wrap a core function the host provides to a guest (an import, an async
+built-in, a resource intrinsic): run in a fiber, it is run by the owner, which
+holds the frame and the host's resources, and its answer, or what it raised,
+comes back to the fiber.
+""".
+-spec owner_side(function()) -> function().
+owner_side(F) ->
+    fun(Ctx, Flats) ->
+        case get(?FIBER) of
+            undefined -> F(Ctx, Flats);
+            {Owner, Ref} -> fiber_call(Owner, Ref, fun() -> F(Ctx, Flats) end)
+        end
+    end.
+
+%% While it waits, the fiber runs what the owner sends back into the guest
+%% (an allocation for a result), since the guest's call is here.
+fiber_call(Owner, Ref, Fun) ->
+    Owner ! {fiber_call, Ref, self(), Fun},
+    fiber_wait(Owner, Ref).
+
+fiber_wait(Owner, Ref) ->
+    receive
+        {fiber_reply, Ref, Answer} -> unwrap(Answer);
+        {fiber_reenter, Ref, G} ->
+            Owner ! {fiber_reentered, Ref, protect(G)},
+            fiber_wait(Owner, Ref)
+    end.
+
+protect(G) ->
+    try {value, G()}
+    catch Class:Reason:Stack -> {raise, Class, Reason, Stack}
+    end.
+
+unwrap({value, V}) -> V;
+unwrap({raise, Class, Reason, Stack}) -> erlang:raise(Class, Reason, Stack).
+
+-doc """
+Run `Fun`, a call back into a guest, where the guest's call is: in the fiber
+the owner is serving, if it is serving one, else here.
+""".
+-spec reenter(fun(() -> T)) -> T.
+reenter(Fun) ->
+    case get(?SERVING) of
+        undefined -> Fun();
+        {Pid, Ref} ->
+            Pid ! {fiber_reenter, Ref, Fun},
+            receive {fiber_reentered, Ref, Answer} -> unwrap(Answer) end
+    end.
+
+-doc """
+Run `Call`, a stackful task's whole guest call, in a fiber of its own, and
+serve it until it ends (`{done, Result}`) or waits (`{waiting, Fiber}`, for
+`suspend_fiber/2`). Its stack is its own, so while it waits the caller below
+it goes on.
+""".
+-spec start_fiber(fun(() -> term())) -> {done, term()} | {waiting, map()} |
+                                        {error, term()}.
+start_fiber(Call) ->
+    Owner = self(),
+    Ref = make_ref(),
+    {Pid, Mon} = spawn_opt(
+                   fun() ->
+                           ok = wasm_lifetime:bind(Owner),
+                           put(?FIBER, {Owner, Ref}),
+                           Owner ! {fiber_done, Ref, protect(Call)}
+                   end, [{monitor, [{tag, ?FIBER_DOWN}]}]),
+    put(?FIBERS, [{Pid, Mon} | fibers()]),
+    serve_fiber(#{pid => Pid, mon => Mon, ref => Ref}).
+
+fibers() -> case get(?FIBERS) of undefined -> []; L -> L end.
+
+%% Answer the fiber's calls, one at a time, as a guest call of this process,
+%% until it ends or waits.
+serve_fiber(#{pid := Pid, ref := Ref} = F) ->
+    put(?SERVING, {Pid, Ref}),
+    put(?RUNNING, running() + 1),
+    try serve_loop(F)
+    after
+        put(?RUNNING, running() - 1),
+        erase(?SERVING)
+    end.
+
+serve_loop(#{pid := Pid, mon := Mon, ref := Ref} = F) ->
+    receive
+        {fiber_call, Ref, Pid, Fun} ->
+            try Fun() of
+                V -> Pid ! {fiber_reply, Ref, {value, V}}, serve_loop(F)
+            catch
+                throw:{?MODULE, fiber_block, Ready, Finish} ->
+                    {waiting, F#{ready => Ready, finish => Finish}};
+                Class:Reason:Stack ->
+                    Pid ! {fiber_reply, Ref, {raise, Class, Reason, Stack}},
+                    serve_loop(F)
+            end;
+        {fiber_done, Ref, Answer} ->
+            forget_fiber(Pid),
+            receive {?FIBER_DOWN, Mon, process, Pid, _} -> ok end,
+            case Answer of
+                {value, V} -> {done, V};
+                {raise, _, Reason, _} -> {error, {fiber_failed, Reason}}
+            end;
+        {?FIBER_DOWN, Mon, process, Pid, Reason} ->
+            forget_fiber(Pid),
+            {error, {fiber_failed, Reason}}
+    end.
+
+forget_fiber(Pid) ->
+    put(?FIBERS, lists:keydelete(Pid, 1, fibers())).
+
+-doc """
+Keep a waiting fiber as a task of the frame, as `suspend_task/4` keeps a
+callback task: the executor resumes it once its wait has an event.
+""".
+-spec suspend_fiber(map()) -> reference().
+suspend_fiber(F) ->
+    ok = call_over(),
+    _ = erase(?TASK_RETURN),
+    Task = #{fiber => F, status => fiber, ctx => save_ctx(), budget => ?MAX_COPY,
+             inst => task_instance(), comp => comp(), mode => get(?MODE)},
+    Id = make_ref(),
+    put(?TASKS, (tasks())#{Id => Task}),
+    Id.
+
+%% Answer the fiber's wait and serve it again, until it ends or waits again.
+run_fiber(Id, #{fiber := #{pid := Pid, ref := Ref, finish := Finish} = F} = Task,
+          Event) ->
+    restore_ctx(maps:get(ctx, Task)),
+    put(?TASK_INST, maps:get(inst, Task)),
+    put_comp(Task#{component => maps:get(comp, Task, undefined)}),
+    put_mode(Task),
+    _ = erase(?RESOLVED),
+    Pid ! {fiber_reply, Ref, protect(fun() -> Finish(Event) end)},
+    Outcome = serve_fiber(maps:without([ready, finish], F)),
+    Task1 = resolve_link(Task),
+    _ = erase(?TASK_RETURN),
+    _ = erase(?RESOLVED),
+    case Outcome of
+        {waiting, F1} ->
+            put(?TASKS, (tasks())#{Id => Task1#{fiber => F1, ctx => save_ctx()}}),
+            progress;
+        %% The fiber's call ended in a trap or another error: so does the
+        %% task, with it.
+        {done, {error, _} = E} ->
+            put(?TASKS, maps:remove(Id, tasks())),
+            E;
+        {done, _} ->
+            case finished(Id, Task1) of
+                progress -> start_deferred(maps:get(comp, Task1, undefined));
+                Other -> Other
+            end;
+        {error, _} = E -> put(?TASKS, maps:remove(Id, tasks())), E
+    end.
+
+%% Teardown: a fiber still waiting is killed, and waited for, as producers are.
+stop_fibers() ->
+    Fs = fibers(),
+    _ = [exit(Pid, kill) || {Pid, _} <- Fs],
+    _ = [receive {?FIBER_DOWN, Mon, process, _, _} -> ok
+         after 5000 -> erlang:demonitor(Mon, [flush])
+         end || {_, Mon} <- Fs],
+    erase(?FIBERS),
+    ok.
 
 next(Id, #{budget := B} = Task, Status, Ctx) ->
     put(?TASKS, (tasks())#{Id => Task#{status => Status, ctx => Ctx,

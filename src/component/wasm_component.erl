@@ -417,7 +417,7 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     Leftovers = [K || K <- EntryImports, not maps:is_key(K, Host)],
     UseSimple = Leftovers =:= []
         andalso (length(Cores) =:= 1
-                 orelse wasm_component_link:exports_resolve_on_entry(Sec, EntryIdx)),
+                 orelse wasm_component_link:exports_resolve_on_entry(Sec, EntryIdx, Core)),
     %% This instance's own resource handle table (see wasm_resources). It is
     %% current while the cores are built, so a start function that mints a
     %% handle mints it here; guest calls run with it current, and destroy frees

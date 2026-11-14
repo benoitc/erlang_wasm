@@ -1007,19 +1007,29 @@ block_wait_1(Ready, Ref) ->
             end
     end.
 
-%% A waiter between guest calls lets the frame's other tasks run: the one it
-%% waits for may be one of them, such as a task of another component its
-%% subtask stands for.
+%% A waiter lets the frame's other tasks run: the one it waits for may be one
+%% of them, such as a task of another component its subtask stands for.
+%% Between guest calls any task may run. Inside one (a stackful wait), only
+%% another component's: the waiting instance is never entered again.
 run_other() ->
-    case running() =:= 0 andalso tasks() =/= #{} of
-        false -> none;
-        true ->
+    case runnable(maps:to_list(tasks())) of
+        [] -> none;
+        Tasks ->
             with_saved(fun() ->
-                               case ready_task(maps:to_list(tasks())) of
+                               case ready_task(Tasks) of
                                    {Id, Args} -> run_task(Id, Args);
                                    none -> none
                                end
                        end)
+    end.
+
+runnable([]) -> [];
+runnable(Tasks) ->
+    case {running(), comp()} of
+        {0, _} -> Tasks;
+        {_, undefined} -> [];
+        {_, Mine} -> [T || {_, #{comp := C}} = T <- Tasks,
+                           C =/= undefined, C =/= Mine]
     end.
 
 again(Ready, Ref) ->

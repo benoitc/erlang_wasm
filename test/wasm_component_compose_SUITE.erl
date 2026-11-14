@@ -23,7 +23,8 @@ all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           an_async_interface_signature_is_decoded,
           an_async_call_passes_a_stream_and_a_future,
           a_component_cannot_copy_a_tuple_to_itself,
-          a_call_that_waits_is_a_subtask_from_a_callback].
+          a_call_that_waits_is_a_subtask_from_a_callback,
+          a_call_that_waits_is_a_subtask_from_a_stackful_task].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),

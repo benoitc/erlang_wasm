@@ -16,7 +16,7 @@ flags, option, result), resource handles and the async `future`, `stream` and
 
 -include("wasm_component.hrl").
 
--export([plain_name/1, label/1]).
+-export([plain_name/1, label/1, forwarded_funcs/1]).
 -export([import_interfaces/1, parse_types/1, type_space/1, func_sig/2,
          value_desc/2, resource_dtors/1]).
 
@@ -60,6 +60,65 @@ import_interfaces(Sec) ->
                                    maps:merge(Acc, resolve_imports(Imports, Types))
                            end, #{}, sections(?SEC_COMP_IMPORT, Sec))}
       end).
+
+-doc """
+For a component of only types, imports and exports, as wit-component writes to
+export an interface: each exported function that is a function it imports,
+`#{ExportName => ImportName}`. A component with anything else gives `#{}`.
+""".
+-spec forwarded_funcs(binary()) -> #{binary() => binary()}.
+forwarded_funcs(Sec) ->
+    try forwarded(Sec, 0, #{}, #{})
+    catch _:_ -> #{}
+    end.
+
+forwarded(<<>>, _N, _Imported, Acc) ->
+    Acc;
+forwarded(<<SecId, Rest0/binary>>, N, Imported, Acc) ->
+    {Size, Rest1} = wasm_leb128:u32(Rest0),
+    <<Content:Size/binary, Rest2/binary>> = Rest1,
+    case SecId of
+        Id when Id =:= 0; Id =:= ?SEC_TYPE ->
+            forwarded(Rest2, N, Imported, Acc);
+        ?SEC_COMP_IMPORT ->
+            {Count, R} = wasm_leb128:u32(Content),
+            {N1, Imported1} = import_funcs(Count, R, N, Imported),
+            forwarded(Rest2, N1, Imported1, Acc);
+        ?SEC_EXPORT ->
+            {Count, R} = wasm_leb128:u32(Content),
+            {N1, Acc1} = export_funcs(Count, R, N, Imported, Acc),
+            forwarded(Rest2, N1, Imported, Acc1);
+        _ ->
+            #{}
+    end.
+
+import_funcs(0, _Bin, N, Imported) ->
+    {N, Imported};
+import_funcs(K, Bin, N, Imported) ->
+    {Name, R0} = label(Bin),
+    case externdesc(R0) of
+        {{func, _}, R1} -> import_funcs(K - 1, R1, N + 1, Imported#{N => Name});
+        {_, R1} -> import_funcs(K - 1, R1, N, Imported)
+    end.
+
+%% A function export also takes the next function index.
+export_funcs(0, _Bin, N, _Imported, Acc) ->
+    {N, Acc};
+export_funcs(K, Bin, N, Imported, Acc) ->
+    {Name, R0} = label(Bin),
+    {Sort, R1} = sort(R0),
+    {Idx, R2} = wasm_leb128:u32(R1),
+    R3 = skip_ascription(R2),
+    case {Sort, R0} of
+        {other, <<16#01, _/binary>>} ->
+            Acc1 = case maps:find(Idx, Imported) of
+                       {ok, Imp} -> Acc#{Name => Imp};
+                       error -> Acc
+                   end,
+            export_funcs(K - 1, R3, N + 1, Imported, Acc1);
+        _ ->
+            export_funcs(K - 1, R3, N, Imported, Acc)
+    end.
 
 %% The content of every section with id `Id', each on its own.
 sections(Id, Sec) ->

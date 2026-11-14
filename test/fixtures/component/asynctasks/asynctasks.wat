@@ -9,6 +9,9 @@
 ;; drops the stream `feed' returns unread. `pipe' hands the stream `chan'
 ;; returns, which a producer process fills over time, to `drain', a sink, and
 ;; answers the value of the future `drain' resolves at the end of the stream.
+;; `renamed' lifts core function `go' with callback `resume', and
+;; `renamed-stackful' lifts `go2': none is named after the export, so only the
+;; lift's own declaration finds them.
 ;; Build: `scripts/build-wat-component-fixtures.sh`.
 (component
   (type $s8 (stream u8))
@@ -162,6 +165,13 @@
       (drop (call $fread (call $drain (call $chan)) (i32.const 64)))
       (call $ret (i32.load (i32.const 64))))
 
+    ;; go() yields; resume answers 9. go2() answers 11.
+    (func (export "go") (result i32) (i32.const 1))
+    (func (export "resume") (param i32 i32 i32) (result i32)
+      (call $ret (i32.const 9))
+      (i32.const 0))
+    (func (export "go2") (call $ret (i32.const 11)))
+
     (func (export "[async-lift]reenter")
       (call $ret (call $reenter)))
 
@@ -200,6 +210,10 @@
     (canon lift (core func $i "[async-lift]take-future") async))
   (func (export "pipe") async (result u32)
     (canon lift (core func $i "[async-lift]pipe") async))
+  (func (export "renamed") async (result u32)
+    (canon lift (core func $i "go") async (callback (func $i "resume"))))
+  (func (export "renamed-stackful") async (result u32)
+    (canon lift (core func $i "go2") async))
   (func (export "reenter") async (result u32)
     (canon lift (core func $i "[async-lift]reenter") async))
   (func (export "ended") async (result u32)

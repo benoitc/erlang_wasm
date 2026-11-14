@@ -636,15 +636,21 @@ bridge_async(Provider, FuncName, {Params, Result} = Sig) ->
              Args = [as_end(P, A)
                      || {P, A} <- lists:zip(Params,
                                             to_provider(Params, Terms, ProviderId))],
+             Finish = fun(Value) ->
+                              from_provider(Result, Value, Provider, ProviderId)
+                      end,
              case wasm_async:nested(
                     fun() -> start_nested(Provider, FuncName, Sig, Args) end) of
                  {ok, Value} ->
                      {returned, from_provider(Result, Value, Provider, ProviderId)};
                  {pending_task, Id} ->
-                     {pending_task, Id,
-                      fun(Value) ->
-                              from_provider(Result, Value, Provider, ProviderId)
-                      end};
+                     {pending_task, Id, Finish};
+                 {busy, Comp} ->
+                     {pending_start, Comp,
+                      fun() ->
+                              wasm_async:nested(
+                                fun() -> start_nested(Provider, FuncName, Sig, Args) end)
+                      end, Finish};
                  {error, _} = E ->
                      throw({wasm_bridge_failed, FuncName, E})
              end
@@ -1146,10 +1152,15 @@ do_call_async(I, Export, {Params, Result}, Args, Opts, Mode) ->
         {ok, LiftName} ->
             Inst = core_with_export(I, LiftName),
             Callback = async_callback(I, LiftName),
-            case wasm_async:backpressure(Inst) of
-                0 -> run_async(Inst, LiftName, Callback, {Params, Result}, Args,
-                               Opts#{component => maps:get(res_id, I, undefined)},
-                               Mode);
+            Comp = maps:get(res_id, I, undefined),
+            case {wasm_async:backpressure(Inst), wasm_async:fiber_waiting(Comp)} of
+                %% The instance's stackful task waits in the middle of its call:
+                %% another component's call starts once it has returned.
+                {0, true} when Mode =:= nested -> {busy, Comp};
+                {0, true} -> {error, async_backpressure};
+                {0, false} ->
+                    run_async(Inst, LiftName, Callback, {Params, Result}, Args,
+                              Opts#{component => Comp}, Mode);
                 %% Only a task of this instance can lower it, and a task runs in
                 %% its caller's process: waiting here would wait for ever.
                 _ -> {error, async_backpressure}

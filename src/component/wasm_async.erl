@@ -38,7 +38,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% Tasks that outlive the call that started them, and the host's side of the
 %% streams and futures they use.
 -export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
-         nested/1, owner_side/1, reenter/1, start_fiber/1, suspend_fiber/1,
+         nested/1, owner_side/1, fiber_waiting/1, reenter/1, start_fiber/1, suspend_fiber/1,
          guest_call/1,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
          on_end/2,
@@ -137,6 +137,9 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% The frame's fibers, `[{Pid, Mon}]', and the tag on their monitors.
 -define(FIBERS, {?MODULE, fibers}).
 -define(FIBER_DOWN, {?MODULE, fiber_down}).
+%% Calls into a component instance whose fiber waits, started once it returns:
+%% `[{Comp, Subtask, Start, Finish}]', oldest first.
+-define(DEFERRED, {?MODULE, deferred}).
 
 %%% --------------------------------------------------------------- task frame ---
 
@@ -326,6 +329,7 @@ is_frame_key(?PRODUCERS)   -> true;
 is_frame_key(?TASKS)       -> true;
 is_frame_key(?HOST_ENDS)   -> true;
 is_frame_key(?FIBERS)      -> true;
+is_frame_key(?DEFERRED)    -> true;
 is_frame_key(_)            -> false.
 
 -doc "The value the task handed back through `task.return`, or `undefined`.".
@@ -864,6 +868,9 @@ async_lower({Params, Result}, Fun) ->
             %% is a subtask that completes when that task does.
             {pending_task, Id, Finish} ->
                 link_subtask(Result, Rest, Id, Finish);
+            %% The callee's instance is busy: the call starts later.
+            {pending_start, Comp, Start, Finish} ->
+                defer_subtask(Result, Rest, Comp, Start, Finish);
             {returned, V} ->
                 write_return_area(Inst, Result, Rest, V),
                 {ok, [?SUBTASK_RETURNED]};
@@ -871,6 +878,51 @@ async_lower({Params, Result}, Fun) ->
                 write_return_area(Inst, Result, Rest, V),
                 {ok, [?SUBTASK_RETURNED]}
         end
+    end.
+
+defer_subtask(Result, Rest, Comp, Start, Finish) ->
+    H = new_subtask(Result, Rest),
+    put(?DEFERRED, deferred() ++ [{Comp, H, Start, Finish}]),
+    {ok, [(H bsl 4) bor ?SUBTASK_STARTED]}.
+
+new_subtask(Result, Rest) ->
+    RetPtr = case Rest of [P | _] -> P; [] -> undefined end,
+    H = next_handle(),
+    put(?WAITABLE(H), #{'end' => subtask, result => Result, ret_ptr => RetPtr,
+                        value => undefined, state => awaiting,
+                        inst => task_instance()}),
+    H.
+
+deferred() -> case get(?DEFERRED) of undefined -> []; L -> L end.
+
+-doc "Whether a fiber of component instance `Comp` waits in the frame.".
+-spec fiber_waiting(term()) -> boolean().
+fiber_waiting(undefined) -> false;
+fiber_waiting(Comp) ->
+    lists:any(fun(#{status := fiber, comp := C}) -> C =:= Comp;
+                 (_) -> false
+              end, maps:values(tasks())).
+
+%% A fiber of `Comp' has returned: the oldest call that waited for it starts,
+%% and completes its subtask, now or once it returns in turn.
+start_deferred(Comp) ->
+    case lists:keytake(Comp, 1, deferred()) of
+        {value, {Comp, H, Start, Finish}, Rest} ->
+            put(?DEFERRED, Rest),
+            case with_saved(Start) of
+                {ok, V} ->
+                    update(H, fun(S) -> S#{state => ready, value => Finish(V)} end),
+                    start_deferred(Comp);
+                {pending_task, Id} ->
+                    put(?TASKS, maps:update_with(
+                                  Id, fun(T) -> T#{link => {H, Finish}} end, tasks())),
+                    progress;
+                {busy, Comp} ->
+                    put(?DEFERRED, [{Comp, H, Start, Finish} | Rest]),
+                    progress;
+                {error, _} = E -> E
+            end;
+        false -> progress
     end.
 
 link_subtask(Result, Rest, Id, Finish) ->
@@ -1640,7 +1692,11 @@ run_fiber(Id, #{fiber := #{pid := Pid, ref := Ref, finish := Finish} = F} = Task
         {waiting, F1} ->
             put(?TASKS, (tasks())#{Id => Task1#{fiber => F1, ctx => save_ctx()}}),
             progress;
-        {done, _} -> finished(Id, Task1);
+        {done, _} ->
+            case finished(Id, Task1) of
+                progress -> start_deferred(maps:get(comp, Task1, undefined));
+                Other -> Other
+            end;
         {error, _} = E -> put(?TASKS, maps:remove(Id, tasks())), E
     end.
 

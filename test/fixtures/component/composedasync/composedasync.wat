@@ -13,6 +13,8 @@
 ;; returns 41 + 1. `later-sync' does the same as a stackful lift, which waits
 ;; on its own stack, then adds the host's `tick' (1); `later-trap' traps once
 ;; its wait is over. The `-sync' and `-trap' consumers call those.
+;; `run-twice' calls `later-sync' twice: the second call comes while the first
+;; waits, and starts once it has returned; it answers 42 + 43.
 ;; Build: `scripts/build-wat-component-fixtures.sh`.
 (component
   (component $provider
@@ -41,9 +43,15 @@
       (import "" "tick" (func $tick (result i32)))
       ;; later-sync(f) -> u32: as `later', stackful: the blocking read waits
       ;; on this task's own stack, and the host's tick adds the one.
+      ;; It keeps its own call's state at 400 across the wait, as a shadow
+      ;; stack would: a second call entering meanwhile overwrites it, and the
+      ;; answer is 1000 more.
       (func (export "[async-lift]local:pipe/svc#later-sync") (param $f i32)
+        (i32.store (i32.const 400) (local.get $f))
         (drop (call $fread (local.get $f) (i32.const 264)))
-        (call $ret (i32.add (i32.load (i32.const 264)) (call $tick))))
+        (call $ret (i32.add (i32.add (i32.load (i32.const 264)) (call $tick))
+                            (i32.mul (i32.ne (i32.load (i32.const 400)) (local.get $f))
+                                     (i32.const 1000)))))
       ;; later-trap(f) -> u32: waits for `f', then traps.
       (func (export "[async-lift]local:pipe/svc#later-trap") (param $f i32)
         (drop (call $fread (local.get $f) (i32.const 264)))
@@ -187,6 +195,26 @@
           (then (drop (call $wait (local.get $set) (i32.const 320)))))
         (call $ret (i32.load (i32.const 300))))
       (func (export "[async-lift]run-later-sync") (call $wait_with (i32.const 1)))
+      (func (export "[async-lift]run-twice")
+        (local $f1 i64) (local $f2 i64) (local $set i32)
+        (local.set $f1 (call $newf))
+        (local.set $f2 (call $newf))
+        (local.set $set (call $ws_new))
+        (call $join (i32.shr_u (call $later_sync (i32.wrap_i64 (local.get $f1))
+                                                 (i32.const 300)) (i32.const 4))
+                    (local.get $set))
+        (call $join (i32.shr_u (call $later_sync (i32.wrap_i64 (local.get $f2))
+                                                 (i32.const 304)) (i32.const 4))
+                    (local.get $set))
+        (i32.store (i32.const 308) (i32.const 41))
+        (drop (call $fwrite (i32.wrap_i64 (i64.shr_u (local.get $f1) (i64.const 32)))
+                            (i32.const 308)))
+        (i32.store (i32.const 312) (i32.const 42))
+        (drop (call $fwrite (i32.wrap_i64 (i64.shr_u (local.get $f2) (i64.const 32)))
+                            (i32.const 312)))
+        (drop (call $wait (local.get $set) (i32.const 320)))
+        (drop (call $wait (local.get $set) (i32.const 320)))
+        (call $ret (i32.add (i32.load (i32.const 300)) (i32.load (i32.const 304)))))
       (func (export "[async-lift]run-later-trap") (call $wait_with (i32.const 2)))
       (func (export "[async-lift]run-later-sync-cb") (result i32)
         (local $set i32)
@@ -249,6 +277,8 @@
       (canon lift (core func $cmi "[async-lift]run-later") async))
     (func (export "run-later-sync") async (result u32)
       (canon lift (core func $cmi "[async-lift]run-later-sync") async))
+    (func (export "run-twice") async (result u32)
+      (canon lift (core func $cmi "[async-lift]run-twice") async))
     (func (export "run-later-trap") async (result u32)
       (canon lift (core func $cmi "[async-lift]run-later-trap") async))
     (func (export "run-later-sync-cb") async (result u32)
@@ -269,10 +299,12 @@
   (alias export $c "run-later-sync" (func $run_later_sync))
   (alias export $c "run-later-sync-cb" (func $run_later_sync_cb))
   (alias export $c "run-later-trap" (func $run_later_trap))
+  (alias export $c "run-twice" (func $run_twice))
   (export "run" (func $run))
   (export "self" (func $self))
   (export "run-later" (func $run_later))
   (export "run-later-cb" (func $run_later_cb))
   (export "run-later-sync" (func $run_later_sync))
   (export "run-later-sync-cb" (func $run_later_sync_cb))
-  (export "run-later-trap" (func $run_later_trap)))
+  (export "run-later-trap" (func $run_later_trap))
+  (export "run-twice" (func $run_twice)))

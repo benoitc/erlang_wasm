@@ -26,7 +26,8 @@ all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           a_call_that_waits_is_a_subtask_from_a_callback,
           a_call_that_waits_is_a_subtask_from_a_stackful_task,
           a_stackful_callee_that_waits_releases_its_caller,
-          a_stackful_callee_that_waits_releases_a_callback_caller].
+          a_stackful_callee_that_waits_releases_a_callback_caller,
+          a_call_into_a_waiting_fiber_starts_when_it_returns].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -182,6 +183,20 @@ a_stackful_callee_that_waits_releases_its_caller(_Config) ->
 
 a_stackful_callee_that_waits_releases_a_callback_caller(_Config) ->
     later(<<"run-later-sync-cb">>).
+
+%% A component instance whose stackful task waits is in the middle of a call:
+%% a second call into it would run on the same globals and memory. It answers
+%% STARTED and starts once the first has returned, so each gets its own
+%% value: 42 and 43.
+a_call_into_a_waiting_fiber_starts_when_it_returns(_Config) ->
+    ?assertEqual(85, element(2, later_value(<<"run-twice">>))).
+
+later_value(Export) ->
+    {ok, Bin} = file:read_file(fixture_path("composedasync")),
+    {ok, Inst} = wasm_component:instantiate(Bin, tick(), #{loader => compile}),
+    try wasm_component:call_async(Inst, Export, {[], u32}, [])
+    after wasm_component:destroy(Inst)
+    end.
 
 %% The host's `local:host/tick', which the composition imports for its
 %% provider: 1.

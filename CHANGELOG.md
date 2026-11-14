@@ -6,6 +6,37 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **Composed components can call each other's async exports.** A component
+  composed with another could only call its synchronous functions, so a WASI
+  0.3 HTTP middleware composed with the handler it forwards to did not
+  instantiate. Async calls between composed components now work, with the
+  streams and futures they pass shared between them. As the Component Model
+  requires, a component that reads and writes the same stream or future of
+  non-numeric elements now traps.
+- **Fixed: stream and future types were read the wrong way round** in a
+  component's type section, and an async function type or a type an
+  interface takes from the enclosing component was not read at all.
+- **The HTTP listener streams WASI 0.3 responses.** It read a 0.3 handler's
+  whole response body before sending anything, so the client waited for the
+  end and the host held the whole body, up to `http_max_body_bytes`. The
+  status and headers now go out as soon as the handler returns them, and the
+  body as the guest writes it. A client that reads slowly makes the guest
+  wait. Without a `content-length` from the guest, an HTTP/1.1 client now
+  gets the body chunked where it got a `content-length`.
+- **The HTTP listener serves HTTP/2 requests.** With `transport => h2`, every
+  request waited for a body that never arrived and was answered 408 once
+  `request_timeout` passed. HTTP/2 requests are now served, and the guest no
+  longer sees the HTTP/2 pseudo-headers (`:path`, `:scheme` and the like)
+  among the request's headers.
+- **WASI 0.3 handlers get and send trailers.** Header fields sent after the
+  body were dropped both ways. A request's `trailers` now reach the handler,
+  and a handler that sets response trailers gets them to the client, through
+  the listener over HTTP/1.1 and HTTP/2. `wasi_preview3:run_serve/3,4`
+  answer `{ok, Status, Headers, Body, Trailers}` for such a response; one
+  without trailers still answers the 4-tuple.
+- **Now uses h1 0.11.0 and h2 0.17.0.** With h1 0.10.0, a response ending with
+  trailers kept the connection open when the client had asked to close it,
+  and left one entry behind per request on a kept-alive connection.
 - **You can refuse file access without the native file backend.** When the
   optional file NIF does not build or load, WASI file access falls back to
   pure Erlang, which checks a path and opens it in two steps, so a symlink

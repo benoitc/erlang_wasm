@@ -1,0 +1,54 @@
+round 1 load 6.58
+main serve02 710.6
+main listen02 6446.0
+main listen03 1679.3
+main firstbyte 4108.8 4112.5
+cand serve02 699.1
+cand listen02 6162.6
+cand listen03 1710.2
+cand firstbyte 9.7 3959.4
+round 2 load 4.26
+cand serve02 721.9
+cand listen02 6421.1
+cand listen03 1723.7
+cand firstbyte 10.4 4087.5
+main serve02 730.9
+main listen02 6485.8
+main listen03 1648.5
+main firstbyte 4329.1 4332.9
+round 3 load 3.37
+main serve02 734.2
+main listen02 6432.1
+main listen03 1654.2
+main firstbyte 4273.5 4277.3
+cand serve02 732.0
+cand listen02 6397.2
+cand listen03 1728.2
+cand firstbyte 10.3 4056.4
+round 4 load 3.54
+cand serve02 728.0
+cand listen02 6298.3
+cand listen03 1700.0
+cand firstbyte 9.5 4105.9
+main serve02 767.4
+main listen02 6651.6
+main listen03 1674.0
+main firstbyte 4338.9 4342.5
+round 5 load 5.60
+main serve02 732.7
+main listen02 6462.4
+main listen03 1670.6
+main firstbyte 4362.8 4366.6
+cand serve02 740.2
+cand listen02 6329.3
+cand listen03 1721.1
+cand firstbyte 10.5 4136.3
+round 6 load 4.09
+cand serve02 757.1
+cand listen02 6535.4
+cand listen03 1722.1
+cand firstbyte 10.8 4154.9
+main serve02 737.2
+main listen02 6428.1
+main listen03 1659.4
+main firstbyte 4391.5 4395.1

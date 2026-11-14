@@ -19,7 +19,10 @@ all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           an_interface_import_signature_is_decoded,
           an_aggregate_interface_signature_is_decoded,
           a_wac_composed_component_passes_a_string,
-          a_wac_composed_component_passes_a_resource].
+          a_wac_composed_component_passes_a_resource,
+          an_async_interface_signature_is_decoded,
+          an_async_call_passes_a_stream_and_a_future,
+          a_component_cannot_copy_a_tuple_to_itself].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -108,6 +111,46 @@ a_wac_composed_component_passes_a_resource(_Config) ->
         ?assertEqual({ok, 42}, wasm_component:call(Inst, <<"run">>, {[], u32}, []))
     after
         wasm_component:destroy(Inst, fun(_) -> ok end)
+    end.
+
+%% An async function type (`func async', tag 0x43) decodes as any function
+%% type, and a type an instance type takes from the enclosing component
+%% (`alias outer') is that component's. Before, the async type was misread as
+%% a value type and the outer one was opaque, so a composed handler's `handle'
+%% import had no signature and was never bridged.
+an_async_interface_signature_is_decoded(_Config) ->
+    {ok, <<_:8/binary, Sec/binary>>} = file:read_file(fixture_path("composedasync")),
+    Consumer = lists:nth(2, nested_components(Sec)),
+    <<_:8/binary, CSec/binary>> = Consumer,
+    ?assertEqual({ok, #{<<"local:pipe/svc">> =>
+                            #{<<"sum">> => {[{stream, u8}, {future, u32}], u32}}}},
+                 wasm_component_types:import_interfaces(CSec)).
+
+%% A call into another component's async export: the consumer writes "abc" to
+%% a stream and 7 to a future and passes their readers; the provider reads both
+%% and answers 301 only if it reads the very ends the consumer wrote. The
+%% provider's task runs in the consumer's frame, where those ends are.
+an_async_call_passes_a_stream_and_a_future(_Config) ->
+    {ok, Bin} = file:read_file(fixture_path("composedasync")),
+    {ok, Inst} = wasm_component:instantiate(Bin, #{}, #{loader => compile}),
+    try
+        ?assertEqual({ok, 301},
+                     wasm_component:call_async(Inst, <<"run">>, {[], u32}, []))
+    after
+        wasm_component:destroy(Inst)
+    end.
+
+%% A component may not read and write one future or stream when what it
+%% carries is not a number: the specification's same-instance restriction.
+%% `self' writes a tuple to a future it reads itself.
+a_component_cannot_copy_a_tuple_to_itself(_Config) ->
+    {ok, Bin} = file:read_file(fixture_path("composedasync")),
+    {ok, Inst} = wasm_component:instantiate(Bin, #{}, #{loader => compile}),
+    try
+        ?assertMatch({error, #{class := trap, kind := intra_component_copy}},
+                     wasm_component:call_async(Inst, <<"self">>, {[], u32}, []))
+    after
+        wasm_component:destroy(Inst)
     end.
 
 %% The raw bytes of each nested component (section id 4) in a component's section stream.

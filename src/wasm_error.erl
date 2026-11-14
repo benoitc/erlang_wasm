@@ -49,6 +49,7 @@ the API boundary, so no throw ever reaches you.
                      | uninitialized_element
                      | indirect_call_type_mismatch
                      | runtime_stopped
+                     | intra_component_copy
                      | {host_error, term()}.
 
 %%% ---------------------------------------------------------- constructors ---
@@ -193,6 +194,9 @@ trap_msg(uninitialized_element)          -> <<"uninitialized element">>;
 trap_msg(indirect_call_type_mismatch)    -> <<"indirect call type mismatch">>;
 trap_msg(runtime_stopped)                ->
     <<"the wasm application that made this instance has stopped">>;
+trap_msg(intra_component_copy)           ->
+    <<"cannot read from and write to intra-component future/stream with "
+      "non-numeric payload">>;
 trap_msg({host_error, _})                -> <<"host error">>;
 trap_msg(Other) when is_atom(Other)      -> atom_to_binary(Other);
 trap_msg(_)                              -> <<"trap">>.

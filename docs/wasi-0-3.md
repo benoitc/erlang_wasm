@@ -36,6 +36,23 @@ so a listener takes either kind:
                                    headers => [], body => <<>>}, #{}).
 ```
 
+A 0.3 request and response can carry *trailers*: header fields sent after the
+body. Give the request's as `trailers`, a list of `{Name, Value}` pairs. A
+handler that sets trailers on its response answers a 5-tuple:
+
+```erlang
+{ok, 200, _Headers, Body, [{~"fizz", ~"buzz"}]} =
+    wasi_preview3:run_serve(Bin, #{method => ~"POST", path => ~"/",
+                                   scheme => ~"http", authority => ~"localhost",
+                                   headers => [], body => ~"hello",
+                                   trailers => [{~"fizz", ~"buzz"}]}, #{}).
+```
+
+A response without trailers answers the 4-tuple, as before. The listener
+passes the trailers a client sends to the handler, and sends the handler's
+back: over HTTP/2 as a last `HEADERS` frame, over HTTP/1.1 after the last
+chunk of a chunked body.
+
 ## What is there
 
 | package | at 0.3 |
@@ -45,7 +62,7 @@ so a listener takes either kind:
 | `wasi:random` | the same functions as 0.2 |
 | `wasi:filesystem` | the same mounts as 0.2: reads, writes, appends and directory listings through streams, every other call async |
 | `wasi:sockets` | TCP and UDP under the same `network` grant as 0.2: a connection's data through `send` and `receive` streams, `listen` as a stream of accepted sockets, async `connect` and UDP `send` and `receive`, async name lookup |
-| `wasi:http` | `fields`, `request`, `request-options` and `response`; `client.send` through the same transport and grant as 0.2; a `wasi:http/handler` export served by `run_serve/3` and the listener. Not yet: middleware (a handler that imports another) |
+| `wasi:http` | `fields`, `request`, `request-options` and `response`; `client.send` through the same transport and grant as 0.2; a `wasi:http/handler` export served by `run_serve/3` and the listener, alone or composed with a middleware that imports `wasi:http/handler` |
 
 ## Notes
 
@@ -56,8 +73,10 @@ so a listener takes either kind:
   stream, so a large file is held in memory while the guest reads it.
 - Mount files with `preopen`, `writable` and `preopens`, as for 0.2.
 - Every HTTP body the host holds is limited by `http_max_body_bytes`, 8 MiB
-  by default: a request body the guest sends, and a handler's response body,
-  which fails with `HTTP-response-body-size` past it.
+  by default: a request body the guest sends, and a handler's response body
+  read by `run_serve/3,4`, which fails with `HTTP-response-body-size` past it.
+  The listener streams a handler's response instead of holding it, so the
+  limit does not apply there.
 - A request body must match its `content-length`: a write that would go past
   it is refused, and one that ends short fails with `HTTP-request-body-size`.
 - A handler's response body is read whole before the answer is sent. What

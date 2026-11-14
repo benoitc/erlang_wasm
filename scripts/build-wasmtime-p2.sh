@@ -89,3 +89,31 @@ for f in "$out"/p3_*.component.wasm; do
   n3=$((n3 + 1))
 done
 echo "built $n3 WASI 0.3 commands into $dest3, $s3 services into $serve3"
+
+# The middleware programs import wasi:http/handler; wasmtime's tests compose
+# each with the echo handler before serving it, and so does this. `compose'
+# names the dependency after the file, which must be kebab case.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+cp "$serve3/p3_http_echo.component.wasm" "$work/echo.wasm"
+cp "$serve3/p3_http_middleware.component.wasm" "$work/middleware.wasm"
+cp "$serve3/p3_http_middleware_with_chain.component.wasm" "$work/chain.wasm"
+cat > "$work/chain.yml" <<'YML'
+dependencies:
+  local:local/chain-http:
+    path: echo.wasm
+instantiations:
+  root:
+    dependency: local:local/chain-http
+    arguments:
+      local:local/chain-http:
+        instance: local:local/chain-http
+        export: wasi:http/handler@0.3.0
+YML
+(cd "$work" &&
+   wasm-tools compose middleware.wasm -d echo.wasm -o composed.wasm 2>/dev/null &&
+   wasm-tools compose chain.wasm -c chain.yml -o chain-composed.wasm 2>/dev/null)
+cp "$work/composed.wasm" "$serve3/p3_http_middleware_composed.component.wasm"
+cp "$work/chain-composed.wasm" \
+   "$serve3/p3_http_middleware_with_chain_composed.component.wasm"
+echo "composed the two middleware programs with the echo handler into $serve3"

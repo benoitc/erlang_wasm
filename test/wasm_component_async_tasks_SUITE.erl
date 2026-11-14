@@ -28,7 +28,8 @@ import could neither take nor give one.
          a_call_that_ends_leaves_a_pending_task_alone/1,
          a_sink_on_an_ended_stream_gets_the_end/1,
          dropping_a_host_stream_tells_its_maker/1,
-         a_host_stream_open_at_the_end_tells_its_maker/1]).
+         a_host_stream_open_at_the_end_tells_its_maker/1,
+         a_producer_feeds_a_sink_through_the_guest/1]).
 
 all() ->
     [a_task_resolves_and_keeps_writing,
@@ -43,9 +44,11 @@ all() ->
      a_call_that_ends_leaves_a_pending_task_alone,
      a_sink_on_an_ended_stream_gets_the_end,
      dropping_a_host_stream_tells_its_maker,
-     a_host_stream_open_at_the_end_tells_its_maker].
+     a_host_stream_open_at_the_end_tells_its_maker,
+     a_producer_feeds_a_sink_through_the_guest].
 
 -define(BODY, {[], {stream, u8}}).
+-define(CHUNKS, [<<"first ">>, <<"second ">>, <<>>, <<"third">>]).
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -160,6 +163,16 @@ a_host_stream_open_at_the_end_tells_its_maker(Config) ->
                  wasm_component:call_async(inst(Config), ~"sum-feed", {[], u32}, [])),
     ?assertEqual(1, ended()).
 
+%% A request body reaching a response: `chan' gives the guest a stream a
+%% producer process fills over time, and the guest hands it to `drain', a
+%% sink. Every chunk reaches the sink in order, then the end, which resolves
+%% the future the guest waits on with the byte count.
+a_producer_feeds_a_sink_through_the_guest(Config) ->
+    ?assertEqual({ok, byte_size(iolist_to_binary(?CHUNKS))},
+                 wasm_component:call_async(inst(Config), ~"pipe", {[], u32}, [])),
+    ?assertEqual(iolist_to_binary(?CHUNKS), collect(<<>>)),
+    receive eof -> ok after 0 -> ct:fail(no_eof) end.
+
 %%% ------------------------------------------------------------- helpers ---
 
 ended() ->
@@ -201,6 +214,32 @@ imports() ->
                               end),
                     counters:get(Got, 1) * 10 + counters:get(Got, 2)
             end),
+      {Host, ~"chan"} =>
+          wasm_component:import_fun(
+            {[], {stream, u8}},
+            fun([]) ->
+                    R = wasm_async:new_stream_channel(u8),
+                    ok = wasm_async:register_producer(R, fun produce/1),
+                    R
+            end),
+      {Host, ~"drain"} =>
+          wasm_component:import_fun(
+            {[{stream, u8}], {future, u32}},
+            fun([S]) ->
+                    Test = self(),
+                    {R, W} = wasm_async:host_future(u32),
+                    Got = counters:new(1, []),
+                    Sink = fun(eof) ->
+                                   Test ! eof,
+                                   wasm_async:host_future_resolve(
+                                     W, counters:get(Got, 1));
+                              (B) ->
+                                   Test ! {bytes, B},
+                                   counters:add(Got, 1, byte_size(B))
+                           end,
+                    ok = wasm_async:host_sink(S, Sink),
+                    R
+            end),
       {Host, ~"reenter"} =>
           wasm_component:import_fun(
             {[], u32},
@@ -210,6 +249,15 @@ imports() ->
                         _ -> 0
                     end
             end)}.
+
+%% Sends each chunk a little after the last, so they arrive while the guest
+%% waits, then the end.
+produce(#{owner := O, task_ref := Ref, handle := H}) ->
+    lists:foreach(fun(C) ->
+                          timer:sleep(10),
+                          O ! {async_ready, Ref, H, {data, C}}
+                  end, ?CHUNKS),
+    O ! {async_ready, Ref, H, close}.
 
 read_all(H) -> read_all(H, <<>>).
 

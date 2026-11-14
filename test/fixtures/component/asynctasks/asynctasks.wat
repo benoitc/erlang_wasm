@@ -6,7 +6,9 @@
 ;; interleaving each write their own bytes. The stackful exports read what a
 ;; host import hands them: a stream (`sum-feed'), a future (`take-future'), and
 ;; whether a host-end call inside an import is refused (`reenter'). `drop-feed'
-;; drops the stream `feed' returns unread.
+;; drops the stream `feed' returns unread. `pipe' hands the stream `chan'
+;; returns, which a producer process fills over time, to `drain', a sink, and
+;; answers the value of the future `drain' resolves at the end of the stream.
 ;; Build: `scripts/build-wat-component-fixtures.sh`.
 (component
   (type $s8 (stream u8))
@@ -17,11 +19,15 @@
     (export "feed" (func (result $s8)))
     (export "fut" (func (result $f32)))
     (export "reenter" (func (result u32)))
-    (export "take" (func (param "s" $s8) (result u32)))))
+    (export "take" (func (param "s" $s8) (result u32)))
+    (export "chan" (func (result $s8)))
+    (export "drain" (func (param "s" $s8) (result $f32)))))
   (alias export $host "feed" (func $feed))
   (alias export $host "fut" (func $fut))
   (alias export $host "reenter" (func $reenter))
   (alias export $host "take" (func $take))
+  (alias export $host "chan" (func $chan))
+  (alias export $host "drain" (func $drain))
 
   (core module $libc (memory (export "memory") 1))
   (core instance $libc (instantiate $libc))
@@ -43,6 +49,8 @@
   (core func $fut_l (canon lower (func $fut)))
   (core func $reenter_l (canon lower (func $reenter)))
   (core func $take_l (canon lower (func $take)))
+  (core func $chan_l (canon lower (func $chan)))
+  (core func $drain_l (canon lower (func $drain)))
 
   (core module $m
     (import "" "memory" (memory 1))
@@ -62,6 +70,8 @@
     (import "" "fut" (func $fut (result i32)))
     (import "" "reenter" (func $reenter (result i32)))
     (import "" "take" (func $take (param i32) (result i32)))
+    (import "" "chan" (func $chan (result i32)))
+    (import "" "drain" (func $drain (param i32) (result i32)))
     (global $tasks (mut i32) (i32.const 0))
 
     ;; State block P: writer +0, bytes left +4, waitable-set +8, data +12.
@@ -146,6 +156,12 @@
       (drop (call $fread (call $fut) (i32.const 64)))
       (call $ret (i32.load (i32.const 64))))
 
+    ;; pipe() -> u32: the value of the future `drain' resolves once it took
+    ;; every byte of the stream `chan' returns.
+    (func (export "[async-lift]pipe")
+      (drop (call $fread (call $drain (call $chan)) (i32.const 64)))
+      (call $ret (i32.load (i32.const 64))))
+
     (func (export "[async-lift]reenter")
       (call $ret (call $reenter)))
 
@@ -170,7 +186,8 @@
     (export "join" (func $join)) (export "ctx_get" (func $ctx_get))
     (export "ctx_set" (func $ctx_set)) (export "feed" (func $feed_l))
     (export "fut" (func $fut_l)) (export "reenter" (func $reenter_l))
-    (export "take" (func $take_l))))))
+    (export "take" (func $take_l)) (export "chan" (func $chan_l))
+    (export "drain" (func $drain_l))))))
 
   (func (export "body") async (result $s8)
     (canon lift (core func $i "[async-lift]body") async
@@ -181,6 +198,8 @@
     (canon lift (core func $i "[async-lift]drop-feed") async))
   (func (export "take-future") async (result u32)
     (canon lift (core func $i "[async-lift]take-future") async))
+  (func (export "pipe") async (result u32)
+    (canon lift (core func $i "[async-lift]pipe") async))
   (func (export "reenter") async (result u32)
     (canon lift (core func $i "[async-lift]reenter") async))
   (func (export "ended") async (result u32)

@@ -142,11 +142,15 @@ serve_request(Transport, Conn, Id, Method, Path, Config) ->
     %% Fixed when the request arrives: the body and the guest share it.
     Deadline = erlang:monotonic_time(millisecond) + Timeout,
     case read_body(Transport, Conn, Id, Config, Deadline) of
-        {ok, Body} ->
+        {ok, Body, Trailers} ->
             Request = #{method => Method, path => Path, scheme => Scheme,
-                        authority => authority(Headers), headers => Headers,
-                        body => Body},
-            case run(Component, Request, ServeOpts, Imports, Deadline) of
+                        authority => authority(Headers),
+                        headers => fields(Headers), body => Body,
+                        trailers => fields(Trailers)},
+            Out = {Transport, Conn, Id},
+            case run(Component, Request, ServeOpts, Imports, Deadline, Out) of
+                streamed ->
+                    ok;
                 {ok, Status, RespHeaders, RespBody} ->
                     answer(Transport, Conn, Id, Status, RespHeaders, RespBody);
                 timeout ->
@@ -167,29 +171,103 @@ serve_request(Transport, Conn, Id, Method, Path, Config) ->
 %% The guest runs in a child bound to this process, which holds the deadline:
 %% a guest that never returns is stopped at it, and a request process killed
 %% by the wire library takes the guest with it.
-run(Component, Request, ServeOpts, Imports, Deadline) ->
+%%
+%% A 0.3 response is streamed: the child sends its head, then each chunk the
+%% guest writes, then its end, and this process writes them out. The child
+%% waits for each chunk to be written before it reads the next, so one chunk
+%% at a time is in flight and a slow client slows the guest. Once the head is
+%% out, a failure can no longer be answered with a status: the stream is
+%% reset instead. Answers `streamed' once a streamed response has ended,
+%% whichever way, or the whole result of a 0.2 handler.
+run(Component, Request, ServeOpts, Imports, Deadline, Out) ->
     Parent = self(),
+    Emit = fun(Event) ->
+                   Parent ! {stream, self(), Event},
+                   case Event of
+                       {chunk, _} -> receive {written, Parent} -> ok end;
+                       _ -> ok
+                   end
+           end,
     {Pid, Mon} = spawn_monitor(
                    fun() ->
                            ok = wasm_lifetime:bind(Parent),
                            Parent ! {served, self(),
-                                     try wasi_preview3:run_serve(
-                                           Component, Request, ServeOpts, Imports)
+                                     try wasi_preview3:run_serve_stream(
+                                           Component, Request, ServeOpts, Imports,
+                                           Emit)
                                      catch _:Reason -> {error, Reason}
                                      end}
                    end),
-    Left = max(0, Deadline - erlang:monotonic_time(millisecond)),
+    wait(Pid, Mon, Deadline, Out, none).
+
+%% `Head' is `none' until the head is written, then the framing it set.
+wait(Pid, Mon, Deadline, {Transport, Conn, Id} = Out, Head) ->
     receive
+        {stream, Pid, {head, Status, Headers}} ->
+            _ = Transport:send_response(Conn, Id, Status, Headers),
+            wait(Pid, Mon, Deadline, Out, framing(Transport, Headers));
+        {stream, Pid, {chunk, Bin}} ->
+            case send_chunk(Transport, Conn, Id, Bin, Deadline) of
+                ok ->
+                    Pid ! {written, self()},
+                    wait(Pid, Mon, Deadline, Out, Head);
+                {error, _} ->
+                    exit(Pid, kill),
+                    erlang:demonitor(Mon, [flush]),
+                    served(gone, Out, Head)
+            end;
+        {stream, Pid, {done, Trailers}} ->
+            _ = finish(Out, Head, Trailers),
+            wait(Pid, Mon, Deadline, Out, done);
         {served, Pid, Result} ->
             erlang:demonitor(Mon, [flush]),
-            Result;
+            served(Result, Out, Head);
         {'DOWN', Mon, process, Pid, Reason} ->
-            {error, Reason}
-    after Left ->
+            served({error, Reason}, Out, Head)
+    after left(Deadline) ->
         exit(Pid, kill),
         erlang:demonitor(Mon, [flush]),
-        timeout
+        served(timeout, Out, Head)
     end.
+
+%% A chunk waits for the client to take it: h2 holds data the client's window
+%% has no room for up to a cap, and past it refuses more unless asked to wait.
+%% A client that takes nothing before the deadline, or has gone, ends the
+%% response.
+send_chunk(h2, Conn, Id, Bin, Deadline) ->
+    catch_send(fun() -> h2:send_data(Conn, Id, Bin, false, #{block => left(Deadline)}) end);
+send_chunk(Transport, Conn, Id, Bin, _Deadline) ->
+    catch_send(fun() -> Transport:send_data(Conn, Id, Bin, false) end).
+
+catch_send(Send) ->
+    try Send() of
+        ok -> ok;
+        {error, _} = E -> E
+    catch exit:Reason -> {error, Reason}
+    end.
+
+served(Result, _Out, none) -> Result;
+served(_Result, _Out, done) -> streamed;
+%% The head is out but the response did not end: the client must not take
+%% what it got for the whole response.
+served(_Result, {Transport, Conn, Id}, _Framing) ->
+    _ = Transport:cancel(Conn, Id),
+    streamed.
+
+%% h1 can send trailers only after a chunked body: a response that declared
+%% its length is sent with that length, and its trailers are dropped.
+framing(h1, Headers) ->
+    case content_length(Headers) of
+        undefined -> chunked;
+        _ -> length
+    end;
+framing(_, _Headers) -> frames.
+
+finish({Transport, Conn, Id}, Framing, Trailers) when Trailers =:= [];
+                                                     Framing =:= length ->
+    Transport:send_data(Conn, Id, <<>>, true);
+finish({Transport, Conn, Id}, _Framing, Trailers) ->
+    Transport:send_trailers(Conn, Id, Trailers).
 
 answer(Transport, Conn, Id, Status, Headers, Body) ->
     Hdrs = ensure_length(Headers, byte_size(Body)),
@@ -200,20 +278,33 @@ answer(Transport, Conn, Id, Status, Headers, Body) ->
 %% Read the request body to its end, chunked or not: both libraries end every
 %% request, a bodyless one included, with a final data frame. Only this
 %% request's frames are taken from the mailbox; anything else stays there.
-%% Answers `{ok, Body}', `timeout', `too_large', or `gone' when the peer reset
-%% the request or left.
+%% Answers `{ok, Body, Trailers}', `timeout', `too_large', or `gone' when the
+%% peer reset the request or left. Trailers end the body.
 read_body(Transport, Conn, Id, #{max_body_bytes := Max, headers := Headers},
           Deadline) ->
     case content_length(Headers) of
         N when is_integer(N), N > Max -> too_large;
-        _ -> read_body(Transport, Conn, Id, <<>>, Max, Deadline)
+        _ ->
+            ok = take_stream(Transport, Conn, Id),
+            read_body(Transport, Conn, Id, <<>>, Max, Deadline)
     end.
+
+%% h2 holds a stream's events until a process asks for them, and its server
+%% does not ask for the request process: without this, the body never came
+%% and every h2 request ended at the deadline. h1 sends them here already.
+take_stream(h2, Conn, Id) ->
+    case h2:set_stream_handler(Conn, Id, self()) of
+        ok -> ok;
+        {error, _} -> ok
+    end;
+take_stream(_, _Conn, _Id) ->
+    ok.
 
 read_body(h1, Conn, Id, Acc, Max, Deadline) ->
     receive
         {h1_stream, Id, {data, Data, End}} ->
             more(h1, Conn, Id, <<Acc/binary, Data/binary>>, End, Max, Deadline);
-        {h1_stream, Id, {trailers, _}} -> {ok, Acc};
+        {h1_stream, Id, {trailers, Trailers}} -> {ok, Acc, Trailers};
         {h1_stream, Id, {stream_reset, _}} -> gone
     after left(Deadline) -> timeout
     end;
@@ -221,7 +312,7 @@ read_body(h2, Conn, Id, Acc, Max, Deadline) ->
     receive
         {h2, Conn, {data, Id, Data, End}} ->
             more(h2, Conn, Id, <<Acc/binary, Data/binary>>, End, Max, Deadline);
-        {h2, Conn, {trailers, Id, _}} -> {ok, Acc};
+        {h2, Conn, {trailers, Id, Trailers}} -> {ok, Acc, Trailers};
         {h2, Conn, {stream_reset, Id, _}} -> gone;
         {h2, Conn, {closed, _}} -> gone
     after left(Deadline) -> timeout
@@ -231,7 +322,7 @@ more(_Transport, _Conn, _Id, Body, _End, Max, _Deadline)
   when byte_size(Body) > Max ->
     too_large;
 more(_Transport, _Conn, _Id, Body, true, _Max, _Deadline) ->
-    {ok, Body};
+    {ok, Body, []};
 more(Transport, Conn, Id, Body, false, Max, Deadline) ->
     read_body(Transport, Conn, Id, Body, Max, Deadline).
 
@@ -245,11 +336,25 @@ content_length(Headers) ->
         V         -> try binary_to_integer(V) catch _:_ -> undefined end
     end.
 
+%% h2 gives the authority as `:authority', h1 as `host'.
 authority(Headers) ->
-    case header(<<"host">>, Headers) of
-        undefined -> <<>>;
-        V         -> V
+    case header(<<":authority">>, Headers) of
+        undefined ->
+            case header(<<"host">>, Headers) of
+                undefined -> <<>>;
+                V         -> V
+            end;
+        V -> V
     end.
+
+%% The request's fields, without h2's pseudo-headers: the method, path,
+%% scheme and authority reach the guest as themselves, and a pseudo-header
+%% the guest echoed would be a malformed response.
+fields(Headers) ->
+    [{N, V} || {N, V} <- Headers, not is_pseudo(N)].
+
+is_pseudo(<<":", _/binary>>) -> true;
+is_pseudo(_) -> false.
 
 header(Name, Headers) ->
     case [V || {N, V} <- Headers, string:lowercase(N) =:= Name] of

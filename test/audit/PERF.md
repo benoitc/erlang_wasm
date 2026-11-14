@@ -8870,3 +8870,37 @@ with the gates fixed in the plan.
 | 0.3 listener, hello world, requests a second | 1610.9 | 1612.7 | 0.999x in time | 1.03x | pass |
 
 Medians. Scripts and log: `test/audit/raw/async-targets/`.
+
+## Interface functions called as declared (2026-11-14)
+
+Every per-export table (core function, string encoding, realloc and
+post-return, handle signature) now covers an interface's functions. The
+single-core decision reads them too, and is now made once when a component
+is prepared rather than for every instance. Measured against main (`6ffd85b`),
+each sample a fresh VM at `+S 10:10`, six rounds interleaved, both orders,
+each round started at a one-minute load below 8, with the gates fixed in the
+plan.
+
+| path | main | candidate | ratio | gate | result |
+| --- | --- | --- | --- | --- | --- |
+| 0.2 `run_command`, `p2_cli_hello_stdout`, ms | 1.573 | 1.552 | 0.987x | 1.03x | pass |
+| 0.2 `run_serve/4`, hello world, us a request | 786.4 | 801.6 | 1.019x | 1.03x | pass |
+| 0.2 listener, hello world, requests a second | 6535.5 | 6689.0 | 0.977x in time | 1.03x | pass |
+
+Medians; one-minute load 7.07 to 7.28. `handle` now has a declared binding,
+so each call goes through the realloc the lift names instead of the default
+path: about 2% on `run_serve/4`, within the gate.
+
+The first run failed one gate: `run_serve/4` at 1.033x (774.9 against 800.1
+us), with the single-core decision read again for every instance and dearer
+by about 7 us for a proxy component (29.6 against 36.7 us). Before that, a
+first version that took every interface function into account sent each
+proxy component (`run` in a shim core, `handle` in the main one) through the
+full linker: 1.03x to 1.45x on `run_serve/4` in three quick pairs at a load
+of 15. Only an interface function whose name the entry core also exports now
+needs the linker.
+
+Audit over the 149 wasmtime components (`p2`, `p3` and the serve programs):
+the single-core decision is unchanged for every one, the 97 synchronous
+interface functions resolve to the same core function as by name, and none
+gains a post-return. Scripts, logs and the audit: `test/audit/raw/iface-declared/`.

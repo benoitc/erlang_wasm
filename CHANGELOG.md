@@ -6,6 +6,15 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+- **Fixed: a component's interface functions are called as it declares them.**
+  A function an exported interface holds (`wasi:http/incoming-handler#handle`)
+  was found by a core function of that very name, and called without what its
+  component declared for it. Its cleanup function never ran, so a function
+  returning a string or a list leaked guest memory on every call. A function
+  declared as UTF-16 or Latin-1 had its strings read as UTF-8, and one whose
+  core function had another name was not found. All of that now comes from the
+  component's declaration, as it already did for functions exported on their
+  own.
 - **Fixed: an async export is called as the component declares it.** The
   runtime found an async export's core function and its callback by the names
   toolchains give them, not by what the component's lift declares. A

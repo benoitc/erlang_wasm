@@ -1,0 +1,590 @@
+p2_cli_serve_authority_and_scheme cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_serve_config cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_serve_echo_env cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_serve_hello_world cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_serve_keyvalue cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_serve_return_before_set cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_serve_sleep cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_serve_trap_before_set cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_serve_with_print cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_adapter_badfd cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_args cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_argv0 cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_default_clocks cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_directory_list cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_env cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_exit_default cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_exit_failure cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_exit_panic cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_exit_success cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_exit_with_code cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_export_cabi_realloc cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_file_append cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_file_dir_sync cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_file_read cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_hello_stdout cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_hostcall_fuel cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_http_headers cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_initial_cwd cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_invoke_async cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_large_env cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_many_resources cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_max_resources cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_much_stdout cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_multiple_preopens cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_no_ip_name_lookup cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_no_tcp cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_no_udp cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_sleep cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_sleep_forever cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_splice_stdin cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_stdin cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_stdin_eisdir cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_stdin_empty cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_stdio_write_flushes cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_cli_stdout_epipe cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_clocks_zero_wait cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_file_hardlink_across_perms cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_file_read_write cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_file_rename_across_perms cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_file_stream_not_permitted cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_file_truncation_readonly cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_content_length cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_get cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_invalid_dnsname cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_invalid_header cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_invalid_port cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_invalid_version cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_large_post cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_missing_path_and_query cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_post cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_put cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_response_build cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_timeout cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_unknown_method cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_http_outbound_request_unsupported_scheme cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_ip_name_lookup cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_pollable_correct cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_pollable_traps cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_random cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_sleep cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_stream_pollable_correct cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_stream_pollable_traps cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_tcp_bind cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_tcp_busy_poll cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_tcp_connect cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_tcp_listen cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_tcp_sample_application cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_tcp_sockopts cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_tcp_states cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_tcp_streams cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_udp_bind cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_udp_connect cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_udp_sample_application cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_udp_send_to_closed_receiver cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_udp_send_too_much cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_udp_sockopts cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_udp_states cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p2_udp_stream cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_serve_hello_world cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_serve_post_return cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_serve_sleep cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_echo cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_forbidden_headers cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_middleware cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_middleware_composed composed
+p3_http_middleware_with_chain cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_middleware_with_chain_composed composed
+p3_http_proxy cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_big_random_buf cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_deny_listen cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_hello_stdout cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_hello_stdout_post_return cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_many_stream cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_many_tasks cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_much_stdout cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_random_limits cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_read_stdin cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_cli_stdout_flush cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_clocks_sleep cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_file_hardlink_across_perms cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_file_rename_across_perms cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_file_truncation_readonly cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_file_write cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_file_write_chunked cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_filesystem_file_read_write cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_chunk_size cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_content_length cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_get cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_invalid_dnsname cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_invalid_header cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_invalid_port cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_invalid_version cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_large_post cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_missing_path_and_query cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_post cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_put cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_response_build cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_timeout cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_unknown_method cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_http_outbound_request_unsupported_scheme cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_random_imports cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_readdir cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_ip_name_lookup cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_tcp_bind cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_tcp_busy_poll cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_tcp_connect cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_tcp_listen cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_tcp_sample_application cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_tcp_sockopts cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_tcp_states cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_tcp_streams cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_udp_bind cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_udp_connect cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_udp_receive cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_udp_sample_application cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_udp_send cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_udp_sockopts cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}
+p3_sockets_udp_states cores=4 simple=true
+  export_map export_map #{}
+  str_enc str_enc #{}
+  bindings bindings #{}

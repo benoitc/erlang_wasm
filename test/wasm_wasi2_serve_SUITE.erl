@@ -24,7 +24,7 @@ all() -> [hello_world, with_print, authority_and_scheme, live_over_h1,
 init_per_suite(Config) ->
     case filelib:is_dir(dir()) of
         false ->
-            {skip, "no wasmtime serve fixtures: run scripts/build-wasmtime-p2.sh"};
+            wasi_p2_runner:missing_fixtures("no wasmtime serve fixtures");
         true ->
             {ok, _} = application:ensure_all_started(wasm),
             Config

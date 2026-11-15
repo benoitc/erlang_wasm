@@ -202,7 +202,10 @@ jobs:
       - name: Build wasmtime's programs
         if: steps.programs.outputs.cache-hit != 'true'
         run: |
-          rustup toolchain install 1.97.1 --profile minimal --target wasm32-wasip1
+          # wasip1 for the programs, unknown-unknown for the preview1
+          # adapter wasmtime builds to make components of them.
+          rustup toolchain install 1.97.1 --profile minimal \
+            --target wasm32-wasip1 --target wasm32-unknown-unknown
           rustup default 1.97.1
           scripts/build-wasmtime-p2.sh
       # Saved as soon as they are built, so a failing test does not cost the

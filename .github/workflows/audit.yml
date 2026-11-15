@@ -1,0 +1,29 @@
+name: Audit
+
+# What a pull request cannot change but time can: an advisory published
+# against a dependency already locked. So these run every week as well as on
+# pull requests, and you can start them by hand.
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+env:
+  OTP: '29'
+  REBAR3: '3.27'
+
+jobs:
+  # Each package in rebar.lock at its locked version, against the OSV database
+  # and hex.pm's retirements. Dependabot does not read rebar.lock.
+  deps:
+    name: Locked dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      - run: scripts/audit-deps.sh

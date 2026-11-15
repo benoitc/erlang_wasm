@@ -26,10 +26,15 @@ docker run --rm -v "$ROOT":/src:ro -w /w "$IMAGE" bash -lc '
   set -e
   mkdir -p /w && cp -a /src/. /w/ && cd /w
   rm -rf _build priv/*.so priv/*.dSYM
-  WASM_NIF_SANITIZE=address rebar3 compile >/dev/null
+  # Kept for the test run as well: `rebar3 ct` recompiles, and without it
+  # the NIF would be rebuilt uninstrumented.
+  export WASM_NIF_SANITIZE=address
+  rebar3 compile >/dev/null
   export LD_PRELOAD=$(gcc -print-file-name=libasan.so)
   # Leak detection is off: the emulator holds allocations for its whole life by
-  # design, so it reports pages of them and none are the NIF.
-  export ASAN_OPTIONS=detect_leaks=0
+  # design, so it reports pages of them and none are the NIF. Use-after-return
+  # detection is off by default, and a stack buffer used after its function
+  # returned is a defect this NIF has had.
+  export ASAN_OPTIONS=detect_stack_use_after_return=1:detect_leaks=0:abort_on_error=1
   rebar3 ct --suite='"$SUITE"'
 '

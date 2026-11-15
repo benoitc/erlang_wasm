@@ -427,16 +427,22 @@ static int walk_parent(int dirfd, const char *path, char *buf, size_t buflen,
  * same way `step` walks the rest of a path: an absolute target is refused, and
  * a target that steps up out of its directory is refused by the depth counter.
  * The caller then acts with `AT_SYMLINK_NOFOLLOW`, so a name swapped for a
- * symlink after this returns is operated on as the link itself. */
-static int resolve_final(int base, const char *path, char *buf, size_t buflen,
-                         int *out_fd, int *out_owned, char **out_name) {
+ * symlink after this returns is operated on as the link itself.
+ *
+ * `*out_name` points into `buf` or into `nbuf`, both the caller's and both
+ * `buflen` long, so it is valid for as long as the caller's buffers are. It
+ * pointed into a buffer of this function's own, gone once it returned, and the
+ * caller passed that to `fstatat`/`utimensat`: whether the name survived
+ * depended on what ran in between. */
+static int resolve_final(int base, const char *path, char *buf, char *nbuf,
+                         size_t buflen, int *out_fd, int *out_owned,
+                         char **out_name) {
     int pfd, owned;
     char *name;
     int e = walk_parent(base, path, buf, buflen, &pfd, &owned, &name);
     if (e != 0) return e;
 
     char link[MAX_PATH_LEN];
-    char lbuf[MAX_PATH_LEN];
     for (int budget = MAX_SYMLINKS; budget > 0; budget--) {
         ssize_t n = readlinkat(pfd, name, link, sizeof(link) - 1);
         if (n < 0) {
@@ -449,12 +455,12 @@ static int resolve_final(int base, const char *path, char *buf, size_t buflen,
         link[n] = '\0';
         if (link[0] == '/') { if (owned) close(pfd); return E_REFUSED; }
         /* The target is relative to the directory the link sits in. `readlinkat'
-         * above has already read `name', so reusing `lbuf' for the new parent
+         * above has already read `name', so reusing `nbuf' for the new parent
          * name is safe. `walk_parent' resolves intermediate links and refuses a
          * `..' that would leave the preopen. */
         int npfd, nowned;
         char *nname;
-        e = walk_parent(pfd, link, lbuf, sizeof(lbuf), &npfd, &nowned, &nname);
+        e = walk_parent(pfd, link, nbuf, buflen, &npfd, &nowned, &nname);
         if (owned) close(pfd);
         if (e != 0) return e;
         pfd = npfd; owned = nowned; name = nname;
@@ -462,6 +468,22 @@ static int resolve_final(int base, const char *path, char *buf, size_t buflen,
     if (owned) close(pfd);
     return ELOOP;
 }
+
+/* A check build (`-DWASM_NIF_STACK_CHECK -O0 -fno-inline`, the CI job "NIF
+ * checks") overwrites the stack a resolution has just returned from, before
+ * its result is used. A result left pointing into the resolution's own frame is then
+ * garbage, and the operation fails every time rather than on whichever
+ * machine happens to reuse that stack. Nothing else finds it: the pointer is
+ * only ever read by the system call it is passed to, which a sanitizer does
+ * not watch. */
+#ifdef WASM_NIF_STACK_CHECK
+static void __attribute__((noinline)) scrub_stack(void) {
+    volatile char junk[4 * MAX_PATH_LEN];
+    memset((char *)junk, 0x5a, sizeof(junk));
+}
+#else
+#define scrub_stack() ((void)0)
+#endif
 
 /* A directory handle's descriptor, duplicated under its lock. The copy is
  * ours, so it cannot be closed underneath a walk that takes many syscalls. */
@@ -578,7 +600,7 @@ static ERL_NIF_TERM path_op_nif(ErlNifEnv *env, int argc,
     int e = dir_dup(dir, &base);
     if (e != 0) return mk_errno(env, e);
 
-    char path[MAX_PATH_LEN], buf[MAX_PATH_LEN];
+    char path[MAX_PATH_LEN], buf[MAX_PATH_LEN], nbuf[MAX_PATH_LEN];
     memcpy(path, rel.data, rel.size);
     path[rel.size] = '\0';
 
@@ -588,10 +610,12 @@ static ERL_NIF_TERM path_op_nif(ErlNifEnv *env, int argc,
      * own budget, then acts NOFOLLOW; every other operation acts on the name as
      * written. */
     if (op == OP_STAT_FOLLOW || op == OP_SETTIMES_FOLLOW)
-        e = resolve_final(base, path, buf, sizeof(buf), &pfd, &owned, &name);
+        e = resolve_final(base, path, buf, nbuf, sizeof(buf), &pfd, &owned,
+                          &name);
     else
         e = walk_parent(base, path, buf, sizeof(buf), &pfd, &owned, &name);
     if (e != 0) { close(base); return mk_errno(env, e); }
+    scrub_stack();
 
     ERL_NIF_TERM result;
     int rc = 0;

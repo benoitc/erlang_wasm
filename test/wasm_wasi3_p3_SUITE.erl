@@ -70,7 +70,7 @@ baseline() ->
 
 init_per_suite(Config) ->
     case programs() of
-        [] -> {skip, "no wasmtime p3 fixtures: run scripts/build-wasmtime-p2.sh"};
+        [] -> wasi_p2_runner:missing_fixtures("no wasmtime p3 fixtures");
         _ ->
             {ok, _} = application:ensure_all_started(wasm),
             %% The server the outbound HTTP programs reach, as wasmtime's own

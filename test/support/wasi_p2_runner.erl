@@ -15,7 +15,8 @@ cli), the same shape `wasm_wasi2_p2_SUITE` compares against a known-failing
 baseline: a fix lowers a count, a regression raises one and fails the build.
 """.
 
--export([dir/0, have_fixtures/0, programs/0, run_all/0, format_report/1, group/1]).
+-export([dir/0, have_fixtures/0, missing_fixtures/1, programs/0, run_all/0,
+         format_report/1, group/1]).
 
 %% A program that neither exits nor traps within this bound is killed and
 %% counted as a failure: the WASI operations these programs use are meant to be
@@ -34,6 +35,19 @@ dir() ->
 -spec have_fixtures() -> boolean().
 have_fixtures() ->
     filelib:is_dir(dir()) andalso programs() =/= [].
+
+-doc """
+What a suite's init answers when wasmtime's programs are not built: a skip
+in a working copy, but a failure where `WASM_REQUIRE_WASMTIME_FIXTURES` is set,
+as in the CI job that builds them, so that job cannot pass by running none.
+""".
+-spec missing_fixtures(string()) -> {skip, string()} | {fail, string()}.
+missing_fixtures(Why) ->
+    Msg = Why ++ ": run scripts/build-wasmtime-p2.sh",
+    case os:getenv("WASM_REQUIRE_WASMTIME_FIXTURES") of
+        V when V =:= false; V =:= ""; V =:= "0" -> {skip, Msg};
+        _ -> {fail, Msg}
+    end.
 
 -doc "Every built command program, sorted.".
 -spec programs() -> [file:filename()].

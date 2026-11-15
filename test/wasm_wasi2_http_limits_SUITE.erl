@@ -66,8 +66,7 @@ init_per_group(listener, Config) ->
     case file:read_file(hello()) of
         {ok, Bin} -> [{component, Bin} | Config];
         {error, _} ->
-            {skip, "no wasmtime serve fixtures: "
-                   "run scripts/build-wasmtime-p2.sh"}
+            wasi_p2_runner:missing_fixtures("no wasmtime serve fixtures")
     end;
 init_per_group(_, Config) -> Config.
 

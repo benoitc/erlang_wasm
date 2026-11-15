@@ -341,6 +341,7 @@ udp_connect(S, Remote, Grant) ->
 udp_disconnect(S) ->
     case wasm_component:host_get(S) of
         {ok, {udp_socket, {udp_bound, Sock, {udp, _, _}}}} ->
+            ok = wasi_sock2:disconnect(Sock),
             _ = wasm_component:host_update(S, {udp_bound, Sock, none}),
             {ok, undefined};
         _ -> {error, ~"invalid-state"}

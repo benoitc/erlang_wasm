@@ -19,7 +19,7 @@ connected) is tracked by the caller, not here. Errors are POSIX atoms the caller
 to WASI `error-code`s.
 """.
 
--export([open/1, open_udp/1, bind/2, connect/3, listen/2, accept/2]).
+-export([open/1, open_udp/1, bind/2, connect/3, disconnect/1, listen/2, accept/2]).
 -export([recv/3, send/2, recvfrom/2, sendto/3, shutdown/2, close/1]).
 -export([sockname/1, peername/1, family/1, setopt/3, getopt/2]).
 
@@ -70,6 +70,19 @@ bind({_Proto, Family, S}, {Addr, Port}) ->
 -spec connect(handle(), endpoint(), timeout()) -> ok | {error, reason()}.
 connect({_Proto, Family, S}, {Addr, Port}, Timeout) ->
     map(socket:connect(S, sockaddr(Family, Addr, Port), Timeout)).
+
+-doc """
+Dissolve a UDP socket's association with its peer: a connect to an address of
+no family, as POSIX has it. Linux fixes the source address of a socket bound
+to any address at its first connect, so a later connect to a peer that source
+cannot reach fails with `einval` until the old association is dissolved. The
+BSDs and macOS report `einval` for this call but dissolve it all the same, so
+the answer is not looked at.
+""".
+-spec disconnect(handle()) -> ok.
+disconnect({udp, _Family, S}) ->
+    _ = socket:connect(S, #{family => unspec}),
+    ok.
 
 %%% ---------------------------------------------------------------- listen ---
 

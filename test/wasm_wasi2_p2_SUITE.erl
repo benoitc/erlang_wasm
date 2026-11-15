@@ -44,7 +44,7 @@ baseline() ->
 init_per_suite(Config) ->
     case wasi_p2_runner:have_fixtures() of
         false ->
-            {skip, "no wasmtime p2 fixtures: run scripts/build-wasmtime-p2.sh"};
+            wasi_p2_runner:missing_fixtures("no wasmtime p2 fixtures");
         true ->
             {ok, _} = application:ensure_all_started(wasm),
             Config

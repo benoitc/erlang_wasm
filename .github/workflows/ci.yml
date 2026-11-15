@@ -149,6 +149,81 @@ jobs:
         run: scripts/fetch-qjs-fixture.sh
       - run: rebar3 ct
 
+  # wasmtime's own WASI 0.2 and 0.3 test programs, run as wasmtime's tests run
+  # them. They are not vendored: `scripts/build-wasmtime-p2.sh' builds them
+  # from wasmtime at a pinned tag, which takes a Rust toolchain and the better
+  # part of half an hour, so the result is cached on the script, which names
+  # the tag. A changed script builds them again. The suites skip without them,
+  # which is right in a working copy and wrong here:
+  # WASM_REQUIRE_WASMTIME_FIXTURES makes a missing program a failure, so this
+  # job cannot pass by running none.
+  wasmtime:
+    name: wasmtime programs
+    needs: compile
+    runs-on: ubuntu-latest
+    env:
+      WASM_REQUIRE_WASMTIME_FIXTURES: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build
+          key: ${{ runner.os }}-rebar3-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: ${{ runner.os }}-rebar3-${{ env.OTP }}-
+      - name: Restore wasmtime's programs
+        id: programs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            test/fixtures/wasmtime-p2
+            test/fixtures/wasmtime-p2-serve
+            test/fixtures/wasmtime-p3
+            test/fixtures/wasmtime-p3-serve
+          key: wasmtime-programs-${{ runner.os }}-${{ hashFiles('scripts/build-wasmtime-p2.sh') }}
+      # Checked before it is used, as the WASI SDK is: it composes the
+      # middleware programs the suites serve.
+      - name: Install the pinned wasm-tools
+        if: steps.programs.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/wasm-tools.tar.gz \
+            https://github.com/bytecodealliance/wasm-tools/releases/download/v1.256.0/wasm-tools-1.256.0-x86_64-linux.tar.gz
+          echo "0b488be25c9e8a74dfa09f7eac614a927ea197f389d8fa5a21ffb1c15deb469d  /tmp/wasm-tools.tar.gz" \
+            | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/wasm-tools.tar.gz -C /tmp
+          mv /tmp/wasm-tools-1.256.0-x86_64-linux/wasm-tools "$HOME/.local/bin/"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build wasmtime's programs
+        if: steps.programs.outputs.cache-hit != 'true'
+        run: |
+          # wasip1 for the programs, unknown-unknown for the preview1
+          # adapter wasmtime builds to make components of them.
+          rustup toolchain install 1.97.1 --profile minimal \
+            --target wasm32-wasip1 --target wasm32-unknown-unknown
+          rustup default 1.97.1
+          scripts/build-wasmtime-p2.sh
+      # Saved as soon as they are built, so a failing test does not cost the
+      # next run the build.
+      - name: Keep wasmtime's programs
+        if: steps.programs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            test/fixtures/wasmtime-p2
+            test/fixtures/wasmtime-p2-serve
+            test/fixtures/wasmtime-p3
+            test/fixtures/wasmtime-p3-serve
+          key: ${{ steps.programs.outputs.cache-primary-key }}
+      - name: Run them
+        run: >-
+          rebar3 ct --suite=test/wasm_wasi2_p2_SUITE,test/wasm_wasi2_serve_SUITE,test/wasm_wasi2_http_limits_SUITE,test/wasm_wasi3_p3_SUITE
+
   lint:
     name: Lint
     needs: compile

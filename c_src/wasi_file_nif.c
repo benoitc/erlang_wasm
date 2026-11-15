@@ -463,9 +463,9 @@ static int resolve_final(int base, const char *path, char *buf, size_t buflen,
     return ELOOP;
 }
 
-/* A check build (`-DWASM_NIF_STACK_CHECK`, the CI job "NIF checks")
- * overwrites the stack a resolution has just returned from, before its result
- * is used. A result left pointing into the resolution's own frame is then
+/* A check build (`-DWASM_NIF_STACK_CHECK -O0 -fno-inline`, the CI job "NIF
+ * checks") overwrites the stack a resolution has just returned from, before
+ * its result is used. A result left pointing into the resolution's own frame is then
  * garbage, and the operation fails every time rather than on whichever
  * machine happens to reuse that stack. Nothing else finds it: the pointer is
  * only ever read by the system call it is passed to, which a sanitizer does

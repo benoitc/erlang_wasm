@@ -43,10 +43,18 @@ case "$(uname -s)" in
     *)      LDFLAGS="-shared" ;;
 esac
 
-if "$CC" -O2 -fPIC $SAN $EXTRA $LDFLAGS -I"$INC" -o "$OUT" "$SRC" 2>/tmp/wasm_nif_build.log; then
+# Built under a name of its own, then renamed into place. A rename is atomic,
+# so a runtime loading the NIF while another build runs sees the old file or
+# the new one, never one half-written, and two builds at once cannot mix
+# their output. Each build keeps its own log for the same reason.
+TMP="$OUT.$$.tmp"
+LOG="$(mktemp "${TMPDIR:-/tmp}/wasm_nif_build.XXXXXX")"
+if "$CC" -O2 -fPIC $SAN $EXTRA $LDFLAGS -I"$INC" -o "$TMP" "$SRC" 2>"$LOG" \
+        && mv -f "$TMP" "$OUT"; then
     echo "wasm: built $OUT"
 else
     echo "wasm: NIF build failed, using pure Erlang fallback:"
-    sed 's/^/  /' /tmp/wasm_nif_build.log | head -5
+    sed 's/^/  /' "$LOG" | head -5
 fi
+rm -f "$TMP" "$LOG"
 exit 0

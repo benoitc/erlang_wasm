@@ -67,6 +67,18 @@ them as separate jobs gated on `compile`, and fetches both upstream test suites
 first, at the commits `scripts/fetch-suites.sh` names, because they are not
 vendored and every suite that needs one *skips* when it is absent.
 
+wasmtime's own WASI 0.2 and 0.3 test programs run in a job of their own,
+"wasmtime programs". `scripts/build-wasmtime-p2.sh` builds them from wasmtime
+at a pinned tag, and CI caches the result on that script. The job sets
+`WASM_REQUIRE_WASMTIME_FIXTURES=1`, so a suite that finds no programs fails
+there instead of skipping. To run the same locally, build them once and set
+it:
+
+```sh
+scripts/build-wasmtime-p2.sh
+WASM_REQUIRE_WASMTIME_FIXTURES=1 rebar3 ct --suite=test/wasm_wasi3_p3_SUITE
+```
+
 ## Build & Development Commands
 
 ```bash

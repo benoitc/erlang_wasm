@@ -23,6 +23,15 @@ plain Erlang.
 
 ### Changes
 
+- **Fixed: a UDP socket could not be reconnected on Linux.** A WASI program
+  that connected a UDP socket to one address, then to another that the first
+  source address cannot reach (from loopback to a public address), got
+  `invalid-argument` on Linux. macOS picks a new source, Linux keeps the first.
+  The old association is now dissolved and the connect tried again, as
+  wasmtime does, and disconnecting a socket now also tells the system.
+- **wasmtime's own WASI 0.2 and 0.3 test programs now run in CI.** They are
+  built from wasmtime at a pinned tag and cached, and the job fails rather
+  than skips when they are missing.
 - **Fixed: a component's interface functions are called as it declares them.**
   A function an exported interface holds (`wasi:http/incoming-handler#handle`)
   was found by a core function of that very name, and called without what its

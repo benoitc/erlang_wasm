@@ -6,6 +6,23 @@ A pool of script workers can share one image, and sending an image no longer
 copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
 plain Erlang.
 
+### Security
+
+- **Fixed: the file NIF used a name after the buffer holding it was gone.**
+  When a WASI program asked about a file through a symbolic link and asked to
+  follow it, the native file backend resolved the link into a buffer that no
+  longer existed when the file was then looked up. Depending on the machine,
+  the lookup used the right name, a wrong one, or failed. It stayed inside the
+  directory the program was granted, but which file it touched there was not
+  certain. Only the native backend was affected, not the pure Erlang one.
+- **Fixed: a NIF build running beside another could leave it unloadable.**
+  The build wrote the library in place, so two builds at once could leave a
+  file the runtime could not load, and it would silently fall back to the
+  pure Erlang file backend. The library is now built aside and moved into
+  place in one step.
+
+### Changes
+
 - **Fixed: a component's interface functions are called as it declares them.**
   A function an exported interface holds (`wasi:http/incoming-handler#handle`)
   was found by a core function of that very name, and called without what its

@@ -23,10 +23,31 @@ emulator: `LD_PRELOAD` survives the exec from `erl` to the emulator there.
 To do it by hand, or in an image of your own:
 
 ```sh
-WASM_NIF_SANITIZE=address rebar3 compile
+export WASM_NIF_SANITIZE=address   # kept set: `rebar3 ct` recompiles
+rebar3 compile
 LD_PRELOAD=$(gcc -print-file-name=libasan.so) \
-  ASAN_OPTIONS=detect_leaks=0 rebar3 ct --suite=test/wasi_nif_SUITE
+  ASAN_OPTIONS=detect_stack_use_after_return=1:detect_leaks=0:abort_on_error=1 \
+  rebar3 ct --suite=test/wasi_nif_SUITE
 ```
+
+## Run the check build
+
+A pointer left into a stack frame that has returned is the one defect the
+sanitizer above cannot see in this NIF. Such a name is only read by the
+system call it is passed to, and a sanitizer does not watch system calls.
+Whether the stale bytes still read right depends on the compiler and on what
+ran in between, so the plain suites pass on one machine and fail on another.
+
+The check build makes it fail every time. It overwrites the stack a path
+resolution has just returned from, before the name is used. It is built
+unoptimised and not inlined, so each function keeps its own frame:
+
+```sh
+WASM_NIF_CFLAGS="-DWASM_NIF_STACK_CHECK -O0 -fno-inline" rebar3 compile
+rebar3 ct --suite=test/wasi_nif_SUITE,test/wasi_SUITE
+```
+
+CI runs both, in the job "NIF checks".
 
 ## What each sanitizer will and will not find
 

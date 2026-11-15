@@ -200,7 +200,7 @@ jobs:
           mv /tmp/wasm-tools-1.256.0-x86_64-linux/wasm-tools "$HOME/.local/bin/"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Build wasmtime's programs
-        if: false
+        if: steps.programs.outputs.cache-hit != 'true'
         run: |
           rustup toolchain install 1.97.1 --profile minimal --target wasm32-wasip1
           rustup default 1.97.1
@@ -208,7 +208,7 @@ jobs:
       # Saved as soon as they are built, so a failing test does not cost the
       # next run the build.
       - name: Keep wasmtime's programs
-        if: false
+        if: steps.programs.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |

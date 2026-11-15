@@ -764,11 +764,24 @@ udp_connect(Sock, {some, Addr}, Grant) ->
                 false ->
                     {error, <<"access-denied">>};
                 true ->
-                    case wasi_sock2:connect(Sock, {Ip, Port}, ?SOCK_TIMEOUT) of
+                    case udp_os_connect(Sock, {Ip, Port}) of
                         ok             -> {ok, {udp, Ip, Port}};
                         {error, Errno} -> {error, sock2_errno(Errno)}
                     end
             end
+    end.
+
+%% Linux fixes the source address of a socket bound to any address at its
+%% first connect, and a new peer that source cannot reach answers `einval'.
+%% Other systems pick the source again. So on `einval' the old association is
+%% dissolved and the connect tried once more, as wasmtime does: dissolving
+%% first every time would give up the socket's port.
+udp_os_connect(Sock, Endpoint) ->
+    case wasi_sock2:connect(Sock, Endpoint, ?SOCK_TIMEOUT) of
+        {error, einval} ->
+            ok = wasi_sock2:disconnect(Sock),
+            wasi_sock2:connect(Sock, Endpoint, ?SOCK_TIMEOUT);
+        Other -> Other
     end.
 
 udp_local(Self) ->

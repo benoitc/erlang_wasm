@@ -463,6 +463,22 @@ static int resolve_final(int base, const char *path, char *buf, size_t buflen,
     return ELOOP;
 }
 
+/* A check build (`-DWASM_NIF_STACK_CHECK`, the CI job "NIF checks")
+ * overwrites the stack a resolution has just returned from, before its result
+ * is used. A result left pointing into the resolution's own frame is then
+ * garbage, and the operation fails every time rather than on whichever
+ * machine happens to reuse that stack. Nothing else finds it: the pointer is
+ * only ever read by the system call it is passed to, which a sanitizer does
+ * not watch. */
+#ifdef WASM_NIF_STACK_CHECK
+static void __attribute__((noinline)) scrub_stack(void) {
+    volatile char junk[4 * MAX_PATH_LEN];
+    memset((char *)junk, 0x5a, sizeof(junk));
+}
+#else
+#define scrub_stack() ((void)0)
+#endif
+
 /* A directory handle's descriptor, duplicated under its lock. The copy is
  * ours, so it cannot be closed underneath a walk that takes many syscalls. */
 static int dir_dup(file_handle *dir, int *out) {
@@ -592,6 +608,7 @@ static ERL_NIF_TERM path_op_nif(ErlNifEnv *env, int argc,
     else
         e = walk_parent(base, path, buf, sizeof(buf), &pfd, &owned, &name);
     if (e != 0) { close(base); return mk_errno(env, e); }
+    scrub_stack();
 
     ERL_NIF_TERM result;
     int rc = 0;

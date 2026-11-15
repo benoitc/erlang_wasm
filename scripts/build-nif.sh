@@ -28,6 +28,9 @@ INC="$(ls -d "$INC"/erts-*/include 2>/dev/null | head -1)"
 CC="${CC:-cc}"
 command -v "$CC" >/dev/null || { echo "wasm: no C compiler; skipping NIF (pure Erlang fallback in use)"; exit 0; }
 
+# Extra compiler flags, such as -DWASM_NIF_STACK_CHECK for the check build.
+EXTRA="${WASM_NIF_CFLAGS:-}"
+
 SAN=""
 if [ -n "${WASM_NIF_SANITIZE:-}" ]; then
     SAN="-fsanitize=${WASM_NIF_SANITIZE} -fno-omit-frame-pointer -g -O1"
@@ -40,7 +43,7 @@ case "$(uname -s)" in
     *)      LDFLAGS="-shared" ;;
 esac
 
-if "$CC" -O2 -fPIC $SAN $LDFLAGS -I"$INC" -o "$OUT" "$SRC" 2>/tmp/wasm_nif_build.log; then
+if "$CC" -O2 -fPIC $SAN $EXTRA $LDFLAGS -I"$INC" -o "$OUT" "$SRC" 2>/tmp/wasm_nif_build.log; then
     echo "wasm: built $OUT"
 else
     echo "wasm: NIF build failed, using pure Erlang fallback:"

@@ -249,3 +249,44 @@ jobs:
           key: ${{ runner.os }}-plt-${{ env.OTP }}-${{ hashFiles('rebar.lock') }}
           restore-keys: ${{ runner.os }}-plt-${{ env.OTP }}-
       - run: rebar3 dialyzer
+
+  # The NIF is C. Two runs of its file suites on Linux:
+  #
+  # - A check build (-DWASM_NIF_STACK_CHECK) overwrites the stack a path
+  #   resolution returned from before its result is used, so a name left
+  #   pointing into a finished frame fails the operation every time. Neither
+  #   the plain suites nor AddressSanitizer see that one: the stale pointer is
+  #   only read by the system call it is passed to, and whether its bytes
+  #   survive depends on the machine.
+  # - AddressSanitizer, preloaded as `scripts/sanitize.sh' does in a
+  #   container, for the memory errors it does watch. WASM_NIF_SANITIZE stays
+  #   set for the test run: `rebar3 ct' recompiles, and without it the NIF
+  #   would be rebuilt uninstrumented. Leak detection is off because the
+  #   emulator keeps its allocations for its whole life.
+  nif:
+    name: NIF checks
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      - name: The file suites on the check build
+        env:
+          WASM_NIF_CFLAGS: -DWASM_NIF_STACK_CHECK
+        run: |
+          rebar3 compile
+          test -f priv/wasi_file_nif.so
+          rebar3 ct --suite=test/wasi_nif_SUITE,test/wasi_SUITE
+      - name: The file suites under AddressSanitizer
+        env:
+          WASM_NIF_SANITIZE: address
+        run: |
+          rm -rf _build/test priv/wasi_file_nif.so
+          rebar3 compile
+          test -f priv/wasi_file_nif.so
+          export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
+          export ASAN_OPTIONS=detect_stack_use_after_return=1:detect_leaks=0:abort_on_error=1
+          rebar3 ct --suite=test/wasi_nif_SUITE,test/wasi_SUITE

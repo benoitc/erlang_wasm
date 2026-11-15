@@ -1,10 +1,14 @@
 name: ThreadSanitizer
 
 # The NIF's locking (`handle_lock', `dir_dup') under ThreadSanitizer. Unlike
-# AddressSanitizer it cannot be preloaded into a stock emulator: the whole
-# program has to be instrumented, so this builds OTP with it, as
-# `docs/contributing/nif.md' describes, and caches that build. It is slow,
-# so it runs when the NIF or this workflow changes, weekly, and by hand.
+# AddressSanitizer it cannot be preloaded into a stock emulator: the emulator
+# itself has to be built with it. Only the emulator, though, not the compiled
+# Erlang: this installs the stock OTP at one exact version, builds that
+# version's `beam.smp' with ThreadSanitizer, and puts it in place of the stock
+# one. Building all of OTP with it took over three hours, because OTP's own
+# bootstrap compiles every application on the instrumented emulator. The
+# emulator is cached. It runs when the NIF or this workflow changes, weekly,
+# and by hand.
 on:
   pull_request:
     branches: [main]
@@ -17,9 +21,10 @@ on:
   workflow_dispatch:
 
 env:
-  OTP: '29'
+  # The stock install and the sources the emulator is built from must be the
+  # same version, so this is exact.
+  OTP: '29.1.2'
   REBAR3: '3.27'
-  OTP_TSAN: 'OTP-29.1.2'
 
 jobs:
   tsan:
@@ -27,7 +32,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # For rebar3 only; the emulator the suites run on is the one below.
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: ${{ env.OTP }}
@@ -37,42 +41,46 @@ jobs:
       # "unexpected memory mapping" unless the randomisation is narrowed.
       - name: Let ThreadSanitizer map its shadow memory
         run: sudo sysctl -w vm.mmap_rnd_bits=28
-      - name: Restore the instrumented OTP
-        id: otp
+      - name: Restore the instrumented emulator
+        id: emu
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/otp-tsan
-          key: otp-tsan-${{ runner.os }}-${{ env.OTP_TSAN }}
-      # The build runs the emulator it is building to compile OTP's own
-      # modules, and ERTS's deliberate races would make each of those runs
-      # exit 66, so reports are off while it builds.
-      - name: Build OTP with ThreadSanitizer
-        if: steps.otp.outputs.cache-hit != 'true'
+          path: ~/beam-tsan
+          key: beam-tsan-${{ runner.os }}-${{ env.OTP }}
+      - name: Build the emulator with ThreadSanitizer
+        if: steps.emu.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "OTP-$OTP" https://github.com/erlang/otp /tmp/otp
+          cd /tmp/otp
+          export ERL_TOP=$PWD
+          ./otp_build configure \
+            CFLAGS="-fsanitize=thread -fPIE -O1 -g" LDFLAGS="-fsanitize=thread"
+          make -j"$(nproc)" emulator
+          mkdir -p "$HOME/beam-tsan"
+          cp bin/*/beam.smp "$HOME/beam-tsan/beam.smp"
+      - name: Keep the instrumented emulator
+        if: steps.emu.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/beam-tsan
+          key: ${{ steps.emu.outputs.cache-primary-key }}
+      # The runner is thrown away after the job, so the stock emulator is
+      # replaced in place rather than a second install made, whose start
+      # scripts would still name the first.
+      - name: Put it in place of the stock emulator
         env:
           TSAN_OPTIONS: report_bugs=0 exitcode=0
         run: |
-          git clone --depth 1 --branch "$OTP_TSAN" https://github.com/erlang/otp /tmp/otp
-          cd /tmp/otp
-          export ERL_TOP=$PWD
-          ./otp_build configure --prefix="$HOME/otp-tsan" \
-            --without-wx --without-javac --without-odbc --without-observer \
-            --without-debugger --without-et --without-megaco --without-jinterface \
-            CFLAGS="-fsanitize=thread -fPIE -O1 -g" LDFLAGS="-fsanitize=thread"
-          make -j"$(nproc)"
-          make install
-      - name: Keep the instrumented OTP
-        if: steps.otp.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/otp-tsan
-          key: ${{ steps.otp.outputs.cache-primary-key }}
+          root=$(erl -noshell -eval 'io:format("~s", [code:root_dir()]), halt().')
+          cp "$HOME/beam-tsan/beam.smp" "$root"/erts-*/bin/beam.smp
+          erl -noshell -eval 'io:format("~s~n", [erlang:system_info(system_version)]), halt().'
       - name: Run the file suites under it
         env:
           WASM_NIF_SANITIZE: thread
         run: |
-          export PATH="$HOME/otp-tsan/bin:$PATH"
-          erl -noshell -eval 'io:format("~s~n", [erlang:system_info(system_version)]), halt().'
-          rebar3 compile
+          # ERTS's deliberate races would make every run exit 66; only the
+          # suites' run below reports.
+          TSAN_OPTIONS="report_bugs=0 exitcode=0" rebar3 compile
           test -f priv/wasi_file_nif.so
           mkdir -p "$RUNNER_TEMP/tsan"
           # Reports go to files and do not change the exit status: the next

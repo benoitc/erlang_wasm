@@ -43,8 +43,13 @@ jobs:
         with:
           path: ~/otp-tsan
           key: otp-tsan-${{ runner.os }}-${{ env.OTP_TSAN }}
+      # The build runs the emulator it is building to compile OTP's own
+      # modules, and ERTS's deliberate races would make each of those runs
+      # exit 66, so reports are off while it builds.
       - name: Build OTP with ThreadSanitizer
         if: steps.otp.outputs.cache-hit != 'true'
+        env:
+          TSAN_OPTIONS: report_bugs=0 exitcode=0
         run: |
           git clone --depth 1 --branch "$OTP_TSAN" https://github.com/erlang/otp /tmp/otp
           cd /tmp/otp
@@ -70,7 +75,9 @@ jobs:
           rebar3 compile
           test -f priv/wasi_file_nif.so
           mkdir -p "$RUNNER_TEMP/tsan"
-          TSAN_OPTIONS="halt_on_error=0 report_signal_unsafe=0 log_path=$RUNNER_TEMP/tsan/report" \
+          # Reports go to files and do not change the exit status: the next
+          # step reads them.
+          TSAN_OPTIONS="halt_on_error=0 exitcode=0 report_signal_unsafe=0 log_path=$RUNNER_TEMP/tsan/report" \
             rebar3 ct --suite=test/wasi_nif_SUITE,test/wasi_SUITE
       # ERTS is full of deliberate lock-free code that ThreadSanitizer
       # reports, so only a report with a NIF frame fails the job. Every report

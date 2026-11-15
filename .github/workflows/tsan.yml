@@ -1,0 +1,94 @@
+name: ThreadSanitizer
+
+# The NIF's locking (`handle_lock', `dir_dup') under ThreadSanitizer. Unlike
+# AddressSanitizer it cannot be preloaded into a stock emulator: the whole
+# program has to be instrumented, so this builds OTP with it, as
+# `docs/contributing/nif.md' describes, and caches that build. It is slow,
+# so it runs when the NIF or this workflow changes, weekly, and by hand.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'c_src/**'
+      - 'scripts/build-nif.sh'
+      - '.github/workflows/tsan.yml'
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+
+env:
+  OTP: '29'
+  REBAR3: '3.27'
+  OTP_TSAN: 'OTP-29.1.2'
+
+jobs:
+  tsan:
+    name: NIF under ThreadSanitizer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # For rebar3 only; the emulator the suites run on is the one below.
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      # ThreadSanitizer maps its shadow memory at fixed places, and the
+      # runner's kernel randomises mappings too widely for it: it aborts with
+      # "unexpected memory mapping" unless the randomisation is narrowed.
+      - name: Let ThreadSanitizer map its shadow memory
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Restore the instrumented OTP
+        id: otp
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/otp-tsan
+          key: otp-tsan-${{ runner.os }}-${{ env.OTP_TSAN }}
+      - name: Build OTP with ThreadSanitizer
+        if: steps.otp.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$OTP_TSAN" https://github.com/erlang/otp /tmp/otp
+          cd /tmp/otp
+          export ERL_TOP=$PWD
+          ./otp_build configure --prefix="$HOME/otp-tsan" \
+            --without-wx --without-javac --without-odbc --without-observer \
+            --without-debugger --without-et --without-megaco --without-jinterface \
+            CFLAGS="-fsanitize=thread -fPIE -O1 -g" LDFLAGS="-fsanitize=thread"
+          make -j"$(nproc)"
+          make install
+      - name: Keep the instrumented OTP
+        if: steps.otp.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/otp-tsan
+          key: ${{ steps.otp.outputs.cache-primary-key }}
+      - name: Run the file suites under it
+        env:
+          WASM_NIF_SANITIZE: thread
+        run: |
+          export PATH="$HOME/otp-tsan/bin:$PATH"
+          erl -noshell -eval 'io:format("~s~n", [erlang:system_info(system_version)]), halt().'
+          rebar3 compile
+          test -f priv/wasi_file_nif.so
+          mkdir -p "$RUNNER_TEMP/tsan"
+          TSAN_OPTIONS="halt_on_error=0 report_signal_unsafe=0 log_path=$RUNNER_TEMP/tsan/report" \
+            rebar3 ct --suite=test/wasi_nif_SUITE,test/wasi_SUITE
+      # ERTS is full of deliberate lock-free code that ThreadSanitizer
+      # reports, so only a report with a NIF frame fails the job. Every report
+      # is counted in the summary.
+      - name: Fail on a report from the NIF
+        if: always()
+        run: |
+          shopt -s nullglob
+          files=("$RUNNER_TEMP"/tsan/report*)
+          total=0; nif=0
+          for f in "${files[@]}"; do
+            n=$(grep -c "WARNING: ThreadSanitizer" "$f" || true)
+            total=$((total + n))
+            if grep -q "wasi_file_nif" "$f"; then nif=$((nif + 1)); cat "$f"; fi
+          done
+          {
+            echo "### ThreadSanitizer"
+            echo "- reports: $total, in ${#files[@]} log files"
+            echo "- log files with a NIF frame: $nif"
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$nif" -eq 0

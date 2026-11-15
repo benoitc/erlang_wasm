@@ -23,6 +23,16 @@ plain Erlang.
 
 ### Changes
 
+- **The locked dependencies are checked for known vulnerabilities.** On every
+  pull request and every week, each package in `rebar.lock` is looked up at its
+  locked version in the OSV database and on hex.pm. A published advisory or a
+  retired release fails the check. Run it yourself with
+  `scripts/audit-deps.sh`.
+- **The file NIF runs under ThreadSanitizer.** CI builds OTP with
+  ThreadSanitizer and runs the file suites on it, weekly and whenever the NIF
+  changes.
+- **The feature page says what the conformance figure covers:** the
+  WebAssembly 3.0 core test suite, not every proposal.
 - **Fixed: a UDP socket could not be reconnected on Linux.** A WASI program
   that connected a UDP socket to one address, then to another that the first
   source address cannot reach (from loopback to a public address), got

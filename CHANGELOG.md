@@ -23,6 +23,9 @@ plain Erlang.
 
 ### Changes
 
+- **h2 updated to 0.18.0.** A graceful HTTP/2 shutdown now lets the requests
+  already accepted finish before the connection closes, instead of cutting
+  their responses off.
 - **The locked dependencies are checked for known vulnerabilities.** On every
   pull request and every week, each package in `rebar.lock` is looked up at its
   locked version in the OSV database and on hex.pm. A published advisory or a

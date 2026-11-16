@@ -59,19 +59,46 @@ descriptor field itself.
 
 **ThreadSanitizer cannot be preloaded.** Unlike AddressSanitizer it needs the
 whole program instrumented, and preloading it into a stock emulator segfaults
-it outright rather than reporting anything. That means an emulator built with
-it:
+it outright rather than reporting anything. You need an emulator built with
+it. CI's "NIF under ThreadSanitizer" job (`.github/workflows/tsan.yml`) does
+the following on Linux, weekly and whenever the NIF changes, and you can run
+the same steps by hand.
+
+Build only the emulator, at the OTP version you run:
 
 ```sh
-git clone --depth 1 https://github.com/erlang/otp && cd otp
-export ERL_TOP=$PWD
-./otp_build configure CFLAGS="-fsanitize=thread -fPIE" LDFLAGS="-fsanitize=thread"
-make
+git clone --depth 1 --branch OTP-29.1.2 https://github.com/erlang/otp
+cd otp && export ERL_TOP=$PWD
+./otp_build configure CFLAGS="-fsanitize=thread -fPIE -O1 -g" \
+  LDFLAGS="-fsanitize=thread"
+make -C erts/lib_src opt
+make -C erts/emulator opt
 ```
 
-Expect noise. ERTS is full of deliberate lock-free code that ThreadSanitizer
-reports, so a suppression file comes before the output is worth reading. This
-route is described rather than demonstrated: it has not been run here.
+Copy `bin/<arch>/beam.smp` over the `beam.smp` of an installed OTP of the
+same version. Then build the NIF instrumented and run the file suites:
+
+```sh
+sudo sysctl -w vm.mmap_rnd_bits=28
+export ERL_FLAGS="+Mea min"
+export TSAN_OPTIONS="detect_deadlocks=0 halt_on_error=0 exitcode=0 log_path=/tmp/tsan/report"
+WASM_NIF_SANITIZE=thread rebar3 ct --suite=test/wasi_nif_SUITE,test/wasi_SUITE
+grep -l wasi_file_nif /tmp/tsan/report*
+```
+
+Each setting is there for a reason:
+
+- `vm.mmap_rnd_bits=28`: with the kernel's default address randomisation,
+  ThreadSanitizer cannot map its shadow memory.
+- `detect_deadlocks=0`: the lock-order detector tracks at most 64 held
+  locks. ERTS holds more, and the detector's failed check hangs the emulator.
+- `+Mea min`: ERTS's own allocators hand a freed block to another thread
+  with atomics ThreadSanitizer cannot see. Without this, a new file handle in
+  a recycled block is reported as racing the old handle's destructor.
+
+Expect noise even then. ERTS's atomics are inline assembly, so its deliberate
+lock-free code is reported by the thousand. Read only the reports with a
+`wasi_file_nif` frame. That is all the CI job fails on.
 
 **Neither of them replaces the test.** `wasi_nif_SUITE` reproduces the
 close-against-read race with no sanitizer at all, by asserting that no read

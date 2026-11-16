@@ -1393,7 +1393,7 @@ canon(<<16#04, R0/binary>>) ->
 %% The async Canonical ABI built-ins. Each is a core function the guest imports; the
 %% linker binds it to a `wasm_async` builtin in `step/2`. Operands are parsed so the
 %% section is consumed exactly; the type/slot/encoding a built-in needs is carried in
-%% its item. Opcodes 0x26+ (the threads proposal) are refused rather than crashed.
+%% its item.
 canon(<<16#05, R0/binary>>) -> {{canon_async, task_cancel, #{}}, R0};
 canon(<<16#06, _Async, R1/binary>>) ->
     {{canon_async, subtask_cancel, #{}}, R1};
@@ -1409,8 +1409,7 @@ canon(<<16#0B, R0/binary>>) ->
     {Vt, R1} = val_type(R0),
     {Slot, R2} = wasm_leb128:u32(R1),
     {{canon_async, context_set, #{type => Vt, slot => Slot}}, R2};
-canon(<<16#0C, _Cancellable, R1/binary>>) ->
-    {{canon_async, yield, #{}}, R1};
+canon(<<16#0C, R0/binary>>) -> cancellable(yield, R0);
 canon(<<16#0D, R0/binary>>) -> {{canon_async, subtask_drop, #{}}, R0};
 canon(<<16#0E, R0/binary>>) -> async_ty(stream_new, R0);
 canon(<<16#0F, R0/binary>>) -> async_ty_opts(stream_read, R0);
@@ -1440,7 +1439,29 @@ canon(<<16#22, R0/binary>>) -> {{canon_async, waitable_set_drop, #{}}, R0};
 canon(<<16#23, R0/binary>>) -> {{canon_async, waitable_join, #{}}, R0};
 canon(<<16#24, R0/binary>>) -> {{canon_async, backpressure_inc, #{}}, R0};
 canon(<<16#25, R0/binary>>) -> {{canon_async, backpressure_dec, #{}}, R0};
-canon(<<Op, _/binary>>) -> error({unsupported_canon_opcode, Op}).
+%% The cooperative thread built-ins. `new-indirect` names a core function type
+%% and a core table; the suspending and yielding ones carry a cancellable flag.
+canon(<<16#26, R0/binary>>) -> {{canon_async, thread_index, #{}}, R0};
+canon(<<16#27, R0/binary>>) ->
+    {Ft, R1} = wasm_leb128:u32(R0),
+    {Table, R2} = wasm_leb128:u32(R1),
+    {{canon_async, thread_new_indirect, #{core_type => Ft, table => Table}}, R2};
+canon(<<16#28, R0/binary>>) -> {{canon_async, thread_resume_later, #{}}, R0};
+canon(<<16#29, R0/binary>>) -> cancellable(thread_suspend, R0);
+canon(<<16#2A, R0/binary>>) -> cancellable(thread_suspend_then_resume, R0);
+canon(<<16#2B, R0/binary>>) -> cancellable(thread_yield_then_resume, R0);
+canon(<<16#2C, R0/binary>>) -> cancellable(thread_suspend_then_promote, R0);
+canon(<<16#2D, R0/binary>>) -> cancellable(thread_yield_then_promote, R0);
+canon(<<16#2E, R0/binary>>) -> async_ty(stream_forward, R0);
+canon(<<16#2F, R0/binary>>) -> async_ty(future_forward, R0);
+%% Anything else, the shared-everything thread built-ins (0x40 to 0x42) among
+%% them, is a built-in this runtime does not implement.
+canon(<<Op, _/binary>>) ->
+    wasm_error:link_error(unsupported_canon_builtin,
+                          <<"unsupported canonical built-in">>, #{opcode => Op}).
+
+cancellable(Which, <<Flag, R/binary>>) ->
+    {{canon_async, Which, #{cancellable => Flag =:= 1}}, R}.
 
 %% Async built-in operand shapes: a bare type index; a type index plus a canonopts
 %% vec; a type index plus an async bool flag. The options a built-in acts on are

@@ -1034,8 +1034,10 @@ host_fun({host, Iface, Field}, S) ->
         undefined -> missing({Iface, Field}, S);
         Fun       -> {ok, Fun}
     end;
-host_fun({import_func, Name}, _S) ->
-    {error, {unsupported, {comp_func_import, Name}}};
+%% A bare function import is keyed by its name twice, as
+%% `wasm_component_types:import_interfaces/1' gives its signature.
+host_fun({import_func, Name}, S) ->
+    host_fun({host, Name, Name}, S);
 host_fun({lift, _CoreFuncIdx}, _S) ->
     {error, {unsupported, lower_of_lift}}.
 

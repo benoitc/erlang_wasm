@@ -16,6 +16,7 @@ component and dispatches the outer export to that sub-instance.
 
 all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           a_cross_component_call_bridges_to_the_provider,
+          a_function_argument_wires_a_bare_function_import,
           an_interface_import_signature_is_decoded,
           an_aggregate_interface_signature_is_decoded,
           a_wac_composed_component_passes_a_string,
@@ -36,6 +37,16 @@ init_per_suite(Config) ->
     Config.
 
 end_per_suite(_Config) -> ok.
+
+%% A composition can give a component one function rather than a whole
+%% interface: `composedfunc` instantiates $C with its import "double" bound to
+%% $P's export. Fail-first: an imported bare function was unsupported, so $C
+%% did not link.
+a_function_argument_wires_a_bare_function_import(_Config) ->
+    {ok, Bin} = file:read_file(fixture_path("composedfunc")),
+    {ok, Inst} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 42}, wasm_component:call(Inst, <<"run">>, {[u32], u32}, [21])),
+    ok = wasm_component:destroy(Inst).
 
 %% Calling the outer `run` reaches the inner component's core function (returns 42) only
 %% if the runtime decoded the nested-component and component-instance sections,

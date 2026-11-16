@@ -526,16 +526,20 @@ compose_step({component_def, Bytes}, #{comps := Comps, n_comp := N} = S) ->
 %% to bridge, so it is recorded as an import reference and otherwise left alone.
 compose_step({comp_import_instance, Name}, #{insts := Insts, n_inst := N} = S) ->
     S#{insts => Insts#{N => {import_iface, Name}}, n_inst => N + 1};
+%% An imported function likewise takes its slot in the function index space.
+compose_step({comp_import_func, Name}, #{funcs := Funcs, n_func := N} = S) ->
+    S#{funcs => Funcs#{N => {import_func, Name}}, n_func => N + 1};
 compose_step({comp_instance_alias, SrcInst, Name},
              #{insts := Insts, n_inst := N} = S) ->
     S#{insts => Insts#{N => {iface_ref, SrcInst, Name}}, n_inst => N + 1};
 compose_step({comp_instantiate, CompIdx, Args},
-             #{comps := Comps, insts := Insts, n_inst := N,
+             #{comps := Comps, insts := Insts, n_inst := N, funcs := Funcs,
                imports := Imports, opts := Opts} = S) ->
     Bytes = maps:get(CompIdx, Comps),
-    %% Wire the arguments (a sibling instance's interface feeding this one's import) as
-    %% host bridges, over any host imports the composition itself was given.
-    Bridged = maps:merge(Imports, bridge_imports(Args, Bytes, Insts)),
+    %% Wire the arguments (a sibling instance's interface or function feeding
+    %% this one's import) as host bridges, over any host imports the
+    %% composition itself was given.
+    Bridged = maps:merge(Imports, bridge_imports(Args, Bytes, Insts, Funcs)),
     case instantiate(Bytes, Bridged, Opts) of
         {ok, Sub} ->
             S#{insts => Insts#{N => {instance, Sub}}, n_inst => N + 1};
@@ -571,14 +575,26 @@ compose_step(_Other, S) ->
 %% export, and lowers the result. Values cross as Erlang terms and each side uses its own
 %% memory, so a cross-component call is two ordinary component calls back to back. The
 %% function signatures come from the component's own type section (`wasm_component_types`).
-bridge_imports(Args, Bytes, Insts) ->
+%% An argument that binds an imported function to a sibling's exported function
+%% is one such bridge, keyed as a bare function import is.
+bridge_imports(Args, Bytes, Insts, CompFuncs) ->
     <<_:8/binary, Sec/binary>> = Bytes,
     Ifaces = case wasm_component_types:import_interfaces(Sec) of
                  {ok, Map}  -> Map;
                  {error, _} -> #{}
              end,
     lists:foldl(
-      fun({ArgName, _Sort, Idx}, Acc) ->
+      fun({ArgName, 1, Idx}, Acc) ->  % sort 1, a function
+              case {maps:get(Idx, CompFuncs, undefined), Ifaces} of
+                  {{SrcInst, ExportName}, #{ArgName := #{ArgName := Sig}}}
+                    when is_integer(SrcInst) ->
+                      {instance, Provider} = maps:get(SrcInst, Insts),
+                      Acc#{{ArgName, ArgName} =>
+                               bridge_any(Provider, ExportName, Sig)};
+                  _ ->
+                      Acc
+              end;
+         ({ArgName, _Sort, Idx}, Acc) ->
           case maps:get(Idx, Insts, undefined) of
               {iface_ref, SrcInst, ProvExport} ->
                   {instance, Provider} = maps:get(SrcInst, Insts),

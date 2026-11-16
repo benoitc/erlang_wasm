@@ -355,13 +355,58 @@ is lifted and lowered at its size; a `stream<u8>` stays a binary.
   whole: limit such a guest with `fuel` or a timeout, as you would any loop.
 - A wait that no producer can end traps with `async_deadlock`; there is no
   time limit. A producer that fails while a copy needs it traps the wait.
-- `subtask.cancel` stops a running subtask's producer; `subtask.drop` needs
-  the subtask resolved. `task.cancel` traps, because the runtime never asks a
-  task to cancel.
+- `subtask.cancel` stops a host import's producer at once. A stackful
+  callee is asked instead: the call answers BLOCKED, the callee's next
+  cancellable yield, suspend or switch returns 1, and its `task.cancel`
+  resolves the subtask as cancelled. `task.cancel` traps when nothing asked.
+  `subtask.drop` needs the subtask resolved.
+- `thread.yield` in a stackful callee lets its caller run, as any wait does.
+- `stream.forward` turns the readable end into a sink that hands each write
+  on to the writable end's reader, and ends it when it ends; both handles
+  leave the guest. Forwarding a stream into its own writable end, or into one
+  nobody reads, drops both. `future.forward` does the same for one value.
+- Every async and thread built-in traps with `cannot_leave` while its
+  instance runs a `realloc` or a `post-return`, as the specification's
+  `may_leave` has it.
 - `backpressure.inc` and `dec` count per instance. A task runs in its caller's
   process, so a call that arrives while the count is above zero returns
   `{error, async_backpressure}` instead of waiting for ever.
 - A trap's reason is in the error's `ctx`, under `reason`.
+
+### Cooperative threads
+
+A component instance's threads take turns; one runs at a time. A thread is
+suspended (only another thread resumes it), ready (the scheduler may run it),
+waiting (for an event) or running. Each instance has its own threads table,
+numbered from 1; `thread.index` gives the running thread's number.
+
+```text
+ owner process (holds the frame, runs the scheduler)
+   |  T1, the task's implicit thread, runs here or in a fiber
+   |
+   |  T1 calls thread.suspend-then-resume(2)
+   |    -> T1 suspended; the built-in runs the scheduler in place
+   |    -> T2 starts: a process of its own, calling its built-ins here
+   |
+   +--> T2 calls thread.yield-then-resume(1)
+            -> T2 ready, its call unanswered; T1 picked: the built-in returns
+```
+
+- A task's implicit thread runs where the task runs, in the owner or in a
+  fiber. When it stops, the built-in it called runs the other threads, and
+  returns once the scheduler picks it again.
+- An explicit thread, from `thread.new-indirect`, is a process that calls
+  its start function and calls its built-ins through the owner, as a fiber
+  does. It stops by waiting for the answer to one of them.
+- Ready threads run oldest first; a waiting thread runs once its event has
+  come.
+- When nothing can run, a fiber's task gives its caller the turn, as a wait
+  does, and goes on once one of its threads can. A synchronous call traps
+  with `async_deadlock`.
+- An instance's globals are read once per call and written back at its end.
+  A switch commits the running thread's state first, and the thread that
+  resumes reloads it, so every thread sees the others' writes.
+- `wasm_component:destroy/1` stops the instance's threads.
 
 On the import side, the linker binds each async canon built-in with
 `wasm_async:builtin/2`. An imports map value of `{async_import, Sig, Fun}`

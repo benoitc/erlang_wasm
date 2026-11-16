@@ -23,6 +23,24 @@ plain Erlang.
 
 ### Changes
 
+- **Components can use cooperative threads.** A component can start threads
+  of its own and switch between them, suspend, yield and resume them, with or
+  without cancellation, as the Component Model specifies. A component that
+  uses shared-everything threads is still refused when it links, now with an
+  error that names the built-in.
+- **Components can forward a stream or a future** into another with
+  `stream.forward` and `future.forward`.
+- **A stackful component call can be cancelled.** The callee is asked to
+  cancel and reports it when it is ready, instead of being stopped. Its yield
+  now also lets the caller run.
+- **Fixed: a nested component could not import a single function.** A
+  composition could only wire whole interfaces into a component.
+- **Fixed: some async exports were refused when they linked.** A callback
+  export whose function returns nothing, or a stackful export that returns a
+  value, failed the type check.
+- **Fixed: a trap in a `realloc` or a `post-return` was reported as an
+  internal error.** The call now fails with the trap itself.
+
 - **h2 updated to 0.18.0.** A graceful HTTP/2 shutdown now lets the requests
   already accepted finish before the connection closes, instead of cutting
   their responses off.

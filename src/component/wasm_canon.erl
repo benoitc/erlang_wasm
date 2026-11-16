@@ -39,12 +39,16 @@ as a pointer, as the specification says.
          result_via_memory/1]).
 -export([params_spill/1, lift_async_params/3]).
 -export([with_realloc/2, with_string_encoding/2]).
+-export([no_leave/1, may_leave/0]).
 
 -export_type([desc/0]).
 
 %% The realloc override for the current host-import call (a multi-core component
 %% names its own realloc), installed by `with_realloc/2` for the call's duration.
 -define(REALLOC, {?MODULE, realloc}).
+%% How many calls that must not leave their instance are running here: a
+%% `realloc' and a `post-return' (the specification's `may_leave', cleared).
+-define(NO_LEAVE, {?MODULE, no_leave}).
 %% The active string encoding for the canon lift/lower in progress, set by
 %% `with_string_encoding/2` from a component's canon options. `undefined` is UTF-8.
 -define(STRENC, {?MODULE, strenc}).
@@ -850,15 +854,42 @@ check_aligned(Ptr, Align) ->
 %% instance (a multi-core component, where the lowering names its own realloc)
 %% installs that function with `with_realloc/2`; otherwise the guest's
 %% `cabi_realloc` export is called, as a single-core component has always done.
+%% A realloc that traps fails the call with its trap.
 realloc(Inst, Align, Size) ->
-    case get(?REALLOC) of
-        undefined ->
-            {ok, [Ptr]} = wasm:call(Inst, <<"cabi_realloc">>, [0, 0, Align, Size]),
-            Ptr;
-        Fun ->
-            {ok, [Ptr]} = Fun(#{}, [0, 0, Align, Size]),
-            Ptr
+    Answer = no_leave(
+               fun() ->
+                   case get(?REALLOC) of
+                       undefined ->
+                           wasm:call(Inst, <<"cabi_realloc">>, [0, 0, Align, Size]);
+                       Fun ->
+                           Fun(#{}, [0, 0, Align, Size])
+                   end
+               end),
+    case Answer of
+        {ok, [Ptr]} -> Ptr;
+        {error, E} -> throw({wasm_error, E})
     end.
+
+-doc """
+Run `Fun`, a call that must not leave its component instance: a `realloc` or
+a `post-return`. While it runs, `may_leave/0` is false, and every async and
+thread built-in traps.
+""".
+-spec no_leave(fun(() -> T)) -> T.
+no_leave(Fun) ->
+    N = case get(?NO_LEAVE) of undefined -> 0; M -> M end,
+    put(?NO_LEAVE, N + 1),
+    try Fun()
+    after
+        case N of
+            0 -> erase(?NO_LEAVE);
+            _ -> put(?NO_LEAVE, N)
+        end
+    end.
+
+-doc "Whether the running call may leave its component instance.".
+-spec may_leave() -> boolean().
+may_leave() -> get(?NO_LEAVE) =:= undefined.
 
 read_int(Inst, Ptr, Bytes, Sign) ->
     {ok, Bin} = wasm:read_memory(Inst, Ptr, Bytes),

@@ -61,6 +61,7 @@ restore twice. The bounds are still checked, because they trap.
 -export([snapshotable/1, enter_call/1, leave_call/1,
          begin_capture/1, end_capture/1, begin_destroy/1]).
 -export([publish/2, unpublish/2, published/1]).
+-export([commit_inflight/0, refresh_inflight/0]).
 -export([get_extra/2, set_extra/3, on_destroy/2, run_cleanups/1]).
 -export([note_entry/2, prep/1, shared_prep/1, unshared_ir/1]).
 
@@ -1977,6 +1978,37 @@ happened, which is cheaper than reading the version counter twice.
 """.
 -spec published(#inst{}) -> #mut{}.
 published(#inst{id = Id}) -> get({wasm_inflight, Id}).
+
+-doc """
+Commit the state every call in flight in this process has published, so
+another process that runs the same instances next sees it. A cooperative
+thread switch does this before the next thread runs.
+""".
+-spec commit_inflight() -> ok.
+commit_inflight() ->
+    lists:foreach(fun({Id, Mut}) ->
+                          case lookup(Id) of
+                              {ok, Inst} -> set_mut(Inst, Mut);
+                              error -> ok
+                          end
+                  end, inflight()).
+
+-doc """
+Replace what each call in flight in this process has published with the
+newest committed state, which another process may have written while this one
+waited. The call adopts it when its host function returns.
+""".
+-spec refresh_inflight() -> ok.
+refresh_inflight() ->
+    lists:foreach(fun({Id, _Mut}) ->
+                          case lookup(Id) of
+                              {ok, #inst{store = T, version = V}} ->
+                                  put({wasm_inflight, Id}, mut_at(T, V, Id));
+                              error -> ok
+                          end
+                  end, inflight()).
+
+inflight() -> [{Id, Mut} || {{wasm_inflight, Id}, Mut} <- get()].
 
 -spec set_mut(#inst{}, #mut{}) -> ok.
 set_mut(#inst{store = T, version = V, id = Id}, Mut) ->

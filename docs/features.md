@@ -58,10 +58,11 @@ specification. What they cover, and what they do not, is in
 | A worker kernel for untrusted guests, with an adapter per language | complete |
 | WASI sockets: a capability model, the four standard calls, the client extension | complete |
 | The Component Model: decoding, linking several cores, composition, resources | complete |
-| The async Canonical ABI: `async func`, `stream<T>` and `future<T>` of any element type, callback and stackful lifts, cancellation, subtasks, `error-context`, backpressure, `thread.yield` | complete |
+| The async Canonical ABI: `async func`, `stream<T>` and `future<T>` of any element type, callback and stackful lifts, cancellation, subtasks, `error-context`, backpressure, `stream.forward` and `future.forward` | complete |
+| Cooperative threads in a component instance: `thread.new-indirect`, `thread.index`, suspending, yielding, resuming and switching, cancellable or not | complete |
 | WASI 0.2: random, clocks, cli, io, filesystem, sockets | complete |
 | `wasi:http`: outbound requests and serving an incoming-handler | complete |
-| WASI 0.3: cli, clocks, random, filesystem, sockets and `wasi:http`, beside 0.2 in one component ([WASI 0.3](wasi-0-3.md)) | complete, except middleware |
+| WASI 0.3: cli, clocks, random, filesystem, sockets and `wasi:http`, beside 0.2 in one component ([WASI 0.3](wasi-0-3.md)) | complete |
 | An async task that runs on after its call returns, and host imports that take or give a stream or future | complete |
 | Preparing a component once for many instances (`wasm_component:prepare/1`) | complete |
 
@@ -69,8 +70,7 @@ specification. What they cover, and what they do not, is in
 
 | Area | Why |
 | --- | --- |
-| The async ABI's `thread.*` built-ins other than `thread.yield` | they belong to the threads proposal; a component that uses one is refused when it is linked |
-| `stream.forward` and `future.forward` | added to the specification after the async ABI; `wasm-tools` does not emit them yet |
+| Shared-everything threads: `thread.spawn-ref`, `thread.spawn-indirect`, `thread.available-parallelism` | they run threads in parallel over shared memory; a component that uses one is refused when it is linked, with `unsupported_canon_builtin` |
 | Snapshots of component instances | `wasm:snapshot/2` captures a core instance; a component's handle tables point to host state that a snapshot image cannot store |
 
 ## Caching compiled code

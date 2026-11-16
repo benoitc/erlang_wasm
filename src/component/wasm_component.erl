@@ -280,7 +280,8 @@ derive(#{core := Core, sec := Sec} = Decoded) ->
             on_entry => on_entry(Decoded)},
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
-            Pre#{graph => Graph, types => link_types(Graph, Sec)};
+            Pre#{graph => Graph, types => link_types(Graph, Sec),
+                 async_builtins => lists:keymember(canon_async, 1, Graph)};
         {error, _} ->
             %% Linking reports it, if the component ever needs the linker.
             Pre
@@ -442,14 +443,25 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% the way the component's canon lift asks, rather than by name.
     StrEnc = pre(str_enc, Decoded, fun() -> wasm_component_link:export_encodings(Sec) end),
     Bindings = pre(bindings, Decoded, fun() -> wasm_component_link:export_bindings(Sec) end),
-    with_export_map(Result, ExportMap, StrEnc, Bindings, ResId, Res).
+    Async = pre(async_builtins, Decoded, fun() -> async_builtins(Sec) end),
+    with_export_map(Result, ExportMap, StrEnc, Bindings, ResId, Res, Async).
 
-with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings, ResId, Res) ->
+%% Whether the component binds any async built-in: only then does a
+%% synchronous call set up what those built-ins read. A section the linker
+%% cannot read, which a component on the single-core path may have, counts as
+%% yes.
+async_builtins(Sec) ->
+    case wasm_error:capture(fun() -> wasm_component_link:parse(Sec) end) of
+        {ok, Graph} -> lists:keymember(canon_async, 1, Graph);
+        {error, _} -> true
+    end.
+
+with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings, ResId, Res, Async) ->
     #{sigs := Sigs, defined := Defined, dtors := Dtors} = Res,
-    {ok, Inst#{export_map => ExportMap, str_enc => StrEnc,
+    {ok, Inst#{export_map => ExportMap, str_enc => StrEnc, async_builtins => Async,
                export_bindings => Bindings, res_id => ResId,
                res_sigs => Sigs, res_defined => Defined, res_dtors => Dtors}};
-with_export_map(Other, _ExportMap, _StrEnc, _Bindings, ResId, _Res) ->
+with_export_map(Other, _ExportMap, _StrEnc, _Bindings, ResId, _Res, _Async) ->
     wasm_resources:destroy_instance(ResId),
     Other.
 
@@ -526,16 +538,20 @@ compose_step({component_def, Bytes}, #{comps := Comps, n_comp := N} = S) ->
 %% to bridge, so it is recorded as an import reference and otherwise left alone.
 compose_step({comp_import_instance, Name}, #{insts := Insts, n_inst := N} = S) ->
     S#{insts => Insts#{N => {import_iface, Name}}, n_inst => N + 1};
+%% An imported function likewise takes its slot in the function index space.
+compose_step({comp_import_func, Name}, #{funcs := Funcs, n_func := N} = S) ->
+    S#{funcs => Funcs#{N => {import_func, Name}}, n_func => N + 1};
 compose_step({comp_instance_alias, SrcInst, Name},
              #{insts := Insts, n_inst := N} = S) ->
     S#{insts => Insts#{N => {iface_ref, SrcInst, Name}}, n_inst => N + 1};
 compose_step({comp_instantiate, CompIdx, Args},
-             #{comps := Comps, insts := Insts, n_inst := N,
+             #{comps := Comps, insts := Insts, n_inst := N, funcs := Funcs,
                imports := Imports, opts := Opts} = S) ->
     Bytes = maps:get(CompIdx, Comps),
-    %% Wire the arguments (a sibling instance's interface feeding this one's import) as
-    %% host bridges, over any host imports the composition itself was given.
-    Bridged = maps:merge(Imports, bridge_imports(Args, Bytes, Insts)),
+    %% Wire the arguments (a sibling instance's interface or function feeding
+    %% this one's import) as host bridges, over any host imports the
+    %% composition itself was given.
+    Bridged = maps:merge(Imports, bridge_imports(Args, Bytes, Insts, Funcs)),
     case instantiate(Bytes, Bridged, Opts) of
         {ok, Sub} ->
             S#{insts => Insts#{N => {instance, Sub}}, n_inst => N + 1};
@@ -571,14 +587,26 @@ compose_step(_Other, S) ->
 %% export, and lowers the result. Values cross as Erlang terms and each side uses its own
 %% memory, so a cross-component call is two ordinary component calls back to back. The
 %% function signatures come from the component's own type section (`wasm_component_types`).
-bridge_imports(Args, Bytes, Insts) ->
+%% An argument that binds an imported function to a sibling's exported function
+%% is one such bridge, keyed as a bare function import is.
+bridge_imports(Args, Bytes, Insts, CompFuncs) ->
     <<_:8/binary, Sec/binary>> = Bytes,
     Ifaces = case wasm_component_types:import_interfaces(Sec) of
                  {ok, Map}  -> Map;
                  {error, _} -> #{}
              end,
     lists:foldl(
-      fun({ArgName, _Sort, Idx}, Acc) ->
+      fun({ArgName, 1, Idx}, Acc) ->  % sort 1, a function
+              case {maps:get(Idx, CompFuncs, undefined), Ifaces} of
+                  {{SrcInst, ExportName}, #{ArgName := #{ArgName := Sig}}}
+                    when is_integer(SrcInst) ->
+                      {instance, Provider} = maps:get(SrcInst, Insts),
+                      Acc#{{ArgName, ArgName} =>
+                               bridge_any(Provider, ExportName, Sig)};
+                  _ ->
+                      Acc
+              end;
+         ({ArgName, _Sort, Idx}, Acc) ->
           case maps:get(Idx, Insts, undefined) of
               {iface_ref, SrcInst, ProvExport} ->
                   {instance, Provider} = maps:get(SrcInst, Insts),
@@ -800,6 +828,9 @@ destroy(Inst, Closer) ->
     %% Tasks still running from `start_async/5' and the ends the host holds go
     %% first: their producers stop, so nothing writes into what is freed next.
     ok = wasm_async:close_frame(),
+    %% Its threads too: a thread a synchronous call left suspended has a
+    %% process, and no frame stops it.
+    lists:foreach(fun wasm_async:drop_threads/1, res_ids(Inst)),
     lists:foreach(fun wasm:destroy/1, cores_of(Inst)),
     lists:foreach(fun wasm_resources:destroy_instance/1, res_ids(Inst)),
     sweep_host(Closer),
@@ -926,7 +957,13 @@ do_call_1(I, Export, {Params, Result}, Args) ->
             Realloc,
             fun() ->
                 CoreArgs = wasm_canon:lower_params(Inst, Params, Args1),
-                case wasm:call(Inst, CoreName, CoreArgs) of
+                Call = fun() -> wasm:call(Inst, CoreName, CoreArgs) end,
+                Answer = case maps:get(async_builtins, I, true) of
+                             true -> wasm_async:sync_call(Inst, maps:get(res_id, I),
+                                                          Call);
+                             false -> Call()
+                         end,
+                case Answer of
                     {ok, CoreResults} ->
                         Value = lift_call_result(Inst, Result, CoreResults),
                         %% Run the declared post-return; a trap in cleanup fails
@@ -1691,7 +1728,11 @@ host_table() ->
 run_post_return(_Inst, none, _CoreResults) ->
     ok;
 run_post_return(Inst, Name, CoreResults) ->
-    case wasm:call(Inst, Name, CoreResults) of
+    case wasm_canon:no_leave(fun() -> wasm:call(Inst, Name, CoreResults) end) of
         {ok, _}    -> ok;
-        {error, E} -> wasm_error:trap({host_error, {post_return_failed, Name, E}}, #{})
+        %% The call fails with the trap itself, naming the post-return.
+        {error, #{ctx := Ctx} = E} when is_map(Ctx) ->
+            throw({wasm_error, E#{ctx := Ctx#{post_return => Name}}});
+        {error, E} ->
+            wasm_error:trap({host_error, {post_return_failed, Name, E}}, #{})
     end.

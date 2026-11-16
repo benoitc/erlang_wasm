@@ -1,0 +1,1 @@
+{"source_filename":"/Users/benoitc/Projects/erlang_wasm/.wasmtime-src/wasmtime/tests/misc_testsuite/component-model-threading/yield-cancellable.wast","commands":[{"type":"module","line":4,"filename":"yield-cancellable.0.wasm","module_type":"binary"},{"type":"assert_return","line":58,"action":{"type":"invoke","field":"run","args":[]},"expected":[]}]}

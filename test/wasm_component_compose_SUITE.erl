@@ -16,6 +16,7 @@ component and dispatches the outer export to that sub-instance.
 
 all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           a_cross_component_call_bridges_to_the_provider,
+          a_function_argument_wires_a_bare_function_import,
           an_interface_import_signature_is_decoded,
           an_aggregate_interface_signature_is_decoded,
           a_wac_composed_component_passes_a_string,
@@ -29,6 +30,7 @@ all() -> [a_nested_component_is_instantiated_and_its_export_reached,
           a_stackful_callee_that_waits_releases_a_callback_caller,
           a_call_into_a_waiting_fiber_starts_when_it_returns,
           destroy_leaves_no_fiber_behind,
+          destroy_stops_a_suspended_thread,
           a_trap_after_the_wait_fails_the_call].
 
 init_per_suite(Config) ->
@@ -36,6 +38,33 @@ init_per_suite(Config) ->
     Config.
 
 end_per_suite(_Config) -> ok.
+
+%% A synchronous call that returns with a thread still suspended leaves it
+%% alive, since a later call may resume it; destroying the instance stops it.
+%% Fail-first: nothing stopped it, and its process lived as long as the
+%% caller.
+destroy_stops_a_suspended_thread(_Config) ->
+    {ok, Bin} = file:read_file(fixture_path("threadleft")),
+    {ok, Inst} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 7}, wasm_component:call(Inst, <<"run">>, {[], u32}, [])),
+    ?assertEqual(1, length(threads())),
+    ok = wasm_component:destroy(Inst),
+    ?assertEqual([], threads()).
+
+threads() ->
+    [P || P <- processes(),
+          {dictionary, D} <- [process_info(P, dictionary)],
+          lists:keymember({wasm_async, in_thread}, 1, D)].
+
+%% A composition can give a component one function rather than a whole
+%% interface: `composedfunc` instantiates $C with its import "double" bound to
+%% $P's export. Fail-first: an imported bare function was unsupported, so $C
+%% did not link.
+a_function_argument_wires_a_bare_function_import(_Config) ->
+    {ok, Bin} = file:read_file(fixture_path("composedfunc")),
+    {ok, Inst} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 42}, wasm_component:call(Inst, <<"run">>, {[u32], u32}, [21])),
+    ok = wasm_component:destroy(Inst).
 
 %% Calling the outer `run` reaches the inner component's core function (returns 42) only
 %% if the runtime decoded the nested-component and component-instance sections,

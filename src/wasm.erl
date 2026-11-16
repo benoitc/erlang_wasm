@@ -85,6 +85,8 @@ context to diagnose it.
 -export([read_memory/3, write_memory/3, memory_size/1]).
 -export([format_error/1]).
 -export([check_module_bytes/1]).
+%% Internal: a function by its index, for `thread.new-indirect'.
+-export([call_func/3]).
 
 -define(MAX_MODULE_BYTES, 64 * 1024 * 1024).
 
@@ -484,6 +486,14 @@ call_1(Inst, Name, Args, Opts) ->
             {error, err(link, unknown_export, <<"unknown export">>,
                         #{name => Name})}
     end.
+
+-doc false.
+%% A function by its index in `Inst', as `call/3' calls an export: the same
+%% lease, depth, budget and write-back. `thread.new-indirect' starts a thread
+%% on a function a table names, which need not be exported.
+-spec call_func(instance(), non_neg_integer(), [term()]) ->
+          {ok, [term()]} | {error, wasm_error:error()}.
+call_func(Inst, Idx, Args) -> invoke(Inst, Idx, Args, #{}).
 
 %% As `call/3', but lets a wasm exception escape as a throw instead of turning
 %% it into a trap. Used only for wasm-to-wasm links.

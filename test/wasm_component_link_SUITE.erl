@@ -24,6 +24,9 @@ all() ->
      a_failed_link_frees_the_cores_it_built,
      a_malformed_component_link_leaks_no_cores,
      an_unsupported_alias_is_a_named_error,
+     an_unsupported_canon_builtin_is_a_named_error,
+     the_thread_and_forward_builtins_are_parsed,
+     async_lifts_are_checked_by_the_async_rule,
      an_instance_sort_alias_is_parsed,
      a_non_utf8_string_encoding_is_accepted,
      destroy_closes_host_resources_and_clears_the_tables].
@@ -120,6 +123,55 @@ an_unsupported_alias_is_a_named_error(_Config) ->
     ?assertMatch({error, #{kind := unsupported_alias}},
                  wasm_error:capture(
                    fun() -> wasm_component_link:parse(AliasSection) end)).
+
+%% A canon built-in the runtime does not implement is a named link error. The
+%% shared-everything thread built-ins (0x40 to 0x42) are the ones a toolchain
+%% emits today. Fail-first: `canon/1` raised, and `capture` could report it only
+%% as `kind => internal`. Section 8 (canon), one entry `40 00 00`, which is
+%% `thread.spawn-ref` over core type 0.
+an_unsupported_canon_builtin_is_a_named_error(_Config) ->
+    Content = <<1, 16#40, 16#00, 16#00>>,
+    CanonSection = <<8, (byte_size(Content)), Content/binary>>,
+    ?assertMatch({error, #{kind := unsupported_canon_builtin,
+                           ctx := #{opcode := 16#40}}},
+                 wasm_error:capture(
+                   fun() -> wasm_component_link:parse(CanonSection) end)).
+
+%% The cooperative thread built-ins and the two forwards, with their operands,
+%% in the bytes wasm-tools 1.256 writes for them (the forwards by the
+%% specification's binary format, which it cannot write yet). Fail-first: each
+%% was an unsupported opcode.
+the_thread_and_forward_builtins_are_parsed(_Config) ->
+    Entries = <<16#26, 16#27, 3, 1, 16#28, 16#29, 0, 16#29, 1, 16#0C, 1,
+                16#2A, 1, 16#2B, 0, 16#2C, 1, 16#2D, 0, 16#2E, 4, 16#2F, 5>>,
+    Content = <<12, Entries/binary>>,
+    CanonSection = <<8, (byte_size(Content)), Content/binary>>,
+    ?assertEqual(
+       {ok, [{canon_async, thread_index, #{}},
+             {canon_async, thread_new_indirect, #{core_type => 3, table => 1}},
+             {canon_async, thread_resume_later, #{}},
+             {canon_async, thread_suspend, #{cancellable => false}},
+             {canon_async, thread_suspend, #{cancellable => true}},
+             {canon_async, yield, #{cancellable => true}},
+             {canon_async, thread_suspend_then_resume, #{cancellable => true}},
+             {canon_async, thread_yield_then_resume, #{cancellable => false}},
+             {canon_async, thread_suspend_then_promote, #{cancellable => true}},
+             {canon_async, thread_yield_then_promote, #{cancellable => false}},
+             {canon_async, stream_forward, #{type => 4}},
+             {canon_async, future_forward, #{type => 5}}]},
+       wasm_component_link:parse(CanonSection)).
+
+%% An async lift's core function returns its callback status (i32), or nothing
+%% when it has no callback, whatever the component function returns: the result
+%% goes through task.return. Fail-first: the check applied the sync rule, so a
+%% callback lift of a function with no result, and a stackful lift of one with
+%% a u32 result, were both refused with invalid_lift_type.
+async_lifts_are_checked_by_the_async_rule(_Config) ->
+    {ok, Bin} = file:read_file(fixture("asynclifts.component.wasm")),
+    {ok, Inst} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 7},
+                 wasm_component:call_async(Inst, <<"stackful-u32">>, {[], u32}, [])),
+    ok = wasm_component:destroy(Inst).
 
 %% A composed component aliases one instance's interface export to wire it into another
 %% instance's import. The instance-sort alias (0x05) parses to a `comp_instance_alias`

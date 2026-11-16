@@ -90,6 +90,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/tsan"
           # The lock-order detector tracks at most 64 held locks; ERTS holds
           # more, and the detector's failed check hangs the emulator.
+          # ERTS's own allocators hand a freed block to another thread with
+          # atomics TSan cannot see, so a reused resource looks like a race
+          # with its previous owner's destructor. +Mea min sends allocation
+          # to malloc, which TSan tracks.
+          export ERL_FLAGS="+Mea min"
           # Reports go to files and do not change the exit status: the next
           # step reads them.
           TSAN_OPTIONS="detect_deadlocks=0 halt_on_error=0 exitcode=0 report_signal_unsafe=0 log_path=$RUNNER_TEMP/tsan/report" \

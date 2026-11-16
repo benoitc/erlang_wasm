@@ -296,9 +296,10 @@ validate_lifts(Sec, CoreMods) ->
 
 check_lifts([], _CoreNames, _AliasInst, _InstMods, _Types, _Mods) ->
     ok;
-check_lifts([{canon_lift, CFI, _Enc, _Async, _Rl, _P, Ft} | Rest],
+check_lifts([{canon_lift, CFI, _Enc, Async, _Rl, _P, Ft} | Rest],
             CoreNames, AliasInst, InstMods, Types, Mods) ->
-    case lift_signatures(CFI, Ft, CoreNames, AliasInst, InstMods, Types, Mods) of
+    case lift_signatures(CFI, Ft, Async, CoreNames, AliasInst, InstMods, Types,
+                         Mods) of
         skip ->
             check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Mods);
         {Expected, Expected} ->
@@ -314,7 +315,7 @@ check_lifts([_Other | Rest], CoreNames, AliasInst, InstMods, Types, Mods) ->
 %% The declared (expected) and actual core signatures of one lift, or `skip` when
 %% any piece is missing (a non-alias core func, an unresolvable module, a component
 %% type that is not a function type): the lift is then left unchecked.
-lift_signatures(CFI, Ft, CoreNames, AliasInst, InstMods, Types, Mods) ->
+lift_signatures(CFI, Ft, Async, CoreNames, AliasInst, InstMods, Types, Mods) ->
     case {maps:get(CFI, CoreNames, undefined), maps:get(CFI, AliasInst, undefined),
           maps:get(Ft, Types, undefined)} of
         {Name, InstIdx, {func, Params, Result}}
@@ -323,7 +324,8 @@ lift_signatures(CFI, Ft, CoreNames, AliasInst, InstMods, Types, Mods) ->
             case module_bytes(ModIdx, Mods) of
                 {ok, Bytes} ->
                     case wasm:func_type_of(Bytes, Name) of
-                        {ok, Actual} -> {derive_lift_sig(Params, Result), Actual};
+                        {ok, Actual} ->
+                            {derive_lift_sig(Params, Result, Async), Actual};
                         {error, _}   -> skip
                     end;
                 error ->
@@ -341,8 +343,10 @@ module_bytes(_ModIdx, _Mods) ->
 
 %% The core signature the Canonical ABI derives from a lift's component params and
 %% result: params flatten, spilling to one i32 pointer past MAX_FLAT_PARAMS; a
-%% result of more than one core value returns through an i32 pointer.
-derive_lift_sig(Params, Result) ->
+%% result of more than one core value returns through an i32 pointer. An async
+%% lift returns its callback status, or nothing without a callback: its result
+%% goes through task.return.
+derive_lift_sig(Params, Result, sync) ->
     ExpParams = case wasm_canon:params_spill(Params) of
                     true  -> [i32];
                     false -> lists:append([wasm_canon:flat_types(P) || P <- Params])
@@ -354,7 +358,10 @@ derive_lift_sig(Params, Result) ->
                                  false -> wasm_canon:flat_types(Result)
                              end
                  end,
-    {ExpParams, ExpResults}.
+    {ExpParams, ExpResults};
+derive_lift_sig(Params, _Result, {async, Callback}) ->
+    {ExpParams, _} = derive_lift_sig(Params, none, sync),
+    {ExpParams, case Callback of none -> []; _ -> [i32] end}.
 
 %% No interface function lifted from another core shares its core name with a
 %% function the entry core exports.

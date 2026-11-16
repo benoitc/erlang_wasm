@@ -26,6 +26,7 @@ all() ->
      an_unsupported_alias_is_a_named_error,
      an_unsupported_canon_builtin_is_a_named_error,
      the_thread_and_forward_builtins_are_parsed,
+     async_lifts_are_checked_by_the_async_rule,
      an_instance_sort_alias_is_parsed,
      a_non_utf8_string_encoding_is_accepted,
      destroy_closes_host_resources_and_clears_the_tables].
@@ -159,6 +160,18 @@ the_thread_and_forward_builtins_are_parsed(_Config) ->
              {canon_async, stream_forward, #{type => 4}},
              {canon_async, future_forward, #{type => 5}}]},
        wasm_component_link:parse(CanonSection)).
+
+%% An async lift's core function returns its callback status (i32), or nothing
+%% when it has no callback, whatever the component function returns: the result
+%% goes through task.return. Fail-first: the check applied the sync rule, so a
+%% callback lift of a function with no result, and a stackful lift of one with
+%% a u32 result, were both refused with invalid_lift_type.
+async_lifts_are_checked_by_the_async_rule(_Config) ->
+    {ok, Bin} = file:read_file(fixture("asynclifts.component.wasm")),
+    {ok, Inst} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, 7},
+                 wasm_component:call_async(Inst, <<"stackful-u32">>, {[], u32}, [])),
+    ok = wasm_component:destroy(Inst).
 
 %% A composed component aliases one instance's interface export to wire it into another
 %% instance's import. The instance-sort alias (0x05) parses to a `comp_instance_alias`

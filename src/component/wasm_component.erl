@@ -280,7 +280,8 @@ derive(#{core := Core, sec := Sec} = Decoded) ->
             on_entry => on_entry(Decoded)},
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
-            Pre#{graph => Graph, types => link_types(Graph, Sec)};
+            Pre#{graph => Graph, types => link_types(Graph, Sec),
+                 async_builtins => lists:keymember(canon_async, 1, Graph)};
         {error, _} ->
             %% Linking reports it, if the component ever needs the linker.
             Pre
@@ -442,14 +443,25 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     %% the way the component's canon lift asks, rather than by name.
     StrEnc = pre(str_enc, Decoded, fun() -> wasm_component_link:export_encodings(Sec) end),
     Bindings = pre(bindings, Decoded, fun() -> wasm_component_link:export_bindings(Sec) end),
-    with_export_map(Result, ExportMap, StrEnc, Bindings, ResId, Res).
+    Async = pre(async_builtins, Decoded, fun() -> async_builtins(Sec) end),
+    with_export_map(Result, ExportMap, StrEnc, Bindings, ResId, Res, Async).
 
-with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings, ResId, Res) ->
+%% Whether the component binds any async built-in: only then does a
+%% synchronous call set up what those built-ins read. A section the linker
+%% cannot read, which a component on the single-core path may have, counts as
+%% yes.
+async_builtins(Sec) ->
+    case wasm_error:capture(fun() -> wasm_component_link:parse(Sec) end) of
+        {ok, Graph} -> lists:keymember(canon_async, 1, Graph);
+        {error, _} -> true
+    end.
+
+with_export_map({ok, Inst}, ExportMap, StrEnc, Bindings, ResId, Res, Async) ->
     #{sigs := Sigs, defined := Defined, dtors := Dtors} = Res,
-    {ok, Inst#{export_map => ExportMap, str_enc => StrEnc,
+    {ok, Inst#{export_map => ExportMap, str_enc => StrEnc, async_builtins => Async,
                export_bindings => Bindings, res_id => ResId,
                res_sigs => Sigs, res_defined => Defined, res_dtors => Dtors}};
-with_export_map(Other, _ExportMap, _StrEnc, _Bindings, ResId, _Res) ->
+with_export_map(Other, _ExportMap, _StrEnc, _Bindings, ResId, _Res, _Async) ->
     wasm_resources:destroy_instance(ResId),
     Other.
 
@@ -946,7 +958,12 @@ do_call_1(I, Export, {Params, Result}, Args) ->
             fun() ->
                 CoreArgs = wasm_canon:lower_params(Inst, Params, Args1),
                 Call = fun() -> wasm:call(Inst, CoreName, CoreArgs) end,
-                case wasm_async:sync_call(Inst, maps:get(res_id, I, undefined), Call) of
+                Answer = case maps:get(async_builtins, I, true) of
+                             true -> wasm_async:sync_call(Inst, maps:get(res_id, I),
+                                                          Call);
+                             false -> Call()
+                         end,
+                case Answer of
                     {ok, CoreResults} ->
                         Value = lift_call_result(Inst, Result, CoreResults),
                         %% Run the declared post-return; a trap in cleanup fails

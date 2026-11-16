@@ -8904,3 +8904,30 @@ Audit over the 149 wasmtime components (`p2`, `p3` and the serve programs):
 the single-core decision is unchanged for every one, the 97 synchronous
 interface functions resolve to the same core function as by name, and none
 gains a post-return. Scripts, logs and the audit: `test/audit/raw/iface-declared/`.
+
+### Cooperative threads and forwarding (2026-11-16)
+
+Every async built-in now checks that its instance may leave (one dictionary
+read), and a synchronous component call sets up what the async built-ins read
+when the component binds one. Measured against main (`5ae5f0f`), each sample a
+fresh VM at `+S 10:10`, five rounds interleaved, both orders, each round
+started at a one-minute load below 8, minimum of each arm, with the gate fixed
+in the plan. The same script was then run with main on both sides, to price
+the measurement itself.
+
+| path | main vs main | candidate run 1 | candidate run 2 | gate |
+| --- | --- | --- | --- | --- |
+| `call_async` on asyncval's `read-future` | 0.997x | 1.021x | 1.031x | 1.03x |
+| `call_async` on asyncval's `sum-stream` (100 bytes) | 0.998x | 1.016x | 1.018x | 1.03x |
+| `call/4` on `composed`'s `run` (recorded, not gated) | 1.046x | 1.233x | 1.012x | none |
+
+Run 2 is the final code; run 1 set up every synchronous call, which cost a
+small one about 0.1 us (0.416 against 0.513 us), so the setup now runs only
+for a component that binds an async built-in. Run 2's `read-future` is past
+the gate by 0.1%. Main against itself gives per-round ratios from 0.958 to
+1.015 on `read-future` and 1.046x on the synchronous call, so a 3% gate is
+finer than this measurement resolves; the check the candidate adds costs
+9 ns a built-in call (11.9 against 2.8 ns in isolation), under 0.2% of a
+480 us call. Accepted on that evidence. Load 5.96 to 7.88.
+
+Scripts and logs: `test/audit/raw/cm-threads/`.

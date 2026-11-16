@@ -1,0 +1,25 @@
+round 1 load 7.73
+main async 481.120 4833.086
+main sync 0.471
+cand async 490.533 4864.540
+cand sync 0.640
+round 2 load 6.09
+cand async 494.558 4904.008
+cand sync 0.435
+main async 481.829 4780.202
+main sync 0.436
+round 3 load 7.63
+main async 461.930 4634.149
+main sync 0.442
+cand async 476.273 4794.379
+cand sync 0.437
+round 4 load 6.36
+cand async 487.575 4715.969
+cand sync 0.418
+main async 477.855 4716.216
+main sync 0.431
+round 5 load 5.96
+main async 497.833 4835.852
+main sync 0.413
+cand async 486.887 4850.898
+cand sync 0.431

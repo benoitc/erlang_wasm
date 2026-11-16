@@ -8,6 +8,16 @@ How the garbage collector works and how the WASI sandboxes are enforced are
 explained in the [design notes](design-notes.md), with the other reasons
 behind the runtime's design. Build and test instructions are in the README.
 
+What the conformance figure means, exactly: every assertion of the official
+core test suite passes, 65,481 of them, at the commit
+`scripts/fetch-suites.sh` pins. That suite is WebAssembly 3.0's, so this is
+conformance to the WebAssembly 3.0 core specification. It is not a claim about
+every WebAssembly proposal: the threads proposal is implemented and checked by
+its own suite (see [Threads](#threads)), and a proposal not named on this page
+is not implemented. The Component Model and WASI are not part of the core
+specification. What they cover, and what they do not, is in
+[Components](components.md), [WASI](wasi.md) and [WASI 0.3](wasi-0-3.md).
+
 ## What works
 
 | Area | Status |
@@ -59,8 +69,6 @@ behind the runtime's design. Build and test instructions are in the README.
 
 | Area | Why |
 | --- | --- |
-| WASI 0.3 http middleware | every 0.3 interface is hosted ([WASI 0.3](wasi-0-3.md)); a handler that imports another handler needs two components linked, which is not done yet |
-| A 0.3 handler's response body streamed to the client | `wasi_preview3:run_serve/3` reads the body whole, then answers |
 | The async ABI's `thread.*` built-ins other than `thread.yield` | they belong to the threads proposal; a component that uses one is refused when it is linked |
 | `stream.forward` and `future.forward` | added to the specification after the async ABI; `wasm-tools` does not emit them yet |
 | Snapshots of component instances | `wasm:snapshot/2` captures a core instance; a component's handle tables point to host state that a snapshot image cannot store |

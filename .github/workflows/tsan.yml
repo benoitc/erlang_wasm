@@ -1,0 +1,122 @@
+name: ThreadSanitizer
+
+# The NIF's locking (`handle_lock', `dir_dup') under ThreadSanitizer. Unlike
+# AddressSanitizer it cannot be preloaded into a stock emulator: the emulator
+# itself has to be built with it. Only the emulator, though, not the compiled
+# Erlang: this installs the stock OTP at one exact version, builds that
+# version's `beam.smp' with ThreadSanitizer, and puts it in place of the stock
+# one. Building all of OTP with it took over three hours, because OTP's own
+# bootstrap compiles every application on the instrumented emulator. The
+# emulator is cached. It runs when the NIF or this workflow changes, weekly,
+# and by hand.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'c_src/**'
+      - 'scripts/build-nif.sh'
+      - '.github/workflows/tsan.yml'
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+
+env:
+  # The stock install and the sources the emulator is built from must be the
+  # same version, so this is exact.
+  OTP: '29.1.2'
+  REBAR3: '3.27'
+
+jobs:
+  tsan:
+    name: NIF under ThreadSanitizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: ${{ env.OTP }}
+          rebar3-version: ${{ env.REBAR3 }}
+      # ThreadSanitizer maps its shadow memory at fixed places, and the
+      # runner's kernel randomises mappings too widely for it: it aborts with
+      # "unexpected memory mapping" unless the randomisation is narrowed.
+      - name: Let ThreadSanitizer map its shadow memory
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Restore the instrumented emulator
+        id: emu
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/beam-tsan
+          key: beam-tsan-${{ runner.os }}-${{ env.OTP }}
+      - name: Build the emulator with ThreadSanitizer
+        if: steps.emu.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "OTP-$OTP" https://github.com/erlang/otp /tmp/otp
+          cd /tmp/otp
+          export ERL_TOP=$PWD
+          ./otp_build configure \
+            CFLAGS="-fsanitize=thread -fPIE -O1 -g" LDFLAGS="-fsanitize=thread"
+          # "make emulator" also builds erl_call, which needs erl_interface;
+          # the emulator needs only these two.
+          make -j"$(nproc)" -C erts/lib_src opt
+          make -j"$(nproc)" -C erts/emulator opt
+          mkdir -p "$HOME/beam-tsan"
+          cp bin/*/beam.smp "$HOME/beam-tsan/beam.smp"
+      - name: Keep the instrumented emulator
+        if: steps.emu.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/beam-tsan
+          key: ${{ steps.emu.outputs.cache-primary-key }}
+      # The runner is thrown away after the job, so the stock emulator is
+      # replaced in place rather than a second install made, whose start
+      # scripts would still name the first.
+      - name: Put it in place of the stock emulator
+        env:
+          TSAN_OPTIONS: report_bugs=0 exitcode=0 detect_deadlocks=0
+        run: |
+          root=$(erl -noshell -eval 'io:format("~s", [code:root_dir()]), halt().')
+          cp "$HOME/beam-tsan/beam.smp" "$root"/erts-*/bin/beam.smp
+          erl -noshell -eval 'io:format("~s~n", [erlang:system_info(system_version)]), halt().'
+      - name: Run the file suites under it
+        timeout-minutes: 40
+        env:
+          WASM_NIF_SANITIZE: thread
+        run: |
+          # ERTS's deliberate races would make every run exit 66; only the
+          # suites' run below reports.
+          TSAN_OPTIONS="report_bugs=0 exitcode=0 detect_deadlocks=0" rebar3 compile
+          # The NIF the suites load must be the instrumented one.
+          nm -D priv/wasi_file_nif.so | grep -q __tsan_
+          mkdir -p "$RUNNER_TEMP/tsan"
+          # The lock-order detector tracks at most 64 held locks; ERTS holds
+          # more, and the detector's failed check hangs the emulator.
+          # ERTS's own allocators hand a freed block to another thread with
+          # atomics TSan cannot see, so a reused resource looks like a race
+          # with its previous owner's destructor. +Mea min sends allocation
+          # to malloc, which TSan tracks.
+          export ERL_FLAGS="+Mea min"
+          # Reports go to files and do not change the exit status: the next
+          # step reads them.
+          TSAN_OPTIONS="detect_deadlocks=0 halt_on_error=0 exitcode=0 report_signal_unsafe=0 log_path=$RUNNER_TEMP/tsan/report" \
+            rebar3 ct --suite=test/wasi_nif_SUITE,test/wasi_SUITE
+      # ERTS is full of deliberate lock-free code that ThreadSanitizer
+      # reports, so only a report with a NIF frame fails the job. Every report
+      # is counted in the summary.
+      - name: Fail on a report from the NIF
+        if: always()
+        run: |
+          shopt -s nullglob
+          files=("$RUNNER_TEMP"/tsan/report*)
+          total=0; nif=0
+          for f in "${files[@]}"; do
+            n=$(grep -c "WARNING: ThreadSanitizer" "$f" || true)
+            total=$((total + n))
+            if grep -q "wasi_file_nif" "$f"; then nif=$((nif + 1)); cat "$f"; fi
+          done
+          {
+            echo "### ThreadSanitizer"
+            echo "- reports: $total, in ${#files[@]} log files"
+            echo "- log files with a NIF frame: $nif"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$nif" -eq 0

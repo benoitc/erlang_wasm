@@ -39,7 +39,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% streams and futures they use.
 -export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
          nested/1, owner_side/1, fiber_waiting/1, reenter/1, start_fiber/1, suspend_fiber/1,
-         guest_call/1,
+         guest_call/1, sync_call/3,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
          on_end/2,
          host_write/3, host_close/1, host_future_resolve/2,
@@ -154,6 +154,11 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -define(READY(Comp), {?MODULE, ready_threads, Comp}).
 %% In an explicit thread's process.
 -define(IN_THREAD, {?MODULE, in_thread}).
+%% A cancellation asked of the stackful task a fiber runs: `requested', then
+%% `delivered' once a cancellable wait has reported it.
+-define(CANCEL(Pid), {?MODULE, cancel, Pid}).
+%% Set by `task.cancel': the running task resolves as cancelled.
+-define(TASK_CANCELLED, {?MODULE, task_cancelled}).
 
 %%% --------------------------------------------------------------- task frame ---
 
@@ -511,7 +516,15 @@ builtin_1(task_return, #{result := Result}) ->
 %% The runtime never asks a task to cancel, and the specification traps a
 %% `task.cancel' that answers no request.
 builtin_1(task_cancel, _Meta) ->
-    fun(_Ctx, _Flats) -> {trap, task_cancel_not_requested} end;
+    fun(_Ctx, _Flats) ->
+        case get(?CANCEL(caller())) of
+            undefined -> {trap, task_cancel_not_requested};
+            _ ->
+                put(?TASK_CANCELLED, true),
+                put(?RESOLVED, true),
+                {ok, []}
+        end
+    end;
 %% context.get/set: a task-local i32 slot wit-bindgen uses for its task pointer.
 builtin_1(context_get, #{slot := Slot}) ->
     fun(_Ctx, _Flats) -> {ok, [get_context(Slot)]} end;
@@ -523,10 +536,13 @@ builtin_1(yield, #{cancellable := Cancellable}) ->
     fun(_Ctx, _Flats) ->
         Comp = thread_comp(),
         case get(?THREADS(Comp)) of
+            undefined when Cancellable ->
+                case take_cancel(caller()) of
+                    true -> {ok, [1]};
+                    false -> plain_yield(Cancellable)
+                end;
             undefined ->
-                erlang:yield(),
-                ingest_available(task_ref(), ?POLL_DRAIN),
-                {ok, [0]};
+                plain_yield(Cancellable);
             _ ->
                 thread_yield(Comp, Cancellable)
         end
@@ -862,14 +878,10 @@ subtask_cancel(H) ->
             {event, _, _, State} = try_deliver(H),
             {ok, [State]};
         {#{'end' := subtask, state := awaiting} = S, _} ->
-            stop_producer(H),
-            %% A linked task goes with it, unresolved: nothing waits for it.
-            _ = case S of
-                    #{task := Id} -> put(?TASKS, maps:remove(Id, tasks()));
-                    _ -> ok
-                end,
-            put(?WAITABLE(H), S#{state => cancelled}),
-            {ok, [?SUBTASK_CANCELLED]};
+            case maps:find(maps:get(task, S, undefined), tasks()) of
+                {ok, #{status := fiber} = Task} -> cancel_fiber_task(Task);
+                _ -> cancel_subtask(H, S)
+            end;
         {#{'end' := subtask}, _} ->
             {trap, subtask_already_resolved};
         {undefined, _} ->
@@ -877,6 +889,26 @@ subtask_cancel(H) ->
         _ ->
             {trap, wrong_end}
     end.
+
+%% A stackful task is asked to cancel, and goes on until it reports it: the
+%% caller learns the outcome from the subtask's event.
+cancel_fiber_task(#{fiber := #{pid := Pid}}) ->
+    case get(?CANCEL(Pid)) of
+        undefined -> put(?CANCEL(Pid), requested);
+        _ -> ok
+    end,
+    {ok, [?BLOCKED]}.
+
+%% Any other subtask stops at once.
+cancel_subtask(H, S) ->
+    stop_producer(H),
+    %% A linked task goes with it, unresolved: nothing waits for it.
+    _ = case S of
+            #{task := Id} -> put(?TASKS, maps:remove(Id, tasks()));
+            _ -> ok
+        end,
+    put(?WAITABLE(H), S#{state => cancelled}),
+    {ok, [?SUBTASK_CANCELLED]}.
 
 %% `subtask.drop': only once the subtask has resolved and the guest knows it.
 subtask_drop(H) ->
@@ -1271,6 +1303,9 @@ try_deliver(H) ->
                               Value),
             put(?WAITABLE(H), S#{state => returned}),
             {event, ?EV_SUBTASK, H, ?SUBTASK_RETURNED};
+        #{'end' := subtask, state := cancelled_ready} = S ->
+            put(?WAITABLE(H), S#{state => cancelled}),
+            {event, ?EV_SUBTASK, H, ?SUBTASK_CANCELLED};
         _ ->
             none
     end.
@@ -1575,8 +1610,15 @@ put_mode(_) -> ok.
 %% in its caller, with the value the caller gets (`Finish'). It no longer
 %% stands for one: anything it resolves to again is dropped.
 resolve_link(#{link := {H, Finish}} = Task) ->
-    case get(?RESOLVED) of
-        true ->
+    case {get(?TASK_CANCELLED), get(?RESOLVED)} of
+        %% `task.cancel': the caller sees the subtask cancelled.
+        {true, _} ->
+            update(H, fun(#{'end' := subtask, state := awaiting} = S) ->
+                              S#{state => cancelled_ready};
+                         (E) -> E
+                      end),
+            maps:remove(link, Task);
+        {_, true} ->
             V = Finish(get(?TASK_RETURN)),
             update(H, fun(#{'end' := subtask, state := awaiting} = S) ->
                               S#{state => ready, value => V};
@@ -1719,6 +1761,7 @@ serve_loop(#{pid := Pid, mon := Mon, ref := Ref} = F) ->
     end.
 
 forget_fiber(Pid) ->
+    _ = erase(?CANCEL(Pid)),
     put(?FIBERS, lists:keydelete(Pid, 1, fibers())).
 
 -doc """
@@ -1743,11 +1786,31 @@ run_fiber(Id, #{fiber := #{pid := Pid, ref := Ref, finish := Finish} = F} = Task
     put_comp(Task#{component => maps:get(comp, Task, undefined)}),
     put_mode(Task),
     _ = erase(?RESOLVED),
-    Pid ! {fiber_reply, Ref, protect(fun() -> Finish(Event) end)},
+    %% Finishing the wait may run the fiber's other threads first, as the
+    %% fiber's own call is answered, and they may all wait again.
+    put(?SERVING, {Pid, Ref}),
+    Reply = try {value, Finish(Event)}
+            catch
+                throw:{?MODULE, fiber_block, Ready1, Finish1} -> {block, Ready1, Finish1};
+                Class:Reason:Stack -> {raise, Class, Reason, Stack}
+            after erase(?SERVING)
+            end,
+    case Reply of
+        {block, R1, F1} ->
+            put(?TASKS, (tasks())#{Id => Task#{fiber => F#{ready => R1, finish => F1},
+                                               ctx => save_ctx()}}),
+            progress;
+        _ ->
+            Pid ! {fiber_reply, Ref, Reply},
+            run_fiber_1(Id, Task, F)
+    end.
+
+run_fiber_1(Id, Task, F) ->
     Outcome = serve_fiber(maps:without([ready, finish], F)),
     Task1 = resolve_link(Task),
     _ = erase(?TASK_RETURN),
     _ = erase(?RESOLVED),
+    _ = erase(?TASK_CANCELLED),
     case Outcome of
         {waiting, F1} ->
             put(?TASKS, (tasks())#{Id => Task1#{fiber => F1, ctx => save_ctx()}}),
@@ -1864,8 +1927,41 @@ suspend(Comp, Cancellable) ->
 thread_yield(Comp, Cancellable) ->
     stop(Comp, current_thread(Comp), ready, undefined, Cancellable).
 
-%% `-then-resume': run `I', which must be suspended.
+%% `thread.yield' in an instance with no threads. A stackful task's lets its
+%% caller run: its fiber waits, ready at once.
+plain_yield(Cancellable) ->
+    case get(?SERVING) of
+        {Pid, _} ->
+            throw({?MODULE, fiber_block,
+                   fun() -> {event, 0, 0, 0} end,
+                   fun(_) -> {ok, [cancelled(Pid, Cancellable)]} end});
+        undefined ->
+            erlang:yield(),
+            ingest_available(task_ref(), ?POLL_DRAIN),
+            {ok, [0]}
+    end.
+
+%% What a cancellable wait reports: 1 once, for a cancellation asked of the
+%% task, else 0.
+cancelled(Pid, true) -> case take_cancel(Pid) of true -> 1; false -> 0 end;
+cancelled(_Pid, false) -> 0.
+
+take_cancel(Pid) ->
+    case get(?CANCEL(Pid)) of
+        requested -> put(?CANCEL(Pid), delivered), true;
+        _ -> false
+    end.
+
+%% `-then-resume': run `I', which must be suspended. A cancellation pending
+%% for a cancellable one is reported first, whatever `I' is doing, as wasmtime
+%% does.
 switch_to(Comp, I, MyState, Cancellable) ->
+    case Cancellable andalso take_cancel(caller()) of
+        true -> {ok, [1]};
+        false -> switch_to_1(Comp, I, MyState, Cancellable)
+    end.
+
+switch_to_1(Comp, I, MyState, Cancellable) ->
     Me = current_thread(Comp),
     case thread(Comp, I) of
         {ok, #{state := suspended}} when I =/= Me ->
@@ -1876,6 +1972,12 @@ switch_to(Comp, I, MyState, Cancellable) ->
 
 %% `-then-promote': run `I' if it is ready, else just stop.
 promote(Comp, I, MyState, Cancellable) ->
+    case Cancellable andalso take_cancel(caller()) of
+        true -> {ok, [1]};
+        false -> promote_1(Comp, I, MyState, Cancellable)
+    end.
+
+promote_1(Comp, I, MyState, Cancellable) ->
     case current_thread(Comp) of
         I -> {trap, thread_promotes_itself};
         Me ->
@@ -1890,7 +1992,14 @@ promote(Comp, I, MyState, Cancellable) ->
 
 %% The running thread `Me' stops, `suspended' or `ready', and `Target' (or
 %% the oldest ready thread) runs.
-stop(Comp, Me, MyState, Target, _Cancellable) ->
+%% A cancellable stop with a cancellation pending reports it instead.
+stop(Comp, Me, MyState, Target, Cancellable) ->
+    case Cancellable andalso take_cancel(caller()) of
+        true -> {ok, [1]};
+        false -> stop_1(Comp, Me, MyState, Target, Cancellable)
+    end.
+
+stop_1(Comp, Me, MyState, Target, Cancellable) ->
     {ok, T} = thread(Comp, Me),
     set_thread(Comp, Me, T#{state := MyState}),
     MyState =:= ready andalso push_ready(Comp, Me),
@@ -1901,42 +2010,130 @@ stop(Comp, Me, MyState, Target, _Cancellable) ->
             %% Its state goes where the next thread reads it, from the process
             %% its guest code runs in, and comes back from there after.
             ok = reenter(fun wasm_instance:commit_inflight/0),
-            Answer = run_threads(Comp, Me, Target),
+            Answer = run_threads(Comp, Me, Target, Cancellable),
             ok = reenter(fun wasm_instance:refresh_inflight/0),
-            Answer
+            case Answer of
+                {ok, [0]} -> {ok, [cancelled(caller(), Cancellable)]};
+                _ -> Answer
+            end
     end.
 
 %% Run threads until `Waiter' is picked.
-run_threads(Comp, Waiter, Target) ->
+run_threads(Comp, Waiter, Target, Cancellable) ->
     case pick(Comp, Target) of
-        Waiter ->
+        {run, Waiter} ->
             {ok, T} = thread(Comp, Waiter),
             set_thread(Comp, Waiter, T#{state := running}),
             {ok, [0]};
         none ->
-            {trap, async_deadlock};
-        I ->
+            stalled(Comp, Waiter, Cancellable);
+        {run, I} ->
             case thread(Comp, I) of
+                {ok, #{kind := remote, pid := _} = T} ->
+                    {switch, Next} = run_remote(Comp, I, T, {value, {ok, [0]}}),
+                    run_threads(Comp, Waiter, Next, Cancellable);
                 {ok, #{kind := remote} = T} ->
-                    {switch, Next} = run_remote(Comp, I, T),
-                    run_threads(Comp, Waiter, Next);
+                    {switch, Next} = run_remote(Comp, I, T, start),
+                    run_threads(Comp, Waiter, Next, Cancellable);
                 _ ->
                     %% Another task's implicit thread, below this one on the
                     %% stack: it runs once this one has returned.
                     {trap, thread_not_reachable}
+            end;
+        {resume, I, Finish, Event} ->
+            {ok, T} = thread(Comp, I),
+            {switch, Next} = run_remote(Comp, I, maps:without([wait, event], T),
+                                        {finish, Finish, Event}),
+            run_threads(Comp, Waiter, Next, Cancellable)
+    end.
+
+%% The thread to run: the target, else the oldest ready thread, else a
+%% waiting thread whose event has come.
+pick(_Comp, I) when is_integer(I) -> {run, I};
+pick(Comp, undefined) ->
+    case pop_ready(Comp) of
+        none -> waiting_event(Comp);
+        I -> {run, I}
+    end.
+
+waiting_event(Comp) ->
+    Waiting = lists:sort([{I, T} || {I, #{state := waiting} = T} <- maps:to_list(threads(Comp))]),
+    waiting_event(Comp, Waiting).
+
+waiting_event(_Comp, []) ->
+    none;
+waiting_event(Comp, [{I, #{wait := {Ready, Finish}} = T} | Rest]) ->
+    %% `Ready' takes the event it finds, so a found one is kept until used.
+    case maps:get(event, T, none) of
+        none ->
+            case Ready() of
+                {event, _, _, _} = E ->
+                    set_thread(Comp, I, T#{event => E}),
+                    {resume, I, Finish, E};
+                none -> waiting_event(Comp, Rest)
+            end;
+        E -> {resume, I, Finish, E}
+    end.
+
+%% Nothing of `Comp' can run while `Waiter' waits. A fiber's task gives its
+%% caller the turn, and goes on once one of its threads can; this process
+%% waits for an event, if a thread waits for one.
+stalled(Comp, Waiter, Cancellable) ->
+    {ok, #{pid := WPid}} = thread(Comp, Waiter),
+    Ready = fun() ->
+                    case runnable(Comp, WPid, Cancellable) of
+                        true -> {event, 0, 0, 0};
+                        false -> none
+                    end
+            end,
+    case WPid =:= self() of
+        false ->
+            Finish = fun(_) ->
+                             Answer = resume_waiter(Comp, Waiter, WPid, Cancellable),
+                             ok = reenter(fun wasm_instance:refresh_inflight/0),
+                             Answer
+                     end,
+            throw({?MODULE, fiber_block, Ready, Finish});
+        true ->
+            case [1 || #{state := waiting} <- maps:values(threads(Comp))] of
+                [] -> {trap, async_deadlock};
+                _ ->
+                    case wait_core(Ready, blocking) of
+                        {event, _, _, _} -> resume_waiter(Comp, Waiter, WPid, Cancellable);
+                        {error, R} -> {trap, R}
+                    end
             end
     end.
 
-pick(Comp, undefined) -> pop_ready(Comp);
-pick(_Comp, I) -> I.
+runnable(Comp, WPid, Cancellable) ->
+    ready(Comp) =/= []
+        orelse (Cancellable andalso get(?CANCEL(WPid)) =:= requested)
+        orelse waiting_event(Comp) =/= none.
+
+resume_waiter(Comp, Waiter, WPid, Cancellable) ->
+    case Cancellable andalso take_cancel(WPid) of
+        true ->
+            {ok, T} = thread(Comp, Waiter),
+            set_thread(Comp, Waiter, T#{state := running}),
+            {ok, [1]};
+        false ->
+            run_threads(Comp, Waiter, undefined, Cancellable)
+    end.
 
 %% Start or resume the explicit thread `I', and answer its calls until it
 %% stops.
-run_remote(Comp, I, #{pid := Pid, ref := Ref} = T) ->
+run_remote(Comp, I, #{pid := Pid, ref := Ref} = T, How) ->
     set_thread(Comp, I, T#{state := running}),
-    Pid ! {fiber_reply, Ref, {value, {ok, [0]}}},
-    serve_thread(Comp, I, T);
-run_remote(Comp, I, #{start := {FInst, F, C}} = T) ->
+    serve_thread(Comp, I, T,
+                 fun() ->
+                         Reply = case How of
+                                     {value, V} -> {value, V};
+                                     {finish, Finish, Event} ->
+                                         protect(fun() -> Finish(Event) end)
+                                 end,
+                         Pid ! {fiber_reply, Ref, Reply}
+                 end);
+run_remote(Comp, I, #{start := {FInst, F, C}} = T, start) ->
     Owner = self(),
     Ref = make_ref(),
     {Pid, Mon} = spawn_opt(
@@ -1953,12 +2150,14 @@ run_remote(Comp, I, #{start := {FInst, F, C}} = T) ->
     put(?THREAD_COMP(Pid), Comp),
     T1 = maps:remove(start, T#{pid => Pid, ref => Ref, mon => Mon, state := running}),
     set_thread(Comp, I, T1),
-    serve_thread(Comp, I, T1).
+    serve_thread(Comp, I, T1, fun() -> ok end).
 
-serve_thread(Comp, I, #{pid := Pid, ref := Ref} = T) ->
+serve_thread(Comp, I, #{pid := Pid, ref := Ref} = T, First) ->
     Prev = get(?SERVING),
     put(?SERVING, {Pid, Ref}),
-    try thread_loop(Comp, I, T)
+    try
+        First(),
+        thread_loop(Comp, I, T)
     after
         case Prev of
             undefined -> erase(?SERVING);
@@ -1973,6 +2172,11 @@ thread_loop(Comp, I, #{pid := Pid, ref := Ref, mon := Mon} = T) ->
                 V -> Pid ! {fiber_reply, Ref, {value, V}}, thread_loop(Comp, I, T)
             catch
                 throw:{?MODULE, thread_block, Target} -> {switch, Target};
+                %% It waits for an event: other threads run meanwhile.
+                throw:{?MODULE, fiber_block, Ready, Finish} ->
+                    {ok, T1} = thread(Comp, I),
+                    set_thread(Comp, I, T1#{state := waiting, wait => {Ready, Finish}}),
+                    {switch, undefined};
                 Class:Reason:Stack ->
                     Pid ! {fiber_reply, Ref, {raise, Class, Reason, Stack}},
                     thread_loop(Comp, I, T)
@@ -2329,6 +2533,26 @@ load_elems(D, Ptr, N, stream) ->
 %%% -------------------------------------------------------------------- helpers ---
 
 task_instance() -> get(?TASK_INST).
+
+-doc """
+Run `Fun`, a call into a synchronously lifted export, with `Inst`, the lift's
+core, and `Comp`, its component instance, as those the async built-ins it calls
+act on: a synchronous task may wait, read and write streams as an async one.
+""".
+-spec sync_call(wasm:instance(), term(), fun(() -> T)) -> T.
+sync_call(Inst, Comp, Fun) ->
+    PrevInst = get(?TASK_INST),
+    PrevComp = get(?TASK_COMP),
+    put(?TASK_INST, Inst),
+    put_comp(#{component => Comp}),
+    try Fun()
+    after
+        restore_key(?TASK_INST, PrevInst),
+        restore_key(?TASK_COMP, PrevComp)
+    end.
+
+restore_key(K, undefined) -> _ = erase(K), ok;
+restore_key(K, V) -> put(K, V), ok.
 
 %% A fresh (readable, writable) pair, reader in the LOW 32 bits, writer in the high.
 %% Each end knows the other: a guest writes to the writer and keeps or returns the

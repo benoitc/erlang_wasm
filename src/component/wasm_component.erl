@@ -942,7 +942,8 @@ do_call_1(I, Export, {Params, Result}, Args) ->
             Realloc,
             fun() ->
                 CoreArgs = wasm_canon:lower_params(Inst, Params, Args1),
-                case wasm:call(Inst, CoreName, CoreArgs) of
+                Call = fun() -> wasm:call(Inst, CoreName, CoreArgs) end,
+                case wasm_async:sync_call(Inst, maps:get(res_id, I, undefined), Call) of
                     {ok, CoreResults} ->
                         Value = lift_call_result(Inst, Result, CoreResults),
                         %% Run the declared post-return; a trap in cleanup fails

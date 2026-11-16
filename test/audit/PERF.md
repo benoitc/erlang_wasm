@@ -8930,4 +8930,5 @@ finer than this measurement resolves; the check the candidate adds costs
 9 ns a built-in call (11.9 against 2.8 ns in isolation), under 0.2% of a
 480 us call. Accepted on that evidence. Load 5.96 to 7.88.
 
-Scripts and logs: `test/audit/raw/cm-threads/`.
+Scripts and logs: `test/audit/raw/cm-threads/` (`run.log` is run 2, `null.log`
+main against itself; run 1's log was overwritten by run 2).

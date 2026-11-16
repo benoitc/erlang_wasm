@@ -14,7 +14,8 @@ runner calls every export from an async store, and through
 `call_async/4` refuses. Its signature comes from the command: the argument
 types and the expected result. An `assert_trap` names
 wasmtime's message; `trap_reason/1` maps each one to the reason this runtime
-gives the same trap.
+gives the same trap. `host/1` gives what wasmtime's runner gives its scripts
+to import.
 """.
 
 -include_lib("common_test/include/ct.hrl").
@@ -56,6 +57,13 @@ yield_cancellable(_) -> script("yield-cancellable").
 trap_reason(<<"cannot leave component instance">>) -> cannot_leave;
 trap_reason(<<"cannot resume thread which is not suspended">>) -> thread_not_suspended;
 trap_reason(<<"uninitialized">>) -> uninitialized_element.
+
+%% wasmtime's runner gives its scripts a `host' instance: `never-return'
+%% starts an async call that never ends.
+host() ->
+    Never = fun(_) -> receive after infinity -> ok end end,
+    #{{<<"host">>, <<"never-return">>} =>
+          {async_import, {[], none}, fun([]) -> ok end, {producer, Never}}}.
 
 %% A component's instances live in the process that made them, so the whole
 %% script runs in one process, under a deadline.
@@ -121,7 +129,7 @@ step(#{<<"type">> := <<"assert_trap">>, <<"action">> := Action,
 
 instantiate(File) ->
     {ok, Bin} = file:read_file(filename:join(dir(), File)),
-    wasm_component:instantiate(Bin, #{}).
+    wasm_component:instantiate(Bin, host()).
 
 invoke(_Action, _Expected, State) when not is_map_key(current, State) ->
     {error, no_instance};

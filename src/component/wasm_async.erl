@@ -39,7 +39,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% streams and futures they use.
 -export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
          nested/1, owner_side/1, fiber_waiting/1, reenter/1, start_fiber/1, suspend_fiber/1,
-         guest_call/1, sync_call/3,
+         guest_call/1, sync_call/3, drop_threads/1,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
          on_end/2,
          host_write/3, host_close/1, host_future_resolve/2,
@@ -1877,6 +1877,30 @@ drop_thread(Comp, I, Pid) ->
     put(?THREADS(Comp), maps:remove(I, threads(Comp))),
     _ = erase(?THREAD_OF(Pid, Comp)),
     _ = erase(?THREAD_COMP(Pid)),
+    ok.
+
+-doc """
+Stop every thread of the component instance `Comp` and forget its threads
+table. `wasm_component:destroy/1` calls it.
+""".
+-spec drop_threads(term()) -> ok.
+drop_threads(Comp) ->
+    lists:foreach(
+      fun({I, T}) ->
+              case T of
+                  #{kind := remote, pid := Pid, mon := Mon} ->
+                      exit(Pid, kill),
+                      receive {?FIBER_DOWN, Mon, process, Pid, _} -> ok
+                      after 5000 -> erlang:demonitor(Mon, [flush])
+                      end,
+                      forget_fiber(Pid);
+                  _ -> ok
+              end,
+              drop_thread(Comp, I, maps:get(pid, T, undefined))
+      end, maps:to_list(threads(Comp))),
+    _ = erase(?THREADS(Comp)),
+    _ = erase(?THREAD_NEXT(Comp)),
+    _ = erase(?READY(Comp)),
     ok.
 
 %% The running thread: the caller's, made the first time it asks.

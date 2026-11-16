@@ -816,6 +816,9 @@ destroy(Inst, Closer) ->
     %% Tasks still running from `start_async/5' and the ends the host holds go
     %% first: their producers stop, so nothing writes into what is freed next.
     ok = wasm_async:close_frame(),
+    %% Its threads too: a thread a synchronous call left suspended has a
+    %% process, and no frame stops it.
+    lists:foreach(fun wasm_async:drop_threads/1, res_ids(Inst)),
     lists:foreach(fun wasm:destroy/1, cores_of(Inst)),
     lists:foreach(fun wasm_resources:destroy_instance/1, res_ids(Inst)),
     sweep_host(Closer),

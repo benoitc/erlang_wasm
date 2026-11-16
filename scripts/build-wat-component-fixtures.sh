@@ -15,7 +15,7 @@ dir="$here/test/fixtures/component"
 for src in asyncabi/asyncabi wasi3keys/wasi3keys wasi3keys/asyncping \
            asynctasks/asynctasks composedasync/composedasync \
            ifaceexports/ifaceexports asynclifts/asynclifts \
-           composedfunc/composedfunc; do
+           composedfunc/composedfunc threadleft/threadleft; do
   out="$dir/$(basename "$src").component.wasm"
   wasm-tools parse "$dir/$src.wat" -o "$out"
   wasm-tools validate --features all "$out"

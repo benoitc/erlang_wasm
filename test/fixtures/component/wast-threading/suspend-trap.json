@@ -1,0 +1,1 @@
+{"source_filename":"/Users/benoitc/Projects/erlang_wasm/.wasmtime-src/wasmtime/tests/misc_testsuite/component-model-threading/suspend-trap.wast","commands":[{"type":"module","line":5,"filename":"suspend-trap.0.wasm","module_type":"binary"},{"type":"assert_trap","line":56,"action":{"type":"invoke","field":"run","args":[]},"text":"cannot resume thread which is not suspended"}]}

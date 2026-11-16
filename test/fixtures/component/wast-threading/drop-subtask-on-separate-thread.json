@@ -1,0 +1,1 @@
+{"source_filename":"/Users/benoitc/Projects/erlang_wasm/.wasmtime-src/wasmtime/tests/misc_testsuite/component-model-threading/drop-subtask-on-separate-thread.wast","commands":[{"type":"module","line":4,"filename":"drop-subtask-on-separate-thread.0.wasm","module_type":"binary"},{"type":"assert_return","line":86,"action":{"type":"invoke","field":"f","args":[]},"expected":[]}]}

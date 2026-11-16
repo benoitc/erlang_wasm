@@ -608,6 +608,10 @@ builtin_1(future_cancel_write, _Meta) ->
     fun(_Ctx, [H | _]) -> cancel_copy(write, future, H) end;
 builtin_1(stream_drop_readable, _Meta) ->
     fun(_Ctx, [H | _]) -> drop_end(read, stream, H) end;
+builtin_1(stream_forward, Meta) ->
+    fun(_Ctx, [RI, WI]) -> forward(stream, elem(Meta), RI, WI) end;
+builtin_1(future_forward, Meta) ->
+    fun(_Ctx, [RI, WI]) -> forward(future, elem(Meta), RI, WI) end;
 builtin_1(stream_drop_writable, _Meta) ->
     fun(_Ctx, [H | _]) -> drop_end(write, stream, H) end;
 builtin_1(future_drop_readable, _Meta) ->
@@ -816,6 +820,9 @@ drop_end(Dir, Kind, H) ->
     case get(?WAITABLE(H)) of
         #{'end' := Dir, kind := Kind, state := {copying, _, _}} ->
             {trap, drop_while_copying};
+        %% Forwarded: no longer the guest's.
+        #{state := forwarded} ->
+            {trap, unknown_waitable};
         #{'end' := write, kind := future, state := State} when State =/= done ->
             {trap, future_dropped_before_write};
         #{'end' := Dir, kind := Kind} = E ->
@@ -828,6 +835,76 @@ drop_end(Dir, Kind, H) ->
             {ok, []};
         undefined -> {trap, unknown_waitable};
         _ -> {trap, wrong_end}
+    end.
+
+%% `{stream,future}.forward': what reaches the readable end `RI' goes on to
+%% the reader of the writable end `WI', and the end of `RI' ends it. Both
+%% handles leave the guest. Forwarding a stream's readable end into its own
+%% writable end, or into one nobody reads, drops both.
+%%
+%% `RI' becomes a host sink, so whatever feeds it, a guest writer, a producer
+%% or nothing more, is taken as it already is for a host that reads a stream.
+forward(Kind, Elem, RI, WI) ->
+    case {get(?WAITABLE(RI)), get(?WAITABLE(WI))} of
+        {#{'end' := read, kind := Kind, elem := Elem, state := idle} = R1,
+         #{'end' := write, kind := Kind, elem := Elem, state := idle} = W2} ->
+            case in_set(RI) orelse in_set(WI) of
+                true -> {trap, forward_end_in_waitable_set};
+                false -> forward_1(RI, R1, WI, W2)
+            end;
+        {#{'end' := read, kind := Kind, elem := Elem},
+         #{'end' := write, kind := Kind, elem := Elem}} ->
+            {trap, forward_end_not_idle};
+        {#{'end' := read, kind := Kind}, #{'end' := write, kind := Kind}} ->
+            {trap, forward_type_mismatch};
+        {undefined, _} -> {trap, unknown_waitable};
+        {_, undefined} -> {trap, unknown_waitable};
+        _ -> {trap, wrong_end}
+    end.
+
+forward_1(RI, R1, WI, W2) ->
+    case maps:get(peer, R1, undefined) =:= WI
+         orelse maps:get(reader, W2, undefined) =:= undefined of
+        true ->
+            forget_waitable(RI),
+            ok = detach(R1),
+            ok = stop_producer(RI),
+            forget_waitable(WI),
+            ok = detach(W2),
+            {ok, []};
+        false ->
+            put(?WAITABLE(WI), W2#{state => forwarded}),
+            ok = host_sink(RI, fun(eof) -> end_forward(WI);
+                                  (Items) -> forward_items(WI, Items)
+                               end),
+            update(RI, fun(R) -> R#{state => forwarded} end),
+            {ok, []}
+    end.
+
+in_set(H) -> get(?WSET_OF(H)) =/= undefined.
+
+%% What the forwarded stream carries, into `WI''s reader, as a guest writer's
+%% would go: a host sink takes it on, a future keeps its one value.
+forward_items(WI, Items) ->
+    case get(?WAITABLE(WI)) of
+        #{reader := RH} ->
+            case get(?WAITABLE(RH)) of
+                #{'end' := read, host := sink, sink := Sink} -> Sink(Items);
+                #{'end' := read, kind := future} = R ->
+                    put(?WAITABLE(RH), R#{buf => Items, writer => closed}),
+                    ok;
+                #{'end' := read} = R ->
+                    append(RH, R, Items),
+                    ok;
+                _ -> closed
+            end;
+        _ -> closed
+    end.
+
+end_forward(WI) ->
+    case get(?WAITABLE(WI)) of
+        undefined -> ok;
+        W2 -> forget_waitable(WI), detach(W2)
     end.
 
 detach(#{'end' := read, peer := W}) when W =/= undefined ->

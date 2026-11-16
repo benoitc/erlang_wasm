@@ -21,6 +21,11 @@ for src in asyncabi/asyncabi wasi3keys/wasi3keys wasi3keys/asyncping \
   wasm-tools validate --features all "$out"
 done
 
+# The forwards: written with placeholder built-ins, then rewritten. The
+# validator does not know the forwards yet, so this one is not validated.
+wasm-tools parse "$dir/asyncforward/asyncforward.wat" -o "$dir/asyncforward.component.wasm"
+"$here/scripts/forward-opcodes.escript" "$dir/asyncforward.component.wasm"
+
 tag="$(sed -n 's/^tag="\(.*\)"$/\1/p' "$here/scripts/build-wasmtime-p2.sh")"
 wasmtime="${WASMTIME_P2_SRC:-$here/.wasmtime-src}/wasmtime"
 test "$(git -C "$wasmtime" describe --tags)" = "$tag"

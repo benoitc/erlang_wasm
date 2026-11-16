@@ -30,6 +30,7 @@ jobs:
   tsan:
     name: NIF under ThreadSanitizer
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
@@ -55,7 +56,10 @@ jobs:
           export ERL_TOP=$PWD
           ./otp_build configure \
             CFLAGS="-fsanitize=thread -fPIE -O1 -g" LDFLAGS="-fsanitize=thread"
-          make -j"$(nproc)" emulator
+          # "make emulator" also builds erl_call, which needs erl_interface;
+          # the emulator needs only these two.
+          make -j"$(nproc)" -C erts/lib_src opt
+          make -j"$(nproc)" -C erts/emulator opt
           mkdir -p "$HOME/beam-tsan"
           cp bin/*/beam.smp "$HOME/beam-tsan/beam.smp"
       - name: Keep the instrumented emulator
@@ -75,6 +79,7 @@ jobs:
           cp "$HOME/beam-tsan/beam.smp" "$root"/erts-*/bin/beam.smp
           erl -noshell -eval 'io:format("~s~n", [erlang:system_info(system_version)]), halt().'
       - name: Run the file suites under it
+        timeout-minutes: 40
         env:
           WASM_NIF_SANITIZE: thread
         run: |

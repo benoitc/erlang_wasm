@@ -9,8 +9,10 @@ command list `wasm-tools json-from-wast` makes, and one binary per component
 baseline.
 
 An `invoke` goes through `wasm_component:call_async/4`, as wasmtime's own
-runner calls every export from an async store. Its signature comes from the
-command: the argument types and the expected result. An `assert_trap` names
+runner calls every export from an async store, and through
+`wasm_component:call/4` for an export lifted synchronously, which
+`call_async/4` refuses. Its signature comes from the command: the argument
+types and the expected result. An `assert_trap` names
 wasmtime's message; `trap_reason/1` maps each one to the reason this runtime
 gives the same trap.
 """.
@@ -129,8 +131,13 @@ invoke(#{<<"field">> := Field, <<"args">> := Args}, Expected,
                  [] -> none;
                  [E] -> desc(E)
              end,
-    wasm_component:call_async(Inst, Field, {Params, Result},
-                              [value(A) || A <- Args]).
+    Values = [value(A) || A <- Args],
+    case wasm_component:call_async(Inst, Field, {Params, Result}, Values) of
+        {error, {no_async_export, _}} ->
+            wasm_component:call(Inst, Field, {Params, Result}, Values);
+        Answer ->
+            Answer
+    end.
 
 desc(#{<<"type">> := <<"u32">>}) -> u32;
 desc(#{<<"type">> := <<"string">>}) -> string.

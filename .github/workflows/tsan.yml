@@ -86,7 +86,8 @@ jobs:
           # ERTS's deliberate races would make every run exit 66; only the
           # suites' run below reports.
           TSAN_OPTIONS="report_bugs=0 exitcode=0 detect_deadlocks=0" rebar3 compile
-          test -f priv/wasi_file_nif.so
+          # The NIF the suites load must be the instrumented one.
+          nm -D priv/wasi_file_nif.so | grep -q __tsan_
           mkdir -p "$RUNNER_TEMP/tsan"
           # The lock-order detector tracks at most 64 held locks; ERTS holds
           # more, and the detector's failed check hangs the emulator.
@@ -117,5 +118,5 @@ jobs:
             echo "### ThreadSanitizer"
             echo "- reports: $total, in ${#files[@]} log files"
             echo "- log files with a NIF frame: $nif"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           test "$nif" -eq 0

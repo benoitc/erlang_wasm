@@ -141,6 +141,20 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% `[{Comp, Subtask, Start, Finish}]', oldest first.
 -define(DEFERRED, {?MODULE, deferred}).
 
+%% Cooperative threads, per component instance: the table, `#{Index =>
+%% Thread}', and the next index to give out.
+-define(THREADS(Comp), {?MODULE, threads, Comp}).
+-define(THREAD_NEXT(Comp), {?MODULE, thread_next, Comp}).
+%% The thread a process runs for a component instance: the owner's own guest
+%% code, a fiber's, or an explicit thread's.
+-define(THREAD_OF(Pid, Comp), {?MODULE, thread_of, Pid, Comp}).
+%% The component instance an explicit thread's process belongs to.
+-define(THREAD_COMP(Pid), {?MODULE, thread_comp, Pid}).
+%% A component instance's threads that are ready to run, oldest first.
+-define(READY(Comp), {?MODULE, ready_threads, Comp}).
+%% In an explicit thread's process.
+-define(IN_THREAD, {?MODULE, in_thread}).
+
 %%% --------------------------------------------------------------- task frame ---
 
 -doc """
@@ -476,8 +490,19 @@ stream or future built-in, and `async`, whether a copy may return BLOCKED rather
 wait in place.
 """.
 -spec builtin(atom(), map()) -> function().
+%% Every built-in traps while its instance runs a call that must not leave it
+%% (a `realloc' or a `post-return'), as the specification has it.
+builtin(Which, Meta) ->
+    F = builtin_1(Which, Meta),
+    fun(Ctx, Flats) ->
+        case wasm_canon:may_leave() of
+            true -> F(Ctx, Flats);
+            false -> {trap, cannot_leave}
+        end
+    end.
+
 %% task.return: lift the result from the caller's memory and stash it for call_async.
-builtin(task_return, #{result := Result}) ->
+builtin_1(task_return, #{result := Result}) ->
     fun(_Ctx, Flats) ->
         put(?TASK_RETURN, task_return_value(Result, Flats)),
         put(?RESOLVED, true),
@@ -485,22 +510,28 @@ builtin(task_return, #{result := Result}) ->
     end;
 %% The runtime never asks a task to cancel, and the specification traps a
 %% `task.cancel' that answers no request.
-builtin(task_cancel, _Meta) ->
+builtin_1(task_cancel, _Meta) ->
     fun(_Ctx, _Flats) -> {trap, task_cancel_not_requested} end;
 %% context.get/set: a task-local i32 slot wit-bindgen uses for its task pointer.
-builtin(context_get, #{slot := Slot}) ->
+builtin_1(context_get, #{slot := Slot}) ->
     fun(_Ctx, _Flats) -> {ok, [get_context(Slot)]} end;
-builtin(context_set, #{slot := Slot}) ->
+builtin_1(context_set, #{slot := Slot}) ->
     fun(_Ctx, [Value | _]) -> put(?CTX(Slot), Value), {ok, []} end;
 %% thread.yield: let producers run, take what they sent, and report that the
 %% task is not cancelled (0).
-builtin(yield, _Meta) ->
+builtin_1(yield, #{cancellable := Cancellable}) ->
     fun(_Ctx, _Flats) ->
-        erlang:yield(),
-        ingest_available(task_ref(), ?POLL_DRAIN),
-        {ok, [0]}
+        Comp = thread_comp(),
+        case get(?THREADS(Comp)) of
+            undefined ->
+                erlang:yield(),
+                ingest_available(task_ref(), ?POLL_DRAIN),
+                {ok, [0]};
+            _ ->
+                thread_yield(Comp, Cancellable)
+        end
     end;
-builtin(backpressure_inc, _Meta) ->
+builtin_1(backpressure_inc, _Meta) ->
     fun(_Ctx, _Flats) ->
         Key = ?BACKPRESSURE(task_instance()),
         case backpressure(task_instance()) + 1 of
@@ -508,7 +539,7 @@ builtin(backpressure_inc, _Meta) ->
             N -> put(Key, N), {ok, []}
         end
     end;
-builtin(backpressure_dec, _Meta) ->
+builtin_1(backpressure_dec, _Meta) ->
     fun(_Ctx, _Flats) ->
         case backpressure(task_instance()) of
             0 -> {trap, backpressure_underflow};
@@ -517,11 +548,11 @@ builtin(backpressure_dec, _Meta) ->
         end
     end;
 %% waitable-set: a set of waitables the guest waits on. Membership is guest-controlled.
-builtin(waitable_set_new, _Meta) ->
+builtin_1(waitable_set_new, _Meta) ->
     fun(_Ctx, _Flats) -> H = next_handle(), put(?WSET(H), []), {ok, [H]} end;
-builtin(waitable_join, _Meta) ->
+builtin_1(waitable_join, _Meta) ->
     fun(_Ctx, [W, Set | _]) -> join(W, Set), {ok, []} end;
-builtin(waitable_set_drop, _Meta) ->
+builtin_1(waitable_set_drop, _Meta) ->
     fun(_Ctx, [Set | _]) ->
         case get(?WSET(Set)) of
             [_ | _] -> {trap, waitable_set_not_empty};
@@ -530,49 +561,49 @@ builtin(waitable_set_drop, _Meta) ->
     end;
 %% waitable-set.poll(set, ptr): non-blocking. Deliver one ready event (writing its two
 %% payload words at ptr, returning the event code) else NONE.
-builtin(waitable_set_poll, _Meta) ->
+builtin_1(waitable_set_poll, _Meta) ->
     fun(_Ctx, [Set, Ptr | _]) -> wait_write(Set, Ptr, nonblocking) end;
 %% waitable-set.wait(set, ptr): blocks until a member is deliverable, writes its
 %% payload at ptr, returns the event code. A producer that fails, or a wait nothing
 %% can ever end, traps.
-builtin(waitable_set_wait, _Meta) ->
+builtin_1(waitable_set_wait, _Meta) ->
     fun(_Ctx, [Set, Ptr | _]) -> wait_write(Set, Ptr, blocking) end;
 %% stream/future `new` mints a packed pair: reader in the LOW 32 bits, writer in the
 %% high (per the ABI).
-builtin(stream_new, Meta) ->
+builtin_1(stream_new, Meta) ->
     fun(_Ctx, _Flats) -> {ok, [new_pair(stream, elem(Meta))]} end;
-builtin(future_new, Meta) ->
+builtin_1(future_new, Meta) ->
     fun(_Ctx, _Flats) -> {ok, [new_pair(future, elem(Meta))]} end;
-builtin(future_read, Meta) ->
+builtin_1(future_read, Meta) ->
     fun(_Ctx, [H, Ptr | _]) -> copy(read, future, Meta, H, Ptr, 1) end;
-builtin(stream_read, Meta) ->
+builtin_1(stream_read, Meta) ->
     fun(_Ctx, [H, Ptr, Count | _]) -> copy(read, stream, Meta, H, Ptr, Count) end;
-builtin(future_write, Meta) ->
+builtin_1(future_write, Meta) ->
     fun(_Ctx, [W, Ptr | _]) -> copy(write, future, Meta, W, Ptr, 1) end;
-builtin(stream_write, Meta) ->
+builtin_1(stream_write, Meta) ->
     fun(_Ctx, [W, Ptr, Count | _]) -> copy(write, stream, Meta, W, Ptr, Count) end;
-builtin(stream_cancel_read, _Meta) ->
+builtin_1(stream_cancel_read, _Meta) ->
     fun(_Ctx, [H | _]) -> cancel_copy(read, stream, H) end;
-builtin(stream_cancel_write, _Meta) ->
+builtin_1(stream_cancel_write, _Meta) ->
     fun(_Ctx, [H | _]) -> cancel_copy(write, stream, H) end;
-builtin(future_cancel_read, _Meta) ->
+builtin_1(future_cancel_read, _Meta) ->
     fun(_Ctx, [H | _]) -> cancel_copy(read, future, H) end;
-builtin(future_cancel_write, _Meta) ->
+builtin_1(future_cancel_write, _Meta) ->
     fun(_Ctx, [H | _]) -> cancel_copy(write, future, H) end;
-builtin(stream_drop_readable, _Meta) ->
+builtin_1(stream_drop_readable, _Meta) ->
     fun(_Ctx, [H | _]) -> drop_end(read, stream, H) end;
-builtin(stream_drop_writable, _Meta) ->
+builtin_1(stream_drop_writable, _Meta) ->
     fun(_Ctx, [H | _]) -> drop_end(write, stream, H) end;
-builtin(future_drop_readable, _Meta) ->
+builtin_1(future_drop_readable, _Meta) ->
     fun(_Ctx, [H | _]) -> drop_end(read, future, H) end;
-builtin(future_drop_writable, _Meta) ->
+builtin_1(future_drop_writable, _Meta) ->
     fun(_Ctx, [H | _]) -> drop_end(write, future, H) end;
-builtin(subtask_cancel, _Meta) ->
+builtin_1(subtask_cancel, _Meta) ->
     fun(_Ctx, [H | _]) -> subtask_cancel(H) end;
-builtin(subtask_drop, _Meta) ->
+builtin_1(subtask_drop, _Meta) ->
     fun(_Ctx, [H | _]) -> subtask_drop(H) end;
 %% error-context.new(ptr, len): keep the guest's message under a fresh handle.
-builtin(error_context_new, _Meta) ->
+builtin_1(error_context_new, _Meta) ->
     fun(_Ctx, [Ptr, Len | _]) ->
         {[Msg], _} = wasm_canon:lift_params(task_instance(), [string], [Ptr, Len]),
         H = next_handle(),
@@ -581,7 +612,7 @@ builtin(error_context_new, _Meta) ->
     end;
 %% error-context.debug-message(handle, ptr): the message, lowered as a string (through
 %% the built-in's realloc) at ptr.
-builtin(error_context_debug_message, _Meta) ->
+builtin_1(error_context_debug_message, _Meta) ->
     fun(_Ctx, [H, Ptr | _]) ->
         case get(?ERRCTX(H)) of
             undefined -> {trap, unknown_error_context};
@@ -590,14 +621,31 @@ builtin(error_context_debug_message, _Meta) ->
                 {ok, []}
         end
     end;
-builtin(error_context_drop, _Meta) ->
+builtin_1(error_context_drop, _Meta) ->
     fun(_Ctx, [H | _]) ->
         case erase(?ERRCTX(H)) of
             undefined -> {trap, unknown_error_context};
             _ -> {ok, []}
         end
     end;
-builtin(Which, _Meta) ->
+%% The cooperative thread built-ins: see "cooperative threads" below.
+builtin_1(thread_index, _Meta) ->
+    fun(_Ctx, _Flats) -> {ok, [current_thread(thread_comp())]} end;
+builtin_1(thread_new_indirect, #{table := Table}) ->
+    fun(_Ctx, [Fi, C]) -> new_thread(thread_comp(), Table, Fi, C) end;
+builtin_1(thread_resume_later, _Meta) ->
+    fun(_Ctx, [I]) -> resume_later(thread_comp(), I) end;
+builtin_1(thread_suspend, #{cancellable := Cancellable}) ->
+    fun(_Ctx, _Flats) -> suspend(thread_comp(), Cancellable) end;
+builtin_1(thread_suspend_then_resume, #{cancellable := Cancellable}) ->
+    fun(_Ctx, [I]) -> switch_to(thread_comp(), I, suspended, Cancellable) end;
+builtin_1(thread_yield_then_resume, #{cancellable := Cancellable}) ->
+    fun(_Ctx, [I]) -> switch_to(thread_comp(), I, ready, Cancellable) end;
+builtin_1(thread_suspend_then_promote, #{cancellable := Cancellable}) ->
+    fun(_Ctx, [I]) -> promote(thread_comp(), I, suspended, Cancellable) end;
+builtin_1(thread_yield_then_promote, #{cancellable := Cancellable}) ->
+    fun(_Ctx, [I]) -> promote(thread_comp(), I, ready, Cancellable) end;
+builtin_1(Which, _Meta) ->
     fun(_Ctx, _Flats) -> {trap, {unsupported_async_builtin, Which}} end.
 
 elem(Meta) -> maps:get(elem, Meta, u8).
@@ -1562,7 +1610,19 @@ owner_side(F) ->
     fun(Ctx, Flats) ->
         case get(?FIBER) of
             undefined -> F(Ctx, Flats);
-            {Owner, Ref} -> fiber_call(Owner, Ref, fun() -> F(Ctx, Flats) end)
+            {Owner, Ref} ->
+                case get(?IN_THREAD) of
+                    undefined ->
+                        fiber_call(Owner, Ref, fun() -> F(Ctx, Flats) end);
+                    true ->
+                        %% Another thread of the same instances may run before
+                        %% this call returns: it sees what this one did, and
+                        %% this one, after, what it did.
+                        ok = wasm_instance:commit_inflight(),
+                        try fiber_call(Owner, Ref, fun() -> F(Ctx, Flats) end)
+                        after ok = wasm_instance:refresh_inflight()
+                        end
+                end
         end
     end.
 
@@ -1703,6 +1763,234 @@ run_fiber(Id, #{fiber := #{pid := Pid, ref := Ref, finish := Finish} = F} = Task
                 Other -> Other
             end;
         {error, _} = E -> put(?TASKS, maps:remove(Id, tasks())), E
+    end.
+
+%%% ------------------------------------------------------ cooperative threads ---
+%%
+%% A component instance's threads take turns: one runs, the others are
+%% suspended (only another thread resumes them), ready (the scheduler may run
+%% them) or waiting (for an event). The implicit thread of a task runs where
+%% the task runs, in this process or in a fiber, and is a `stack' thread: when
+%% it stops, the built-in it called runs the others here, and returns once it
+%% is picked again. An explicit thread, made by `thread.new-indirect', is a
+%% `remote' thread: a process of its own, which calls its built-ins here, as a
+%% fiber does, and stops by waiting for the answer to one.
+
+%% The component instance a thread built-in acts for.
+thread_comp() ->
+    case get(?SERVING) of
+        {Pid, _} ->
+            case get(?THREAD_COMP(Pid)) of
+                undefined -> comp();
+                C -> C
+            end;
+        undefined ->
+            case wasm_resources:current() of
+                undefined -> comp();
+                Id -> Id
+            end
+    end.
+
+%% The process whose guest code made the call being answered.
+caller() ->
+    case get(?SERVING) of
+        {Pid, _} -> Pid;
+        undefined -> self()
+    end.
+
+threads(Comp) -> case get(?THREADS(Comp)) of undefined -> #{}; M -> M end.
+
+thread(Comp, I) -> maps:find(I, threads(Comp)).
+
+set_thread(Comp, I, T) -> put(?THREADS(Comp), (threads(Comp))#{I => T}).
+
+add_thread(Comp, T) ->
+    I = case get(?THREAD_NEXT(Comp)) of undefined -> 1; N -> N end,
+    put(?THREAD_NEXT(Comp), I + 1),
+    set_thread(Comp, I, T),
+    I.
+
+drop_thread(Comp, I, Pid) ->
+    put(?THREADS(Comp), maps:remove(I, threads(Comp))),
+    _ = erase(?THREAD_OF(Pid, Comp)),
+    _ = erase(?THREAD_COMP(Pid)),
+    ok.
+
+%% The running thread: the caller's, made the first time it asks.
+current_thread(Comp) ->
+    Pid = caller(),
+    case get(?THREAD_OF(Pid, Comp)) of
+        undefined ->
+            I = add_thread(Comp, #{kind => stack, pid => Pid, state => running}),
+            put(?THREAD_OF(Pid, Comp), I),
+            I;
+        I -> I
+    end.
+
+push_ready(Comp, I) ->
+    put(?READY(Comp), ready(Comp) ++ [I]).
+
+ready(Comp) -> case get(?READY(Comp)) of undefined -> []; L -> L end.
+
+pop_ready(Comp) ->
+    case ready(Comp) of
+        [] -> none;
+        [I | Rest] -> put(?READY(Comp), Rest), I
+    end.
+
+new_thread(Comp, Table, Fi, C) ->
+    _ = current_thread(Comp),
+    case wasm_exec:table_func(Table, Fi, {functype, [i32], []}) of
+        {ok, FInst, F} ->
+            {ok, [add_thread(Comp, #{kind => remote, state => suspended,
+                                     start => {FInst, F, C}})]};
+        {trap, _} = T ->
+            T
+    end.
+
+resume_later(Comp, I) ->
+    case thread(Comp, I) of
+        {ok, #{state := suspended} = T} ->
+            set_thread(Comp, I, T#{state := ready}),
+            push_ready(Comp, I),
+            {ok, []};
+        {ok, _} -> {trap, thread_not_suspended};
+        error -> {trap, unknown_thread}
+    end.
+
+suspend(Comp, Cancellable) ->
+    stop(Comp, current_thread(Comp), suspended, undefined, Cancellable).
+
+thread_yield(Comp, Cancellable) ->
+    stop(Comp, current_thread(Comp), ready, undefined, Cancellable).
+
+%% `-then-resume': run `I', which must be suspended.
+switch_to(Comp, I, MyState, Cancellable) ->
+    Me = current_thread(Comp),
+    case thread(Comp, I) of
+        {ok, #{state := suspended}} when I =/= Me ->
+            stop(Comp, Me, MyState, I, Cancellable);
+        {ok, _} -> {trap, thread_not_suspended};
+        error -> {trap, unknown_thread}
+    end.
+
+%% `-then-promote': run `I' if it is ready, else just stop.
+promote(Comp, I, MyState, Cancellable) ->
+    case current_thread(Comp) of
+        I -> {trap, thread_promotes_itself};
+        Me ->
+            case thread(Comp, I) of
+                {ok, #{state := ready}} ->
+                    put(?READY(Comp), ready(Comp) -- [I]),
+                    stop(Comp, Me, MyState, I, Cancellable);
+                {ok, _} -> stop(Comp, Me, MyState, undefined, Cancellable);
+                error -> {trap, unknown_thread}
+            end
+    end.
+
+%% The running thread `Me' stops, `suspended' or `ready', and `Target' (or
+%% the oldest ready thread) runs.
+stop(Comp, Me, MyState, Target, _Cancellable) ->
+    {ok, T} = thread(Comp, Me),
+    set_thread(Comp, Me, T#{state := MyState}),
+    MyState =:= ready andalso push_ready(Comp, Me),
+    case T of
+        #{kind := remote} ->
+            throw({?MODULE, thread_block, Target});
+        #{kind := stack} ->
+            %% Its state goes where the next thread reads it, from the process
+            %% its guest code runs in, and comes back from there after.
+            ok = reenter(fun wasm_instance:commit_inflight/0),
+            Answer = run_threads(Comp, Me, Target),
+            ok = reenter(fun wasm_instance:refresh_inflight/0),
+            Answer
+    end.
+
+%% Run threads until `Waiter' is picked.
+run_threads(Comp, Waiter, Target) ->
+    case pick(Comp, Target) of
+        Waiter ->
+            {ok, T} = thread(Comp, Waiter),
+            set_thread(Comp, Waiter, T#{state := running}),
+            {ok, [0]};
+        none ->
+            {trap, async_deadlock};
+        I ->
+            case thread(Comp, I) of
+                {ok, #{kind := remote} = T} ->
+                    {switch, Next} = run_remote(Comp, I, T),
+                    run_threads(Comp, Waiter, Next);
+                _ ->
+                    %% Another task's implicit thread, below this one on the
+                    %% stack: it runs once this one has returned.
+                    {trap, thread_not_reachable}
+            end
+    end.
+
+pick(Comp, undefined) -> pop_ready(Comp);
+pick(_Comp, I) -> I.
+
+%% Start or resume the explicit thread `I', and answer its calls until it
+%% stops.
+run_remote(Comp, I, #{pid := Pid, ref := Ref} = T) ->
+    set_thread(Comp, I, T#{state := running}),
+    Pid ! {fiber_reply, Ref, {value, {ok, [0]}}},
+    serve_thread(Comp, I, T);
+run_remote(Comp, I, #{start := {FInst, F, C}} = T) ->
+    Owner = self(),
+    Ref = make_ref(),
+    {Pid, Mon} = spawn_opt(
+                   fun() ->
+                           ok = wasm_lifetime:bind(Owner),
+                           put(?FIBER, {Owner, Ref}),
+                           put(?IN_THREAD, true),
+                           ok = wasm_instance:remember(FInst),
+                           Owner ! {fiber_done, Ref,
+                                    protect(fun() -> wasm:call_func(FInst, F, [C]) end)}
+                   end, [{monitor, [{tag, ?FIBER_DOWN}]}]),
+    put(?FIBERS, [{Pid, Mon} | fibers()]),
+    put(?THREAD_OF(Pid, Comp), I),
+    put(?THREAD_COMP(Pid), Comp),
+    T1 = maps:remove(start, T#{pid => Pid, ref => Ref, mon => Mon, state := running}),
+    set_thread(Comp, I, T1),
+    serve_thread(Comp, I, T1).
+
+serve_thread(Comp, I, #{pid := Pid, ref := Ref} = T) ->
+    Prev = get(?SERVING),
+    put(?SERVING, {Pid, Ref}),
+    try thread_loop(Comp, I, T)
+    after
+        case Prev of
+            undefined -> erase(?SERVING);
+            _ -> put(?SERVING, Prev)
+        end
+    end.
+
+thread_loop(Comp, I, #{pid := Pid, ref := Ref, mon := Mon} = T) ->
+    receive
+        {fiber_call, Ref, Pid, Fun} ->
+            try Fun() of
+                V -> Pid ! {fiber_reply, Ref, {value, V}}, thread_loop(Comp, I, T)
+            catch
+                throw:{?MODULE, thread_block, Target} -> {switch, Target};
+                Class:Reason:Stack ->
+                    Pid ! {fiber_reply, Ref, {raise, Class, Reason, Stack}},
+                    thread_loop(Comp, I, T)
+            end;
+        {fiber_done, Ref, Answer} ->
+            forget_fiber(Pid),
+            receive {?FIBER_DOWN, Mon, process, Pid, _} -> ok end,
+            ok = drop_thread(Comp, I, Pid),
+            case Answer of
+                {value, {ok, _}} -> {switch, undefined};
+                %% A thread that traps fails the thread that ran it.
+                {value, {error, E}} -> throw({wasm_error, E});
+                {raise, Class, Reason, Stack} -> erlang:raise(Class, Reason, Stack)
+            end;
+        {?FIBER_DOWN, Mon, process, Pid, Reason} ->
+            forget_fiber(Pid),
+            ok = drop_thread(Comp, I, Pid),
+            wasm_error:trap({host_error, {thread_failed, Reason}}, #{})
     end.
 
 %% Teardown: a fiber still waiting is killed, and waited for, as producers are.

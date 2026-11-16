@@ -751,6 +751,9 @@ async_elem(#{type := Ty} = Meta, S) ->
         {ok, {future, Elem}} -> Meta#{elem => Elem};
         _                    -> Meta
     end;
+%% `thread.new-indirect' names a core table: the built-in reads that table.
+async_elem(#{table := Idx} = Meta, S) ->
+    Meta#{table := maps:get(Idx, maps:get(core_tables, S))};
 async_elem(Meta, _S) ->
     Meta.
 

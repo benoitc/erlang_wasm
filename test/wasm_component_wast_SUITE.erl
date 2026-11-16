@@ -103,7 +103,8 @@ step(#{<<"type">> := <<"assert_return">>, <<"action">> := Action,
            end,
     case invoke(Action, Expected, State) of
         Want -> {ok, State};
-        {ok, ok} when Want =:= ok -> {ok, State};
+        %% `call_async/4' answers a function with no result so.
+        {ok, undefined} when Want =:= ok -> {ok, State};
         Got -> {failed, {assert_return, Want, Got}, State}
     end;
 step(#{<<"type">> := <<"assert_trap">>, <<"action">> := Action,

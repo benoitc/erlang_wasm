@@ -70,6 +70,7 @@ to, so the interpreted and compiled paths cannot disagree; `%%% exceptions`,
 %% access are decided once and in one place.
 -export([load_spec/1, store_spec/1]).
 -export([max_depth/1, depth_exhausted/0]).
+-export([table_func/3]).
 -export([call_out/7, shard_call/8, check_depth/2, indirect_out/9,
          indirect_index/5,
          unreachable_at/7]).
@@ -1838,6 +1839,30 @@ indirect_entry(Entry, Expected, Inst) ->
     end.
 
 canon_at(Idx, #inst{canon = C}) -> element(Idx + 1, C).
+
+-doc """
+The function entry `Idx` of `Table` names, with its instance, for
+`thread.new-indirect`: the lookup and the traps of `call_indirect`, checked
+against `Want`, a plain signature, since the type a component names has no
+canonical id in any instance.
+""".
+-spec table_func(wasm_table:table(), non_neg_integer(), #functype{}) ->
+          {ok, #inst{}, non_neg_integer()} | {trap, atom()}.
+table_func(Table, Idx, Want) ->
+    case wasm_table:lookup(Table, Idx) of
+        out_of_bounds -> {trap, undefined_element};
+        {ok, null} -> {trap, uninitialized_element};
+        {ok, {funcref, Id, F}} ->
+            case wasm_instance:lookup(Id) of
+                {ok, FInst} ->
+                    case func_type_in(FInst, F) of
+                        {_, _, Want} -> {ok, FInst, F};
+                        _ -> {trap, indirect_call_type_mismatch}
+                    end;
+                error -> {trap, undefined_element}
+            end;
+        {ok, _} -> {trap, indirect_call_type_mismatch}
+    end.
 
 %% The callee's type must be a *subtype* of the declared one, not equal to it.
 %% Both sides are canonical, and the callee carries its whole supertype chain

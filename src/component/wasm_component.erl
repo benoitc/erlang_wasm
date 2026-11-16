@@ -1707,7 +1707,11 @@ host_table() ->
 run_post_return(_Inst, none, _CoreResults) ->
     ok;
 run_post_return(Inst, Name, CoreResults) ->
-    case wasm:call(Inst, Name, CoreResults) of
+    case wasm_canon:no_leave(fun() -> wasm:call(Inst, Name, CoreResults) end) of
         {ok, _}    -> ok;
-        {error, E} -> wasm_error:trap({host_error, {post_return_failed, Name, E}}, #{})
+        %% The call fails with the trap itself, naming the post-return.
+        {error, #{ctx := Ctx} = E} when is_map(Ctx) ->
+            throw({wasm_error, E#{ctx := Ctx#{post_return => Name}}});
+        {error, E} ->
+            wasm_error:trap({host_error, {post_return_failed, Name, E}}, #{})
     end.

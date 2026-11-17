@@ -8932,3 +8932,38 @@ finer than this measurement resolves; the check the candidate adds costs
 
 Scripts and logs: `test/audit/raw/cm-threads/` (`run.log` is run 2, `null.log`
 main against itself; run 1's log was overwritten by run 2).
+
+### Snapshots of component instances (2026-11-17)
+
+A component worker request started from an image, against one that
+instantiates the component cold, and the cold path and a core snapshot
+restore against main (`6ba03a8`). Each sample a fresh VM at `+S 10:10`, five
+rounds interleaved, both orders, each round started at a one-minute load
+below 8 (7.13 to 7.89), minimum of each arm, with the gates fixed in the plan.
+Main was run against itself first, with the same script.
+
+| fixture, us a request | candidate, image | candidate, cold | main, cold | image / cold | gate |
+| --- | --- | --- | --- | --- | --- |
+| `statecore` (one core, a global) | 384.1 | 578.1 | 574.3 | 0.66x | 0.8x |
+| `twocore` (two linked cores) | 373.5 | 735.2 | 759.7 | 0.51x | 0.8x |
+| `realupper` (wasip2 command, stdio per request) | 2275.7 | 6723.6 | 6817.2 | 0.34x | 0.8x |
+
+| path, candidate / main | ratio | main / main | gate |
+| --- | --- | --- | --- |
+| cold `statecore` | 1.007x | 0.990x | 1.03x |
+| cold `twocore` | 0.968x | 0.991x | 1.03x |
+| cold `realupper` | 0.986x | 0.999x | 1.03x |
+| QuickJS reactor, a core image restored per request (12.541 against 12.322 ms) | 1.018x | 0.987x | 1.03x |
+
+Every gate passes. The cold path compiles the component's cores again on every
+request: a request's process releases them when it ends, and the module cache
+evicts them. At its default of 50 loads a second the cache refuses a cold
+worker past that rate, so both arms ran with `max_module_loads_per_second`
+raised; a worker started from an image keeps its modules claimed and loads
+nothing. Four `realupper` cold samples are missing (two of the candidate's
+and one of main's in the gate run, one in the null run): the bench
+adapter's cleanup deleted a table its runner had already taken with it, and
+the reaper's log line took the sample's place in the output. The minimums are
+over the samples present; the adapter now tolerates it.
+
+Scripts and logs: `test/audit/raw/cm-snapshot/`.

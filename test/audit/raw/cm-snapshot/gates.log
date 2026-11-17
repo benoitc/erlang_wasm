@@ -1,0 +1,61 @@
+round 1 load 7.45
+main cold statecore 574.3
+main cold twocore 759.7
+main cold realupper 6852.2
+main qjs 13.207
+cand cold statecore 607.4
+cand image statecore 419.9
+cand cold twocore 735.2
+cand image twocore 446.3
+cand cold realupper wasm_worker_reaper: snapb_adapter:cleanup/1 failed: {error,badarg}
+cand image realupper 2332.4
+cand qjs 12.981
+round 2 load 7.73
+cand cold statecore 578.1
+cand image statecore 385.0
+cand cold twocore 760.8
+cand image twocore 403.6
+cand cold realupper wasm_worker_reaper: snapb_adapter:cleanup/1 failed: {error,badarg}
+cand image realupper 2425.2
+cand qjs 12.633
+main cold statecore 659.8
+main cold twocore 791.4
+main cold realupper 7047.4
+main qjs 12.739
+round 3 load 7.64
+main cold statecore 596.5
+main cold twocore 768.6
+main cold realupper wasm_worker_reaper: snapb_adapter:cleanup/1 failed: {error,badarg}
+main qjs 13.211
+cand cold statecore 651.8
+cand image statecore 427.8
+cand cold twocore 803.1
+cand image twocore 373.5
+cand cold realupper 7243.5
+cand image realupper 2417.9
+cand qjs 12.631
+round 4 load 7.66
+cand cold statecore 580.1
+cand image statecore 384.1
+cand cold twocore 854.6
+cand image twocore 397.2
+cand cold realupper 6723.6
+cand image realupper 2390.5
+cand qjs 12.541
+main cold statecore 782.1
+main cold twocore 908.4
+main cold realupper 6817.2
+main qjs 13.190
+round 5 load 7.89
+main cold statecore 593.2
+main cold twocore 767.4
+main cold realupper 6875.9
+main qjs 12.322
+cand cold statecore 594.6
+cand image statecore 429.6
+cand cold twocore 827.1
+cand image twocore 400.5
+cand cold realupper 7067.3
+cand image realupper 2275.7
+cand qjs 13.145
+

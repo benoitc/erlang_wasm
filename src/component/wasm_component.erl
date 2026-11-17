@@ -56,7 +56,10 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
 -export([snapshot/2, restore/3, acquire/1, release/1]).
 -export([host_new/2, host_new/3, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
--export_type([component/0, prepared/0, instance/0]).
+-export_type([component/0, prepared/0, instance/0, image/0]).
+
+%% What `snapshot/2' captures: an Erlang term, held through `acquire/1'.
+-type image() :: #{component_image := ?MODULE, owner := pid(), atom() => term()}.
 
 -opaque component() :: #{core := binary(), cores := [binary()],
                          sec := binary(), entry_idx := non_neg_integer(),
@@ -857,7 +860,7 @@ same link.
 Refused when the instance holds what an image cannot: a task frame with work
 in it, a thread, a host resource, a resource of its own.
 """.
--spec snapshot(instance(), map()) -> {ok, term()} | {error, term()}.
+-spec snapshot(instance(), map()) -> {ok, image()} | {error, term()}.
 snapshot(#{recipe := _} = I, Opts) ->
     wasm_error:capture(fun() -> snapshot_1(I, Opts) end);
 snapshot(_I, _Opts) ->
@@ -1055,7 +1058,7 @@ snapshot_refused(Kind, Msg, Ctx) ->
 Keep a component image alive past the process that captured it, as
 `wasm:acquire/1` does for a core image.
 """.
--spec acquire(map()) -> ok | {error, term()}.
+-spec acquire(image()) -> ok | {error, term()}.
 acquire(#{component_image := ?MODULE, owner := Owner}) ->
     case wasm_snapshot_owner:acquire(Owner, self()) of
         ok -> ok;
@@ -1063,7 +1066,7 @@ acquire(#{component_image := ?MODULE, owner := Owner}) ->
     end.
 
 -doc "Stop holding a component image.".
--spec release(map()) -> ok.
+-spec release(image()) -> ok.
 release(#{component_image := ?MODULE, owner := Owner}) ->
     wasm_snapshot_owner:release(Owner, self()).
 
@@ -1081,7 +1084,7 @@ component restored in its place and its bridges built again.
   the image kept, such as `wasi_preview2:host_remake/1` gives. Needed only
   when the image keeps any.
 """.
--spec restore(map(), #{{binary(), binary()} => term()}, map()) ->
+-spec restore(image(), #{{binary(), binary()} => term()}, map()) ->
           {ok, instance()} | {error, term()}.
 restore(#{component_image := ?MODULE, owner := Owner, key := Key} = Image, Imports, Opts) ->
     case {wasm_snapshot_owner:holders(Owner), maps:get(compatibility_key, Opts, undefined)} of

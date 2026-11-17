@@ -702,7 +702,8 @@ that exports `wasi:cli/run...#run` (a command) or, failing that, the largest cor
            fun(([{binary(), binary()}]) -> map()), map()) ->
           {ok, #{core := wasm:instance(), cores := [wasm:instance()],
                  export_targets := #{binary() => {wasm:instance(), binary()}},
-                 async_targets := #{binary() => async_target()}}}
+                 async_targets := #{binary() => async_target()},
+                 externals := [[{{binary(), binary()}, {binary(), binary()}}]]}}
           | {error, term()}.
 link(Graph, EntryModIdx, HostResolve, Opts) ->
     S0 = #{mods => list_to_tuple([B || {core_module, B} <- Graph]),

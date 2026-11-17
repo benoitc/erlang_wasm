@@ -261,7 +261,7 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
             %% Captured once at `init/1' and held for the worker's life, so a
             %% request restores rather than starting an interpreter. The worker
             %% process is the holder, which is the lifetime that matches.
-            image          :: undefined | wasm:snapshot(),
+            image          :: undefined | wasm:snapshot() | wasm_component:image(),
             snapshot_cap   :: undefined | snapshot_cap(),
             %% `restore_ahead': the long-lived runner that restores the next
             %% instance while the worker waits, and the worker's monitor on it.
@@ -715,13 +715,13 @@ capture_and_file(Key, Cap, Budget) ->
 %% An inline module has no content hash and cannot be filed, which is the rule
 %% `wasm_code_cache` already applies for the same reason: there would be
 %% nothing to key on that meant the same thing twice.
-%% A component is keyed by its bytes, under an ABI of its own, so it never
-%% shares with a core module's image, and with its version and key, so two
-%% initialisations of the same bytes never share either.
+%% A component is keyed by the hash of its own bytes, which no core module's
+%% hash is, and by its version and key, so two initialisations of the same
+%% bytes never share.
 image_key(Bin, #{runtime := component, version := Version}, ImportSet) when is_binary(Bin) ->
     wasm_snapshot_store:key(crypto:hash(sha256, Bin), Version,
                             maps:get(compatibility_key, ImportSet, undefined),
-                            {component, wasm_snapshot_file:image_abi()});
+                            wasm_snapshot_file:image_abi());
 image_key({wasm_module, Hash}, #{version := Version}, ImportSet) ->
     wasm_snapshot_store:key(Hash, Version,
                             maps:get(compatibility_key, ImportSet, undefined),
@@ -1208,7 +1208,7 @@ clear_waiter(W) ->
             adapter     :: module(),
             artifact    :: artifact(),
             request     :: request(),
-            image       :: undefined | wasm:snapshot(),
+            image       :: undefined | wasm:snapshot() | wasm_component:image(),
             snapshot_cap :: undefined | snapshot_cap(),
             limits      :: map(),
             runner_heap :: non_neg_integer(),
@@ -1953,17 +1953,17 @@ post_restore(Inst, Image, #g{snapshot_cap = #{post_restore := F}}) ->
         {ok, ok} ->
             {ok, Inst};
         {ok, {error, WErr}} ->
-            refused(Inst, WErr);
+            refused(Inst, Image, WErr);
         {error, WErr} ->
-            refused(Inst, WErr)
+            refused(Inst, Image, WErr)
     end.
 
 %% The instance goes and the adapter's own error is what comes back, rather
 %% than a `trapped' with nothing in it that `decode/2' would have to guess at.
-refused(#{cores := _} = Inst, WErr) ->
+refused(Inst, #{component_image := _}, WErr) ->
     ok = wasm_component:destroy(Inst),
     {error, WErr};
-refused(Inst, WErr) ->
+refused(Inst, _Image, WErr) ->
     ok = wasm:destroy(Inst),
     {error, WErr}.
 

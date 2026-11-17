@@ -23,6 +23,12 @@ plain Erlang.
 
 ### Changes
 
+- **The refusal of a shared-everything thread built-in names it.** A
+  component that uses `thread.spawn-ref`, `thread.spawn-indirect` or
+  `thread.available-parallelism` is still refused when it is linked, and the
+  error now says which one. They stay unsupported until an engine runs them
+  and the toolchain writes them as the specification does; the features page
+  says why.
 - **Component instances can be snapshotted.** A component, or a composed one,
   can be initialised once, captured with `wasm_component:snapshot/2` and
   restored for each request with `wasm_component:restore/3`, instead of being

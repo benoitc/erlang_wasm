@@ -71,7 +71,7 @@ specification. What they cover, and what they do not, is in
 
 | Area | Why |
 | --- | --- |
-| Shared-everything threads: `thread.spawn-ref`, `thread.spawn-indirect`, `thread.available-parallelism` | they run threads in parallel over shared memory; a component that uses one is refused when it is linked, with `unsupported_canon_builtin` |
+| Shared-everything threads: `thread.spawn-ref`, `thread.spawn-indirect`, `thread.available-parallelism` | no engine runs them yet, and the specification and wasm-tools write them differently ([why](#shared-everything-threads)); a component that uses one is refused when it is linked, with `unsupported_canon_builtin` and the built-in's name |
 
 ## Caching compiled code
 
@@ -679,6 +679,38 @@ Those suites found two real defects before they were removed: a shared
 memory did not link against a shared import (sharing has to match exactly, in
 both directions, and was not compared at all), and `wasm_spectest` had no shared
 memory to import.
+
+### Shared-everything threads
+
+Three Component Model built-ins are left out on purpose. `thread.spawn-ref`
+starts a thread from a function reference, `thread.spawn-indirect` starts one
+from a slot in a table, and `thread.available-parallelism` tells the guest how
+many threads can run at once. A component that uses one is refused when it is
+linked. The error is `unsupported_canon_builtin`, and its context names the
+built-in, for example `builtin => <<"thread.spawn-ref">>`.
+
+They are left out because there is nothing yet to check an implementation
+against:
+
+- **No engine runs them.** wasmtime refuses all three, and lists the core
+  shared-everything-threads proposal as not implemented.
+- **The specification and the toolchain write them differently.** The
+  Component Model's binary format puts a `shared` flag before each built-in's
+  operands. wasm-tools writes them without it. A decoder cannot accept both,
+  because the flag and a type index of 0 or 1 are the same bytes.
+- **The parallel form needs a draft proposal.** With the `shared` flag, the
+  new thread runs in parallel with the others. It needs shared types, shared
+  tables and shared function references from the core proposal, which is
+  still a draft. This runtime refuses shared tables.
+- **There are no tests.** The Component Model's own reference tests have no
+  case for any of the three.
+
+They come back when wasmtime runs them and wasm-tools writes the
+specification's format. Without the `shared` flag, a spawned thread is a
+cooperative one, so that form can reuse the cooperative threads this runtime
+already has: `thread.new-indirect` followed by `thread.resume-later`. The
+parallel form also waits for the core proposal to settle enough to implement
+shared tables and shared function references.
 
 ## Read this next
 

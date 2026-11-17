@@ -223,6 +223,13 @@ jobs:
       - name: Run them
         run: >-
           rebar3 ct --suite=test/wasm_wasi2_p2_SUITE,test/wasm_wasi2_serve_SUITE,test/wasm_wasi2_http_limits_SUITE,test/wasm_wasi3_p3_SUITE
+      # The programs past the suite's 60 s bound for each one, under a bound of
+      # their own: p3_sockets_tcp_streams takes about seven minutes.
+      - name: Run the slow one
+        timeout-minutes: 20
+        env:
+          WASM_RUN_SLOW_PROGRAMS: '1'
+        run: rebar3 ct --suite=test/wasm_wasi3_p3_SUITE --case=slow_programs
 
   lint:
     name: Lint

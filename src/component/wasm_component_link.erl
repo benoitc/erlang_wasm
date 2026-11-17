@@ -1512,11 +1512,20 @@ canon(<<16#2C, R0/binary>>) -> cancellable(thread_suspend_then_promote, R0);
 canon(<<16#2D, R0/binary>>) -> cancellable(thread_yield_then_promote, R0);
 canon(<<16#2E, R0/binary>>) -> async_ty(stream_forward, R0);
 canon(<<16#2F, R0/binary>>) -> async_ty(future_forward, R0);
-%% Anything else, the shared-everything thread built-ins (0x40 to 0x42) among
-%% them, is a built-in this runtime does not implement.
+%% Anything else is a built-in this runtime does not implement. The
+%% shared-everything thread built-ins (0x40 to 0x42) are named in the error:
+%% no engine runs them yet, and the specification and wasm-tools do not agree
+%% on their bytes (see docs/features.md).
 canon(<<Op, _/binary>>) ->
     wasm_error:link_error(unsupported_canon_builtin,
-                          <<"unsupported canonical built-in">>, #{opcode => Op}).
+                          <<"unsupported canonical built-in">>, builtin_ctx(Op)).
+
+builtin_ctx(16#40) -> #{opcode => 16#40, builtin => <<"thread.spawn-ref">>};
+builtin_ctx(16#41) ->
+    #{opcode => 16#41, builtin => <<"thread.spawn-indirect">>};
+builtin_ctx(16#42) ->
+    #{opcode => 16#42, builtin => <<"thread.available-parallelism">>};
+builtin_ctx(Op) -> #{opcode => Op}.
 
 cancellable(Which, <<Flag, R/binary>>) ->
     {{canon_async, Which, #{cancellable => Flag =:= 1}}, R}.

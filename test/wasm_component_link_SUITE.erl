@@ -126,16 +126,27 @@ an_unsupported_alias_is_a_named_error(_Config) ->
 
 %% A canon built-in the runtime does not implement is a named link error. The
 %% shared-everything thread built-ins (0x40 to 0x42) are the ones a toolchain
-%% emits today. Fail-first: `canon/1` raised, and `capture` could report it only
-%% as `kind => internal`. Section 8 (canon), one entry `40 00 00`, which is
-%% `thread.spawn-ref` over core type 0.
+%% emits today, and the error names which one it is. Fail-first: `canon/1`
+%% raised, and `capture` could report it only as `kind => internal`; then the
+%% error carried the opcode alone. Section 8 (canon), one entry `Op 00 00`;
+%% 0x3F is an opcode no built-in has, and carries no name.
 an_unsupported_canon_builtin_is_a_named_error(_Config) ->
-    Content = <<1, 16#40, 16#00, 16#00>>,
-    CanonSection = <<8, (byte_size(Content)), Content/binary>>,
-    ?assertMatch({error, #{kind := unsupported_canon_builtin,
-                           ctx := #{opcode := 16#40}}},
-                 wasm_error:capture(
-                   fun() -> wasm_component_link:parse(CanonSection) end)).
+    Refusal = fun(Op) ->
+                  Content = <<1, Op, 16#00, 16#00>>,
+                  Section = <<8, (byte_size(Content)), Content/binary>>,
+                  {error, #{kind := unsupported_canon_builtin, ctx := Ctx}} =
+                      wasm_error:capture(
+                        fun() -> wasm_component_link:parse(Section) end),
+                  Ctx
+              end,
+    ?assertEqual(#{opcode => 16#40, builtin => <<"thread.spawn-ref">>},
+                 Refusal(16#40)),
+    ?assertEqual(#{opcode => 16#41, builtin => <<"thread.spawn-indirect">>},
+                 Refusal(16#41)),
+    ?assertEqual(#{opcode => 16#42,
+                   builtin => <<"thread.available-parallelism">>},
+                 Refusal(16#42)),
+    ?assertEqual(#{opcode => 16#3F}, Refusal(16#3F)).
 
 %% The cooperative thread built-ins and the two forwards, with their operands,
 %% in the bytes wasm-tools 1.256 writes for them (the forwards by the

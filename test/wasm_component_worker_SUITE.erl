@@ -30,13 +30,31 @@ all() ->
 %% supervised one, and whichever came first made the other's start fail with
 %% `already_started': an automatic skip, which fails the run. The supervised
 %% reaper is suspended for the suite, as the adapter conformance kit does.
+%%
+%% The cases load a component's cores many times in quick succession, and the
+%% module cache allows `max_module_loads_per_second' (50) across the whole
+%% node. Back to back, the cases shared one second's budget and whichever came
+%% last failed with `load_rate_exceeded', depending on how fast the machine
+%% was. The limit has its own test (`wasm_wasi2_serve_SUITE'); here it is lifted
+%% for the suite. The module cache reads it when it starts, and loading the
+%% application would reset it, so it is loaded first.
 init_per_suite(Config) ->
+    _ = application:load(wasm),
+    Old = application:get_env(wasm, max_module_loads_per_second),
+    _ = application:stop(wasm),
+    ok = application:set_env(wasm, max_module_loads_per_second, 1000000),
     {ok, _} = application:ensure_all_started(wasm),
     ok = wasm_worker_sup:suspend_reaper(),
-    Config.
+    [{load_rate, Old} | Config].
 
-end_per_suite(_Config) ->
+end_per_suite(Config) ->
     _ = wasm_worker_sup:resume_reaper(),
+    ok = application:stop(wasm),
+    case ?config(load_rate, Config) of
+        {ok, V} -> application:set_env(wasm, max_module_loads_per_second, V);
+        undefined -> application:unset_env(wasm, max_module_loads_per_second)
+    end,
+    {ok, _} = application:ensure_all_started(wasm),
     ok.
 
 init_per_testcase(TC, Config) ->

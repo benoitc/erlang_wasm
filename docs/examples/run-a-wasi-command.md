@@ -47,8 +47,7 @@ working directory. Without `net`, it has no network. See
 ok = file:del_dir_r(Dir).
 ```
 
-**Next:** [Run a WASI 0.2 component](run-a-wasi-2-component.md).
-
 ## Read this next
 
+The next example: [Run a WASI 0.2 component](run-a-wasi-2-component.md).
 The guide behind this example: [WASI preview 1](../wasi.md).

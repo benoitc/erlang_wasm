@@ -1,4 +1,4 @@
-# Producing a module
+# Producing a guest module
 
 This page shows you how to build a module that this runtime can run, and how
 to choose between the two forms a guest can take. Read it before you write a
@@ -30,9 +30,10 @@ OPTION A - compile to wasm                OPTION B - interpret inside wasm
   ONE level of interpretation            TWO levels, stacked
 ```
 
-The cost of each option, measured on our test machine with the two examples:
+The cost of each option, measured on our test machine with a small Rust
+plugin and with QuickJS:
 
-| | compiled (`plugin_worker`) | interpreted (`qjs_worker`) |
+| | compiled (the Rust plugin) | interpreted (a script on QuickJS) |
 | --- | ---: | ---: |
 | module | 46 KB | 1.8 MB |
 | compile, once | 1.6 ms | 310 ms |
@@ -85,7 +86,7 @@ wasm-tools strip plugin.wasm -o plugin.wasm
 ```
 
 Strip the module, and check which library code your functions bring in.
-`scripts/build-plugin-fixture.sh` builds the example plugin. Using
+`scripts/build-plugin-fixture.sh` builds the plugin measured above. Using
 `str::to_lowercase` instead of `to_ascii_lowercase` made it grow from 46 KB to
 2 MB, because the Unicode case tables were included.
 
@@ -142,76 +143,36 @@ A module with more than 256 functions is prepared in steps: each function body
 is lowered the first time it is called, not at instantiation. So you pay only
 for the part of the module that runs. You build the module the same way.
 
-## Run the two examples
+## Run what you built
 
-Both are in `examples/`, and they are **not** part of the application. They
-are code for you to copy and change, not library modules to depend on. To try
-them in place, build the two guests and compile the examples in a shell.
+Both forms run on workers that are installed with the application, so you
+copy no code.
 
-Build the guests. The plugin needs the Rust wasm target. The QuickJS build is
-downloaded:
-
-```sh
-rustup target add wasm32-wasip1
-./scripts/build-plugin-fixture.sh      # -> test/fixtures/plugin/plugin.wasm
-./scripts/fetch-qjs-fixture.sh         # -> test/fixtures/lang/qjs.wasm
-```
-
-Start a shell and compile the examples into it:
-
-```sh
-rebar3 shell
-```
+A compiled module (the first form) runs on `wasm_instance_worker`: one
+instance in its own process, with limits and a deadline that kills it.
 
 ```erlang
-c("examples/plugin_worker.erl").
-c("examples/qjs_worker.erl").
+{ok, Mod} = wasm:load_file("plugin.wasm"),
+Opts = #{imports => Imports, limits => wasm_limits:untrusted()},
+{ok, W} = wasm_instance_worker:start_link(Mod, Opts),
+{ok, Results} = wasm_instance_worker:call(W, ~"handle", Args, 500),
+ok = wasm_instance_worker:stop(W).
 ```
 
-Try the compiled plugin:
+[Using workers](worker.md) explains each option. Grant only the imports the
+module needs: a Rust plugin built for `wasm32-wasip1` needs four WASI
+functions from its standard library.
 
-```erlang
-{ok, W} = plugin_worker:start_link("test/fixtures/plugin/plugin.wasm").
-plugin_worker:normalise(W, ~"  User@Example.COM  ").
-%% {ok,<<"user@example.com">>}
-plugin_worker:normalise(W, ~"nonsense").
-%% {error,invalid}
-plugin_worker:hang(W).
-%% {error,timeout}           the runaway is killed; W is still usable
-```
+An interpreter (the second form) runs on `wasm_script_worker`, with an
+adapter for its language: `wasm_javascript`, `wasm_python` or `wasm_lua`.
+Each request sends source code and gets its own fresh instance.
+[Hosting scripting languages](scripting.md) shows how to start one.
 
-Then the scripting sandbox:
+## Read this next
 
-```erlang
-{ok, S} = qjs_worker:start_link("test/fixtures/lang/qjs.wasm").
-qjs_worker:eval(S, ~"print(1 + 2);").
-%% {ok,<<"3\n">>}
-qjs_worker:eval(S, ~"for(;;){}").
-%% {error,timeout}
-qjs_worker:eval(S, ~"print(typeof globalThis.marker);").
-%% {ok,<<"undefined\n">>}   nothing survives a request
-```
-
-To use either one in your own application, copy it and change the policy:
-
-```sh
-cp deps/wasm/examples/plugin_worker.erl src/my_plugin_worker.erl
-```
-
-The parts you will want to change are the timeout, the fuel, and the
-capabilities you grant the instance. `plugin_worker` grants only the four
-imports that Rust's standard library requires. `qjs_worker` grants one
-directory that holds one script, and no network.
-
-`wasm_examples_SUITE` runs everything above, so if a command on this page
-stops working, the build fails.
-
-## Next
-
-- [worker.md](worker.md): running a guest under limits, and the path of a
-  request
-- [wasi.md](wasi.md): the capabilities you can grant a module
-- [security.md](security.md): what those limits do and do not cover
-- `examples/plugin_worker.erl` and `examples/qjs_worker.erl`: both forms,
-  working, with the tests that run them
-- `wasm_instance_worker`: the general worker, installed with the application
+- [Using workers](worker.md): running a compiled module under limits, and
+  the path of a request
+- [Hosting scripting languages](scripting.md): running scripts with
+  `wasm_script_worker`
+- [WASI preview 1](wasi.md): the capabilities you can grant a module
+- [Security](security.md): what those limits do and do not cover

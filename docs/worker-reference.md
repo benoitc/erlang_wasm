@@ -44,7 +44,7 @@ key.
 | `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2`, and nothing before it. CPython needs about 90 s and so must raise it |
 | `runner_min_heap_words` | the adapter's | a heap floor for each request's runner: 200,000 words for `wasm_lua` and `wasm_javascript`, 1,500,000 for `wasm_python` on the compiled tier and 1,000,000 on the interpreter, none for an adapter without `defaults/1`. `0` turns it off; see [How a heap floor works](tuning.md#how-a-heap-floor-works) |
 | `capture_min_heap_words` | the adapter's | the same, for the process that captures the snapshot. No shipped adapter sets one; see [How a heap floor works](tuning.md#how-a-heap-floor-works) |
-| `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and imports that are all functions. Each idle worker holds one restored instance: its page table (a list of the image's pages it reads), not a copy of the image |
+| `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Restore the next instance ahead](scripting.md#restore-the-next-instance-ahead). Needs a snapshot capability and imports that are all functions. Each idle worker holds one restored instance: its page table (a list of the image's pages it reads), not a copy of the image |
 | `compiled` | `false` | `true` runs requests in the compiled tier: it sets `fuel => infinity`, `compile => true`, `compile_after => 1` and `compile_quality => baseline` under your own `limits`. Only the deadline stops a runaway; see [Hosting scripting languages](scripting.md) |
 
 `start_link/2,3` refuses to start in these cases:
@@ -60,8 +60,8 @@ worker whose artifact gives the same store key as a live worker's holds that
 worker's image instead of loading or capturing its own. Workers that start
 while the first one loads or captures wait for it, at most `capture_timeout`
 and 30 seconds, then capture their own. The image is freed with the last
-worker that holds it. See "Run a pool from one image" in
-[Using workers](worker.md).
+worker that holds it. See [Run a pool from one
+image](scripting.md#run-a-pool-from-one-image).
 
 ## Per node, for the reaper
 

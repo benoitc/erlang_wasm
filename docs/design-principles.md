@@ -69,7 +69,8 @@ itself, for the whole node. See
 **Where you see it.**
 
 - `wasm_instance_worker` and `wasm_script_worker`, with `timeout` in their
-  limits. See [Using workers](worker.md).
+  limits. See [Using workers](worker.md) and
+  [Hosting scripting languages](scripting.md).
 - `isolation => fresh`, a new instance for every request.
 - An instance handle stops working when the process that created it exits.
   See [Know who owns the instance](embedding.md#know-who-owns-the-instance).

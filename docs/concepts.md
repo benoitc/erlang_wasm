@@ -259,7 +259,7 @@ internals pages use come last.
 | **capability** | a permission granted by supplying an import, such as a directory or an address | [WASI preview 1](wasi.md) |
 | **class**, **kind** | the two fields that classify an error: one of five classes (`malformed`, `invalid`, `link`, `trap`, `exhaustion`) and a kind your code can match on | [above](#guest-errors-are-returned-as-values) |
 | **code cache** | compiled BEAM modules saved on disk under `code_cache_dir`, so a restart does not compile them again | [The compiled tier](compiled-tier.md) |
-| **command**, **reactor** | a guest that runs `main` once and exits, compared with one that exports functions and stays ready | [Producing a module](guests.md) |
+| **command**, **reactor** | a guest that runs `main` once and exits, compared with one that exports functions and stays ready | [Producing a guest module](guests.md) |
 | **compiled tier** | translating the functions a guest runs most into BEAM code, through Core Erlang | [The compiled tier](compiled-tier.md) |
 | **component** | a Component Model binary: core modules plus typed interfaces, instantiated with `wasm_component` | [Components](components.md) |
 | **content hash** | a checksum of a module's bytes; two identical files have the same hash, so the runtime can reuse its work | [Hold modules and instances](embedding.md) |

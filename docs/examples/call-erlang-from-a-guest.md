@@ -55,9 +55,7 @@ Returning `{trap, Reason}` would stop the call instead.
 ok = wasm:destroy(Inst).
 ```
 
-**Next:** [Pass bytes](pass-bytes.md), or [Host functions](../host-functions.md)
-for the rest of the contract.
-
 ## Read this next
 
+The next example: [Pass bytes](pass-bytes.md).
 The guide behind this example: [Host functions](../host-functions.md).

@@ -18,7 +18,7 @@ that file it names.
 
 | word | what it means here |
 | --- | --- |
-| **worker** | a process that runs guest requests one at a time; here, `wasm_script_worker`. See [Using workers](worker.md). |
+| **worker** | a process that runs guest requests one at a time; here, `wasm_script_worker`. See [Hosting scripting languages](scripting.md). |
 | **runner** | the process the worker starts to run one request. |
 | **capture** | the step at worker start that runs the guest's initialisation and saves the result as an image ([Snapshots](snapshots.md)). |
 | **word** | the Erlang VM's unit of process memory: 8 bytes on a 64-bit system. |
@@ -167,8 +167,8 @@ tier](compiled-tier.md)).
 
 Workers with the same adapter and options share one image, so
 `max_snapshot_bytes` limits the number of different images on the node, not
-the number of workers. "Run a pool from one image" in
-[Using workers](worker.md) has the details.
+the number of workers. [Run a pool from one
+image](scripting.md#run-a-pool-from-one-image) has the details.
 
 A script worker restores its image for every request: the restored memory
 reads the image's pages where they are and copies only the 4 KiB pages a

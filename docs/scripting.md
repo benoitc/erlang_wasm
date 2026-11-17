@@ -77,6 +77,24 @@ crash, nothing removes it. So set `scratch_roots` in production.
 `wasm_script_worker:cleanup_stats/0` and `cleanup_requests/0` show which
 requests the reaper still has to clean, and which process holds each one.
 
+## Know what a crash leaves
+
+A request's directory is named `req-...`. The reaper keeps a journal on
+disk, with one record for each running request, so it can find these
+directories after a crash. The **runner** in the table is the process that
+runs the guest for one request.
+
+| what dies | what is left | who cleans it |
+| --- | --- | --- |
+| the runner, at a deadline or a crash | nothing of the instance; the request's directory, until its cleanup runs | the reaper, as for any request; the worker starts a new runner before its next request |
+| the worker | its runner, which exits when it sees that the worker is gone | nothing else to clean |
+| the node, during a request | the request's directory and its journal record | the reaper at the next start, **if** `scratch_roots` names the same directory |
+| the host machine, during a request | as above, maybe without the record, because the record is not synced to disk | the next start deletes every `req-` directory that no record names |
+
+When `scratch_roots` is not set, each node uses its own directory, and a later
+start never looks in it. So set `scratch_roots` when files left by a crash must
+be deleted at the next start.
+
 ## Choose a configuration: metered or compiled
 
 A worker runs in one of two configurations:
@@ -157,6 +175,102 @@ wasm_script_worker:start_link(my_adapter, #{capture_min_heap_words => 2_000_000}
 Every setting, with its default, is in [Worker
 configuration](worker-reference.md). How the kernel's processes work together
 is in [Worker internals](worker-internals.md).
+
+## Restore the next instance ahead
+
+Use `restore_ahead` when the guest is restored from an image (the saved copy
+of the interpreter after start-up) and your workers are idle between
+requests. The worker restores the next instance while it waits, so a new
+request starts directly with the guest's own work.
+
+<!-- check: modules my_adapter -->
+```erlang
+{ok, W} = wasm_script_worker:start_link(my_adapter, #{root => scratch,
+                                                      restore_ahead => true}).
+```
+
+What it changes:
+
+- Each worker has one runner that lives for many requests. It restores the
+  instance and runs the request. The request's imports (preopened directories,
+  output sinks, host calls) are the ones the adapter's `prepare/3` built for
+  that request. They are installed before the guest runs.
+- Every request still gets its own instance, restored from the image and used
+  once. Globals, linear memory and the files of one request never reach a
+  later request. `wasm_worker_lang_SUITE` checks each of these for every
+  shipped reactor.
+- An idle worker holds one restored instance. For CPython that is about 42 MB
+  of linear memory per worker.
+- It needs an adapter that supports snapshots, and imports that are all
+  functions. An adapter without snapshots ignores the option. If an import is
+  not a function, the worker logs a warning and restores for each request, as
+  without the option.
+
+It makes a request shorter only when the worker was idle long enough to finish
+the restore. A pool that always gives the next request to the worker that just
+answered (last in, first out) leaves it no time; rotate between idle workers
+instead. Under full load it does not add throughput, because the restore still
+has to run.
+
+## Run a pool from one image
+
+Use this when you start several workers with the same adapter and options.
+You do nothing to share the image:
+a worker started with the same adapter and the same options as a live worker
+holds that worker's image instead of loading or capturing its own. A pool of N
+workers holds one copy, counts it once against `max_snapshot_bytes`, and
+captures once when no image is stored yet, even when the N workers start at
+the same moment.
+
+Sharing needs the adapter's snapshot capability to name a module loaded from
+bytes, so it has a content hash, and to give a `compatibility_key`. The
+shipped adapters (`wasm_python`, `wasm_javascript`, `wasm_lua`) do. Without
+either, each worker captures its own image, as a worker with no store does.
+
+Put the workers under a supervisor of your own:
+
+<!-- check: modules my_pool_sup -->
+```erlang
+-module(my_pool_sup).
+-behaviour(supervisor).
+-export([start_link/3, init/1]).
+
+start_link(Adapter, Opts, N) ->
+    supervisor:start_link(?MODULE, {Adapter, Opts, N}).
+
+init({Adapter, Opts, N}) ->
+    Children = [#{id => {worker, I},
+                  start => {wasm_script_worker, start_link, [Adapter, Opts]}}
+                || I <- lists:seq(1, N)],
+    {ok, {#{strategy => one_for_one, intensity => 10, period => 10},
+          Children}}.
+```
+
+Start it with the adapter, the options every worker shares, and the pool size:
+
+<!-- check: modules my_pool_sup my_adapter -->
+```erlang
+{ok, Pool} = my_pool_sup:start_link(my_adapter, #{root => scratch}, 8).
+```
+
+What it changes:
+
+- The image is loaded from the snapshot store, or captured and stored, by the
+  first worker. The workers that start while it does wait for it, and then
+  hold the same image. It is freed with the last worker that holds it; the next
+  worker to start loads or captures it again.
+- The options must be equal, as `=:=` compares them. A worker with other
+  options, another adapter, or an artifact whose module changed has its own
+  image.
+- Each worker still loads its own artifact (what the adapter loads once at
+  start, such as the guest module). A crashed worker restarts alone, on the
+  image the others hold.
+- Isolation does not change: every request still gets its own instance,
+  restored from the image and used once.
+
+`capture_timeout` limits the capture, as before. A worker waits for another
+worker's capture at most `capture_timeout` and 30 seconds; past that, it
+captures its own.
 
 ## Read this next
 

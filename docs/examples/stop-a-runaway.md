@@ -44,8 +44,7 @@ so the shell shows it exiting. Put workers under a supervisor, as
 ok = wasm_instance_worker:stop(W).
 ```
 
-**Next:** [A plugin per request](plugin-per-request.md).
-
 ## Read this next
 
+The next example: [A plugin per request](plugin-per-request.md).
 The guide behind this example: [Using workers](../worker.md).

@@ -39,8 +39,7 @@ and returned the list of its results.
 ok = wasm:destroy(Inst).
 ```
 
-**Next:** [Call Erlang from a guest](call-erlang-from-a-guest.md).
-
 ## Read this next
 
+The next example: [Call Erlang from a guest](call-erlang-from-a-guest.md).
 The guide behind this example: [Hold modules and instances](../embedding.md).

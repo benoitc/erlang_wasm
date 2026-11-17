@@ -176,4 +176,5 @@ This part is for you if you change the runtime.
 ## Read this next
 
 [WASI preview 1](wasi.md), the standard set of host functions, or
-[Streams](streams.md) to talk to a guest while it runs.
+[Talk to a running guest (stdin and stdout)](streams.md), to exchange data
+with a guest while it runs.

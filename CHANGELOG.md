@@ -305,7 +305,7 @@ plain Erlang.
   adapter and the same options now hold one image instead of a copy each:
   one capture on a missing image, even when they start together, and one
   charge to `max_snapshot_bytes`. You set nothing for it. "Run a pool from one
-  image" in `docs/worker.md` shows a supervised pool.
+  image" in `docs/scripting.md` shows a supervised pool.
 - **A table of functions travels as one binary.** An image's table holding
   only `null` and the module's own functions is packed at capture and at load,
   so handing an image to a request's runner copies a reference instead of the

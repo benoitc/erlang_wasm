@@ -222,9 +222,23 @@ Notes:
   instance that never ran `init`.
 - **`capture_timeout` limits the capture**, 60 s by default. It is a worker
   option, not a limit: a `timeout` in a limits map is applied by the process
-  that owns the instance. So the kernel runs the capture in a separate
-  process and kills it at the deadline. Raise it for a runtime that needs
+  that owns the instance, and an inline call cannot be interrupted. So the
+  kernel runs the capture in a separate process and kills it at the
+  deadline: a guest whose `init()` never returns costs one timeout, not a
+  `start_link/2` that never returns. It limits the capture and nothing
+  before it: loading the artifact and looking for the image in
+  `snapshot_dir` have no time limit. Raise it for a runtime that needs
   longer: CPython takes about ninety seconds.
+
+  <!-- check: modules my_adapter -->
+  ```erlang
+  wasm_script_worker:start_link(my_adapter, #{root => scratch,
+                                              capture_timeout => 180_000}).
+  ```
+
+- **Give the initialisation as few bindings as the guest allows.**
+  Everything that `init()` touches is shared by every request that restores
+  the image.
 - **`validate` should ask the runtime, not the module.** The kernel does not
   read guest values, so it never sees what `init` returned. A `validate` that
   only checks that an export exists cannot tell a started runtime from one
@@ -236,6 +250,15 @@ Notes:
   request's deadline, because it runs for each request.
 - **A restore is a fresh instance.** Nothing a request did is kept after it.
   This is how the worker keeps requests isolated from each other.
+- **Workers with the same adapter and options share one image.** The pool
+  holds it once, is charged for it once, and captures once when the workers
+  start together and the capture succeeds. [Run a pool from one
+  image](scripting.md#run-a-pool-from-one-image) has the details.
+- **A component guest works the same way.** Return `runtime => component`
+  from `snapshot_capability/1`, and carry `host_remake` beside the bindings
+  in each request's import set. The worker then captures with
+  `wasm_component:snapshot/2` and restores with `wasm_component:restore/3`;
+  see [Snapshot a component](snapshots.md#snapshot-a-component).
 - [Snapshots](snapshots.md) has the rest, including what a capture refuses
   and what an image keeps fixed.
 

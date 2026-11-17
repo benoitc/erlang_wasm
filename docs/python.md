@@ -156,7 +156,8 @@ Notes:
 - **`start_link/2` takes about 14 seconds**, or 5 with the capture heap floor
   described below, because it starts the interpreter once. Workers started
   with the same options share that image, so it happens once per pool, not
-  once per worker or per request; see [Using workers](worker.md). Start your
+  once per worker or per request; see [Run a pool from one
+  image](scripting.md#run-a-pool-from-one-image). Start your
   workers before you accept traffic. The example raises `capture_timeout`
   above its 60 s default, because a capture can take longer: 91 to 95 s
   without the floor, in the measurements below.

@@ -80,8 +80,7 @@ key, the component does not have that capability.
 ok = file:del_dir_r(Dir).
 ```
 
-**Next:** [Stop a runaway](stop-a-runaway.md).
-
 ## Read this next
 
+The next example: [Stop a runaway](stop-a-runaway.md).
 The guide behind this example: [Components](../components.md).

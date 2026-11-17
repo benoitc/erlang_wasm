@@ -62,7 +62,7 @@ Pick the path for what you do. Stop when your question is answered.
    API, such as why errors are values and why you load a module once.
 3. [Getting started](getting-started.md): an empty project to a running
    module.
-4. [Producing a module](guests.md): building a `.wasm` this runtime can run.
+4. [Producing a guest module](guests.md): building a `.wasm` this runtime can run.
 5. The [examples](examples/call-an-export.md), one task per page.
 6. [Hold modules and instances](embedding.md),
    [Host functions](host-functions.md) and
@@ -78,7 +78,7 @@ Pick the path for what you do. Stop when your question is answered.
 4. [Security](security.md): what the sandbox covers, and what is yours.
 5. [Snapshots](snapshots.md), [The compiled tier](compiled-tier.md) and
    [Tuning](tuning.md), once you have measured.
-6. [Upgrading from 0.3](upgrading.md) and the [Changelog](../CHANGELOG.md)
+6. [Upgrading](upgrading.md) and the [Changelog](../CHANGELOG.md)
    before each upgrade.
 
 **You change it**:

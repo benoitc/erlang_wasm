@@ -833,11 +833,11 @@ queued(N, Left) ->
         _   -> timer:sleep(10), queued(N, Left - 1)
     end.
 
-%% The pool `docs/worker.md' shows, compiled from the guide itself so the
+%% The pool `docs/scripting.md' shows, compiled from the guide itself so the
 %% example cannot drift from what is tested: three workers on one image, and
 %% a killed worker restarts alone, on the image the others hold.
 the_documented_pool_restarts_as_supervised(_Config) ->
-    ok = load_guide_modules("worker.md", [my_pool_sup]),
+    ok = load_guide_modules("scripting.md", [my_pool_sup]),
     {ok, Sup} = my_pool_sup:start_link(fake_reactor_adapter,
                                        (own())#{root => scratch}, 3),
     unlink(Sup),
@@ -1428,9 +1428,12 @@ with_store(Dir, F) ->
 %% stops the next one being added the same way.
 %%
 %% It reads the names out of the code rather than listing them here, so adding
-%% a setting and forgetting the guide fails rather than passing.
+%% a setting and forgetting the guide fails rather than passing. A worker
+%% setting is documented in the worker reference; a node-wide one in the
+%% configuration page, which lists every application setting.
 every_setting_is_documented(_Config) ->
-    Guide = read_guide("worker-reference.md"),
+    Guide = <<(read_guide("worker-reference.md"))/binary,
+              (read_guide("configuration.md"))/binary>>,
     Undocumented = [S || S <- settings(), not documented(S, Guide)],
     ?assertEqual([], Undocumented).
 

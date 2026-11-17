@@ -23,6 +23,13 @@ plain Erlang.
 
 ### Changes
 
+- **The documentation has one front door.** Start here tells you which module
+  and which page fit what you have, and which modules are supported API; the
+  internal ones are grouped apart on the documentation site. New pages map
+  every module to its tests, list every setting with its default, explain
+  the design principles, and say what to change when you upgrade, one
+  release at a time. Measurement history moved out of the guides into the
+  project's record.
 - **The refusal of a shared-everything thread built-in names it.** A
   component that uses `thread.spawn-ref`, `thread.spawn-indirect` or
   `thread.available-parallelism` is still refused when it is linked, and the

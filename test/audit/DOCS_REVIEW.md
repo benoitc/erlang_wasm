@@ -561,3 +561,70 @@ Each step is one pull request, one at a time, each merged before the next.
    `wasm_component` (M1), IR lowering out of `wasm_instance` (M2), renames
    (M5-M7, M9), the cleanup migration end state (M8). Steps 1-8 make the
    boundaries visible first, so each of these is a smaller, safer change.
+
+## What this release fixed
+
+The maintainer chose to fix the documentation in full before the release,
+in one pull request with one commit per step. No runtime behaviour changed:
+every source file the pull request touches has the same code tokens as
+before, only its docs and comments differ.
+
+| step | what was done |
+| --- | --- |
+| 0, stale facts | all fixed, except the "milestone M6" comment (Q5) |
+| 1-2, structure and front door | `README.md` is one screen with the installed API; `docs/start-here.md` replaces `docs/README.md`, `introduction.md` and `what-you-get.md`, with the decision table, three reading paths and the Supported API; internal modules are in hexdocs groups named "Internals: ..." (Q1) |
+| 3, audiences | as proposed |
+| 4, verdicts | as proposed; `otp.md` merged into `embedding.md`; `upgrading.md` is "Upgrading", one section per breaking release (Q10) |
+| 5, missing documents | `start-here.md`, `design-principles.md`, `configuration.md`, `compiled-tier-internals.md`, `map.md`, `contributing/fixtures.md`, and `test/audit/CONFORMANCE.md` for the conformance history |
+| 6, concepts | the error model is stated precisely in `design-principles.md`, with the host-side exceptions listed (Q3); one definition each for image, profile and lease |
+| 7, navigation | `docs/map.md` holds the source map and the area table; `wasm_architecture_SUITE` now fails when a module is missing from it; AGENTS.md links to it (Q6) |
+| 8, module docs | "Where things are" tables for `wasm_component` and `wasm_async`, banners in `wasm`, `wasm_jit`, `wasm_core`, `wasm_component`; `wasm_exec` and `wasm_error` say what they are for |
+| 9-10, hard modules, large functions | documented, not changed: code organisation is left for later (step 14.9) |
+| 11, recipes | all added |
+| 12, diagrams | all drawn except the CI jobs and the script-to-fixture graphs, which became tables in CONTRIBUTING and `fixtures.md` |
+| 14, order | steps 1-8 done; step 9 (code organisation) left open |
+
+Q8 is answered from the code: an automatic split makes at most two units
+(4,096 functions a unit, requests over 8,192 refused); four (`MAX_SHARDS`)
+is reached only through the `compile_shards` limit.
+
+### Still open
+
+Questions Q2, Q4, Q5, Q7, Q9 and Q11 to Q15 above are still open. Writing
+the documentation found these as well, none of them changed:
+
+- **A tactic in the limits map.** `compile_shards` forces how a compile is
+  split (`wasm_jit.erl`, `shard_count`), against the rule that options never
+  select a tactic. It is not part of the supported API.
+- **`compile` against `loader`.** `wasm_component:instantiate/3` takes
+  `loader => load | compile` and picks the module cache only while the
+  application runs. The `run_command` and `run_serve` runners of
+  `wasi_preview2` and `wasi_preview3` take `compile => boolean()` and answer
+  `cache_unavailable` without the application. The docs state both.
+- **The cleanup migration.** `wasm_cleanup_manager:admit/1` and `release/1`
+  are called by nothing in `src/`; the reaper refuses with
+  `cleanup_saturated`. `CLEANUP_STEWARD.md` has the manager granting every
+  job slot; the code has two separate counts (Q4).
+- **Why `wasm_async` keeps its state in the process dictionary.** Nothing
+  says why. The docs now give the reason the code implies: the built-ins
+  are host functions in the owning process and return only results.
+- **Errors.** A bare `~"unit"` passed for a variant answers `malformed`,
+  `internal`, with a stack trace, not a kind of its own.
+  `wasm_script_worker:stop/1` exits `noproc` on a dead worker, unlike `run`,
+  `submit`, `await` and `cancel`.
+- **Tests.** No suite tests the `{Module, Function}` host import form.
+  `wasm_wasi2_async_SUITE` never runs in CI (it needs
+  `p2_cli_invoke_async`, and its skip ignores
+  `WASM_REQUIRE_WASMTIME_FIXTURES`). One case of `wasm_module_cache_SUITE`
+  fails instead of skipping on a clone without `qjs.wasm`. The Tests job
+  installs neither `wasm-tools` nor `wasmtime`, so the cases that need them
+  skip there. The `python_metered` and `python_compiled` groups of
+  `wasm_worker_lang_SUITE` are not in `all/0`.
+- **Exports nothing calls.** `wasm_exec:check_depth/2`, `table_func/3` and
+  `init_state/4` are exported, but only `wasm_exec` itself calls them.
+- **Settings.** The `gc_*` thresholds are documented in `gc.md` but marked
+  internal in `configuration.md`, because no option may select a collection
+  strategy. The snapshot file ceilings are explained only in
+  `wasm_snapshot_file`, an internal module. A snapshot format bump breaks the
+  committed `pager-0.8.0.img` fixture; the recipe says to update both and
+  note it in Upgrading.

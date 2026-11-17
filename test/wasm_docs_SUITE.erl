@@ -49,6 +49,7 @@
 -define(RUN_DIR, "docs/examples/").
 %% Pages where no block may be skipped: Start here, and the examples.
 -define(START_PAGES, ["docs/start-here.md", "docs/concepts.md",
+                      "docs/design-principles.md",
                       "docs/getting-started.md", "docs/guests.md"]).
 %% The worker start functions whose adapter argument must name an adapter, as
 %% {Module, Function, Arity, ArgumentPosition}.

@@ -98,25 +98,11 @@ later. This is better than a leak you cannot see.
 
 ## Node-wide
 
-Also in the `wasm` application environment:
-
-| setting | default | what it controls |
-| --- | ---: | --- |
-| `worker_timeout` | 5 s | the deadline `wasm_instance_worker:call/3` uses when you give none |
-| `max_snapshot_bytes` | `infinity` | the memory that all snapshot images **keep**, on the whole node. `infinity` means no limit; snapshots still work |
-| `snapshot_dir` | unset | where images are kept between restarts. Unset means images live only in memory |
-| `max_snapshot_dir_bytes` | 512 MiB | how much **disk** that directory may hold. An image file is 35 KB for Lua and 2.7 MB for CPython |
-| `code_cache_dir` | unset | where compiled code is kept. Unset means the compiled tier recompiles on every start |
-| `page_limit` | see `wasm_engine` | linear memory pages across every instance on the node |
-
-The runtime removes old files from the snapshot directory **only when it
-saves a new image**. So a directory over its limit stays over it until the
-next capture, and lowering the setting removes nothing by itself.
-`wasm_snapshot_store:purge/0` empties the directory at once.
-
-`max_snapshot_bytes` limits memory and `max_snapshot_dir_bytes` limits disk,
-for the same images. [Snapshots](snapshots.md) shows both sizes side by
-side.
+The other settings of the `wasm` application environment, such as
+`worker_timeout`, `snapshot_dir` and its limits, `code_cache_dir` and
+`page_limit`, are in
+[Configuration](configuration.md#the-application-environment), each with its
+default and the page that explains it.
 
 ## Read this next
 

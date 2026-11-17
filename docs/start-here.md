@@ -58,20 +58,22 @@ Pick the path for what you do. Stop when your question is answered.
 **You use it** to run WebAssembly from your code:
 
 1. [Concepts](concepts.md): the words every other page uses.
-2. [Getting started](getting-started.md): an empty project to a running
+2. [Design principles](design-principles.md): the rules that explain the
+   API, such as why errors are values and why you load a module once.
+3. [Getting started](getting-started.md): an empty project to a running
    module.
-3. [Producing a module](guests.md): building a `.wasm` this runtime can run.
-4. The [examples](examples/call-an-export.md), one task per page.
-5. [Embedding](embedding.md), [Host functions](host-functions.md) and
+4. [Producing a module](guests.md): building a `.wasm` this runtime can run.
+5. The [examples](examples/call-an-export.md), one task per page.
+6. [Embedding](embedding.md), [Host functions](host-functions.md) and
    [Pass data in and out](passing-data.md).
-6. The guide for your case, from the table above.
+7. The guide for your case, from the table above.
 
 **You operate it** in production, and want it bounded, fast and safe:
 
 1. [Using workers](worker.md): untrusted code with a deadline.
 2. [Put it in an OTP application](otp.md): loading, ownership, supervision.
-3. [Worker configuration](worker-reference.md): every setting, with its
-   default.
+3. [Configuration](configuration.md): every setting, with its default, and
+   [Worker configuration](worker-reference.md) for the worker settings.
 4. [Security](security.md): what the sandbox covers, and what is yours.
 5. [Snapshots](snapshots.md), [The compiled tier](compiled-tier.md) and
    [Tuning](tuning.md), once you have measured.
@@ -80,7 +82,8 @@ Pick the path for what you do. Stop when your question is answered.
 
 **You change it**:
 
-1. [CONTRIBUTING.md](../CONTRIBUTING.md): the checks and the rules.
+1. [CONTRIBUTING.md](../CONTRIBUTING.md): the checks and the rules, and
+   [Design principles](design-principles.md): the rules a change must keep.
 2. [Where things are](map.md): every module, and the suites for each area.
 3. [Architecture](architecture.md): how the modules depend on each other,
    and the path of a call.
@@ -133,16 +136,10 @@ a note.
 
 ## Settings you may want in production
 
-```erlang
-%% sys.config
-[{wasm, [{scratch_roots, #{scratch => "/var/lib/myapp/wasm-scratch"}},
-         {code_cache_dir, "/var/lib/myapp/wasm-code"}]}].
-```
-
-`scratch_roots` is where request files live. When a node restarts after a
-crash, it cleans up there what the crashed node left behind. `code_cache_dir`
-keeps compiled code across restarts. [Worker configuration](worker-reference.md)
-lists every other setting.
+Two settings matter on most nodes: `scratch_roots`, where request files
+live, and `code_cache_dir`, which keeps compiled code across restarts.
+[Configuration](configuration.md#settings-for-production) shows them in a
+`sys.config` and lists every other setting.
 
 ## Read this next
 

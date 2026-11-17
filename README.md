@@ -58,9 +58,12 @@ not from how C runtimes are built. In short: the interpreter walks nested
 lists instead of a flat bytecode array, linear memory is `atomics` arrays,
 floats that Erlang cannot hold (NaN, Infinity) get their own form, garbage
 collected objects live in a store the runtime collects itself, and each
-untrusted instance runs in its own process. [Design notes](docs/design-notes.md)
-gives the reasons. The measurements are in `test/audit/PERF.md`, under "The
-six results behind the design".
+untrusted instance runs in its own process. Errors from a guest come back as
+values, and guest data never becomes an atom.
+[Design principles](docs/design-principles.md) states these rules and where
+they show in the API; [Design notes](docs/design-notes.md) gives the reasons
+behind the internals. The measurements are in `test/audit/PERF.md`, under
+"The six results behind the design".
 
 ## AI-assisted development
 

@@ -141,8 +141,10 @@ See [wasi.md](wasi.md).
 
 ## Handle failure
 
-Nothing raises an exception: errors come back as values, so you match on
-them. A trap is the guest stopping on an error, such as the `unreachable`
+Nothing a guest does makes a call raise an exception: errors come back as
+values, so you match on them. A few mistakes in your own code do raise;
+[Design principles](design-principles.md#failures-are-values-at-the-guest-boundary)
+lists them. A trap is the guest stopping on an error, such as the `unreachable`
 instruction. This module's `run` always traps:
 
 <!-- check: fresh -->

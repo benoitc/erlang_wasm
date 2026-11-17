@@ -44,9 +44,13 @@ A module cannot reach outside its sandbox, for five reasons:
   guest with `binary_to_atom/2`, while the property test for the decoder
   passed. `wasm_prop_SUITE` now tests both. It checks that the number of atoms
   does not grow with the number of different strings a guest sends.
-- **Nothing raises.** Malformed input, ill-typed modules, traps and exhausted
-  limits all come back as values. Property tests check this on random binaries,
-  and on valid modules changed one byte at a time.
+- **Nothing a guest supplies makes a call raise.** Malformed input, ill-typed
+  modules, traps and exhausted limits all come back as values. Property tests
+  check this on random binaries, and on valid modules changed one byte at a
+  time. A few mistakes on the host side do raise, such as a malformed network
+  grant;
+  [Design principles](design-principles.md#failures-are-values-at-the-guest-boundary)
+  lists them.
 
 None of this depends on processes. A call in your own process is in the same
 sandbox as a call inside a worker.
@@ -313,8 +317,8 @@ What the runtime checks before it will use one:
 - nothing on the path is a symlink, and an entry is a regular file
 - the entry's own checksum matches, before any byte of it is loaded
 
-Every failure is a cache miss and a line in the log. Nothing raises. A cache
-that cannot be trusted only makes the node slower, never broken.
+Every failure is a cache miss and a line in the log, never an exception. A
+cache that cannot be trusted only makes the node slower, never broken.
 
 **What this does not do.** The checksum detects damage (a partial write, a bad
 disk, a crash). It does **not** detect a writer who puts a well-formed entry

@@ -36,7 +36,7 @@ wasm_instance_worker:call(W2, ~"spin", [], 200).
 function uses none. A deadline counts time, and needs a separate process. For
 untrusted code, use both. The killed worker was linked to your shell process,
 so the shell shows it exiting. Put workers under a supervisor, as
-[Put it in an OTP application](../otp.md) shows.
+[Hold modules and instances](../embedding.md#supervise-workers) shows.
 
 **Clean up:**
 

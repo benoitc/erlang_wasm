@@ -13,9 +13,8 @@ that it exports.
 {ok, Mod} = wasm:load_file("test/fixtures/plugin/plugin.wasm").
 ```
 
-`load_file/1` decodes and validates the module once, and caches it by
-content hash (a checksum of its bytes). Each request makes its own instance
-from this one module:
+Load the module once ([why](../embedding.md#load-modules-once-at-startup)).
+Each request makes its own instance from it:
 
 ```erlang
 Normalise = fun(Input) ->

@@ -168,8 +168,9 @@ another module's layout.
 
 WASI is an Erlang host interface, not an embedded runtime: each syscall is an
 ordinary host function, so it can be traced, replaced or refused.
-[WASI](wasi.md) is the guide: the options, the syscalls that are implemented,
-and what each sandbox refuses. This section keeps the reasons.
+[WASI preview 1](wasi.md) is the guide: the options and what each sandbox
+refuses. [Features](features.md#wasi-preview-1) lists the syscalls. This
+section keeps the reasons.
 
 An absent key is an absent capability and the syscall returns `ENOTCAPABLE`,
 except `clocks` and `random`, which default to both clocks and strong

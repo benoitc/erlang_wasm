@@ -1,11 +1,11 @@
 # The file NIF
 
-The optional file NIF in `c_src/wasi_file_nif.c` is the only C in the
-project. It closes the time-of-check-to-time-of-use window in WASI path
-resolution described in [WASI](../wasi.md), and it is where a memory error
-would be invisible from Erlang. This page is for you if you are changing
-`c_src/`: it says how to run the NIF under a sanitizer and what a sanitizer
-can and cannot find. The checks every change passes are in
+The optional file NIF in `c_src/wasi_file_nif.c` is the only C in the project.
+It closes the time-of-check-to-time-of-use window in WASI path resolution
+described in [WASI preview 1](../wasi.md#check-which-backend-you-have), and it
+is where a memory error would be invisible from Erlang. This page is for you
+if you are changing `c_src/`: it says how to run the NIF under a sanitizer and
+what a sanitizer can and cannot find. The checks every change passes are in
 [Contributing](../../CONTRIBUTING.md).
 
 ## Run the NIF under a sanitizer
@@ -120,5 +120,6 @@ are for what a test cannot phrase.
 
 ## Read this next
 
-[Testing](testing.md), for the suites and fixtures, or [WASI](../wasi.md) for
-what the NIF protects.
+[Testing](testing.md), for the suites and fixtures, or
+[WASI preview 1](../wasi.md#check-which-backend-you-have) for what the NIF
+protects.

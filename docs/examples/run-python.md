@@ -51,7 +51,7 @@ default; [Python](../python.md) describes it.
 ok = wasm_script_worker:stop(W).
 ```
 
-**Next:** [Put it in an OTP application](../otp.md).
+**Next:** [Hold modules and instances](../embedding.md).
 
 ## Read this next
 

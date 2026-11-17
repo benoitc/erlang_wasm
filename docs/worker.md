@@ -125,10 +125,11 @@ Pool = [begin {ok, W} = wasm_instance_worker:start_link(Mod, Opts), W end
         || _ <- lists:seq(1, erlang:system_info(schedulers_online))].
 ```
 
-Put them under your own supervisor, as [Put it in an OTP
-application](otp.md) shows. With `isolation => fresh`, a restart loses nothing,
-so start the worker `permanent`. With `reuse`, the worker keeps state that only
-the process that created it can rebuild, so start it `temporary`.
+Put them under your own supervisor, as [Hold modules and
+instances](embedding.md#supervise-workers) shows. With `isolation => fresh`, a
+restart loses nothing, so start the worker `permanent`. With `reuse`, the
+worker keeps state that only the process that created it can rebuild, so start
+it `temporary`.
 
 ## Clean up
 

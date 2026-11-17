@@ -35,10 +35,10 @@ Grant = #{connect => [{tcp, ~"127.0.0.1", 8080}], resolve => allow},
 ```
 
 It is the same grant that `wasi:sockets` uses, described in
-[WASI](wasi.md). Before each request, the host splits the *authority* (the
-`host:port` part of the URL) into a host and a port. Without a port, it uses
-80 for `http` and 443 for `https`. Then it checks them against the `connect`
-rules:
+[WASI preview 1](wasi.md). Before each request, the host splits the
+*authority* (the `host:port` part of the URL) into a host and a port. Without
+a port, it uses 80 for `http` and 443 for `https`. Then it checks them against
+the `connect` rules:
 
 - An IP address is checked as it is.
 - A host name needs `resolve => allow`. The host resolves the name once and

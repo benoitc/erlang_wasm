@@ -434,26 +434,12 @@ Releasing the same hold twice frees nothing the second time.
 
 ## References the embedder holds
 
-A reference that leaves the runtime cannot be reached from any root that the
-runtime can see. So it is **pinned**: this applies to call results,
-`wasm:get_global/2` results, and the values carried by an uncaught exception.
-
-Each pin has a count, and you release it explicitly:
-
-```erlang
-{ok, [Ref]} = wasm:call(Inst, ~"make", []),
-%% ... use it ...
-ok = wasm:release(Inst, Ref).
-ok = wasm:release_all(Inst).        % or drop the lot, per request
-```
+Pinning, `wasm:release/2` and `wasm:release_all/1` are a user API; see
+[Keep garbage-collected references](embedding.md#keep-garbage-collected-references).
+Two facts about how the heap keeps them:
 
 - The pins are stored next to the objects, so pinning needs no state
   write-back.
-- If you never release, an embedder that calls a function returning a struct
-  a million times keeps a million objects alive.
-- Call `wasm:pin/2` yourself in one case: a **host function that keeps a
-  reference it received**. Its arguments are safe during the call, because no
-  collection runs below a running frame. After the call they are not.
 - Ids are never reused, so that a reference that is no longer pinned traps; it
   never points to a different live object.
 

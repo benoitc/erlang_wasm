@@ -60,15 +60,12 @@ ok         = wasm:destroy(Inst),
 ok         = file:delete("add.wasm").
 ```
 
-You load a module once and instantiate it as often as you like.
-`load_file/1` decodes and validates the bytes, and keeps the result in a cache
-under its content hash (a checksum of the bytes). So loading the same file
-again takes microseconds instead of milliseconds. Each `instantiate/2` gives
-you a new instance that shares nothing with the others.
-
-`compile/1`, used above, does not use that cache. This is correct for text: a
-module built from text gets a new identity every time, so the cache has no
-stable key for it. Use `load_file/1` for a module you instantiate many times.
+You load a module once and instantiate it as often as you like. Each
+`instantiate/2` gives you a new instance that shares nothing with the others.
+`load_file/1` keeps the module in a cache, so loading the same file again is
+cheap. `compile/1`, used above, does not use that cache. Where to load a
+module and why is in
+[Load modules once, at startup](embedding.md#load-modules-once-at-startup).
 
 Each section of this page starts from a clean shell. If you paste them all
 into one shell, run `f().` between sections, so that you can bind names like
@@ -202,7 +199,8 @@ work, and [security.md](security.md) for what limits do not cover.
 
 ## Next
 
-- [embedding.md](embedding.md): instance lifetime, ownership, and limits
+- [Hold modules and instances](embedding.md): loading, ownership, supervision
+  and limits
 - [host-functions.md](host-functions.md): calling Erlang from WebAssembly
 - [guests.md](guests.md): producing a module, and which form you want
 - [wasi.md](wasi.md): capabilities, preopened directories, sockets

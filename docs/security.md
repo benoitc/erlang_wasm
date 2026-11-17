@@ -19,7 +19,7 @@ important one.
 | **page budget** | the node-wide limit on linear-memory pages, set with `wasm_engine:set_page_limit/1`. |
 | **fuel** | a work budget: the guest stops when it has done that much work. |
 | **worker** | a process that owns an instance and can be killed when a call takes too long. See [Using workers](worker.md). |
-| **grant** | a permission you give a WASI guest, such as a directory or an address. See [WASI](wasi.md). |
+| **grant** | a permission you give a WASI guest, such as a directory or an address. See [WASI preview 1](wasi.md). |
 
 More terms are in the [glossary](concepts.md#glossary).
 
@@ -346,4 +346,4 @@ writable only by the node's user, as you do `code_cache_dir`.
 
 ## Read this next
 
-[WASI](wasi.md), for the capabilities you grant.
+[WASI preview 1](wasi.md), for the capabilities you grant.

@@ -60,7 +60,7 @@ See [Host functions](host-functions.md).
 **WASI** is a standard set of imports for files, clocks, random data and
 networking. You grant each one by name, for example a directory or a network
 address. Anything you do not grant does not exist for the guest. See
-[WASI](wasi.md).
+[WASI preview 1](wasi.md).
 
 **Linear memory** is the guest's byte array. The guest can make it larger
 while it runs. Numbers pass directly as call arguments. Strings and binaries
@@ -235,17 +235,17 @@ internals pages use come last.
 | **atom** | a named constant, such as `ok` or `trap`. The node keeps every atom forever and has a fixed maximum, so the runtime never turns guest data into atoms | [Design principles](design-principles.md#guest-data-never-becomes-an-atom) |
 | **behaviour** | an Erlang interface: the list of callback functions a module must export to play a given role | [Writing an adapter](worker-contract.md) |
 | **BEAM** | the Erlang virtual machine, which runs Erlang code; "BEAM code" is code compiled for it | [Architecture](architecture.md) |
-| **ETS table** | an in-memory table that belongs to one process and is deleted when that process exits | [Embedding](embedding.md) |
+| **ETS table** | an in-memory table that belongs to one process and is deleted when that process exits | [Hold modules and instances](embedding.md) |
 | **heap** | the memory of one Erlang process, where its data lives; each process has its own | [Tuning](tuning.md) |
-| **link**, **trap exits** | a link connects two processes so that when one exits, the other is told or exits too; a process that traps exits receives a message instead of exiting | [Put it in an OTP application](otp.md) |
+| **link**, **trap exits** | a link connects two processes so that when one exits, the other is told or exits too; a process that traps exits receives a message instead of exiting | [Hold modules and instances](embedding.md) |
 | **mailbox** | the queue of messages a process has received; it handles them one at a time | [Using workers](worker.md) |
 | **NIF** | a "native implemented function": C code loaded into the BEAM and called like an Erlang function | [Design principles](design-principles.md#pure-erlang-not-a-binding) |
 | **node** | one running BEAM, with all its processes | [Architecture](architecture.md) |
-| **OTP application** | a packaged Erlang component that starts and stops as a unit; this runtime is the application `wasm` | [Put it in an OTP application](otp.md) |
+| **OTP application** | a packaged Erlang component that starts and stops as a unit; this runtime is the application `wasm` | [Hold modules and instances](embedding.md) |
 | **process** | a lightweight Erlang thread with its own memory and mailbox; it can be killed without affecting the others | [Using workers](worker.md) |
 | **reduction** | the unit of work the BEAM counts to share the CPU: a process runs for a fixed number of reductions, then another process gets its turn. It is not a time limit | [Limits, fuel and deadlines](#limits-fuel-and-deadlines) |
 | **scheduler** | one BEAM thread that runs processes, usually one per CPU core; it switches between processes so that no process keeps a core | [Limits, fuel and deadlines](#limits-fuel-and-deadlines) |
-| **supervisor**, **supervision tree** | a process that starts other processes and restarts them when they crash; supervisors nested inside each other form a tree | [Put it in an OTP application](otp.md) |
+| **supervisor**, **supervision tree** | a process that starts other processes and restarts them when they crash; supervisors nested inside each other form a tree | [Hold modules and instances](embedding.md) |
 | **word** | the BEAM's unit of process memory: 8 bytes on a 64-bit system | [The compiled tier](compiled-tier.md) |
 
 ### Runtime terms
@@ -256,13 +256,13 @@ internals pages use come last.
 | **async ABI** | the Canonical ABI's `async func`, `stream` and `future`; called with `wasm_component:call_async/4` | [Components](components.md) |
 | **`baseline`, `full`** | the two compile levels: `full` code runs faster, `baseline` code compiles faster | [The compiled tier](compiled-tier.md) |
 | **Canonical ABI** | the rules for how a component-level value (a string, a record, a handle) is stored in a core module's memory and read back | [Components](components.md) |
-| **capability** | a permission granted by supplying an import, such as a directory or an address | [WASI](wasi.md) |
+| **capability** | a permission granted by supplying an import, such as a directory or an address | [WASI preview 1](wasi.md) |
 | **class**, **kind** | the two fields that classify an error: one of five classes (`malformed`, `invalid`, `link`, `trap`, `exhaustion`) and a kind your code can match on | [above](#guest-errors-are-returned-as-values) |
 | **code cache** | compiled BEAM modules saved on disk under `code_cache_dir`, so a restart does not compile them again | [The compiled tier](compiled-tier.md) |
 | **command**, **reactor** | a guest that runs `main` once and exits, compared with one that exports functions and stays ready | [Producing a module](guests.md) |
 | **compiled tier** | translating the functions a guest runs most into BEAM code, through Core Erlang | [The compiled tier](compiled-tier.md) |
 | **component** | a Component Model binary: core modules plus typed interfaces, instantiated with `wasm_component` | [Components](components.md) |
-| **content hash** | a checksum of a module's bytes; two identical files have the same hash, so the runtime can reuse its work | [Embedding](embedding.md) |
+| **content hash** | a checksum of a module's bytes; two identical files have the same hash, so the runtime can reuse its work | [Hold modules and instances](embedding.md) |
 | **Core Erlang** | an intermediate language inside the Erlang compiler; the compiled tier generates it | [The compiled tier](compiled-tier.md) |
 | **deadline** | the wall-clock time a call may take; the process that owns the instance kills it when the time passes | [Using workers](worker.md) |
 | **export**, **import** | a guest function the host can call, and an operation the host supplies to the guest | [above](#the-guest-asks-erlang-decides) |
@@ -276,11 +276,11 @@ internals pages use come last.
 | **linear memory** | the guest's byte array, which it can grow; measured in pages of 64 KiB | [Memory](memory.md) |
 | **load rate** | how many new modules the module cache decodes in one second: 50 unless you set `max_module_loads_per_second`. Past it, `wasm:load/1` answers `{error, {load_rate_exceeded, 50}}`. Loading bytes that are already in the cache is not counted | [Modules are loaded once](design-principles.md#modules-are-loaded-once) |
 | **module**, **instance** | validated code, and one running copy of it with its own state | [above](#who-runs-what) |
-| **module cache** | one decoded and validated copy of each module per node, found by its content hash | [Put it in an OTP application](otp.md) |
-| **owner** | the process responsible for an instance or an image; when it exits, what it holds is released | [Embedding](embedding.md) |
+| **module cache** | one decoded and validated copy of each module per node, found by its content hash | [Hold modules and instances](embedding.md) |
+| **owner** | the process responsible for an instance or an image; when it exits, what it holds is released | [Hold modules and instances](embedding.md) |
 | **page** | a linear-memory page is 64 KiB; a snapshot image is copied in smaller pages of 4 KiB | [Memory](memory.md) |
 | **page budget** | the maximum number of linear-memory pages for the whole node, kept by `wasm_engine` | [Memory](memory.md) |
-| **preview 1**, **0.2**, **0.3** | the WASI versions: preview 1 for core modules, 0.2 and 0.3 for components | [WASI](wasi.md), [WASI 0.3](wasi-0-3.md) |
+| **preview 1**, **0.2**, **0.3** | the WASI versions: preview 1 for core modules, 0.2 and 0.3 for components | [WASI preview 1](wasi.md), [WASI 0.3](wasi-0-3.md) |
 | **profile** | the `profile` option of `wasm:instantiate/3`: `plugin` or `script`, one name that sets the compile options for a kind of workload. Two other uses of the word are different things: `script_v1` is the protocol the shipped adapters speak, and the relaxed SIMD "deterministic profile" is a term from the specification | [The compiled tier](compiled-tier.md) |
 | **reaper** | the process, one per node, that removes what finished requests left on disk | [Worker configuration](worker-reference.md) |
 | **resident cap** | the most the module cache holds at once: 256 modules (`max_resident_modules`) and 2 GiB (`max_resident_module_bytes`). Past it, a load answers `{error, {too_many_modules, 256}}` or `{error, {module_cache_full, Bytes}}` | [Configuration](configuration.md) |
@@ -291,7 +291,7 @@ internals pages use come last.
 | **snapshot** | a saved copy of a guest after it started, restored as a fresh instance for each request | [Snapshots](snapshots.md) |
 | **subtask** | an async call from one component into another that waited before it returned: the caller goes on, and the subtask tells it later that it has returned | [Components](components.md#compose-components) |
 | **trap** | the guest stopped on an error that the specification defines, such as `unreachable`; returned as a value | [Getting started](getting-started.md) |
-| **WASI** | the standard imports for files, clocks, random data and networking | [WASI](wasi.md) |
+| **WASI** | the standard imports for files, clocks, random data and networking | [WASI preview 1](wasi.md) |
 | **worker**, **worker kernel** | a process that owns an instance; `wasm_script_worker` runs one request at a time with a deadline | [Using workers](worker.md) |
 
 ### Words from the internals pages

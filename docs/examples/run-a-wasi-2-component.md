@@ -71,8 +71,8 @@ answered every import from Erlang, through the same path and grant checks
   outside it.
 - The third wrote a file only because you passed `writable => true`.
 
-The same rules apply as in [WASI](../wasi.md): if you leave out a key, the
-component does not have that capability.
+The same rules apply as in [WASI preview 1](../wasi.md): if you leave out a
+key, the component does not have that capability.
 
 **Clean up:**
 

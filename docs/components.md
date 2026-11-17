@@ -11,7 +11,7 @@ bundle built with `wac`), or when you want to connect several components.
 **Do you need this?** Yes, if `wasm-tools print your.wasm` starts with
 `(component ...)`, or your build targets `wasm32-wasip2`. No, for a core module
 (`(module ...)`) of functions over the memory you give it: use
-[Embedding](embedding.md) instead.
+[Hold modules and instances](embedding.md) instead.
 
 You use two modules: `wasm_component` to decode, instantiate and call, and
 `wasi_preview2` for the WASI 0.2 host that a component imports. Components
@@ -54,9 +54,39 @@ ok = wasm_component:destroy(Inst).
 
 The third argument is the export's signature as `{Params, Result}`: `Params` is
 a list of one descriptor per parameter, and `Result` is one descriptor or
-`none`. You must pass the signature because you cannot get the interface types
-from the `.wasm` file through this call. The signature is the WIT function type,
-written with the descriptors below.
+`none`. The signature is the WIT function type, written with the descriptors
+below. You write it by hand because the runtime reads types out of the binary
+only where it must, to connect composed components and to check resource
+handles; a direct call takes its value types from you.
+
+## Name an export
+
+The second argument of `call/4` is the export's name. `exports/1` lists the
+names at the top of a component: its own functions, and the interfaces it
+exports:
+
+<!-- check: run -->
+```erlang
+{ok, CounterBytes} = file:read_file("test/fixtures/component/counter.component.wasm"),
+{ok, C} = wasm_component:instantiate(CounterBytes),
+wasm_component:exports(C).
+%% => [~"example:counter/counters"]
+```
+
+A function inside an exported interface is named by the interface, then `#`,
+then the function. A resource's functions carry a prefix in brackets:
+
+| in the WIT | the name you pass |
+| --- | --- |
+| `export run: func()`, a function of the world | `~"run"` |
+| `make-counter`, in the exported interface `example:counter/counters` | `~"example:counter/counters#make-counter"` |
+| the `constructor` of resource `counter` | `~"example:counter/counters#[constructor]counter"` |
+| the method `increment` of `counter` | `~"example:counter/counters#[method]counter.increment"` |
+| a static function `from-list` of resource `fields` | `~"Interface#[static]fields.from-list"` |
+| the destructor of `counter`, for `drop_resource/3` | `~"example:counter/counters#[dtor]counter"` |
+
+Write the interface name exactly as `exports/1` lists it, with its version
+when it has one, such as `wasi:cli/run@0.2.0#run`.
 
 ## Describe the signature
 
@@ -73,14 +103,45 @@ list and in the result of `call/4`:
 | `{list, D}` | `list<D>` | a list of `D` values (a binary for `{list, u8}`) |
 | `{record, [{Name, D}]}` | `record` | a map `#{Name => value}` |
 | `{tuple, [D]}` | `tuple<...>` | a tuple |
-| `{variant, [{Name, D \| none}]}` | `variant` | `{Name, Payload}` or `Name` |
+| `{variant, [{Name, D \| none}]}` | `variant` | `{Name, Payload}`; `{Name, undefined}` for a case with no payload |
 | `{enum, [Name]}` | `enum` | a `Name` binary |
 | `{option, D}` | `option<D>` | `{some, V}` or `none` |
 | `{result, OkD \| none, ErrD \| none}` | `result<Ok, Err>` | `{ok, V}` / `{error, E}` |
 | `{flags, [Name]}` | `flags` | a list of the set `Name`s |
 
-So a guest exporting `run: func(input: list<u8>) -> result<list<u8>, string>` is
-called with:
+## From WIT to a call
+
+Take one function from its WIT to a call. The `vectors` component in
+`test/fixtures/component/` declares, in its `wit/vectors.wit`:
+
+```text
+record point { x: s32, y: s32 }
+export echo-point: func(v: point) -> point;
+```
+
+1. Write each type as a descriptor. `point` is a record of two `s32` fields:
+   `{record, [{~"x", s32}, {~"y", s32}]}`.
+2. Write the signature: one parameter of type `point`, and a result of type
+   `point`, so `{[Point], Point}`.
+3. Pass the record as a map with the field names as binaries, and call:
+
+<!-- check: run -->
+```erlang
+{ok, VBytes} = file:read_file("test/fixtures/component/vectors.component.wasm"),
+{ok, V} = wasm_component:instantiate(VBytes),
+Point = {record, [{~"x", s32}, {~"y", s32}]},
+R = wasm_component:call(V, ~"echo-point", {[Point], Point}, [#{~"x" => 3, ~"y" => -4}]),
+ok = wasm_component:destroy(V),
+R.
+%% => {ok, #{~"x" := 3, ~"y" := -4}}
+```
+
+`echo-point` is a function of the world, not of an interface, so its name has
+no `#`. `wasm_component_vectors_SUITE` makes the same call, and one for every
+other descriptor in the table.
+
+A guest exporting `run: func(input: list<u8>) -> result<list<u8>, string>` is
+called the same way:
 
 ```erlang
 Sig = {[{list, u8}], {result, {list, u8}, string}},
@@ -160,19 +221,30 @@ call its methods, and drop it when you are done.
 
 The handle is a small integer. It is an index into the instance's handle
 table, not an address inside the guest. In a signature, a resource type is
-`{own, TypeIndex}` or `{borrow, TypeIndex}`. A plain `u32` works the same,
-because the runtime checks every handle against the export's own signature:
+`{own, TypeIndex}` or `{borrow, TypeIndex}`. `TypeIndex` is the resource
+type's position in the component's type list (the numbered types the binary
+declares). The runtime checks each handle against the type the component
+itself declares for that export, not against the number you write. So `0`
+works for any resource, and so does a plain `u32`.
 
+With the `counter` component from [Name an export](#name-an-export), create a
+counter and add 1 to it. A method takes the handle as its first parameter:
+
+<!-- check: run -->
 ```erlang
-{ok, Handle} = wasm_component:call(Inst, ~"[constructor]counter", {[u32], {own, 0}}, [41]),
-{ok, 42} = wasm_component:call(Inst, ~"[method]counter.increment", {[{borrow, 0}], u32}, [Handle]).
+Q = fun(Name) -> <<"example:counter/counters#", Name/binary>> end,
+{ok, Handle} = wasm_component:call(C, Q(~"[constructor]counter"), {[u32], {own, 0}}, [41]),
+wasm_component:call(C, Q(~"[method]counter.increment"), {[{borrow, 0}, u32], u32}, [Handle, 1]).
+%% => {ok, 42}
 ```
 
 Drop a handle with `drop_resource/3`, naming the resource's destructor export.
 It runs the destructor once and returns `ok`:
 
+<!-- check: run -->
 ```erlang
-ok = wasm_component:drop_resource(Inst, ~"[dtor]counter", Handle).
+wasm_component:drop_resource(C, Q(~"[dtor]counter"), Handle).
+%% => ok
 ```
 
 Every handle is checked before the guest runs. If a check fails, the call
@@ -184,9 +256,12 @@ is not called:
 | a handle already dropped, dropped twice, or never handed out | `resource_not_live` | `handle`, `operation` |
 | a handle of one resource type where another is expected | `resource_wrong_type` | `handle`, `expected`, `actual` |
 
+<!-- check: run -->
 ```erlang
 {error, #{class := trap, kind := resource_not_live}} =
-    wasm_component:drop_resource(Inst, ~"[dtor]counter", Handle).
+    wasm_component:drop_resource(C, Q(~"[dtor]counter"), Handle),
+wasm_component:destroy(C).
+%% => ok
 ```
 
 - Each instance has its own table. A handle from one instance means nothing
@@ -263,8 +338,14 @@ component when it starts.
 - Strings are passed as UTF-8 by default. They are passed as UTF-16 or as
   Latin-1+UTF-16 when the component declares that encoding. You do not choose
   it.
+- `instantiate/3` takes `loader => compile` to build the core modules in the
+  calling process, or `loader => load` for the module cache. Leave it out and
+  it picks the cache while the `wasm` application runs. The WASI runners spell
+  the same choice `compile => true`, and do not pick by themselves; see
+  [Options from preview 1](wasi-0-2.md#options-from-preview-1).
 
 ## Read this next
 
 [Use a component resource](examples/use-a-component-resource.md), then
-[Security](security.md).
+[Security](security.md). To change the Component Model code itself, read
+[Component internals](component-internals.md).

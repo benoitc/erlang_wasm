@@ -43,4 +43,4 @@ ok = wasm:destroy(Inst).
 
 ## Read this next
 
-The guide behind this example: [Embedding](../embedding.md).
+The guide behind this example: [Hold modules and instances](../embedding.md).

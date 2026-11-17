@@ -5,10 +5,10 @@ WebAssembly specification test suite. Use it to find out whether your module
 will run, and roughly what it costs.
 
 How the garbage collector works is in [Garbage collection](gc.md), how the
-WASI sandboxes are enforced is in [WASI](wasi.md), and the reasons behind the
-runtime's design are in the [design notes](design-notes.md). How each suite
-was brought up, and the defects that turned up on the way, are in the record:
-`test/audit/CONFORMANCE.md`.
+WASI sandboxes are enforced is in [WASI preview 1](wasi.md), and the reasons
+behind the runtime's design are in the [design notes](design-notes.md). How
+each suite was brought up, and the defects that turned up on the way, are in
+the record: `test/audit/CONFORMANCE.md`.
 
 What the conformance figure means, exactly: every assertion of the official
 core test suite passes, 65,481 of them, at the commit
@@ -18,7 +18,8 @@ every WebAssembly proposal: the threads proposal is implemented and checked by
 its own suite (see [Threads](#threads)), and a proposal not named on this page
 is not implemented. The Component Model and WASI are not part of the core
 specification. What they cover, and what they do not, is in
-[Components](components.md), [WASI](wasi.md) and [WASI 0.3](wasi-0-3.md).
+[Components](components.md), [WASI preview 1](wasi.md) and
+[WASI 0.3](wasi-0-3.md).
 
 ## What works
 
@@ -51,8 +52,8 @@ specification. What they cover, and what they do not, is in
 | Link-time import type checking (kind, limits, signatures, mutability) | complete |
 | Mutable globals shared by reference between instances | complete |
 | Module cache keyed by content hash | complete |
-| Optional native path resolution, closing the WASI time-of-check-to-time-of-use race ([WASI](wasi.md)) | complete |
-| WASI Preview 1: 45 syscalls, capability-based filesystem | complete |
+| Optional native path resolution, closing the WASI time-of-check-to-time-of-use race ([WASI preview 1](wasi.md)) | complete |
+| WASI preview 1: 45 syscalls, capability-based filesystem ([list](#wasi-preview-1)) | complete |
 | Runs unmodified Rust `wasm32-wasip1` and `clang -O2` output | complete |
 | Text format: `.wat` modules and `.wast` scripts | complete |
 | Compiling the most used functions to Core Erlang, with a cache on disk | complete, off by default |
@@ -215,6 +216,47 @@ garbage collection support cost code that does not use it, are in
 `test/audit/PERF.md`, section "The feature page's benchmarks (from
 docs/features.md)". [Tuning a worker host](tuning.md) is about the costs a
 worker host sees.
+
+## WASI preview 1
+
+How the preview 1 host is used and sandboxed is in
+[WASI preview 1](wasi.md). This is what it implements, and how it is checked.
+
+45 syscalls: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`,
+`random_get`, `fd_read`, `fd_write`, `fd_pread`, `fd_pwrite`, `fd_seek`,
+`fd_tell`, `fd_close`, `fd_fdstat_get`, `fd_fdstat_set_flags`,
+`fd_filestat_get`, `fd_filestat_set_size`, `fd_filestat_set_times`,
+`fd_fdstat_set_rights`, `fd_readdir`, `fd_prestat_get`,
+`fd_prestat_dir_name`, `fd_sync`,
+`fd_datasync`, `fd_advise`, `fd_allocate`, `fd_renumber`, `path_open`,
+`path_filestat_get`, `path_filestat_set_times`, `path_create_directory`,
+`path_remove_directory`, `path_unlink_file`, `path_rename`, `path_symlink`,
+`path_readlink`, `path_link`, `proc_exit`, `sched_yield`, `poll_oneoff`,
+`sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown`.
+
+That is enough for Rust's `std::fs`, `std::env`, `thread::sleep` and
+buffered I/O. The eleven socket extension calls that WasmEdge defined are also
+implemented; they are not part of the specification. See
+[Which socket calls you get](wasi.md#which-socket-calls-you-get).
+
+The suites in `test/wasi_*_SUITE.erl` test this project's own reading of
+preview 1. `wasi-testsuite` is written by other people. It is the only test
+here that can show a capability follows the specification exactly, and not
+only our understanding of it.
+
+```sh
+scripts/fetch-suites.sh
+rebar3 ct --suite=test/wasi_conformance_SUITE
+```
+
+All 72 cases pass on the native backend, and 68 of 72 on the fallback. The
+four failures need things Erlang does not give access to.
+`file:write_file_info/3` takes whole seconds, so it cannot set a nanosecond
+timestamp. It also follows symlinks, so it cannot set a link's own times. And
+`file:make_link/2` calls `link()`, which follows symlinks on darwin. The
+conformance suite's baseline lists each one.
+
+Without a checkout the suite skips, so you can keep it in every run.
 
 ## Real toolchain acceptance
 

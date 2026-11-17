@@ -22,7 +22,7 @@ pick the recipe -> read what it names -> test that fails -> change
    address decision through `wasi_net`.
 4. Add a case to the `wasi_*` suite for that area, and one for the refusal: a
    missing capability must answer an errno, not succeed.
-5. Add it to "Which syscalls are implemented" in [WASI](../wasi.md).
+5. Add it to "Which syscalls are implemented" in [WASI preview 1](../wasi.md).
 
 ## Add a WASI 0.2 function or interface
 
@@ -37,7 +37,7 @@ pick the recipe -> read what it names -> test that fails -> change
    second sandbox.
 4. Merge it into `command/1` if a command component needs it.
 5. Test it in the matching `wasm_wasi2_*` suite, and update
-   [Components](../components.md) or [WASI](../wasi.md).
+   [Components](../components.md) or [WASI preview 1](../wasi.md).
 
 ## Add an instruction or a proposal
 
@@ -71,7 +71,7 @@ the files for each opcode space.
    `wasm_script_worker`, where a bad value is refused as `{bad_option, Key,
    Why}`.
 3. Document it in [Worker configuration](../worker-reference.md) or
-   [Embedding](../embedding.md), with its default.
+   [Hold modules and instances](../embedding.md), with its default.
 
 ## Change how memory or the page budget works
 

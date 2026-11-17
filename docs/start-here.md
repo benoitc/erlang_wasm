@@ -38,7 +38,7 @@ that shows you how.
 | you have | you use | read |
 | --- | --- | --- |
 | a core `.wasm` module | `wasm`, and `wasi_preview1` if it imports WASI | [Getting started](getting-started.md) |
-| a program with a `main` (a WASI command) | `wasi` | [WASI](wasi.md) |
+| a program with a `main` (a WASI command) | `wasi` | [WASI preview 1](wasi.md) |
 | a WASI 0.2 or 0.3 component | `wasm_component`, `wasi_preview2`, `wasi_preview3` | [Components](components.md), [WASI 0.2](wasi-0-2.md), [WASI 0.3](wasi-0-3.md) |
 | untrusted code, one instance per request | `wasm_instance_worker` | [Using workers](worker.md) |
 | a script (JavaScript, Python, Lua) sent with each request | `wasm_script_worker` and an adapter | [Hosting scripting languages](scripting.md) |
@@ -64,14 +64,15 @@ Pick the path for what you do. Stop when your question is answered.
    module.
 4. [Producing a module](guests.md): building a `.wasm` this runtime can run.
 5. The [examples](examples/call-an-export.md), one task per page.
-6. [Embedding](embedding.md), [Host functions](host-functions.md) and
+6. [Hold modules and instances](embedding.md),
+   [Host functions](host-functions.md) and
    [Pass data in and out](passing-data.md).
 7. The guide for your case, from the table above.
 
 **You operate it** in production, and want it bounded, fast and safe:
 
 1. [Using workers](worker.md): untrusted code with a deadline.
-2. [Put it in an OTP application](otp.md): loading, ownership, supervision.
+2. [Hold modules and instances](embedding.md): loading, ownership, supervision.
 3. [Configuration](configuration.md): every setting, with its default, and
    [Worker configuration](worker-reference.md) for the worker settings.
 4. [Security](security.md): what the sandbox covers, and what is yours.
@@ -126,7 +127,7 @@ Those functions are supported; the rest of the module is not:
 | `wasm_jit:await/2`, `counts/0`, `diagnostics/0`, `shards/1`, `shard_count/2` | waiting for and inspecting the compiled tier | [The compiled tier](compiled-tier.md) |
 | `wasm_async:host_read/3`, `host_sink/2` | reading a stream that a component returns | [Components](components.md) |
 | `wasm_memory:new/1` | a shared memory for threads | [Features and conformance](features.md) |
-| `wasi_fs:backend/0` | which file backend you got | [WASI](wasi.md) |
+| `wasi_fs:backend/0` | which file backend you got | [WASI preview 1](wasi.md) |
 | `wasm_snapshot_store:purge/0` | emptying the snapshot directory | [Snapshots](snapshots.md) |
 | `wasm_code_cache:purge/0` | emptying the compiled code directory | [The compiled tier](compiled-tier.md) |
 

@@ -197,7 +197,7 @@ fail with `load_rate_exceeded`.
 **Where you see it.**
 
 - Load at startup and keep the handle. See
-  [Load modules once, at startup](otp.md#load-modules-once-at-startup).
+  [Load modules once, at startup](embedding.md#load-modules-once-at-startup).
 - A server that runs a component per request calls
   `wasm_component:hold/1` once, as [HTTP](http.md) does.
 - The three settings are in [Configuration](configuration.md).

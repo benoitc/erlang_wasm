@@ -43,7 +43,7 @@ module cache and the page budget read theirs when the application starts.
 
 | key | default | what it controls | read |
 | --- | ---: | --- | --- |
-| `require_native_fs` | `false` | `true` refuses every directory grant when the file NIF is not loaded, so a guest gets no file system rather than the pure Erlang one | [WASI](wasi.md#symlinks-and-which-backend-you-have) |
+| `require_native_fs` | `false` | `true` refuses every directory grant when the file NIF is not loaded, so a guest gets no file system rather than the pure Erlang one | [WASI preview 1](wasi.md#check-which-backend-you-have) |
 | `scratch_roots` | unset | the directories for request files, as `#{RootId => Dir}`. Set, the reaper starts with the application and cleans what a crashed node left | [Worker configuration](worker-reference.md#per-node-for-the-reaper) |
 | `reaper_options` | `#{}` | the reaper's limits: jobs, queue, retries, timeouts | [Worker configuration](worker-reference.md#per-node-for-the-reaper) |
 | `worker_timeout` | 5000 ms | the deadline `wasm_instance_worker:call/3` uses, and its start function when `limits` has no `timeout` | [Using workers](worker.md#limit-the-work-and-the-time) |
@@ -135,7 +135,7 @@ of the component, and reads these options itself:
 | `resource_closer`, `resource_predrop` | none | functions the runtime calls when the guest drops a host resource | [Component internals](component-internals.md#resources-and-host-handles) |
 
 The WASI hosts take their own options, such as directories, environment and
-network: see [WASI](wasi.md), [WASI 0.2](wasi-0-2.md) and
+network: see [WASI preview 1](wasi.md), [WASI 0.2](wasi-0-2.md) and
 [WASI 0.3](wasi-0-3.md).
 
 ## Worker options

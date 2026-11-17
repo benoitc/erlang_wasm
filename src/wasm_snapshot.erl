@@ -60,6 +60,8 @@ single most important sentence here.
 -export([owner/1, with_owner/2, build/2]).
 -export([image_cost/1]).
 -export([to_parts/1, from_parts/3, logical_bytes/1]).
+%% One core of a component: its defined state only, sibling references kept.
+-export([capture_part/3, restore_part/4, lay_siblings/3]).
 
 -include("wasm.hrl").
 -include("wasm_exec.hrl").
@@ -99,7 +101,13 @@ single most important sentence here.
           %% image is an Erlang term and the BEAM will collect it, but a term
           %% cannot say "I am gone", and two things have to be given back when
           %% it is.
-          owner         :: undefined | pid()
+          owner         :: undefined | pid(),
+          %% `all' for an instance on its own. For one core of a component,
+          %% how many memories, tables and globals it imports: those come
+          %% from a sibling core at restore, so only what follows them is
+          %% in `mems', `tables' and `globals'.
+          imported = all :: all | {non_neg_integer(), non_neg_integer(),
+                                   non_neg_integer()}
          }).
 
 -doc """
@@ -722,6 +730,166 @@ relocate(Tuple, From, To) ->
 
 reloc({funcref, From, F}, From, To) -> {funcref, To, F};
 reloc(V, _From, _To)                -> V.
+
+%%% ------------------------------------------------------- component parts ---
+
+-doc """
+Capture one core of a component: what it defines, not what it imports.
+
+The component captures its cores together, under their leases, and checks
+their imports itself, by where each function came from; so this checks no
+import hook and refuses no imported memory, table or global, which a sibling
+core defines and the component's link wires again at restore. A reference to
+a sibling core's function, in a table or a global, is kept as
+`{sibling, CoreIndex, Func}`, `Siblings` naming each sibling instance's core
+index. Everything else is checked as for an instance on its own.
+
+The part has no owner and no pages of its own: the component reserves once
+for every part and builds each with `build/2` under that one record.
+""".
+-spec capture_part(#inst{}, wasm_module_cache:handle(),
+                   #{module := #module{}, siblings := #{reference() => non_neg_integer()}}) ->
+          {ok, snapshot()} | {error, wasm_error:error()}.
+capture_part(#inst{id = Id} = Inst, Handle, #{module := M, siblings := Sibs}) ->
+    {NM, NT, NG} = Imported = imported_counts(M),
+    #mut{globals = Gs0, tables = Ts, mems = Mems,
+         dropped_elems = DE, dropped_datas = DD} = wasm_instance:mut(Inst),
+    Gs = defined(deref(Gs0), NG),
+    Tables = lists:nthtail(NT, contents(Ts)),
+    Checks = [fun() -> no_shared_memory(Inst) end,
+              fun() -> empty_heap(Inst) end,
+              fun() -> own_or_sibling(tuple_to_list(Gs) ++ lists:append(Tables),
+                                      Id, Sibs) end],
+    case lists:foldl(fun(_C, {error, _} = E) -> E; (C, ok) -> C() end, ok, Checks) of
+        {error, _} = E ->
+            E;
+        ok ->
+            Captured = [capture_mem(Mem) || Mem <- lists:nthtail(NM, tuple_to_list(Mems))],
+            NFuncs = func_count(M),
+            {ok, #snapshot{id = make_ref(), handle = Handle, version = ~"1",
+                           key = undefined, source = Id,
+                           globals = sibling_marks(Gs, Sibs),
+                           tables = [pack_table(marks(T, Sibs), Id, NFuncs) || T <- Tables],
+                           mems = Captured, dropped_elems = DE, dropped_datas = DD,
+                           hooks = #{}, bytes = image_cost(Captured),
+                           img_res = undefined, owner = undefined,
+                           imported = Imported}}
+    end.
+
+imported_counts(#module{imports = Imports}) ->
+    Count = fun(Tag) -> length([1 || #import{desc = D} <- Imports, element(1, D) =:= Tag]) end,
+    {Count(mem), Count(table), Count(global)}.
+
+defined(Tuple, N) -> list_to_tuple(lists:nthtail(N, tuple_to_list(Tuple))).
+
+own_or_sibling(Values, Id, Sibs) ->
+    case [V || V <- Values, not admissible(V, Id), not sibling_ref(V, Sibs)] of
+        [] -> ok;
+        [V | _] -> refuse(foreign_reference_not_snapshottable,
+                          ~"this value cannot be captured", #{shape => shape_of(V)})
+    end.
+
+sibling_ref({funcref, Other, F}, Sibs) -> is_integer(F) andalso is_map_key(Other, Sibs);
+sibling_ref(_, _Sibs) -> false.
+
+marks(Elems, Sibs) -> [mark(V, Sibs) || V <- Elems].
+
+sibling_marks(Tuple, Sibs) -> list_to_tuple(marks(tuple_to_list(Tuple), Sibs)).
+
+mark({funcref, Other, F} = V, Sibs) ->
+    case maps:find(Other, Sibs) of
+        {ok, Core} -> {sibling, Core, F};
+        error -> V
+    end;
+mark(V, _Sibs) -> V.
+
+-doc """
+Restore one core of a component over `M` with `Bindings`, which the
+component's link built and which carry the imported state. Its sibling
+references are left null and handed back, `[{table, Index, Slot, Core, Func}
+| {global, Index, Core, Func}]`, for `lay_siblings/3` once every core exists:
+one may name a core restored after this one.
+""".
+-spec restore_part(snapshot(), #module{}, map(), map()) ->
+          {ok, #inst{}, list()} | {error, wasm_error:error()}
+        | {error, wasm_error:error(), #inst{}}.
+restore_part(#snapshot{imported = {NM, _, _}} = S, M, Bindings, Opts) ->
+    MemOpts = maps:from_list(
+                [{NM + I, #{image => Image, image_res => S#snapshot.img_res}}
+                 || {I, #{image := Image}} <- lists:enumerate(0, S#snapshot.mems)]),
+    case wasm_instance:new(M, Bindings,
+                           Opts#{module_handle => S#snapshot.handle,
+                                 segments => false, memory_opts => MemOpts}) of
+        {error, _} = E -> E;
+        {ok, Inst} ->
+            case wasm_error:capture(fun() -> lay_part(S, Inst) end) of
+                {ok, Pending} -> {ok, Inst, Pending};
+                {error, E} -> {error, E, Inst}
+            end
+    end.
+
+lay_part(#snapshot{source = From, imported = {NM, NT, NG}} = S, #inst{id = To} = Inst) ->
+    #mut{mems = Mems, tables = Tables, globals = Gs} = Current = wasm_instance:mut(Inst),
+    {ImpMems, OwnMems} = lists:split(NM, tuple_to_list(Mems)),
+    Restored = restore_mems(OwnMems, S#snapshot.mems),
+    OwnTables = lists:nthtail(NT, tuple_to_list(Tables)),
+    {Plain, TPending} = split_siblings(S#snapshot.tables, NT),
+    ok = restore_tables(OwnTables, Plain, From, To),
+    {ImpGs, OwnGs} = lists:split(NG, tuple_to_list(Gs)),
+    Captured = tuple_to_list(S#snapshot.globals),
+    GPending = [{global, NG + I, Core, F}
+                || {I, {sibling, Core, F}} <- lists:enumerate(0, Captured)],
+    Values = [case V of {sibling, _, _} -> null; _ -> reloc(V, From, To) end
+              || V <- Captured],
+    Globals = restore_globals(list_to_tuple(OwnGs), list_to_tuple(Values)),
+    ok = wasm_instance:set_mut(
+           Inst, Current#mut{mems = list_to_tuple(ImpMems ++ Restored),
+                             globals = list_to_tuple(ImpGs ++ tuple_to_list(Globals)),
+                             dropped_elems = S#snapshot.dropped_elems,
+                             dropped_datas = S#snapshot.dropped_datas}),
+    TPending ++ GPending.
+
+%% The tables with each sibling reference null, and where those go.
+split_siblings(Tables, NT) ->
+    Indexed = lists:enumerate(NT, Tables),
+    Plain = [case T of
+                 B when is_binary(B) -> B;
+                 L -> [case V of {sibling, _, _} -> null; _ -> V end || V <- L]
+             end || {_, T} <- Indexed],
+    Pending = [{table, TI, Slot, Core, F}
+               || {TI, L} <- Indexed, is_list(L),
+                  {Slot, {sibling, Core, F}} <- lists:enumerate(0, L)],
+    {Plain, Pending}.
+
+-doc """
+Write the sibling references `restore_part/4` handed back, now that every
+core exists: `Cores` maps a core index to its restored instance. Each goes
+into the core's own table or global cell, so a core that imports it sees the
+same one.
+""".
+-spec lay_siblings(#inst{}, list(), #{non_neg_integer() => #inst{}}) -> ok.
+lay_siblings(_Inst, [], _Cores) ->
+    ok;
+lay_siblings(Inst, Pending, Cores) ->
+    Ref = fun(Core, F) -> {funcref, (maps:get(Core, Cores))#inst.id, F} end,
+    #mut{tables = Tables, globals = Gs} = Current = wasm_instance:mut(Inst),
+    lists:foreach(fun({table, TI, Slot, Core, F}) ->
+                          ok = wasm_table:set(element(TI + 1, Tables), Slot, Ref(Core, F));
+                     (_) -> ok
+                  end, Pending),
+    Gs1 = lists:foldl(
+            fun({global, GI, Core, F}, Acc) ->
+                    G = element(GI + 1, Acc),
+                    case wasm_global:is_global(G) of
+                        true -> ok = wasm_global:set(G, Ref(Core, F)), Acc;
+                        false -> setelement(GI + 1, Acc, Ref(Core, F))
+                    end;
+               (_, Acc) -> Acc
+            end, Gs, Pending),
+    case Gs1 =:= Gs of
+        true -> ok;
+        false -> wasm_instance:set_mut(Inst, Current#mut{globals = Gs1})
+    end.
 
 %%% ----------------------------------------------------------------- info ---
 

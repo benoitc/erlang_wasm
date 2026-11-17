@@ -713,6 +713,13 @@ link(Graph, EntryModIdx, HostResolve, Opts) ->
            comp_funcs => #{}, n_pf => 0, built => [], entry_mod => EntryModIdx,
            entry_by_mod => undefined, run_inst => undefined,
            core_func_target => #{}, lift_async => #{},
+           %% Where each lowered host function came from, by the value the
+           %% core index space holds: `{Interface, Func}' of the component
+           %% import. A value absent from it is internal to the component.
+           lowered => #{},
+           %% Per built core, newest first: its function imports that come
+           %% from outside the component, `[{CoreKey, {Interface, Func}}]'.
+           externals => [],
            %% The resource types this component DEFINES (a `resource.new` names
            %% only a defined type). Liveness is enforced on drop/rep of these; an
            %% imported or host resource (a WASI stream) is not a defined type and
@@ -723,6 +730,7 @@ link(Graph, EntryModIdx, HostResolve, Opts) ->
             Built = lists:reverse(maps:get(built, S)),
             case entry(S) of
                 {ok, Core}     -> {ok, #{core => Core, cores => Built,
+                                         externals => lists:reverse(maps:get(externals, S)),
                                          export_targets => export_targets(Graph, S),
                                          async_targets => async_targets(Graph, S)}};
                 {error, _} = E -> destroy_built(S), E
@@ -911,20 +919,22 @@ step({canon_lift, CoreFuncIdx, Enc, Async, _Rl, _P, _Ft}, S) ->
         {error, _} = E -> E
     end;
 step({canon_lower, CompFuncIdx, ReallocIdx, Enc, Async}, S) ->
+    CompFunc = maps:get(CompFuncIdx, maps:get(comp_funcs, S)),
+    Origin = origin(CompFunc),
     case supported_encoding(Enc) of
         {error, _} = E ->
             E;
         ok ->
-            case host_fun(maps:get(CompFuncIdx, maps:get(comp_funcs, S)), S) of
+            case host_fun(CompFunc, S) of
                 {ok, {async_import, Sig, Fun, {producer, PFun}}} ->
                     %% A suspending async import: completes later via a subtask event.
-                    {ok, host_side(S, wasm_async:async_lower(Sig, Fun, PFun))};
+                    {ok, external_side(S, wasm_async:async_lower(Sig, Fun, PFun), Origin)};
                 {ok, {async_import, Sig, Fun}} ->
                     %% An async import: the guest calls it expecting a subtask status.
-                    {ok, host_side(S, wasm_async:async_lower(Sig, Fun))};
+                    {ok, external_side(S, wasm_async:async_lower(Sig, Fun), Origin)};
                 {ok, Fun} when Async =:= sync ->
                     Realloc = realloc_callable(ReallocIdx, S),
-                    {ok, host_side(S, lowered(Fun, Realloc, Enc, S))};
+                    {ok, external_side(S, lowered(Fun, Realloc, Enc, S), Origin)};
                 {ok, _Fun} ->
                     {error, {async_import_not_registered, CompFuncIdx}};
                 {error, _} = E ->
@@ -1086,6 +1096,19 @@ realloc_callable(Idx, S) ->
 host_side(S, Fun) ->
     bump(S, n_cf, core_funcs, wasm_async:owner_side(Fun)).
 
+%% A lowered component import, recorded as coming from outside the component.
+external_side(S, Fun, Origin) ->
+    N = maps:get(n_cf, S),
+    S1 = host_side(S, Fun),
+    Val = maps:get(N, maps:get(core_funcs, S1)),
+    S1#{lowered => (maps:get(lowered, S1))#{Val => Origin}}.
+
+%% The component import a lowered function stands for: an interface's
+%% function, or a bare function import, keyed as the host map keys it.
+origin({host, Iface, Field}) -> {Iface, Field};
+origin({import_func, Name}) -> {Name, Name};
+origin(_) -> internal.
+
 %% A call back into the guest from the host, which runs where the guest's
 %% call is: in the fiber the owner is serving, if any.
 guest_side(Fun) ->
@@ -1144,7 +1167,8 @@ apply_resource_dtor(_Other, _Rep) ->
 export_val(S, InstIdx, Name) ->
     case maps:get(InstIdx, maps:get(core_insts, S), undefined) of
         {real, Inst} ->
-            wasm:extern(Inst, Name);
+            %% A sibling core of this component: it may be snapshotable.
+            wasm:extern_sibling(Inst, Name);
         {synthetic, Map} ->
             case maps:find(Name, Map) of
                 {ok, Val} -> {ok, Val};
@@ -1181,10 +1205,17 @@ instantiate_core(ModIdx, Args, S) ->
             Opts = maps:get(opts, S),
             Loader = maps:get(loader, Opts, load),
             Limits = link_to(maps:get(anchor, S), maps:without([loader], Opts)),
+            Externals = externals(ImportMap, maps:from_list(Args), S),
+            %% `core_builder' builds the core otherwise, as a restore does:
+            %% given which core this is, in build order.
+            Build = maps:get(core_builder, Opts, fun(_N, M, I, L) -> wasm:instantiate(M, I, L) end),
+            Ordinal = length(maps:get(built, S)),
             case load_core(Loader, Bytes) of
                 {ok, Mod} ->
-                    case wasm:instantiate(Mod, ImportMap, Limits) of
-                        {ok, Inst}     -> {ok, record_inst(S, ModIdx, Inst)};
+                    case Build(Ordinal, Mod, ImportMap, maps:without([core_builder], Limits)) of
+                        {ok, Inst} ->
+                            S1 = record_inst(S, ModIdx, Inst),
+                            {ok, S1#{externals => [Externals | maps:get(externals, S1)]}};
                         {error, _} = E -> E
                     end;
                 {error, _} = E ->
@@ -1193,6 +1224,20 @@ instantiate_core(ModIdx, Args, S) ->
         {error, _} = E ->
             E
     end.
+
+%% A core's function imports that come from outside the component: one the host
+%% set answers directly, or one a `with' argument names whose value is a
+%% lowered component import.
+externals(ImportMap, ArgsMap, S) ->
+    Lowered = maps:get(lowered, S),
+    lists:sort(
+      [{Key, Origin}
+       || {{NS, _} = Key, Val} <- maps:to_list(ImportMap),
+          Origin <- [case maps:is_key(NS, ArgsMap) of
+                         false -> Key;
+                         true -> maps:get(Val, Lowered, internal)
+                     end],
+          Origin =/= internal]).
 
 %% One import at a time: from the source core instance the args name for its
 %% namespace, or, for a namespace with no arg, straight from the host set.

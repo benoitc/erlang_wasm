@@ -85,8 +85,9 @@ context to diagnose it.
 -export([read_memory/3, write_memory/3, memory_size/1]).
 -export([format_error/1]).
 -export([check_module_bytes/1]).
-%% Internal: a function by its index, for `thread.new-indirect'.
--export([call_func/3]).
+%% Internal: a function by its index, for `thread.new-indirect'; an export
+%% handed to a sibling core of the same component, for the component linker.
+-export([call_func/3, extern_sibling/2]).
 
 -define(MAX_MODULE_BYTES, 64 * 1024 * 1024).
 
@@ -1238,6 +1239,14 @@ extern(Inst, Name) ->
         false ->
             extern_1(Inst, Name)
     end.
+
+-doc false.
+%% As `extern/2', for the component linker only: the handle goes to a sibling
+%% core of the same component, which is built, captured and restored with this
+%% one and under the same leases, so a snapshotable core may hand it over.
+-spec extern_sibling(instance(), binary()) -> {ok, extern()} | {error, wasm_error:error()}.
+extern_sibling(Inst, Name) ->
+    extern_1(Inst, Name).
 
 extern_1(Inst, Name) ->
     case wasm_instance:export_kind(Inst, Name) of

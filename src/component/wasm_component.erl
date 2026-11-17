@@ -409,9 +409,9 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
                        fun() -> wasm_component_link:core_imports(Core) end),
     %% An async host import is bound here as the linker binds it, so a
     %% component that never reaches the linker can call one too.
+    Intrinsics = resource_imports(EntryImports, Res),
     Host = maps:map(fun(_Key, P) -> provider(P) end,
-                    resolve_imports(EntryImports, Imports,
-                                    resource_imports(EntryImports, Res))),
+                    resolve_imports(EntryImports, Imports, Intrinsics)),
     %% The export map lets `call/4` reach a core function whose name differs from the
     %% component export name; where they coincide it is the identity and the same-name
     %% fallback in `call/4` covers exports it does not resolve.
@@ -444,7 +444,26 @@ instantiate_valid(#{core := Core, exports := Exports, sec := Sec} = Decoded,
     StrEnc = pre(str_enc, Decoded, fun() -> wasm_component_link:export_encodings(Sec) end),
     Bindings = pre(bindings, Decoded, fun() -> wasm_component_link:export_bindings(Sec) end),
     Async = pre(async_builtins, Decoded, fun() -> async_builtins(Sec) end),
-    with_export_map(Result, ExportMap, StrEnc, Bindings, ResId, Res, Async).
+    %% On the single-core path every import the host set answers comes from
+    %% outside the component, but for the resource intrinsics it defines.
+    Result1 = case {UseSimple, Result} of
+                  {true, {ok, I}} ->
+                      {ok, I#{externals => [[{K, K} || K <- EntryImports,
+                                                      not maps:is_key(K, Intrinsics)]]}};
+                  _ -> Result
+              end,
+    with_recipe(with_export_map(Result1, ExportMap, StrEnc, Bindings, ResId, Res, Async),
+                Decoded, Opts).
+
+%% A snapshotable instance keeps what it was built from, so that an image of it
+%% can build it again: the decoded component, with what `prepare/1' derived,
+%% and the options that are not functions (a closer is given again).
+with_recipe({ok, #{} = Inst}, Decoded, #{snapshotable := true} = Opts) ->
+    {ok, Inst#{recipe => #{decoded => Decoded,
+                           opts => maps:filter(fun(_K, V) -> not is_function(V) end,
+                                               Opts)}}};
+with_recipe(Result, _Decoded, _Opts) ->
+    Result.
 
 %% Whether the component binds any async built-in: only then does a
 %% synchronous call set up what those built-ins read. A section the linker
@@ -497,8 +516,9 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports} = Decoded, Impo
                        end,
             case wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts) of
                 {ok, #{core := Inst, cores := Cores, export_targets := Targets,
-                       async_targets := Async}} ->
+                       async_targets := Async, externals := Externals}} ->
                     {ok, #{core => Inst, exports => Exports, cores => Cores,
+                           externals => Externals,
                            export_targets => Targets, async_targets => Async}};
                 {error, _} = E ->
                     E

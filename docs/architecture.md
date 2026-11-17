@@ -33,26 +33,10 @@ ignore it unless you are working on WASI.
 
 ## Where things are
 
-Each row is one part of the runtime: where a call enters it, the modules, what
-configures it, where you extend it, the suites that cover it, and the page to
-read. `test/` holds every suite named here.
-
-| Part | Enter at | Modules | Configured by | Extend through | Tests | Read |
-| --- | --- | --- | --- | --- | --- | --- |
-| Decode and validate | `wasm:compile/2` | `wasm_decode*`, `wasm_validate*`, `wasm_wat*`, `wasm_types` | none | none | `wasm_spec_SUITE`, `wasm_wat_SUITE`, `wasm_prop_SUITE` | [Adding an instruction](contributing/adding-an-instruction.md) |
-| Instantiate and link | `wasm:instantiate/3`, then `wasm_instance:new/3` | `wasm_instance`, `wasm_table`, `wasm_global`, `wasm_heap` | instantiate options; `table_grow_limit` | host functions | `wasm_linking_SUITE`, `wasm_funcref_SUITE`, the `wasm_gc_*` suites | [Embedding](embedding.md), [Host functions](host-functions.md) |
-| Execute, with limits | `wasm:call/3` | `wasm_exec`, `wasm_error`, `wasm_limits`, `wasm_num*`, `wasm_wait` | the limits map | none | `wasm_trap_effects_SUITE`, `wasm_budget_SUITE` | [The path of a call](#the-path-of-a-call) |
-| Memory and the page budget | `wasm_memory:new/1`, `wasm_memory:grow/2` | `wasm_memory`, `wasm_keeper`, `wasm_engine` | `wasm_engine:set_page_limit/1` | none | `wasm_resource_SUITE`, `wasm_shared_pages_SUITE`, `wasm_paged_memory_SUITE` | [Memory](memory.md) |
-| Compiled tier | `wasm_jit:entry/3`, `wasm_jit:after_call/2` | `wasm_jit`, `wasm_core`, `wasm_code_slots`, `wasm_code_cache` | `compile`, `profile`, `code_cache_dir` | none | `wasm_core_SUITE`, the `wasm_jit_*` suites | [The compiled tier](compiled-tier.md) |
-| Snapshots | `wasm:snapshot/2`, `wasm:restore/3` | `wasm_snapshot`, `wasm_snapshot_owner`, `wasm_snapshot_file`, `wasm_snapshot_store` | `max_snapshot_bytes` | `snapshot_hooks` | `wasm_snapshot_SUITE` | [Snapshots](snapshots.md) |
-| Module cache | `wasm:load/1` | `wasm_module_cache` | `max_resident_modules` | none | `wasm_module_cache_SUITE` | [Put it in an OTP application](otp.md) |
-| WASI preview 1 | `wasi_preview1:imports/1` | `wasi_preview1`, `wasi_fs`, `wasi_path`, `wasi_net`, `wasi_sock`, `wasi_file_nif` | the WASI options | the optional file NIF | the `wasi_*` suites | [WASI](wasi.md) |
-| Components and WASI 0.2 | `wasm_component:instantiate/2`, `wasm_component:call/4` | `wasm_component`, `wasm_component_link`, `wasm_component_types`, `wasm_canon`, `wasm_async`, `wasm_resources`, `wasi_preview2`, `wasi_p2_filesystem`, `wasi_p2_sockets`, `wasi_sock2`, `wasi_preview3`, `wasi_p3_filesystem`, `wasi_p3_sockets`, `wasi_p3_http` | the imports map | `wasm_component:import_fun/2` | the `wasm_component_*`, `wasm_wasi2_*` and `wasm_wasi3_*` suites | [Components](components.md), [WASI 0.2](wasi-0-2.md), [Component internals](component-internals.md) |
-| HTTP | `wasi_http:http/1`, `wasi_http_listener:start/1` | `wasi_http`, `wasi_http_h1`, `wasi_http_h2`, `wasi_http_listener` | `http_transport` | the `wasi_http_transport` behaviour | `wasm_wasi2_http_SUITE`, `wasm_wasi2_https_SUITE` | [HTTP](http.md) |
-| Script workers | `wasm_script_worker:start_link/2`, `wasm_script_worker:run/2` | `wasm_script_worker`, the adapters, `wasm_worker_images`, `wasm_worker_reaper`, `wasm_cleanup_manager`, `wasm_cleanup_steward` | worker options; `scratch_roots`, `reaper_options` | the `wasm_worker_adapter` behaviour | the `wasm_worker_*` and `wasm_cleanup_*` suites | [Using workers](worker.md), [Worker internals](worker-internals.md) |
-| Build, packaging, the NIF | `rebar.config`, `scripts/` | `c_src/` | `WASM_NIF_SANITIZE` | none | `wasm_package_SUITE`, `wasm_scripts_SUITE` | [Changing the NIF](contributing/nif.md) |
-| These docs | `docs/`, the module docs | none | `rebar.config` `ex_doc` | none | `wasm_docs_SUITE`, `wasm_architecture_SUITE` | [CONTRIBUTING.md](../CONTRIBUTING.md) |
-| Benchmarks and evidence | `bench/paths/` | none | none | none | `wasm_bench_SUITE` | `test/audit/PERF.md` |
+[Where things are](map.md) has the rest of the map: every directory and
+module with what it does, and for each area of the runtime its entry point,
+modules, configuration, extension point, suites and page. Start there when
+you know what you want to change but not where it lives.
 
 ## The supervision tree
 

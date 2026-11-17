@@ -43,7 +43,7 @@ that shows you how.
 | untrusted code, one instance per request | `wasm_instance_worker` | [Using workers](worker.md) |
 | a script (JavaScript, Python, Lua) sent with each request | `wasm_script_worker` and an adapter | [Hosting scripting languages](scripting.md) |
 | an HTTP handler component | `wasi_http_listener` | [HTTP](http.md) |
-| a change to make in the runtime | [CONTRIBUTING.md](../CONTRIBUTING.md) | [Architecture](architecture.md) |
+| a change to make in the runtime | [CONTRIBUTING.md](../CONTRIBUTING.md) | [Where things are](map.md), [Architecture](architecture.md) |
 
 The library gives you the modules. You bring the guest: the `.wasm` file, or
 for a script the language runtime file and the source code. You also bring
@@ -81,15 +81,17 @@ Pick the path for what you do. Stop when your question is answered.
 **You change it**:
 
 1. [CONTRIBUTING.md](../CONTRIBUTING.md): the checks and the rules.
-2. [Architecture](architecture.md): where things are, and the path of a call.
-3. The internals page for your area: [Memory](memory.md),
+2. [Where things are](map.md): every module, and the suites for each area.
+3. [Architecture](architecture.md): how the modules depend on each other,
+   and the path of a call.
+4. The internals page for your area: [Memory](memory.md),
    [Garbage collection](gc.md), [Worker internals](worker-internals.md) or
    [Component internals](component-internals.md).
-4. [Recipes](contributing/recipes.md): the files, the test and the page for
+5. [Recipes](contributing/recipes.md): the files, the test and the page for
    each kind of change.
-5. [Testing](contributing/testing.md) and
+6. [Testing](contributing/testing.md) and
    [Measuring](contributing/measuring.md).
-6. [Design notes](design-notes.md): why it is built this way.
+7. [Design notes](design-notes.md): why it is built this way.
 
 ## Supported API
 

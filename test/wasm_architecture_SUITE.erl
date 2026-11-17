@@ -23,7 +23,8 @@ all() ->
      the_layer_diagram_names_every_module,
      the_page_counts_the_modules_right,
      every_function_a_moduledoc_names_exists,
-     every_module_and_page_is_in_the_docs_site].
+     every_module_and_page_is_in_the_docs_site,
+     every_module_is_on_the_map].
 
 %% The three components `docs/architecture.md' names, and why each one is there.
 %%
@@ -215,6 +216,20 @@ every_module_and_page_is_in_the_docs_site(_) ->
     ?assert(length(Pages) > 20),
     ?assertEqual([], Pages -- Extras, "pages missing from ex_doc extras"),
     ?assertEqual([], Pages -- InGroups, "pages in no ex_doc group").
+
+%% `docs/map.md' is where a contributor looks a module up: what it does,
+%% whether it is supported, and the suites that cover its area. A map nobody
+%% checks rots. The source map in `AGENTS.md' it replaced had been missing ten
+%% modules, and nothing said so. Each module has to appear on the page as
+%% `` `name` ``, in backticks, so a module named only inside a longer word
+%% does not count.
+every_module_is_on_the_map(_) ->
+    {ok, B} = file:read_file(repo_file("docs/map.md")),
+    Page = binary_to_list(B),
+    Missing = [M || M <- lists:sort(modules()),
+                    string:find(Page, "`" ++ atom_to_list(M) ++ "`")
+                        =:= nomatch],
+    ?assertEqual([], Missing, "modules missing from docs/map.md").
 
 %%% ---------------------------------------------------------------- helpers ---
 

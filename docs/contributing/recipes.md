@@ -139,7 +139,10 @@ Implement the `wasi_http_transport` behaviour, one `request/2` callback, as
    level listing; a call upward means a new cycle, which
    `wasm_architecture_SUITE` refuses.
 2. Open it with a `-moduledoc` saying what it is.
-3. Add it to a group in the `ex_doc` section of `rebar.config`: a group
+3. Give it a line in [Where things are](../map.md), under its directory,
+   and add it to its area's row; `wasm_architecture_SUITE` fails on a module
+   the map does not name.
+4. Add it to a group in the `ex_doc` section of `rebar.config`: a group
    whose name starts with "Internals: ", unless users are meant to call it.
    Then it also goes in the Supported API list of
    [Start here](../start-here.md#supported-api).

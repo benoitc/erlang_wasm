@@ -1,54 +1,34 @@
 # Agents
 
-Instructions for AI coding agents working on this project.
+Instructions for AI coding agents working on this project. The contributor
+guide, [CONTRIBUTING.md](CONTRIBUTING.md), applies to you in full; this page
+adds what an agent most often gets wrong.
 
-## Project Overview
+## Project overview
 
 `erlang_wasm` is a WebAssembly runtime implemented in Erlang/OTP. Decoding,
-validation, instantiation, execution, linear memory and WASI preview 1 are all
-here. It is not a binding to Wasmtime, Wasmer, WAMR or wasm3. The only native
-code is an optional file NIF that closes a time-of-check-to-time-of-use window
-in WASI path resolution, and the runtime works without it.
+validation, instantiation, execution, linear memory, the Component Model and
+WASI are all here. It is not a binding to Wasmtime, Wasmer, WAMR or wasm3.
+The only native code is an optional file NIF that closes a
+time-of-check-to-time-of-use window in WASI path resolution, and the runtime
+works without it.
 
 One OTP application, every module prefixed `wasm_` or `wasi_`. The core
 runtime is in `src/`; the Component Model, WASI and the workers each have a
-folder, which is for finding them and not a namespace:
+folder under it, which is for finding them and not a namespace.
 
-```
-src/    Front end: wasm_decode(+_code/_simd/_gc/_atomic), wasm_leb128,
-        wasm_validate(+_code/_simd/_atomic), wasm_wat(+_lex/_sexp/_num/
-        _instr), wasm_wast
-        Runtime: wasm (public facade), wasm_instance, wasm_exec,
-        wasm_memory, wasm_table, wasm_global, wasm_heap, wasm_keeper,
-        wasm_engine, wasm_error, wasm_wait, wasm_types, wasm_module_cache,
-        wasm_lifetime, wasm_snapshot(+_owner/_file/_store)
-        Compiled tier: wasm_jit, wasm_core, wasm_code_slots,
-        wasm_code_cache, wasm_jit_sup
-        Numerics: wasm_num(+_float/_trunc), wasm_simd
-src/component/  wasm_component(+_link/_types), wasm_canon,
-        wasm_resources, wasm_async, wasm_recipe
-src/wasi/  wasi, wasi_preview1, wasi_fs, wasi_path, wasi_net, wasi_sock,
-        wasi_file_nif; WASI 0.2: wasi_preview2, wasi_p2_filesystem,
-        wasi_p2_sockets, wasi_sock2, wasi_http (+_h1/_h2/_listener/_transport);
-        WASI 0.3: wasi_preview3, wasi_p3_filesystem, wasi_p3_sockets,
-        wasi_p3_http
-src/worker/  wasm_instance_worker, wasm_script_worker (the kernel),
-        wasm_worker_adapter (the behaviour), wasm_worker_error, the adapters
-        wasm_javascript(_command), wasm_python(_command), wasm_lua, the kit
-        wasm_adapter_conformance; internal: wasm_worker_reaper,
-        wasm_worker_sup, wasm_script_v1, wasm_worker_fs
-include/    Shared records: wasm.hrl, wasm_exec.hrl, wasi.hrl
-c_src/      The optional file NIF, built by scripts/build-nif.sh
-test/       Common Test only. test/audit/ is the measurement record.
-bench/      Benchmark arms; bench/paths/README.md has the protocol.
-docs/       The guides ex_doc publishes
-```
+- [Where things are](docs/map.md) lists every directory and module, and for
+  each area the entry point, configuration and suites.
+- [Architecture](docs/architecture.md) has the module levels, the cycles and
+  the path of one call.
+- [Recipes](docs/contributing/recipes.md) names the files, the test and the
+  page for each kind of change.
 
 Authoritative behaviour is the suites under `test/` and the module docs.
 
-## Required Checks
+## Required checks
 
-Every change must pass before committing or opening a PR:
+Every change must pass these before you commit or open a pull request:
 
 ```bash
 rebar3 compile      # warnings_as_errors is on
@@ -58,47 +38,12 @@ rebar3 dialyzer
 rebar3 ct           # every suite under test/
 ```
 
-The benchmarks are not among them: `wasm_bench_SUITE` and
-`wasm_gc_bench_SUITE` keep their measurements in a `bench` group, so a plain
-`rebar3 ct` runs only what can fail and `rebar3 bench` runs the numbers.
-
-`make check` runs the four that matter. CI (`.github/workflows/ci.yml`) runs
-them as separate jobs gated on `compile`, and fetches both upstream test suites
-first, at the commits `scripts/fetch-suites.sh` names, because they are not
-vendored and every suite that needs one *skips* when it is absent.
-
-wasmtime's own WASI 0.2 and 0.3 test programs run in a job of their own,
-"wasmtime programs". `scripts/build-wasmtime-p2.sh` builds them from wasmtime
-at a pinned tag, and CI caches the result on that script. The job sets
-`WASM_REQUIRE_WASMTIME_FIXTURES=1`, so a suite that finds no programs fails
-there instead of skipping. To run the same locally, build them once and set
-it:
-
-```sh
-scripts/build-wasmtime-p2.sh
-WASM_REQUIRE_WASMTIME_FIXTURES=1 rebar3 ct --suite=test/wasm_wasi3_p3_SUITE
-```
-
-One 0.3 program, `p3_sockets_tcp_streams`, takes about seven minutes, past
-the suite's 60 s bound for each program. The same job runs it in a step of
-its own, with `WASM_RUN_SLOW_PROGRAMS=1`; a plain `rebar3 ct` skips it. To run
-it locally:
-
-```sh
-WASM_REQUIRE_WASMTIME_FIXTURES=1 WASM_RUN_SLOW_PROGRAMS=1 \
-  rebar3 ct --suite=test/wasm_wasi3_p3_SUITE --case=slow_programs
-```
-
-## Build & Development Commands
-
-```bash
-rebar3 compile
-rebar3 shell
-rebar3 ct --suite=test/wasm_spec_SUITE
-make suites                                   # the upstream suites, pinned
-make bench                                    # the benchmark arms
-rebar3 ex_doc                                 # docs into doc/
-```
+A suite that needs a missing fixture skips, and a skip is green: fetch the
+upstream suites first (`make suites`) and read the skips in the log before
+you report a run as passing. CONTRIBUTING.md has the CI jobs, what each needs
+and what skips there; [Testing](docs/contributing/testing.md) has the
+environment variables, and [Fixtures](docs/contributing/fixtures.md) where
+each fixture comes from.
 
 ## Measure before you claim
 
@@ -109,9 +54,12 @@ This project keeps a measurement record and it is not decoration.
 - `test/audit/ATTEMPTS.md` is what was tried and reverted. Read it before
   proposing an optimisation; several obvious ones are already there with the
   numbers that killed them.
-- `bench/paths/README.md` has the comparison protocol: build the other side
-  somewhere else, interleave the runs, take minimums, and **check the load
-  average first** -- this box has swung between 4 and 84 in one session.
+- [Measuring](docs/contributing/measuring.md) is the protocol, and the only
+  statement of it: write the gates first, build the other side somewhere
+  else, check the load average, run each side in a fresh emulator,
+  interleave both orderings, and compare paired runs. Inside one launch an
+  arm may take the minimum of its rounds; never compare minimums picked
+  across launches.
 
 Three changes to `wasm_exec:run/3`, `branch/3` or `do_call/4` have cost about
 70% on QuickJS while the synthetic loop measured nothing or measured an
@@ -126,45 +74,20 @@ them managed it.
 
 ## Conventions
 
-- Elvis must pass. A new per-module ignore belongs in `rebar.config` with a
-  one-line reason, which is how every ignore already there is written.
-- **There is no formatter.** `erlfmt` would rewrite 16,252 lines across 51
-  files, and it moves aligned trailing comments above the definitions they
-  annotate, which is most of how this code explains itself. The convention is
-  80 columns, kept by review.
-- One pull request per feature or defect family: one branch, with one commit
-  per step or per defect. Do not split a feature across several pull requests,
-  even a large one; stack the steps as commits instead.
-- Pull request descriptions are in plain English, for a reader who does not
-  know the code: say what was wrong and why it matters, then what changes, in
-  everyday words. Explain a project term the first time you use it, keep
-  internal names to the few the reader needs, and do not list the tests or
-  describe the diff. End with the breaking changes, or say there are none.
-- Commit messages: one imperative subject line, body only for the non-obvious
-  "why". No diff restatement, no "generated by" or "co-authored-by" trailers.
+The full rules are in CONTRIBUTING.md: "The rules", "Write code that reads
+like the code around it", "Write documentation the same way" and "Commit and
+open a pull request". The ones to check before every commit:
+
+- Nothing raises, and nothing a guest supplies becomes an atom.
+- Options express what the embedder knows, never an implementation tactic.
+  Do not add a knob for a tactic that wins only on some workloads.
+- Use only documented OTP APIs.
+- Do not run a formatter; keep 80 columns by hand.
 - Do not use the em-dash character in code, docs or messages.
+- A new module needs a level in `docs/architecture.md`, a line in
+  `docs/map.md` and an `ex_doc` group; `wasm_architecture_SUITE` checks all
+  three.
 - Every code block in `README.md`, `docs/` and the module docs is checked by
-  `wasm_docs_SUITE`: labelled with its language, parsed, and every module it
-  names resolved. `getting-started.md` runs as pasted. A block that cannot be
-  checked as written carries an HTML comment saying why; the suite's header
-  lists them.
-- Write documentation task-oriented: second person, one paragraph saying what
-  it is and when you need it, then steps with minimal prose between code
-  blocks.
-- Nothing raises. Malformed input, ill-typed modules, traps and exhausted
-  limits are values carrying a class, a kind, the specification's message and
-  context. Keep it that way.
-- Nothing a guest supplies becomes an atom. The atom table is node-wide and
-  never reclaimed, so a guest that can mint one atom per call is a permanent
-  leak. `wasm_prop_SUITE` asserts both halves.
-- `rebar.lock` is committed: CI keys its build cache on the lock hash.
-- Options express what the embedder knows: semantics and resources, such as
-  limits, timeouts, isolation and whether to compile. They never select an
-  implementation tactic: cache shape, page or memory layout, chunk size, GC
-  strategy, preload mode or generated-code ABI. When a tactic wins only for
-  some workloads, pick it mechanically from what the runtime can observe, or
-  record the trade-off in `test/audit/ATTEMPTS.md` and ship the one default
-  that measures well enough. Do not add a knob for it.
-- Use only documented OTP APIs. A behaviour that holds only through an
-  undocumented call (`process_flag(scheduler, N)` was one) can change under an
-  upgrade without notice; remove the need for it instead.
+  `wasm_docs_SUITE`; label each with its language.
+- One pull request per feature or defect family, one commit per step. Commit
+  messages have no "generated by" or "co-authored-by" trailers.

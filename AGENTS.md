@@ -78,7 +78,10 @@ The full rules are in CONTRIBUTING.md: "The rules", "Write code that reads
 like the code around it", "Write documentation the same way" and "Commit and
 open a pull request". The ones to check before every commit:
 
-- Nothing raises, and nothing a guest supplies becomes an atom.
+- Nothing a guest supplies makes a call raise, and nothing a guest supplies
+  becomes an atom. A guest's failure comes back as `{error, Error}`; the
+  promise and its known exceptions are in
+  [Design principles](docs/design-principles.md#failures-are-values-at-the-guest-boundary).
 - Options express what the embedder knows, never an implementation tactic.
   Do not add a knob for a tactic that wins only on some workloads.
 - Use only documented OTP APIs.

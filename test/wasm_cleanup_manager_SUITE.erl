@@ -1,10 +1,12 @@
 -module(wasm_cleanup_manager_SUITE).
 -moduledoc """
-The cleanup manager's capacity accounting.
+The cleanup manager's capacity accounting, its tracking of the reaper, and its
+job leases.
 
-The manager bounds how many requests may hold cleanup state at once, keyed by
-request id. This is the foundation the steward routing builds on; the lease and
-recovery machinery arrive with later stages.
+The admission cases call `wasm_cleanup_manager:admit/1` and `release/1`
+directly: nothing in `src/` calls them yet, because the reaper still decides
+admission. The other cases check that the manager learns the current reaper's
+generation and that local cleanup jobs stay within `max_cleanup_jobs`.
 """.
 
 -compile([export_all, nowarn_export_all]).

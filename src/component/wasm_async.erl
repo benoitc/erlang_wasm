@@ -25,11 +25,53 @@ only when it has a pending read AND its data can satisfy it, at which point the 
 into guest memory happens and exactly one event is produced). A WAIT never manufactures
 a completion; it delivers only from ingested state.
 
-All per-task state lives in the process dictionary, one live task per process (matching
-the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCKED is
-`-1`, since the operand stack holds signed Erlang integers.
+i32 sentinels are signed: BLOCKED is `-1`, since the operand stack holds
+signed Erlang integers.
+
+## Where its state lives
+
+It is in the process dictionary of the process that owns the component
+instance: the frame (the tasks, handles, waitable-sets and producers of the
+calls into the instance), the frames set aside by a task started inside
+another, and each component instance's cooperative threads. A fiber's or an
+explicit thread's own process keeps only the keys that say whom it serves.
+Every key is `{wasm_async, ...}`, and each is declared as a macro near the
+top of this file with a line saying what it holds.
+
+It is there because the async built-ins are host functions. `builtin/2`
+answers a `fun(Ctx, Flats)` that the interpreter calls in that process and
+that returns only its results, so nothing carries a frame from one built-in
+call to the next; the process is the task. `wasm_resources` keeps its handle
+tables, and `wasm_component` its host resource table, in the same process
+for the same reason. The consequence is the one `wasm_component:destroy/1`
+states: one live component instance per process, destroyed from that
+process.
+
+## Where things are
+
+The banners divide the file in this order.
+
+| banner | what is there |
+| --- | --- |
+| `%%% task frame` | opening, joining and closing a frame: `begin_task/2`, `leave_call/0`, `end_task/0`, `close_frame/0`, `nested/1`, `take_return/0`, `resolved/0` |
+| `%%% host-created ends` | a stream or future the host makes for a call: `new_future_readable/2`, `new_stream_readable/2`, `new_future_channel/1`, `new_stream_channel/1,2`, `register_producer/2,3`, `deliver_before/2`; and `backpressure/1` |
+| `%%% built-ins` | `builtin/2`: what each async canon built-in does |
+| `%%% copies` | `stream.read`, `stream.write`, `future.read` and `future.write` into and out of guest memory |
+| `%%% subtasks` | an async-lowered import called as a subtask: `async_lower/2,3`, `subtask.cancel`, `fiber_waiting/1`, `take_produced/1` |
+| `%%% wait (executor) side` | `wait_on_set/1`: blocking until a waitable-set has an event, then delivering it |
+| `%%% waitable-set state` | which set each waitable is in |
+| `%%% producers` | the processes that feed a read, and stopping them |
+| `%%% tasks after their call` | a task that runs on after its call returned: `suspend_task/4`, `pending/0`, `pump/1` |
+| `%%% fibers` | a stackful task run in a fiber process: `owner_side/1`, `reenter/1`, `start_fiber/1`, `suspend_fiber/1` |
+| `%%% cooperative threads` | the thread built-ins and their scheduler: `quiet/1`, `drop_threads/1`, `guest_call/1` |
+| `%%% host ends` | the host's side of a stream or future: `host_reader/1`, `host_sink/2,3`, `host_stream/1`, `host_future/1`, `on_end/2`, `host_write/3`, `host_close/1`, `host_future_resolve/2`, `host_read/3`, `host_future_await/2` |
+| `%%% buffers` | a stream's buffered values, as a binary for `stream<u8>` and a list otherwise |
+| `%%% helpers` | `sync_call/3`, which lets a synchronous call use the built-ins; `handle_counter/0`, `raise_handle_counter/1` |
 """.
 
+%% What a call into an async export uses: the built-ins the linker binds, the
+%% task frame `wasm_component' opens around the call, the streams and futures
+%% the host makes for it, and the wait.
 -export([builtin/2, begin_task/2, end_task/0, take_return/0, task_ref/0, waits/0,
          new_future_readable/2, new_stream_readable/2,
          new_future_channel/1, new_stream_channel/1, new_stream_channel/2,

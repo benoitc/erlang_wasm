@@ -2,14 +2,27 @@
 -moduledoc """
 Resource limits, and an honest account of what they do not cover.
 
-Pass a limits map to `wasm:instantiate/3`, or per call. Reach for the presets
-when you have not measured anything yet: getting these right matters most for
-the people least likely to tune them.
+Pass a limits map to `wasm:instantiate/3`, or per call to `wasm:call/4`. Reach
+for the presets when you have not measured anything yet: getting these right
+matters most for the people least likely to tune them.
 
 ```erlang
 Limits = wasm_limits:untrusted(),
 {ok, Inst} = wasm:instantiate(Module, Imports, Limits).
 ```
+
+The keys go flat into the options map, beside the other options. A
+`limits => #{...}` key is not read by `wasm:instantiate/3`, so nothing inside
+it is applied. Add other options to the preset itself:
+
+```erlang
+Opts = maps:merge(wasm_limits:untrusted(), #{compile => true}),
+{ok, Inst} = wasm:instantiate(Module, Imports, Opts).
+```
+
+The workers are the exception: `wasm_instance_worker` and
+`wasm_script_worker` take these same keys nested, under their own `limits`
+option.
 
 ## What you get
 

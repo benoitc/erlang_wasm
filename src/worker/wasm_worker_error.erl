@@ -2,9 +2,13 @@
 -moduledoc """
 The worker's own error type, and the closed set of kinds it can carry.
 
-Every entry point in `wasm_script_worker` answers with one of these or with a
-result. Nothing raises, which is the runtime's rule applied to the layer above
-it: a dead worker, an exhausted limit and a guest that trapped are all values.
+The calls into a running `wasm_script_worker` (`run`, `submit`, `await`,
+`cancel`) answer with one of these or with a result, and do not raise: a dead
+worker, an exhausted limit and a guest that trapped are all values. That is
+the runtime's promise, [Failures are values at the guest
+boundary](../docs/design-principles.md#failures-are-values-at-the-guest-boundary),
+applied to the layer above it. `wasm_script_worker:stop/1` on a worker that
+has already exited still exits, as any `gen_server` does.
 
 ## Why this is not a `wasm_error`
 

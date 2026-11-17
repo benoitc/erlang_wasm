@@ -36,15 +36,46 @@ through `wasm_async`.
 | To | Use |
 |---|---|
 | decode a binary | `decode/1` |
+| decode and check once, for many instantiations | `prepare/1`, and `source/1` for the bytes it was made from |
+| keep the core modules loaded while instances come and go | `hold/1` |
 | instantiate, with host imports and options | `instantiate/1`, `instantiate/2`, `instantiate/3` |
-| call an export, sync or async | `call/4`, `call_async/4` |
+| list the exports | `exports/1` |
+| call an export, sync or async | `call/4`, `call_async/4`, `call_async/5` |
+| return when an async export resolves, and run what it left | `start_async/4`, `start_async/5`, `pump/2` |
 | drop a resource the host holds | `drop_resource/3` |
 | free the instance | `destroy/1`, `destroy/2` |
+| capture an initialised instance, and start a new one from it | `snapshot/2`, `restore/3` |
+| keep an image alive past the process that captured it | `acquire/1`, `release/1` |
 | write a host import | `import_fun/2` |
 | keep host-side state behind a handle | `host_new/2`, `host_get/1`, `host_update/2`, `host_drop/1` |
+| a host entry an image can keep, because it says where it came from | `host_new/3` |
+| the live host handles, for tests and teardown checks | `host_live/0` |
 
 The wiring of several cores is `wasm_component_link`; lifting and lowering
 values is `wasm_canon`; the handle tables are `wasm_resources`.
+
+## Where things are
+
+The banners divide the file in this order.
+
+| banner | what is there |
+| --- | --- |
+| `%%% holding cores` | `hold/1` |
+| `%%% decode` | `decode/1`: the section walk, the core modules and the export names |
+| `%%% prepare` | `prepare/1`, `source/1`, and `derive/1`, what instantiation reads from the bytes alone |
+| `%%% instantiate` | `instantiate/3`; `instantiate_valid/4` picks the single-core path or `link_in/3`, which hands linked cores to `wasm_component_link` |
+| `%%% composition` | a component with no top-level core: `instantiate_composed/3` folds `compose_step/2` over its graph |
+| `%%% bridges between components` | one nested component calling another, sync (`bridge/3`) or async (`bridge_async/3`), and how a handle crosses (`to_provider/3`, `from_provider/4`) |
+| `%%% drops and the entry core` | `drop_fun/1`, which reads `resource_closer` and `resource_predrop`; `start/6`, which builds the single core |
+| `%%% snapshots` | `snapshot/2`, `acquire/1`, `release/1`, `restore/3` |
+| `%%% destroy and calls` | `destroy/1`, `destroy/2`, `exports/1`, `call/4` |
+| `%%% host boundary` | checking and translating handles on a call: `handle_sig/4`, `lower_handles/3`, `lift_handles/3`, `with_loans/2` |
+| `%%% async calls` | `call_async/5`, `start_async/5`, `pump/2`, and the callback loop, `drive/5` |
+| `%%% host imports and drops` | `import_fun/2`, `drop_resource/3` |
+| `%%% import resolution` | `resolve_imports/3`, and `host_key/1`, which strips an interface version |
+| `%%% resource table` | the resource built-ins a single core imports, bound to `wasm_resources` by `resource_imports/2` |
+| `%%% host resource table` | `host_new/2`, `host_new/3`, `host_get/1`, `host_update/2`, `host_drop/1`, `host_live/0` |
+| `%%% helpers` | `run_post_return/3` |
 """.
 
 -include("wasm_component.hrl").
@@ -103,6 +134,8 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
 %% a progress check): a legitimate stream takes one turn per read round.
 -define(ASYNC_BUDGET, 1000000).
 
+%%% --------------------------------------------------------- holding cores ---
+
 -doc """
 Keep a component's core modules loaded while the calling process lives.
 
@@ -136,6 +169,8 @@ hold_cores([Core | Rest]) ->
         {ok, _Handle} -> hold_cores(Rest);
         {error, _} = E -> E
     end.
+
+%%% ---------------------------------------------------------------- decode ---
 
 -doc """
 Decode a component binary into its embedded core module and export names.
@@ -233,6 +268,8 @@ skip_sortidx(<<_Sort, Rest0/binary>>) ->
 skip_sortidx(Bin) ->
     Bin.
 
+%%% --------------------------------------------------------------- prepare ---
+
 -doc """
 Decode, check and parse component `Bin` once, for many instantiations.
 
@@ -319,6 +356,8 @@ pre(Key, #{pre := Pre}, Fun) ->
 pre(_Key, _Decoded, Fun) ->
     Fun().
 
+%%% ----------------------------------------------------------- instantiate ---
+
 -doc "Decode and instantiate a component, wiring any resource intrinsics.".
 -spec instantiate(binary()) -> {ok, instance()} | {error, term()}.
 instantiate(Bin) ->
@@ -351,6 +390,24 @@ the worker uses per request.
 `loader` picks how core modules are built: `load` through the module cache
 (rate-limited, and it needs the `wasm` application), or `compile` inline. Left
 out, it is `load` while the cache runs and `compile` when it does not.
+
+Three more keys are read here and not passed to the cores:
+
+- `resource_limit`: how many host resource handles may be live at once in
+  the calling process, and how many subtasks an async task of this instance
+  may have waiting. Past it, `host_new/2` traps with
+  `resource_limit_reached`. `infinity` when left out; each instantiation
+  sets it again for the whole process.
+- `resource_closer`: a `fun(Resource)` that closes the host resource behind
+  a handle the guest drops, at the drop rather than at `destroy/2`.
+- `resource_predrop`: a `fun(Handle)` called before that drop; answering
+  `{trap, Reason}` refuses it.
+
+`resource_closer` and `resource_predrop` are used when the cores are wired
+by `wasm_component_link`: a guest's `canon resource.drop` of a resource type
+the component does not define calls them. On the single-core path that drop
+is the host import of the same name. Everything else in the map goes to each
+core as its options, flat, as `wasm:instantiate/3` takes them.
 """.
 -spec instantiate(binary() | prepared(), #{{binary(), binary()} => function()}, map()) ->
           {ok, instance()} | {error, term()}.
@@ -533,6 +590,8 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports} = Decoded, Impo
             end
     end.
 
+%%% ----------------------------------------------------------- composition ---
+
 %% A composed component (nested component definitions instantiated and their exports
 %% wired together, as `wac` produces) has no top-level core. Instantiate each nested
 %% component recursively and build an instance whose exports dispatch to the
@@ -614,6 +673,8 @@ compose_step({comp_export, Name, 5, Idx}, #{insts := Insts, dispatch := D} = S) 
     end;
 compose_step(_Other, S) ->
     S.
+
+%%% -------------------------------------------- bridges between components ---
 
 %% The host imports a nested component needs from its instantiate arguments. For each
 %% argument that binds one of the component's imported interfaces to another instance's
@@ -798,6 +859,8 @@ release(#{res_id := Id} = Provider, Hp) ->
         error ->
             ok
     end.
+
+%%% ---------------------------------------------- drops and the entry core ---
 
 %% The drop function `canon resource.drop` runs, returning `ok` or `{trap, Reason}`.
 %% A caller that owns OS resources supplies `resource_closer` (the same closer
@@ -1208,6 +1271,8 @@ module_record({wasm_module, _} = Handle) ->
 module_record(M) ->
     {ok, M}.
 
+%%% ----------------------------------------------------- destroy and calls ---
+
 -doc """
 Destroy a component instance, freeing every core it built and sweeping the host
 resource tables. A resource may own an OS handle (a file descriptor, a socket)
@@ -1522,6 +1587,8 @@ realloc_fun(_Inst, none) ->
     undefined;
 realloc_fun(Inst, Name) ->
     fun(_Ctx, Args) -> wasm_async:reenter(fun() -> wasm:call(Inst, Name, Args) end) end.
+
+%%% ----------------------------------------------------------- async calls ---
 
 -doc """
 Call an async-lifted export, lowering `Args` and lifting the result by `Sig`.
@@ -1854,6 +1921,8 @@ core_with_export(#{core := Entry} = I, CoreName) ->
 lift_call_result(_Inst, none, _CoreResults) -> undefined;
 lift_call_result(Inst, Result, CoreResults) ->
     wasm_canon:lift_result(Inst, Result, CoreResults).
+
+%%% ------------------------------------------------ host imports and drops ---
 
 -doc """
 Wrap a typed host function as an import, handling the Canonical ABI both ways.

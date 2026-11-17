@@ -741,16 +741,18 @@ their imports itself, by where each function came from; so this checks no
 import hook and refuses no imported memory, table or global, which a sibling
 core defines and the component's link wires again at restore. A reference to
 a sibling core's function, in a table or a global, is kept as
-`{sibling, CoreIndex, Func}`, `Siblings` naming each sibling instance's core
-index. Everything else is checked as for an instance on its own.
+`{sibling, CoreIndex, Func}`, `cores` listing the component's core instances
+in build order. Everything else is checked as for an instance on its own.
 
 The part has no owner and no pages of its own: the component reserves once
 for every part and builds each with `build/2` under that one record.
 """.
 -spec capture_part(#inst{}, wasm_module_cache:handle(),
-                   #{module := #module{}, siblings := #{reference() => non_neg_integer()}}) ->
+                   #{module := #module{}, cores := [#inst{}]}) ->
           {ok, snapshot()} | {error, wasm_error:error()}.
-capture_part(#inst{id = Id} = Inst, Handle, #{module := M, siblings := Sibs}) ->
+capture_part(#inst{id = Id} = Inst, Handle, #{module := M, cores := Cores}) ->
+    Sibs = maps:from_list([{C#inst.id, N} || {N, C} <- lists:enumerate(0, Cores),
+                                             C#inst.id =/= Id]),
     {NM, NT, NG} = Imported = imported_counts(M),
     #mut{globals = Gs0, tables = Ts, mems = Mems,
          dropped_elems = DE, dropped_datas = DD} = wasm_instance:mut(Inst),
@@ -822,8 +824,8 @@ restore_part(#snapshot{imported = {NM, _, _}} = S, M, Bindings, Opts) ->
                                  segments => false, memory_opts => MemOpts}) of
         {error, _} = E -> E;
         {ok, Inst} ->
-            case wasm_error:capture(fun() -> lay_part(S, Inst) end) of
-                {ok, Pending} -> {ok, Inst, Pending};
+            case wasm_error:capture(fun() -> {laid, lay_part(S, Inst)} end) of
+                {laid, Pending} -> {ok, Inst, Pending};
                 {error, E} -> {error, E, Inst}
             end
     end.

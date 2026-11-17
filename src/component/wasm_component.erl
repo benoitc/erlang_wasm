@@ -53,6 +53,7 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
          call_async/4, call_async/5, start_async/4, start_async/5, pump/2,
          destroy/1, destroy/2, drop_resource/3]).
 -export([import_fun/2, exports/1, hold/1, source/1]).
+-export([snapshot/2, restore/3, acquire/1, release/1]).
 -export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
 -export_type([component/0, prepared/0, instance/0]).
@@ -806,10 +807,12 @@ drop_fun(Opts) ->
         end
     end.
 
-start(Loader, Core, Imports, Limits, Exports, Extra) ->
+start(Loader, Core, Imports, Limits0, Exports, Extra) ->
+    Build = maps:get(core_builder, Limits0, fun(_N, M, I, L) -> wasm:instantiate(M, I, L) end),
+    Limits = maps:without([core_builder], Limits0),
     case wasm_component_link:load_core(Loader, Core) of
         {ok, Mod} ->
-            case wasm:instantiate(Mod, Imports, Limits) of
+            case Build(0, Mod, Imports, Limits) of
                 {ok, Inst} ->
                     {ok, #{core => Inst, exports => Exports,
                            cores => [Inst | Extra]}};
@@ -819,6 +822,265 @@ start(Loader, Core, Imports, Limits, Exports, Extra) ->
         {error, _} = E ->
             E
     end.
+
+%%% ------------------------------------------------------------ snapshots ---
+
+-doc """
+Capture a component instance made with `snapshotable => true`, after it is
+initialised, so that each later instance can start from that point with
+`restore/3` instead of being instantiated and initialised again.
+
+Every core is captured, together and under their leases: what each defines,
+not what it imports from a sibling, which the link wires again at restore.
+The image keeps what the component was built from, so a restore replays the
+same link.
+
+`Opts`:
+
+- `snapshot_hooks`: `#{Interface => stateless}`, one entry for each
+  interface the component imports from outside itself. **Silence means no**,
+  as for a core snapshot: an import nobody declared refuses the capture,
+  because only its author knows whether it keeps state of its own.
+- `version`, `compatibility_key`: as `wasm:snapshot/2`.
+
+Refused when the instance holds what an image cannot: a task frame with work
+in it, a thread, a host resource, a resource of its own.
+""".
+-spec snapshot(instance(), map()) -> {ok, term()} | {error, term()}.
+snapshot(#{composed := true}, _Opts) ->
+    snapshot_refused(component_not_snapshottable,
+                     ~"a composed component cannot be captured yet", #{});
+snapshot(#{recipe := _} = I, Opts) ->
+    wasm_error:capture(fun() -> snapshot_1(I, Opts) end);
+snapshot(_I, _Opts) ->
+    snapshot_refused(not_snapshotable,
+                     ~"instantiate with `snapshotable => true` to capture", #{}).
+
+snapshot_1(#{cores := Cores, res_id := ResId} = I, Opts) ->
+    Checks = [fun() -> quiet(ResId) end,
+              fun() -> no_host_resources() end,
+              fun() -> no_guest_resources(ResId) end,
+              fun() -> imports_declared(I, maps:get(snapshot_hooks, Opts, #{})) end],
+    case lists:foldl(fun(_C, {error, _} = E) -> E; (C, ok) -> C() end, ok, Checks) of
+        {error, _} = E -> E;
+        ok -> with_leases(Cores, [], fun() -> capture_cores(I, Opts) end)
+    end.
+
+quiet(ResId) ->
+    case wasm_async:quiet(ResId) of
+        ok -> ok;
+        {error, Kind} -> snapshot_refused(Kind, ~"the instance is not quiet", #{})
+    end.
+
+no_host_resources() ->
+    case lists:sort(maps:to_list(host_table())) of
+        [] -> ok;
+        [{_H, {Tag, _}} | _] ->
+            snapshot_refused(host_resource_not_snapshottable,
+                             ~"a host resource cannot be captured", #{tag => Tag})
+    end.
+
+no_guest_resources(ResId) ->
+    case wasm_resources:live(ResId) of
+        [] -> ok;
+        [_ | _] -> snapshot_refused(resource_not_snapshottable,
+                                    ~"a resource cannot be captured", #{})
+    end.
+
+%% Every function a core imports from outside the component names an interface
+%% `Hooks' declares. Matched as the host map keys are, by interface without
+%% its version.
+imports_declared(#{externals := Externals}, Hooks) ->
+    Declared = maps:from_list([{host_key(K), V} || {K, V} <- maps:to_list(Hooks)]),
+    case [Iface || PerCore <- Externals, {_Key, {Iface, _Func}} <- PerCore,
+                   not maps:is_key(host_key(Iface), Declared)] of
+        [] -> ok;
+        [Iface | _] ->
+            snapshot_refused(import_not_snapshottable,
+                             ~"this import declares no snapshot hook", #{import => Iface})
+    end.
+
+%% Each core's lease, in build order; one busy releases those taken.
+with_leases([], Taken, Fun) ->
+    try Fun()
+    after end_leases(Taken)
+    end;
+with_leases([Core | Rest], Taken, Fun) ->
+    case wasm_instance:begin_capture(Core) of
+        ok -> with_leases(Rest, [Core | Taken], Fun);
+        {error, not_snapshotable} ->
+            end_leases(Taken),
+            snapshot_refused(not_snapshotable, ~"a core is not snapshotable", #{});
+        {error, Why} ->
+            end_leases(Taken),
+            {error, #{class => link, kind => busy, msg => ~"the instance is in use",
+                      ctx => #{state => Why}}}
+    end.
+
+end_leases(Cores) ->
+    lists:foreach(fun(C) ->
+                          case wasm_instance:end_capture(C) of
+                              ok -> ok;
+                              destroy_now -> ok = wasm:destroy(C)
+                          end
+                  end, Cores).
+
+capture_cores(#{cores := Cores, recipe := Recipe}, Opts) ->
+    case modules_of(Cores, []) of
+        {error, _} = E -> E;
+        {ok, Mods} ->
+            case parts(Cores, Mods, Cores, []) of
+                {error, _} = E -> E;
+                {ok, Parts} ->
+                    Handles = [H || {H, _M} <- Mods],
+                    Bytes = lists:sum([wasm_snapshot:bytes(P) || P <- Parts]),
+                    owned(Parts, Handles, Bytes, Recipe, Opts)
+            end
+    end.
+
+modules_of([], Acc) ->
+    {ok, lists:reverse(Acc)};
+modules_of([Core | Rest], Acc) ->
+    case wasm_instance:module_handle(Core) of
+        undefined ->
+            snapshot_refused(module_not_loaded,
+                             ~"a core was not built through the module cache", #{});
+        Handle ->
+            case wasm_module_cache:get(Handle) of
+                {ok, M} -> modules_of(Rest, [{Handle, M} | Acc]);
+                {error, not_loaded} ->
+                    snapshot_refused(module_not_loaded, ~"module is not loaded",
+                                     #{handle => Handle})
+            end
+    end.
+
+parts([], [], _All, Acc) ->
+    {ok, lists:reverse(Acc)};
+parts([Core | Rest], [{Handle, M} | Ms], All, Acc) ->
+    case wasm_snapshot:capture_part(Core, Handle, #{module => M, cores => All}) of
+        {ok, Part} -> parts(Rest, Ms, All, [Part | Acc]);
+        {error, _} = E -> E
+    end.
+
+%% One owner for every core: it claims their modules and charges their pages
+%% once, under one keeper record each part is built with.
+owned(Parts, Handles, Bytes, Recipe, Opts) ->
+    case wasm_snapshot_owner:start(Handles, Bytes, self()) of
+        {ok, Owner, Img} ->
+            case wasm_error:capture(
+                   fun() -> {ok, [wasm_snapshot:build(P, Img) || P <- Parts]} end) of
+                {ok, Built} ->
+                    {ok, #{component_image => ?MODULE, recipe => Recipe, parts => Built,
+                           owner => Owner, bytes => Bytes,
+                           version => maps:get(version, Opts, ~"1"),
+                           key => maps:get(compatibility_key, Opts, undefined)}};
+                {error, _} = E ->
+                    ok = wasm_snapshot_owner:abandon(Owner),
+                    E
+            end;
+        {error, not_loaded} ->
+            snapshot_refused(module_not_loaded, ~"a module is not loaded", #{});
+        {error, _} = E ->
+            E
+    end.
+
+snapshot_refused(Kind, Msg, Ctx) ->
+    {error, #{class => invalid, kind => Kind, msg => Msg, ctx => Ctx}}.
+
+-doc """
+Keep a component image alive past the process that captured it, as
+`wasm:acquire/1` does for a core image.
+""".
+-spec acquire(map()) -> ok | {error, term()}.
+acquire(#{component_image := ?MODULE, owner := Owner}) ->
+    case wasm_snapshot_owner:acquire(Owner, self()) of
+        ok -> ok;
+        gone -> snapshot_refused(snapshot_invalidated, ~"this image has been released", #{})
+    end.
+
+-doc "Stop holding a component image.".
+-spec release(map()) -> ok.
+release(#{component_image := ?MODULE, owner := Owner}) ->
+    wasm_snapshot_owner:release(Owner, self()).
+
+-doc """
+A component instance at the point an image was captured: the same link,
+replayed over `Imports` given for this instance, each core laid from its part
+of the image instead of instantiated, so no start function runs and nothing
+is initialised again. `Opts` as `instantiate/3`, and `compatibility_key` must
+match the image's.
+""".
+-spec restore(map(), #{{binary(), binary()} => term()}, map()) ->
+          {ok, instance()} | {error, term()}.
+restore(#{component_image := ?MODULE, owner := Owner, key := Key} = Image, Imports, Opts) ->
+    case {wasm_snapshot_owner:holders(Owner), maps:get(compatibility_key, Opts, undefined)} of
+        {gone, _} ->
+            snapshot_refused(snapshot_invalidated, ~"this image has been released", #{});
+        {_, Key} ->
+            restore_1(Image, Imports, maps:without([compatibility_key], Opts));
+        {_, Other} ->
+            snapshot_refused(snapshot_incompatible,
+                             ~"the compatibility key does not match the image",
+                             #{expected => Key, got => Other})
+    end.
+
+restore_1(#{recipe := #{decoded := Decoded, opts := ROpts}, parts := Parts}, Imports, Opts) ->
+    Laid = make_ref(),
+    Parts1 = list_to_tuple(Parts),
+    Builder = fun(N, Mod, ImportMap, Limits) ->
+                      restore_core(element(N + 1, Parts1), Mod, ImportMap, Limits, N, Laid)
+              end,
+    Opts1 = (maps:merge(maps:without([snapshotable], ROpts), Opts))#{core_builder => Builder},
+    Pre = maps:get(pre, Decoded, #{}),
+    Prepared = {prepared, #{bin => <<>>, decoded => maps:remove(pre, Decoded), pre => Pre}},
+    try
+        case instantiate(Prepared, Imports, Opts1) of
+            {ok, Inst} ->
+                Restored = get({?MODULE, Laid}),
+                Cores = maps:from_list([{N, C} || {N, {C, _}} <- maps:to_list(Restored)]),
+                case wasm_error:capture(
+                       fun() ->
+                               [ok = wasm_snapshot:lay_siblings(C, P, Cores)
+                                || {C, P} <- maps:values(Restored)],
+                               ok
+                       end) of
+                    ok -> {ok, maps:remove(recipe, Inst)};
+                    {error, _} = E -> ok = destroy(Inst), E
+                end;
+            {error, _} = E ->
+                E
+        end
+    after
+        erase({?MODULE, Laid})
+    end.
+
+%% One core laid from its part: the module the link loaded, the imports it
+%% built. What it could not lay yet (a reference to a later core) is kept.
+restore_core(Part, Mod, ImportMap, Limits, N, Laid) ->
+    case module_record(Mod) of
+        {error, _} = E -> E;
+        {ok, M} ->
+            case wasm_snapshot:restore_part(Part, M, ImportMap, Limits) of
+                {ok, Inst, Pending} ->
+                    Restored = case get({?MODULE, Laid}) of undefined -> #{}; R -> R end,
+                    put({?MODULE, Laid}, Restored#{N => {Inst, Pending}}),
+                    {ok, Inst};
+                {error, E, Inst} ->
+                    ok = wasm:destroy(Inst),
+                    {error, E};
+                {error, _} = E ->
+                    E
+            end
+    end.
+
+module_record({wasm_module, _} = Handle) ->
+    case wasm_module_cache:get(Handle) of
+        {ok, M} -> {ok, M};
+        {error, not_loaded} ->
+            snapshot_refused(module_not_loaded, ~"module is not loaded", #{handle => Handle})
+    end;
+module_record(M) ->
+    {ok, M}.
 
 -doc """
 Destroy a component instance, freeing every core it built and sweeping the host

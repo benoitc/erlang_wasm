@@ -39,7 +39,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 %% streams and futures they use.
 -export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
          nested/1, owner_side/1, fiber_waiting/1, reenter/1, start_fiber/1, suspend_fiber/1,
-         guest_call/1, sync_call/3, drop_threads/1,
+         guest_call/1, sync_call/3, drop_threads/1, quiet/1,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
          on_end/2,
          host_write/3, host_close/1, host_future_resolve/2,
@@ -1955,6 +1955,19 @@ drop_thread(Comp, I, Pid) ->
     _ = erase(?THREAD_OF(Pid, Comp)),
     _ = erase(?THREAD_COMP(Pid)),
     ok.
+
+-doc """
+Whether the component instance `Comp` holds nothing an image cannot keep: no
+task frame open with work in it (a pending task, a host-held end) and no
+thread. A snapshot of it is refused otherwise.
+""".
+-spec quiet(term()) -> ok | {error, async_frame_open | threads_live}.
+quiet(Comp) ->
+    case {open_with_work(), maps:size(threads(Comp))} of
+        {true, _} -> {error, async_frame_open};
+        {false, 0} -> ok;
+        {false, _} -> {error, threads_live}
+    end.
 
 -doc """
 Stop every thread of the component instance `Comp` and forget its threads

@@ -56,7 +56,10 @@ and the claim back with it; one that fails to build and lives calls
 `abandon/1`. Nothing of the image itself passes through this process: a copy
 into it and back measured up to 0.6 ms of a CPython load.
 """.
--spec start(wasm_module_cache:handle(), non_neg_integer(), pid()) ->
+%% A component's image has one owner for all its cores: `Handle' is then the
+%% list of their modules, each claimed, and all given back together.
+-spec start(wasm_module_cache:handle() | [wasm_module_cache:handle()],
+            non_neg_integer(), pid()) ->
           {ok, pid(), wasm_keeper:resource()}
         | {error, not_loaded | wasm_error:error()}.
 start(Handle, Bytes, FirstHolder) ->
@@ -86,7 +89,11 @@ abandon(Owner) ->
     receive {'DOWN', Mon, process, Owner, _} -> ok end.
 
 init(Caller, Ref, Handle, Bytes, FirstHolder) ->
-    case wasm_module_cache:claim_for(Handle, self()) of
+    Mods = case is_list(Handle) of
+               true -> lists:usort(Handle);
+               false -> [Handle]
+           end,
+    case claim_all(Mods, []) of
         {error, not_loaded} ->
             Caller ! {Ref, {error, not_loaded}};
         ok ->
@@ -94,13 +101,25 @@ init(Caller, Ref, Handle, Bytes, FirstHolder) ->
             Mon = erlang:monitor(process, FirstHolder),
             case reserve(Bytes, Id) of
                 {error, _} = E ->
-                    ok = wasm_module_cache:unclaim_for(Handle, self()),
+                    ok = unclaim_all(Mods),
                     Caller ! {Ref, E};
                 {ok, Img} ->
                     Caller ! {Ref, {ok, Img}},
-                    loop({Handle, Img, Id}, Bytes, #{FirstHolder => Mon})
+                    loop({Mods, Img, Id}, Bytes, #{FirstHolder => Mon})
             end
     end.
+
+%% Every module or none: a claim that fails gives back those already taken.
+claim_all([], _Taken) ->
+    ok;
+claim_all([Mod | Rest], Taken) ->
+    case wasm_module_cache:claim_for(Mod, self()) of
+        ok -> claim_all(Rest, [Mod | Taken]);
+        {error, not_loaded} = E -> ok = unclaim_all(Taken), E
+    end.
+
+unclaim_all(Mods) ->
+    lists:foreach(fun(Mod) -> ok = wasm_module_cache:unclaim_for(Mod, self()) end, Mods).
 
 %% A counter left by an older build fails closed rather than metering against a
 %% value that may already be wrong, until the node is restarted.
@@ -171,8 +190,8 @@ loop(Handle, Bytes, Holders) ->
         {release, Pid} ->
             drop(Handle, Bytes, Holders, Pid);
         abandon ->
-            {Mod, Img, Id} = Handle,
-            ok = wasm_module_cache:unclaim_for(Mod, self()),
+            {Mods, Img, Id} = Handle,
+            ok = unclaim_all(Mods),
             ok = wasm_keeper:release(Img, {snapshot, Id});
         {'DOWN', _Mon, process, Pid, _Why} ->
             drop(Handle, Bytes, Holders, Pid)
@@ -190,8 +209,8 @@ drop(Handle, Bytes, Holders, Pid) ->
             %% The claim would go when this process exits anyway; doing it here
             %% means the claim and the charge are given back together rather
             %% than one of them whenever the cache notices.
-            {Mod, Img, Id} = Handle,
-            ok = wasm_module_cache:unclaim_for(Mod, self()),
+            {Mods, Img, Id} = Handle,
+            ok = unclaim_all(Mods),
             ok = wasm_keeper:release(Img, {snapshot, Id}),
             ok
     end.

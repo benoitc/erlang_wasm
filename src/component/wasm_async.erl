@@ -40,6 +40,7 @@ the host-resource contract in `wasm_component`). i32 sentinels are signed: BLOCK
 -export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
          nested/1, owner_side/1, fiber_waiting/1, reenter/1, start_fiber/1, suspend_fiber/1,
          guest_call/1, sync_call/3, drop_threads/1, quiet/1,
+         handle_counter/0, raise_handle_counter/1,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
          on_end/2,
          host_write/3, host_close/1, host_future_resolve/2,
@@ -2687,3 +2688,14 @@ next_handle() ->
     N = case get(?NEXT) of undefined -> 1; V -> V end,
     put(?NEXT, N + 1),
     N.
+
+-doc "The next stream, future or waitable handle this process gives out.".
+-spec handle_counter() -> pos_integer().
+handle_counter() -> case get(?NEXT) of undefined -> 1; V -> V end.
+
+-doc """
+Make sure no handle below `N` is given out again, as a restored instance's
+guest may hold or have dropped one: the counter never goes down.
+""".
+-spec raise_handle_counter(pos_integer()) -> ok.
+raise_handle_counter(N) -> put(?NEXT, max(handle_counter(), N)), ok.

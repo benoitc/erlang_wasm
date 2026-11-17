@@ -27,7 +27,10 @@ replayed the link answers 42.
          a_restore_that_fails_at_a_later_core_leaves_nothing/1,
          an_image_past_the_budget_is_refused_and_charges_nothing/1,
          an_image_no_one_holds_gives_its_charge_back/1,
-         pages_stay_charged_while_a_restored_instance_reads_them/1]).
+         pages_stay_charged_while_a_restored_instance_reads_them/1,
+         a_resource_held_at_init_is_usable_after_restore/1,
+         a_handle_dropped_at_init_is_never_given_again/1,
+         a_resource_the_host_holds_refuses_the_capture/1]).
 
 all() ->
     [a_restore_starts_where_the_capture_was,
@@ -43,7 +46,10 @@ all() ->
      a_restore_that_fails_at_a_later_core_leaves_nothing,
      an_image_past_the_budget_is_refused_and_charges_nothing,
      an_image_no_one_holds_gives_its_charge_back,
-     pages_stay_charged_while_a_restored_instance_reads_them].
+     pages_stay_charged_while_a_restored_instance_reads_them,
+     a_resource_held_at_init_is_usable_after_restore,
+     a_handle_dropped_at_init_is_never_given_again,
+     a_resource_the_host_holds_refuses_the_capture].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -239,6 +245,39 @@ pages_stay_charged_while_a_restored_instance_reads_them(_Config) ->
     ?assertEqual({ok, 42}, run(R)),
     ok = wasm_component:destroy(R),
     wait_until(fun() -> wasm_snapshot_owner:charged() =:= Before end).
+
+%% `resinit''s init keeps a resource of its own: its table is in the image,
+%% and the handle the guest kept still names it.
+a_resource_held_at_init_is_usable_after_restore(_Config) ->
+    {ok, Image} = resinit_image(),
+    {ok, R} = wasm_component:restore(Image, #{}, #{}),
+    ?assertEqual({ok, 20}, call(R, ~"held-rep")),
+    ok = wasm_component:destroy(R).
+
+%% Init made handle 1, dropped it, and holds 2: a resource made after the
+%% restore gets 3, as it would have had the instance carried on. Rebuilding
+%% the counter from the live entries would have given 1 again.
+a_handle_dropped_at_init_is_never_given_again(_Config) ->
+    {ok, Image} = resinit_image(),
+    {ok, R} = wasm_component:restore(Image, #{}, #{}),
+    ?assertEqual({ok, 3}, call(R, ~"fresh")),
+    ok = wasm_component:destroy(R).
+
+%% A resource the host holds is the host's to keep track of, and the next
+%% request's host knows nothing of it.
+a_resource_the_host_holds_refuses_the_capture(_Config) ->
+    {ok, I} = wasm_component:instantiate(fixture("resinit"), #{}, ?SNAP),
+    {ok, _} = wasm_component:call(I, ~"init", {[], none}, []),
+    _ = wasm_resources:host_receive(maps:get(res_id, I), 0, 2),
+    ?assertMatch({error, #{kind := resource_held_by_host}}, wasm_component:snapshot(I, #{})),
+    ok = wasm_component:destroy(I).
+
+resinit_image() ->
+    {ok, I} = wasm_component:instantiate(fixture("resinit"), #{}, ?SNAP),
+    {ok, _} = wasm_component:call(I, ~"init", {[], none}, []),
+    Captured = wasm_component:snapshot(I, #{}),
+    ok = wasm_component:destroy(I),
+    Captured.
 
 %%% ------------------------------------------------------------- helpers ---
 

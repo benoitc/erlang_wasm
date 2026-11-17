@@ -859,12 +859,24 @@ snapshot(_I, _Opts) ->
 snapshot_1(#{cores := Cores, res_id := ResId} = I, Opts) ->
     Checks = [fun() -> quiet(ResId) end,
               fun() -> no_host_resources() end,
-              fun() -> no_guest_resources(ResId) end,
               fun() -> imports_declared(I, maps:get(snapshot_hooks, Opts, #{})) end],
     case lists:foldl(fun(_C, {error, _} = E) -> E; (C, ok) -> C() end, ok, Checks) of
         {error, _} = E -> E;
-        ok -> with_leases(Cores, [], fun() -> capture_cores(I, Opts) end)
+        ok ->
+            case wasm_resources:capture(ResId) of
+                {error, Kind} ->
+                    snapshot_refused(Kind, ~"a resource cannot be captured", #{});
+                {ok, Guest} ->
+                    %% The counters as they are, not rebuilt from what is live:
+                    %% a handle dropped before the capture is never given again.
+                    Counters = #{guest => Guest,
+                                 host_next => host_next(),
+                                 async_next => wasm_async:handle_counter()},
+                    with_leases(Cores, [], fun() -> capture_cores(I, Counters, Opts) end)
+            end
     end.
+
+host_next() -> case get(?HOST_NEXT) of undefined -> 1; N -> N end.
 
 quiet(ResId) ->
     case wasm_async:quiet(ResId) of
@@ -878,13 +890,6 @@ no_host_resources() ->
         [{_H, {Tag, _}} | _] ->
             snapshot_refused(host_resource_not_snapshottable,
                              ~"a host resource cannot be captured", #{tag => Tag})
-    end.
-
-no_guest_resources(ResId) ->
-    case wasm_resources:live(ResId) of
-        [] -> ok;
-        [_ | _] -> snapshot_refused(resource_not_snapshottable,
-                                    ~"a resource cannot be captured", #{})
     end.
 
 %% Every function a core imports from outside the component names an interface
@@ -925,7 +930,7 @@ end_leases(Cores) ->
                           end
                   end, Cores).
 
-capture_cores(#{cores := Cores, recipe := Recipe}, Opts) ->
+capture_cores(#{cores := Cores, recipe := Recipe}, Counters, Opts) ->
     case modules_of(Cores, []) of
         {error, _} = E -> E;
         {ok, Mods} ->
@@ -934,7 +939,7 @@ capture_cores(#{cores := Cores, recipe := Recipe}, Opts) ->
                 {ok, Parts} ->
                     Handles = [H || {H, _M} <- Mods],
                     Bytes = lists:sum([wasm_snapshot:bytes(P) || P <- Parts]),
-                    owned(Parts, Handles, Bytes, Recipe, Opts)
+                    owned(Parts, Handles, Bytes, Recipe#{counters => Counters}, Opts)
             end
     end.
 
@@ -1024,7 +1029,8 @@ restore(#{component_image := ?MODULE, owner := Owner, key := Key} = Image, Impor
                              #{expected => Key, got => Other})
     end.
 
-restore_1(#{recipe := #{decoded := Decoded, opts := ROpts}, parts := Parts}, Imports, Opts) ->
+restore_1(#{recipe := #{decoded := Decoded, opts := ROpts} = Recipe, parts := Parts},
+          Imports, Opts) ->
     Laid = make_ref(),
     Parts1 = list_to_tuple(Parts),
     Builder = fun(N, Mod, ImportMap, Limits) ->
@@ -1036,6 +1042,7 @@ restore_1(#{recipe := #{decoded := Decoded, opts := ROpts}, parts := Parts}, Imp
     try
         case instantiate(Prepared, Imports, Opts1) of
             {ok, Inst} ->
+                ok = restore_counters(Inst, maps:get(counters, Recipe)),
                 Restored = get({?MODULE, Laid}),
                 Cores = maps:from_list([{N, C} || {N, {C, _}} <- maps:to_list(Restored)]),
                 case wasm_error:capture(
@@ -1053,6 +1060,14 @@ restore_1(#{recipe := #{decoded := Decoded, opts := ROpts}, parts := Parts}, Imp
     after
         erase({?MODULE, Laid})
     end.
+
+%% The guest's table into the restored instance's, and no counter of this
+%% process left below the captured one.
+restore_counters(#{res_id := ResId}, #{guest := Guest, host_next := HostNext,
+                                        async_next := AsyncNext}) ->
+    ok = wasm_resources:restore(ResId, Guest),
+    put(?HOST_NEXT, max(host_next(), HostNext)),
+    wasm_async:raise_handle_counter(AsyncNext).
 
 %% One core laid from its part: the module the link loaded, the imports it
 %% built. What it could not lay yet (a reference to a later core) is kept.

@@ -404,6 +404,61 @@ A restore is not charged again. What a restored memory allocates (its page
 table and the pages it writes) is charged to the node page budget, and
 `max_memory_pages` limits its size, as for any memory.
 
+## Snapshot a component
+
+A component is several core instances linked together, plus the host's
+tables. `wasm_component:snapshot/2` captures all of its cores at once, and
+`wasm_component:restore/3` builds the component again at that point: it
+replays the same link, and lays each core from the image instead of
+instantiating it. Use it the way you use a core snapshot, for a component
+whose start is expensive.
+
+Instantiate it with `snapshotable => true`, initialise it, then capture it.
+Name every interface it imports from outside itself in `snapshot_hooks`:
+an import nobody declared refuses the capture, as for a core snapshot.
+
+```erlang
+O1 = #{stdin => <<>>},
+{ok, I} = wasm_component:instantiate(Bin, wasi_preview2:command(O1),
+                                     #{snapshotable => true}),
+{ok, Image} = wasm_component:snapshot(
+                I, #{snapshot_hooks => wasi_preview2:snapshot_hooks()}),
+ok = wasm_component:destroy(I).
+```
+
+Restore it for each request with that request's imports. If the guest took
+its stdio streams or a preopened directory during init, give the request's
+`host_remake`: it makes them again from the request's own configuration,
+under the handles the guest holds.
+
+```erlang
+O2 = #{stdin => <<"hello">>, stdout => fun(_Bytes) -> ok end},
+{ok, R} = wasm_component:restore(Image, wasi_preview2:command(O2),
+                                 #{host_remake => wasi_preview2:host_remake(O2)}),
+ok = wasm_component:destroy(R).
+```
+
+A worker does this for you when its adapter's `snapshot_capability/1`
+returns `runtime => component`, and the request's import set carries
+`host_remake` beside its bindings.
+
+The image keeps the component's own resources and its handle counters, so a
+handle the guest dropped before the capture is never given again. It
+refuses:
+
+| What the instance holds | Kind |
+| --- | --- |
+| an import no hook declares | `import_not_snapshottable` |
+| a host resource with no origin: a file, a socket, an opened subdirectory | `host_resource_not_snapshottable` |
+| a stream that changed since it was made, such as one with a write permit outstanding | `host_resource_not_snapshottable` |
+| a resource the host holds | `resource_held_by_host` |
+| a resource from another component | `remote_resource_not_snapshottable` |
+| a task frame with work in it, or a thread | `async_frame_open`, `threads_live` |
+
+A composed component is captured too: each nested component restores where
+the composition instantiates it, and its bridges are built again. A component
+image lives in this node only; it cannot be saved to a file.
+
 ## What an image freezes
 
 Any random value or clock time the guest read before the capture is in the

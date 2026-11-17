@@ -261,7 +261,7 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
             %% Captured once at `init/1' and held for the worker's life, so a
             %% request restores rather than starting an interpreter. The worker
             %% process is the holder, which is the lifetime that matches.
-            image          :: undefined | wasm:snapshot(),
+            image          :: undefined | wasm:snapshot() | wasm_component:image(),
             snapshot_cap   :: undefined | snapshot_cap(),
             %% `restore_ahead': the long-lived runner that restores the next
             %% instance while the worker waits, and the worker's monitor on it.
@@ -693,6 +693,9 @@ capture_image(Adapter, Artifact, Budget) ->
 %% another build -- costs exactly the capture that would have happened anyway,
 %% which is why `wasm_snapshot_store:lookup/2` answers `miss` rather than
 %% raising.
+%% A component's image is never filed: there is no file form for one.
+from_store_or_capture(#{runtime := component} = Cap, Budget) ->
+    capture_elsewhere(Cap, Budget);
 from_store_or_capture(#{module := M, imports := ImportSet} = Cap, Budget) ->
     Key = image_key(M, Cap, ImportSet),
     case wasm_snapshot_store:lookup(Key, M) of
@@ -712,6 +715,13 @@ capture_and_file(Key, Cap, Budget) ->
 %% An inline module has no content hash and cannot be filed, which is the rule
 %% `wasm_code_cache` already applies for the same reason: there would be
 %% nothing to key on that meant the same thing twice.
+%% A component is keyed by the hash of its own bytes, which no core module's
+%% hash is, and by its version and key, so two initialisations of the same
+%% bytes never share.
+image_key(Bin, #{runtime := component, version := Version}, ImportSet) when is_binary(Bin) ->
+    wasm_snapshot_store:key(crypto:hash(sha256, Bin), Version,
+                            maps:get(compatibility_key, ImportSet, undefined),
+                            wasm_snapshot_file:image_abi());
 image_key({wasm_module, Hash}, #{version := Version}, ImportSet) ->
     wasm_snapshot_store:key(Hash, Version,
                             maps:get(compatibility_key, ImportSet, undefined),
@@ -743,7 +753,7 @@ capture_elsewhere(Cap, #{timeout := Timeout, words := Words, floor := Floor}) ->
             %% process dies, and the image's first holder is the process that
             %% captured it: letting that one go first invalidates the image
             %% between the send and the acquire.
-            ok = wasm:acquire(Image),
+            ok = acquire_image(Image),
             reap(Pid, Mon),
             {ok, Image, C};
         {captured, Pid, {error, _} = E} ->
@@ -801,12 +811,22 @@ reap(Pid, Mon) ->
 
 reason_of(R) -> iolist_to_binary(io_lib:format(~"~p", [R])).
 
+%% A component image is held through `wasm_component', a core one through
+%% `wasm'.
+acquire_image(#{component_image := _} = Image) -> wasm_component:acquire(Image);
+acquire_image(Image) -> wasm:acquire(Image).
+
+release_image(#{component_image := _} = Image) -> wasm_component:release(Image);
+release_image(Image) -> wasm:release(Image).
+
 run_capture(#{module := M, imports := ImportSet, init := Invoke} = Cap) ->
     %% No fuel and no inner deadline: the wall clock is the parent's kill, and
     %% a work budget would be charging host code the host chose to run.
     Limits = #{fuel => infinity, timeout => infinity},
     Opts = maps:merge(Limits#{snapshotable => true}, restore_opts(ImportSet)),
     initialise(M, maps:get(bindings, ImportSet), Opts, Limits, Invoke, Cap).
+
+
 
 snapshot_cap(Adapter, Artifact) ->
     case erlang:function_exported(Adapter, snapshot_capability, 1) of
@@ -828,16 +848,25 @@ restore_opts(ImportSet) ->
     end.
 
 initialise(M, Bindings, Opts, Limits, Invoke, Cap) ->
-    case wasm:instantiate(M, Bindings, Opts) of
+    Made = case component_cap(Cap) of
+               true -> wasm_component:instantiate(M, Bindings, Opts);
+               false -> wasm:instantiate(M, Bindings, Opts)
+           end,
+    case Made of
         {error, E} -> {error, wasm_worker_error:runtime(E)};
         {ok, Inst} -> initialised(Inst, Opts, Limits, Invoke, Cap)
     end.
+
+component_cap(Cap) -> maps:get(runtime, Cap, core) =:= component.
 
 %% The initialisation instance exists to be captured once and destroyed, so it
 %% goes whether the capture worked or not.
 initialised(Inst, Opts, Limits, Invoke, Cap) ->
     Result = run_init(Invoke, Inst, Opts, Limits, Cap),
-    ok = wasm:destroy(Inst),
+    ok = case component_cap(Cap) of
+             true -> wasm_component:destroy(Inst);
+             false -> wasm:destroy(Inst)
+         end,
     Result.
 
 run_init([], Inst, Opts, _Limits, #{validate := Validate} = Cap) ->
@@ -849,11 +878,25 @@ run_init([{call, Name, Args} | Rest], Inst, Opts, Limits, Cap) ->
     case wasm:call(Inst, Name, Args, Limits) of
         {error, E} -> {error, wasm_worker_error:runtime(E)};
         {ok, _}    -> run_init(Rest, Inst, Opts, Limits, Cap)
+    end;
+%% A component's init calls name the export's signature.
+run_init([{call, Name, Sig, Args} | Rest], Inst, Opts, Limits, Cap) ->
+    case wasm_component:call(Inst, Name, Sig, Args) of
+        {error, E} -> {error, wasm_worker_error:runtime(E)};
+        {ok, _}    -> run_init(Rest, Inst, Opts, Limits, Cap)
     end.
 
 captured(Inst, Opts, #{version := Version} = Cap) ->
     Keys = maps:with([compatibility_key], Opts),
-    case wasm:snapshot(Inst, Keys#{version => Version}) of
+    Snap = case component_cap(Cap) of
+               %% The interfaces the component imports, declared as the core
+               %% declares its import modules.
+               true -> wasm_component:snapshot(
+                         Inst, Keys#{version => Version,
+                                     snapshot_hooks => maps:get(snapshot_hooks, Opts, #{})});
+               false -> wasm:snapshot(Inst, Keys#{version => Version})
+           end,
+    case Snap of
         {error, E}  -> {error, wasm_worker_error:runtime(E)};
         {ok, Image} -> {ok, Image, Cap}
     end.
@@ -946,7 +989,7 @@ terminate(Why, #w{image = Image} = W) ->
     %% Belt as well as braces: a holder goes when its process dies, and this
     %% process is the holder, so the image would be released anyway. Saying so
     %% is what makes the lifetime readable.
-    _ = Image =:= undefined orelse wasm:release(Image),
+    _ = Image =:= undefined orelse release_image(Image),
     %% The runner watches this process and goes when it does; a request that
     %% holds it is stopped with the guardian below.
     _ = W#w.ahead =:= undefined orelse exit(W#w.ahead, shutdown),
@@ -1165,7 +1208,7 @@ clear_waiter(W) ->
             adapter     :: module(),
             artifact    :: artifact(),
             request     :: request(),
-            image       :: undefined | wasm:snapshot(),
+            image       :: undefined | wasm:snapshot() | wasm_component:image(),
             snapshot_cap :: undefined | snapshot_cap(),
             limits      :: map(),
             runner_heap :: non_neg_integer(),
@@ -1873,6 +1916,16 @@ start_instance(#g{image = undefined, limits = Limits}, Spec) ->
         component -> wasm_component:instantiate(M, Bindings, Limits);
         _Core     -> wasm:instantiate(M, Bindings, Limits)
     end;
+%% A component restores through `wasm_component', with the request's own
+%% `host_remake' for the stdio and preopens its image keeps.
+start_instance(#g{image = #{component_image := _} = Image} = G, #{imports := ImportSet}) ->
+    Opts = maps:merge(maps:merge(G#g.limits, restore_opts(ImportSet)),
+                      maps:with([host_remake], ImportSet)),
+    case wasm_component:restore(Image, maps:get(bindings, ImportSet),
+                                maps:without([snapshot_hooks], Opts)) of
+        {error, E} -> {error, E};
+        {ok, Inst} -> post_restore(Inst, Image, G)
+    end;
 start_instance(#g{image = Image} = G, #{imports := ImportSet}) ->
     %% The module is not passed: `restore/3' takes it from the image, so there
     %% is no argument left to lay one module's bytes over another's layout.
@@ -1895,21 +1948,27 @@ start_instance(#g{image = Image} = G, #{imports := ImportSet}) ->
 %% deadline**, because it happens per request. Governing it by a capture budget
 %% would bound request work with an initialisation one.
 post_restore(Inst, Image, #g{snapshot_cap = #{post_restore := F}}) ->
-    #{module := M, version := V} = wasm:snapshot_info(Image),
+    #{module := M, version := V} = image_info(Image),
     case call_fun(F, [Inst, #{module => M, version => V}]) of
         {ok, ok} ->
             {ok, Inst};
         {ok, {error, WErr}} ->
-            refused(Inst, WErr);
+            refused(Inst, Image, WErr);
         {error, WErr} ->
-            refused(Inst, WErr)
+            refused(Inst, Image, WErr)
     end.
 
 %% The instance goes and the adapter's own error is what comes back, rather
 %% than a `trapped' with nothing in it that `decode/2' would have to guess at.
-refused(Inst, WErr) ->
+refused(Inst, #{component_image := _}, WErr) ->
+    ok = wasm_component:destroy(Inst),
+    {error, WErr};
+refused(Inst, _Image, WErr) ->
     ok = wasm:destroy(Inst),
     {error, WErr}.
+
+image_info(#{component_image := _, version := V}) -> #{module => component, version => V};
+image_info(Image) -> wasm:snapshot_info(Image).
 
 %% An exception from an adapter fun normalises like every other callback: named
 %% in the context, never a crash the runner carries somewhere else.

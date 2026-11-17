@@ -48,6 +48,9 @@ in its options. `docs/components.md` shows both from the caller's side.
          peer_matches/3, random_bytes/1]).
 %% Exported so a test can mint an output stream and drive the permit contract.
 -export([new_output_stream/1, permit_write/2, check_write/1]).
+%% For a component snapshot: the interfaces this host serves, and how to make
+%% again, for another instance, the stdio and preopen entries a guest held.
+-export([snapshot_hooks/0, host_remake/1]).
 
 %% result<_, stream-error>, the result every output-stream method returns. The
 %% error arm names an `error` resource (a handle), minted when a file-backed write
@@ -640,7 +643,9 @@ exit_of(_) -> 1.
 cli_stderr(Sink) ->
     #{{<<"wasi:cli/stderr">>, <<"get-stderr">>} =>
           wasm_component:import_fun(
-            {[], handle}, fun([]) -> new_output_stream(Sink) end)}.
+            {[], handle},
+            fun([]) -> wasm_component:host_new(output_stream, {ostream, 0, false, Sink},
+                                               {stdio, stderr}) end)}.
 
 %% Not a terminal: get-terminal-* report none, so a guest writes plainly. No
 %% terminal handle is ever minted, so the resource-drops are unreachable, but a
@@ -695,7 +700,9 @@ io(Opts) ->
     Subscribe = fun([Stream]) -> wasm_component:host_new(pollable, {stream, Stream}) end,
     #{{Stdout, <<"get-stdout">>} =>
           wasm_component:import_fun(
-            {[], handle}, fun([]) -> new_output_stream(Sink) end),
+            {[], handle},
+            fun([]) -> wasm_component:host_new(output_stream, {ostream, 0, false, Sink},
+                                               {stdio, stdout}) end),
       {Streams, <<"[method]output-stream.check-write">>} =>
           wasm_component:import_fun(
             {[handle], ?COUNT_RESULT}, fun([H]) -> check_write(H) end),
@@ -731,7 +738,8 @@ io(Opts) ->
           fun(_Ctx, [H]) -> _ = output_drop(H), {ok, []} end,
       {Stdin, <<"get-stdin">>} =>
           wasm_component:import_fun(
-            {[], handle}, fun([]) -> wasm_component:host_new(input_stream, Source) end),
+            {[], handle},
+            fun([]) -> wasm_component:host_new(input_stream, Source, {stdio, stdin}) end),
       {Streams, <<"[method]input-stream.read">>} =>
           wasm_component:import_fun({[handle, u64], ?READ_RESULT}, Read),
       {Streams, <<"[method]input-stream.blocking-read">>} =>
@@ -843,6 +851,45 @@ write_backing(_Handle, _P, Sink, Bytes) when is_function(Sink) ->
     case Sink(Bytes) of
         closed -> {error, closed};
         _      -> ok
+    end.
+
+-doc """
+The WASI interfaces this host serves, declared for `wasm_component:snapshot/2`'s
+`snapshot_hooks`. Their functions keep nothing between calls but the host
+entries the capture checks itself: a stdio stream or a preopened directory is
+kept and made again by `host_remake/1`; any other entry refuses the capture.
+""".
+-spec snapshot_hooks() -> #{binary() => stateless}.
+snapshot_hooks() ->
+    Keys = maps:keys(command(#{network => #{connect => [], listen => [], resolve => deny}})),
+    maps:from_list([{Iface, stateless} || {Iface, _} <- Keys]).
+
+-doc """
+For `wasm_component:restore/3`'s `host_remake`: a fun that makes again, from
+`Opts` (what `command/1` takes for this instance), each host entry an image
+kept. Stdout and stderr write to this instance's sinks, stdin reads this
+instance's input, and a preopen opens this instance's directory of the same
+guest name; a name it does not mount fails the restore with `preopen_missing`.
+""".
+-spec host_remake(map()) -> fun((term()) -> {ok, atom(), term()} | {error, atom()}).
+host_remake(Opts) ->
+    Stdout = maps:get(stdout, Opts, fun(_) -> ok end),
+    Stderr = maps:get(stderr, Opts, fun(_) -> ok end),
+    Stdin = maps:get(stdin, Opts, <<>>),
+    Mounts = command_mounts(Opts),
+    fun({stdio, stdout}) -> {ok, output_stream, {ostream, 0, false, Stdout}};
+       ({stdio, stderr}) -> {ok, output_stream, {ostream, 0, false, Stderr}};
+       ({stdio, stdin}) -> {ok, input_stream, Stdin};
+       ({preopen, Name}) ->
+            case lists:keyfind(Name, 1, Mounts) of
+                {Name, Dir, Writable} ->
+                    case wasi_fs:preopen(Dir) of
+                        {ok, Root} -> {ok, fs_dir, {Root, Writable}};
+                        {error, _} -> {error, preopen_missing}
+                    end;
+                false -> {error, preopen_missing}
+            end;
+       (_) -> {error, unknown_origin}
     end.
 
 %% Mint a host output-stream over Backing. wasi-io's `write` requires a permit

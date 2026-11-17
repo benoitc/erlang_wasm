@@ -1,0 +1,45 @@
+round 1 load 7.66
+main cold statecore 697.9
+main cold twocore 876.8
+main cold realupper 7709.8
+main qjs 14.674
+cand cold statecore 729.4
+cand cold twocore 868.3
+cand cold realupper wasm_worker_reaper: snapb_adapter:cleanup/1 failed: {error,badarg}
+cand qjs 12.696
+round 2 load 7.26
+cand cold statecore 604.7
+cand cold twocore 769.3
+cand cold realupper 6722.6
+cand qjs 12.610
+main cold statecore 566.1
+main cold twocore 766.2
+main cold realupper 6874.7
+main qjs 13.166
+round 3 load 7.73
+main cold statecore 912.8
+main cold twocore 777.4
+main cold realupper 6728.7
+main qjs 13.010
+cand cold statecore 560.5
+cand cold twocore 758.2
+cand cold realupper 7091.5
+cand qjs 12.642
+round 4 load 7.13
+cand cold statecore 564.9
+cand cold twocore 739.8
+cand cold realupper 6801.6
+cand qjs 12.488
+main cold statecore 588.2
+main cold twocore 746.5
+main cold realupper 7044.3
+main qjs 12.744
+round 5 load 7.58
+main cold statecore 673.8
+main cold twocore 758.1
+main cold realupper 6887.9
+main qjs 12.655
+cand cold statecore 668.7
+cand cold twocore 830.6
+cand cold realupper 7056.5
+cand qjs 12.972

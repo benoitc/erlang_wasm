@@ -31,6 +31,7 @@ representation), so a path that never set one behaves as it did.
 -export([new_instance/0, destroy_instance/1, exists/1, with_instance/2,
          current/0]).
 -export([new/2, rep/2, drop/2, lookup/1, take/1]).
+-export([capture/1, restore/2]).
 -export([host_receive/3, host_give/3, host_lend/3, host_unlend/2,
          host_drop/3, host_lookup/2, live/1]).
 
@@ -65,6 +66,40 @@ instance.
 -spec destroy_instance(id()) -> ok.
 destroy_instance(Id) ->
     put(?TABLES, maps:remove(Id, tables())),
+    ok.
+
+-doc """
+`Id`'s table as an image keeps it: its next handle, and each guest-held
+entry's handle, type and representation. A handle the host holds or lends,
+or one standing for another component's resource, cannot be kept: the next
+host knows nothing of it, and the other component is not in the image.
+""".
+-spec capture(id()) -> {ok, {pos_integer(), [{handle(), rt(), integer()}]}}
+                     | {error, resource_held_by_host | remote_resource_not_snapshottable}.
+capture(Id) ->
+    {Next, Entries} = table(Id),
+    Sorted = lists:sort(maps:to_list(Entries)),
+    case [O || {_H, {_Rt, _Rep, O}} <- Sorted, O =/= guest] of
+        [_ | _] -> {error, resource_held_by_host};
+        [] ->
+            case [R || {_H, {_Rt, R, _O}} <- Sorted, not is_integer(R)] of
+                [_ | _] -> {error, remote_resource_not_snapshottable};
+                [] -> {ok, {Next, [{H, Rt, Rep} || {H, {Rt, Rep, guest}} <- Sorted]}}
+            end
+    end.
+
+-doc """
+Lay a table `capture/1` kept into `Id`'s, which must be empty: the same
+handles, held by the guest, and the same next handle, so a handle dropped
+before the capture is never given again.
+""".
+-spec restore(id(), {pos_integer(), [{handle(), rt(), integer()}]}) -> ok.
+restore(Id, {Next, Kept}) ->
+    {_, Empty} = table(Id),
+    0 = map_size(Empty),
+    put(?TABLES, maps:put(Id, {Next, maps:from_list([{H, {Rt, Rep, guest}}
+                                                     || {H, Rt, Rep} <- Kept])},
+                          tables())),
     ok.
 
 -doc """

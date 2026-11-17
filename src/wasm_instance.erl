@@ -110,7 +110,10 @@ new(M, Imports, Opts) ->
     end.
 
 new_1(M, Imports, Opts, Build, Heap, Owned) ->
-    case wasm_error:capture(fun() -> {ok, build(M, Imports, Opts, Heap, Build)} end) of
+    %% Made here rather than inside the build, so a build that fails part way
+    %% deletes it: nothing else would.
+    Store = holder_new(#mut{globals = {}, tables = {}, mems = {}}),
+    case wasm_error:capture(fun() -> {ok, build(M, Imports, Opts, Heap, Build, Store)} end) of
         {ok, Inst} ->
             %% One step, so there is no window in which the resources belong to
             %% neither the build nor the instance.
@@ -131,6 +134,7 @@ new_1(M, Imports, Opts, Build, Heap, Owned) ->
             end,
             {ok, Inst};
         {error, _} = Error ->
+            true = ets:delete(Store),
             ok = wasm_keeper:discard(Build),
             %% Release only a heap this instantiation made. One adopted from a
             %% linked instance belongs to that instance and is still in use.
@@ -193,7 +197,7 @@ allocates(#module{types = Types}) ->
                  (_) -> false
               end, Types).
 
-build(#module{} = M, Imports, Opts, Heap, Build) ->
+build(#module{} = M, Imports, Opts, Heap, Build, Store) ->
     %% Fusion can be disabled to compare against the unfused interpreter, which
     %% is how the superinstruction set was measured and how a suspected fusion
     %% bug would be isolated. Bodies lowered later read it from the instance
@@ -243,7 +247,7 @@ build(#module{} = M, Imports, Opts, Heap, Build) ->
         %% limits map is copied wherever the instance goes.
         limits = maps:merge(?DEFAULT_LIMITS, maps:remove(memory_opts, Opts)),
         ctx = Ctx,
-        store = holder_new(#mut{globals = {}, tables = {}, mems = {}}),
+        store = Store,
         identity = M#module.identity,
         module_handle = maps:get(module_handle, Opts, undefined),
         leases = case maps:get(snapshotable, Opts, false) of

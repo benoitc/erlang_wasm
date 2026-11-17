@@ -18,6 +18,7 @@ all() ->
      a_dropped_element_segment_is_not_a_root,
      a_nested_call_does_not_collect,
      a_failed_instantiation_leaves_no_heap,
+     a_failed_instantiation_leaves_no_state_table,
      a_linked_instance_shares_one_store,
      another_instances_global_is_a_root,
      an_unlinked_reference_traps,
@@ -194,6 +195,19 @@ a_nested_call_does_not_collect(_Config) ->
 %% not allocated. The store is a handle now and there is nothing to thread, but
 %% the tables it names still have to be released, which is why the heap is
 %% created before `build/4' rather than inside it.
+%% An instantiation refused partway, here by a memory past its limit, gives
+%% back the table it keeps its state in. Fail-first: the table was made
+%% during the build and nothing deleted it when the build failed.
+a_failed_instantiation_leaves_no_state_table(_Config) ->
+    {ok, M} = wasm:load(memory_module()),
+    Before = state_tables(),
+    ?assertMatch({error, #{kind := memory_limit}},
+                 wasm:instantiate(M, #{}, #{max_memory_pages => 0})),
+    ?assertEqual(Before, state_tables()).
+
+state_tables() ->
+    length([T || T <- ets:all(), ets:info(T, name) =:= wasm_instance_store]).
+
 a_failed_instantiation_leaves_no_heap(_Config) ->
     {ok, Bad} = wasm:load(allocating_module_with_missing_import()),
     ?assertMatch({error, #{class := link}}, wasm:instantiate(Bad, #{})),

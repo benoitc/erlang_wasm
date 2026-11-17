@@ -39,6 +39,21 @@ of the interpreter's state after start-up. Each request then starts from a
 copy of that snapshot (a **restore**). For CPython this changes a request
 from most of a minute to a tenth of a second. See [Snapshots](snapshots.md).
 
+## Get a language runtime
+
+The interpreters are built by other projects. The library does not ship them:
+you download or build them.
+
+| language | file | how |
+| --- | --- | --- |
+| JavaScript | `qjs.wasm`, a QuickJS command | `scripts/fetch-qjs-fixture.sh` |
+| JavaScript, fast path | `qjs_reactor.wasm` | `scripts/build-quickjs-reactor.sh`, needs the WASI SDK |
+| Python | `python.wasm`, a CPython command | `scripts/fetch-python-fixture.sh` |
+| Python, fast path | `py_reactor.wasm` and its standard library | `scripts/build-python-reactor.sh`, about twenty minutes |
+| Lua | `lua_reactor.wasm` | `scripts/build-lua-reactor.sh`, needs the WASI SDK |
+
+The scripts are in the repository and in the Hex package, under `scripts/`.
+
 ## Where request files go
 
 Each request gets its own directory. After the request, the **reaper**

@@ -148,6 +148,10 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [Multi-core component linking: native decode unchanged (2026-09-23)](#multi-core-component-linking-native-decode-unchanged-2026-09-23)
 - [Multi-core linking: the realloc override is off the guarded path (2026-09-23)](#multi-core-linking-the-realloc-override-is-off-the-guarded-path-2026-09-23)
 
+**The design**
+
+- [The six results behind the design, as the README gave them (2026-11-17)](#the-six-results-behind-the-design-as-the-readme-gave-them-2026-11-17)
+
 
 ## Compiled-code lifetime, before any of it is generated
 
@@ -8967,3 +8971,68 @@ the reaper's log line took the sample's place in the output. The minimums are
 over the samples present; the adapter now tolerates it.
 
 Scripts and logs: `test/audit/raw/cm-snapshot/`.
+
+## The six results behind the design, as the README gave them (2026-11-17)
+
+These six paragraphs were the README's "Why it is built this way" section
+until 2026-11-17, when the README was cut to one screen. They are kept here
+word for word, so nothing the README cited is lost. The README gave the
+numbers without the run behind them. Where a fuller record of a number
+exists, it is named after the paragraph.
+
+**Walking a nested list is faster than a flat instruction array.** We ran the
+same program of 2.4 million instructions both ways. Walking a nested tree of
+lists took 3.7 ns per instruction. A flat array of bytecode with a program
+counter, the design every C interpreter uses, took 5.6 ns. In Erlang,
+`element/2` with an index known only at run time checks its bounds each time.
+Matching the head of a list is a pointer read, and the compiler turns it into
+a jump table. WebAssembly control flow is structured: blocks nest, so the
+interpreter needs no program counter at all.
+
+Also in: the `wasm_exec` moduledoc.
+
+**An Erlang float cannot be NaN or Infinity.** `0.0/0.0` raises `badarith`,
+and `<<F:64/float>>` does not match those bit patterns. So the runtime stores
+floats in a mixed form: an Erlang float when possible, a tuple or atom
+otherwise. We measured a C NIF as an alternative, and it was *slower*. A NIF
+that handles NaN must return the raw bit pattern, and each one is a big
+integer allocated on the heap.
+
+Also in: `docs/design-notes.md`, "Float representation, and why there is no
+NIF" (f64 add, 1,000,000 operations: 8.9 ns hybrid Erlang, 13.1 ns NIF).
+
+**A `v128` is a binary, not a 128-bit integer.** Binary syntax cuts each field
+to its declared width, so the overflow of each lane is handled with no extra
+work, and the vector is built in one allocation. `i32x4.add` took 11.8 ns, and
+126 ns as an integer. `i8x16.add` took 14.6 ns, and 610 ns as an integer.
+
+Also in: `docs/features.md`, "SIMD" (200,000 iterations, minimum of five).
+
+**Garbage-collected objects cannot use the BEAM garbage collector.** These
+objects can change and can point to each other in cycles. The only mutable
+container the BEAM collector traces holds integers. So the objects live in a
+store that this runtime owns and collects itself. This is affordable only
+because the interpreter keeps all execution state in plain data. Between two
+calls, the operand stack is empty, so the runtime can list every root without
+stack maps or safe points.
+
+**The collector is generational, and the generations cost nothing to track.**
+Object ids come from a counter and are never reused. So the objects created
+since the last collection are exactly a range of ids, and the young
+generation needs no bookkeeping. After a thousand allocations, a minor
+collection takes 0.083 ms, whether a thousand or a hundred thousand objects
+are alive. Tracing a hundred thousand objects takes 14.9 ms.
+
+Also in: `docs/gc.md`, the table of major and minor collections by live set.
+
+**`atomics` arrays make linear memory possible without native code.** A store
+takes 6 ns. Rebuilding an immutable binary takes 1201 ns. Memory is a set of
+`atomics` arrays sized to the memory, so growing it adds arrays and copies
+nothing. A memory restored from a snapshot reads the image's pages where they
+are, and copies a 4 KiB page only the first time the guest writes to it. So a
+CPython restore takes 0.8 ms instead of 12.
+
+Also in: the `wasm_memory` moduledoc (6.1 ns for a raw 64-bit `atomics`
+store, 1201 ns for a 64 KiB binary rebuild), and `docs/snapshots.md`, the
+table comparing `wasm:restore/3` with the 0.8 releases (CPython 12.0 ms
+against 0.79 ms).

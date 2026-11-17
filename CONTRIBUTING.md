@@ -114,7 +114,9 @@ and when you need it, then steps with little prose between code blocks.
 `wasm_docs_SUITE` checks every code block in `README.md`, `docs/` and the
 module docs: each fence names its language, Erlang parses and every module it
 names exists, and `docs/getting-started.md` and `docs/examples/` run as pasted.
-A new page goes in the `ex_doc` extras and in [the index](docs/README.md).
+A new page goes in the `ex_doc` extras and in a `groups_for_extras` group,
+and in a reading path of [Start here](docs/start-here.md) if a reader needs
+it on the way.
 
 ## Commit and open a pull request
 

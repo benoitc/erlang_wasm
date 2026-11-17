@@ -139,15 +139,19 @@ Implement the `wasi_http_transport` behaviour, one `request/2` callback, as
    level listing; a call upward means a new cycle, which
    `wasm_architecture_SUITE` refuses.
 2. Open it with a `-moduledoc` saying what it is.
-3. Add it to a group in the `ex_doc` section of `rebar.config`.
+3. Add it to a group in the `ex_doc` section of `rebar.config`: a group
+   whose name starts with "Internals: ", unless users are meant to call it.
+   Then it also goes in the Supported API list of
+   [Start here](../start-here.md#supported-api).
 
 ## Add a page
 
 1. Write it task-oriented: what it is and when you need it, then steps.
 2. Label every code block with its language; Erlang blocks are parsed and the
    modules they name must exist.
-3. Add it to the `ex_doc` extras and groups in `rebar.config`, and to
-   [the index](../README.md).
+3. Add it to the `ex_doc` extras and groups in `rebar.config`, and to a
+   reading path of [Start here](../start-here.md) if a reader needs it on
+   the way.
 
 ## Claim a speed-up
 

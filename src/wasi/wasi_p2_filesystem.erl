@@ -251,7 +251,8 @@ get_directories(Mounts) ->
     lists:flatmap(
       fun({Name, HostDir, Writable}) ->
           case wasi_fs:preopen(HostDir) of
-              {ok, Root} -> [{wasm_component:host_new(fs_dir, {Root, Writable}), Name}];
+              {ok, Root} -> [{wasm_component:host_new(fs_dir, {Root, Writable},
+                                                      {preopen, Name}), Name}];
               {error, _} -> []
           end
       end, Mounts).

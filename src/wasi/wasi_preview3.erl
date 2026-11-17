@@ -27,6 +27,8 @@ one together, and `run_command/3` runs a 0.2 or a 0.3 command.
 -export([command/1, run_command/3, run_serve/3, run_serve/4, run_serve_stream/5,
          serve_imports/2, cli/1,
          clocks/0, random/0]).
+%% For a component snapshot, as `wasi_preview2' has them.
+-export([snapshot_hooks/0, host_remake/1]).
 
 %% The largest HTTP body the host holds, as `wasi_http' has it.
 -define(MAX_BODY_BYTES, 8388608).
@@ -43,6 +45,22 @@ one together, and `run_command/3` runs a 0.2 or a 0.3 command.
 -define(STDIO_RESULT, {result, none, {enum, [~"io", ~"illegal-byte-sequence", ~"pipe"]}}).
 
 -type host() :: #{{binary(), binary()} => term()}.
+
+-doc """
+The WASI 0.2 and 0.3 interfaces this host serves, declared for
+`wasm_component:snapshot/2`, as `wasi_preview2:snapshot_hooks/0` declares the
+0.2 ones. A 0.3 stdio stream is a stream end, not a host entry: a guest that
+holds one after init leaves a task frame open, and the capture is refused.
+""".
+-spec snapshot_hooks() -> #{binary() => stateless}.
+snapshot_hooks() ->
+    Keys = maps:keys(command(#{network => #{connect => [], listen => [], resolve => deny}})),
+    maps:from_list([{Iface, stateless} || {Iface, _} <- Keys]).
+
+-doc "As `wasi_preview2:host_remake/1`: the 0.3 host's preopens are 0.2's.".
+-spec host_remake(map()) -> fun((term()) -> {ok, atom(), term()} | {error, atom()}).
+host_remake(Opts) ->
+    wasi_preview2:host_remake(Opts).
 
 -doc """
 Every import a `wasi:cli/command` needs at 0.2 and at 0.3: the 0.2 host of

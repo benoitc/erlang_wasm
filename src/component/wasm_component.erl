@@ -54,7 +54,7 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
          destroy/1, destroy/2, drop_resource/3]).
 -export([import_fun/2, exports/1, hold/1, source/1]).
 -export([snapshot/2, restore/3, acquire/1, release/1]).
--export([host_new/2, host_get/1, host_update/2, host_drop/1, host_live/0]).
+-export([host_new/2, host_new/3, host_get/1, host_update/2, host_drop/1, host_live/0]).
 
 -export_type([component/0, prepared/0, instance/0]).
 
@@ -85,6 +85,10 @@ values is `wasm_canon`; the handle tables are `wasm_resources`.
 
 -define(HOST, {?MODULE, host_resources}).
 -define(HOST_NEXT, {?MODULE, host_next}).
+%% Where a host entry came from, when the host said so, and its state then:
+%% `{Origin, State}'. Only such an entry, still in that state, can be kept
+%% by an image and made again by the next instance's host.
+-define(HOST_ORIGIN(H), {?MODULE, host_origin, H}).
 %% An optional cap on how many host resources may be live at once, so a guest that
 %% creates and never drops (forgets) them cannot exhaust host memory. `infinity`
 %% (the default) is no cap; a caller sets it through `instantiate` opts.
@@ -858,18 +862,18 @@ snapshot(_I, _Opts) ->
 
 snapshot_1(#{cores := Cores, res_id := ResId} = I, Opts) ->
     Checks = [fun() -> quiet(ResId) end,
-              fun() -> no_host_resources() end,
               fun() -> imports_declared(I, maps:get(snapshot_hooks, Opts, #{})) end],
     case lists:foldl(fun(_C, {error, _} = E) -> E; (C, ok) -> C() end, ok, Checks) of
         {error, _} = E -> E;
         ok ->
-            case wasm_resources:capture(ResId) of
-                {error, Kind} ->
+            case {wasm_resources:capture(ResId), host_entries()} of
+                {_, {error, _} = E} -> E;
+                {{error, Kind}, _} ->
                     snapshot_refused(Kind, ~"a resource cannot be captured", #{});
-                {ok, Guest} ->
+                {{ok, Guest}, {ok, HostEntries}} ->
                     %% The counters as they are, not rebuilt from what is live:
                     %% a handle dropped before the capture is never given again.
-                    Counters = #{guest => Guest,
+                    Counters = #{guest => Guest, host => HostEntries,
                                  host_next => host_next(),
                                  async_next => wasm_async:handle_counter()},
                     with_leases(Cores, [], fun() -> capture_cores(I, Counters, Opts) end)
@@ -884,12 +888,25 @@ quiet(ResId) ->
         {error, Kind} -> snapshot_refused(Kind, ~"the instance is not quiet", #{})
     end.
 
-no_host_resources() ->
-    case lists:sort(maps:to_list(host_table())) of
-        [] -> ok;
-        [{_H, {Tag, _}} | _] ->
+%% The host entries an image keeps: each with an origin, in the state it was
+%% made in. A file, a socket, an opened subdirectory has no origin; a stream
+%% a permit was granted on, or that was read or closed, has changed.
+host_entries() ->
+    host_entries(lists:sort(maps:to_list(host_table())), []).
+
+host_entries([], Acc) ->
+    {ok, lists:reverse(Acc)};
+host_entries([{H, {Tag, State}} | Rest], Acc) ->
+    case get(?HOST_ORIGIN(H)) of
+        {Origin, State} -> host_entries(Rest, [{H, Tag, Origin} | Acc]);
+        undefined ->
             snapshot_refused(host_resource_not_snapshottable,
-                             ~"a host resource cannot be captured", #{tag => Tag})
+                             ~"a host resource cannot be captured",
+                             #{tag => Tag, reason => no_origin});
+        {_Origin, _Then} ->
+            snapshot_refused(host_resource_not_snapshottable,
+                             ~"a host resource changed since it was made",
+                             #{tag => Tag, reason => changed})
     end.
 
 %% Every function a core imports from outside the component names an interface
@@ -1036,29 +1053,38 @@ restore_1(#{recipe := #{decoded := Decoded, opts := ROpts} = Recipe, parts := Pa
     Builder = fun(N, Mod, ImportMap, Limits) ->
                       restore_core(element(N + 1, Parts1), Mod, ImportMap, Limits, N, Laid)
               end,
-    Opts1 = (maps:merge(maps:without([snapshotable], ROpts), Opts))#{core_builder => Builder},
+    Opts1 = (maps:merge(maps:without([snapshotable], ROpts),
+                        maps:without([host_remake], Opts)))#{core_builder => Builder},
     Pre = maps:get(pre, Decoded, #{}),
     Prepared = {prepared, #{bin => <<>>, decoded => maps:remove(pre, Decoded), pre => Pre}},
     try
         case instantiate(Prepared, Imports, Opts1) of
             {ok, Inst} ->
                 ok = restore_counters(Inst, maps:get(counters, Recipe)),
-                Restored = get({?MODULE, Laid}),
-                Cores = maps:from_list([{N, C} || {N, {C, _}} <- maps:to_list(Restored)]),
-                case wasm_error:capture(
-                       fun() ->
-                               [ok = wasm_snapshot:lay_siblings(C, P, Cores)
-                                || {C, P} <- maps:values(Restored)],
-                               ok
-                       end) of
-                    ok -> {ok, maps:remove(recipe, Inst)};
-                    {error, _} = E -> ok = destroy(Inst), E
+                case remake_host(maps:get(host, maps:get(counters, Recipe)),
+                                 maps:get(host_remake, Opts, undefined)) of
+                    ok -> restore_2(Inst, Laid);
+                    {error, _} = HE -> ok = destroy(Inst), HE
                 end;
             {error, _} = E ->
                 E
         end
     after
         erase({?MODULE, Laid})
+    end.
+
+%% The references to later cores, now that every core exists.
+restore_2(Inst, Laid) ->
+    Restored = get({?MODULE, Laid}),
+    Cores = maps:from_list([{N, C} || {N, {C, _}} <- maps:to_list(Restored)]),
+    case wasm_error:capture(
+           fun() ->
+                   [ok = wasm_snapshot:lay_siblings(C, P, Cores)
+                    || {C, P} <- maps:values(Restored)],
+                   ok
+           end) of
+        ok -> {ok, maps:remove(recipe, Inst)};
+        {error, _} = E -> ok = destroy(Inst), E
     end.
 
 %% The guest's table into the restored instance's, and no counter of this
@@ -1068,6 +1094,24 @@ restore_counters(#{res_id := ResId}, #{guest := Guest, host_next := HostNext,
     ok = wasm_resources:restore(ResId, Guest),
     put(?HOST_NEXT, max(host_next(), HostNext)),
     wasm_async:raise_handle_counter(AsyncNext).
+
+%% Each host entry the image kept, made again by this instance's host from
+%% its origin, under the handle the guest holds.
+remake_host([], _Remake) ->
+    ok;
+remake_host([_ | _], undefined) ->
+    snapshot_refused(host_remake_missing,
+                     ~"the image keeps host resources and no host_remake was given", #{});
+remake_host([{H, Tag, Origin} | Rest], Remake) ->
+    case Remake(Origin) of
+        {ok, Tag, State} ->
+            put(?HOST, maps:put(H, {Tag, State}, host_table())),
+            put(?HOST_ORIGIN(H), {Origin, State}),
+            remake_host(Rest, Remake);
+        {error, Kind} ->
+            snapshot_refused(Kind, ~"a host resource could not be made again",
+                             #{origin => Origin})
+    end.
 
 %% One core laid from its part: the module the link loaded, the imports it
 %% built. What it could not lay yet (a reference to a later core) is kept.
@@ -2002,8 +2046,20 @@ host_update(Handle, State) ->
 -doc "Drop a host handle. A miss (double drop, unknown handle) is a no-op.".
 -spec host_drop(pos_integer()) -> ok.
 host_drop(Handle) ->
+    _ = erase(?HOST_ORIGIN(Handle)),
     put(?HOST, maps:remove(Handle, host_table())),
     ok.
+
+-doc """
+As `host_new/2`, saying where the entry came from: an origin the host can make
+the entry again from, for another instance, as a restore does. WASI's stdio
+streams and preopened directories have one; nothing else does.
+""".
+-spec host_new(atom(), term(), term()) -> pos_integer().
+host_new(Tag, State, Origin) ->
+    H = host_new(Tag, State),
+    put(?HOST_ORIGIN(H), {Origin, State}),
+    H.
 
 -doc "The live host handles in this process, for tests and teardown checks.".
 -spec host_live() -> [pos_integer()].

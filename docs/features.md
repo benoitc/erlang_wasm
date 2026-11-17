@@ -65,13 +65,13 @@ specification. What they cover, and what they do not, is in
 | WASI 0.3: cli, clocks, random, filesystem, sockets and `wasi:http`, beside 0.2 in one component ([WASI 0.3](wasi-0-3.md)) | complete |
 | An async task that runs on after its call returns, and host imports that take or give a stream or future | complete |
 | Preparing a component once for many instances (`wasm_component:prepare/1`) | complete |
+| Snapshots of component instances, composed ones too, with WASI stdio and preopens made again per request ([snapshots](snapshots.md)) | complete, in memory only |
 
 ## Not implemented
 
 | Area | Why |
 | --- | --- |
 | Shared-everything threads: `thread.spawn-ref`, `thread.spawn-indirect`, `thread.available-parallelism` | they run threads in parallel over shared memory; a component that uses one is refused when it is linked, with `unsupported_canon_builtin` |
-| Snapshots of component instances | `wasm:snapshot/2` captures a core instance; a component's handle tables point to host state that a snapshot image cannot store |
 
 ## Caching compiled code
 

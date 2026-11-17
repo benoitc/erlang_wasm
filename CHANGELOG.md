@@ -23,6 +23,18 @@ plain Erlang.
 
 ### Changes
 
+- **Component instances can be snapshotted.** A component, or a composed one,
+  can be initialised once, captured with `wasm_component:snapshot/2` and
+  restored for each request with `wasm_component:restore/3`, instead of being
+  instantiated again every time. A worker does this for a component adapter
+  that asks for it. The stdio streams and preopened directories a WASI guest
+  took during init come back on each request's own stdin, stdout and
+  directories. An import nobody declared, or a host resource that cannot be
+  made again, such as an open file or a socket, refuses the capture.
+- **Fixed: a failed instantiation left a table behind.** An instantiation
+  refused part way, for example by a memory limit, kept the table holding its
+  state for as long as the calling process lived.
+
 - **Components can use cooperative threads.** A component can start threads
   of its own and switch between them, suspend, yield and resume them, with or
   without cancellation, as the Component Model specifies. A component that

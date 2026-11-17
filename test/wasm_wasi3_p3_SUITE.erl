@@ -27,6 +27,9 @@ middleware ones (not vendored).
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 
 -define(ECHO_BODY, ~"And the mome raths outgrabe").
+%% How long a program may run: the sweep's bound, and the slow programs'.
+-define(DEADLINE, 60000).
+-define(SLOW_DEADLINE, 900000).
 -export([hello_stdout/1, read_stdin/1, cli/1, clocks_sleep/1, random_imports/1,
          big_random_buf/1, random_limits/1, much_stdout/1,
          many_tasks_reach_the_resource_limit/1, file_write_chunked/1,
@@ -41,7 +44,7 @@ middleware ones (not vendored).
          middleware_with_chain/1, middleware_with_chain_host_to_host/1,
          empty_frame_at_end_of_stream/1, data_frame_at_end_of_stream/1,
          empty_frames_interleaved/1, chunks_over_h1/1,
-         p3_cases/1]).
+         p3_cases/1, slow_programs/1]).
 
 all() ->
     [hello_stdout, read_stdin, cli, clocks_sleep, random_imports, big_random_buf,
@@ -56,7 +59,7 @@ all() ->
      middleware_with_chain, middleware_with_chain_host_to_host,
      empty_frame_at_end_of_stream, data_frame_at_end_of_stream,
      empty_frames_interleaved, chunks_over_h1,
-     p3_cases].
+     p3_cases, slow_programs].
 
 %% Programs still failing, by group, and why. Each step of the WASI 0.3 work
 %% lowers its group to 0.
@@ -417,6 +420,19 @@ serve(Name, Headers, Extra) ->
             authority => <<"localhost">>, headers => Headers, body => <<"hello body">>},
     bounded(fun() -> wasi_preview3:run_serve(Bin, Req, Extra#{compile => true}) end).
 
+%% The programs the sweep leaves out, each under `SLOW_DEADLINE'. Only with
+%% WASM_RUN_SLOW_PROGRAMS=1, as CI's "wasmtime programs" job sets it: a plain
+%% `rebar3 ct' stays fast.
+slow_programs(_) ->
+    case os:getenv("WASM_RUN_SLOW_PROGRAMS") of
+        "1" ->
+            Results = [{N, outcome(filename:join(dir(), N ++ ".component.wasm"),
+                                   ?SLOW_DEADLINE)} || N <- slow()],
+            ?assertEqual([{N, pass} || N <- slow()], Results);
+        _ ->
+            {skip, "set WASM_RUN_SLOW_PROGRAMS=1 to run the slow programs"}
+    end.
+
 p3_cases(_) ->
     Results = [{group(P), filename:basename(P, ".component.wasm"), outcome(P)}
                || P <- programs()],
@@ -437,23 +453,33 @@ p3_cases(_) ->
 %%% ------------------------------------------------------------- helpers ---
 
 run(Name, Stdin, Opts) ->
+    run(Name, Stdin, Opts, ?DEADLINE).
+
+run(Name, Stdin, Opts, Deadline) ->
     {ok, Bin} = file:read_file(filename:join(dir(), Name ++ ".component.wasm")),
-    bounded(fun() -> wasi_preview3:run_command(Bin, Stdin, Opts#{compile => true}) end).
+    bounded(fun() -> wasi_preview3:run_command(Bin, Stdin, Opts#{compile => true}) end,
+            Deadline).
 
 %% Each program in its own process, under a deadline.
 bounded(Fun) ->
+    bounded(Fun, ?DEADLINE).
+
+bounded(Fun, Deadline) ->
     {Pid, Mon} = spawn_monitor(fun() -> exit({done, Fun()}) end),
     receive
         {'DOWN', Mon, process, Pid, {done, R}} -> R;
         {'DOWN', Mon, process, Pid, Other} -> {error, {crashed, Other}}
-    after 60000 ->
+    after Deadline ->
         exit(Pid, kill),
         {error, timeout}
     end.
 
 outcome(Path) ->
+    outcome(Path, ?DEADLINE).
+
+outcome(Path, Deadline) ->
     Name = filename:basename(Path, ".component.wasm"),
-    case {Name, run(Name, stdin(Name), opts(Name))} of
+    case {Name, run(Name, stdin(Name), opts(Name), Deadline)} of
         {_, {ok, #{exit_code := 0}}} -> pass;
         %% Passes by trapping at the limit, as wasmtime's own test has it.
         {"p3_cli_many_tasks", {error, #{ctx := #{reason := resource_limit_reached}}}} ->
@@ -546,9 +572,10 @@ programs() ->
     lists:sort([P || P <- filelib:wildcard(filename:join(dir(), "p3_*.component.wasm")),
                      not lists:member(filename:basename(P, ".component.wasm"), slow())]).
 
-%% Programs that pass but run past the sweep's 60 s bound, run by hand.
-%% p3_sockets_tcp_streams reads 2 MB a byte at a time through a debug build,
-%% twice: about seven minutes interpreted (test/audit/PERF.md).
+%% Programs that pass but run past the sweep's 60 s bound: `slow_programs'
+%% runs them, under a bound of their own. p3_sockets_tcp_streams sends 2 MiB
+%% over loopback in 256-byte chunks and checks every byte, twice, in a debug
+%% build, all interpreted: about seven minutes (test/audit/PERF.md).
 slow() -> ["p3_sockets_tcp_streams"].
 
 dir() ->

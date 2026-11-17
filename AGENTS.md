@@ -79,6 +79,16 @@ scripts/build-wasmtime-p2.sh
 WASM_REQUIRE_WASMTIME_FIXTURES=1 rebar3 ct --suite=test/wasm_wasi3_p3_SUITE
 ```
 
+One 0.3 program, `p3_sockets_tcp_streams`, takes about seven minutes, past
+the suite's 60 s bound for each program. The same job runs it in a step of
+its own, with `WASM_RUN_SLOW_PROGRAMS=1`; a plain `rebar3 ct` skips it. To run
+it locally:
+
+```sh
+WASM_REQUIRE_WASMTIME_FIXTURES=1 WASM_RUN_SLOW_PROGRAMS=1 \
+  rebar3 ct --suite=test/wasm_wasi3_p3_SUITE --case=slow_programs
+```
+
 ## Build & Development Commands
 
 ```bash

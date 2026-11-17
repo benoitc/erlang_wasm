@@ -50,17 +50,49 @@ components without a shell script. Nothing in `src/` calls it.
 and the raw sections for later. It parses the graph of instances only when it
 is needed.
 
-A component then has one of three shapes:
+### How a component's shape picks its instantiate path
+
+A component has one of three shapes, and each shape has its own path through
+`wasm_component`:
 
 | Shape | Recognised by | Path |
 | --- | --- | --- |
 | single core | one core, or every export lifts from the largest core and the host covers its imports | `start`: one `wasm:instantiate/3` |
-| linked cores | the entry core imports from another core, or an export lifts from a core other than the largest | `wasm_component_link:link/4` |
+| linked cores | the entry core imports from another core, or an export lifts from a core other than the largest | `link_in`, then `wasm_component_link:link/4` |
 | composed | no top-level core (nested components, as `wac` emits) | `instantiate_composed` |
 
 The entry core is the largest core, because a resource or WASI component
 puts smaller shim and adapter cores next to the guest. If two cores have the
 same size, the first one wins, so the choice is always the same.
+
+The decision, with the private functions that make it:
+
+```text
+  instantiate/3
+     |
+  instantiate_decoded
+     |-- no top-level core? -- yes --> instantiate_composed
+     |                                   compose_step for each graph item;
+     no                                  a nested component goes through
+     |                                   instantiate/3 again
+  validate_lifts/2
+     |
+  instantiate_valid
+     |  resolve the entry core's imports: host map, then resource built-ins
+     |
+     |-- every import resolved, and on_entry? -- yes --> start
+     |     on_entry: one core, or every export             one core,
+     |     resolves on the entry core                      wasm:instantiate/3
+     no
+     |
+  link_in --> wasm_component_link:link/4   every core, one shared store
+```
+
+`on_entry` is computed once by `prepare/1` and read from the prepared
+component after that. The single-core and linked paths both end in
+`with_export_map`, which records the per-export tables `call/4` reads. On
+every path, `snapshotable => true` also keeps what the instance was built
+from (`with_recipe`), so a restore can take the same path again.
 
 ```text
   component bytes
@@ -286,6 +318,60 @@ Imports = #{{~"example:store/kv", ~"[constructor]bucket"} =>
 - `destroy/2` closes every live host handle in the process with its closer.
   This is why the rule is one live instance per process.
 
+### The host resource table
+
+The host resource table holds every resource the host defines for a
+component: what a host function returns as an `own` handle, such as a
+stream, a file descriptor, a socket or an HTTP request. It lives in
+`wasm_component` (`host_new/2`, `host_new/3`, `host_get/1`, `host_update/2`,
+`host_drop/1`, `host_live/0`). Read this before you add a host resource or
+change how one is freed or captured.
+
+**Who uses it.** The WASI hosts: `wasi_preview2`, `wasi_p2_filesystem`,
+`wasi_p2_sockets` and `wasi_http` for 0.2, and `wasi_p3_sockets` and
+`wasi_p3_http` for 0.3. A method looks its handle up with `host_get/1`,
+changes its state with `host_update/2`, and `[resource-drop]` calls
+`host_drop/1`. Your own host imports can use it the same way.
+
+**Where it lives.** In the process dictionary of the process that owns the
+instance, because host functions run in that process. It is one map,
+`Handle => {Tag, State}`, for the whole process: every component instance in
+the process shares it.
+
+**How long an entry lives.** Until `host_drop/1`, or until
+`wasm_component:destroy/1,2`, which removes every live entry in the process
+and, with `destroy/2`, closes each one with the closer you pass first. Nothing
+else frees an entry, except the process exiting. So run one live component
+instance per process, and destroy it from that process: the worker kernel
+does this with one instance per runner.
+
+**The handle counter.** Handles start at 1 and each `host_new/2` takes the
+next one. The counter is never reset, not even by `destroy`, so a handle is
+never given twice in one process. It is separate from the counter of
+`wasm_resources`, so a guest handle and a host handle can have the same
+number; the handle's resource type decides which table it is looked up in.
+
+**The limit.** `resource_limit` in the `instantiate/3` options sets how many
+entries may be live in the process at once. Each `instantiate/3` sets it
+again. Above it, `host_new/2` traps with `resource_limit_reached`, so a guest
+that never drops what it opens cannot use up the host's memory.
+
+**Snapshots.** `wasm_component:snapshot/2` keeps a host entry only when the
+host said where it came from and it has not changed since:
+
+1. `host_new/3` records an origin with the entry, such as `{stdio, stdout}`
+   or `{preopen, Name}`. WASI 0.2 gives one to its stdio streams and its
+   preopened directories, and to nothing else.
+2. At capture, an entry with no origin, or whose state differs from the
+   state it was made with, refuses the snapshot with
+   `host_resource_not_snapshottable`. The image keeps each other entry as
+   `{Handle, Tag, Origin}`, and the counter.
+3. `wasm_component:restore/3` calls the `host_remake` fun you pass (for
+   example `wasi_preview2:host_remake/1`) with each origin, and puts the new
+   entry under the same handle, because the guest still holds that number.
+   It then raises the counter to at least the captured value. An image with
+   entries and no `host_remake` fails with `host_remake_missing`.
+
 ## The async ABI
 
 `wasm_async` runs the async Canonical ABI on the BEAM's own scheduling. The
@@ -468,6 +554,10 @@ resource, create it with `host_new/2` and also provide its `[resource-drop]`.
 | `wasm_component_async_tasks_SUITE` | tasks that outlive their call, two at once, the host's ends, `on_end` on drop and at teardown |
 | `wasm_wasi2_async_SUITE` | `call_async/4` against wasmtime's async fixture |
 | `wasm_component_malformed_SUITE` | truncation and corruption are values |
+| `wasm_component_iface_SUITE` | an interface's functions called as their `canon lift` declares: post-return, string encoding and realloc |
+| `wasm_component_forward_SUITE` | `stream.forward` and `future.forward` |
+| `wasm_component_wast_SUITE` | wasmtime's test scripts for the cooperative thread built-ins |
+| `wasm_component_snapshot_SUITE` | `snapshot/2` and `restore/3` of a component, with one core and with linked cores |
 | `wasm_component_worker_SUITE` | a component through the worker kernel |
 | `wasm_recipe_SUITE` | the build plan, and one gated real build |
 
@@ -488,7 +578,11 @@ for s in wasm_component_SUITE \
          wasm_component_async_import_SUITE \
          wasm_component_async_abi_SUITE \
          wasm_component_async_tasks_SUITE \
-         wasm_component_malformed_SUITE; do
+         wasm_component_malformed_SUITE \
+         wasm_component_iface_SUITE \
+         wasm_component_forward_SUITE \
+         wasm_component_wast_SUITE \
+         wasm_component_snapshot_SUITE; do
     rebar3 ct --suite="test/$s" || break
 done
 ```

@@ -196,8 +196,8 @@ so that low addresses of a restored memory do not read the page table on
 every access. It only caches translations to an array (a private slot or a
 growth chunk). Neither of these ever moves, so no entry ever becomes wrong.
 If you change the code generated for a memory access, read "The translation
-cache" in [Design notes](design-notes.md#the-translation-cache) and
-[Compiled tier](compiled-tier.md).
+cache" in [Compiled tier
+internals](compiled-tier-internals.md#the-translation-cache).
 
 ## The keeper: who holds what
 
@@ -266,6 +266,52 @@ The rows go when the `wasm` application stops, and an instance made before the
 stop is no longer counted. So after the next start it cannot grow, and a call
 that reaches its wasm tables or shared globals traps with `runtime_stopped`.
 Its memory is freed when its owner drops it.
+
+## Who owns what, and who frees it
+
+A restored memory involves four things with different owners: the image, the
+image's owner process, the memory's own arrays and the keeper's rows. This is
+how they fit, and what each event frees:
+
+```text
+  wasm_snapshot_owner, one process per image
+    holders: the process that captured or loaded the image, then every
+             process that called wasm:acquire/1
+    |
+    | holds {snapshot, Id}
+    v
+  keeper row: image                         image (a term)
+    Bytes, counted in max_snapshot_bytes      one binary per 64 KiB page,
+    restored memories: N                      read in place, never written
+         ^                                           ^
+         | each restored memory counts once          | reads
+         |                                           |
+  keeper row: memory M                      memory M (one instance's)
+    charged: page table + growth + arena      page table: one entry per
+    holders: {instance, I}, ...                 4 KiB page
+                                              arena: private 4 KiB copies
+                                              chunks: growth past the image
+
+  wasm:destroy(I), or the process that owns I exits
+    -> the keeper drops {instance, I}. If M has no holder left, its
+       charged pages go back to the node budget, and N goes down by one.
+  the last process holding the image calls wasm:release/1, or exits
+    -> the owner gives back its module claims, drops {snapshot, Id}
+       and exits.
+  no {snapshot, Id} left and N = 0
+    -> the keeper removes the image row; Bytes go back to
+       max_snapshot_bytes.
+```
+
+- **The image can outlive its owner.** A memory restored from it still reads
+  its pages, so the keeper keeps the image row until the last such memory is
+  gone. This is how a runner can finish a request after its worker stopped.
+- **The keeper owns the counting, not the bytes.** The `atomics` arrays and
+  the page binaries are freed by the Erlang VM when no process holds a term
+  that refers to them. The keeper's rows decide what the node budget and the
+  snapshot budget count.
+- **A memory without an image** has no page table and no arena: only its
+  chunks, charged to the node budget, and the same holder rule.
 
 ## The node page budget
 

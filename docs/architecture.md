@@ -26,7 +26,8 @@ before it.
 5. `wasm_exec` is the interpreter. Go to the `dispatch` section and read three
    or four instructions.
 6. `wasm_jit` and `wasm_core` are the compiled tier. Read
-   [the compiled tier](compiled-tier.md) first, then `wasm_jit:entry/3`.
+   [the compiled tier](compiled-tier.md) first, then
+   [its internals](compiled-tier-internals.md) and `wasm_jit:entry/3`.
 
 `wasi_preview1` is a separate part that sits on top of all of this. You can
 ignore it unless you are working on WASI.
@@ -270,6 +271,8 @@ fourteen modules, which is completely wrong.
 ## Read this next
 
 The page for the part you are changing: [Worker
-internals](worker-internals.md), [The compiled tier](compiled-tier.md) or
+internals](worker-internals.md), [Compiled tier
+internals](compiled-tier-internals.md), [Component
+internals](component-internals.md), [Memory](memory.md) or
 [Snapshots](snapshots.md); then [Design notes](design-notes.md) for the reasons
 behind the design.

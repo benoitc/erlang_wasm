@@ -145,7 +145,7 @@ that measures well enough.
 instance options by `wasm_jit:shard_count/2`, sets how many units a compile
 is split into. `compile_sync`, `compile_whole` and `compile_force` exist for
 the conformance suites; see
-[Design notes](design-notes.md#three-options-that-exist-only-for-conformance).
+[Compiled tier internals](compiled-tier-internals.md#three-options-that-exist-only-for-conformance).
 The collector's thresholds (`gc_alloc_threshold` and the other `gc_*`
 settings) are described on the internals page
 [Garbage collection](gc.md). None of these is part of the supported API,

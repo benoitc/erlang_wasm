@@ -92,8 +92,9 @@ the files for each opcode space.
    `wasm`.
 2. If generated code changes shape (what it reads, what a continuation
    carries, which helper it calls), bump `ABI` in `wasm_jit` in the same
-   commit and say what an older artifact would do wrong. Design notes,
-   "Bump the ABI when generated code changes shape", has the history.
+   commit and say what an older artifact would do wrong. [Compiled tier
+   internals](../compiled-tier-internals.md#bump-the-abi-when-generated-code-changes-shape)
+   has the rule and the history.
 3. Gate cold compile time and generated code size as well as speed. A change
    that sped up calls once quadrupled compile time because no gate looked.
 4. Run `realbench` on QuickJS, five interleaved pairs, both orderings.

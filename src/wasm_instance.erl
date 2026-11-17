@@ -110,8 +110,8 @@ new(M, Imports, Opts) ->
     end.
 
 new_1(M, Imports, Opts, Build, Heap, Owned) ->
-    %% Made here rather than inside the build, so a build that fails part way
-    %% deletes it: nothing else would.
+    %% Made here rather than inside the build, so a build that fails before
+    %% anything can refer to the instance deletes it: nothing else would.
     Store = holder_new(#mut{globals = {}, tables = {}, mems = {}}),
     case wasm_error:capture(fun() -> {ok, build(M, Imports, Opts, Heap, Build, Store)} end) of
         {ok, Inst} ->
@@ -133,8 +133,17 @@ new_1(M, Imports, Opts, Build, Heap, Owned) ->
                 Hooks -> ok = set_extra(Inst, snapshot_hooks, Hooks)
             end,
             {ok, Inst};
-        {error, _} = Error ->
-            true = ets:delete(Store),
+        {error, Err} = Error ->
+            %% A trap is a segment failing to initialise, after earlier ones
+            %% may already have put this instance's functions into an imported
+            %% table: those stay callable, as the specification has it
+            %% (`linking.wast'), so the state they read stays too. Any other
+            %% failure, a limit or a link error, comes before anything could
+            %% refer to the instance.
+            _ = case Err of
+                    #{class := trap} -> ok;
+                    _ -> ets:delete(Store)
+                end,
             ok = wasm_keeper:discard(Build),
             %% Release only a heap this instantiation made. One adopted from a
             %% linked instance belongs to that instance and is still in use.

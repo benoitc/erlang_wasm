@@ -156,15 +156,16 @@ created. It is not set with `process_flag` inside the runner: the closure and
 the request are copied onto the new heap before such a call could run. If
 you call the guest inline, passing the key does nothing.
 
-## Why reactors were slow to adopt compiled code
+## Why a reactor uses compiled code from its first request
 
-Until 0.3.0, a new instance could start using compiled code only on a call
-where the tier's hotness counter fired: one call in 32. A reactor makes a new
-instance for each request. So 31 requests in 32 ran interpreted, even though
-the compiled code was already loaded. Now `wasm_jit`'s `maybe_adopt` first
-looks for loaded code, and reads the counter only when there is none. An
-instance uses compiled code from its first call. `test/audit/PERF.md` has the
-numbers before and after.
+A reactor makes a new instance for each request. If an instance could adopt
+compiled code only on a call where the tier's hotness counter fires, one call
+in 32, then 31 requests in 32 would run interpreted while the compiled code was
+already loaded. So `wasm_jit`'s `maybe_adopt` first looks for loaded code, and
+reads the counter only when there is none: an instance uses compiled code from
+its first call. The measurements are in `test/audit/PERF.md`, section "Where a
+QuickJS request actually goes", under "Adoption, separated from the compile
+threshold".
 
 ## Why a request's memory is a page table over the worker's image
 

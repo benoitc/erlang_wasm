@@ -217,6 +217,22 @@ Three behaviours to know:
   source port needs a `listen` rule for it. A loopback grant does not allow
   binding `0.0.0.0`.
 
+### What the network grant refuses
+
+Every route out gets a case in `wasi_net_escape_SUITE`:
+
+| attempt | result |
+| --- | --- |
+| a granted address and port | connected |
+| the granted address, another port | `ENOTCAPABLE` |
+| `::ffff:127.0.0.1` under a `127.0.0.0/8` grant | connected, over IPv4 |
+| `::ffff:10.0.0.1` under a `127.0.0.0/8` grant | `ENOTCAPABLE` |
+| `::127.0.0.1` under a `127.0.0.0/8` grant | `ENOTCAPABLE`, it is IPv6 |
+| binding `0.0.0.0` under a loopback `listen` grant | `ENOTCAPABLE` |
+| connecting to an address `sock_getaddrinfo` returned | checked as an address |
+| a socket descriptor from another instance | `EBADF` |
+| any socket call with no `net` key | `ENOTCAPABLE` or `EBADF` |
+
 ### Which socket calls you get
 
 Preview 1 defines four socket calls: `sock_accept`, `sock_recv`, `sock_send`
@@ -242,6 +258,7 @@ read subscription reports how many bytes are waiting. It sets
 `EVENTRWFLAGS_FD_READWRITE_HANGUP` when the peer has closed the connection.
 So your module can tell "nothing yet" from "nothing ever again". Bytes that a
 poll finds are kept for the next read. The poll does not consume them.
+A subscription on a file returns `ENOSYS` rather than a guess.
 
 Set `FDFLAGS_NONBLOCK` through `fd_fdstat_set_flags` to make reads return
 `EAGAIN` instead of waiting. It applies to sockets; files ignore it.

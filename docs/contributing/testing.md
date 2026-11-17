@@ -31,6 +31,42 @@ the suites that test it. Suites are named after what they cover, and each
 opens by saying what that is; the map's last section shows how to search
 `test/` for the suites that call a module.
 
+## The suites behind the feature page
+
+These are the suites behind the claims in
+[Features and conformance](../features.md), and the properties they hold:
+
+| Suite | What it covers |
+| --- | --- |
+| `wasm_spec_SUITE` | the official suite, gated per suite against a baseline |
+| `wasm_prop_SUITE` | totality, atom safety, memory model equivalence, LEB128 round trip |
+| `wasm_bench_SUITE` | the benchmark tables in `test/audit/PERF.md`, plus the responsiveness assertion |
+| `wasm_worker_SUITE` | limits actually bound, tested through `wasm_instance_worker` |
+| `wasi_SUITE` | WASI syscalls, and one case per filesystem escape technique |
+| `wasi_nif_SUITE` | the native backend, including the symlink-swap race |
+| `wasi_net_SUITE` | the network grant on its own, with no sockets in it |
+| `wasi_sock_SUITE` | the four standard socket calls, and readiness |
+| `wasi_sock_ext_SUITE` | the client extension, layouts built byte by byte |
+| `wasi_net_escape_SUITE` | one case per network escape route |
+| `wasm_num_SUITE` | numeric edge cases, each naming the rule it enforces |
+| `wasm_native_SUITE` | a `clang -O2` module: recursion, memory, indirect calls |
+| `wasm_rust_SUITE` | a real Rust `std` binary through `_start`, sandbox included |
+| `wasm_lang_SUITE` | a real 1.8 MB QuickJS build, evaluating JavaScript |
+| `wasm_scale_SUITE` | what only breaks at size: big tables, deferred lowering |
+| `wasm_examples_SUITE` | both worked examples, run as their documentation says |
+
+The main properties:
+
+- **Totality.** No binary, however hostile, produces anything but `{ok, _}` or a
+  structured `{error, _}`. Verified over random binaries and over valid modules
+  mutated at the byte level.
+- **No atom creation.** Decoding arbitrary input never moves the atom count. The
+  atom table is node-wide and never reclaimed, so one
+  `binary_to_atom` on module data would let a remote module crash the node.
+- **Memory equivalence.** Random sequences of store, fill, copy and grow against
+  the `atomics` backend agree byte for byte with a plain binary model. The same
+  property will validate the optional native backend when it arrives.
+
 ## Get the fixtures
 
 Most suites build what they run from WAT at test time. The rest read a

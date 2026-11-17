@@ -250,8 +250,8 @@ What to know:
 
 The same request through `handle()` and through an entry, with the compiled
 tier on, run one after the other in one emulator on a loaded machine: the
-guest's call took 40.4 ms and 2.1 ms. [Tuning a worker host](tuning.md) has
-the table.
+guest's call took 40.4 ms and 2.1 ms. `test/audit/PERF.md`, section "The
+tuning guide's measurements (from docs/tuning.md)", has the table.
 
 ## Give both processes a heap floor
 

@@ -11,6 +11,7 @@ propose an optimisation, or before you change something an audit fixed.
 | --- | --- | --- |
 | `PERF.md` | the measurement record: every measured figure a claim cites, one `##` section per question, roughly in the order they were taken. A topic index is at the top | you cite a number, or need to know how one was taken |
 | `ATTEMPTS.md` | ideas tried and dropped or reverted, with the numbers that dropped them and what would reopen them; also what succeeded and the rules the failures produced | before you propose any optimisation, so you do not repeat one already measured |
+| `CONFORMANCE.md` | how each conformance suite was brought up: what the harness was not checking, what the baseline was hiding, and the defects and measurements each proposal produced | you change the spec harness, the baseline, or an instruction set it covers |
 | `REVIEW.md` | the pre-release audit of `release-0.3.0`: ten findings, each reproduced by a probe, and the commit that closed each | you change a mechanism one of the findings covers |
 | `DOCS_REVIEW.md` | the documentation and maintainability review the next release waits on: stale facts, the recommended doc structure, the map from area to modules and tests, the modules hard to understand, questions for the maintainer | before a release, or before you restructure the docs or split a module |
 | `CLEANUP_STEWARD.md` | the design record for the worker cleanup rework: the problem, the roles (guardian, cleanup steward, reaper), the protocol and its journal | you change worker cleanup, the reaper or its journal |

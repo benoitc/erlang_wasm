@@ -70,6 +70,34 @@ Generated code reads `#mem{}` by literal field index.
 to `wasm_memory:field_indices/0`. If you add a field to `#mem{}`, that test
 fails, instead of memory being corrupted without any error.
 
+## Atomic instructions and `wait`
+
+The threads proposal's atomic instructions run on the same chunks. Read this
+before you change `wasm_memory`'s atomic paths or `wasm_wait`. What the
+proposal covers, and how you create agents, is in
+[Features and conformance](features.md#threads).
+
+**The storage was already atomic.** Linear memory is chunked `atomics` arrays,
+so an eight-byte aligned atomic load is the same single `atomics:get` an
+ordinary one is. Narrower accesses are a *field* of a 64-bit word, so writing
+one means reading the word, replacing the field and writing it back; those go
+through `atomics:compare_exchange` and retry. A read-modify-write is that same
+loop with the arithmetic inside it, and this makes it one indivisible step,
+not a load and a store that usually work.
+
+**`wait` is a `receive`.** Other runtimes use a futex, which has a well-known
+risk: a waiter must check a value and then sleep, and a notify that arrives
+between those two steps wakes nobody. Here the waiter registers *before* it
+re-reads the value, so a notify arriving afterwards lands in its mailbox and
+`receive` finds it either way. A mailbox is a queue, not a signal that can be
+missed. This is the one part of the proposal that the BEAM makes easier, not
+harder.
+
+**Nothing reorders.** `atomics` is sequentially consistent, so `atomic.fence`
+has nothing to do and the relaxed memory model the proposal permits is not
+exploited. An implementation that reordered would be faster, but ordering bugs
+in guest programs could then not be reproduced.
+
 ## A restored memory shares its image
 
 A memory restored from a snapshot has two regions. An address below

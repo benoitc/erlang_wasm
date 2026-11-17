@@ -96,136 +96,11 @@ done
 
 ## Thresholds, and what they cost
 
-A threshold chosen after seeing the result is not a threshold. These were set
-before the resource model was written, in the plan that called for it, and the
-measurement below is what it came out at.
-
-| path | threshold | before | after | ratio |
-| --- | --- | ---: | ---: | ---: |
-| `memory.grow`, standalone | no more than 3x | 3320 ns | 8530 ns | 2.6x |
-| `memory.grow`, exported | no more than 3x | 4670 ns | 8265 ns | 1.8x |
-| `memory-new+free-1page` | none set | 2776 ns | 4154 ns | 1.5x |
-| `call-fac-10` | untouched | 1414 ns | 1417 ns | 1.0x |
-| `write_memory-64k` | untouched | 152.8 us | 154.8 us | 1.0x |
-
-Creating, growing and releasing a memory became `wasm_keeper` transactions,
-which is a synchronous round trip where there had been a lock-free counter
-bump. About 3.8 us of the growth figure is that round trip. The rest of the
-standalone arm is a second change in the same commit: a standalone memory is
-now observable, so growing it publishes a chunk tuple as well as a size, which
-an exported memory was already paying for and a standalone one was not.
-
-Execution is untouched, which is the point of putting the transaction on the
-lifecycle path and not on the access path. Missing the growth threshold would
-have meant a lock per memory instead of a central process.
-
-Those are the micro-arms. A real instantiate-and-destroy loop went the other
-way, because the store used to keep every chunk tuple, table array and global
-cell ever made. Ten thousand cycles of the 17-page Rust plugin, one live at a
-time:
-
-| | rows left in the store | live VM memory | us per instantiate |
-| --- | ---: | ---: | ---: |
-| before | 20,015 | 20.1 GB | 496 rising to 638 |
-| after | 15 | 87 MB | 348 to 376, flat |
-
-`pages_in_use` read 0 at both ends of both runs, which is what made this
-invisible: the counter was right and the store was not. Instantiation got
-faster because it stopped allocating on top of its own garbage.
-
-### Execution leases, against the threshold recorded before them
-
-The gate was fixed at **no more than 10% on a call against a linked or shared
-object store**, and written down before the mechanism existed. Four interleaved
-passes, minimum of each, `e0fb152` against the leases:
-
-| arm | before | after | change |
-| --- | ---: | ---: | ---: |
-| `gc-call-alloc-linked` | 542.5 ns | 564.1 ns | +4.0% |
-| `gc-call-pure-linked` | 157.8 ns | 165.8 ns | +5.1% |
-| `gc-call-alloc-unlinked` | 542.6 ns | 587.6 ns | +8.3% |
-| `gc-call-pure-unlinked` | 144.4 ns | 165.6 ns | **+14.7%** |
-
-The arm the gate names passes at +4.0%. A lease is two `atomics`
-read-modify-writes, about 21 ns, taken once per outermost call, so it lands
-hardest on the shortest call: `pure` allocates nothing and exists only to price
-the mechanism.
-
-**The unlinked arms were supposed not to move at all, and they do.** The plan
-had an instance alone in its process take no lease. That is not sound, and the
-reason is a case the plan did not consider: a heap becomes shared when a second
-instance links to it, which can happen while a call on that heap is already
-running. That call took no lease, nothing can observe it, and the new instance
-is then free to collect underneath it. So a lease is taken whenever the store
-exists at all. A module declaring no struct and no array type has no store and
-pays one comparison.
-
-The alternative the plan named for missing the gate, moving leases off the call
-path and making collection owner-only, gives up collecting a shared store
-altogether. 21 ns is the cheaper trade.
-
-### Keeping what a trap wrote
-
-No threshold was set for this one. Every store mutation is recorded so the
-invocation's catch can commit it, which is one process dictionary write per
-mutation and one erase per top-level call. Four interleaved passes, minimum of
-each, `f1bdedb` against the checkpoints, at a load average of 25 so read them
-as indicative:
-
-| arm | before | after | change |
-| --- | ---: | ---: | ---: |
-| `global.set-x1000` | 88.0 us | 96.8 us | +10.0% |
-| `call-through-host-import` | 210.0 ns | 222.1 ns | +5.8% |
-| `call-fac-10` | 1440.5 ns | 1432.0 ns | none |
-
-About 8.8 ns per `global.set` and about 12 ns per top-level call. The
-`global.set` arm does a thousand of them in one call and is the worst case on
-purpose; `call-through-host-import` is a 210 ns call, which is why a fixed 12 ns
-shows as 6% there and as nothing on a 1.4 us one.
-
-The key those writes are made under is a bare reference rather than a
-`{wasm_checkpoint, Id}` tuple. Building and hashing the tuple on every mutation
-cost more than the write it was the key for: the same arm measured +20.3% that
-way, against +10.0% now.
-
-### The invocation budget
-
-The plan asked for one thing here: that the charged edge did not get slower.
-Fuel is charged at every loop back edge and every call, and it stays an
-immutable field read; the budget is touched only at boundaries. Three
-interleaved passes, minimum of each, `7a8b31e` against the budget, at a load
-average between 24 and 51 so treat them as indicative:
-
-| arm | before | after | change |
-| --- | ---: | ---: | ---: |
-| `call-fac-10` | 1489.2 ns | 1473.1 ns | none |
-| `global.set-x1000` | 97.7 us | 94.5 us | none |
-| `call-through-host-import` | 225.0 ns | 263.8 ns | +17.2% |
-
-The charged edge is unchanged, which was the requirement. What moved is the
-host-call boundary: two process dictionary operations per outermost invocation
-and three per host call, to publish the fuel a nested call continues from,
-count the call, and adopt whatever came back. About 39 ns on a 225 ns round
-trip through an import that does nothing. A host function that does real work,
-which is every WASI call, is measured in microseconds.
-
-### Enforcing the page ceiling
-
-A holder's total is kept as a running sum in the keeper rather than as an index
-from holder to memories, because growth has to check every holder of the memory
-being grown. Three interleaved passes, minimum of each, `36afdd0` against the
-ceiling, at a load average of 6 to 10:
-
-| arm | before | after | change |
-| --- | ---: | ---: | ---: |
-| `instantiate-fac` | 3438.5 ns | 3436.9 ns | none |
-| `memory-new+free-1page` | 4455.1 ns | 4630.4 ns | +3.9% |
-
-Instantiation is unchanged because a limits map without `max_memory_pages`
-short-circuits before it reaches the keeper at all. What moved is creating and
-releasing a memory, which now adds to and subtracts from a holder's total.
-
-Recorded on an Apple M4 Pro, OTP 29, `a6be24d` against the resource model.
+A threshold chosen after seeing the result is not a threshold. Write yours down
+before the numbers arrive. The thresholds set for the resource model, execution
+leases, keeping what a trap wrote, the invocation budget and the page ceiling,
+and what each came out at, are in `test/audit/PERF.md`, section "Path arm
+results (from bench/paths/README.md)".
 
 ## Which fusion rules actually fire
 
@@ -244,41 +119,9 @@ erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
 Add `show` after the path to print the IR, which is readable for a benchmark
 loop and is not for anything else.
 
-Over 560,000 instructions of QuickJS, every rule fires and fusion removes 22.1%
-of dispatches; over the 46 KB Rust plugin, 24.1%. Over `bench/cross/loop.wat`,
-which is what the cross-runtime arm times, only two of the nine fire:
-
-| module | instructions | after fusion | removed |
-| --- | ---: | ---: | ---: |
-| `loop.wasm` | 24 | 18 | 25.0% |
-| `plugin.wasm` | 13,931 | 10,569 | 24.1% |
-| `qjs.wasm` | 559,987 | 435,991 | 22.1% |
-
-**So the benchmark loop is not a sample of the rules.** Seven of the nine were
-chosen from real clang and Rust output and the loop exercises none of them. A
-fusion change has to be counted on a real module and timed on the loop, and the
-two answer different questions.
-
-### What `fc183c1` actually did
-
-`fc183c1` added four rules and measured -1.3%, and there was no way at the time
-to say whether they had run. Counted against `54761de`, on the loop, exactly
-one of the four fires: `lg_const_add_set` replaces the `lg_const_add`,
-`local.set` pair the older rules left. The loop body goes from 16 dispatches
-per iteration to 15.
-
-| | dispatches per iteration | ns/iteration |
-| --- | ---: | ---: |
-| `54761de` | 16 | 111.6 |
-| `fc183c1` | 15 | 108.8 |
-
-**6.25% fewer dispatches bought 2.5% of the time**, consistently in that
-direction across three interleaved passes but inside the run-to-run spread of
-either arm. So the rules do fire, the change is a small real win rather than
-the nothing it looked like, and dispatch count is worth about a third of its
-face value on this loop. The rest of the time is in the operand traffic around
-the dispatch, which is what a bounded top-of-stack cache is aimed at and what
-another peephole rule is not.
+What it counted on QuickJS, the Rust plugin and the benchmark loop, and what
+`fc183c1` actually did, are in `test/audit/PERF.md`, section "Path arm results
+(from bench/paths/README.md)".
 
 ## Compiling one function instead of interpreting it
 
@@ -294,8 +137,8 @@ erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths -pa bench/cross \
 
 It asserts the same checksum as the interpreter at five sizes before it reports
 a time, because a faster answer to a different computation is not a result.
-**2.59 ns/iteration against the interpreter's 60.5**, which is faster than
-wasm3 and slower than V8.
+What it measured is in `test/audit/PERF.md`, section "Path arm results (from
+bench/paths/README.md)".
 
 It is in `bench/` and not `src/` on purpose. It loads one literal module name,
 once, never unloads or purges, and covers only blocks, loops and the i32
@@ -317,30 +160,10 @@ erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
     -run subset main test/fixtures/lang/qjs.wasm why
 ```
 
-**The subset `corespike` covers is 0.5% of QuickJS by function and 0.02% by
-instruction**, and 4.7% and 0.04% of the Rust plugin. Adding restrictions back,
-by share of instructions:
-
-| compiler supports | qjs funcs | qjs instrs | plugin funcs | plugin instrs |
-| --- | ---: | ---: | ---: | ---: |
-| i32, control, locals | 0.5% | 0.0% | 4.7% | 0.0% |
-| + i64, div/rem | 1.1% | 0.0% | 4.7% | 0.0% |
-| + memory | 8.2% | 2.4% | 16.0% | 22.7% |
-| + globals, floats | 10.3% | 3.2% | 16.7% | 22.8% |
-| + calls | 94.1% | 73.8% | 100% | 100% |
-
-The remaining 5.9% of QuickJS is SIMD, and nothing in either module uses
-tables, the GC types or atomics.
-
-**So there is no cheap on-ramp.** A compiler that cannot call is worth nothing
-on real code: leaf functions doing pure integer arithmetic are 107 instructions
-out of 560,000. The compiled-to-interpreted boundary is not the last piece of
-the project, it is the first, and the cost of crossing it in both directions is
-what decides whether the rest is worth building. Memory is the second: it
-alone takes the plugin from nothing to 22.7%.
-
-Static counts weight every instruction equally, which a loop body is not. Read
-the table as a ceiling on coverage, not as a share of run time.
+The table it produced for QuickJS and the Rust plugin, and what it means for a
+compiler, are in `test/audit/PERF.md`, section "Path arm results (from
+bench/paths/README.md)". Static counts weight every instruction equally, so
+read the table as a ceiling on coverage, not as a share of run time.
 
 ## The measurement protocol, and why it is not optional
 
@@ -428,63 +251,8 @@ erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths -pa bench/cross \
     -run callcost main
 ```
 
-Inside the interpreter a call is a trampoline: `enter/5` stashes the caller's
-continuation in `#st.frames` and tail-calls `run/3`, so no Erlang frame is used
-and no state is rebuilt. A compiled function cannot do that, because its
-continuation is a Core Erlang frame. It has to make a nested invocation through
-`wasm_exec:call/5`, which is what `foreign_call` already does for a call into
-another instance, so the floor can be timed from Erlang with no compiler.
-
-Three passes on a two-function module whose loops differ in exactly one thing,
-whether the accumulator is incremented by a call or in line:
-
-| | ns per call |
-| --- | ---: |
-| interpreted call, trampolined | 43.5 to 44.7 |
-| nested invocation, the floor | 37.4 to 43.4 |
-
-**They are the same, which was not the expected answer.** The nested path
-rebuilds a state and publishes fuel on return, and it still comes out level,
-because it skips the `call` dispatch and the operand-stack traffic the
-trampoline pays instead.
-
-So the boundary is about 40 ns and the compiled body it replaces runs about 25x
-faster: `corespike`'s loop is 68 ns interpreted and 2.59 ns compiled. A
-compiled function breaks even once its interpreted body would have cost more
-than the boundary, which is about six instructions. QuickJS functions average
-336. And a compiled function calling a compiled one is an ordinary Erlang call
-at a couple of ns, which is 94% of the calls once the coverage above holds.
-
-Three things this does not price, each of which only adds: the caller's own
-state threaded into the crossing, the interpreter's side of an
-interpreted-to-compiled call, and the try/catch a trap has to unwind through.
-
-### What the generator's limits have to be
-
-`subset` also reports the shapes a code generator is bounded by, so the limits
-come from the two real modules rather than from a guess. A generated control
-continuation carries the frame's locals plus whatever operands are live across
-its boundary, so its arity is bounded by params plus locals plus the operand
-height the validator already recorded.
-
-| | plugin max | plugin p99 | qjs max | qjs p99 |
-| --- | ---: | ---: | ---: | ---: |
-| params + locals | 15 | 12 | 63 | 30 |
-| operand height | 8 | 7 | 12 | 10 |
-| bound on continuation arity | 20 | 18 | **71** | 37 |
-| control frames per function | 118 | 41 | **1016** | 165 |
-| control nesting | 18 | 9 | **257** | 30 |
-| compilable functions | 150 | | 1666 | |
-
-**Arity is not the constraint it looked like.** The worst function in QuickJS
-would generate a continuation of 71 arguments against the BEAM's limit of 255,
-so a bound anywhere above about 128 costs no coverage at all. The decoder's
-one-million-local ceiling and a `nparams =< 254` test are both theoretical.
-
-What is real is the **atom pools**, since a Core function identifier has to be
-an atom. One name per compiled function needs to cover 1666. One name per
-control frame does *not* need to cover 1016: `letrec` scoping means sibling
-frames can reuse a name, so what has to be covered is the nesting depth, 257.
+What it measured, and the limits it gives a code generator, are in
+`test/audit/PERF.md`, section "Path arm results (from bench/paths/README.md)".
 
 ## Changing the dispatch path: check QuickJS first
 

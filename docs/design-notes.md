@@ -10,24 +10,14 @@ was tried and then reverted. Both files stay in that order, so neither is easy
 to look things up in. This page is for looking things up, and it links to
 them.
 
-[Threads](features.md#threads) are documented as a feature rather than here,
-because what matters about them is what is implemented. So is the compiled
-tier, in [its own guide](compiled-tier.md), linear memory and the page budget,
-in [Memory](memory.md), and the garbage collector, in
-[Garbage collection](gc.md). The WASI sandboxes are at the end of this page.
-
-## Linear memory is chunked atomics arrays
-
-Linear memory is a tuple of `atomics` arrays, sized per memory, so a store
-mutates in place and growth appends a chunk; a NIF was declined to keep the
-sandbox boundary in Erlang. Moved to [Memory](memory.md).
-
-## A restored memory shares its image
-
-A restored memory reads its snapshot image through a page table with one entry
-per 4 KiB page, and copies a page into a private arena slot on its first write.
-The keeper records logical pages and charged pages separately. Moved to
-[Memory](memory.md).
+Some subjects have a page of their own, with their reasons beside them:
+[Threads](features.md#threads), documented as a feature because what matters
+about them is what is implemented; linear memory, restored memory and the
+page budget, in [Memory](memory.md); the garbage collector, in
+[Garbage collection](gc.md); why a request is three processes, in
+[Worker internals](worker-internals.md); and the compiled tier, in
+[its own guide](compiled-tier.md). The reasons behind the WASI sandboxes are
+at the end of this page.
 
 ## The interpreter keeps its own control stack
 
@@ -95,113 +85,18 @@ unit holds which function before it generates anything. So adding a second
 compile would only need a new rule for when to do it, not new code to track
 functions. The measurements have not shown a need for one.
 
-## A benchmark that lied, and how it was caught
+## What measuring the interpreter found
 
-To compare two versions (A and B) of the code, the benchmarks ran them in
-turn, one after the other, in the same VM. This removes the effect of the
-machine's load changing over time, so it was used for every A/B comparison
-here. On a workload that uses a lot of memory, it reported that
-superinstructions made the code **2x slower**, every time (0.49x across three
-runs).
-
-A control experiment found the cause. With *all fusions disabled*, both
-versions ran exactly the same code, and the same harness still reported 0.38x.
-So the harness was wrong, not the runtime. Switching between two instances
-switches between two 1 MiB linear memories, and the CPU cache keeps losing its
-contents. The same instance measured twice in a row ran in 1560 us, against
-2200 us when switching.
-
-Running in turn is right when the machine's load changes, and wrong when each
-version uses a lot of its own memory. Those A/B comparisons now run each
-version in its own VM, several times, and keep the minimum. Measured that way,
-fusion is **1.14x faster** on the same workload, not 2x slower.
-
-This is recorded because a benchmark that gives a stable, repeatable, wrong
-number is more dangerous than a noisy one. Only the null experiment found it:
-running the comparison with no real difference between the two sides.
-
-## Where a call's time goes
-
-Decomposing `wasm:call/3` on a trivial exported function showed that execution
-was the smallest part of it:
-
-| stage | cost |
-| --- | ---: |
-| export name lookup | 26 ns |
-| instance state read (ETS) | 105 ns |
-| **interpreter execution** | **~45 ns** |
-| instance state write-back (ETS) | 185 ns |
-
-For a short call, most of the time went into copying the instance's mutable
-state out of ETS and back in. These changes followed:
-
-- **Skip the write-back when nothing changed.** A function that only reads
-  threads the same `#mut{}` term straight through, so `=:=` is a pointer
-  comparison and the ETS write disappears entirely. Most compute functions
-  mutate no globals, tables or memory size.
-- **Build the locals tuple in one pass.** `lists:split` then `lists:reverse`
-  then `++ Defaults` walks the arguments three times and allocates three lists.
-  Popping top-first into an accumulator seeded with the defaults produces the
-  same tuple in one pass. Interleaved A/B over 7 rounds: **32.7 ns to 17.6 ns,
-  1.86x**, consistent in every round.
-- **Precompute the `{func, N}` control frame** at instantiation instead of
-  allocating one per call.
-
-### Removing the state read
-
-That state read turned out to be term-copy cost, not table overhead: the same
-`ets:lookup_element` returning an atom costs 30 ns, a big nested term 175 ns,
-and the real Rust module's state 398 ns. Meanwhile a process dictionary read
-costs 9 ns regardless of size, because it does not copy.
-
-So each process caches the state it last saw together with a version counter
-held in an `atomics` slot. A hit is an `atomics:get` plus a dictionary lookup;
-any process's write bumps the counter and invalidates every other cache. That
-coherence property is asserted in both directions by
-`wasm_worker_SUITE:state_stays_coherent_across_processes/1`.
-
-Interleaved A/B on the real Rust module: **398.5 ns to 18.8 ns, 21x**, stable
-across all seven rounds (399-407 against 19-20).
-
-### Superinstructions
-
-Chosen from measured frequencies over ~25,000 instructions of real Rust and
-clang output rather than from intuition. `local.get` alone is 28.3% of the
-stream and `i32.const` a further 17.6%. The fused sequences are
-`local.get,i32.const,i32.add` (address arithmetic), `local.get,i32.load`,
-`local.get,local.get`, `local.get,i32.const`, and `i32.eqz,br_if`.
-
-Only straight-line runs are fused. `br_if,local.get` is a frequent adjacency
-but must never be merged, because the `local.get` runs only when the branch is
-not taken.
-
-Removes 23.9% of static instructions on the clang fixture; worth roughly
-1.02x to 1.14x of wall clock depending on workload. Fusion can be disabled with
-`wasm:instantiate(M, Imports, #{fuse => false})`, which is how it was measured
-and how a suspected fusion bug would be isolated.
-
-### Bulk memory, and where a NIF *is* justified
-
-The float experiment found a NIF losing to pure Erlang. Bulk memory is the
-opposite, and measuring it first found two defects worth fixing before any
-native code:
-
-| operation, 64 KiB | before | after | ceiling (`binary:copy`) |
-| --- | ---: | ---: | ---: |
-| `load_bytes` | 1437 us | **122 us** | 5.5 us |
-| `memory.copy`, disjoint | 5424 us | **257 us** | 5.5 us |
-| `memory.fill` | 145 us | 145 us | 5.5 us |
-
-`memory.copy` was testing only `Dst =< Src` to decide whether it needed a
-backward copy, so every high-to-low copy took the byte-at-a-time path even when
-the ranges were disjoint. `load_bytes` was building 8192 small binaries and
-joining them instead of accumulating into one.
-
-Even after a 21x and an 11.8x fix, bulk memory is still 26x to 47x slower than
-`memcpy`, and Erlang cannot close that gap: it must build the bytes from
-64-bit atomic words one at a time. So here, unlike for floats, a native
-backend would be worth having. If one is written, the memory-model property
-test will check it with no extra work.
+Two measurements shaped how the interpreter is changed and measured. An A/B
+comparison of two versions that each use a lot of memory runs each version in
+its own VM: run in turn in one VM, the CPU cache made fusion look 2x slower
+when it was 1.14x faster. And a short call spent most of its time copying the
+instance's state out of ETS and back, not executing, so each process now caches
+the state it last saw; the superinstructions and the bulk memory fixes were
+chosen from measured frequencies and costs in the same way. The runs are in
+`test/audit/PERF.md`, sections "A benchmark that lied, and how it was caught
+(from the design notes)" and "Where a call's time goes (from the design
+notes)".
 
 ## Table representation
 
@@ -247,11 +142,6 @@ exceeds 2^59 and is therefore a heap bignum allocated on every operation. The
 raw-double NIF avoids that but cannot implement WebAssembly f64 at all. Pure
 Erlang wins here on measurement, not on principle.
 
-## A request is three processes, not one
-
-Moved to [Worker internals](worker-internals.md), beside the rest of how the
-worker kernel is built.
-
 ## A snapshot is a copy of state, not of an instance
 
 `wasm:snapshot/1` does not freeze an instance. It copies the state the guest
@@ -274,28 +164,12 @@ segments wrote. Second, the restore takes the module from the handle the image
 kept, not from an argument. So no argument can put one module's bytes over
 another module's layout.
 
-## Garbage collection
-
-Structs and arrays live in an ETS store the runtime owns and collects itself,
-because the interpreter's explicit state makes the roots enumerable. Two
-generations keep the pause proportional to what was just allocated. Moved to
-[Garbage collection](gc.md), with the costs and the roots that were missed.
-
 ## WASI
 
 WASI is an Erlang host interface, not an embedded runtime: each syscall is an
 ordinary host function, so it can be traced, replaced or refused.
-
-```erlang
-Wasi = #{ stdout => self(),
-          dirs   => [{<<"/data">>, "/srv/app/data", read}],
-          env    => #{<<"MODE">> => <<"production">>},
-          args   => [<<"prog">>],
-          clocks => [monotonic],
-          random => strong,
-          net    => #{connect => [{tcp, <<"10.0.0.0/8">>, 443}]} },
-{ok, Inst} = wasm:instantiate(Mod, wasi_preview1:imports(Wasi)).
-```
+[WASI](wasi.md) is the guide: the options, the syscalls that are implemented,
+and what each sandbox refuses. This section keeps the reasons.
 
 An absent key is an absent capability and the syscall returns `ENOTCAPABLE`,
 except `clocks` and `random`, which default to both clocks and strong
@@ -306,38 +180,11 @@ No `env` means zero variables rather than the host's. `ENOTCAPABLE` is kept
 distinct from `EACCES` so a module can tell "not granted" from "the OS
 refused".
 
-Implemented, 45 of them: `args_*`, `environ_*`, `clock_res_get`,
-`clock_time_get`, `random_get`, `fd_write`, `fd_read`, `fd_close`, `fd_seek`,
-`fd_tell`, `fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_fdstat_set_rights`,
-`fd_prestat_get`,
-`fd_prestat_dir_name`, `fd_filestat_get`, `fd_filestat_set_size`,
-`fd_filestat_set_times`, `fd_sync`, `fd_datasync`, `fd_pread`, `fd_pwrite`,
-`fd_readdir`, `fd_advise`, `fd_allocate`, `fd_renumber`, `path_open`,
-`path_filestat_get`, `path_filestat_set_times`, `path_create_directory`,
-`path_unlink_file`, `path_remove_directory`, `path_rename`, `path_symlink`,
-`path_readlink`, `path_link`, `proc_exit`, `sched_yield`, `poll_oneoff`
-(clocks and socket readiness; a file still returns `ENOSYS` rather than a
-guess), `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown`.
-
-Plus eleven socket extension calls, which are WasmEdge's rather than the
-specification's: `sock_open`, `sock_bind`, `sock_listen`, `sock_connect`,
-`sock_send_to`, `sock_recv_from`, `sock_getlocaladdr`, `sock_getpeeraddr`,
-`sock_getsockopt`, `sock_setsockopt`, `sock_getaddrinfo`.
-
 ### Path sandboxing
 
-Every escape technique gets its own test case, and all must fail with
-`ENOTCAPABLE` rather than `ENOENT`, so the error code cannot be used to probe
-the host's directory layout:
-
-| attempt | result |
-| --- | --- |
-| `note.txt`, `./note.txt` | opened |
-| `../secret/key.txt` | `ENOTCAPABLE` |
-| `/etc/passwd` | `ENOTCAPABLE` |
-| `escape.txt` (symlink out of the sandbox) | `ENOTCAPABLE` |
-| `sub/../../secret/key.txt` | `ENOTCAPABLE` |
-| `missing.txt` | `ENOENT` |
+Every escape fails with `ENOTCAPABLE` rather than `ENOENT`, so the error code
+cannot be used to probe the host's directory layout. The cases are in
+[What the sandbox refuses](wasi.md#what-the-sandbox-refuses).
 
 Resolution uses `filelib:safe_relative_path/2`, which already handles lexical
 traversal *and* symlink escapes, rather than a hand-rolled sanitiser. Requested
@@ -362,33 +209,14 @@ resolve and open and asserts the native path refuses it.
 A `net` grant names what may be reached. `connect` and `listen` are separate
 capabilities, `resolve` is a third, and none implies another.
 
-```erlang
-net => #{connect     => [{tcp, <<"10.0.0.0/8">>, {8000, 8099}}],
-         listen      => [{tcp, <<"127.0.0.1">>, 8080}],
-         resolve     => allow,
-         max_sockets => 32,
-         timeout     => 30000}
-```
-
 **Grants name addresses, never names.** There is no rule that says
 `example.com`. A name has to be resolved to be checked and resolved again to be
 used, and the two answers can differ; `sock_connect` hands the operating system
 the same tuple it checked, so nothing in between can move the target. That is
 the difference between removing the window and narrowing it.
 
-Every route out gets a case in `wasi_net_escape_SUITE`:
-
-| attempt | result |
-| --- | --- |
-| a granted address and port | connected |
-| the granted address, another port | `ENOTCAPABLE` |
-| `::ffff:127.0.0.1` under a `127.0.0.0/8` grant | connected, over IPv4 |
-| `::ffff:10.0.0.1` under a `127.0.0.0/8` grant | `ENOTCAPABLE` |
-| `::127.0.0.1` under a `127.0.0.0/8` grant | `ENOTCAPABLE`, it is IPv6 |
-| binding `0.0.0.0` under a loopback `listen` grant | `ENOTCAPABLE` |
-| connecting to an address `sock_getaddrinfo` returned | checked as an address |
-| a socket descriptor from another instance | `EBADF` |
-| any socket call with no `net` key | `ENOTCAPABLE` or `EBADF` |
+Every route out has a case in `wasi_net_escape_SUITE`, listed in
+[What the network grant refuses](wasi.md#what-the-network-grant-refuses).
 
 The refusal is the same whether or not something is listening on the port, for
 the reason path escapes answer `ENOTCAPABLE` rather than `ENOENT`: an errno that

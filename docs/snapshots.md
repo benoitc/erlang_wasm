@@ -190,20 +190,13 @@ and a restore builds the new table directly from those words. A table that
 holds anything else stays a list. Packing changes nothing on disk: the file
 holds the same lists as before, and files written earlier still load.
 
-Compared with the 0.8 releases, which copied the image into every restore
-(medians from `test/audit/PERF.md`, "Shared pages"):
-
-| guest | `wasm:restore/3`, 0.8 | now | first writes per request | instances under `page_limit` 4096, 0.8 | now |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| CPython | 12.0 ms | 0.79 ms | 256 pages, 1.3 ms | 6 | 124 |
-| QuickJS | 0.42 ms | 0.12 ms | 41 pages, 0.21 ms | 682 | 1024 |
-| Lua | 0.17 ms | 0.06 ms | 12 pages, 0.06 ms | 1365 | 2048 |
-
-The cost moves to memory access. Compiled code finds each page through a
-lookup, so the guest time of a compiled request is 12% to 49% higher than
-before. The whole request becomes between 8% faster and 19% slower, depending
-on how much of it was the restore. A CPython worker with an `entry`, where the
-restore was most of the request, went from 5.4 ms to 3.0 ms.
+Because a restore shares the image instead of copying it, a CPython restore
+takes about 0.8 ms, and about twenty times as many CPython instances fit under
+one page budget as when every restore copied the image. The cost moves to
+memory access: compiled code finds each page through a lookup, so the guest
+time of a compiled request is 12% to 49% higher. The comparison with the 0.8
+releases is in `test/audit/PERF.md`, section "Restore against the 0.8 releases
+(from docs/snapshots.md)".
 
 The restored instance is built without applying the module's active data
 segments, because the image already contains what they wrote. Their bounds are

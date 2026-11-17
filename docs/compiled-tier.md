@@ -390,32 +390,11 @@ A worker that restores a snapshot for each request makes a **new instance
 every time**. A new instance looks for compiled code on its first call, so
 each request uses the compiled code once it exists.
 
-A whole request, interpreted against compiled, with the heap floor on in both
-cases. Medians of twelve paired runs:
-
-| guest | interpreted | compiled |
-| --- | ---: | ---: |
-| Lua | 11.4 ms | **4.4 ms** |
-| QuickJS | 20.4 ms | **6.9 ms** |
-| CPython | 93.1 ms | **37.6 ms** |
-
-With fourteen workers, requests per second rise by about three quarters.
-
-**The rest of a request is not the guest's code.** The same requests, split
-into steps, compiled:
-
-| guest | accept the request | deliver and restore | run the guest | reply |
-| --- | ---: | ---: | ---: | ---: |
-| Lua | 1.18 ms | 0.26 ms | 2.35 ms | 0.03 ms |
-| QuickJS | 1.42 ms | 0.56 ms | 4.38 ms | 0.06 ms |
-| CPython | 1.99 ms | **13.5 ms** | 20.7 ms | 0.86 ms |
-
-Compiling only speeds up "run the guest", by about 4 times for all three. The
-difference between guests is the restore, which depends on the size of the
-snapshot, and accepting the request, which costs 1.2 to 2.0 ms whatever the
-guest. These steps were measured when a restore still copied the snapshot;
-a restore now shares it instead, and a CPython restore takes 0.79 ms instead
-of 12.0. [Snapshots](snapshots.md) has the numbers.
+Compiling speeds up only the guest's own code, by about four times on Lua,
+QuickJS and CPython. Accepting the request and restoring the snapshot cost the
+same either way, so a whole request gains less. The tables, measured when a
+restore still copied the snapshot, are in `test/audit/PERF.md`, section "A
+reactor request before shared restore (from docs/compiled-tier.md)".
 
 **Plan for the first start.** Compiled code arrives after a fixed amount of
 compiling, and a reactor request is about ten times faster than a command, so

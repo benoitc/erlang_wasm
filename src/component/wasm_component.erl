@@ -391,7 +391,7 @@ default_loader() ->
     end.
 
 instantiate_decoded(#{composed := true} = Decoded, Imports, Opts, _Limits) ->
-    instantiate_composed(Decoded, Imports, Opts);
+    with_recipe(instantiate_composed(Decoded, Imports, Opts), Decoded, Opts);
 instantiate_decoded(#{core := Core, sec := Sec} = Decoded, Imports, Opts, Limits) ->
     %% Reject a component whose `canon lift` declares a type its core function cannot
     %% have (the Canonical ABI derives the core signature from the declared component
@@ -539,14 +539,14 @@ instantiate_composed(#{sec := Sec, exports := Exports}, Imports, Opts) ->
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->
             S0 = #{comps => #{}, n_comp => 0, insts => #{}, n_inst => 0,
-                   funcs => #{}, n_func => 0, dispatch => #{},
+                   funcs => #{}, n_func => 0, dispatch => #{}, bridged => #{},
                    imports => Imports, opts => Opts},
-            #{insts := Insts, dispatch := Dispatch} =
+            #{insts := Insts, dispatch := Dispatch, bridged := Bridged} =
                 lists:foldl(fun compose_step/2, S0, Graph),
             Cores = lists:append([cores_of(Sub)
                                   || {instance, Sub} <- maps:values(Insts)]),
             {ok, #{composed => true, exports => Exports, insts => Insts,
-                   dispatch => Dispatch, cores => Cores}};
+                   dispatch => Dispatch, cores => Cores, bridged => Bridged}};
         {error, _} = E ->
             E
     end.
@@ -576,10 +576,17 @@ compose_step({comp_instantiate, CompIdx, Args},
     %% Wire the arguments (a sibling instance's interface or function feeding
     %% this one's import) as host bridges, over any host imports the
     %% composition itself was given.
-    Bridged = maps:merge(Imports, bridge_imports(Args, Bytes, Insts, Funcs)),
-    case instantiate(Bytes, Bridged, Opts) of
+    Bridges = bridge_imports(Args, Bytes, Insts, Funcs),
+    Bridged = maps:merge(Imports, Bridges),
+    %% `sub_builder' builds a nested component otherwise, as a restore does.
+    Build = maps:get(sub_builder, Opts, fun(_N, B, I, O) -> instantiate(B, I, O) end),
+    case Build(N, Bytes, Bridged, maps:without([sub_builder], Opts)) of
         {ok, Sub} ->
-            S#{insts => Insts#{N => {instance, Sub}}, n_inst => N + 1};
+            %% Which of its imports a sibling provides: those are internal to
+            %% the composition, as a snapshot of it needs to know.
+            Within = [host_key(Iface) || {Iface, _} <- maps:keys(Bridges)],
+            S#{insts => Insts#{N => {instance, Sub}}, n_inst => N + 1,
+               bridged => (maps:get(bridged, S))#{N => Within}};
         {error, E} ->
             wasm_error:link_error(nested_component_failed,
                                   <<"a nested component did not instantiate">>,
@@ -851,32 +858,29 @@ Refused when the instance holds what an image cannot: a task frame with work
 in it, a thread, a host resource, a resource of its own.
 """.
 -spec snapshot(instance(), map()) -> {ok, term()} | {error, term()}.
-snapshot(#{composed := true}, _Opts) ->
-    snapshot_refused(component_not_snapshottable,
-                     ~"a composed component cannot be captured yet", #{});
 snapshot(#{recipe := _} = I, Opts) ->
     wasm_error:capture(fun() -> snapshot_1(I, Opts) end);
 snapshot(_I, _Opts) ->
     snapshot_refused(not_snapshotable,
                      ~"instantiate with `snapshotable => true` to capture", #{}).
 
-snapshot_1(#{cores := Cores, res_id := ResId} = I, Opts) ->
-    Checks = [fun() -> quiet(ResId) end,
-              fun() -> imports_declared(I, maps:get(snapshot_hooks, Opts, #{})) end],
+snapshot_1(I, Opts) ->
+    Hooks = maps:from_list([{host_key(K), V}
+                            || {K, V} <- maps:to_list(maps:get(snapshot_hooks, Opts, #{}))]),
+    Checks = [fun() -> lists:foldl(fun(Id, ok) -> quiet(Id); (_, E) -> E end, ok, res_ids(I)) end,
+              fun() -> imports_declared(I, Hooks) end],
     case lists:foldl(fun(_C, {error, _} = E) -> E; (C, ok) -> C() end, ok, Checks) of
         {error, _} = E -> E;
         ok ->
-            case {wasm_resources:capture(ResId), host_entries()} of
-                {_, {error, _} = E} -> E;
-                {{error, Kind}, _} ->
-                    snapshot_refused(Kind, ~"a resource cannot be captured", #{});
-                {{ok, Guest}, {ok, HostEntries}} ->
+            case host_entries() of
+                {error, _} = E -> E;
+                {ok, HostEntries} ->
                     %% The counters as they are, not rebuilt from what is live:
                     %% a handle dropped before the capture is never given again.
-                    Counters = #{guest => Guest, host => HostEntries,
-                                 host_next => host_next(),
+                    Counters = #{host => HostEntries, host_next => host_next(),
                                  async_next => wasm_async:handle_counter()},
-                    with_leases(Cores, [], fun() -> capture_cores(I, Counters, Opts) end)
+                    with_leases(cores_of(I), [],
+                                fun() -> captured_tree(I, Counters, Opts) end)
             end
     end.
 
@@ -911,11 +915,20 @@ host_entries([{H, {Tag, State}} | Rest], Acc) ->
 
 %% Every function a core imports from outside the component names an interface
 %% `Hooks' declares. Matched as the host map keys are, by interface without
-%% its version.
-imports_declared(#{externals := Externals}, Hooks) ->
-    Declared = maps:from_list([{host_key(K), V} || {K, V} <- maps:to_list(Hooks)]),
+%% its version. In a composition, what a sibling provides through a bridge is
+%% inside it.
+imports_declared(I, Hooks) ->
+    imports_declared(I, Hooks, []).
+
+imports_declared(#{composed := true, insts := Insts, bridged := Bridged}, Hooks, _Within) ->
+    lists:foldl(fun({N, {instance, Sub}}, ok) ->
+                        imports_declared(Sub, Hooks, maps:get(N, Bridged, []));
+                   (_, Acc) -> Acc
+                end, ok, lists:sort(maps:to_list(Insts)));
+imports_declared(#{externals := Externals}, Hooks, Within) ->
     case [Iface || PerCore <- Externals, {_Key, {Iface, _Func}} <- PerCore,
-                   not maps:is_key(host_key(Iface), Declared)] of
+                   not lists:member(host_key(Iface), Within),
+                   not maps:is_key(host_key(Iface), Hooks)] of
         [] -> ok;
         [Iface | _] ->
             snapshot_refused(import_not_snapshottable,
@@ -947,16 +960,41 @@ end_leases(Cores) ->
                           end
                   end, Cores).
 
-capture_cores(#{cores := Cores, recipe := Recipe}, Counters, Opts) ->
-    case modules_of(Cores, []) of
+%% The whole tree captured, then one owner for all of it.
+captured_tree(I, Counters, Opts) ->
+    case tree(I) of
         {error, _} = E -> E;
-        {ok, Mods} ->
-            case parts(Cores, Mods, Cores, []) of
+        {ok, Tree, Handles, Parts} ->
+            Bytes = lists:sum([wasm_snapshot:bytes(P) || P <- Parts]),
+            owned(Tree, Handles, Bytes, Counters, Opts)
+    end.
+
+%% What an image keeps of an instance: for a component, its recipe, each
+%% core's part and its own resources; for a composition, its recipe and each
+%% nested component's tree, by its place in the composition.
+tree(#{composed := true, recipe := Recipe, insts := Insts}) ->
+    Subs = [{N, Sub} || {N, {instance, Sub}} <- lists:sort(maps:to_list(Insts))],
+    lists:foldl(fun(_, {error, _} = E) -> E;
+                   ({N, Sub}, {ok, {composed, R, Trees}, Hs, Ps}) ->
+                        case tree(Sub) of
+                            {ok, T, H1, P1} ->
+                                {ok, {composed, R, Trees#{N => T}}, Hs ++ H1, Ps ++ P1};
+                            {error, _} = E -> E
+                        end
+                end, {ok, {composed, Recipe, #{}}, [], []}, Subs);
+tree(#{cores := Cores, recipe := Recipe, res_id := ResId}) ->
+    case wasm_resources:capture(ResId) of
+        {error, Kind} -> snapshot_refused(Kind, ~"a resource cannot be captured", #{});
+        {ok, Guest} ->
+            case modules_of(Cores, []) of
                 {error, _} = E -> E;
-                {ok, Parts} ->
-                    Handles = [H || {H, _M} <- Mods],
-                    Bytes = lists:sum([wasm_snapshot:bytes(P) || P <- Parts]),
-                    owned(Parts, Handles, Bytes, Recipe#{counters => Counters}, Opts)
+                {ok, Mods} ->
+                    case parts(Cores, Mods, Cores, []) of
+                        {error, _} = E -> E;
+                        {ok, Parts} ->
+                            {ok, {component, Recipe, Parts, Guest},
+                             [H || {H, _M} <- Mods], Parts}
+                    end
             end
     end.
 
@@ -984,16 +1022,15 @@ parts([Core | Rest], [{Handle, M} | Ms], All, Acc) ->
         {error, _} = E -> E
     end.
 
-%% One owner for every core: it claims their modules and charges their pages
-%% once, under one keeper record each part is built with.
-owned(Parts, Handles, Bytes, Recipe, Opts) ->
+%% One owner for every core of the tree: it claims their modules and charges
+%% their pages once, under one keeper record each part is built with.
+owned(Tree, Handles, Bytes, Counters, Opts) ->
     case wasm_snapshot_owner:start(Handles, Bytes, self()) of
         {ok, Owner, Img} ->
-            case wasm_error:capture(
-                   fun() -> {ok, [wasm_snapshot:build(P, Img) || P <- Parts]} end) of
-                {ok, Built} ->
-                    {ok, #{component_image => ?MODULE, recipe => Recipe, parts => Built,
-                           owner => Owner, bytes => Bytes,
+            case wasm_error:capture(fun() -> {built, built_tree(Tree, Img)} end) of
+                {built, Built} ->
+                    {ok, #{component_image => ?MODULE, tree => Built,
+                           counters => Counters, owner => Owner, bytes => Bytes,
                            version => maps:get(version, Opts, ~"1"),
                            key => maps:get(compatibility_key, Opts, undefined)}};
                 {error, _} = E ->
@@ -1005,6 +1042,11 @@ owned(Parts, Handles, Bytes, Recipe, Opts) ->
         {error, _} = E ->
             E
     end.
+
+built_tree({composed, R, Trees}, Img) ->
+    {composed, R, maps:map(fun(_N, T) -> built_tree(T, Img) end, Trees)};
+built_tree({component, R, Parts, Guest}, Img) ->
+    {component, R, [wasm_snapshot:build(P, Img) || P <- Parts], Guest}.
 
 snapshot_refused(Kind, Msg, Ctx) ->
     {error, #{class => invalid, kind => Kind, msg => Msg, ctx => Ctx}}.
@@ -1029,8 +1071,15 @@ release(#{component_image := ?MODULE, owner := Owner}) ->
 A component instance at the point an image was captured: the same link,
 replayed over `Imports` given for this instance, each core laid from its part
 of the image instead of instantiated, so no start function runs and nothing
-is initialised again. `Opts` as `instantiate/3`, and `compatibility_key` must
-match the image's.
+is initialised again. A composition is replayed the same way, each nested
+component restored in its place and its bridges built again.
+
+`Opts` as `instantiate/3`, plus:
+
+- `compatibility_key`: must match the image's.
+- `host_remake`: the fun that makes again, from its origin, each host entry
+  the image kept, such as `wasi_preview2:host_remake/1` gives. Needed only
+  when the image keeps any.
 """.
 -spec restore(map(), #{{binary(), binary()} => term()}, map()) ->
           {ok, instance()} | {error, term()}.
@@ -1039,33 +1088,52 @@ restore(#{component_image := ?MODULE, owner := Owner, key := Key} = Image, Impor
         {gone, _} ->
             snapshot_refused(snapshot_invalidated, ~"this image has been released", #{});
         {_, Key} ->
-            restore_1(Image, Imports, maps:without([compatibility_key], Opts));
+            wasm_error:capture(
+              fun() -> restore_1(Image, Imports, maps:without([compatibility_key], Opts)) end);
         {_, Other} ->
             snapshot_refused(snapshot_incompatible,
                              ~"the compatibility key does not match the image",
                              #{expected => Key, got => Other})
     end.
 
-restore_1(#{recipe := #{decoded := Decoded, opts := ROpts} = Recipe, parts := Parts},
-          Imports, Opts) ->
+restore_1(#{tree := Tree, counters := Counters}, Imports, Opts) ->
+    Remake = maps:get(host_remake, Opts, undefined),
+    case restore_tree(Tree, Imports, maps:without([host_remake], Opts)) of
+        {ok, Inst} ->
+            ok = raise_counters(Counters),
+            case remake_host(maps:get(host, Counters), Remake) of
+                ok -> {ok, Inst};
+                {error, _} = E -> ok = destroy(Inst), E
+            end;
+        {error, _} = E ->
+            E
+    end.
+
+%% A composition replays its graph, each nested component restored from its
+%% own tree where the graph instantiates it.
+restore_tree({composed, #{decoded := Decoded, opts := ROpts}, Trees}, Imports, Opts) ->
+    SubBuild = fun(N, _Bytes, Bridged, O) ->
+                       restore_tree(maps:get(N, Trees), Bridged, O)
+               end,
+    Opts1 = (maps:merge(maps:without([snapshotable], ROpts), Opts))#{sub_builder => SubBuild},
+    case instantiate_composed(Decoded, Imports, Opts1) of
+        {ok, Inst} -> {ok, Inst};
+        {error, _} = E -> E
+    end;
+restore_tree({component, #{decoded := Decoded, opts := ROpts}, Parts, Guest}, Imports, Opts) ->
     Laid = make_ref(),
     Parts1 = list_to_tuple(Parts),
     Builder = fun(N, Mod, ImportMap, Limits) ->
                       restore_core(element(N + 1, Parts1), Mod, ImportMap, Limits, N, Laid)
               end,
-    Opts1 = (maps:merge(maps:without([snapshotable], ROpts),
-                        maps:without([host_remake], Opts)))#{core_builder => Builder},
+    Opts1 = (maps:merge(maps:without([snapshotable], ROpts), Opts))#{core_builder => Builder},
     Pre = maps:get(pre, Decoded, #{}),
     Prepared = {prepared, #{bin => <<>>, decoded => maps:remove(pre, Decoded), pre => Pre}},
     try
         case instantiate(Prepared, Imports, Opts1) of
             {ok, Inst} ->
-                ok = restore_counters(Inst, maps:get(counters, Recipe)),
-                case remake_host(maps:get(host, maps:get(counters, Recipe)),
-                                 maps:get(host_remake, Opts, undefined)) of
-                    ok -> restore_2(Inst, Laid);
-                    {error, _} = HE -> ok = destroy(Inst), HE
-                end;
+                ok = wasm_resources:restore(maps:get(res_id, Inst), Guest),
+                lay_later(Inst, get({?MODULE, Laid}));
             {error, _} = E ->
                 E
         end
@@ -1074,8 +1142,7 @@ restore_1(#{recipe := #{decoded := Decoded, opts := ROpts} = Recipe, parts := Pa
     end.
 
 %% The references to later cores, now that every core exists.
-restore_2(Inst, Laid) ->
-    Restored = get({?MODULE, Laid}),
+lay_later(Inst, Restored) ->
     Cores = maps:from_list([{N, C} || {N, {C, _}} <- maps:to_list(Restored)]),
     case wasm_error:capture(
            fun() ->
@@ -1087,11 +1154,8 @@ restore_2(Inst, Laid) ->
         {error, _} = E -> ok = destroy(Inst), E
     end.
 
-%% The guest's table into the restored instance's, and no counter of this
-%% process left below the captured one.
-restore_counters(#{res_id := ResId}, #{guest := Guest, host_next := HostNext,
-                                        async_next := AsyncNext}) ->
-    ok = wasm_resources:restore(ResId, Guest),
+%% No counter of this process left below the captured one.
+raise_counters(#{host_next := HostNext, async_next := AsyncNext}) ->
     put(?HOST_NEXT, max(host_next(), HostNext)),
     wasm_async:raise_handle_counter(AsyncNext).
 

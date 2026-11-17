@@ -37,7 +37,10 @@ replayed the link answers 42.
          a_missing_preopen_fails_the_restore/1,
          an_entry_without_an_origin_refuses_the_capture/1,
          a_stream_granted_a_permit_refuses_the_capture/1,
-         an_undeclared_interface_in_a_mixed_namespace_refuses/1]).
+         an_undeclared_interface_in_a_mixed_namespace_refuses/1,
+         a_composed_component_is_restored_with_its_bridges/1,
+         a_composition_wired_by_one_function_is_restored/1,
+         a_resource_from_another_component_refuses_the_capture/1]).
 
 all() ->
     [a_restore_starts_where_the_capture_was,
@@ -63,7 +66,10 @@ all() ->
      a_missing_preopen_fails_the_restore,
      an_entry_without_an_origin_refuses_the_capture,
      a_stream_granted_a_permit_refuses_the_capture,
-     an_undeclared_interface_in_a_mixed_namespace_refuses].
+     an_undeclared_interface_in_a_mixed_namespace_refuses,
+     a_composed_component_is_restored_with_its_bridges,
+     a_composition_wired_by_one_function_is_restored,
+     a_resource_from_another_component_refuses_the_capture].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -377,6 +383,37 @@ an_undeclared_interface_in_a_mixed_namespace_refuses(_Config) ->
                            ctx := #{import := ~"wasi:cli/stderr@0.2.0"}}},
                  wasm_component:snapshot(I, Hooks)),
     ok = wasm_component:destroy(I).
+
+%% `composed' nests components and dispatches its export to one of them; each
+%% is restored where the composition instantiates it.
+a_composed_component_is_restored_with_its_bridges(_Config) ->
+    {ok, I} = wasm_component:instantiate(fixture("composed"), #{}, ?SNAP),
+    {ok, 42} = run(I),
+    {ok, Image} = wasm_component:snapshot(I, #{}),
+    ok = wasm_component:destroy(I),
+    {ok, R} = wasm_component:restore(Image, #{}, #{}),
+    ?assertEqual({ok, 42}, run(R)),
+    ok = wasm_component:destroy(R).
+
+%% `composedfunc''s consumer imports one function from its provider: the bridge
+%% is a sibling's, inside the composition, and is built again over the
+%% restored provider.
+a_composition_wired_by_one_function_is_restored(_Config) ->
+    {ok, I} = wasm_component:instantiate(fixture("composedfunc"), #{}, ?SNAP),
+    {ok, Image} = wasm_component:snapshot(I, #{}),
+    ok = wasm_component:destroy(I),
+    {ok, R} = wasm_component:restore(Image, #{}, #{}),
+    ?assertEqual({ok, 42}, wasm_component:call(R, ~"run", {[u32], u32}, [21])),
+    ok = wasm_component:destroy(R).
+
+%% An entry standing for another component's resource names that component,
+%% which is not in the image of this one.
+a_resource_from_another_component_refuses_the_capture(_Config) ->
+    Id = wasm_resources:new_instance(),
+    _ = wasm_resources:with_instance(
+          Id, fun() -> wasm_resources:new(imported, {remote, 1, 1, fun() -> ok end}) end),
+    ?assertEqual({error, remote_resource_not_snapshottable}, wasm_resources:capture(Id)),
+    ok = wasm_resources:destroy_instance(Id).
 
 preopen_image(Dir) ->
     O1 = #{preopens => [{~"/data", Dir, true}]},

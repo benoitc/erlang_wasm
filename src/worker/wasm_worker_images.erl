@@ -71,7 +71,7 @@ share(_Key, _Cap, Build, _Wait, 0) ->
 share(Key, Cap, Build, Wait, Tries) ->
     case ask({checkout, Key}, Wait) of
         {shared, Image} ->
-            case wasm:acquire(Image) of
+            case acquire(Image) of
                 ok         -> {ok, Image, Cap};
                 {error, _} -> share(Key, Cap, Build, Wait, Tries - 1)
             end;
@@ -124,7 +124,7 @@ handle_cast({publish, Key, Pid, Image}, #s{keys = Keys} = S) ->
     case maps:get(Key, Keys, none) of
         {building, Pid, Mon, Waiters} ->
             S1 = forget_mon(Mon, S),
-            case wasm_snapshot:owner(Image) of
+            case owner(Image) of
                 Owner when is_pid(Owner) ->
                     S2 = lists:foldl(fun({W, WMon}, Acc) ->
                                              gen_server:reply(W, {shared, Image}),
@@ -206,3 +206,11 @@ next_builder(Key, [{{Pid, _} = From, WMon} | Waiters], S) ->
 forget_mon(Mon, #s{mons = Mons} = S) ->
     erlang:demonitor(Mon, [flush]),
     S#s{mons = maps:remove(Mon, Mons)}.
+
+%% A component image is held through `wasm_component', and names its owner
+%% itself; a core image goes through `wasm' and `wasm_snapshot'.
+acquire(#{component_image := _} = Image) -> wasm_component:acquire(Image);
+acquire(Image) -> wasm:acquire(Image).
+
+owner(#{component_image := _, owner := Owner}) -> Owner;
+owner(Image) -> wasm_snapshot:owner(Image).

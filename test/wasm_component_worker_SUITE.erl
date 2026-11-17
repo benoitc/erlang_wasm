@@ -21,7 +21,10 @@ all() ->
      a_file_is_processed_over_a_mount,
      a_typed_service_export_is_called_per_request,
      the_multi_core_linker_runs_through_the_worker,
-     each_request_gets_a_fresh_component_instance].
+     each_request_gets_a_fresh_component_instance,
+     a_component_request_starts_from_the_image,
+     a_pool_captures_a_component_once,
+     another_init_version_captures_its_own].
 
 %% Each case starts a reaper of its own. Starting a worker can also start the
 %% supervised one, and whichever came first made the other's start fail with
@@ -134,6 +137,50 @@ each_request_gets_a_fresh_component_instance(_Config) ->
         ?assertEqual({ok, #{value => 1}}, wasm_script_worker:run(W, #{}))
     after
         wasm_script_worker:stop(W)
+    end.
+
+%% The adapter's init bumps twice before the capture, so every request,
+%% restored from the image, answers 3. Fail-first: the worker instantiated a
+%% component cold for every request, and a component could not be captured.
+a_component_request_starts_from_the_image(_Config) ->
+    {ok, W} = wasm_script_worker:start_link(fake_component_snapshot_adapter,
+                                            #{root => scratch, version => ~"v-start"}),
+    try
+        [?assertEqual({ok, #{value => 3}}, wasm_script_worker:run(W, #{}))
+         || _ <- [1, 2, 3]]
+    after
+        wasm_script_worker:stop(W)
+    end.
+
+%% Two workers with the same adapter, options and key share one capture.
+a_pool_captures_a_component_once(_Config) ->
+    ok = fake_component_snapshot_adapter:reset_captures(),
+    Opts = #{root => scratch, version => ~"v-pool"},
+    {ok, A} = wasm_script_worker:start_link(fake_component_snapshot_adapter, Opts),
+    {ok, B} = wasm_script_worker:start_link(fake_component_snapshot_adapter, Opts),
+    try
+        ?assertEqual({ok, #{value => 3}}, wasm_script_worker:run(A, #{})),
+        ?assertEqual({ok, #{value => 3}}, wasm_script_worker:run(B, #{})),
+        ?assertEqual(1, fake_component_snapshot_adapter:captures())
+    after
+        wasm_script_worker:stop(A),
+        wasm_script_worker:stop(B)
+    end.
+
+%% The same bytes initialised under another version are another image.
+another_init_version_captures_its_own(_Config) ->
+    ok = fake_component_snapshot_adapter:reset_captures(),
+    {ok, A} = wasm_script_worker:start_link(fake_component_snapshot_adapter,
+                                            #{root => scratch, version => ~"v-one"}),
+    {ok, B} = wasm_script_worker:start_link(fake_component_snapshot_adapter,
+                                            #{root => scratch, version => ~"v-two"}),
+    try
+        ?assertEqual({ok, #{value => 3}}, wasm_script_worker:run(A, #{})),
+        ?assertEqual({ok, #{value => 3}}, wasm_script_worker:run(B, #{})),
+        ?assertEqual(2, fake_component_snapshot_adapter:captures())
+    after
+        wasm_script_worker:stop(A),
+        wasm_script_worker:stop(B)
     end.
 
 %%% -------------------------------------------------------------- helpers ---

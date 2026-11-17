@@ -144,8 +144,10 @@ wasm_engine:set_page_limit(16384),          % 1 GiB
 #{pages_in_use := N} = wasm_engine:stats().
 ```
 
-Set this. Linear memory is stored outside the process heap, and
-`max_heap_size` does not see it, so nothing else limits it. The budget counts
+Without a call, the limit is 16384 pages (1 GiB), or the `page_limit` value
+in the `wasm` application environment. Set it to what your node can afford.
+Linear memory is stored outside the process heap, and `max_heap_size` does not
+see it, so this budget is the only thing that limits it. The budget counts
 what is allocated, not what a guest could address: a memory's chunks (the
 arrays it is made of), and, for a memory restored from an image, its page
 table and the pages it has written.

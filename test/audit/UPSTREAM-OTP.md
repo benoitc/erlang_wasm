@@ -7,7 +7,9 @@ related issue is #1972, the 2018 PR that introduced
 `no_spawn_compiler_process`.
 
 The numbers come from `PERF.md`, "Owning the compiler worker", and the
-reproduction in finding 2 is the probe that led to `wasm_core:reap/2`.
+reproduction in finding 2 is the probe that led to `wasm_core:run_compiler/4`,
+which spawns the compiler process itself, and to `wasm_lifetime:bind/1`, which
+ends that process when its caller dies.
 
 ---
 

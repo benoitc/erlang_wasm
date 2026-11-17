@@ -204,9 +204,11 @@ pool made at startup (nothing a guest supplies may become an atom). A hot set
 of 4,097 to 8,192 functions is split into two units, automatically. Splitting
 has two costs: a call from one unit into the other is slower than a call
 inside a unit, and **a split module is never saved in the code cache**, so it
-is compiled again on every start. CPython 3.12 runs 2,333 functions in one
-`_start`, which fits in one unit: 1,105 seconds to compile the first time, two
-seconds on the next start with the cache.
+is compiled again on every start. Two units is the most the automatic split
+makes, because a larger hot set is refused (below). The runtime never makes
+more than four. CPython 3.12 runs 2,333 functions in one `_start`, which fits
+in one unit: 1,105 seconds to compile the first time, two seconds on the next
+start with the cache.
 
 A hot set of **more than 8,192 functions is refused**: the module stays
 interpreted, and the reason is recorded:
@@ -249,7 +251,7 @@ an instance destroyed while it compiles, and more modules than slots.
 A node has **16 slots**, and each loaded unit takes one. In practice:
 
 - **16 different guest modules** can have compiled code loaded at the same
-  time; a module split in two units counts twice.
+  time; a module split into two units counts twice.
 - **Any number of instances** can use that code: all instances of one module
   share its unit and its slot.
 - A 17th module is **not refused for good**: it runs interpreted, and is
@@ -432,10 +434,10 @@ Two kinds of module are never saved:
 
 - a module with no content hash, which means every module built from the text
   format;
-- a module split into two units. A split unit refers to the other unit, and
-  the key does not describe that link, so a saved one could be joined to the
-  wrong partner. A guest large enough to split is compiled again on every
-  start.
+- a module split into more than one unit. A split unit refers to the other
+  units, and the key does not describe that link, so a saved one could be
+  joined to the wrong partner. A guest large enough to split is compiled
+  again on every start.
 
 The cache keeps at most 512 MB and removes the oldest files first.
 `wasm_code_cache:purge/0` empties it, and checks the directory first like any

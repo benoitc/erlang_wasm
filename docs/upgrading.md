@@ -45,9 +45,10 @@ Then delete `src/wasm_worker.erl`. If your copy was renamed, as
 | `worker_error:runtime(E)` and the other constructors | `wasm_worker_error:runtime(E)` |
 | `worker_reaper:stats/0`, `requests/0` | `wasm_script_worker:cleanup_stats/0`, `cleanup_requests/0` |
 
-Limits and option keys are otherwise unchanged. The profile is still called
-`script_v1` and the boot scripts are still in `priv/script_v1/`, so a guest
-built for 0.3 needs nothing.
+Limits and option keys are otherwise unchanged. The script profile the shipped
+adapters speak (one source, a JSON context, `main(context)`, a JSON result; not
+the compile `profile` option) is still called `script_v1`, and the boot scripts
+are still in `priv/script_v1/`, so a guest built for 0.3 needs nothing.
 
 ## Where scratch files go now
 

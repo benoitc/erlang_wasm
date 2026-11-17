@@ -462,17 +462,20 @@ specification says -1.
 
 `compile_whole` is not a setting for speed. Compiling every function of
 QuickJS took 107 s in the first run that measured it, against 15.2 s for the
-223-function hot set in four units. Specification modules have only a few
-functions each, so it is affordable there and nowhere else.
+223-function hot set forced into four units with `compile_shards => 4`.
+Specification modules have only a few functions each, so it is affordable
+there and nowhere else.
 
 **Nowhere else means nowhere else.** CPython 3.12 has 11,447 eligible
 functions, although one request only *reaches* 971 of them. With
 `compile_whole` it used 33 GB of memory on a 48 GB machine in eleven minutes,
 produced nothing, and spent that time swapping to disk instead of compiling.
 That run is why a request over 8,192 functions is now refused with
-`{too_many_functions, N}`, whatever `compile_whole` asks. The four-unit limit
-bounds the names a unit can use. It does not promise that everything under it
-will compile.
+`{too_many_functions, N}`, whatever `compile_whole` asks. One unit holds at
+most 4,096 functions, the depth of the name pool, so a request the runtime
+accepts splits into at most two units on its own. Four units (`MAX_SHARDS` in
+`wasm_jit`) is a hard cap that only a forced split reaches. Neither limit
+promises that everything under it will compile.
 
 
 ### The translation cache

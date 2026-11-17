@@ -19,7 +19,7 @@ to run, such as an interpreter. No, for a plugin that starts in microseconds.
 
 | word | what it means here |
 | --- | --- |
-| **image** | the snapshot itself: the guest's memories, globals and tables after initialisation. On this page "snapshot" and "image" mean the same thing. |
+| **image** | what a capture produces: the guest's memories, globals and tables after initialisation, kept in this node or in a file. A snapshot is the idea; the image is the copy you hold and restore from. |
 | **capture** | making an image from a running instance, with `wasm:snapshot/1`. |
 | **restore** | making a new instance from an image, with `wasm:restore/3`. |
 | **reactor** | a guest that starts its runtime in one call and then returns, so you can call it again later. |

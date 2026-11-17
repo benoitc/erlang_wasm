@@ -428,9 +428,14 @@ Clock = #{{~"example:host/clock", ~"now"} =>
 Imports = maps:merge(wasi_preview2:imports(), Clock).
 ```
 
-A WASI interface belongs in `wasi_preview2`, merged into what its `imports/0`
-returns. If the import returns a resource, create it with `host_new/2` and also
-provide its `[resource-drop]`.
+A small, stateless WASI 0.2 interface belongs in `wasi_preview2`, merged into
+what its `imports/0` returns. A larger one has a module of its own, as
+`wasi_p2_filesystem`, `wasi_p2_sockets` and `wasi_http` do, and
+`wasi_preview2:command/1` merges its map. A WASI 0.3 interface goes in
+`wasi_preview3`, or in a module beside `wasi_p3_filesystem`, `wasi_p3_sockets`
+and `wasi_p3_http`, merged by `wasi_preview3:command/1`. Its interface names
+keep the version, as in `~"wasi:sockets/types@0.3"`. If the import returns a
+resource, create it with `host_new/2` and also provide its `[resource-drop]`.
 
 **A canonical type.** Every layer has to agree on it:
 

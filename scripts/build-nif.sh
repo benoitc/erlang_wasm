@@ -12,8 +12,8 @@
 #   WASM_NIF_SANITIZE=thread  rebar3 compile
 #
 # That instruments the NIF; it does not instrument the emulator, so the runtime
-# has to be loaded into the process first. See the sanitizer section of
-# `docs/wasi.md` for the two ways to arrange that.
+# has to be loaded into the process first. See "Run the NIF under a sanitizer"
+# in `docs/contributing/nif.md` for the two ways to arrange that.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/c_src/wasi_file_nif.c"

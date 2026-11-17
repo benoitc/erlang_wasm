@@ -186,7 +186,7 @@ CPython restore takes 0.8 ms instead of 12.
 
 The full reasoning, with the options we rejected and the benchmark that gave
 a wrong result, is in the module documentation and in
-[docs/features.md](docs/features.md).
+[docs/design-notes.md](docs/design-notes.md).
 
 ## AI-assisted development
 

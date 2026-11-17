@@ -14,7 +14,7 @@ stops one guest from using all the memory of the node.
 | **linear memory** | the array of bytes a WebAssembly guest reads and writes. It grows in **pages** of 64 KiB. |
 | **chunk** | one `atomics` array holding part of a linear memory. |
 | **snapshot** | a saved copy of an instance's state, taken so that new instances can start from it. See [Snapshots](snapshots.md). |
-| **image** | the memory part of a snapshot: its pages, read-only, shared by every memory restored from it. |
+| **image** | what a capture produces: the guest's memories, globals and tables, kept in this node or in a file. This page is about its memory pages, which are read-only and shared by every memory restored from it. |
 | **restore** | making a new instance from a snapshot instead of running the guest's start-up code again. |
 | **page table** | a small `atomics` array, one entry per 4 KiB page, that says where each page of a restored memory is now: still in the image, or in a private copy. |
 | **arena** | the private 4 KiB copies of the image pages that one memory has written to. |

@@ -107,7 +107,8 @@ prepare(Request, #{module := M}, Env) ->
     Stage = maps:get(stage, Env),
     Source = maps:get(source, Request, ?DEFAULT_SOURCE),
     Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
-    case stage_all(Stage, [{~"main.js", Source}, {~"context.json", Context}]) of
+    Files = [{~"main.js", Source}, {~"context.json", Context}],
+    case wasm_script_v1:stage_all(Stage, Files) of
         {error, E} ->
             {error, E, #{}};
         ok ->
@@ -117,13 +118,6 @@ prepare(Request, #{module := M}, Env) ->
                    imports => imports(Env),
                    invoke => [{call, ~"handle", []}]},
              #{}}
-    end.
-
-stage_all(_Stage, []) -> ok;
-stage_all(Stage, [{Path, Bytes} | Rest]) ->
-    case Stage(ro, Path, Bytes) of
-        ok             -> stage_all(Stage, Rest);
-        {error, _} = E -> E
     end.
 
 imports(Env) ->
@@ -163,23 +157,8 @@ result_import(Channel) ->
         end
     end.
 
-decode(#{outcome := returned} = R, _State) ->
-    #{channels := #{result := Res, stdout := Out, stderr := Err}} = R,
-    case wasm_script_v1:decode_channel(Res) of
-        {ok, Result} ->
-            {ok, #{result => Result, stdout => Out, stderr => Err}};
-        {error, Code, Msg} ->
-            {error, wasm_script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
-    end;
-decode(#{outcome := trapped, error := undefined}, _State) ->
-    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
-decode(#{outcome := trapped, error := E}, _State) ->
-    {error, wasm_worker_error:runtime(E)};
-decode(#{outcome := exited, exit := Code} = R, _State) ->
-    #{channels := #{stdout := Out, stderr := Err}} = R,
-    {error, wasm_worker_error:adapter(exit, ~"the engine exited", #{code => Code,
-                                                              stdout => Out,
-                                                              stderr => Err})}.
+decode(R, _State) ->
+    wasm_script_v1:channel_outcome(R, ~"the engine exited").
 
 cleanup(_State) -> ok.
 

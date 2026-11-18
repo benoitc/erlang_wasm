@@ -28,14 +28,16 @@ and an artifact gets one of them, named.
 `worker.result(ptr, len)`, bound to the kernel's `result` channel. Genuinely
 separate: stdout, stderr and result carry independent bounds, all three are
 enforced while streaming, and no parsing is involved. It needs control of the
-guest's imports.
+guest's imports. An adapter on this transport decodes with
+`channel_outcome/2`.
 
 **`script_v1.combined`, for an artifact whose imports we cannot change** --
 exactly the interpreters we fetch. The result arrives **on stdout**, which
 means one bound over the stream that is actually shared: `max_combined_bytes`
 covers stdout and the result together, because on this transport they are one
 descriptor. `stderr` is a separate descriptor and keeps its own
-`max_output_bytes`.
+`max_output_bytes`. An adapter on this transport decodes with
+`combined_outcome/2`.
 
 ## The marker authenticates nothing
 
@@ -88,7 +90,8 @@ reach it. They travel in `ctx.code` under the kernel's `adapter_failure`.
 """.
 
 -export([version/0, marker/0, encode_context/1, decode_combined/2,
-         decode_channel/1, error/3, codes/0, combined_limits/1]).
+         decode_channel/1, error/3, codes/0, combined_limits/1,
+         stage_all/2, channel_outcome/2, combined_outcome/2]).
 
 -define(VERSION, ~"script_v1").
 
@@ -156,6 +159,73 @@ is `ctx.code`, which is a binary and can grow with the languages.
 error(Code, Msg, Ctx) ->
     wasm_worker_error:adapter(adapter_failure, Msg, Ctx#{code => Code}).
 
+-doc """
+Stage each file read-only, in order, and stop at the first error.
+
+`Stage` is the `stage` function of the adapter's `env()`. Every shipped
+adapter stages its source and context this way before a run.
+""".
+-spec stage_all(fun((wasm_worker_adapter:mount_name(), binary(), iodata()) ->
+                        ok | {error, wasm_worker_error:worker_error()}),
+                [{binary(), iodata()}]) ->
+          ok | {error, wasm_worker_error:worker_error()}.
+stage_all(_Stage, []) -> ok;
+stage_all(Stage, [{Path, Bytes} | Rest]) ->
+    case Stage(ro, Path, Bytes) of
+        ok             -> stage_all(Stage, Rest);
+        {error, _} = E -> E
+    end.
+
+-doc """
+An adapter's `decode/2` on the `script_v1.channel` transport.
+
+A return is read from the result channel with `decode_channel/1`. An exit is
+an `exit` error carrying `ExitMsg`, which names what the adapter runs.
+""".
+-spec channel_outcome(wasm_worker_adapter:execution_result(), binary()) ->
+          wasm_worker_adapter:outcome().
+channel_outcome(#{outcome := returned} = R, _ExitMsg) ->
+    #{channels := #{result := Res, stdout := Out, stderr := Err}} = R,
+    case decode_channel(Res) of
+        {ok, Result} ->
+            {ok, #{result => Result, stdout => Out, stderr => Err}};
+        {error, Code, Msg} ->
+            {error, ?MODULE:error(Code, Msg, #{stdout => Out, stderr => Err})}
+    end;
+channel_outcome(#{outcome := trapped} = R, _ExitMsg) ->
+    trapped(R);
+channel_outcome(#{outcome := exited, exit := Code} = R, ExitMsg) ->
+    #{channels := #{stdout := Out, stderr := Err}} = R,
+    {error, wasm_worker_error:adapter(exit, ExitMsg,
+                                      #{code => Code, stdout => Out,
+                                        stderr => Err})}.
+
+-doc """
+An adapter's `decode/2` on the `script_v1.combined` transport.
+
+A clean exit, or a return, is read from stdout with `decode_combined/2` and
+`Marker`. Any other exit is an `exit` error.
+""".
+-spec combined_outcome(wasm_worker_adapter:execution_result(), binary()) ->
+          wasm_worker_adapter:outcome().
+combined_outcome(#{outcome := exited, exit := 0} = R, Marker) ->
+    #{channels := #{stdout := Out, stderr := Err}} = R,
+    case decode_combined(Out, Marker) of
+        {ok, #{result := Result, stdout := Printed}} ->
+            {ok, #{result => Result, stdout => Printed, stderr => Err}};
+        {error, Code, Msg} ->
+            {error, ?MODULE:error(Code, Msg, #{stdout => Out, stderr => Err})}
+    end;
+combined_outcome(#{outcome := exited, exit := Code} = R, _Marker) ->
+    #{channels := #{stdout := Out, stderr := Err}} = R,
+    {error, wasm_worker_error:adapter(exit, ~"the engine exited non-zero",
+                                      #{code => Code, stdout => Out,
+                                        stderr => Err})};
+combined_outcome(#{outcome := trapped} = R, _Marker) ->
+    trapped(R);
+combined_outcome(#{outcome := returned} = R, Marker) ->
+    combined_outcome(R#{outcome := exited, exit := 0}, Marker).
+
 -doc "Every code this profile defines. Extensible without touching the kernel.".
 -spec codes() -> [binary()].
 codes() -> [~"no_entry_point", ~"exception", ~"bad_result", ~"no_result"].
@@ -183,6 +253,13 @@ combined_limits(Limits) ->
     Limits#{max_output_bytes => #{stdout => Combined, stderr => Stderr}}.
 
 %%% ----------------------------------------------------------------- guts ---
+
+%% A trap carries the runtime's error. One with none is the adapter's fault.
+trapped(#{error := undefined}) ->
+    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error",
+                                      #{})};
+trapped(#{error := E}) ->
+    {error, wasm_worker_error:runtime(E)}.
 
 %% A bare value cannot say whether the tenant returned it or never ran, so the
 %% bootstrap frames which of the two happened.

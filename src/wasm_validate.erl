@@ -99,13 +99,20 @@ context(#module{types = Types, imports = Imports, funcs = Funcs, tables = Tables
     #ctx{
         types   = TypeTuple,
         canon   = Canon,
-        fields  = list_to_tuple([type_fields(S) || S <- Types]), kinds   = list_to_tuple([type_kind(S) || S <- Types]), supers  = list_to_tuple(
+        fields  = list_to_tuple([type_fields(S) || S <- Types]),
+        kinds   = list_to_tuple([type_kind(S) || S <- Types]),
+        supers  = list_to_tuple(
                     [wasm_types:canon_supers(I, TypeTuple, Canon)
-                     || I <- lists:seq(0, length(Types) - 1)]), funcs   = list_to_tuple(ImportedFuncs ++ [T || #func{type = T} <- Funcs]), tables  = list_to_tuple(ImportedTables ++ Tables),
+                     || I <- lists:seq(0, length(Types) - 1)]),
+        funcs   = list_to_tuple(ImportedFuncs ++
+                                [T || #func{type = T} <- Funcs]),
+        tables  = list_to_tuple(ImportedTables ++ Tables),
         mems    = list_to_tuple(ImportedMems ++ Mems),
         globals = list_to_tuple(ImportedGlobals ++
-                                [T || #global{type = T} <- Globals]), tags    = list_to_tuple(ImportedTags ++ M#module.tags),
-        elems   = list_to_tuple([T || #elem{type = T} <- Elems]), n_datas = length(Datas),
+                                [T || #global{type = T} <- Globals]),
+        tags    = list_to_tuple(ImportedTags ++ M#module.tags),
+        elems   = list_to_tuple([T || #elem{type = T} <- Elems]),
+        n_datas = length(Datas),
         n_imported_globals = length(ImportedGlobals),
         refs    = declared_refs(M),
         shared_globals = shared_globals(M),

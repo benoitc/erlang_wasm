@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **Fixed: most of a component's lifts were not type-checked.** A lift is a
+  component function implemented by a core function, and its declared type
+  must match that core function's. The check read only the first of a
+  component's type sections and missed every type after an earlier section,
+  so in the components this project tests 103 of 112 lifts went unchecked,
+  and a component lifting a core function with the wrong type was accepted.
+  Every lift is checked now, and preparing a component costs no more than
+  before; for one with a large core it is many times faster, because the core
+  is no longer decoded in full to read its exports' types.
+- **Fixed: a resource destructor declared in a later type section never ran.**
+  Dropping a handle of such a resource left its cleanup undone. Destructors are
+  found wherever the component declares them now.
+- **Fixed: `wasm:validate/1` refused a module loaded with `wasm:load/1`.** It
+  answered `malformed` for the handle `load/1` returns. It validates the module
+  the handle names now, and answers `module_not_loaded` for a handle the node no
+  longer holds.
+- **A test of the WAT reader had never run.** It is part of every run now, and
+  the test suites fail when one of their cases is left out of every list.
+
 ## 0.10.1
 
 A security fix for WASI 0.2 and 0.3 file paths, and the test suites a

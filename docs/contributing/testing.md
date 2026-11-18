@@ -98,7 +98,8 @@ need something a fresh clone does not have:
 | `wasm_wasi3_p3_SUITE`, `slow_programs` | `WASM_RUN_SLOW_PROGRAMS=1` | that case skips |
 | `wasm_wasi2_conformance_SUITE`, `wasm_wasi2_real_SUITE`, `wasm_component_worker_SUITE` | `wasmtime` on the path, for the cases that compare with it | those cases skip |
 | `wasm_recipe_SUITE` | `cargo` and `wasm-tools`, for one case | that case skips |
-| `wasm_scripts_SUITE` | `make` | skips |
+| `wasm_scripts_SUITE` | `make` for the link-line cases, `git` for the pin cases | that group skips |
+| `wasi_nul_path_SUITE` | the file NIF built, for the `fs_native` group | that group skips |
 | `wasi_nif_SUITE` | the file NIF built | the cases about the native backend skip |
 | `wasm_docs_SUITE` | each block's checker tool and fixture | that block skips; fails under `WASM_DOCS_STRICT=1` |
 

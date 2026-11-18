@@ -13,6 +13,16 @@
   Such a path is now refused as invalid in every WASI version, and the
   native file backend refuses one as well. WASI preview 1 was not affected.
 
+### Changes
+
+- **The upstream test suites are always the pinned ones.** The scripts that
+  fetch the specification suites and wasmtime's test programs used an
+  existing checkout without looking at its commit, so a local conformance
+  run could test a different suite than the one this project declares, and
+  changing a pin did nothing to a checkout you already had. Now a checkout
+  at another commit is moved to the pin, and the script stops if you
+  changed files in it.
+
 ## 0.10.0
 
 WASI 0.3 commands and HTTP handlers run, beside WASI 0.2 in the same

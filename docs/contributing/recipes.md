@@ -469,9 +469,10 @@ that read it and how it is checked.
 
 Two scripts pin what CI fetches or builds: `scripts/fetch-suites.sh` names
 one commit for each upstream test suite, and `scripts/build-wasmtime-p2.sh`
-names wasmtime's tag in its `tag=` line. Both skip the clone when a checkout
-is already there, so delete the checkout first or the new pin changes
-nothing. Then update the baselines the suites keep; never move a suite out of
+names wasmtime's tag in its `tag=` line. Both check a checkout you already
+have against the pin: they move an unchanged one and stop on a changed one, so
+changing the pin and running the script is enough. Then update the baselines
+the suites keep; never move a suite out of
 `wasm_spec_manifest:core/0` to make a build pass. [Bump an upstream
 pin](fixtures.md#bump-an-upstream-pin) has the steps for each script.
 

@@ -6,7 +6,7 @@ everything that changed; this page lists only the changes that can break your
 code, and what to write instead. Releases are newest first. A release that is
 not on this page needs no change in your code.
 
-## Unreleased
+## 0.10.0
 
 **Network and HTTP.**
 

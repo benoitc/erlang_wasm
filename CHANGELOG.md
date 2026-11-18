@@ -4,6 +4,11 @@
 
 ### Changes
 
+- **Fixed: parsing a large text module was slow.** Parsing a `.wat` module took
+  time that grew with the square of its size: 10,000 small functions took more
+  than a second, and a long data string written in escapes slowed down the
+  same way. It grows linearly now, and those 10,000 functions parse in about
+  65 ms. Ordinary modules parse as fast as before.
 - **Fixed: three cases of the adapter conformance kit failed now and then.**
   The cases that restart the reaper did so as soon as a request was reserved,
   before it had handed its cleanup state over, so on a busy machine the

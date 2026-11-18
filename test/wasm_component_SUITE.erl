@@ -28,8 +28,10 @@ all() ->
      a_post_return_trap_fails_the_call,
      a_lift_selects_its_declared_core,
      an_ill_typed_lift_is_rejected,
+     a_lift_typed_in_a_later_type_section_is_checked,
      a_double_drop_traps,
      a_destructor_runs_once_on_drop,
+     a_destructor_declared_in_a_later_type_section_runs,
      a_wrong_type_handle_traps,
      a_prepared_component_instantiates_like_its_bytes,
      preparing_checks_what_instantiating_checks].
@@ -175,6 +177,30 @@ an_ill_typed_lift_is_rejected(_Config) ->
     {ok, Bin} = file:read_file(component_fixture("audit/invalid_lift.wasm")),
     ?assertMatch({error, {invalid_lift_type, _}},
                  wasm_component:instantiate(Bin)).
+
+%% A component's type index counts every type section, and a lift's type can be
+%% in any of them. `latelift''s `bad' is type 1, in the second section, and
+%% declares a u32 result for a core function returning f64. Validation read only
+%% the first section, found no type 1, and let it through: of the 112 lifts in
+%% the committed fixtures it checked 9. Fail-first: `prepare/1' answered `ok'.
+a_lift_typed_in_a_later_type_section_is_checked(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("latelift.component.wasm")),
+    ?assertMatch({error, {invalid_lift_type, #{core_func := <<"bad">>}}},
+                 wasm_component:prepare(Bin)),
+    ?assertMatch({error, {invalid_lift_type, #{core_func := <<"bad">>}}},
+                 wasm_component:instantiate(Bin)).
+
+%% The same reading of types numbered resource destructors from the first type
+%% section only. `latedtor''s resource is type 1, in the second section, so its
+%% destructor was not found and dropping a handle did not run it. Fail-first:
+%% `count' answered 0.
+a_destructor_declared_in_a_later_type_section_runs(_Config) ->
+    {ok, Bin} = file:read_file(component_fixture("latedtor.component.wasm")),
+    {ok, I} = wasm_component:instantiate(Bin),
+    ?assertEqual({ok, undefined},
+                 wasm_component:call(I, <<"make-and-drop">>, {[], none}, [])),
+    ?assertEqual({ok, 1}, wasm_component:call(I, <<"count">>, {[], u32}, [])),
+    ok = wasm_component:destroy(I).
 
 %% The guest mints a resource handle, drops it, then drops the same handle again.
 %% The second drop is a use of a handle no longer live in the instance, so it

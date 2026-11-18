@@ -1,0 +1,45 @@
+round 1 load 82.65 62.70 43.85
+main echo 773.04
+main asynclifts 23.65
+main ifaceexports 81.03
+main realupper 175.56
+branch echo 17.51
+branch asynclifts 22.48
+branch ifaceexports 76.08
+branch realupper 183.78
+round 2 load 82.65 62.70 43.85
+branch echo 17.46
+branch asynclifts 22.34
+branch ifaceexports 76.08
+branch realupper 181.44
+main echo 472.88
+main asynclifts 22.82
+main ifaceexports 81.97
+main realupper 179.70
+round 3 load 79.16 62.30 43.82
+main echo 491.40
+main asynclifts 23.51
+main ifaceexports 81.26
+main realupper 179.00
+branch echo 17.27
+branch asynclifts 22.03
+branch ifaceexports 74.78
+branch realupper 184.84
+round 4 load 79.16 62.30 43.82
+branch echo 17.48
+branch asynclifts 22.37
+branch ifaceexports 73.69
+branch realupper 183.41
+main echo 512.00
+main asynclifts 22.62
+main ifaceexports 81.13
+main realupper 171.44
+round 5 load 79.16 62.30 43.82
+main echo 465.97
+main asynclifts 22.66
+main ifaceexports 79.47
+main realupper 171.85
+branch echo 17.89
+branch asynclifts 22.17
+branch ifaceexports 76.28
+branch realupper 180.90

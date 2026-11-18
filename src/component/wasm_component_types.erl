@@ -17,7 +17,7 @@ flags, option, result), resource handles and the async `future`, `stream` and
 -include("wasm_component.hrl").
 
 -export([plain_name/1, label/1, forwarded_funcs/1]).
--export([import_interfaces/1, parse_types/1, type_space/1, func_sig/2,
+-export([import_interfaces/1, type_space/1, func_sig/2,
          value_desc/2, resource_dtors/1]).
 
 -export_type([sig/0]).
@@ -134,14 +134,8 @@ sections(Id, <<SecId, Rest0/binary>>, Acc) ->
         _  -> sections(Id, Rest2, Acc)
     end.
 
--doc "Decode the first type section in `Sec` into a map of type index to `typedef()`.".
--spec parse_types(binary()) -> #{non_neg_integer() => typedef()}.
-parse_types(Sec) ->
-    types_table(collect(?SEC_TYPE, Sec)).
-
 -doc """
-The component's whole type index space, as `parse_types/1` reads its first type
-section.
+The component's whole type index space, every type section included.
 
 A component's type indices are assigned, in section order, by every type
 definition, every type imported, every type aliased and every type exported (an
@@ -306,35 +300,7 @@ alias_target(<<Kind, Rest0/binary>>) when Kind =:= 16#00; Kind =:= 16#01 ->
     {_Name, Rest2} = plain_name(Rest1),
     Rest2.
 
-%%% ------------------------------------------------------------- sections ---
-
-%% Concatenate the content of every section with id `Id` in the stream, in order (a
-%% component may split types or imports across several sections, one entry each).
-collect(Id, Sec) ->
-    collect(Id, Sec, <<>>).
-
-collect(_Id, <<>>, Acc) ->
-    Acc;
-collect(Id, <<SecId, Rest0/binary>>, Acc) ->
-    {Size, Rest1} = wasm_leb128:u32(Rest0),
-    <<Content:Size/binary, Rest2/binary>> = Rest1,
-    case SecId of
-        Id -> collect(Id, Rest2, <<Acc/binary, Content/binary>>);
-        _  -> collect(Id, Rest2, Acc)
-    end.
-
 %%% ---------------------------------------------------------------- types ---
-
-%% Build the type index space: each entry is one `deftype`, numbered from 0 in order.
-types_table(Content) ->
-    {Count, Rest} = wasm_leb128:u32(Content),
-    types_table(Count, Rest, 0, #{}).
-
-types_table(0, _Rest, _Idx, Acc) ->
-    Acc;
-types_table(N, Bin, Idx, Acc) ->
-    {Def, Rest} = deftype(Bin),
-    types_table(N - 1, Rest, Idx + 1, Acc#{Idx => Def}).
 
 %% A `deftype`: `0x40` functype, `0x42` instancetype, or a value type (a primitive byte
 %% or an aggregate). Component/resource type forms are consumed only enough to model them
@@ -374,31 +340,25 @@ deftype_1(Bin) ->
     {{value, Desc}, Rest}.
 
 -doc """
-Each defined resource type's destructor, as `#{TypeIndex => CoreFuncIndex}`.
+Each defined resource type's destructor, as `#{TypeIndex => CoreFuncIndex}`,
+from the component's section bytes or from a type space `type_space/1`
+already built.
 
 A resource type may name a core function the runtime runs when an owned handle of
-that type is dropped. Only the first type section is read (as `parse_types/1`),
-which covers a component that defines its resources there. A resource with no
-destructor, or a type that is not a resource, is omitted. Never raises.
+that type is dropped. The indices are those of `type_space/1`, the whole type
+space, so a resource defined in a later type section is found under its real
+index; reading only the first section missed it, and its destructor never ran.
+A resource with no destructor, or a type that is not a resource, is omitted.
+Never raises.
 """.
--spec resource_dtors(binary()) -> #{non_neg_integer() => non_neg_integer()}.
-resource_dtors(Sec) ->
-    try
-        {Count, Rest} = wasm_leb128:u32(collect(?SEC_TYPE, Sec)),
-        resource_dtors(Count, Rest, 0, #{})
-    catch
-        _:_ -> #{}
-    end.
-
-resource_dtors(0, _Rest, _Idx, Acc) ->
-    Acc;
-resource_dtors(N, Bin, Idx, Acc) ->
-    {Def, Rest} = deftype(Bin),
-    Acc1 = case Def of
-               {resource, Dtor} when is_integer(Dtor) -> Acc#{Idx => Dtor};
-               _                                      -> Acc
-           end,
-    resource_dtors(N - 1, Rest, Idx + 1, Acc1).
+-spec resource_dtors(binary() | #{non_neg_integer() => typedef()}) ->
+          #{non_neg_integer() => non_neg_integer()}.
+resource_dtors(Sec) when is_binary(Sec) ->
+    resource_dtors(type_space(Sec));
+resource_dtors(Types) when is_map(Types) ->
+    maps:filtermap(fun(_Idx, {resource, Dtor}) when is_integer(Dtor) -> {true, Dtor};
+                      (_Idx, _Def) -> false
+                   end, Types).
 
 %% Function parameters: a vector of `(name, valtype)`.
 func_params(Bin) ->

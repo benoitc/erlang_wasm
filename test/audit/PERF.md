@@ -147,6 +147,7 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [Running a real WASI 0.2 component costs a cold instantiation per call](#running-a-real-wasi-02-component-costs-a-cold-instantiation-per-call)
 - [Multi-core component linking: native decode unchanged (2026-09-23)](#multi-core-component-linking-native-decode-unchanged-2026-09-23)
 - [Multi-core linking: the realloc override is off the guarded path (2026-09-23)](#multi-core-linking-the-realloc-override-is-off-the-guarded-path-2026-09-23)
+- [Checking every lift, at no cost to preparation (2026-11-18)](#checking-every-lift-at-no-cost-to-preparation-2026-11-18)
 
 **The design**
 
@@ -9999,3 +10000,41 @@ registry in the engine's shared, named, write-concurrent table cost 2.2 us of
 a 6.0 us instantiation; it is now a row in the heap's own objects table.
 Registering the whole `#inst{}` cost another 1.9 us, because ETS copies on
 insert; now only the four fields that a root scan reads are registered.
+
+## Checking every lift, at no cost to preparation (2026-11-18)
+
+**The question.** Lift validation read only a component's first type section,
+and checked 9 of the 112 lifts in `test/fixtures/component/`. Checking all of
+them means reading each lifted core's export types. Does it make
+`wasm_component:prepare/1` slower? The gate, fixed before measuring: no
+slower than 1.10x `main` on echo, asynclifts, ifaceexports and realupper.
+
+**The first attempt failed it.** Reading each core's types through
+`wasm_decode:module_unchecked/1` decodes the code section too. On realupper,
+whose lifts `main` never checked, that cost 2.2 to 2.6 ms a prepare against
+`main`'s 0.18 ms: 13 times slower. Two changes brought it back:
+
+- `wasm_decode:interface_unchecked/1` decodes only the type, import, function
+  and export sections, and skips the rest by size;
+- `prepare/1` builds the type space once and passes it to the lift check, to
+  `resource_info/3` and to `resource_dtors/1`, which had each built their own.
+
+**The result.** Minimum of five batches of 200 cold prepares, per fixture,
+five rounds alternating `main` at `7a11f21` and the branch's lift check. The
+load average was between 79 and 83 (this box is shared), far above the
+protocol's 8, so these are an upper bound on the noise, not a clean
+measurement:
+
+| fixture | main µs | branch µs | ratio |
+| --- | ---: | ---: | ---: |
+| echo | 465.97 | 17.27 | 0.04 |
+| asynclifts | 22.62 | 22.03 | 0.97 |
+| ifaceexports | 79.47 | 73.69 | 0.93 |
+| realupper | 171.44 | 180.90 | 1.06 |
+
+The gate passes. echo is 27 times faster: `main` decoded its 15 KB core in
+full, for the one lift it did check, on every prepare.
+
+**Raw.** `test/audit/raw/lift-validation/`: `bench.erl`, `gate.sh` and
+`gate.log`.
+

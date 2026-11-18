@@ -37,7 +37,7 @@ in `include/wasm.hrl`, which is what `wasm_validate` then checks.
 
 -include("wasm.hrl").
 
--export([module/1, module_unchecked/1]).
+-export([module/1, module_unchecked/1, interface_unchecked/1]).
 -export([valtype/1, reftype/1, heaptype/1, limits/1, name/1]).
 -export([imports/1]).
 
@@ -76,6 +76,39 @@ module_unchecked(Bin) when byte_size(Bin) < 8 ->
 module_unchecked(_) ->
     wasm_error:malformed(magic_header_not_detected,
                          <<"magic header not detected">>).
+
+-doc """
+Decode only what a module's function exports are typed by: its type, import,
+function and export sections. Every other section is skipped by its size and
+not checked, so the code is never decoded. For reading an export's signature
+without paying for the module, as `wasm:func_types_of/1` does; use `module/1`
+to know a module is well formed. Lets the internal throw escape, as
+`module_unchecked/1` does.
+""".
+-spec interface_unchecked(binary()) -> #module{}.
+interface_unchecked(<<"\0asm", 1:32/little, Rest/binary>>) ->
+    interface_sections(Rest, #module{});
+interface_unchecked(Bin) ->
+    %% Not a version 1 module: the same refusal as a full decode.
+    module_unchecked(Bin).
+
+interface_sections(<<>>, M) ->
+    M;
+interface_sections(<<Id:8, Rest0/binary>>, M) ->
+    {Size, Rest1} = wasm_leb128:u32(Rest0),
+    case Rest1 of
+        <<Body:Size/binary, Rest2/binary>>
+          when Id =:= ?SEC_TYPE; Id =:= ?SEC_IMPORT; Id =:= ?SEC_FUNCTION;
+               Id =:= ?SEC_EXPORT ->
+            interface_sections(Rest2, decode_section(Id, Body, M));
+        <<_:Size/binary, Rest2/binary>> ->
+            interface_sections(Rest2, M);
+        _ ->
+            wasm_error:malformed(unexpected_end,
+                                 <<"unexpected end of section or function">>,
+                                 #{section => Id, declared_size => Size,
+                                   remaining => byte_size(Rest1)})
+    end.
 
 %%% ------------------------------------------------------------- sections ---
 

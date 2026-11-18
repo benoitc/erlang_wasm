@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
-A pool of script workers can share one image, and sending an image no longer
-copies its tables. Compiled code calls and does 32-bit arithmetic as fast as
-plain Erlang.
+WASI 0.3 commands and HTTP handlers run, beside WASI 0.2 in the same
+component. The async Component Model ABI is complete, components can run
+cooperative threads, and a component instance can be snapshotted and
+restored once per request. The HTTP listener serves HTTP/2 and bounds every
+request. A pool of script workers shares one image, and compiled calls and
+32-bit arithmetic are much faster. Some defaults are stricter: read
+[Upgrading](docs/upgrading.md) before you move to this release.
 
 ### Security
 

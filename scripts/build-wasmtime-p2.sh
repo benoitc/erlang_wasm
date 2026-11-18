@@ -28,12 +28,11 @@ command -v cargo >/dev/null      || { echo "cargo not found" >&2; exit 1; }
 command -v wasm-tools >/dev/null || { echo "wasm-tools not found" >&2; exit 1; }
 rustup target add wasm32-wasip1 >/dev/null 2>&1 || true
 
-if [ ! -d "$src/wasmtime" ]; then
-  echo "cloning wasmtime $tag into $src"
-  mkdir -p "$src"
-  git clone --depth 1 --branch "$tag" \
-      https://github.com/bytecodealliance/wasmtime.git "$src/wasmtime"
-fi
+# A checkout left at another tag would build other programs than the ones
+# this tag names, so it is checked, and moved when it is unchanged.
+mkdir -p "$src"
+"$here/scripts/checkout-pin.sh" "$src/wasmtime" \
+    https://github.com/bytecodealliance/wasmtime.git "$tag"
 
 cd "$src/wasmtime"
 pkg="$(grep -m1 '^name' crates/test-programs/artifacts/Cargo.toml \

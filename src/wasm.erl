@@ -251,11 +251,28 @@ with_room(Bytes, F) ->
     end.
 
 -doc """
-Decode without validating. Use it to inspect a module that fails validation;
-do not instantiate what it gives you.
+Validate a module, as `wasm:load/1` or `wasm_decode:module/1` gives it.
+
+A decoded module answers `{ok, Module}` when it is valid. A handle from
+`wasm:load/1` names the cache's copy, which is validated and answered as
+`{ok, Handle}`; a handle the node no longer holds answers
+`module_not_loaded`, as `instantiate/3` does. Otherwise `{error, Why}`, the
+reason the module is invalid.
 """.
 -spec validate(module_()) -> {ok, module_()} | {error, wasm_error:error()}.
-validate(M) -> wasm_validate:module(M).
+validate({wasm_module, _} = Handle) ->
+    case wasm_module_cache:get(Handle) of
+        {ok, M} ->
+            case wasm_validate:module(M) of
+                {ok, _} -> {ok, Handle};
+                {error, _} = E -> E
+            end;
+        {error, not_loaded} ->
+            {error, err(link, module_not_loaded, ~"module is not loaded",
+                        #{handle => Handle})}
+    end;
+validate(#module{} = M) ->
+    wasm_validate:module(M).
 
 -spec instantiate(module_(), map()) -> {ok, instance()} | {error, wasm_error:error()}.
 instantiate(M, Imports) -> instantiate(M, Imports, #{}).

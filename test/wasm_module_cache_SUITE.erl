@@ -39,7 +39,8 @@ all() ->
      a_publish_racing_an_eviction_leaves_nothing,
      claims_name_what_a_process_holds_and_hand_over,
      a_module_past_the_size_limit_is_refused_before_any_work,
-     the_cache_refuses_a_load_past_its_byte_budget].
+     the_cache_refuses_a_load_past_its_byte_budget,
+     a_loaded_module_validates_by_its_handle].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -51,6 +52,23 @@ end_per_suite(_) -> ok.
 
 init_per_testcase(_, Config) -> wasm_test_slots:reset(), Config.
 end_per_testcase(_, _) -> wasm_test_slots:reset(), ok.
+
+%% `wasm:validate/1' takes a module as `wasm:load/1' returns it, a handle, as
+%% well as a decoded module. It gave the handle to a function expecting the
+%% decoded record, so validating a module that had loaded answered
+%% `malformed'/`internal'. A handle the node no longer holds is refused as
+%% `instantiate/3' refuses it. Fail-first: both handles answered `internal'.
+a_loaded_module_validates_by_its_handle(_Config) ->
+    Dir = wasm_spec_runner:fixtures_dir(),
+    [begin
+         {ok, Bin} = file:read_file(filename:join(Dir, F)),
+         {ok, M} = wasm_decode:module(Bin),
+         ?assertMatch({ok, _}, wasm:validate(M)),
+         {ok, H} = wasm:load(unique(Bin)),
+         ?assertEqual({ok, H}, wasm:validate(H)),
+         ok = wasm:unload(H),
+         ?assertMatch({error, #{kind := module_not_loaded}}, wasm:validate(H))
+     end || F <- ["plugin/plugin.wasm", "rust/wasi_demo.wasm"]].
 
 %% Nothing bounded a module's size: decoding, validating and, through the
 %% cache, hashing all ran on whatever arrived. Past `max_module_bytes' both

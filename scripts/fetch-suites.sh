@@ -5,22 +5,18 @@
 # Neither suite is vendored, and both used to be cloned from a moving branch:
 # the same commit of this project could pass on one run and fail the next, and
 # "conformance passed" meant whatever upstream held that day. To move a pin,
-# change its commit here, run the suites, and commit the change.
+# change its commit here, run this again, run the suites, and commit the
+# change. An existing checkout is moved to the pin, or the script stops if
+# you changed it: see `checkout-pin.sh'.
 #
 #   scripts/fetch-suites.sh [DIR]     # DIR defaults to the current directory
 set -eu
 
 DIR=${1:-.}
+here=$(cd "$(dirname "$0")" && pwd)
 
 fetch() {
-    name=$1 url=$2 commit=$3
-    dest="$DIR/$name"
-    if [ -d "$dest" ]; then
-        return 0
-    fi
-    git init -q "$dest"
-    git -C "$dest" fetch -q --depth 1 "$url" "$commit"
-    git -C "$dest" checkout -q FETCH_HEAD
+    "$here/checkout-pin.sh" "$DIR/$1" "$2" "$3"
 }
 
 fetch testsuite https://github.com/WebAssembly/testsuite.git \

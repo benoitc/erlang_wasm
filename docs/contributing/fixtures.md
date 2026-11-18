@@ -84,15 +84,17 @@ make p2-fixtures
 
 ### The specification and WASI suites
 
-`scripts/fetch-suites.sh` names one commit for each suite. It returns early
-when the directory already exists, so changing a commit does nothing to a
-checkout you already have. Delete the checkout first:
+`scripts/fetch-suites.sh` names one commit for each suite. It checks a
+checkout you already have against its commit, through
+`scripts/checkout-pin.sh`: one at another commit is moved to the pin and the
+move is printed, and the script stops, without touching anything, if you
+changed tracked files in it. So you never need to delete a checkout to move a
+pin:
 
 1. Change the commit in `scripts/fetch-suites.sh`.
-2. Delete the old checkout, then fetch:
+2. Fetch:
 
    ```sh
-   rm -rf testsuite wasi-testsuite
    scripts/fetch-suites.sh
    ```
 
@@ -112,14 +114,16 @@ checkout you already have. Delete the checkout first:
 ### wasmtime's programs
 
 `scripts/build-wasmtime-p2.sh` clones wasmtime at the tag in its `tag=` line
-into `.wasmtime-src/` (or `WASMTIME_P2_SRC`), and skips the clone when that
-checkout exists. Delete it when you change the tag:
+into `.wasmtime-src/` (or `WASMTIME_P2_SRC`). A checkout already there is
+checked against the tag the same way, so it is moved to a new tag for you.
+The built programs are not: a program the old tag had and the new one dropped
+would stay behind, so delete them when you change the tag:
 
 1. Change `tag=` in `scripts/build-wasmtime-p2.sh`.
-2. Delete the old checkout and the built programs, then build:
+2. Delete the built programs, then build:
 
    ```sh
-   rm -rf .wasmtime-src test/fixtures/wasmtime-p2* test/fixtures/wasmtime-p3*
+   rm -rf test/fixtures/wasmtime-p2* test/fixtures/wasmtime-p3*
    scripts/build-wasmtime-p2.sh
    ```
 

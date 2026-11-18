@@ -495,7 +495,8 @@ the_reaper_finishes_what_a_killed_guardian_left(Ctx) ->
 a_restarted_reaper_adopts_a_live_request(Ctx) ->
     W = unhurried(Ctx),
     {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
-    [#{id := Id}] = until_reservations(1, 40),
+    %% Started, not merely reserved: see `until_started/1'.
+    [#{id := Id}] = until_started(40),
     Dir = filename:join(root(Ctx), <<"req-", Id/binary>>),
     ?assert(filelib:is_dir(Dir)),
     ok = wasm_worker_reaper:stop(),
@@ -863,6 +864,18 @@ until_state(Want, N) ->
         _      -> timer:sleep(?TICK), until_state(Want, N - 1)
     end.
 
+%% A request that has finished starting: its adapter state has reached the
+%% reaper, so the guardian sends nothing more before the guest runs. A case
+%% that stops the reaper must wait for this, not for the reservation. The
+%% reservation is made before `prepare/3' runs, and the state is handed over
+%% after it; a reaper stopped in between leaves no reaper registered for that
+%% hand-over, the cleanup manager answers that none is coming (the kit holds
+%% the supervised one), and the guardian ends the request. Its `finish' then
+%% reaches the replacement, which rightly cleans up a request that is over:
+%% the adoption case failed this way in CI, traced to the microsecond. An
+%% adapter with no state never delivers one, and the wait ends at its budget.
+until_started(N) -> until_delivered(N).
+
 until_delivered(0) -> wasm_worker_reaper:requests();
 until_delivered(N) ->
     case wasm_worker_reaper:requests() of
@@ -942,7 +955,7 @@ a_stale_job_is_refused_by_the_replacement(Ctx) ->
     %% of this case passed with the check removed.
     W = unhurried(Ctx),
     {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
-    [#{id := Id}] = until_reservations(1, 40),
+    [#{id := Id}] = until_started(40),
     Old = wasm_worker_reaper:generation(),
     ok = wasm_worker_reaper:stop(),
     {ok, _} = wasm_worker_reaper:start_link(#{scratch => root(Ctx)}),
@@ -1163,7 +1176,7 @@ probe_byte(Ctx, N) ->
 a_reused_pid_denies_the_handshake(Ctx) ->
     W = unhurried(Ctx),
     {ok, Ref} = wasm_script_worker:submit(W, fix(Ctx, runaway)),
-    [#{guardian := G}] = until_reservations(1, 40),
+    [#{guardian := G}] = until_started(40),
     ok = wasm_worker_reaper:stop(),
     %% A record naming a live process that is a guardian, but for a *different*
     %% request. Liveness alone is not enough: pids are reused within one

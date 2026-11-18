@@ -4,6 +4,12 @@
 
 ### Changes
 
+- **Fixed: three cases of the adapter conformance kit failed now and then.**
+  The cases that restart the reaper did so as soon as a request was reserved,
+  before it had handed its cleanup state over, so on a busy machine the
+  hand-over found no reaper and the request ended early. They now wait for the
+  request to have started. An adapter's own suite running the kit could fail
+  the same way.
 - **Preparing a component is faster.** `wasm_component:prepare/1` read the
   component's wiring six or seven times, once for each thing it derives from
   it; it reads it once now. Preparing takes about half the time it did for a

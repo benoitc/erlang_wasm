@@ -21,6 +21,7 @@ the node's life.
          importing_one_memory_through_two_slots_counts_once/1,
          concurrent_growers_agree_on_the_size_and_the_charge/1,
          a_grower_that_dies_gives_its_reservation_back/1,
+         queued_growers_are_served_in_the_order_they_arrived/1,
          a_table_and_a_global_outlive_the_process_that_made_them/1,
          a_table_goes_when_the_last_holder_lets_go/1,
          a_failed_build_gives_back_what_it_took/1,
@@ -51,6 +52,7 @@ all() ->
      importing_one_memory_through_two_slots_counts_once,
      concurrent_growers_agree_on_the_size_and_the_charge,
      a_grower_that_dies_gives_its_reservation_back,
+     queued_growers_are_served_in_the_order_they_arrived,
      a_table_and_a_global_outlive_the_process_that_made_them,
      a_table_goes_when_the_last_holder_lets_go,
      a_failed_build_gives_back_what_it_took,
@@ -267,6 +269,37 @@ a_grower_that_dies_gives_its_reservation_back(_Config) ->
     ?assertEqual(2, wasm_memory:size_pages(Grown)),
     ok = wasm_memory:free(Grown),
     ?assertEqual(Base, wasm_engine:pages_in_use()).
+
+%% Growers that wait behind a growth in flight are let through in the order
+%% they arrived. The wait list was appended at its end and is a `queue' now:
+%% this holds the order, it does not reproduce a defect. Each grower is in its
+%% call before the next one starts, and the size each one grew from says
+%% which went first.
+queued_growers_are_served_in_the_order_they_arrived(_Config) ->
+    {ok, Mem} = wasm_memory:new(shared_limits()),
+    Res = wasm_memory:resource(Mem),
+    Self = self(),
+    Holder = spawn(fun() ->
+                       {ok, _Old} = wasm_keeper:grow_begin(Res, make_ref(), 4,
+                                                           64),
+                       Self ! claimed,
+                       receive never -> ok end
+                   end),
+    receive claimed -> ok after 5000 -> ct:fail(no_claim) end,
+    [begin
+         P = spawn(fun() -> Self ! {grown, K, wasm_memory:grow(Mem, 1)} end),
+         wait_until(fun() -> in_a_call(P) end, 2000)
+     end || K <- [1, 2, 3]],
+    exit(Holder, kill),
+    Olds = [receive {grown, K, {ok, Old, _}} -> Old
+            after 5000 -> ct:fail({stuck, K})
+            end || K <- [1, 2, 3]],
+    ?assertEqual([1, 2, 3], Olds),
+    ok = wasm_memory:free(Mem).
+
+in_a_call(Pid) ->
+    erlang:process_info(Pid, current_function) =:=
+        {current_function, {gen, do_call, 4}}.
 
 %%% ---------------------------------------------------- tables and globals ---
 

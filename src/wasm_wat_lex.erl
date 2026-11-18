@@ -167,7 +167,7 @@ string(<<$", R/binary>>, Pos, Acc) ->
 string(<<$\\, C, R/binary>>, Pos, Acc) ->
     case escape(C) of
         {ok, Byte} -> string(R, Pos + 2, [Byte | Acc]);
-        hex -> hex_escape(<<C, R/binary>>, Pos, Acc);
+        hex -> hex_escape(C, R, Pos, Acc);
         unicode -> unicode_escape(R, Pos + 2, Acc);
         false -> fail(invalid_escape, Pos, #{character => C})
     end;
@@ -188,14 +188,16 @@ escape(C) when C >= $a, C =< $f -> hex;
 escape(C) when C >= $A, C =< $F -> hex;
 escape(_) -> false.
 
-hex_escape(<<H1, H2, R/binary>>, Pos, Acc) ->
+%% The first digit arrives on its own, so the rest of the source is not
+%% rebuilt around it for every escape.
+hex_escape(H1, <<H2, R/binary>>, Pos, Acc) ->
     case {hexval(H1), hexval(H2)} of
         {V1, V2} when is_integer(V1), is_integer(V2) ->
             string(R, Pos + 3, [V1 * 16 + V2 | Acc]);
         _ ->
             fail(invalid_escape, Pos)
     end;
-hex_escape(_, Pos, _Acc) ->
+hex_escape(_H1, _, Pos, _Acc) ->
     fail(invalid_escape, Pos).
 
 unicode_escape(<<${, R0/binary>>, Pos, Acc) ->
@@ -220,10 +222,13 @@ unicode(Code) -> unicode:characters_to_binary([Code], unicode, utf8).
 %% The specification's `idchar` set: everything a keyword, identifier or number
 %% may be made of. Deliberately generous, so a mistyped token is one reserved
 %% token rather than a run of small ones.
-idchars(<<C, R/binary>>, Pos, Acc) ->
+%% The rest is handed back as the sub-binary it already is. Rebuilding it as
+%% `<<C, R/binary>>' copied the remainder of the source once per token, which
+%% made a module's lexing cost grow with the square of its length.
+idchars(<<C, R/binary>> = Bin, Pos, Acc) ->
     case is_idchar(C) of
         true -> idchars(R, Pos + 1, [C | Acc]);
-        false -> {list_to_binary(lists:reverse(Acc)), <<C, R/binary>>, Pos}
+        false -> {list_to_binary(lists:reverse(Acc)), Bin, Pos}
     end;
 idchars(<<>>, Pos, Acc) ->
     {list_to_binary(lists:reverse(Acc)), <<>>, Pos}.

@@ -63,7 +63,7 @@ announcement. An announcement from an older generation is ignored.
             %% reaper outage cannot make local cleanup an unbounded burst.
             job_cap :: non_neg_integer(),
             jobs = #{} :: #{reference() => term()},
-            lqueue = [] :: [{term(), map()}]}).
+            lqueue = queue:new() :: queue:queue(term())}).
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
@@ -244,7 +244,7 @@ handle_info(_Msg, S) ->
 %% the job once this returns.
 start_or_queue_job(Spec, #s{jobs = Jobs, job_cap = Cap} = S)
   when map_size(Jobs) >= Cap ->
-    S#s{lqueue = S#s.lqueue ++ [Spec]};
+    S#s{lqueue = queue:in(Spec, S#s.lqueue)};
 start_or_queue_job(Spec, S) ->
     start_job(Spec, S).
 
@@ -257,9 +257,9 @@ start_job(Spec, #s{jobs = Jobs} = S) ->
 %% is now free.
 job_done(Ref, #s{jobs = Jobs} = S) ->
     S1 = S#s{jobs = maps:remove(Ref, Jobs)},
-    case S1#s.lqueue of
-        []             -> S1;
-        [Spec | Rest]  -> start_job(Spec, S1#s{lqueue = Rest})
+    case queue:out(S1#s.lqueue) of
+        {empty, _}              -> S1;
+        {{value, Spec}, Rest}   -> start_job(Spec, S1#s{lqueue = Rest})
     end.
 
 %% Track the reaper that announced. An older generation is ignored; the same

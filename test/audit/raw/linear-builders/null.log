@@ -1,0 +1,65 @@
+round 1 load 55.85 47.43 36.17
+a wat_large 1228850.0
+a wat_corpus 37906.0
+a keeper_depth1 20.5
+a keeper_depth1000 49804.0
+a manager_depth1 124.6
+a manager_depth1000 14297.0
+b wat_large 1256588.0
+b wat_corpus 40239.0
+b keeper_depth1 21.2
+b keeper_depth1000 55098.0
+b manager_depth1 180.6
+b manager_depth1000 14836.0
+round 2 load 46.93 45.94 35.89
+b wat_large 1196594.0
+b wat_corpus 41619.0
+b keeper_depth1 20.4
+b keeper_depth1000 45314.0
+b manager_depth1 126.7
+b manager_depth1000 13691.0
+a wat_large 1250260.0
+a wat_corpus 38108.0
+a keeper_depth1 21.5
+a keeper_depth1000 47590.0
+a manager_depth1 118.9
+a manager_depth1000 14465.0
+round 3 load 43.47 45.08 35.87
+a wat_large 1205599.0
+a wat_corpus 39014.0
+a keeper_depth1 21.4
+a keeper_depth1000 51480.0
+a manager_depth1 118.5
+a manager_depth1000 14478.0
+b wat_large 1187120.0
+b wat_corpus 40034.0
+b keeper_depth1 21.1
+b keeper_depth1000 57070.0
+b manager_depth1 112.0
+b manager_depth1000 13511.0
+round 4 load 42.13 44.73 35.96
+b wat_large 1191724.0
+b wat_corpus 37917.0
+b keeper_depth1 20.9
+b keeper_depth1000 58170.0
+b manager_depth1 120.5
+b manager_depth1000 14860.0
+a wat_large 1202437.0
+a wat_corpus 38951.0
+a keeper_depth1 20.9
+a keeper_depth1000 56434.0
+a manager_depth1 115.2
+a manager_depth1000 14686.0
+round 5 load 46.02 45.51 36.44
+a wat_large 1196711.0
+a wat_corpus 37680.0
+a keeper_depth1 21.1
+a keeper_depth1000 52072.0
+a manager_depth1 109.9
+a manager_depth1000 15958.0
+b wat_large 1175139.0
+b wat_corpus 39559.0
+b keeper_depth1 21.1
+b keeper_depth1000 58516.0
+b manager_depth1 128.6
+b manager_depth1000 14671.0

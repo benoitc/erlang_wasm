@@ -10080,3 +10080,59 @@ is reported as it stands, not redefined.
 **Raw.** `test/audit/raw/prepare-once/`: `bench.erl`, `gate.sh`, `gate.log`,
 `gate2.log` and `null.log`.
 
+
+## Parsing a large text module in linear time, and two queues (2026-11-19)
+
+**The question.** `wasm_wat:module/1` took 25 ms for 1,250 small functions
+and 5.1 s for 10,000: each doubling cost five to eight times as much.
+Profiling with `tprof` put 87% of the time in the lexer, which handed the
+rest of the source back as a new binary at the end of every word, copying it
+once per token. The hex escapes in a string did the same. With the lexer
+fixed, the build was still quadratic (1.2 s at 10,000, 23.7 s at 40,000)
+because each definition was appended to its list and its index found by
+recounting them. Do the two fixes make the parse linear, and does an
+ordinary module parse no slower? Separately, the keeper's queue of waiting
+growers and the cleanup manager's overflow were lists appended at their end.
+Does a `queue` leave the usual case of one waiter alone?
+
+**The gate, fixed before measuring.** A generated module of 10,000 small
+exported functions parses in at most 0.5x `main`. Every `(module ...)` form
+of the 255 `.wast` files the corpus case reads parses with
+`wasm_wat:module_form/1` in at most 1.03x. One waiter is no slower than
+1.03x: two processes growing one shared memory together, and
+`max_cleanup_jobs + 1` cleanup jobs whose action returns at once. A
+thousand waiters are measured, not gated, and a throughput claim needs a
+result beyond the null run.
+
+**The result.** `main` at `639df01` against the branch, five pairs of
+launches in alternating order, the minimum of each launch's rounds, the
+median of the five paired ratios. `main` against itself first, then the gate
+twice. The load average was 38 to 71 (this box is shared), far above the
+protocol's 8.
+
+| workload | gate | null | run 1 | run 2 |
+| --- | ---: | ---: | ---: | ---: |
+| 10,000 functions | 0.5 | 0.99 | 0.054 | 0.056 |
+| corpus | 1.03 | 1.05 | 0.97 | 0.95 |
+| keeper, one waiter | 1.03 | 1.00 | 0.99 | 0.96 |
+| manager, one waiter | 1.03 | 1.07 | 1.11 | 1.01 |
+| keeper, 1,000 waiters | none | 1.11 | 0.91 | 0.95 |
+| manager, 1,000 waiters | none | 0.95 | 1.03 | 1.02 |
+
+The 10,000-function module went from 1.2 s to 65 ms. Doubling the functions
+now doubles the time: 42 ms, 121 ms, 262 ms and 560 ms for 5,000 to 40,000.
+The corpus passes in both runs.
+
+One waiter passes for the keeper in both runs. The manager fails in the
+first run at 1.11 and passes in the second at 1.01; its null run was 1.07,
+with pairs from 0.95 to 1.45. One waiter adds one `queue:in/2` and one
+`queue:out/1` to a path that starts a steward process, so the change is far
+below what this setup resolves at this load. The gate is reported as it
+stands, not redefined.
+
+A thousand waiters show nothing beyond the null run for either queue, so no
+throughput is claimed. What the queues remove is the cost of each arrival
+growing with the length of the line.
+
+**Raw.** `test/audit/raw/linear-builders/`: `bench.erl`, `gate.sh`,
+`ratios.escript`, `null.log`, `gate.log` and `gate2.log`.

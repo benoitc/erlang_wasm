@@ -473,83 +473,121 @@ signature(Params, Results) ->
 
 %%% ----------------------------------------------------------- second pass ---
 
+%% Each field adds at most one entry to one index space, so the index it takes
+%% is read before the field and counted after it. Counting the module's lists
+%% instead, and appending to them, made a module of n functions cost n squared.
+%% The lists are built backwards and turned round once, in `finish/1'.
 build(Fields, Ctx) ->
-    lists:foldl(fun(Field, M) -> build_field(Field, M, Ctx) end,
-                #module{types = Ctx#ctx.types,
-                        rec_groups = Ctx#ctx.groups}, Fields).
+    M0 = #module{types = Ctx#ctx.types, rec_groups = Ctx#ctx.groups},
+    {M, _Next} =
+        lists:foldl(fun(Field, {M1, Next}) ->
+                            Space = field_space(Field),
+                            Idx = maps:get(Space, Next, 0),
+                            {build_field(Field, Idx, M1, Ctx),
+                             Next#{Space => Idx + 1}}
+                    end, {M0, #{}}, Fields),
+    finish(M).
 
-build_field({list, _, [{keyword, _, Kind} | Args]}, M, Ctx) ->
-    build_kind(Kind, Args, M, Ctx).
+build_field({list, _, [{keyword, _, Kind} | Args]}, Idx, M, Ctx) ->
+    build_kind(Kind, Args, Idx, M, Ctx).
+
+%% The index space a field adds to. `none' for a field that adds to none, and
+%% for an import too malformed to say, which `build_kind/5' then refuses.
+field_space({list, _, [{keyword, _, <<"import">>}, _, _,
+                       {list, _, [{keyword, _, Kind} | _]}]}) ->
+    space(Kind);
+field_space({list, _, [{keyword, _, Kind} | _]}) ->
+    space(Kind);
+field_space(_Field) ->
+    none.
+
+space(<<"func">>) -> func;
+space(<<"table">>) -> table;
+space(<<"memory">>) -> memory;
+space(<<"global">>) -> global;
+space(<<"tag">>) -> tag;
+space(_Kind) -> none.
+
+finish(#module{imports = Is, exports = Es, funcs = Fs, tables = Ts,
+               mems = Ms, globals = Gs, tags = Tgs, elems = Els,
+               datas = Ds} = M) ->
+    M#module{imports = lists:reverse(Is), exports = lists:reverse(Es),
+             funcs = lists:reverse(Fs), tables = lists:reverse(Ts),
+             mems = lists:reverse(Ms), globals = lists:reverse(Gs),
+             tags = lists:reverse(Tgs), elems = lists:reverse(Els),
+             datas = lists:reverse(Ds)}.
 
 %% Types were built in the first pass, since an inline type reference needs
 %% them before any body is read.
-build_kind(<<"type">>, _Args, M, _Ctx) -> M;
-build_kind(<<"rec">>, _Args, M, _Ctx) -> M;
-build_kind(<<"export">>, [{string, _, Name}, Desc], M, Ctx) ->
-    M#module{exports = M#module.exports ++
-                 [#export{name = name(Name), desc = export_desc(Desc, Ctx)}]};
-build_kind(<<"start">>, [Idx], M, Ctx) ->
-    M#module{start = index(Idx, func, Ctx)};
-build_kind(<<"import">>, [{string, _, Mod}, {string, _, Name}, Desc], M, Ctx) ->
+build_kind(<<"type">>, _Args, _Idx, M, _Ctx) -> M;
+build_kind(<<"rec">>, _Args, _Idx, M, _Ctx) -> M;
+build_kind(<<"export">>, [{string, _, Name}, Desc], _Idx, M, Ctx) ->
+    M#module{exports = [#export{name = name(Name),
+                                desc = export_desc(Desc, Ctx)}
+                        | M#module.exports]};
+build_kind(<<"start">>, [Func], _Idx, M, Ctx) ->
+    M#module{start = index(Func, func, Ctx)};
+build_kind(<<"import">>, [{string, _, Mod}, {string, _, Name}, Desc], _Idx, M,
+           Ctx) ->
     {Space, Rest} = import_desc(Desc),
     add_import(name(Mod), name(Name), Space, Rest, M, Ctx);
-build_kind(<<"memory">>, Args, M, Ctx) ->
+build_kind(<<"memory">>, Args, Idx, M, Ctx) ->
     {R1, Exports, Import} = declaration(Args),
-    M1 = add_exports(Exports, {mem, current(memory, M)}, M),
+    M1 = add_exports(Exports, {mem, Idx}, M),
     case Import of
         {Mod, Name} -> add_import(Mod, Name, memory, R1, M1, Ctx);
-        undefined -> memory_definition(R1, M1, Ctx)
+        undefined -> memory_definition(R1, Idx, M1, Ctx)
     end;
-build_kind(<<"global">>, Args, M, Ctx) ->
+build_kind(<<"global">>, Args, Idx, M, Ctx) ->
     {R1, Exports, Import} = declaration(Args),
-    M1 = add_exports(Exports, {global, current(global, M)}, M),
+    M1 = add_exports(Exports, {global, Idx}, M),
     case Import of
         {Mod, Name} -> add_import(Mod, Name, global, R1, M1, Ctx);
         undefined ->
             [TypeForm | InitForms] = R1,
-            M1#module{globals = M1#module.globals ++
-                          [#global{type = globaltype(TypeForm, Ctx),
-                                   init = expr(InitForms, Ctx)}]}
+            M1#module{globals = [#global{type = globaltype(TypeForm, Ctx),
+                                         init = expr(InitForms, Ctx)}
+                                 | M1#module.globals]}
     end;
-build_kind(<<"table">>, Args, M, Ctx) ->
+build_kind(<<"table">>, Args, Idx, M, Ctx) ->
     {R1, Exports, Import} = declaration(Args),
-    Idx = current(table, M),
     M1 = add_exports(Exports, {table, Idx}, M),
     case Import of
         {Mod, Name} -> add_import(Mod, Name, table, R1, M1, Ctx);
         undefined -> table_definition(R1, Idx, M1, Ctx)
     end;
-build_kind(<<"func">>, Args, M, Ctx) ->
+build_kind(<<"func">>, Args, Idx, M, Ctx) ->
     {R1, Exports, Import} = declaration(Args),
-    M1 = add_exports(Exports, {func, current(func, M)}, M),
+    M1 = add_exports(Exports, {func, Idx}, M),
     {TypeIdx, Params, R2} = typeuse(R1, Ctx),
     case Import of
         {Mod, Name} ->
-            M1#module{imports = M1#module.imports ++
-                          [#import{module = Mod, name = Name,
-                                   desc = {func, TypeIdx}}]};
+            M1#module{imports = [#import{module = Mod, name = Name,
+                                         desc = {func, TypeIdx}}
+                                 | M1#module.imports]};
         undefined ->
             {Locals, R3} = locals(R2, Ctx, []),
             Ctx1 = with_locals(Params ++ Locals, Ctx),
-            M1#module{funcs = M1#module.funcs ++
-                          [#func{type = TypeIdx,
-                                 locals = [T || {_Name2, T} <- Locals], body = seq_all(R3, Ctx1)}]}
+            M1#module{funcs = [#func{type = TypeIdx,
+                                     locals = [T || {_Name2, T} <- Locals],
+                                     body = seq_all(R3, Ctx1)}
+                               | M1#module.funcs]}
     end;
-build_kind(<<"tag">>, Args, M, Ctx) ->
+build_kind(<<"tag">>, Args, Idx, M, Ctx) ->
     {R1, Exports, Import} = declaration(Args),
-    M1 = add_exports(Exports, {tag, current(tag, M)}, M),
+    M1 = add_exports(Exports, {tag, Idx}, M),
     case Import of
         {Mod, Name} -> add_import(Mod, Name, tag, R1, M1, Ctx);
         undefined ->
             {TypeIdx, _Params, _Rest} = typeuse(R1, Ctx),
-            M1#module{tags = M1#module.tags ++ [#tagtype{type = TypeIdx}]}
+            M1#module{tags = [#tagtype{type = TypeIdx} | M1#module.tags]}
     end;
-build_kind(<<"elem">>, Args, M, Ctx) ->
+build_kind(<<"elem">>, Args, _Idx, M, Ctx) ->
     {_Name, Rest} = optional_id(Args),
-    M#module{elems = M#module.elems ++ [elem_segment(Rest, Ctx)]};
-build_kind(<<"data">>, Args, M, Ctx) ->
+    M#module{elems = [elem_segment(Rest, Ctx) | M#module.elems]};
+build_kind(<<"data">>, Args, _Idx, M, Ctx) ->
     {_Name, Rest} = optional_id(Args),
-    M#module{datas = M#module.datas ++ [data_segment(Rest, Ctx)]}.
+    M#module{datas = [data_segment(Rest, Ctx) | M#module.datas]}.
 
 %%% --------------------------------------------------------- declarations ---
 
@@ -591,9 +629,9 @@ import_desc(Form) ->
     fail(unexpected_import_desc, Form).
 
 add_import(Mod, Name, Space, Forms, M, Ctx) ->
-    M#module{imports = M#module.imports ++
-                 [#import{module = Mod, name = Name,
-                          desc = extern_type(Space, Forms, Ctx)}]}.
+    M#module{imports = [#import{module = Mod, name = Name,
+                                desc = extern_type(Space, Forms, Ctx)}
+                        | M#module.imports]}.
 
 extern_type(func, Forms, Ctx) ->
     {TypeIdx, _Params, _Rest} = typeuse(Forms, Ctx),
@@ -613,23 +651,23 @@ extern_type(global, [Form], Ctx) ->
 %% `(memory (data "..."))' is a memory large enough to hold the string and an
 %% active segment that fills it, which is two declarations in one pair of
 %% parentheses.
-memory_definition(Forms, M, Ctx) ->
+memory_definition(Forms, Idx, M, Ctx) ->
     case index_type(Forms) of
         {IndexType, [{list, _, [{keyword, _, <<"data">>} | Strings]}]} ->
-            inline_data(datastring(Strings), IndexType, M);
+            inline_data(datastring(Strings), IndexType, Idx, M);
         _ ->
-            M#module{mems = M#module.mems ++
-                         [#memtype{limits = limits(Forms, Ctx)}]}
+            M#module{mems = [#memtype{limits = limits(Forms, Ctx)}
+                             | M#module.mems]}
     end.
 
-inline_data(Bytes, IndexType, M) ->
+inline_data(Bytes, IndexType, Idx, M) ->
     Pages = (byte_size(Bytes) + ?PAGE_SIZE - 1) div ?PAGE_SIZE,
-    Idx = current(memory, M),
-    M1 = M#module{mems = M#module.mems ++
-                      [#memtype{limits = #limits{min = Pages, max = Pages,
-                                                 index_type = IndexType}}]},
-    M1#module{datas = M1#module.datas ++
-                  [#data{init = Bytes, mode = {active, Idx, zero(IndexType)}}]}.
+    M1 = M#module{mems = [#memtype{limits = #limits{min = Pages, max = Pages,
+                                                    index_type = IndexType}}
+                          | M#module.mems]},
+    M1#module{datas = [#data{init = Bytes,
+                             mode = {active, Idx, zero(IndexType)}}
+                       | M1#module.datas]}.
 
 %% `(table funcref (elem ...))' is the same abbreviation for tables.
 table_definition(Forms, Idx, M, Ctx) ->
@@ -637,20 +675,21 @@ table_definition(Forms, Idx, M, Ctx) ->
         {IndexType, [RT, {list, _, [{keyword, _, <<"elem">>} | Items]}]} ->
             inline_elem(RT, Items, IndexType, Idx, M, Ctx);
         _ ->
-            M#module{tables = M#module.tables ++ [tabletype(Forms, Ctx)]}
+            M#module{tables = [tabletype(Forms, Ctx) | M#module.tables]}
     end.
 
 inline_elem(RT, Items, IndexType, Idx, M, Ctx) ->
     ElemType = reftype_of(RT, Ctx),
     {Type, Init} = elem_list(Items, Ctx),
     Count = length(Init),
-    M1 = M#module{tables = M#module.tables ++
-                      [#tabletype{limits = #limits{min = Count, max = Count,
-                                                   index_type = IndexType},
-                                  elemtype = ElemType}]},
-    M1#module{elems = M1#module.elems ++
-                  [#elem{type = segment_type(Type, ElemType), init = Init,
-                         mode = {active, Idx, zero(IndexType)}}]}.
+    M1 = M#module{tables = [#tabletype{limits = #limits{min = Count,
+                                                        max = Count,
+                                                        index_type = IndexType},
+                                       elemtype = ElemType}
+                            | M#module.tables]},
+    M1#module{elems = [#elem{type = segment_type(Type, ElemType), init = Init,
+                             mode = {active, Idx, zero(IndexType)}}
+                       | M1#module.elems]}.
 
 %% The generated segment initialises this table, so it carries the table's own
 %% element type. The short form written as function indices is only available
@@ -777,26 +816,11 @@ datastring(Forms) ->
 
 %%% ------------------------------------------------------------ bookkeeping ---
 
-%% The index the next definition of a space will have. Imports occupy the low
-%% indices, and the format requires them to be written first, so counting both
-%% in the order they arrive is enough.
-current(Space, M) -> imported(Space, M) + defined(Space, M).
-
-imported(Space, #module{imports = Imports}) ->
-    Tag = desc_tag(Space),
-    length([1 || #import{desc = Desc} <- Imports, element(1, Desc) =:= Tag]).
-
-defined(func, M) -> length(M#module.funcs);
-defined(table, M) -> length(M#module.tables);
-defined(memory, M) -> length(M#module.mems);
-defined(global, M) -> length(M#module.globals);
-defined(tag, M) -> length(M#module.tags).
-
 add_exports([], _Desc, M) -> M;
 add_exports([Name | Rest], Desc, M) ->
     add_exports(Rest, Desc,
-                M#module{exports = M#module.exports ++
-                             [#export{name = Name, desc = Desc}]}).
+                M#module{exports = [#export{name = Name, desc = Desc}
+                                    | M#module.exports]}).
 
 export_desc({list, _, [{keyword, _, Kind}, Idx]}, Ctx) ->
     Space = space_of(Kind),

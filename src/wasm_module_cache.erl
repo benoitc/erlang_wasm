@@ -166,9 +166,10 @@ prep_of(Module) ->
     catch _:_ -> undefined
     end.
 
-%% Nothing this library exposes may raise, including when the server is
-%% overloaded or absent, so a `gen_server' exit becomes the same kind of value
-%% every other failure here is.
+%% A server that is overloaded or absent is not the caller's fault, and a load
+%% answers it as a value like every other failure here: the `gen_server' exit
+%% becomes `cache_timeout' or `cache_unavailable'. The promise this keeps is in
+%% docs/design-principles.md, "Failures are values at the guest boundary".
 call(Request) ->
     try gen_server:call(?SERVER, Request, ?CALL_TIMEOUT)
     catch

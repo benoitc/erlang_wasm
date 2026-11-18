@@ -8,6 +8,25 @@ call is an `async func`. You need this page when a toolchain builds your
 program for 0.3, such as Rust's `wasip3` crate or a target that names
 `wasi:cli/command@0.3.0`.
 
+**Do you need this?** Yes, if `wasm-tools print your.wasm` shows imports
+ending in `@0.3.0` (or another `0.3.x`), or your guest exports an
+`async func` such as a 0.3 `wasi:http/handler`. No, if every WASI import ends
+in `@0.2.x`: use [WASI 0.2](wasi-0-2.md), which is the smaller host. If you
+are not sure, use `wasi_preview3`: its runners run a 0.2 component too, with
+the 0.2 host alone.
+
+The host modules:
+
+| module | what it serves |
+| --- | --- |
+| `wasi_preview3` | `wasi:cli`, `wasi:clocks` and `wasi:random` at 0.3, the runners `run_command/3` and `run_serve/3,4`, and `command/1`, which merges the 0.2 and 0.3 hosts into one imports map |
+| `wasi_p3_filesystem` | `wasi:filesystem` at 0.3 |
+| `wasi_p3_sockets` | `wasi:sockets` at 0.3 |
+| `wasi_p3_http` | `wasi:http` at 0.3 |
+
+The options are those of 0.2; the table in
+[Options from preview 1](wasi-0-2.md#options-from-preview-1) covers both.
+
 ## Run a 0.3 command
 
 `wasi_preview3:run_command/3` runs a 0.2 or a 0.3 command, with the same
@@ -90,11 +109,30 @@ chunk of a chunked body.
   on a socket that is not bound bind it to any address first, and so does a
   UDP `send` with an address.
 - A wait that is already over, such as `wait-until(now)`, completes at once.
-- `resource_limit` also bounds the async calls a guest has waiting at once.
-  Past it, the call traps with `resource_limit_reached`.
+- `resource_limit` is the most host resource handles (open files, sockets,
+  streams) a component may hold at once, and, at 0.3, also the most async
+  calls it may have waiting at once. Past it, the call traps with
+  `resource_limit_reached`. There is no limit unless you set one, in the
+  runner's options or in those of `wasm_component:instantiate/3`. See the
+  [glossary](concepts.md#runtime-terms).
 - A 0.3 import is matched to host functions keyed `Interface@0.3`, never to
   the 0.2 ones of the same name. See [Versioned
   imports](wasi-0-2.md#versioned-imports).
+
+## Check it against wasmtime's programs
+
+`wasm_wasi3_p3_SUITE` runs wasmtime's own WASI 0.3 test programs through
+`wasi_preview3:run_command/3` and `run_serve/3`. The programs are not in the
+repository; build them once, then run the suite:
+
+```sh
+scripts/build-wasmtime-p2.sh
+WASM_REQUIRE_WASMTIME_FIXTURES=1 rebar3 ct --suite=test/wasm_wasi3_p3_SUITE
+```
+
+Without the programs the suite skips, unless
+`WASM_REQUIRE_WASMTIME_FIXTURES=1` is set. [Fixtures](contributing/fixtures.md)
+says how they are built and pinned.
 
 ## Read this next
 

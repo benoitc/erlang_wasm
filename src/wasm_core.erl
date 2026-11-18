@@ -19,6 +19,7 @@ is inside the subset at all, and `wasm_jit` asks them before building anything.
 | the module around them, and the compiler run | `module/4`, `run_compiler/4` |
 | the atoms a name can be | `fun_name/1`, `frame_name/1`, `atoms/0` |
 | the bounds a generator refuses past | `limits/0`, and the table below |
+| a load or store generated inline | `access/7`, under `%%% inline memory access` and the banners after it: `%%% translation cache`, `%%% miss functions`, `%%% answers and their order`, `%%% image regions`, `%%% words in bounds`, `%%% word splicing`, `%%% widening` |
 
 The rest of this doc is about naming, which is one concern of several here but
 the one that can leak the node.
@@ -1625,8 +1626,9 @@ static_slots(TypeIdx, TableIdx, Cands, TSigs) ->
 %% signature, `dispatch_fn/4', and a foreign one to `indirect_out/9'.
 %%
 %% Both answer `{R1, ..., Rn, Mut}', a tuple, which the OTP note on
-%% multi-value joins in `docs/design-notes.md' asks for, with each i32 result
-%% in the form the dispatcher gives it.
+%% multi-value joins asks for (`docs/compiled-tier-internals.md', "Values a
+%% multi-value `let` must not leave unused"), with each i32 result in the form
+%% the dispatcher gives it.
 indirect_local(TypeIdx, TableIdx, {NP, NR}, {Name, AF, RF, Cands}, Rest,
                #g{mod = Mod, gen = Stamp, inst = Inst, mut = Mut} = G0, Exit) ->
     {RawI, G1} = pop_raw(G0),
@@ -2397,6 +2399,8 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
                                                            Slow))]),
                    Slow)))).
 
+%%% ----------------------------------------------------- translation cache ---
+
 %% An access to memory 0 through its translation cache.
 %%
 %% The cache holds two translations, the most recently used first: each a
@@ -2504,6 +2508,8 @@ from_tuple(Form, Call) ->
     cerl:c_case(Call, [cerl:c_clause([cerl:c_tuple(Vs)],
                                      cerl:c_values(order(Form, Vs)))]).
 
+%%% -------------------------------------------------------- miss functions ---
+
 %% What `cached/8' leaves to a function: an access that passed the straddle
 %% test and missed the first entry.
 %%
@@ -2600,6 +2606,8 @@ miss_shapes(Unit) ->
                    end;
               (_, Acc) -> Acc
            end, [])).
+
+%%% ----------------------------------------------- answers and their order ---
 
 %% How an access to memory 0 hands back its result and the cache after it.
 %%
@@ -2700,6 +2708,8 @@ branch(N, D) when N < D -> {true, false};
 branch(_N, _D) -> {false, true}.
 
 either({U1, L1}, {U2, L2}) -> {U1 orelse U2, L1 orelse L2}.
+
+%%% --------------------------------------------------------- image regions ---
 
 %% Below the image region's end the page table decides. A page no write has
 %% reached is read from the image's binary; a private one is a word in an arena
@@ -2810,6 +2820,8 @@ mem_at(Mut, M) ->
 
 field(Mem, Ix) -> bif(element, [cerl:abstract(Ix), Mem]).
 
+%%% ------------------------------------------------------- words in bounds ---
+
 %% In bounds against this handle's own view, and within one word.
 %%
 %% It used to also require the memory to be *private*, which meant `pages_ref`
@@ -2898,6 +2910,8 @@ decode_word(_Int, Raw) ->
                  cerl:c_clause([W], bif('<', [W, cerl:abstract(?S64)]), W),
                  cerl:c_clause([W], cerl:abstract(true),
                                bif('-', [W, cerl:abstract(?P64)]))]).
+
+%%% --------------------------------------------------------- word splicing ---
 
 %% A narrow store is a read, a splice and a write: `atomics' words are 64 bits
 %% and there is no narrower write. That is why a store costs twice a load, and
@@ -2989,6 +3003,8 @@ splice_dyn(N, Old, Vm, Bit) ->
 
 mask(N) -> wasm_memory:mask(N).
 
+%%% -------------------------------------------------------------- widening ---
+
 %% The same widening `wasm_exec:decode_loaded/3` does, generated. The float
 %% cases keep calling, because a NaN payload is not arithmetic.
 %%
@@ -3015,6 +3031,8 @@ sign(N, Raw) ->
 encode(int, V) -> V;
 encode(f32, V) -> cerl:c_call(cerl:c_atom(wasm_num), cerl:c_atom(f32_to_bits), [V]);
 encode(f64, V) -> cerl:c_call(cerl:c_atom(wasm_num), cerl:c_atom(f64_to_bits), [V]).
+
+%%% --------------------------------------- simd, and calls out of the unit ---
 
 %% A pure vector operation: the same `wasm_simd` call the interpreter makes,
 %% with its result bound and pushed.

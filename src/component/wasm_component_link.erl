@@ -1515,7 +1515,7 @@ canon(<<16#2F, R0/binary>>) -> async_ty(future_forward, R0);
 %% Anything else is a built-in this runtime does not implement. The
 %% shared-everything thread built-ins (0x40 to 0x42) are named in the error:
 %% no engine runs them yet, and the specification and wasm-tools do not agree
-%% on their bytes (see docs/features.md).
+%% on their bytes (see docs/features.md, "Shared-everything threads").
 canon(<<Op, _/binary>>) ->
     wasm_error:link_error(unsupported_canon_builtin,
                           <<"unsupported canonical built-in">>, builtin_ctx(Op)).

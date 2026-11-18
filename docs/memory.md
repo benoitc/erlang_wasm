@@ -14,7 +14,7 @@ stops one guest from using all the memory of the node.
 | **linear memory** | the array of bytes a WebAssembly guest reads and writes. It grows in **pages** of 64 KiB. |
 | **chunk** | one `atomics` array holding part of a linear memory. |
 | **snapshot** | a saved copy of an instance's state, taken so that new instances can start from it. See [Snapshots](snapshots.md). |
-| **image** | the memory part of a snapshot: its pages, read-only, shared by every memory restored from it. |
+| **image** | what a capture produces: the guest's memories, globals and tables, kept in this node or in a file. This page is about its memory pages, which are read-only and shared by every memory restored from it. |
 | **restore** | making a new instance from a snapshot instead of running the guest's start-up code again. |
 | **page table** | a small `atomics` array, one entry per 4 KiB page, that says where each page of a restored memory is now: still in the image, or in a private copy. |
 | **arena** | the private 4 KiB copies of the image pages that one memory has written to. |
@@ -69,6 +69,34 @@ Generated code reads `#mem{}` by literal field index.
 `wasm_core_SUITE:the_memory_field_indices_match_the_record` pins those indices
 to `wasm_memory:field_indices/0`. If you add a field to `#mem{}`, that test
 fails, instead of memory being corrupted without any error.
+
+## Atomic instructions and `wait`
+
+The threads proposal's atomic instructions run on the same chunks. Read this
+before you change `wasm_memory`'s atomic paths or `wasm_wait`. What the
+proposal covers, and how you create agents, is in
+[Features and conformance](features.md#threads).
+
+**The storage was already atomic.** Linear memory is chunked `atomics` arrays,
+so an eight-byte aligned atomic load is the same single `atomics:get` an
+ordinary one is. Narrower accesses are a *field* of a 64-bit word, so writing
+one means reading the word, replacing the field and writing it back; those go
+through `atomics:compare_exchange` and retry. A read-modify-write is that same
+loop with the arithmetic inside it, and this makes it one indivisible step,
+not a load and a store that usually work.
+
+**`wait` is a `receive`.** Other runtimes use a futex, which has a well-known
+risk: a waiter must check a value and then sleep, and a notify that arrives
+between those two steps wakes nobody. Here the waiter registers *before* it
+re-reads the value, so a notify arriving afterwards lands in its mailbox and
+`receive` finds it either way. A mailbox is a queue, not a signal that can be
+missed. This is the one part of the proposal that the BEAM makes easier, not
+harder.
+
+**Nothing reorders.** `atomics` is sequentially consistent, so `atomic.fence`
+has nothing to do and the relaxed memory model the proposal permits is not
+exploited. An implementation that reordered would be faster, but ordering bugs
+in guest programs could then not be reproduced.
 
 ## A restored memory shares its image
 
@@ -168,8 +196,8 @@ so that low addresses of a restored memory do not read the page table on
 every access. It only caches translations to an array (a private slot or a
 growth chunk). Neither of these ever moves, so no entry ever becomes wrong.
 If you change the code generated for a memory access, read "The translation
-cache" in [Design notes](design-notes.md#the-translation-cache) and
-[Compiled tier](compiled-tier.md).
+cache" in [Compiled tier
+internals](compiled-tier-internals.md#the-translation-cache).
 
 ## The keeper: who holds what
 
@@ -238,6 +266,52 @@ The rows go when the `wasm` application stops, and an instance made before the
 stop is no longer counted. So after the next start it cannot grow, and a call
 that reaches its wasm tables or shared globals traps with `runtime_stopped`.
 Its memory is freed when its owner drops it.
+
+## Who owns what, and who frees it
+
+A restored memory involves four things with different owners: the image, the
+image's owner process, the memory's own arrays and the keeper's rows. This is
+how they fit, and what each event frees:
+
+```text
+  wasm_snapshot_owner, one process per image
+    holders: the process that captured or loaded the image, then every
+             process that called wasm:acquire/1
+    |
+    | holds {snapshot, Id}
+    v
+  keeper row: image                         image (a term)
+    Bytes, counted in max_snapshot_bytes      one binary per 64 KiB page,
+    restored memories: N                      read in place, never written
+         ^                                           ^
+         | each restored memory counts once          | reads
+         |                                           |
+  keeper row: memory M                      memory M (one instance's)
+    charged: page table + growth + arena      page table: one entry per
+    holders: {instance, I}, ...                 4 KiB page
+                                              arena: private 4 KiB copies
+                                              chunks: growth past the image
+
+  wasm:destroy(I), or the process that owns I exits
+    -> the keeper drops {instance, I}. If M has no holder left, its
+       charged pages go back to the node budget, and N goes down by one.
+  the last process holding the image calls wasm:release/1, or exits
+    -> the owner gives back its module claims, drops {snapshot, Id}
+       and exits.
+  no {snapshot, Id} left and N = 0
+    -> the keeper removes the image row; Bytes go back to
+       max_snapshot_bytes.
+```
+
+- **The image can outlive its owner.** A memory restored from it still reads
+  its pages, so the keeper keeps the image row until the last such memory is
+  gone. This is how a runner can finish a request after its worker stopped.
+- **The keeper owns the counting, not the bytes.** The `atomics` arrays and
+  the page binaries are freed by the Erlang VM when no process holds a term
+  that refers to them. The keeper's rows decide what the node budget and the
+  snapshot budget count.
+- **A memory without an image** has no page table and no arena: only its
+  chunks, charged to the node budget, and the same holder rule.
 
 ## The node page budget
 

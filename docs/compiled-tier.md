@@ -2,7 +2,8 @@
 
 The compiled tier makes a guest run faster by turning its busiest functions
 into BEAM code. It is off by default. Read this page before you turn it on:
-it explains what it compiles, what it costs, and which limits apply.
+it explains what it compiles, what it costs, and which limits apply. To
+change the tier, read [Compiled tier internals](compiled-tier-internals.md).
 
 **Do you need it?** Yes if a guest runs for a long time, like a language
 interpreter: there it made QuickJS about 8 times faster. No for a small
@@ -204,9 +205,11 @@ pool made at startup (nothing a guest supplies may become an atom). A hot set
 of 4,097 to 8,192 functions is split into two units, automatically. Splitting
 has two costs: a call from one unit into the other is slower than a call
 inside a unit, and **a split module is never saved in the code cache**, so it
-is compiled again on every start. CPython 3.12 runs 2,333 functions in one
-`_start`, which fits in one unit: 1,105 seconds to compile the first time, two
-seconds on the next start with the cache.
+is compiled again on every start. Two units is the most the automatic split
+makes, because a larger hot set is refused (below). The runtime never makes
+more than four. CPython 3.12 runs 2,333 functions in one `_start`, which fits
+in one unit: 1,105 seconds to compile the first time, two seconds on the next
+start with the cache.
 
 A hot set of **more than 8,192 functions is refused**: the module stays
 interpreted, and the reason is recorded:
@@ -249,7 +252,7 @@ an instance destroyed while it compiles, and more modules than slots.
 A node has **16 slots**, and each loaded unit takes one. In practice:
 
 - **16 different guest modules** can have compiled code loaded at the same
-  time; a module split in two units counts twice.
+  time; a module split into two units counts twice.
 - **Any number of instances** can use that code: all instances of one module
   share its unit and its slot.
 - A 17th module is **not refused for good**: it runs interpreted, and is
@@ -388,32 +391,11 @@ A worker that restores a snapshot for each request makes a **new instance
 every time**. A new instance looks for compiled code on its first call, so
 each request uses the compiled code once it exists.
 
-A whole request, interpreted against compiled, with the heap floor on in both
-cases. Medians of twelve paired runs:
-
-| guest | interpreted | compiled |
-| --- | ---: | ---: |
-| Lua | 11.4 ms | **4.4 ms** |
-| QuickJS | 20.4 ms | **6.9 ms** |
-| CPython | 93.1 ms | **37.6 ms** |
-
-With fourteen workers, requests per second rise by about three quarters.
-
-**The rest of a request is not the guest's code.** The same requests, split
-into steps, compiled:
-
-| guest | accept the request | deliver and restore | run the guest | reply |
-| --- | ---: | ---: | ---: | ---: |
-| Lua | 1.18 ms | 0.26 ms | 2.35 ms | 0.03 ms |
-| QuickJS | 1.42 ms | 0.56 ms | 4.38 ms | 0.06 ms |
-| CPython | 1.99 ms | **13.5 ms** | 20.7 ms | 0.86 ms |
-
-Compiling only speeds up "run the guest", by about 4 times for all three. The
-difference between guests is the restore, which depends on the size of the
-snapshot, and accepting the request, which costs 1.2 to 2.0 ms whatever the
-guest. These steps were measured when a restore still copied the snapshot;
-a restore now shares it instead, and a CPython restore takes 0.79 ms instead
-of 12.0. [Snapshots](snapshots.md) has the numbers.
+Compiling speeds up only the guest's own code, by about four times on Lua,
+QuickJS and CPython. Accepting the request and restoring the snapshot cost the
+same either way, so a whole request gains less. The tables, measured when a
+restore still copied the snapshot, are in `test/audit/PERF.md`, section "A
+reactor request before shared restore (from docs/compiled-tier.md)".
 
 **Plan for the first start.** Compiled code arrives after a fixed amount of
 compiling, and a reactor request is about ten times faster than a command, so
@@ -432,10 +414,10 @@ Two kinds of module are never saved:
 
 - a module with no content hash, which means every module built from the text
   format;
-- a module split into two units. A split unit refers to the other unit, and
-  the key does not describe that link, so a saved one could be joined to the
-  wrong partner. A guest large enough to split is compiled again on every
-  start.
+- a module split into more than one unit. A split unit refers to the other
+  units, and the key does not describe that link, so a saved one could be
+  joined to the wrong partner. A guest large enough to split is compiled
+  again on every start.
 
 The cache keeps at most 512 MB and removes the oldest files first.
 `wasm_code_cache:purge/0` empties it, and checks the directory first like any
@@ -467,7 +449,8 @@ restored memory uses. One load at address `A`, in page `P`:
 A hit costs one comparison. A write to a page that was never written goes to
 the slow path, which first makes a private copy of the page. [Memory](memory.md)
 describes the page table, and
-[Design notes](design-notes.md#the-translation-cache) the cache.
+[Compiled tier internals](compiled-tier-internals.md#the-translation-cache)
+the cache.
 
 ## Short notes
 
@@ -492,30 +475,33 @@ describes the page table, and
 - **Compiled code holds an i32 unsigned.** Wrapping 32-bit arithmetic is
   then one `band`, as in hand-written Erlang. Values change back to the
   interpreter's signed form at every boundary, so you see no difference.
-  [Design notes](design-notes.md#how-compiled-code-holds-an-i32) has the
-  details.
+  [Compiled tier
+  internals](compiled-tier-internals.md#how-compiled-code-holds-an-i32) has
+  the details.
 - **f64 arithmetic and table calls run inline.** f64 `add`, `sub`, `mul`,
   `div` and comparisons on ordinary floats are Erlang float operations, and a
   `call_indirect` to a function compiled alongside the caller is a local
   call; through a table that cannot change, the target is known when the
-  code is compiled. [Design
-  notes](design-notes.md#how-a-call-through-a-table-finds-its-target) has
-  the details.
+  code is compiled. [Compiled tier
+  internals](compiled-tier-internals.md#how-a-call-through-a-table-finds-its-target)
+  has the details.
 - **Compiled code can go slightly past `max_depth`.** A chain of calls that
   cannot recurse is not counted, so a compiled call can go deeper than
   `max_depth` by at most the number of functions compiled together. A
   recursion is counted exactly, and a runaway one still traps. The trap from
-  compiled code does not report the depth. [Design
-  notes](design-notes.md#how-a-compiled-function-calls-another) has the
-  details.
+  compiled code does not report the depth. [Compiled tier
+  internals](compiled-tier-internals.md#how-a-compiled-function-calls-another)
+  has the details.
 - **`baseline` avoids an OTP compiler bug.** Without its optimisation pass,
   OTP 29.0.3 to at least 29.1.1 can overwrite a value it still needs in one
-  rare code shape. The generator avoids that shape; [Design
-  notes](design-notes.md) says what to check when you upgrade OTP.
+  rare code shape. The generator avoids that shape; [Compiled tier
+  internals](compiled-tier-internals.md#values-a-multi-value-let-must-not-leave-unused)
+  says what to check when you upgrade OTP.
 - Every figure on this page comes from `test/audit/PERF.md`; what was tried
   and dropped is in `test/audit/ATTEMPTS.md`.
 
 ## Read this next
 
-[Tuning](tuning.md), or [Design notes](design-notes.md) for why the tier is
-built this way.
+[Tuning](tuning.md). Before you change the tier itself, read
+[Compiled tier internals](compiled-tier-internals.md), and
+[Design notes](design-notes.md) for why it is built this way.

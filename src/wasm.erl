@@ -15,26 +15,29 @@ ok         = wasm:destroy(Inst).
 
 ## Where things are
 
-The banners `%%% lifecycle`, `%%% calls`, `%%% host helpers` and `%%% errors`
-divide the file; this table goes one step further.
+The first column is the banner (`%%% name`) the code sits under; the banners
+are in this order in the file.
 
-| area | you want | look at |
+| banner | you want | look at |
 | --- | --- | --- |
-| compile and load | a module from bytes or text, cached or not | `load/1`, `load/2`, `load_file/1`, `compile/1`, `compile/2` |
-| compile and load | validation, and dropping a cached module | `validate/1`, `compile_with/3`, `unload/1` |
-| instantiate | a new instance, and the limits it gets | `instantiate/2`, `instantiate/3`, `check_limits/1`, `defaults/1` |
-| instantiate | the start function | `run_start/3` |
-| call | calling an export, and checking its arguments | `call/3`, `call/4`, `check_args/3` |
-| call | the lease, depth and limits around one invocation | `invoke_with/5`, `leased_invoke/6`, `invoke_at/6` |
-| call | a wasm-to-wasm call through a link | `call_nested/3` |
-| call | exports, globals and function types | `exports/1`, `get_global/2`, `func_type_of/2` |
-| memory access | reading and writing linear memory from the host | `read_memory/3`, `write_memory/3`, `memory_size/1` |
-| snapshots | capturing and restoring an image | `snapshot/1`, `snapshot/2`, `restore/3`, `snapshot_info/1` |
-| snapshots | images on disk, and holding one | `save_snapshot/2`, `load_snapshot/2`, `acquire/1`, `release/1` |
-| extern and GC refs | an export in the form another module imports | `extern/2` |
-| extern and GC refs | collection after a call, and its roots | `maybe_collect/4`, `roots_of/1` |
-| extern and GC refs | keeping a reference alive outside the runtime | `pin/2`, `release/2`, `release_all/1` |
+| lifecycle | a module from bytes or text, cached or not | `load/1`, `load/2`, `load_file/1`, `compile/1`, `compile/2` |
+| lifecycle | validation, and dropping a cached module | `validate/1`, `compile_with/3`, `unload/1` |
+| lifecycle | a new instance, and the limits it gets | `instantiate/2`, `instantiate/3`, `check_limits/1`, `defaults/1` |
+| lifecycle | checking a call's arguments | `check_args/3` |
+| lifecycle | the start function | `run_start/3` |
+| call protocol | calling an export | `call/3`, `call/4` |
+| call protocol | the lease, depth and limits around one invocation | `invoke_with/5`, `leased_invoke/6`, `invoke_at/6` |
+| call protocol | a wasm-to-wasm call through a link | `call_nested/3` |
+| call protocol | what a trap leaves in the store, and the call depth | `settle/2`, `enter/0`, `leave/1` |
+| gc roots | collection after a call, and its roots | `maybe_collect/4`, `roots_of/1` |
+| globals, exports and pins | reading a global, listing the exports | `get_global/2`, `exports/1` |
+| globals, exports and pins | keeping a reference alive outside the runtime | `pin/2`, `release/2`, `release_all/1` |
 | destroy | releasing an instance's claims | `destroy/1`, `do_destroy/1`, `share_ir/1` |
+| snapshots | capturing and restoring an image, and holding one | `snapshot/1`, `snapshot/2`, `restore/3`, `acquire/1`, `release/1`, `snapshot_info/1` |
+| snapshot files | images on disk | `save_snapshot/2`, `load_snapshot/2` |
+| extern and export types | an export in the form another module imports | `extern/2` |
+| extern and export types | a function export's type, without instantiating | `func_type_of/2` |
+| host helpers | reading and writing linear memory from the host | `read_memory/3`, `write_memory/3`, `memory_size/1` |
 | errors | printing an error value | `format_error/1` |
 
 ## You get one execution path
@@ -64,11 +67,13 @@ it, and destroying the same instance twice releases nothing the second time.
 
 ## Every failure is a value
 
-Nothing here raises, including on hostile input. A malformed binary, an
-ill-typed module, a trap and a resource limit all come back as `{error, E}`,
-where `E` carries the class (`malformed`, `invalid`, `link`, `trap`,
-`exhaustion`), a machine-readable kind, the specification's message text, and
-context to diagnose it.
+Nothing a guest supplies makes a call here raise, however hostile. A malformed
+binary, an ill-typed module, a trap and a resource limit all come back as
+`{error, E}`, where `E` carries the class (`malformed`, `invalid`, `link`,
+`trap`, `exhaustion`), a machine-readable kind, the specification's message
+text, and context to diagnose it. A wrong Erlang type in your own call, such
+as an atom for the module bytes, raises as any Erlang function does;
+`wasm_error` says how the promise is kept and where its exceptions are listed.
 """.
 
 
@@ -257,9 +262,15 @@ instantiate(M, Imports) -> instantiate(M, Imports, #{}).
 -doc """
 Instantiate, resolving imports and running the start function.
 
-`Opts` takes `fuel` and `max_depth`. Both default to permissive values, so a
-trusted embedder does not have to opt out of limits. Set them yourself when the
-module is untrusted.
+`Opts` is one flat map: the limits (`fuel`, `max_depth`, `max_memory_pages`,
+`max_host_calls`, the keys `wasm_limits` lists) sit in it beside the other
+options, such as `link` or `compile`. A `limits => #{...}` key is not read
+here, so the limits inside it are not applied; that nested form is what
+`wasm_instance_worker` and `wasm_script_worker` take. Pass
+`wasm_limits:untrusted()` itself as `Opts`, or merge your options into it.
+
+The limits default to permissive values, so a trusted embedder does not have
+to opt out of them. Set them yourself when the module is untrusted.
 
 **To link modules that exchange garbage-collected references**, name the
 instance to share an object store with:
@@ -453,7 +464,7 @@ abandoned(#{ctx := Ctx} = Err, Inst) when is_map(Ctx) ->
 abandoned(Err, _Inst) ->
     Err.
 
-%%% ----------------------------------------------------------------- calls ---
+%%% --------------------------------------------------------- call protocol ---
 
 -spec call(instance(), binary(), [term()]) ->
           {ok, [term()]} | {error, wasm_error:error()}.
@@ -691,6 +702,8 @@ enter() ->
 leave(0) -> erase(wasm_call_depth), ok;
 leave(Depth) -> put(wasm_call_depth, Depth), ok.
 
+%%% -------------------------------------------------------------- gc roots ---
+
 %% Collection runs only when enough has been allocated since the last one, so a
 %% call that allocates nothing pays a single integer comparison.
 %%
@@ -777,6 +790,8 @@ elem_roots(Elems, #mut{dropped_elems = Dropped}) ->
     lists:append([element(I + 1, Elems)
                   || I <- lists:seq(0, tuple_size(Elems) - 1), not maps:is_key(I, Dropped)]).
 
+%%% --------------------------------------------- globals, exports and pins ---
+
 -spec get_global(instance(), binary()) ->
           {ok, [term()]} | {error, wasm_error:error()}.
 get_global(Inst, Name) ->
@@ -844,6 +859,8 @@ life of the instance.
 """.
 -spec release_all(instance()) -> ok.
 release_all(Inst) -> wasm_heap:unpin_all(Inst#inst.heap).
+
+%%% --------------------------------------------------------------- destroy ---
 
 -doc """
 Release an instance's memory pages and state.
@@ -914,6 +931,8 @@ share_ir(Inst) ->
         none -> ok;
         {Key, IRs} -> wasm_module_cache:publish_ir(Key, IRs)
     end.
+
+%%% ------------------------------------------------------------- snapshots ---
 
 -doc """
 Capture an initialised instance, so a later one can start where it left off.
@@ -1104,6 +1123,8 @@ release(Snapshot) ->
 -spec snapshot_info(snapshot()) -> map().
 snapshot_info(Snapshot) -> wasm_snapshot:info(Snapshot).
 
+%%% -------------------------------------------------------- snapshot files ---
+
 -doc """
 Write an image to a file, so a later node need not run `init()` again.
 
@@ -1215,6 +1236,8 @@ from_file(Bin, Handle, M) ->
 %% module claim and the byte charge, and a term cannot say when it is gone.
 adopt(Image, Handle) ->
     start_owner(Image, Handle).
+
+%%% ----------------------------------------------- extern and export types ---
 
 -doc """
 Take an instance's export in the form another module can import it.

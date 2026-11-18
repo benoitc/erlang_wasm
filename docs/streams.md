@@ -1,10 +1,13 @@
-# Talking to a guest while it runs
+# Talk to a running guest (stdin and stdout)
 
 This page shows you how to keep a guest running and exchange messages with
-it, instead of calling it and waiting for the result. Read it when the module
-you run is a server rather than a function: a script with its own read loop, a
-language runtime such as QuickJS or CPython that answers one request at a
-time, or a program whose output you want while it is produced.
+it through its standard input and output, instead of calling it and waiting
+for the result. Read it when the module you run is a server rather than a
+function: a script with its own read loop, a language runtime such as
+QuickJS or CPython that answers one request at a time, or a program whose
+output you want while it is produced. It is not about the Component Model's
+`stream<T>` type, which a component passes in a call: that one is in
+[Components](components.md).
 
 With a host function, the guest asks you a question and waits for your
 answer. With a stream, you send data to the guest and read what it writes, and

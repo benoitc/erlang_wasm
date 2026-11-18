@@ -148,6 +148,21 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [Multi-core component linking: native decode unchanged (2026-09-23)](#multi-core-component-linking-native-decode-unchanged-2026-09-23)
 - [Multi-core linking: the realloc override is off the guarded path (2026-09-23)](#multi-core-linking-the-realloc-override-is-off-the-guarded-path-2026-09-23)
 
+**The design**
+
+- [The six results behind the design, as the README gave them (2026-11-17)](#the-six-results-behind-the-design-as-the-readme-gave-them-2026-11-17)
+
+**Moved from the guides (2026-11-17)**
+
+- [A benchmark that lied, and how it was caught (from the design notes)](#a-benchmark-that-lied-and-how-it-was-caught-from-the-design-notes)
+- [Where a call's time goes (from the design notes)](#where-a-calls-time-goes-from-the-design-notes)
+- [The feature page's benchmarks (from docs/features.md)](#the-feature-pages-benchmarks-from-docsfeaturesmd)
+- [Path arm results (from bench/paths/README.md)](#path-arm-results-from-benchpathsreadmemd)
+- [The tuning guide's measurements (from docs/tuning.md)](#the-tuning-guides-measurements-from-docstuningmd)
+- [Restore against the 0.8 releases (from docs/snapshots.md)](#restore-against-the-08-releases-from-docssnapshotsmd)
+- [A reactor request before shared restore (from docs/compiled-tier.md)](#a-reactor-request-before-shared-restore-from-docscompiled-tiermd)
+- [What adding the collector cost (from docs/gc.md)](#what-adding-the-collector-cost-from-docsgcmd)
+
 
 ## Compiled-code lifetime, before any of it is generated
 
@@ -8967,3 +8982,1020 @@ the reaper's log line took the sample's place in the output. The minimums are
 over the samples present; the adapter now tolerates it.
 
 Scripts and logs: `test/audit/raw/cm-snapshot/`.
+
+## The six results behind the design, as the README gave them (2026-11-17)
+
+These six paragraphs were the README's "Why it is built this way" section
+until 2026-11-17, when the README was cut to one screen. They are kept here
+word for word, so nothing the README cited is lost. The README gave the
+numbers without the run behind them. Where a fuller record of a number
+exists, it is named after the paragraph.
+
+**Walking a nested list is faster than a flat instruction array.** We ran the
+same program of 2.4 million instructions both ways. Walking a nested tree of
+lists took 3.7 ns per instruction. A flat array of bytecode with a program
+counter, the design every C interpreter uses, took 5.6 ns. In Erlang,
+`element/2` with an index known only at run time checks its bounds each time.
+Matching the head of a list is a pointer read, and the compiler turns it into
+a jump table. WebAssembly control flow is structured: blocks nest, so the
+interpreter needs no program counter at all.
+
+Also in: the `wasm_exec` moduledoc.
+
+**An Erlang float cannot be NaN or Infinity.** `0.0/0.0` raises `badarith`,
+and `<<F:64/float>>` does not match those bit patterns. So the runtime stores
+floats in a mixed form: an Erlang float when possible, a tuple or atom
+otherwise. We measured a C NIF as an alternative, and it was *slower*. A NIF
+that handles NaN must return the raw bit pattern, and each one is a big
+integer allocated on the heap.
+
+Also in: `docs/design-notes.md`, "Float representation, and why there is no
+NIF" (f64 add, 1,000,000 operations: 8.9 ns hybrid Erlang, 13.1 ns NIF).
+
+**A `v128` is a binary, not a 128-bit integer.** Binary syntax cuts each field
+to its declared width, so the overflow of each lane is handled with no extra
+work, and the vector is built in one allocation. `i32x4.add` took 11.8 ns, and
+126 ns as an integer. `i8x16.add` took 14.6 ns, and 610 ns as an integer.
+
+Also in: `test/audit/CONFORMANCE.md`, "SIMD: why a `v128` is a binary"
+(200,000 iterations, minimum of five).
+
+**Garbage-collected objects cannot use the BEAM garbage collector.** These
+objects can change and can point to each other in cycles. The only mutable
+container the BEAM collector traces holds integers. So the objects live in a
+store that this runtime owns and collects itself. This is affordable only
+because the interpreter keeps all execution state in plain data. Between two
+calls, the operand stack is empty, so the runtime can list every root without
+stack maps or safe points.
+
+**The collector is generational, and the generations cost nothing to track.**
+Object ids come from a counter and are never reused. So the objects created
+since the last collection are exactly a range of ids, and the young
+generation needs no bookkeeping. After a thousand allocations, a minor
+collection takes 0.083 ms, whether a thousand or a hundred thousand objects
+are alive. Tracing a hundred thousand objects takes 14.9 ms.
+
+Also in: `docs/gc.md`, the table of major and minor collections by live set.
+
+**`atomics` arrays make linear memory possible without native code.** A store
+takes 6 ns. Rebuilding an immutable binary takes 1201 ns. Memory is a set of
+`atomics` arrays sized to the memory, so growing it adds arrays and copies
+nothing. A memory restored from a snapshot reads the image's pages where they
+are, and copies a 4 KiB page only the first time the guest writes to it. So a
+CPython restore takes 0.8 ms instead of 12.
+
+Also in: the `wasm_memory` moduledoc (6.1 ns for a raw 64-bit `atomics`
+store, 1201 ns for a 64 KiB binary rebuild), and "Restore against the 0.8
+releases (from docs/snapshots.md)" below (CPython 12.0 ms against 0.79 ms).
+
+## A benchmark that lied, and how it was caught (from the design notes)
+
+Moved word for word from `docs/design-notes.md` on 2026-11-17, when the guides
+stopped carrying measurement history; only the headings changed, and links to
+other pages became file names. The source gave no date or commit.
+
+To compare two versions (A and B) of the code, the benchmarks ran them in
+turn, one after the other, in the same VM. This removes the effect of the
+machine's load changing over time, so it was used for every A/B comparison
+here. On a workload that uses a lot of memory, it reported that
+superinstructions made the code **2x slower**, every time (0.49x across three
+runs).
+
+A control experiment found the cause. With *all fusions disabled*, both
+versions ran exactly the same code, and the same harness still reported 0.38x.
+So the harness was wrong, not the runtime. Switching between two instances
+switches between two 1 MiB linear memories, and the CPU cache keeps losing its
+contents. The same instance measured twice in a row ran in 1560 us, against
+2200 us when switching.
+
+Running in turn is right when the machine's load changes, and wrong when each
+version uses a lot of its own memory. Those A/B comparisons now run each
+version in its own VM, several times, and keep the minimum. Measured that way,
+fusion is **1.14x faster** on the same workload, not 2x slower.
+
+This is recorded because a benchmark that gives a stable, repeatable, wrong
+number is more dangerous than a noisy one. Only the null experiment found it:
+running the comparison with no real difference between the two sides.
+
+## Where a call's time goes (from the design notes)
+
+Moved word for word from `docs/design-notes.md` on 2026-11-17, when the guides
+stopped carrying measurement history; only the headings changed, and links to
+other pages became file names. The source gave no date or commit.
+
+Decomposing `wasm:call/3` on a trivial exported function showed that execution
+was the smallest part of it:
+
+| stage | cost |
+| --- | ---: |
+| export name lookup | 26 ns |
+| instance state read (ETS) | 105 ns |
+| **interpreter execution** | **~45 ns** |
+| instance state write-back (ETS) | 185 ns |
+
+For a short call, most of the time went into copying the instance's mutable
+state out of ETS and back in. These changes followed:
+
+- **Skip the write-back when nothing changed.** A function that only reads
+  threads the same `#mut{}` term straight through, so `=:=` is a pointer
+  comparison and the ETS write disappears entirely. Most compute functions
+  mutate no globals, tables or memory size.
+- **Build the locals tuple in one pass.** `lists:split` then `lists:reverse`
+  then `++ Defaults` walks the arguments three times and allocates three lists.
+  Popping top-first into an accumulator seeded with the defaults produces the
+  same tuple in one pass. Interleaved A/B over 7 rounds: **32.7 ns to 17.6 ns,
+  1.86x**, consistent in every round.
+- **Precompute the `{func, N}` control frame** at instantiation instead of
+  allocating one per call.
+
+### Removing the state read
+
+That state read turned out to be term-copy cost, not table overhead: the same
+`ets:lookup_element` returning an atom costs 30 ns, a big nested term 175 ns,
+and the real Rust module's state 398 ns. Meanwhile a process dictionary read
+costs 9 ns regardless of size, because it does not copy.
+
+So each process caches the state it last saw together with a version counter
+held in an `atomics` slot. A hit is an `atomics:get` plus a dictionary lookup;
+any process's write bumps the counter and invalidates every other cache. That
+coherence property is asserted in both directions by
+`wasm_worker_SUITE:state_stays_coherent_across_processes/1`.
+
+Interleaved A/B on the real Rust module: **398.5 ns to 18.8 ns, 21x**, stable
+across all seven rounds (399-407 against 19-20).
+
+### Superinstructions
+
+Chosen from measured frequencies over ~25,000 instructions of real Rust and
+clang output rather than from intuition. `local.get` alone is 28.3% of the
+stream and `i32.const` a further 17.6%. The fused sequences are
+`local.get,i32.const,i32.add` (address arithmetic), `local.get,i32.load`,
+`local.get,local.get`, `local.get,i32.const`, and `i32.eqz,br_if`.
+
+Only straight-line runs are fused. `br_if,local.get` is a frequent adjacency
+but must never be merged, because the `local.get` runs only when the branch is
+not taken.
+
+Removes 23.9% of static instructions on the clang fixture; worth roughly
+1.02x to 1.14x of wall clock depending on workload. Fusion can be disabled with
+`wasm:instantiate(M, Imports, #{fuse => false})`, which is how it was measured
+and how a suspected fusion bug would be isolated.
+
+### Bulk memory, and where a NIF *is* justified
+
+The float experiment found a NIF losing to pure Erlang. Bulk memory is the
+opposite, and measuring it first found two defects worth fixing before any
+native code:
+
+| operation, 64 KiB | before | after | ceiling (`binary:copy`) |
+| --- | ---: | ---: | ---: |
+| `load_bytes` | 1437 us | **122 us** | 5.5 us |
+| `memory.copy`, disjoint | 5424 us | **257 us** | 5.5 us |
+| `memory.fill` | 145 us | 145 us | 5.5 us |
+
+`memory.copy` was testing only `Dst =< Src` to decide whether it needed a
+backward copy, so every high-to-low copy took the byte-at-a-time path even when
+the ranges were disjoint. `load_bytes` was building 8192 small binaries and
+joining them instead of accumulating into one.
+
+Even after a 21x and an 11.8x fix, bulk memory is still 26x to 47x slower than
+`memcpy`, and Erlang cannot close that gap: it must build the bytes from
+64-bit atomic words one at a time. So here, unlike for floats, a native
+backend would be worth having. If one is written, the memory-model property
+test will check it with no extra work.
+
+## The feature page's benchmarks (from docs/features.md)
+
+Moved word for word from `docs/features.md` on 2026-11-17, when the guides
+stopped carrying measurement history; only the headings changed, and links to
+other pages became file names. The source gave no date or commit.
+`docs/features.md`, "What it costs", keeps the summary.
+
+Measured on Apple Silicon, OTP 29, with `rebar3 bench`. The numbers give an
+idea of the costs. They are not exact results for comparing runtimes.
+
+**On measurement conditions.** The machine had a load average of about 30,
+and runs of the same code varied by up to 3 times. Read the absolute numbers
+as an order of magnitude only. When the page claims that a *change* helped, it
+was measured like this: both versions ran in turn in one VM for several
+rounds, and the minimum of each version was kept. So changes in load affect
+both versions equally. One run before and one run after, on a loaded machine,
+proves nothing, and such numbers are not given here.
+
+### Pipeline
+
+| Operation | Cost |
+| --- | ---: |
+| decode | 6.3 us |
+| validate | 5.6 us |
+| compile (decode + validate) | 13.2 us |
+| instantiate | 2.9 us |
+| call round trip | 0.40 us |
+
+Instantiation at 2.9 us is the important number for plugins and for one
+instance per request. There, what matters is how cheaply the runtime creates
+and discards an instance, more than how fast a long run goes.
+
+### Execution
+
+| Operation | Cost |
+| --- | ---: |
+| interpreter dispatch | 4.9 ns/instruction (206 M instr/s) |
+| memory load i32, aligned | 18.2 ns |
+| memory store i32, aligned | 48.2 ns |
+| memory store i64, aligned | 32.7 ns |
+| memory load i8, unaligned | 18.1 ns |
+| `memory.fill` | 0.43 GB/s |
+
+An i32 store costs more than an i64 store because `atomics` granularity is 64
+bits, so a 32-bit write is a read-modify-write while an aligned 64-bit write is
+a single operation.
+
+**How much garbage collection support slowed down code that does not use
+it.** Measured before the work and again after, minimum of three runs each:
+
+| Path | Before | After |
+| --- | ---: | ---: |
+| interpreter dispatch | 4.9 ns/instr | 4.9 ns/instr |
+| call round trip | 0.40 us | 0.40 us |
+| instantiate | 3.07 us | **2.93 us** |
+| memory load i32 | 16.8 ns | 18.2 ns |
+| compile | 11.8 us | 13.2 us |
+
+These measurements found three slowdowns. All three were fixed:
+
+- **Dispatch had slowed 18%.** The new instructions were inserted early in the
+  interpreter's clause list, so every common instruction was tested against
+  forty new patterns first. Moving them after the common ones gave back the old
+  speed exactly.
+- **Instantiate had slowed 33%**, because the validation context is rebuilt per
+  instance and canonicalising interns every recursive type group. Now the result
+  for the last module is kept and reused, which is why it is *faster* than
+  before. The first attempt used a cache with `phash2` of the module as key, and
+  was even slower: hashing a large module costs more than the work it saved.
+- **Memory access had slowed 15%**, because the page count moved behind an
+  accessor. Inlining it, and keeping a plain record match for a private memory,
+  removed most of the slowdown.
+
+Two real costs remain. Memory access is 1.4 ns slower, because a memory can
+now be shared. Compile is 1.4 us slower, because of canonicalisation: a
+module's recursive type groups are stored once in a node-wide table, so that
+the same type is equal in every module.
+
+### Scheduler responsiveness
+
+This result shows the difference from a runtime called through a NIF. An
+unrelated Erlang process measures how long its own messages take to come
+back, while WebAssembly infinite loops keep every scheduler busy.
+
+The measurement is **compared with a control**: the same number of pure-Erlang
+busy loops. A comparison with an idle node would only measure the cost of
+fourteen busy schedulers, and wrongly report it as a property of this
+runtime.
+
+| Condition | p99 message latency |
+| --- | ---: |
+| idle | 1 us |
+| 14 pure-Erlang busy loops (control) | 6-246 us |
+| 14 WebAssembly infinite loops | 2-153 us standalone, 11.4 ms under Common Test |
+
+Measured the same way, the two cases give similar numbers, and that is the
+result: the interpreter gives up the scheduler like ordinary Erlang code. Every
+dispatch step is an Erlang function call and therefore consumes a reduction, and
+an infinite `loop` runs in **constant space** (986 words, flat, at 780M
+reductions per second), so the heap does not grow and the garbage collector does
+not pause it either. With a runtime called through a NIF, the process would not
+answer at all until the call finished.
+
+Two warnings. The results vary a lot: runs of the *same* case went from 2 us
+to 1005 us. So one before-and-after pair can show any result, and an earlier
+version of this section reported a 40 times slowdown that was one noisy
+sample. Also, under Common Test the same measurement always reports 11.4 ms
+for the WebAssembly case, while its Erlang control reports 6 us. Nobody knows
+why yet, and the gap does not appear outside Common Test.
+`scheduler_stays_responsive/1` now takes the minimum of several rounds per arm
+and logs both, instead of comparing with an idle node using a limit so large
+that it would hide a real 49 ms block.
+
+## Path arm results (from bench/paths/README.md)
+
+Moved word for word from `bench/paths/README.md` on 2026-11-17, when the guides
+stopped carrying measurement history; only the headings changed, and links to
+other pages became file names. Each block names its own commits where the
+source did. The README keeps how to run each arm.
+
+### Thresholds, and what they cost
+
+A threshold chosen after seeing the result is not a threshold. These were set
+before the resource model was written, in the plan that called for it, and the
+measurement below is what it came out at.
+
+| path | threshold | before | after | ratio |
+| --- | --- | ---: | ---: | ---: |
+| `memory.grow`, standalone | no more than 3x | 3320 ns | 8530 ns | 2.6x |
+| `memory.grow`, exported | no more than 3x | 4670 ns | 8265 ns | 1.8x |
+| `memory-new+free-1page` | none set | 2776 ns | 4154 ns | 1.5x |
+| `call-fac-10` | untouched | 1414 ns | 1417 ns | 1.0x |
+| `write_memory-64k` | untouched | 152.8 us | 154.8 us | 1.0x |
+
+Creating, growing and releasing a memory became `wasm_keeper` transactions,
+which is a synchronous round trip where there had been a lock-free counter
+bump. About 3.8 us of the growth figure is that round trip. The rest of the
+standalone arm is a second change in the same commit: a standalone memory is
+now observable, so growing it publishes a chunk tuple as well as a size, which
+an exported memory was already paying for and a standalone one was not.
+
+Execution is untouched, which is the point of putting the transaction on the
+lifecycle path and not on the access path. Missing the growth threshold would
+have meant a lock per memory instead of a central process.
+
+Those are the micro-arms. A real instantiate-and-destroy loop went the other
+way, because the store used to keep every chunk tuple, table array and global
+cell ever made. Ten thousand cycles of the 17-page Rust plugin, one live at a
+time:
+
+| | rows left in the store | live VM memory | us per instantiate |
+| --- | ---: | ---: | ---: |
+| before | 20,015 | 20.1 GB | 496 rising to 638 |
+| after | 15 | 87 MB | 348 to 376, flat |
+
+`pages_in_use` read 0 at both ends of both runs, which is what made this
+invisible: the counter was right and the store was not. Instantiation got
+faster because it stopped allocating on top of its own garbage.
+
+#### Execution leases, against the threshold recorded before them
+
+The gate was fixed at **no more than 10% on a call against a linked or shared
+object store**, and written down before the mechanism existed. Four interleaved
+passes, minimum of each, `e0fb152` against the leases:
+
+| arm | before | after | change |
+| --- | ---: | ---: | ---: |
+| `gc-call-alloc-linked` | 542.5 ns | 564.1 ns | +4.0% |
+| `gc-call-pure-linked` | 157.8 ns | 165.8 ns | +5.1% |
+| `gc-call-alloc-unlinked` | 542.6 ns | 587.6 ns | +8.3% |
+| `gc-call-pure-unlinked` | 144.4 ns | 165.6 ns | **+14.7%** |
+
+The arm the gate names passes at +4.0%. A lease is two `atomics`
+read-modify-writes, about 21 ns, taken once per outermost call, so it lands
+hardest on the shortest call: `pure` allocates nothing and exists only to price
+the mechanism.
+
+**The unlinked arms were supposed not to move at all, and they do.** The plan
+had an instance alone in its process take no lease. That is not sound, and the
+reason is a case the plan did not consider: a heap becomes shared when a second
+instance links to it, which can happen while a call on that heap is already
+running. That call took no lease, nothing can observe it, and the new instance
+is then free to collect underneath it. So a lease is taken whenever the store
+exists at all. A module declaring no struct and no array type has no store and
+pays one comparison.
+
+The alternative the plan named for missing the gate, moving leases off the call
+path and making collection owner-only, gives up collecting a shared store
+altogether. 21 ns is the cheaper trade.
+
+#### Keeping what a trap wrote
+
+No threshold was set for this one. Every store mutation is recorded so the
+invocation's catch can commit it, which is one process dictionary write per
+mutation and one erase per top-level call. Four interleaved passes, minimum of
+each, `f1bdedb` against the checkpoints, at a load average of 25 so read them
+as indicative:
+
+| arm | before | after | change |
+| --- | ---: | ---: | ---: |
+| `global.set-x1000` | 88.0 us | 96.8 us | +10.0% |
+| `call-through-host-import` | 210.0 ns | 222.1 ns | +5.8% |
+| `call-fac-10` | 1440.5 ns | 1432.0 ns | none |
+
+About 8.8 ns per `global.set` and about 12 ns per top-level call. The
+`global.set` arm does a thousand of them in one call and is the worst case on
+purpose; `call-through-host-import` is a 210 ns call, which is why a fixed 12 ns
+shows as 6% there and as nothing on a 1.4 us one.
+
+The key those writes are made under is a bare reference rather than a
+`{wasm_checkpoint, Id}` tuple. Building and hashing the tuple on every mutation
+cost more than the write it was the key for: the same arm measured +20.3% that
+way, against +10.0% now.
+
+#### The invocation budget
+
+The plan asked for one thing here: that the charged edge did not get slower.
+Fuel is charged at every loop back edge and every call, and it stays an
+immutable field read; the budget is touched only at boundaries. Three
+interleaved passes, minimum of each, `7a8b31e` against the budget, at a load
+average between 24 and 51 so treat them as indicative:
+
+| arm | before | after | change |
+| --- | ---: | ---: | ---: |
+| `call-fac-10` | 1489.2 ns | 1473.1 ns | none |
+| `global.set-x1000` | 97.7 us | 94.5 us | none |
+| `call-through-host-import` | 225.0 ns | 263.8 ns | +17.2% |
+
+The charged edge is unchanged, which was the requirement. What moved is the
+host-call boundary: two process dictionary operations per outermost invocation
+and three per host call, to publish the fuel a nested call continues from,
+count the call, and adopt whatever came back. About 39 ns on a 225 ns round
+trip through an import that does nothing. A host function that does real work,
+which is every WASI call, is measured in microseconds.
+
+#### Enforcing the page ceiling
+
+A holder's total is kept as a running sum in the keeper rather than as an index
+from holder to memories, because growth has to check every holder of the memory
+being grown. Three interleaved passes, minimum of each, `36afdd0` against the
+ceiling, at a load average of 6 to 10:
+
+| arm | before | after | change |
+| --- | ---: | ---: | ---: |
+| `instantiate-fac` | 3438.5 ns | 3436.9 ns | none |
+| `memory-new+free-1page` | 4455.1 ns | 4630.4 ns | +3.9% |
+
+Instantiation is unchanged because a limits map without `max_memory_pages`
+short-circuits before it reaches the keeper at all. What moved is creating and
+releasing a memory, which now adds to and subtracts from a holder's total.
+
+Recorded on an Apple M4 Pro, OTP 29, `a6be24d` against the resource model.
+
+### Which fusion rules actually fire
+
+A rule that never matches and a rule that matches and does not pay look
+identical in a timing. `fusecount` tells them apart by walking the lowered IR
+of an instance built with `fuse => true` against one built with `fuse =>
+false`, so nothing is counted inside a timed run and the interpreter carries no
+counters:
+
+```sh
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/fusecount.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run fusecount main test/fixtures/lang/qjs.wasm
+```
+
+Add `show` after the path to print the IR, which is readable for a benchmark
+loop and is not for anything else.
+
+Over 560,000 instructions of QuickJS, every rule fires and fusion removes 22.1%
+of dispatches; over the 46 KB Rust plugin, 24.1%. Over `bench/cross/loop.wat`,
+which is what the cross-runtime arm times, only two of the nine fire:
+
+| module | instructions | after fusion | removed |
+| --- | ---: | ---: | ---: |
+| `loop.wasm` | 24 | 18 | 25.0% |
+| `plugin.wasm` | 13,931 | 10,569 | 24.1% |
+| `qjs.wasm` | 559,987 | 435,991 | 22.1% |
+
+**So the benchmark loop is not a sample of the rules.** Seven of the nine were
+chosen from real clang and Rust output and the loop exercises none of them. A
+fusion change has to be counted on a real module and timed on the loop, and the
+two answer different questions.
+
+#### What `fc183c1` actually did
+
+`fc183c1` added four rules and measured -1.3%, and there was no way at the time
+to say whether they had run. Counted against `54761de`, on the loop, exactly
+one of the four fires: `lg_const_add_set` replaces the `lg_const_add`,
+`local.set` pair the older rules left. The loop body goes from 16 dispatches
+per iteration to 15.
+
+| | dispatches per iteration | ns/iteration |
+| --- | ---: | ---: |
+| `54761de` | 16 | 111.6 |
+| `fc183c1` | 15 | 108.8 |
+
+**6.25% fewer dispatches bought 2.5% of the time**, consistently in that
+direction across three interleaved passes but inside the run-to-run spread of
+either arm. So the rules do fire, the change is a small real win rather than
+the nothing it looked like, and dispatch count is worth about a third of its
+face value on this loop. The rest of the time is in the operand traffic around
+the dispatch, which is what a bounded top-of-stack cache is aimed at and what
+another peephole rule is not.
+
+### Compiling one function instead of interpreting it
+
+`corespike` answers a feasibility question and no others: what would a
+compiler get, if wasm IR were turned into Core Erlang and handed to the
+compiler and JIT that are already here?
+
+```sh
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/corespike.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths -pa bench/cross \
+    -run corespike main bench/cross/loop.wasm
+```
+
+It asserts the same checksum as the interpreter at five sizes before it reports
+a time, because a faster answer to a different computation is not a result.
+**2.59 ns/iteration against the interpreter's 60.5**, which is faster than
+wasm3 and slower than V8.
+
+It is in `bench/` and not `src/` on purpose. It loads one literal module name,
+once, never unloads or purges, and covers only blocks, loops and the i32
+arithmetic this loop uses; anything else raises `{unsupported, Instr}`. See
+`test/audit/PERF.md` for the list of what a real compiler would have to handle
+first.
+
+### How much of a module a compiler could take
+
+`corespike` reports 2.59 ns/iteration on a subset. `subset` says how much of a
+real module has that shape, by walking the lowered IR of every function and
+sorting each instruction into a category. A compiler supporting a set of
+categories can take exactly the functions whose categories fit inside it, so
+the table is a direct answer to "what does the next restriction buy".
+
+```sh
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/subset.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run subset main test/fixtures/lang/qjs.wasm why
+```
+
+**The subset `corespike` covers is 0.5% of QuickJS by function and 0.02% by
+instruction**, and 4.7% and 0.04% of the Rust plugin. Adding restrictions back,
+by share of instructions:
+
+| compiler supports | qjs funcs | qjs instrs | plugin funcs | plugin instrs |
+| --- | ---: | ---: | ---: | ---: |
+| i32, control, locals | 0.5% | 0.0% | 4.7% | 0.0% |
+| + i64, div/rem | 1.1% | 0.0% | 4.7% | 0.0% |
+| + memory | 8.2% | 2.4% | 16.0% | 22.7% |
+| + globals, floats | 10.3% | 3.2% | 16.7% | 22.8% |
+| + calls | 94.1% | 73.8% | 100% | 100% |
+
+The remaining 5.9% of QuickJS is SIMD, and nothing in either module uses
+tables, the GC types or atomics.
+
+**So there is no cheap on-ramp.** A compiler that cannot call is worth nothing
+on real code: leaf functions doing pure integer arithmetic are 107 instructions
+out of 560,000. The compiled-to-interpreted boundary is not the last piece of
+the project, it is the first, and the cost of crossing it in both directions is
+what decides whether the rest is worth building. Memory is the second: it
+alone takes the plugin from nothing to 22.7%.
+
+Static counts weight every instruction equally, which a loop body is not. Read
+the table as a ceiling on coverage, not as a share of run time.
+
+### What a call costs, and what it would cost a compiled function
+
+`subset` says the boundary is the first thing a back end needs. `callcost`
+prices it, before any of it is written:
+
+```sh
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/callcost.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths -pa bench/cross \
+    -run callcost main
+```
+
+Inside the interpreter a call is a trampoline: `enter/5` stashes the caller's
+continuation in `#st.frames` and tail-calls `run/3`, so no Erlang frame is used
+and no state is rebuilt. A compiled function cannot do that, because its
+continuation is a Core Erlang frame. It has to make a nested invocation through
+`wasm_exec:call/5`, which is what `foreign_call` already does for a call into
+another instance, so the floor can be timed from Erlang with no compiler.
+
+Three passes on a two-function module whose loops differ in exactly one thing,
+whether the accumulator is incremented by a call or in line:
+
+| | ns per call |
+| --- | ---: |
+| interpreted call, trampolined | 43.5 to 44.7 |
+| nested invocation, the floor | 37.4 to 43.4 |
+
+**They are the same, which was not the expected answer.** The nested path
+rebuilds a state and publishes fuel on return, and it still comes out level,
+because it skips the `call` dispatch and the operand-stack traffic the
+trampoline pays instead.
+
+So the boundary is about 40 ns and the compiled body it replaces runs about 25x
+faster: `corespike`'s loop is 68 ns interpreted and 2.59 ns compiled. A
+compiled function breaks even once its interpreted body would have cost more
+than the boundary, which is about six instructions. QuickJS functions average
+336. And a compiled function calling a compiled one is an ordinary Erlang call
+at a couple of ns, which is 94% of the calls once the coverage above holds.
+
+Three things this does not price, each of which only adds: the caller's own
+state threaded into the crossing, the interpreter's side of an
+interpreted-to-compiled call, and the try/catch a trap has to unwind through.
+
+#### What the generator's limits have to be
+
+`subset` also reports the shapes a code generator is bounded by, so the limits
+come from the two real modules rather than from a guess. A generated control
+continuation carries the frame's locals plus whatever operands are live across
+its boundary, so its arity is bounded by params plus locals plus the operand
+height the validator already recorded.
+
+| | plugin max | plugin p99 | qjs max | qjs p99 |
+| --- | ---: | ---: | ---: | ---: |
+| params + locals | 15 | 12 | 63 | 30 |
+| operand height | 8 | 7 | 12 | 10 |
+| bound on continuation arity | 20 | 18 | **71** | 37 |
+| control frames per function | 118 | 41 | **1016** | 165 |
+| control nesting | 18 | 9 | **257** | 30 |
+| compilable functions | 150 | | 1666 | |
+
+**Arity is not the constraint it looked like.** The worst function in QuickJS
+would generate a continuation of 71 arguments against the BEAM's limit of 255,
+so a bound anywhere above about 128 costs no coverage at all. The decoder's
+one-million-local ceiling and a `nparams =< 254` test are both theoretical.
+
+What is real is the **atom pools**, since a Core function identifier has to be
+an atom. One name per compiled function needs to cover 1666. One name per
+control frame does *not* need to cover 1016: `letrec` scoping means sibling
+frames can reuse a name, so what has to be covered is the nesting depth, 257.
+
+## The tuning guide's measurements (from docs/tuning.md)
+
+Moved word for word from `docs/tuning.md` on 2026-11-17, when the guides
+stopped carrying measurement history; only the headings changed, and links to
+other pages became file names. The source gave no dates, except where the text
+names a release (0.4.3, 0.5.0, 0.7.0). Fuller records of most of these runs are
+earlier in this file, under "Heap floors" and "Workers and pools" in the topic
+index. "Above" and "below" in them refer to the old guide's sections, kept here
+as headings.
+
+### Find out where the time goes
+
+**Do not use `erlang:statistics(garbage_collection)` for this.** It counts the
+whole node. `bench/paths/allocwords.erl` exists because that counter showed no
+change while the collections of one process fell 51x. That mistake cost an
+afternoon of investigation in the wrong direction.
+
+### Give the request runner a heap floor
+
+A request runner keeps almost nothing on its own heap. The module is a cache
+handle, the memories are `atomics` pages, and a restored image's contents are
+reference-counted binaries. The collector sizes a heap from the data that is
+still live. So it gives the runner the emulator's default of 233 words, and
+then collects dozens of times during the request, while the guest allocates
+hundreds of millions of words.
+
+QuickJS, ten requests per floor, all settings in one emulator:
+
+| floor, words | request, min | collections | time in collections |
+| ---: | ---: | ---: | ---: |
+| none | 56.0 ms | 98 | 35.0 ms |
+| 50,000 | 48.1 ms | 71 | 29.6 ms |
+| 100,000 | 45.8 ms | 67 | 25.9 ms |
+| 130,000 | 22.4 ms | 49 | 3.0 ms |
+| 200,000 | 21.1 ms | 34 | 2.9 ms |
+| 400,000 | 21.3 ms | 25 | 3.0 ms |
+
+The time drops suddenly at the knee, then stays flat. **A floor larger than
+the knee starts to cost time again**, so a sweep must go past the knee and not
+stop at the first improvement. CPython at 1,000,000, 2,000,000 and 4,000,000
+words takes 124, 124 and 145 ms. The number of collections still falls (43,
+then 29, then 19), but the time spent in them rises from 8.3 to 12.6 ms. When
+a heap is much larger than its live data, each collection has more to scan.
+
+**Find your own value.** The right value depends on the guest, not on this
+runtime. The three guests measured here need values up to 5x apart:
+
+| guest | no floor | its knee | time at the knee |
+| --- | ---: | ---: | ---: |
+| Lua | 30.0 ms | 200,000 words | 12.7 ms |
+| QuickJS | 56.0 ms | 200,000 | 21.1 ms |
+| CPython | 367.1 ms | 1,000,000 | 117.8 ms |
+
+Sweep, take the knee, and stop. Two rules, learned from mistakes:
+
+- **Include "no floor" in the sweep.** Without it, nothing in the run shows
+  that the floors had any effect. One CPython sweep here came back flat for
+  this reason and had to be thrown away.
+- **Go past the knee.** Otherwise you cannot tell where the time stops
+  falling, and you may pick a value that is already too large.
+
+### Give the capture a floor as well
+
+This is the same setting for the process that runs a snapshot capture. For a
+guest that takes a long time to start, it helps more than anything else in
+this guide. A CPython worker start, settings alternated, with `snapshot_dir`
+unset so that every run really captures:
+
+| capture floor | worker start |
+| ---: | ---: |
+| none | 91.3 to 94.8 s |
+| 2,000,000 words | **17.4 s** |
+
+The cause is the same as for the request floor: this process also keeps
+little live data. The gain is larger because the work is longer. It applies
+only when a capture happens. A worker that reads its image from `snapshot_dir`
+does not capture, and neither does an adapter that declares no snapshot
+capability.
+
+No shipped adapter sets a capture floor by default. On 0.7.0, CPython with
+2,000,000 words under the 16 M words of `wasm_python:limits/0` killed the
+capture in three starts out of four. So set it only together with a larger
+`max_heap_words`, as `docs/python.md` does.
+
+### What the runtime already sizes for you
+
+- `wasm:compile/1` sets its own heap floor at two words per input byte. That
+  takes QuickJS from 244 ms to 55.
+
+### When the start is slow, not the request
+
+- `snapshot_dir` stores an initialized image on disk. It takes a CPython
+  worker start from 104 s to 998 ms. See `docs/snapshots.md`.
+
+Workers started with the same adapter and options share one image: one
+capture, one image, one charge, whether they start one at a time or together.
+So `max_snapshot_bytes` limits the number of different images on the node,
+not the number of workers. "Run a pool from one image" in
+`docs/worker.md` has the details. Four CPython workers with no
+stored image started in 16 s on one capture, against 40 s when each captured
+its own (`test/audit/PERF.md`, "One image for a pool").
+
+### How it scales, and what it costs
+
+Each runner that runs at the same time has its own floor. So the real question
+is whether the floor still helps with many runners. It does, by the same
+factor at every count. QuickJS, 25 requests per worker, on 14 cores about 70%
+idle:
+
+| workers | no floor | at 200,000 |
+| ---: | ---: | ---: |
+| 1 | 17.8 req/s | 44.4 |
+| 2 | 34.3 | 89.8 |
+| 4 | 65.1 | 159.7 |
+| 8 | 107.6 | 255.2 |
+| 14 | 126.1 | **300.4** |
+
+CPython, 20 requests per worker, at a floor of 1,000,000 and about 60% idle:
+
+| workers | no floor | at 1,000,000 |
+| ---: | ---: | ---: |
+| 1 | 2.4 req/s | 7.2 |
+| 2 | 4.2 | 13.1 |
+| 4 | 6.4 | 18.7 |
+| 8 | 9.1 | 27.5 |
+| 14 | 10.5 | **30.8** |
+
+Peak process memory was measured at fourteen workers only: 204 MB without a
+floor against 129 MB with one on QuickJS, and 556 MB against 398 MB on
+CPython.
+
+Two conclusions from both tables:
+
+- **The floor gives the same speed-up at every worker count**: 2.4x on
+  QuickJS and about 3x on CPython. It does not disappear under concurrency.
+- **Throughput grows less than the worker count, with or without the floor**:
+  7.1x without against 6.8x with on QuickJS, 4.4x against 4.3x on CPython. The
+  floor raises the curve; it does not change its shape.
+
+Do not read the top of these curves as a limit of the runtime. During these
+runs only about 10 and 8 of the 14 cores were really free, and that is most of
+why the curves flatten where they do. The comparison between floor and no
+floor is still valid, because both settings ran on the same machine in the
+same minute. An absolute scaling limit would not be.
+
+**It uses less memory, not more.** You might expect the opposite, since every
+runner reserves extra heap. Fourteen workers peak at 129 MB with the floor
+against 204 MB without. This first comparison is even unfair to the floor, for
+two reasons. The run with the floor finishes in 1164 ms against 2775, so it is
+sampled fewer times. And it includes 34 MB of reserved heap that the other run
+does not have. In a second run, with request counts chosen so both settings
+take the same time (1156 ms against 1130), it is 122 MB against 195 to 210.
+Without a floor, the garbage that piles up between collections is larger than
+the heap a floor reserves.
+
+To measure your own, use the `throughput` mode, and first read the warning in
+`bench/paths/README.md`. Alternating runs protects a latency sweep from a busy
+machine, but it cannot protect a scaling curve. A scaling curve needs a quiet
+machine, and nothing can replace one.
+
+### How much memory the floors hold
+
+Read this before you size a node for many workers. A runner's floor exists
+only while that runner runs a request, and a worker runs at most one request
+at a time. Requests waiting in a queue hold nothing, and the runner's heap is
+freed when the request ends. So the extra memory is at most the floor times
+the number of **busy workers**. It does not grow with requests per second or
+with the number of callers waiting.
+
+Measured with ten workers, compiled tier except where noted, at 64 and 256
+callers, floors on against off, two rounds:
+
+| guest | throughput | extra `erlang:memory(total)`, mean |
+| --- | ---: | ---: |
+| Lua | +13 to 18% | 17 to 18 MB |
+| QuickJS | +8 to 13% | 13 MB |
+| CPython, 1,000,000 | +17 to 24% | 51 to 55 MB |
+| CPython, 1,500,000 | +29 to 34% | 53 to 56 MB |
+| Lua, interpreted | 2.1 to 2.2x | 14 to 16 MB |
+
+The extra memory did not grow from 64 callers to 256. With the floors, the
+share of CPU spent in garbage collection fell from about 9% to 1% on Lua, p99
+latency fell, and allocator segment calls fell 2 to 4x.
+
+To size a node, use Little's law: busy workers = requests per second x time
+per request. The table below is calculated from the one above, not measured,
+for 10,000 requests per second:
+
+| guest | busy workers, off | on | held by the floors |
+| --- | ---: | ---: | ---: |
+| Lua | 96 | 83 | about 145 MB |
+| QuickJS | 133 | 120 | about 155 MB |
+| CPython, 1,500,000 | 346 | 265 | 1.4 to 1.5 GB |
+| Lua, interpreted | 393 | 182 | about 280 MB |
+
+The floors hold that memory. In exchange, the same rate needs 10 to 54% fewer
+busy workers.
+
+#### Why the operating system sees more than `erlang:memory`
+
+Read this when, after you give runners a floor, the node's RSS (the memory the
+operating system counts for it) is higher than `erlang:memory(total)`
+explains. A floor of 200,000 words rounds up to a heap of 318,187 words, about
+2.5 MB. That is above the single-block threshold of the process heap allocator
+(`sbct`, 512 KB), so every runner heap with a floor gets a memory segment (a
+carrier) of its own. When the runner exits, that carrier goes to the
+emulator's segment cache, not back to the operating system. The cache keeps
+up to 10 segments per allocator instance. Those pages count in RSS but not in
+`erlang:memory`.
+
+Ten workers, 64 callers, mean over two rounds:
+
+| guest | floors off | floors on | floors on, `+MMmcs 0` |
+| --- | ---: | ---: | ---: |
+| Lua, RSS | 150 MB | 261 MB | 151 MB |
+| QuickJS, RSS | 317 MB | 496 MB | 317 MB |
+
+`+MMmcs 2` keeps a small cache. It removes most of Lua's difference (194 MB)
+and part of QuickJS's (332 MB). Raising `+MHsbct` does not help: the heaps
+then go into multiblock carriers, which are cached in the same way.
+
+This flag works against the section "Keep freed memory segments" below. A
+larger segment cache makes restores faster when many workers allocate at the
+same time. A smaller one gives memory back sooner. The effect of `+MMmcs 0`
+on throughput with floors is not measured yet: on this machine it changed by
+less than the 30 to 60% that the rounds varied by. Choose it when RSS is your
+limit, and measure your own pool.
+
+For CPython, RSS is not a reliable measure here. On a machine short of memory,
+the operating system compresses idle pages and removes them from RSS. Read
+`footprint` (macOS) or the process's proportional set size instead. By
+footprint, floors on with `+MMmcs 0` came to about 1,310 MB, against about
+1,450 MB for floors off with the same flag. A heap that starts at its working
+size does not leave old, outgrown heaps behind.
+
+### Serve many callers from a pool
+
+CPython reactor, 14 workers, 64 callers, compiled tier already warm, on a
+14-core machine at a load average of 10 to 30:
+
+| | requests a second | `file_server_2` queue, max / mean | reaper queue, max / mean |
+| --- | ---: | ---: | ---: |
+| 0.4.3 | 173 | 12 / 4.4 | 22 / 2.6 |
+| 0.5.0 | 202 to 218 | 0 / 0 | 3 to 7 / under 0.1 |
+
+The keeper and code-slot queues stay at 2 or below in both versions. In
+alternating runs on the same machine, while other work loaded it, 0.4.3 gave
+99 to 179 requests a second and 0.5.0 gave 167 to 211. The busier the disk,
+the larger the difference, because a request no longer waits for the file
+system calls of another request. `test/audit/PERF.md` has every run.
+
+With those queues at 0 to 2, the remaining cost was CPU. At that time, a
+restore wrote the image into memory one word at a time and allocated about
+42 MB of pages, and then the guest ran. Today a restore shares the image and
+copies only the pages a request writes (see "Every request shares the image"
+below). On this machine, 10 of the 14 cores are performance cores, so 14
+workers do not reach 14 times the rate of one request.
+
+#### Restore the next instance ahead
+
+The worker restores the next instance while it waits for a request. A request
+that finds one ready does not wait for a restore. CPython, one request at a
+time, a pause between requests, median of 60 in one emulator:
+
+| phase | per request | `restore_ahead` |
+| --- | ---: | ---: |
+| deliver and restore | 14.8 ms | 0.04 ms |
+| the guest's own call | 28.3 ms | 28.3 ms |
+| whole request, first to last callback | 46.4 ms | 30.0 ms |
+
+These figures were measured before images were shared. A CPython restore now
+takes about 0.8 ms, so `restore_ahead` saves less than it did. A request still
+pays for copying the pages it writes for the first time, during the call.
+
+It needs idle time between a worker's requests. A pool that gives the next
+request to the worker that just answered leaves it no idle time, so rotate
+idle workers (first in, first out). At full load it adds no throughput: the
+restore still runs, only earlier. Each idle worker holds one restored
+instance.
+
+#### Keep freed memory segments
+
+New memory for a growing guest, and the arena (the instance's own memory)
+that a restored memory copies its written pages into, are allocated new each
+time. With many workers allocating at the same time, the operating system's
+page mapping becomes a cost of its own. If the emulator keeps more freed
+segments in its cache, that cost is halved:
+
+```sh
+erl +MMmcs 30 +MMamcbf 1000000 ...
+```
+
+| 43 chunks of 1 MiB, allocated and touched | alone | 14 at once |
+| --- | ---: | ---: |
+| default | 4.0 ms | 11.1 ms |
+| `+MMmcs 30 +MMamcbf 1000000` | 2.4 ms | 5.2 ms |
+
+On the pool above, the gain end to end was about 3%. That was measured when a
+CPython restore still allocated all 43 chunks. A restore now allocates only
+what the request writes, so expect less. The same cache also keeps freed
+runner heaps, so with heap floors it raises RSS too: read "Why the operating
+system sees more than `erlang:memory`" above before you raise it.
+
+### Stop compiling the same Python on every request
+
+The same agent request, a dispatch to a trivial `init`, compiled tier on, the
+three workers alternating in one emulator, 40 requests each:
+
+| path | the guest's call, median | minimum | whole request, median |
+| --- | ---: | ---: | ---: |
+| `handle()`, the 0.5.0 reactor | 59.1 ms | 46.8 ms | 88.4 ms |
+| `handle()`, this reactor | 40.4 ms | 30.9 ms | 70.0 ms |
+| `call()`, an `entry` | 2.1 ms | 1.8 ms | 19.9 ms |
+
+The rest of a request, about 18 ms, is the restore and the kernel code around
+it. `restore_ahead`, above, moves that out of the request. These runs were
+taken while another job loaded the machine (load average 250 to 275), so
+compare the differences, not the absolute times. `test/audit/PERF.md` has the
+runs.
+
+## Restore against the 0.8 releases (from docs/snapshots.md)
+
+Moved word for word from `docs/snapshots.md` on 2026-11-17, when the guides
+stopped carrying measurement history; only the headings changed, and links to
+other pages became file names. The medians come from "Shared pages: the page
+table against the mmap NIF" above.
+
+Compared with the 0.8 releases, which copied the image into every restore
+(medians from `test/audit/PERF.md`, "Shared pages"):
+
+| guest | `wasm:restore/3`, 0.8 | now | first writes per request | instances under `page_limit` 4096, 0.8 | now |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CPython | 12.0 ms | 0.79 ms | 256 pages, 1.3 ms | 6 | 124 |
+| QuickJS | 0.42 ms | 0.12 ms | 41 pages, 0.21 ms | 682 | 1024 |
+| Lua | 0.17 ms | 0.06 ms | 12 pages, 0.06 ms | 1365 | 2048 |
+
+The cost moves to memory access. Compiled code finds each page through a
+lookup, so the guest time of a compiled request is 12% to 49% higher than
+before. The whole request becomes between 8% faster and 19% slower, depending
+on how much of it was the restore. A CPython worker with an `entry`, where the
+restore was most of the request, went from 5.4 ms to 3.0 ms.
+
+## A reactor request before shared restore (from docs/compiled-tier.md)
+
+Moved word for word from `docs/compiled-tier.md` on 2026-11-17, when the guides
+stopped carrying measurement history; only the headings changed, and links to
+other pages became file names. These tables predate shared restore: a CPython
+restore then took 12.0 ms, against 0.79 ms now.
+
+A whole request, interpreted against compiled, with the heap floor on in both
+cases. Medians of twelve paired runs:
+
+| guest | interpreted | compiled |
+| --- | ---: | ---: |
+| Lua | 11.4 ms | **4.4 ms** |
+| QuickJS | 20.4 ms | **6.9 ms** |
+| CPython | 93.1 ms | **37.6 ms** |
+
+With fourteen workers, requests per second rise by about three quarters.
+
+**The rest of a request is not the guest's code.** The same requests, split
+into steps, compiled:
+
+| guest | accept the request | deliver and restore | run the guest | reply |
+| --- | ---: | ---: | ---: | ---: |
+| Lua | 1.18 ms | 0.26 ms | 2.35 ms | 0.03 ms |
+| QuickJS | 1.42 ms | 0.56 ms | 4.38 ms | 0.06 ms |
+| CPython | 1.99 ms | **13.5 ms** | 20.7 ms | 0.86 ms |
+
+Compiling only speeds up "run the guest", by about 4 times for all three. The
+difference between guests is the restore, which depends on the size of the
+snapshot, and accepting the request, which costs 1.2 to 2.0 ms whatever the
+guest. These steps were measured when a restore still copied the snapshot;
+a restore now shares it instead, and a CPython restore takes 0.79 ms instead
+of 12.0. `docs/snapshots.md` has the numbers.
+
+## What adding the collector cost (from docs/gc.md)
+
+Moved word for word from `docs/gc.md` on 2026-11-17, when the guides stopped
+carrying measurement history; only the headings changed, and links to other
+pages became file names. The source gave no date or commit. `docs/gc.md`, "What
+the design costs", keeps the conclusion.
+
+What the design above costs, measured with one benchmark per VM:
+
+| path | before | after |
+| --- | ---: | ---: |
+| call round trip, no objects | 0.478 us | 0.433 us |
+| instantiate, no GC types | 1.669 us | 1.587 us |
+| **instantiate, GC types** | **2.672 us** | **5.053 us** |
+| `struct.get` net of the call | 34.0 ns | 51.5 ns |
+| `struct.new` | 164 ns | 215 ns |
+
+Measurement, not reasoning, found two microseconds. Keeping the instance
+registry in the engine's shared, named, write-concurrent table cost 2.2 us of
+a 6.0 us instantiation; it is now a row in the heap's own objects table.
+Registering the whole `#inst{}` cost another 1.9 us, because ETS copies on
+insert; now only the four fields that a root scan reads are registered.

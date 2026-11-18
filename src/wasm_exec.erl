@@ -58,6 +58,39 @@ generated code is entered; `%%% bounded operand cache` is the operand stack;
 `%%% operations, for generated code` holds the helpers `wasm_core` emits calls
 to, so the interpreted and compiled paths cannot disagree; `%%% exceptions`,
 `%%% gc`, `%%% simd memory` and `%%% bulk memory` are the proposals.
+
+## Most exports are the ABI of generated code
+
+Of the 33 exports, 23 are there for the code `wasm_core` generates, which
+calls them; no other module in `src/` does. 2 more are read by `wasm_core`
+while it generates:
+
+| group | exports |
+| --- | --- |
+| operations and globals | `op1/2`, `op2/3`, `load_at/5`, `store_at/6`, `global_at/2`, `set_global_at/4` |
+| calls out of a compiled unit | `call_out/7`, `shard_call/8`, `indirect_out/9`, `indirect_index/5`, `unreachable_at/7` |
+| the depth limit | `max_depth/1`, `depth_exhausted/0` |
+| memory | `memory_size_at/2`, `memory_grow_at/5`, `memory_fill_at/6`, `memory_copy_at/8`, `memory_init_at/8`, `data_drop_at/3` |
+| SIMD memory | `simd_load_at/7`, `simd_store_at/6`, `simd_load_lane_at/9`, `simd_store_lane_at/8` |
+| read at generation time | `load_spec/1`, `store_spec/1` |
+
+Their names and arities are what generated code calls, so changing one changes
+generated code's shape: bump `ABI` in `wasm_jit`, as "Bump the ABI when
+generated code changes shape" in `docs/compiled-tier-internals.md` says. Of
+the rest, `call/5`, `call_toplevel/5`, `open_budget/1`, `close_budget/1` and
+`fresh_mems/1` are called from `wasm`; `init_state/4`, `check_depth/2` and
+`table_func/3` have no caller outside this module.
+
+## Why it stays one module
+
+The elvis rule against large modules is turned off for this module, and
+`rebar.config` gives the reason: "`wasm_exec` is one dispatcher on purpose:
+every extra call on that path has measured as a regression. See ATTEMPTS.md."
+`AGENTS.md` gives the evidence: three changes to `run/3`, `branch/3` or
+`do_call/4` have cost about 70% on QuickJS while the synthetic loop measured
+nothing or measured an improvement. The helpers for generated code stay here
+too, beside the interpreter code they share, so that the interpreted and
+compiled paths cannot disagree.
 """.
 
 -include("wasm.hrl").

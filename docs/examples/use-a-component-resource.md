@@ -96,8 +96,8 @@ the other, each with its own handle table. So the runtime catches a handle
 that was dropped, reused or of the wrong type, instead of silently accepting
 it.
 
-**Next:** [Components](../components.md).
-
 ## Read this next
 
+This is the last example. Go on with [Hold modules and
+instances](../embedding.md).
 The guide behind this example: [Components](../components.md).

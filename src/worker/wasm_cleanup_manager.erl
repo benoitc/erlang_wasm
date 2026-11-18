@@ -2,15 +2,31 @@
 -moduledoc """
 Internal: the node-wide cleanup manager.
 
-It performs no filesystem I/O and runs no cleanup callback. Its job is to bound
-how many requests may hold cleanup state at once, and later to grant cleanup-job
-leases and hold the operator view, so that the reaper being slow or absent can
-never let cleanup grow without a bound. See `test/audit/CLEANUP_STEWARD.md`.
+It performs no filesystem I/O and runs no cleanup callback, so the reaper being
+slow or absent can never stall it. What it does today:
 
-Admission is keyed by request id and independent of any one steward pid, so a
-steward dying does not release capacity on its own. The lease, per-request
-operator view and the v2 journal arrive with the stages that route the guardian
-through the manager; the capacity accounting here is the foundation they build on.
+- **The operator view.** The reaper pushes its per-state counts and live
+  requests here, and `stats/0` and `requests/0` serve that copy, which
+  `wasm_script_worker:cleanup_stats/0` and
+  `wasm_script_worker:cleanup_requests/0` read. They answer while the reaper
+  is busy with its journal, and answer an empty view between a reaper's death
+  and its replacement's first push.
+- **Job leases for cleanup the reaper cannot own.** `start_local_cleanup/2`
+  and `run_bounded_action/3` run under at most `max_cleanup_jobs` leases, with
+  the overflow queued. This count is separate from the reaper's own jobs.
+- **Whether a reaper can be reached**, for a steward whose reaper died:
+  `reaper/0`.
+- **Admission capacity.** `capacity/0` is the same ceiling the reaper refuses
+  requests at (`max_cleanup_jobs + cleanup_queue_len`), and `admit/1` and
+  `release/1` keep a count against it, keyed by request id. Nothing in `src/`
+  calls `admit/1` or `release/1` yet: the reaper still decides admission and
+  answers `cleanup_saturated` itself. Only `wasm_cleanup_manager_SUITE` uses
+  them.
+
+The cleanup work is moving here from the reaper in stages, and the move is not
+finished. `test/audit/CLEANUP_STEWARD.md` is the design record for where it is
+going; "Who owns what while the cleanup migration is in progress" in
+`docs/worker-internals.md` says who owns each job today.
 
 The manager is `recovering` until it has learned the current reaper's generation.
 The reaper announces its generation and recovered record count by sending the

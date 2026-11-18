@@ -16,10 +16,46 @@ can compare it against the expected failure, and `ctx` carries enough to
 diagnose a module: which function, which byte offset, and the enclosing block
 path. Use `format/1` for logs.
 
+## What it promises
+
+Nothing a guest supplies makes a call raise: not the module bytes, not what
+the guest does while it runs, not the strings it passes to WASI. Each of those
+failures comes back as `{error, Error}`, with `Error` one of the maps above.
+The promise covers the guest. A wrong Erlang type in your own call, such as an
+atom for the module bytes, raises as any Erlang function does. [Failures are
+values at the guest
+boundary](../docs/design-principles.md#failures-are-values-at-the-guest-boundary)
+lists those cases, and the few failures that are values but not maps.
+
+## How the library uses it
+
 Inside the library the decoder and validator signal by `throw/1` rather than
 threading `{ok, _} | {error, _}` through every combinator, which keeps the hot
-paths free of result-tuple allocation. `capture/1` converts back to a value at
-the API boundary, so no throw ever reaches you.
+paths free of result-tuple allocation. Three steps turn that into the promise:
+
+1. **Raise.** Code that finds a failure calls the constructor for its class:
+   `malformed/2,3`, `invalid/2,3`, `link_error/2,3`, `trap/1,2` or
+   `exhaustion/1,2`. Each throws `{wasm_error, Error}` and does not return.
+2. **Capture.** Every public entry point runs its work inside `capture/1` or
+   `capture/2`, which turns that throw back into `{error, Error}`. Any other
+   exception, a bug in this library, becomes `{error, Error}` too, with class
+   `malformed`, kind `internal`, and the exception and its stacktrace in
+   `ctx`. A WebAssembly exception in flight (`{wasm_exception, _}`) is not
+   caught: it is unwinding to a handler in an outer instance.
+3. **Add context.** `capture/2` merges a context map into the error it
+   catches, and `add_context/2` does the same to an error already in hand. A
+   key the error already has wins, because it was recorded closer to the
+   failure.
+
+```erlang
+Result = wasm_error:capture(
+           fun() -> wasm_error:malformed(unexpected_end, ~"unexpected end") end,
+           #{offset => 12}),
+{error, #{class := malformed, ctx := #{offset := 12}}} = Result.
+```
+
+`is_error/1` says whether a term is one of these errors, and `format/1`
+renders one on a line.
 """.
 
 -export([malformed/2, malformed/3,

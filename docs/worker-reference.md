@@ -44,7 +44,7 @@ key.
 | `capture_timeout` | 60 s | one snapshot capture and its hooks, at `start_link/2`, and nothing before it. CPython needs about 90 s and so must raise it |
 | `runner_min_heap_words` | the adapter's | a heap floor for each request's runner: 200,000 words for `wasm_lua` and `wasm_javascript`, 1,500,000 for `wasm_python` on the compiled tier and 1,000,000 on the interpreter, none for an adapter without `defaults/1`. `0` turns it off; see [How a heap floor works](tuning.md#how-a-heap-floor-works) |
 | `capture_min_heap_words` | the adapter's | the same, for the process that captures the snapshot. No shipped adapter sets one; see [How a heap floor works](tuning.md#how-a-heap-floor-works) |
-| `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Tuning a worker host](tuning.md). Needs a snapshot capability and imports that are all functions. Each idle worker holds one restored instance: its page table (a list of the image's pages it reads), not a copy of the image |
+| `restore_ahead` | `false` | restore the next request's instance while the worker waits; see [Restore the next instance ahead](scripting.md#restore-the-next-instance-ahead). Needs a snapshot capability and imports that are all functions. Each idle worker holds one restored instance: its page table (a list of the image's pages it reads), not a copy of the image |
 | `compiled` | `false` | `true` runs requests in the compiled tier: it sets `fuel => infinity`, `compile => true`, `compile_after => 1` and `compile_quality => baseline` under your own `limits`. Only the deadline stops a runaway; see [Hosting scripting languages](scripting.md) |
 
 `start_link/2,3` refuses to start in these cases:
@@ -60,8 +60,8 @@ worker whose artifact gives the same store key as a live worker's holds that
 worker's image instead of loading or capturing its own. Workers that start
 while the first one loads or captures wait for it, at most `capture_timeout`
 and 30 seconds, then capture their own. The image is freed with the last
-worker that holds it. See "Run a pool from one image" in
-[Using workers](worker.md).
+worker that holds it. See [Run a pool from one
+image](scripting.md#run-a-pool-from-one-image).
 
 ## Per node, for the reaper
 
@@ -98,25 +98,11 @@ later. This is better than a leak you cannot see.
 
 ## Node-wide
 
-Also in the `wasm` application environment:
-
-| setting | default | what it controls |
-| --- | ---: | --- |
-| `worker_timeout` | 5 s | the deadline `wasm_instance_worker:call/3` uses when you give none |
-| `max_snapshot_bytes` | `infinity` | the memory that all snapshot images **keep**, on the whole node. `infinity` means no limit; snapshots still work |
-| `snapshot_dir` | unset | where images are kept between restarts. Unset means images live only in memory |
-| `max_snapshot_dir_bytes` | 512 MiB | how much **disk** that directory may hold. An image file is 35 KB for Lua and 2.7 MB for CPython |
-| `code_cache_dir` | unset | where compiled code is kept. Unset means the compiled tier recompiles on every start |
-| `page_limit` | see `wasm_engine` | linear memory pages across every instance on the node |
-
-The runtime removes old files from the snapshot directory **only when it
-saves a new image**. So a directory over its limit stays over it until the
-next capture, and lowering the setting removes nothing by itself.
-`wasm_snapshot_store:purge/0` empties the directory at once.
-
-`max_snapshot_bytes` limits memory and `max_snapshot_dir_bytes` limits disk,
-for the same images. [Snapshots](snapshots.md) shows both sizes side by
-side.
+The other settings of the `wasm` application environment, such as
+`worker_timeout`, `snapshot_dir` and its limits, `code_cache_dir` and
+`page_limit`, are in
+[Configuration](configuration.md#the-application-environment), each with its
+default and the page that explains it.
 
 ## Read this next
 

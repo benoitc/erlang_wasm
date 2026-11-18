@@ -1,19 +1,19 @@
 # WASI 0.2
 
-WASI 0.2 (`wasm32-wasip2`) is the version of WASI for the Component Model.
-The guest is a *component*: a binary that holds core WebAssembly modules and
+WASI 0.2 (`wasm32-wasip2`) is the version of WASI for the Component Model. The
+guest is a *component*: a binary that holds core WebAssembly modules and
 describes typed interfaces (see [Components](components.md)). It imports
 interfaces such as `wasi:cli`, `wasi:io`, `wasi:filesystem`, `wasi:clocks`,
 `wasi:sockets`, `wasi:random` and `wasi:http`. Read this page when your
 toolchain targets `wasm32-wasip2` or produces a component. It shows how to run
 the component, how to decide what it may reach, and which interfaces the host
-provides. For a core module built for `wasm32-wasip1`, read [WASI](wasi.md)
-instead.
+provides. For a core module built for `wasm32-wasip1`, read
+[WASI preview 1](wasi.md) instead.
 
 The host is `wasi_preview2`. It answers every import from Erlang, with the
 same code as Preview 1: paths go through `wasi_fs`, address checks through
 `wasi_net`, and random bytes come from `crypto:strong_rand_bytes/1`. The
-sandbox and grant rules in [WASI](wasi.md) apply here without change.
+sandbox and grant rules in [WASI preview 1](wasi.md) apply here without change.
 
 ## Run a command component
 
@@ -35,7 +35,9 @@ get back the exit code and everything it wrote:
 instance, also on errors. A component without a `wasi:cli/run` export returns
 `{error, no_run_export}`. Pass `compile => true` to build its core modules in
 the calling process instead of through the module cache, which limits how
-many modules it loads a second.
+many modules it loads a second. Without `compile => true`, `run_command/3`
+always uses the cache: if the `wasm` application is not started, it answers
+`{error, #{kind := cache_unavailable}}`.
 
 The exit code is 0 when `run` returns `ok` and 1 when it returns `err`.
 `wasi:cli/exit.exit` works the same way. `exit-with-code` reports the code
@@ -84,7 +86,7 @@ Several, each with its own writability:
 When `preopens` is present, `preopen` and `writable` are ignored. An attempt
 to write on a read-only mount fails with the `read-only` error code. The guest
 path goes to `wasi_fs:open/3`, the same call Preview 1 uses, so the escapes
-listed in [WASI](wasi.md) are refused here too.
+listed in [WASI preview 1](wasi.md) are refused here too.
 
 ### Grant a network
 
@@ -105,6 +107,35 @@ that does not import them still links. `ip-name-lookup` resolves names only
 when the grant says `resolve => allow`. Sockets go through `wasi_sock2`, which
 uses OTP's `socket` module. So a TCP socket can be bound before it connects or
 listens, and can report the port it was given.
+
+## Options from preview 1
+
+The 0.2 and 0.3 hosts grant the same capabilities as preview 1, with other
+names and shapes. `wasi_preview3:run_command/3` takes the same options as
+`wasi_preview2:run_command/3`. Translate a preview 1 map like this:
+
+| capability | preview 1: `wasi:run/2`, `wasi:imports/1` | 0.2 and 0.3: `run_command/3`, `command/1` |
+| --- | --- | --- |
+| arguments | `args => [Arg]` | `args => [Arg]`, the same |
+| environment | `env => #{Name => Value}`, a map | `env => [{Name, Value}]`, a list of pairs |
+| directories | `dirs => [{GuestPath, HostDir, read \| write}]` | `preopen => HostDir` and `writable => true \| false` for one mount at guest `/`, or `preopens => [{GuestPath, HostDir, true \| false}]` |
+| working directory | none | `initial_cwd => Path` |
+| network | `net => Grant` | `network => Grant`: the same grant, plus `tcp` and `udp` booleans |
+| clocks | `clocks => [monotonic, realtime]`, both by default | no option: both clocks, always |
+| random bytes | `random => strong \| {seed, N} \| none`, `strong` by default | no option: always strong |
+| stdin | `stdin => Binary \| Fun` | the second argument of `run_command/3`; `stdin => Binary` for `command/1` |
+| stdout, stderr | `wasi:run/2` collects them; for `imports/1`, a pid, fun or io device | `run_command/3` collects them; for `command/1`, `fun((binary()) -> ok)` |
+| fuel and limits | none on `wasi:run/2`: call `wasm:instantiate/3` with `wasi:imports/1` and a limits map | `fuel`, `max_depth`, `max_memory_pages`, `max_heap_words`, `max_host_calls` in the same map, and `resource_limit` |
+| how core modules are built | your choice before the call: `wasm:load_file/1` (the cache) or `wasm:compile/1` | `compile => true` builds them in the calling process; without it, the module cache |
+| directory listing | `readdir_batch_bytes`, `readdir_fallback` | none |
+| outgoing HTTP | none | `http_transport`, `http_tls`, `http_max_body_bytes` |
+
+`wasm_component:instantiate/3` names the same choice differently:
+`loader => compile` or `loader => load`, and without it, it picks `load`
+while the `wasm` application runs and `compile` when it does not. The
+`run_command/3` and `run_serve/3` runners take `compile => true` and never
+pick by themselves. So with the runners, pass `compile => true` whenever the
+application may not be started; with `instantiate/3`, leave `loader` out.
 
 ## Which interfaces are provided
 

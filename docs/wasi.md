@@ -1,4 +1,4 @@
-# WASI
+# WASI preview 1
 
 WASI lets you run a program built for `wasm32-wasip1` (Rust, TinyGo, clang
 with a WASI sysroot). You give it the files, environment, clocks and sockets
@@ -14,10 +14,12 @@ inside the node. Every syscall is an ordinary host function, so you can trace
 it, replace it or refuse it. Erlang code makes every decision about what the
 guest may do.
 
-This page is WASI Preview 1 (`wasm32-wasip1`). For WASI 0.2 (`wasm32-wasip2`,
-the Component Model), read [WASI 0.2](wasi-0-2.md), or go straight to
-[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md). For WASI 0.3,
-read [WASI 0.3](wasi-0-3.md).
+This page is WASI preview 1 (`wasm32-wasip1`), answered by `wasi_preview1`.
+A component built for `wasm32-wasip2` is answered by `wasi_preview2`: read
+[WASI 0.2](wasi-0-2.md), or go straight to
+[Run a WASI 0.2 component](examples/run-a-wasi-2-component.md). A component
+built for WASI 0.3 runs through `wasi_preview3`: read [WASI 0.3](wasi-0-3.md).
+The sandbox rules on this page apply to all three.
 
 ## The words on this page
 
@@ -70,6 +72,10 @@ apart from "the operating system refused".
 | `stdin` | a binary or a fun | end of file |
 | `net` | sockets, to the addresses named | **no network at all** |
 
+Moving a guest to WASI 0.2 or 0.3? The same capabilities have other option
+names there; [Options from preview 1](wasi-0-2.md#options-from-preview-1)
+translates each one.
+
 A `stdin` fun may block. A `stdout` pid or fun receives each write at the
 moment it happens. With these two, a guest that runs for a long time can
 exchange messages with you. [streams.md](streams.md) shows how.
@@ -119,24 +125,41 @@ learn how your directories are laid out:
 These cases were checked with Rust's own `std::fs`, not only with
 hand-written test programs.
 
-### Check which backend you have
+## Check which backend you have
+
+The **backend** is how the host resolves a guest's file paths. There are two,
+and the runtime picks one when it starts: `native` when the optional file NIF
+(native code, built from `c_src/`) is loaded, `fallback` (pure Erlang) when it
+is not. Ask which one you have:
 
 ```erlang
 wasi_fs:backend().        %% native | fallback
 ```
 
-`native` means the optional NIF was built. The host opens a path one
-component at a time with `openat(..., O_NOFOLLOW)`. The kernel resolves each
-name exactly once and follows no symlink at any depth. This closes the
-time-of-check-to-time-of-use window (a race where an attacker changes a path
-between the check and the open). If someone replaces a component with a
-symlink between the check and the open, the open is still refused.
+| | `native`, with the NIF | `fallback`, pure Erlang |
+| --- | --- | --- |
+| how a path is opened | one component at a time with `openat(..., O_NOFOLLOW)`: the kernel resolves each name once and follows no link | checked with `filelib:safe_relative_path/2`, opened by name, and checked again after opening |
+| a path changed between the check and the open | still refused: the time-of-check-to-time-of-use window (a race where an attacker changes a path between the check and the open) is closed | the window is smaller but still open, because Erlang gives access to neither `openat` nor `O_NOFOLLOW` |
+| a preopen | a directory, opened once when you grant it: renaming or replacing the host directory later does not change what the guest sees | a name, resolved again on every open |
+| a link's own timestamps, or a time finer than one second | set | not set |
 
-`fallback` means the NIF is not there. The host checks paths with
-`filelib:safe_relative_path/2`, which refuses every escape above, and checks
-again after opening. This makes the window smaller but does not close it,
-because Erlang gives access to neither `openat` nor `O_NOFOLLOW`. Do not use a
-preopen on a directory that a hostile party can write to at the same time.
+Both refuse every escape listed above. With the fallback, do not grant a
+directory that a hostile party can write to at the same time. To refuse file
+access when the NIF is not loaded, set the `require_native_fs` application
+setting to `true`: on the fallback, no directory is then granted, so a guest
+has no file system rather than one whose paths are checked and opened in two
+steps. The refusal is logged once.
+
+Symlinks follow the same rules on both backends. The host follows a link in
+the last component of a path only when the guest passes
+`LOOKUPFLAGS_SYMLINK_FOLLOW`, as preview 1 says. Without the flag, opening a
+link gives `ELOOP`, and `readlink`, stat on a link and unlink of a link act on
+the link itself. Links in the other components are always followed. A
+followed link is walked under the same rules as a literal path, at most eight
+links deep, so a cycle is an error and not a hang. A link that leaves the
+preopen is refused, like a `..` that climbs above the root.
+
+To build the NIF, or to change it, read [The file NIF](contributing/nif.md).
 
 ## Grant a network
 
@@ -217,6 +240,22 @@ Three behaviours to know:
   source port needs a `listen` rule for it. A loopback grant does not allow
   binding `0.0.0.0`.
 
+### What the network grant refuses
+
+Every route out gets a case in `wasi_net_escape_SUITE`:
+
+| attempt | result |
+| --- | --- |
+| a granted address and port | connected |
+| the granted address, another port | `ENOTCAPABLE` |
+| `::ffff:127.0.0.1` under a `127.0.0.0/8` grant | connected, over IPv4 |
+| `::ffff:10.0.0.1` under a `127.0.0.0/8` grant | `ENOTCAPABLE` |
+| `::127.0.0.1` under a `127.0.0.0/8` grant | `ENOTCAPABLE`, it is IPv6 |
+| binding `0.0.0.0` under a loopback `listen` grant | `ENOTCAPABLE` |
+| connecting to an address `sock_getaddrinfo` returned | checked as an address |
+| a socket descriptor from another instance | `EBADF` |
+| any socket call with no `net` key | `ENOTCAPABLE` or `EBADF` |
+
 ### Which socket calls you get
 
 Preview 1 defines four socket calls: `sock_accept`, `sock_recv`, `sock_send`
@@ -242,106 +281,13 @@ read subscription reports how many bytes are waiting. It sets
 `EVENTRWFLAGS_FD_READWRITE_HANGUP` when the peer has closed the connection.
 So your module can tell "nothing yet" from "nothing ever again". Bytes that a
 poll finds are kept for the next read. The poll does not consume them.
+A subscription on a file returns `ENOSYS` rather than a guess.
 
 Set `FDFLAGS_NONBLOCK` through `fd_fdstat_set_flags` to make reads return
 `EAGAIN` instead of waiting. It applies to sockets; files ignore it.
 
 For the risks that socket support does not protect you from, see
 [security.md](security.md).
-
-## Which syscalls are implemented
-
-45 of them: `args_*`, `environ_*`, `clock_res_get`, `clock_time_get`,
-`random_get`, `fd_read`, `fd_write`, `fd_pread`, `fd_pwrite`, `fd_seek`,
-`fd_tell`, `fd_close`, `fd_fdstat_get`, `fd_fdstat_set_flags`,
-`fd_filestat_get`, `fd_filestat_set_size`, `fd_filestat_set_times`,
-`fd_fdstat_set_rights`, `fd_readdir`, `fd_prestat_get`,
-`fd_prestat_dir_name`, `fd_sync`,
-`fd_datasync`, `fd_advise`, `fd_allocate`, `fd_renumber`, `path_open`,
-`path_filestat_get`, `path_filestat_set_times`, `path_create_directory`,
-`path_remove_directory`, `path_unlink_file`, `path_rename`, `path_symlink`,
-`path_readlink`, `path_link`, `proc_exit`, `sched_yield`, `poll_oneoff`,
-`sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown`.
-
-That is enough for Rust's `std::fs`, `std::env`, `thread::sleep` and
-buffered I/O. The eleven socket extension calls listed above are also
-implemented. They come from WasmEdge, not from the specification.
-
-## The preopen is a directory, not a name
-
-On the **native** backend, the host opens a preopen once, when you grant it.
-It resolves every guest path relative to that open directory. If you replace
-or rename the host directory later, the instance keeps reading the directory
-it was given. This is intended: a capability is a specific directory, not a
-name.
-
-Earlier versions used the name. They resolved the root again on every open,
-so replacing the directory while an instance ran changed where every path
-pointed.
-
-On the **fallback** backend, a preopen is still a name, because that backend
-always resolves by name. If anyone other than you can replace the host
-directory, build the NIF.
-
-## Symlinks, and which backend you have
-
-The host follows a symlink in the last component only when the caller passes
-`LOOKUPFLAGS_SYMLINK_FOLLOW`. Preview 1 says this, and both backends do it.
-Without the flag, opening a link gives `ELOOP`. Links in the other components
-are always followed, as in any normal path.
-
-On the **native** backend, the host reads a followed link and walks its text
-under the same rules as a literal path: one component at a time with
-`openat(O_NOFOLLOW)`. It follows at most eight links, so a cycle is an error,
-not a hang. A link that leaves the preopen is refused, like a `..` that climbs
-above the root: the walk counts the depth and never goes below the root.
-
-On the **fallback** backend, `filelib:safe_relative_path/2` does the same job,
-by checking the text and by resolving. It resolves the *parent* of a path and
-then acts on the last component by name. So it can name a link without
-following it: `readlink`, stat on a link and unlink of a link all work. It
-cannot set a link's own timestamps, or a timestamp finer than one second,
-because Erlang gives access to neither.
-
-```erlang
-wasi_fs:backend().   %% native | fallback
-```
-
-Check it if your guests use symlinks. Only the native backend can set a
-link's own timestamps, or a timestamp finer than one second.
-
-To refuse file access when the native backend is not loaded, set the
-`require_native_fs` application setting to `true`. On the fallback, no
-directory is then granted, so a guest has no file system rather than one
-whose paths are checked and opened in two steps. The refusal is logged once.
-
-## WASI 0.2
-
-A component built for `wasm32-wasip2` is answered by a different host,
-`wasi_preview2`. Its grants, interfaces and `wasi:http` are in
-[WASI 0.2](wasi-0-2.md) and [HTTP](http.md). A component built for WASI 0.3
-runs through `wasi_preview3`; see [WASI 0.3](wasi-0-3.md).
-
-## Check it against the official suite
-
-The suites in `test/wasi_*_SUITE.erl` test this project's own reading of
-Preview 1. `wasi-testsuite` is written by other people. It is the only test
-here that can show a capability follows the specification exactly, and not
-only our understanding of it.
-
-```sh
-scripts/fetch-suites.sh
-rebar3 ct --suite=test/wasi_conformance_SUITE
-```
-
-All 72 cases pass on the native backend, and 68 of 72 on the fallback. The
-four failures need things Erlang does not give access to.
-`file:write_file_info/3` takes whole seconds, so it cannot set a nanosecond
-timestamp. It also follows symlinks, so it cannot set a link's own times. And
-`file:make_link/2` calls `link()`, which follows symlinks on darwin. The
-conformance suite's baseline lists each one.
-
-Without a checkout the suite skips, so you can keep it in every run.
 
 ## What is refused on purpose
 
@@ -370,12 +316,9 @@ case wasm:call(Inst, ~"_start", []) of
 end.
 ```
 
-## Change the NIF
-
-If you change `c_src/`, read [The file NIF](contributing/nif.md). It shows how
-to run the NIF under a sanitizer, and what each sanitizer can find.
-
 ## Read this next
 
 [WASI 0.2](wasi-0-2.md), for components, or [Security](security.md) for what
-the sandbox does not cover.
+the sandbox does not cover. The syscalls this host implements, and its result
+on the official `wasi-testsuite`, are in
+[Features](features.md#wasi-preview-1).

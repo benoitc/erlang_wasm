@@ -25,6 +25,12 @@ loaded into and when that name may be reused.
 | diagnostics and the generated source | `diagnostics/0`, `dump/1` |
 | an instance letting go of its slot | `release/1` |
 
+The compile path runs under these banners, in this order: `%%% asking for a
+compile` (the ask, and starting a compiler), `%%% the compiler process`,
+`%%% generation`, `%%% admission and build` (the compile budget, the code
+cache, publishing), `%%% splitting into units`, `%%% limits`, `%%% shards`
+and `%%% running the units, and the artifact`.
+
 ## Off by default
 
 Compiled code is opt-in, `#{compile => true}` in an instance's limits, the way
@@ -539,7 +545,7 @@ retry(Inst, Deadline) ->
         true -> timer:sleep(20), await_1(Inst, Deadline)
     end.
 
-%%% ------------------------------------------------------------- compiling ---
+%%% -------------------------------------------------- asking for a compile ---
 
 %% Counted per module rather than per instance, or a workload of short-lived
 %% instances never gets hot.
@@ -677,6 +683,8 @@ spawn_compile(Inst, Limits) ->
             true
     end.
 
+%%% -------------------------------------------------- the compiler process ---
+
 %% One more compiler, unless there are already as many as there are slots.
 %%
 %% A soft bound, and deliberately: the hard one is the slots themselves, and a
@@ -765,6 +773,8 @@ compile(Inst, Limits, Executed, Mode) ->
             retry;
         {compile, Mod, Token} -> generate(Inst, Limits, Mod, Token, Executed)
     end.
+
+%%% ------------------------------------------------------------ generation ---
 
 generate(Inst, Limits, Mod, Token, Executed) ->
     %% Counted here, over what was *asked for*, because `unit/2` lowers every
@@ -867,6 +877,8 @@ generate_1(Inst, Limits, Mod, Token, Unit) ->
                              {Mod, Token}, COpts, Budget)
             end
     end.
+
+%%% --------------------------------------------------- admission and build ---
 
 %% The budget is held for the whole build and given back however it ends,
 %% including a trap on the way out. A compiler that is *killed* gives it back
@@ -1011,6 +1023,8 @@ publish_all(Inst, _Limits, Tokens, Parts, Bins) ->
             adopt(Inst, element(1, hd(Tokens)))
     end.
 
+%%% -------------------------------------------------- splitting into units ---
+
 %% Balanced by IR words, largest first into the lightest unit so far.
 %%
 %% Not by function count: one QuickJS function is 98,191 words and 8.4 seconds
@@ -1029,6 +1043,8 @@ split(Unit, Limits) ->
                 Parts -> renumber(Parts)
             end
     end.
+
+%%% ---------------------------------------------------------------- limits ---
 
 -doc """
 Every bound the compiled tier applies to a *request*, so a caller can ask rather
@@ -1142,6 +1158,8 @@ resolve_max_heap_words() ->
         W when is_integer(W), W >= Min, W =< ?MAX_HEAP_WORDS -> {W, ok};
         Bad -> {0, {bad, Bad}}
     end.
+
+%%% ---------------------------------------------------------------- shards ---
 
 -doc """
 How many units this many functions are split into.
@@ -1275,6 +1293,8 @@ claim_rest(Inst, N, Acc) ->
         %% call took and compile as one unit next time round.
         _ -> {error, Acc}
     end.
+
+%%% ----------------------------------- running the units, and the artifact ---
 
 %% Run the units at once. `compile:forms/2` is the whole of the cost and the
 %% units share nothing, so this is the wall clock the split is for.

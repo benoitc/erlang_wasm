@@ -41,6 +41,14 @@ is one `destroy` plus one `instantiate`, roughly 15 us plus page allocation.
 
 Comes from more workers, never from concurrent calls into one instance. Run a
 pool and check one out per request.
+
+## Naming a worker
+
+The `name` option is a label, nothing more: `info/1` gives it back, and it is
+the process label (`proc_lib:set_label/1`) that `observer` and crash dumps
+show. The process is not registered under it, so you always address a worker
+by the pid `start_link/2` returns. Register it yourself, or keep the pid in
+your pool, if you need to find it by name.
 """.
 
 -behaviour(gen_server).
@@ -71,10 +79,12 @@ pool and check one out per request.
 -doc """
 Start a worker over an already-loaded module.
 
-`Opts` accepts `imports`, `limits`, `isolation` (`fresh` | `reuse`) and `name`.
-The module's start function runs when the worker instantiates it, under a
-deadline of its own: `timeout` in `limits` (milliseconds, or `infinity`), or
-`worker_timeout` as for `call/3`. A start that runs past it kills the worker.
+`Opts` accepts `imports`, `limits`, `isolation` (`fresh` | `reuse`) and `name`,
+a label `info/1` returns; the process is not registered under it. `limits`
+is a nested map of the keys `wasm_limits` lists. The module's start function
+runs when the worker instantiates it, under a deadline of its own: `timeout`
+in `limits` (milliseconds, or `infinity`), or `worker_timeout` as for
+`call/3`. A start that runs past it kills the worker.
 """.
 -spec start_link(wasm:module_()) -> {ok, pid()} | {error, term()}.
 start_link(Module) -> start_link(Module, #{}).

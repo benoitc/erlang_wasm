@@ -5,7 +5,10 @@ all: compile
 compile:
 	rebar3 compile
 
-# What every change has to pass. Same list as `.github/workflows/ci.yml'.
+# What every change has to pass locally. CI runs these too, and more beside:
+# the Integration, Docs and NIF checks jobs and wasmtime's programs in
+# `.github/workflows/ci.yml', ThreadSanitizer in `tsan.yml' and the
+# dependency audit in `audit.yml'.
 check: lint xref dialyzer ct
 
 test: ct
@@ -39,8 +42,9 @@ bench:
 suites:
 	./scripts/fetch-suites.sh
 
-# wasmtime's native WASI 0.2 test programs for the interop track
-# (wasm_wasi2_p2_SUITE). Not vendored: built on demand, skipped when absent.
+# wasmtime's native WASI 0.2 and 0.3 test programs for the interop track
+# (wasm_wasi2_p2_SUITE, wasm_wasi3_p3_SUITE). Not vendored: built on demand,
+# skipped when absent.
 p2-fixtures:
 	./scripts/build-wasmtime-p2.sh
 

@@ -10,24 +10,14 @@ was tried and then reverted. Both files stay in that order, so neither is easy
 to look things up in. This page is for looking things up, and it links to
 them.
 
-[Threads](features.md#threads) are documented as a feature rather than here,
-because what matters about them is what is implemented. So is the compiled
-tier, in [its own guide](compiled-tier.md), linear memory and the page budget,
-in [Memory](memory.md), and the garbage collector, in
-[Garbage collection](gc.md). The WASI sandboxes are at the end of this page.
-
-## Linear memory is chunked atomics arrays
-
-Linear memory is a tuple of `atomics` arrays, sized per memory, so a store
-mutates in place and growth appends a chunk; a NIF was declined to keep the
-sandbox boundary in Erlang. Moved to [Memory](memory.md).
-
-## A restored memory shares its image
-
-A restored memory reads its snapshot image through a page table with one entry
-per 4 KiB page, and copies a page into a private arena slot on its first write.
-The keeper records logical pages and charged pages separately. Moved to
-[Memory](memory.md).
+Some subjects have a page of their own, with their reasons beside them:
+[Threads](features.md#threads), documented as a feature because what matters
+about them is what is implemented; linear memory, restored memory and the
+page budget, in [Memory](memory.md); the garbage collector, in
+[Garbage collection](gc.md); why a request is three processes, in
+[Worker internals](worker-internals.md); and the compiled tier, in
+[its own guide](compiled-tier.md). The reasons behind the WASI sandboxes are
+at the end of this page.
 
 ## The interpreter keeps its own control stack
 
@@ -95,113 +85,18 @@ unit holds which function before it generates anything. So adding a second
 compile would only need a new rule for when to do it, not new code to track
 functions. The measurements have not shown a need for one.
 
-## A benchmark that lied, and how it was caught
+## What measuring the interpreter found
 
-To compare two versions (A and B) of the code, the benchmarks ran them in
-turn, one after the other, in the same VM. This removes the effect of the
-machine's load changing over time, so it was used for every A/B comparison
-here. On a workload that uses a lot of memory, it reported that
-superinstructions made the code **2x slower**, every time (0.49x across three
-runs).
-
-A control experiment found the cause. With *all fusions disabled*, both
-versions ran exactly the same code, and the same harness still reported 0.38x.
-So the harness was wrong, not the runtime. Switching between two instances
-switches between two 1 MiB linear memories, and the CPU cache keeps losing its
-contents. The same instance measured twice in a row ran in 1560 us, against
-2200 us when switching.
-
-Running in turn is right when the machine's load changes, and wrong when each
-version uses a lot of its own memory. Those A/B comparisons now run each
-version in its own VM, several times, and keep the minimum. Measured that way,
-fusion is **1.14x faster** on the same workload, not 2x slower.
-
-This is recorded because a benchmark that gives a stable, repeatable, wrong
-number is more dangerous than a noisy one. Only the null experiment found it:
-running the comparison with no real difference between the two sides.
-
-## Where a call's time goes
-
-Decomposing `wasm:call/3` on a trivial exported function showed that execution
-was the smallest part of it:
-
-| stage | cost |
-| --- | ---: |
-| export name lookup | 26 ns |
-| instance state read (ETS) | 105 ns |
-| **interpreter execution** | **~45 ns** |
-| instance state write-back (ETS) | 185 ns |
-
-For a short call, most of the time went into copying the instance's mutable
-state out of ETS and back in. These changes followed:
-
-- **Skip the write-back when nothing changed.** A function that only reads
-  threads the same `#mut{}` term straight through, so `=:=` is a pointer
-  comparison and the ETS write disappears entirely. Most compute functions
-  mutate no globals, tables or memory size.
-- **Build the locals tuple in one pass.** `lists:split` then `lists:reverse`
-  then `++ Defaults` walks the arguments three times and allocates three lists.
-  Popping top-first into an accumulator seeded with the defaults produces the
-  same tuple in one pass. Interleaved A/B over 7 rounds: **32.7 ns to 17.6 ns,
-  1.86x**, consistent in every round.
-- **Precompute the `{func, N}` control frame** at instantiation instead of
-  allocating one per call.
-
-### Removing the state read
-
-That state read turned out to be term-copy cost, not table overhead: the same
-`ets:lookup_element` returning an atom costs 30 ns, a big nested term 175 ns,
-and the real Rust module's state 398 ns. Meanwhile a process dictionary read
-costs 9 ns regardless of size, because it does not copy.
-
-So each process caches the state it last saw together with a version counter
-held in an `atomics` slot. A hit is an `atomics:get` plus a dictionary lookup;
-any process's write bumps the counter and invalidates every other cache. That
-coherence property is asserted in both directions by
-`wasm_worker_SUITE:state_stays_coherent_across_processes/1`.
-
-Interleaved A/B on the real Rust module: **398.5 ns to 18.8 ns, 21x**, stable
-across all seven rounds (399-407 against 19-20).
-
-### Superinstructions
-
-Chosen from measured frequencies over ~25,000 instructions of real Rust and
-clang output rather than from intuition. `local.get` alone is 28.3% of the
-stream and `i32.const` a further 17.6%. The fused sequences are
-`local.get,i32.const,i32.add` (address arithmetic), `local.get,i32.load`,
-`local.get,local.get`, `local.get,i32.const`, and `i32.eqz,br_if`.
-
-Only straight-line runs are fused. `br_if,local.get` is a frequent adjacency
-but must never be merged, because the `local.get` runs only when the branch is
-not taken.
-
-Removes 23.9% of static instructions on the clang fixture; worth roughly
-1.02x to 1.14x of wall clock depending on workload. Fusion can be disabled with
-`wasm:instantiate(M, Imports, #{fuse => false})`, which is how it was measured
-and how a suspected fusion bug would be isolated.
-
-### Bulk memory, and where a NIF *is* justified
-
-The float experiment found a NIF losing to pure Erlang. Bulk memory is the
-opposite, and measuring it first found two defects worth fixing before any
-native code:
-
-| operation, 64 KiB | before | after | ceiling (`binary:copy`) |
-| --- | ---: | ---: | ---: |
-| `load_bytes` | 1437 us | **122 us** | 5.5 us |
-| `memory.copy`, disjoint | 5424 us | **257 us** | 5.5 us |
-| `memory.fill` | 145 us | 145 us | 5.5 us |
-
-`memory.copy` was testing only `Dst =< Src` to decide whether it needed a
-backward copy, so every high-to-low copy took the byte-at-a-time path even when
-the ranges were disjoint. `load_bytes` was building 8192 small binaries and
-joining them instead of accumulating into one.
-
-Even after a 21x and an 11.8x fix, bulk memory is still 26x to 47x slower than
-`memcpy`, and Erlang cannot close that gap: it must build the bytes from
-64-bit atomic words one at a time. So here, unlike for floats, a native
-backend would be worth having. If one is written, the memory-model property
-test will check it with no extra work.
+Two measurements shaped how the interpreter is changed and measured. An A/B
+comparison of two versions that each use a lot of memory runs each version in
+its own VM: run in turn in one VM, the CPU cache made fusion look 2x slower
+when it was 1.14x faster. And a short call spent most of its time copying the
+instance's state out of ETS and back, not executing, so each process now caches
+the state it last saw; the superinstructions and the bulk memory fixes were
+chosen from measured frequencies and costs in the same way. The runs are in
+`test/audit/PERF.md`, sections "A benchmark that lied, and how it was caught
+(from the design notes)" and "Where a call's time goes (from the design
+notes)".
 
 ## Table representation
 
@@ -247,11 +142,6 @@ exceeds 2^59 and is therefore a heap bignum allocated on every operation. The
 raw-double NIF avoids that but cannot implement WebAssembly f64 at all. Pure
 Erlang wins here on measurement, not on principle.
 
-## A request is three processes, not one
-
-Moved to [Worker internals](worker-internals.md), beside the rest of how the
-worker kernel is built.
-
 ## A snapshot is a copy of state, not of an instance
 
 `wasm:snapshot/1` does not freeze an instance. It copies the state the guest
@@ -274,28 +164,13 @@ segments wrote. Second, the restore takes the module from the handle the image
 kept, not from an argument. So no argument can put one module's bytes over
 another module's layout.
 
-## Garbage collection
-
-Structs and arrays live in an ETS store the runtime owns and collects itself,
-because the interpreter's explicit state makes the roots enumerable. Two
-generations keep the pause proportional to what was just allocated. Moved to
-[Garbage collection](gc.md), with the costs and the roots that were missed.
-
 ## WASI
 
 WASI is an Erlang host interface, not an embedded runtime: each syscall is an
 ordinary host function, so it can be traced, replaced or refused.
-
-```erlang
-Wasi = #{ stdout => self(),
-          dirs   => [{<<"/data">>, "/srv/app/data", read}],
-          env    => #{<<"MODE">> => <<"production">>},
-          args   => [<<"prog">>],
-          clocks => [monotonic],
-          random => strong,
-          net    => #{connect => [{tcp, <<"10.0.0.0/8">>, 443}]} },
-{ok, Inst} = wasm:instantiate(Mod, wasi_preview1:imports(Wasi)).
-```
+[WASI preview 1](wasi.md) is the guide: the options and what each sandbox
+refuses. [Features](features.md#wasi-preview-1) lists the syscalls. This
+section keeps the reasons.
 
 An absent key is an absent capability and the syscall returns `ENOTCAPABLE`,
 except `clocks` and `random`, which default to both clocks and strong
@@ -306,38 +181,11 @@ No `env` means zero variables rather than the host's. `ENOTCAPABLE` is kept
 distinct from `EACCES` so a module can tell "not granted" from "the OS
 refused".
 
-Implemented, 45 of them: `args_*`, `environ_*`, `clock_res_get`,
-`clock_time_get`, `random_get`, `fd_write`, `fd_read`, `fd_close`, `fd_seek`,
-`fd_tell`, `fd_fdstat_get`, `fd_fdstat_set_flags`, `fd_fdstat_set_rights`,
-`fd_prestat_get`,
-`fd_prestat_dir_name`, `fd_filestat_get`, `fd_filestat_set_size`,
-`fd_filestat_set_times`, `fd_sync`, `fd_datasync`, `fd_pread`, `fd_pwrite`,
-`fd_readdir`, `fd_advise`, `fd_allocate`, `fd_renumber`, `path_open`,
-`path_filestat_get`, `path_filestat_set_times`, `path_create_directory`,
-`path_unlink_file`, `path_remove_directory`, `path_rename`, `path_symlink`,
-`path_readlink`, `path_link`, `proc_exit`, `sched_yield`, `poll_oneoff`
-(clocks and socket readiness; a file still returns `ENOSYS` rather than a
-guess), `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown`.
-
-Plus eleven socket extension calls, which are WasmEdge's rather than the
-specification's: `sock_open`, `sock_bind`, `sock_listen`, `sock_connect`,
-`sock_send_to`, `sock_recv_from`, `sock_getlocaladdr`, `sock_getpeeraddr`,
-`sock_getsockopt`, `sock_setsockopt`, `sock_getaddrinfo`.
-
 ### Path sandboxing
 
-Every escape technique gets its own test case, and all must fail with
-`ENOTCAPABLE` rather than `ENOENT`, so the error code cannot be used to probe
-the host's directory layout:
-
-| attempt | result |
-| --- | --- |
-| `note.txt`, `./note.txt` | opened |
-| `../secret/key.txt` | `ENOTCAPABLE` |
-| `/etc/passwd` | `ENOTCAPABLE` |
-| `escape.txt` (symlink out of the sandbox) | `ENOTCAPABLE` |
-| `sub/../../secret/key.txt` | `ENOTCAPABLE` |
-| `missing.txt` | `ENOENT` |
+Every escape fails with `ENOTCAPABLE` rather than `ENOENT`, so the error code
+cannot be used to probe the host's directory layout. The cases are in
+[What the sandbox refuses](wasi.md#what-the-sandbox-refuses).
 
 Resolution uses `filelib:safe_relative_path/2`, which already handles lexical
 traversal *and* symlink escapes, rather than a hand-rolled sanitiser. Requested
@@ -362,33 +210,14 @@ resolve and open and asserts the native path refuses it.
 A `net` grant names what may be reached. `connect` and `listen` are separate
 capabilities, `resolve` is a third, and none implies another.
 
-```erlang
-net => #{connect     => [{tcp, <<"10.0.0.0/8">>, {8000, 8099}}],
-         listen      => [{tcp, <<"127.0.0.1">>, 8080}],
-         resolve     => allow,
-         max_sockets => 32,
-         timeout     => 30000}
-```
-
 **Grants name addresses, never names.** There is no rule that says
 `example.com`. A name has to be resolved to be checked and resolved again to be
 used, and the two answers can differ; `sock_connect` hands the operating system
 the same tuple it checked, so nothing in between can move the target. That is
 the difference between removing the window and narrowing it.
 
-Every route out gets a case in `wasi_net_escape_SUITE`:
-
-| attempt | result |
-| --- | --- |
-| a granted address and port | connected |
-| the granted address, another port | `ENOTCAPABLE` |
-| `::ffff:127.0.0.1` under a `127.0.0.0/8` grant | connected, over IPv4 |
-| `::ffff:10.0.0.1` under a `127.0.0.0/8` grant | `ENOTCAPABLE` |
-| `::127.0.0.1` under a `127.0.0.0/8` grant | `ENOTCAPABLE`, it is IPv6 |
-| binding `0.0.0.0` under a loopback `listen` grant | `ENOTCAPABLE` |
-| connecting to an address `sock_getaddrinfo` returned | checked as an address |
-| a socket descriptor from another instance | `EBADF` |
-| any socket call with no `net` key | `ENOTCAPABLE` or `EBADF` |
+Every route out has a case in `wasi_net_escape_SUITE`, listed in
+[What the network grant refuses](wasi.md#what-the-network-grant-refuses).
 
 The refusal is the same whether or not something is listening on the port, for
 the reason path escapes answer `ENOTCAPABLE` rather than `ENOENT`: an errno that
@@ -409,293 +238,8 @@ asserted by tests so the document fails with them.
 
 ## The compiled tier, for someone changing it
 
-What follows was in [the compiled tier guide](compiled-tier.md), and is for
-changing `wasm_jit`, `wasm_core`, `wasm_code_slots` or `wasm_code_cache`
-rather than using them.
-
-### The five modules, and what each decides
-
-| module | decides |
-| --- | --- |
-| `wasm_jit` | when a module gets compiled and how a call reaches the result. Policy only. |
-| `wasm_core` | what Core Erlang a function lowers to, which functions it will take at all, and the process the OTP compiler runs in. |
-| `wasm_code_slots` | which of sixteen module names the result may load into, and when that name may be reused. |
-| `wasm_code_cache` | whether an artifact already exists on disk. |
-| `wasm_jit_sup` | the processes that compile, so none of them is invisible. |
-
-The compile runs in a supervised process that **owns** its slot reservation.
-This is all that keeps the reservation safe: the reservation ends when its
-owner ends. So a compiler that crashes or is killed loses only its work.
-
-### Read what it generated
-
-If you change a lowering clause, look at the result rather than guessing:
-
-```erlang
-{ok, I} = wasm:instantiate(M, #{}, #{}),
-io:format("~s~n", [wasm_jit:dump(I)]).       %% the whole unit
-io:format("~s~n", [wasm_jit:dump(I, 12)]).   %% one function, by module index
-```
-
-`dump/1` builds the same unit the compiler builds and stops one step earlier, so
-what you read is what would run. `wasm_core:module/6` calls
-`wasm_core:forms/5` and compiles what it answers, and
-`wasm_core_SUITE:the_core_you_can_read_is_the_core_that_is_compiled` holds the
-two together.
-
-### Three options that exist only for conformance
-
-The defaults are what an embedder wants and are all wrong for a test that means
-to check generated code, because each of them lets a test pass without any
-generated code having run.
-
-| option | what it changes |
-| --- | --- |
-| `compile_sync` | compile on the calling process, so the next call is already compiled |
-| `compile_whole` | compile every eligible function, not only the ones that have run. Applies to background compiles as well as under `compile_sync`; an earlier version ignored it there without any error, and compiled only what had run |
-| `compile_force` | raise on a compile error instead of interpreting |
-
-`wasm_spec_SUITE:compiled_phase` sets all three and then asserts
-`wasm_jit:counts/0` moved, because even with all three a refusal still
-interprets. That phase is what found `i32.shr_u` answering 4294967295 where the
-specification says -1.
-
-`compile_whole` is not a setting for speed. Compiling every function of
-QuickJS took 107 s in the first run that measured it, against 15.2 s for the
-223-function hot set in four units. Specification modules have only a few
-functions each, so it is affordable there and nowhere else.
-
-**Nowhere else means nowhere else.** CPython 3.12 has 11,447 eligible
-functions, although one request only *reaches* 971 of them. With
-`compile_whole` it used 33 GB of memory on a 48 GB machine in eleven minutes,
-produced nothing, and spent that time swapping to disk instead of compiling.
-That run is why a request over 8,192 functions is now refused with
-`{too_many_functions, N}`, whatever `compile_whole` asks. The four-unit limit
-bounds the names a unit can use. It does not promise that everything under it
-will compile.
-
-
-### The translation cache
-
-Generated code reaches memory 0 through a cache of two entries, passed through
-every continuation. In a restored memory, low addresses are found through a
-page table, and reading the page table on every access is what made it slow.
-Read `wasm_core`'s private `cached/8` before you change the code generated for
-a memory access.
-
-- An entry is a 4 KiB page number, the array that page lives in and the word
-  index of its first word. Only translations to an array are cached: a private
-  slot or a growth chunk. An untouched image page is read from its binary and
-  never cached.
-- A hit is one compare per entry, with no bounds test: a page that was in
-  bounds stays in bounds. A hit on the second entry swaps the two, so the
-  pair stays in least-recently-used order. Two entries, not one, because guests
-  alternate between two pages often enough that one entry missed on nearly
-  half their array accesses.
-- A miss is the ordinary access, which puts its translation first when it ends
-  on an array.
-- Nothing invalidates an entry. A page table entry goes from 0 to a slot once
-  and growth only appends chunks, so a cached translation is right whatever
-  another holder does.
-
-Only the hit on the first entry is generated at the access itself. Each access
-site has three parts: the test for an access that crosses a page boundary,
-with its call to the helper; one compare against the first cached page, with
-the load or store under it; and an `apply` for every other case. The `apply`
-calls a function of the generated module. There is one such function for each
-access shape the module uses, built by `wasm_core`'s private `miss_fn/1`:
-
-- It holds the second entry's hit with its swap, the bounds test, the page
-  table, the growth chunks, the read of an untouched image page and the call
-  to the helper.
-- It takes the state, the address, the value for a store and the six cache
-  values, and returns `{Result, P1, A1, B1, P2, A2, B2}` on every path.
-- A shape is a direction, a width and a kind, twenty at most, and each has a
-  literal name: `wasm_m_load_4_i32_u`, `wasm_m_store_8_int`. Nothing a guest
-  supplies names one.
-
-To see it, dump a module with one load and look for the `apply`:
-
-```erlang
-{ok, M} = wasm:compile({wat, ~"(module (memory 1)
-  (func (export \"f\") (param i32) (result i32) local.get 0 i32.load))"}),
-{ok, I} = wasm:instantiate(M, #{}, #{}),
-io:format("~s~n", [wasm_jit:dump(I)]).
-```
-
-Keep the miss path in its own function, not at each access. The cache starts
-empty in every function, so 31 to 50% of a real guest's accesses miss. The
-miss path runs often; it is not a rare branch. When it was generated at every
-access, generated code was 2.3 to 2.5 times as large, four times as slow to
-compile and 1.1 to 1.5 times as slow to run.
-`wasm_paged_memory_SUITE` has a case that fails if a site grows back, and
-`test/audit/PERF.md`, "The miss path out of line", has the gates it was held
-to. A cache of one entry was also measured. Calls were not slower, but it did
-not save the 10% of compile time that the rule, written before measuring,
-required. So the cache keeps two entries.
-
-Some writes can publish arena chunks: a write from the host, a bulk or vector
-instruction, or `wasm:write_memory/3`. They return an updated memory handle,
-so the code after them reads the new pages directly instead of through the
-helper.
-
-### Values a multi-value `let` must not leave unused
-
-An access returns its result and the cache after it. As a Core value list
-that is seven values. As a tuple it is an allocation on every access, about
-5 ns for each store. The out-of-line function always returns the tuple, and
-the access site takes it apart into the list. The hit on the first entry,
-generated at the site, builds the list directly. The value list is used only
-where it is safe, because of a defect in the OTP compiler. Under `no_ssa_opt`
-(the `baseline` quality, which a worker's `compiled => true` asks for), a value
-of a multi-value `let` that nothing uses can share a register with a value
-that is used, because the compiler thinks it is live for zero instructions.
-Where the paths join, the unused copy can overwrite the used one. Real guests
-crashed on it: the instance state was replaced by a cache word.
-
-So `wasm_core`'s private `answer/3` orders every list so that no unused value
-comes after a used one. Where the paths of a load disagree about which values
-they use, it returns a tuple instead. The comment above it explains why each
-ordering is safe. The defect is present on OTP 29.0.3 through 29.1.1 and on
-OTP master as of October 2026, and it is reported upstream. Check it again
-when you move to a newer OTP, before you simplify the ordering.
-
-### How a compiled function calls another
-
-Inside one compiled unit, a call is a local Erlang call, and each function
-is called one of three ways, decided for the whole unit when it is built:
-
-| kind | when | called as |
-| --- | --- | --- |
-| pure | touches nothing and calls nothing | `f(Args)` |
-| calls-only | touches no memory, global or table, and calls only pure or calls-only functions of the unit | `f(Left, Args)` |
-| stateful | anything else | `f(Inst, Mut, Left, Args)`, which also returns the new `Mut` |
-
-A function that reaches a stateful one, directly or through any chain of
-calls, is stateful itself, because it must hand the callee the instance and
-take its state back. So are a function that makes a `call_indirect` and one
-that calls outside the unit (another shard, or a function the compiler
-refused). A set of functions that call each other is decided together: the
-generator starts from every candidate and removes any that calls something
-else, until nothing changes.
-
-`Left` is the number of calls left before the depth limit. `invoke/6`
-computes it once, when the call enters generated code: the instance's
-`max_depth` minus the caller's depth.
-
-Only a call that can recurse counts. The generator groups the unit's
-functions into strongly connected components: functions that can reach each
-other through direct calls. A call to a function of the caller's own group
-(a call to itself included), a `call_indirect` and a call that leaves the
-unit check `Left =< 1` against a literal and pass `Left - 1`. Past it,
-`wasm_exec:depth_exhausted/0` raises the interpreter's error, without the
-depth in its context. Any other call passes `Left` on unchanged, with no
-test.
-
-That still bounds the stack. An uncounted call goes from one group to a
-different one, and the groups cannot call each other in a loop, so a stack
-holds at most one uncounted frame per group. A compiled call can therefore go
-deeper than `max_depth` by at most the number of functions in the unit. A
-recursion is counted exactly. A function with one result returns the bare
-value; `invoke/6` puts it back in the list callers outside generated code
-expect.
-
-`invoke/6` also tests that the depth and the limit are non-negative integers
-before it dispatches. They always are, and saying so in a guard lets the
-Erlang compiler's type pass carry the type of `Left` into every function of
-the unit, so counting down and comparing compile without the generic number
-checks.
-
-A block, loop or `if` that is the last instruction of its body, and whose
-exit takes exactly its results, gets no continuation function: its branches
-go straight to that exit. A function such as `fib`, which ends with an `if`,
-would otherwise make one extra local call on every invocation.
-
-### How compiled code holds an i32
-
-The interpreter holds an i32 *signed*, between -2^31 and 2^31 - 1. Wrapping a
-sum back into that range takes two comparisons and a branch. Compiled code
-holds most i32 values *unsigned* instead, between 0 and 2^32 - 1, which is
-how you would write 32-bit arithmetic in Erlang: wrapping is one `band`, and
-the `band` also tells the Erlang compiler the value's range.
-
-The generator calls the two forms `canon` (signed, the interpreter's) and
-`u32` (unsigned). Which form a value is in is a property of the Core variable
-that holds it; a literal is always `canon`.
-
-| held `u32` | held `canon` |
-| --- | --- |
-| i32 locals and parameters | i64, f32, f64, v128 and references |
-| i32 results of a function in the unit | signed i32 loads (`load8_s`, `load16_s`) |
-| i32 parameters and results of a block, loop or `if` | anything a `wasm_exec` helper returns |
-| results of inline i32 operations and unsigned i32 loads | |
-
-A block's types come from the compiler's own IR: `wasm_instance:compiler_ir/2`
-appends each frame's parameter and result types, which the interpreter's IR
-does not carry.
-
-Every boundary takes `canon`: `invoke/6`'s callers, the `wasm_exec` helpers,
-globals, memory, calls to another shard, to the interpreter or to a host, and
-SIMD lanes. A value changes form at most once on its way there:
-
-- `canon` to `u32`: `V band 16#FFFFFFFF`.
-- `u32` to `canon`: `V - 2^32` when `V >= 2^31`, otherwise `V`.
-
-Operations work on `u32` directly: `add`, `sub`, `mul` and `shl` mask their
-result, `and`, `or`, `xor` and `shr_u` need nothing, and a signed comparison
-flips the top bit of both operands (`bxor 2^31`) and compares them unsigned.
-Division, remainder, rotates and conversions go through `wasm_exec` in
-`canon`, as before. A memory address is taken in `u32` as it is, and an i32
-store writes either form, because every store masks to its width.
-
-### f64 arithmetic inline
-
-f64 `add`, `sub`, `mul`, `div` and the six comparisons are Erlang float
-operations when both operands are floats of a size whose result cannot
-overflow: below 2^1022 for a sum, below 2^511 for a product, a divisor of at
-least 1.0. The BEAM raises `badarith` on overflow rather than answering
-infinity, and these bounds keep that out of reach. Anything else, including
-NaN and the infinities (atoms and tuples, never floats), calls `wasm_exec`.
-On two such floats `wasm_num_float` computes the same thing, so the answer is
-the same bit for bit; inside a function the floats also stay unboxed.
-
-### How a call through a table finds its target
-
-A `call_indirect` whose signature some function of the unit has goes through
-a dispatcher local to the generated module, one per signature
-(`wasm_i_<results>/<4 + params>`), shared by every site. A target in the unit
-is a local call in its own convention; any other target crosses as before.
-
-Where the target comes from depends on the table:
-
-- **A static table** cannot change after instantiation: not imported or
-  exported, no initialiser, never written by any instruction of the module,
-  and filled only by active segments at constant offsets. Its contents are
-  then a property of the module: validation records the candidates in
-  `#ctx.table_candidates`, and the tier drops any a function writes
-  (`static_tables/2` in `wasm_jit`), so the site reads the target from a
-  literal holding, per slot, the unit function whose type is exactly the
-  call's. Nothing is looked up or checked at run time.
-- **Any other table** is resolved by `wasm_exec:indirect_index/5`, which
-  reads the table once and checks the exact type before the supertypes.
-
-A slot the literal cannot settle (empty, another type, a subtype, a function
-outside the unit) and a target in another instance go to
-`wasm_exec:indirect_out/9`, which traps or calls exactly as the interpreter
-does.
-
-### Bump the ABI when generated code changes shape
-
-`wasm_jit`'s `ABI` is part of every cache key, so a node never enters an
-artifact built against a different memory handle or frame shape. Bump it in the
-same commit as any change to what generated code reads, how many values a
-continuation carries, or which helper it calls, and add a line to the history
-above the define saying what an older artifact would do wrong. ABI 14 is the
-two-entry cache; 13 belonged to the deferred mmap prototype and is skipped.
-ABI 15 is the miss path out of line: an older artifact would still be right,
-and the number moved so that its larger code is rebuilt and not loaded. ABI
-16 is the call convention above and the unsigned i32: every function's
-arity, return shape and i32 representation changed.
+How the tier's modules work, what generated code looks like and when to bump
+its ABI is in [Compiled tier internals](compiled-tier-internals.md).
 
 ## Read this next
 

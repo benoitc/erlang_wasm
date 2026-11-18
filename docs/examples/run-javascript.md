@@ -42,8 +42,7 @@ instead; see [JavaScript](../javascript.md).
 ok = wasm_script_worker:stop(W).
 ```
 
-**Next:** [Run Python](run-python.md).
-
 ## Read this next
 
+The next example: [Run Python](run-python.md).
 The guide behind this example: [JavaScript](../javascript.md).

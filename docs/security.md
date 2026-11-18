@@ -2,8 +2,8 @@
 
 This page tells you what the runtime protects you against, and what you must
 handle yourself. Read it before a module you did not write handles requests
-from users. The second list ("What you are still responsible for") is the
-important one.
+from users. Start with the checklist in "Run untrusted code". After it, the
+list in "What you are still responsible for" is the important one.
 
 **Do you need this?** Yes, before you run any module you did not write.
 
@@ -19,9 +19,59 @@ important one.
 | **page budget** | the node-wide limit on linear-memory pages, set with `wasm_engine:set_page_limit/1`. |
 | **fuel** | a work budget: the guest stops when it has done that much work. |
 | **worker** | a process that owns an instance and can be killed when a call takes too long. See [Using workers](worker.md). |
-| **grant** | a permission you give a WASI guest, such as a directory or an address. See [WASI](wasi.md). |
+| **grant** | a permission you give a WASI guest, such as a directory or an address. See [WASI preview 1](wasi.md). |
 
 More terms are in the [glossary](concepts.md#glossary).
+
+## Run untrusted code
+
+```erlang
+{ok, Mod} = wasm:load_file("plugin.wasm"),
+{ok, W}   = wasm_instance_worker:start_link(Mod, #{limits => wasm_limits:untrusted(),
+                                          isolation => fresh,
+                                          imports => MinimalImports}),
+{ok, R}   = wasm_instance_worker:call(W, ~"handle", [Req], 500).
+```
+
+The runtime's limits are opted into: an instance made with no limits has
+unlimited fuel and depth. Before you run code you do not trust, set all of
+these:
+
+- **The limits.** `wasm_limits:untrusted()` on the worker, as above. See
+  [What limits bound](#what-limits-bound).
+- **A deadline that kills.** `wasm_instance_worker:call/4` with a timeout,
+  which kills the worker rather than only stopping waiting for it, and
+  `isolation => fresh`, so no state survives a request.
+- **The node's budgets.** `wasm_engine:set_page_limit/1` for the node, and a
+  bounded pool of workers, so concurrency is capped.
+- **Module size.** `max_module_bytes` (64 MiB by default). If you accept
+  modules from outside, also limit how many you compile at the same time.
+- **The smallest imports.** Only the imports the module needs, narrow file
+  preopens, and the native file backend: `wasi_fs:backend()` answers `native`,
+  and `require_native_fs` set so that a missing NIF means no file access.
+  The fallback has a race between checking a path and opening it; see
+  [What you are still responsible for](#what-you-are-still-responsible-for).
+- **Narrow network grants.** Name the addresses and ports a module may reach.
+  Never grant `0.0.0.0/0` to code you do not trust: it includes loopback,
+  private networks and cloud metadata addresses.
+- **HTTP.** `http_max_body_bytes` (8 MiB by default) bounds every HTTP body
+  the host holds. Keep `wasi_http_listener` on loopback, its default, unless
+  a proxy in front of it limits requests. See [HTTP](http.md).
+- **Trusted directories.** `snapshot_dir` and `code_cache_dir` writable only
+  by the node's user; see
+  [Snapshot images are trusted the same way](#snapshot-images-are-trusted-the-same-way)
+  and the section before it.
+- **Snapshots shared across tenants.** An image keeps every random value and
+  clock reading the guest took before the capture, such as CPython's hash
+  seed, so every tenant restored from it sees the same values. Capture only
+  from trusted initialisation, and give each tenant its own image when they
+  must not share these values. See
+  [What an image freezes](snapshots.md#what-an-image-freezes) and
+  [Snapshots are deterministic](design-principles.md#snapshots-are-deterministic).
+- **Separate processes for separate trust.** Tenants that must not affect
+  each other at all, including through timing, belong in separate operating
+  system processes or containers. One node shares its memory, its schedulers
+  and its page budget.
 
 ## What holds the boundary
 
@@ -44,9 +94,13 @@ A module cannot reach outside its sandbox, for five reasons:
   guest with `binary_to_atom/2`, while the property test for the decoder
   passed. `wasm_prop_SUITE` now tests both. It checks that the number of atoms
   does not grow with the number of different strings a guest sends.
-- **Nothing raises.** Malformed input, ill-typed modules, traps and exhausted
-  limits all come back as values. Property tests check this on random binaries,
-  and on valid modules changed one byte at a time.
+- **Nothing a guest supplies makes a call raise.** Malformed input, ill-typed
+  modules, traps and exhausted limits all come back as values. Property tests
+  check this on random binaries, and on valid modules changed one byte at a
+  time. A few mistakes on the host side do raise, such as a malformed network
+  grant;
+  [Design principles](design-principles.md#failures-are-values-at-the-guest-boundary)
+  lists them.
 
 None of this depends on processes. A call in your own process is in the same
 sandbox as a call inside a worker.
@@ -249,53 +303,6 @@ yourself.
    They are implemented from WasmEdge's headers, and they can change there.
    See [wasi.md](wasi.md).
 
-## Run untrusted code
-
-```erlang
-{ok, Mod} = wasm:load_file("plugin.wasm"),
-{ok, W}   = wasm_instance_worker:start_link(Mod, #{limits => wasm_limits:untrusted(),
-                                          isolation => fresh,
-                                          imports => MinimalImports}),
-{ok, R}   = wasm_instance_worker:call(W, ~"handle", [Req], 500).
-```
-
-The runtime's limits are opted into: an instance made with no limits has
-unlimited fuel and depth. Before you run code you do not trust, set all of
-these:
-
-- **The limits.** `wasm_limits:untrusted()` on the worker, as above. See
-  [What limits bound](#what-limits-bound).
-- **A deadline that kills.** `wasm_instance_worker:call/4` with a timeout,
-  which kills the worker rather than only stopping waiting for it, and
-  `isolation => fresh`, so no state survives a request.
-- **The node's budgets.** `wasm_engine:set_page_limit/1` for the node, and a
-  bounded pool of workers, so concurrency is capped.
-- **Module size.** `max_module_bytes` (64 MiB by default). If you accept
-  modules from outside, also limit how many you compile at the same time.
-- **The smallest imports.** Only the imports the module needs, narrow file
-  preopens, and the native file backend: `wasi_fs:backend()` answers `native`,
-  and `require_native_fs` set so that a missing NIF means no file access.
-  The fallback has a race between checking a path and opening it; see
-  [What you are still responsible for](#what-you-are-still-responsible-for).
-- **Narrow network grants.** Name the addresses and ports a module may reach.
-  Never grant `0.0.0.0/0` to code you do not trust: it includes loopback,
-  private networks and cloud metadata addresses.
-- **HTTP.** `http_max_body_bytes` (8 MiB by default) bounds every HTTP body
-  the host holds. Keep `wasi_http_listener` on loopback, its default, unless
-  a proxy in front of it limits requests. See [HTTP](http.md).
-- **Trusted directories.** `snapshot_dir` and `code_cache_dir` writable only
-  by the node's user; see below.
-- **Separate processes for separate trust.** Tenants that must not affect
-  each other at all, including through timing, belong in separate operating
-  system processes or containers. One node shares its memory, its schedulers
-  and its page budget.
-
-## Reporting
-
-Report a vulnerability privately, through the repository's **Security** tab,
-never in a public issue. [SECURITY.md](../SECURITY.md) says how, and what
-counts as one.
-
 ## The compiled tier's artifact cache is executable code
 
 `code_cache_dir` holds generated BEAM modules. To use one, the runtime calls
@@ -313,8 +320,8 @@ What the runtime checks before it will use one:
 - nothing on the path is a symlink, and an entry is a regular file
 - the entry's own checksum matches, before any byte of it is loaded
 
-Every failure is a cache miss and a line in the log. Nothing raises. A cache
-that cannot be trusted only makes the node slower, never broken.
+Every failure is a cache miss and a line in the log, never an exception. A
+cache that cannot be trusted only makes the node slower, never broken.
 
 **What this does not do.** The checksum detects damage (a partial write, a bad
 disk, a crash). It does **not** detect a writer who puts a well-formed entry
@@ -340,6 +347,12 @@ writer who puts a well-formed image there. Anyone who can write into
 `snapshot_dir` can choose the state every restored guest starts from. Make it
 writable only by the node's user, as you do `code_cache_dir`.
 
+## Reporting
+
+Report a vulnerability privately, through the repository's **Security** tab,
+never in a public issue. [SECURITY.md](../SECURITY.md) says how, and what
+counts as one.
+
 ## Read this next
 
-[WASI](wasi.md), for the capabilities you grant.
+[WASI preview 1](wasi.md), for the capabilities you grant.

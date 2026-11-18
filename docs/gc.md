@@ -148,7 +148,7 @@ only after `gc_alloc_threshold` allocations.
 - The pause is normal Erlang code reading normal terms, so the scheduler can
   interrupt it and other processes keep running.
 
-## What it costs
+## What GC operations cost
 
 You can run these benchmarks with `rebar3 bench`, which runs
 `wasm_gc_bench_SUITE`. Every number is the minimum of five rounds. Where it is
@@ -271,27 +271,17 @@ fifty thousand written elements:
 Arrays like the first one are most of what a language like Java or Kotlin
 allocates.
 
-## What this cost
+## What the design costs
 
-What the design above costs, measured with one benchmark per VM:
-
-| path | before | after |
-| --- | ---: | ---: |
-| call round trip, no objects | 0.478 us | 0.433 us |
-| instantiate, no GC types | 1.669 us | 1.587 us |
-| **instantiate, GC types** | **2.672 us** | **5.053 us** |
-| `struct.get` net of the call | 34.0 ns | 51.5 ns |
-| `struct.new` | 164 ns | 215 ns |
+Adding garbage collection made instantiating a module that has GC types about
+twice as slow, and a field read about 50% slower, while code without GC types
+did not get slower. The measurements, and the two instantiation costs that
+measuring found and removed, are in `test/audit/PERF.md`, section "What adding
+the collector cost (from docs/gc.md)".
 
 What a module with GC types costs: two ETS tables and an `atomics` array for
 each instance that can allocate, the row that records which instances share
 the store, and field reads at the speed of ETS instead of `array`.
-
-Measurement, not reasoning, found two microseconds. Keeping the instance
-registry in the engine's shared, named, write-concurrent table cost 2.2 us of
-a 6.0 us instantiation; it is now a row in the heap's own objects table.
-Registering the whole `#inst{}` cost another 1.9 us, because ETS copies on
-insert; now only the four fields that a root scan reads are registered.
 
 **A major collection costs about 124 ns per live object**, so a hundred
 thousand live objects stop that instance for 12.4 ms. With this storage, it
@@ -444,26 +434,12 @@ Releasing the same hold twice frees nothing the second time.
 
 ## References the embedder holds
 
-A reference that leaves the runtime cannot be reached from any root that the
-runtime can see. So it is **pinned**: this applies to call results,
-`wasm:get_global/2` results, and the values carried by an uncaught exception.
-
-Each pin has a count, and you release it explicitly:
-
-```erlang
-{ok, [Ref]} = wasm:call(Inst, ~"make", []),
-%% ... use it ...
-ok = wasm:release(Inst, Ref).
-ok = wasm:release_all(Inst).        % or drop the lot, per request
-```
+Pinning, `wasm:release/2` and `wasm:release_all/1` are a user API; see
+[Keep garbage-collected references](embedding.md#keep-garbage-collected-references).
+Two facts about how the heap keeps them:
 
 - The pins are stored next to the objects, so pinning needs no state
   write-back.
-- If you never release, an embedder that calls a function returning a struct
-  a million times keeps a million objects alive.
-- Call `wasm:pin/2` yourself in one case: a **host function that keeps a
-  reference it received**. Its arguments are safe during the call, because no
-  collection runs below a running frame. After the call they are not.
 - Ids are never reused, so that a reference that is no longer pinned traps; it
   never points to a different live object.
 

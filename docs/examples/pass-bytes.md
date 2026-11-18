@@ -55,8 +55,7 @@ with a fixed buffer or an allocator that they export.
 ok = wasm:destroy(Inst).
 ```
 
-**Next:** [Run a WASI command](run-a-wasi-command.md).
-
 ## Read this next
 
+The next example: [Run a WASI command](run-a-wasi-command.md).
 The guide behind this example: [Pass data in and out](../passing-data.md).

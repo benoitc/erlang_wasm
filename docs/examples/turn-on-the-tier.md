@@ -57,8 +57,7 @@ keep compiled code across restarts.
 ok = wasm:destroy(Inst).
 ```
 
-**Next:** [Run JavaScript](run-javascript.md).
-
 ## Read this next
 
+The next example: [Run JavaScript](run-javascript.md).
 The guide behind this example: [The compiled tier](../compiled-tier.md).

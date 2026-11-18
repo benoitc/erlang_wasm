@@ -51,8 +51,7 @@ default; [Python](../python.md) describes it.
 ok = wasm_script_worker:stop(W).
 ```
 
-**Next:** [Put it in an OTP application](../otp.md).
-
 ## Read this next
 
+The next example: [Use a component resource](use-a-component-resource.md).
 The guide behind this example: [Python](../python.md).

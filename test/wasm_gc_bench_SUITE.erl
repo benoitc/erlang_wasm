@@ -1,8 +1,10 @@
 %% @doc Garbage collection benchmarks.
 %%
-%% The numbers in `docs/features.md' were produced by hand and could not be
-%% reproduced from the repository. This suite is where they come from now, so a
-%% claim about the collector is a thing anyone can re-run.
+%% The collector numbers the feature page once carried, now in
+%% `test/audit/PERF.md' ("The feature page's benchmarks (from
+%% docs/features.md)"), were produced by hand and could not be reproduced from
+%% the repository. This suite is where they come from now, so a claim about the
+%% collector is a thing anyone can re-run.
 %%
 %% Two of these measure something no other benchmark does:
 %%

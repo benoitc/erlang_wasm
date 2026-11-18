@@ -138,11 +138,16 @@ guardian for the request and let go when the request answers; a deadline, a
 cancellation or a crash kills it as before, and the worker starts another.
 Every request still gets an instance restored from the image and used once.
 
-## Nothing raises
+## Failures are values
 
-`gen_server:call` on a dead process exits, so every entry point catches it and
-answers with a value, which is the runtime's rule applied to this layer's own
-edges. The kinds these four can produce are in `wasm_worker_error`.
+Nothing a guest supplies makes a worker call raise, which is the runtime's
+promise ([Failures are values at the guest
+boundary](../docs/design-principles.md#failures-are-values-at-the-guest-boundary))
+applied to this layer. It also covers the worker itself: `gen_server:call` on
+a dead process exits, so `run/2`, `submit/2`, `await/3` and `cancel/2` catch
+that and answer `{error, WorkerError}`. The kinds they can produce are in
+`wasm_worker_error`. `stop/1` is plain `gen_server:stop/1`, so on a worker that
+has already exited it exits with `noproc`.
 """.
 
 -behaviour(gen_server).
@@ -243,7 +248,8 @@ edges. The kinds these four can produce are in `wasm_worker_error`.
 
 %% What `compiled => true' sets, under the caller's own `limits'. `baseline'
 %% and a threshold of one because a worker restores a fresh instance for every
-%% request: `docs/compiled-tier.md' has the measurements behind both.
+%% request: `docs/compiled-tier.md' ("Choose a profile instead of setting each
+%% option" and "What a reactor gets from it") has the reasons behind both.
 -define(COMPILED_LIMITS,
         #{fuel => infinity, compile => true, compile_after => 1,
           compile_quality => baseline}).
@@ -480,8 +486,9 @@ outcome is retained until acknowledged rather than until sent.
           ok | {error, wasm_worker_error:worker_error()}.
 consumed(W, Ref, Token) -> guard(W, {consumed, Ref, Token}, 5_000).
 
-%% Nothing raises. `gen_server:call' on a dead process exits, so every entry
-%% point turns that into the value the caller was promised.
+%% A dead worker is a value, not an exit. `gen_server:call' on a dead process
+%% exits, so each entry point that calls the worker through here turns that
+%% into the value the caller was promised. `stop/1' does not come here.
 guard(W, Msg, Timeout) ->
     try gen_server:call(W, Msg, Timeout)
     catch
@@ -1005,8 +1012,8 @@ stop_guardian(_Why, #w{guardian = G}) ->
 -doc """
 The ceilings a worker starts with, over `wasm_limits:untrusted/0`.
 
-Exported so that `docs/worker.md` can be held to listing every one of them: a
-default nobody can find is a default nobody can change.
+Exported so that `docs/worker-reference.md` can be held to listing every one
+of them: a default nobody can find is a default nobody can change.
 """.
 -spec default_limits() -> map().
 default_limits() -> ?WORKER_LIMITS.

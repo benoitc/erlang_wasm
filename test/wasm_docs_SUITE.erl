@@ -48,9 +48,9 @@
 -define(RUN_PAGES, ["docs/getting-started.md"]).
 -define(RUN_DIR, "docs/examples/").
 %% Pages where no block may be skipped: Start here, and the examples.
--define(START_PAGES, ["docs/introduction.md", "docs/concepts.md",
-                      "docs/what-you-get.md", "docs/getting-started.md",
-                      "docs/guests.md"]).
+-define(START_PAGES, ["docs/start-here.md", "docs/concepts.md",
+                      "docs/design-principles.md",
+                      "docs/getting-started.md", "docs/guests.md"]).
 %% The worker start functions whose adapter argument must name an adapter, as
 %% {Module, Function, Arity, ArgumentPosition}.
 -define(ADAPTER_ARGS, [{wasm_script_worker, start_link, 2, 1},

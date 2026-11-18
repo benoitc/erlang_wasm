@@ -23,6 +23,13 @@ plain Erlang.
 
 ### Changes
 
+- **The documentation has one front door.** Start here tells you which module
+  and which page fit what you have, and which modules are supported API; the
+  internal ones are grouped apart on the documentation site. New pages map
+  every module to its tests, list every setting with its default, explain
+  the design principles, and say what to change when you upgrade, one
+  release at a time. Measurement history moved out of the guides into the
+  project's record.
 - **The refusal of a shared-everything thread built-in names it.** A
   component that uses `thread.spawn-ref`, `thread.spawn-indirect` or
   `thread.available-parallelism` is still refused when it is linked, and the
@@ -305,7 +312,7 @@ plain Erlang.
   adapter and the same options now hold one image instead of a copy each:
   one capture on a missing image, even when they start together, and one
   charge to `max_snapshot_bytes`. You set nothing for it. "Run a pool from one
-  image" in `docs/worker.md` shows a supervised pool.
+  image" in `docs/scripting.md` shows a supervised pool.
 - **A table of functions travels as one binary.** An image's table holding
   only `null` and the module's own functions is packed at capture and at load,
   so handing an image to a request's runner copies a reference instead of the

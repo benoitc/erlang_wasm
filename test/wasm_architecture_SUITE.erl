@@ -23,7 +23,8 @@ all() ->
      the_layer_diagram_names_every_module,
      the_page_counts_the_modules_right,
      every_function_a_moduledoc_names_exists,
-     every_module_and_page_is_in_the_docs_site].
+     every_module_and_page_is_in_the_docs_site,
+     every_module_is_on_the_map].
 
 %% The three components `docs/architecture.md' names, and why each one is there.
 %%
@@ -199,9 +200,6 @@ repo_file(Name) ->
 %% the cleanup steward) sat in an unnamed bucket at the bottom of the sidebar,
 %% and `components.md' was not published at all, because a new module or page
 %% is one more list to remember and nothing said so.
-%%
-%% `docs/README.md' is the one page left out on purpose: it is the index a
-%% reader browsing the repository gets, and the site builds its own.
 every_module_and_page_is_in_the_docs_site(_) ->
     {ok, Config} = file:consult(repo_file("rebar.config")),
     ExDoc = proplists:get_value(ex_doc, Config),
@@ -214,11 +212,24 @@ every_module_and_page_is_in_the_docs_site(_) ->
     InGroups = [binary_to_list(B)
                 || {_, Bs} <- proplists:get_value(groups_for_extras, ExDoc),
                    B <- Bs],
-    Pages = [P || P <- filelib:wildcard("docs/**/*.md", repo_file("")),
-                  P =/= "docs/README.md"],
+    Pages = filelib:wildcard("docs/**/*.md", repo_file("")),
     ?assert(length(Pages) > 20),
     ?assertEqual([], Pages -- Extras, "pages missing from ex_doc extras"),
     ?assertEqual([], Pages -- InGroups, "pages in no ex_doc group").
+
+%% `docs/map.md' is where a contributor looks a module up: what it does,
+%% whether it is supported, and the suites that cover its area. A map nobody
+%% checks rots. The source map in `AGENTS.md' it replaced had been missing ten
+%% modules, and nothing said so. Each module has to appear on the page as
+%% `` `name` ``, in backticks, so a module named only inside a longer word
+%% does not count.
+every_module_is_on_the_map(_) ->
+    {ok, B} = file:read_file(repo_file("docs/map.md")),
+    Page = binary_to_list(B),
+    Missing = [M || M <- lists:sort(modules()),
+                    string:find(Page, "`" ++ atom_to_list(M) ++ "`")
+                        =:= nomatch],
+    ?assertEqual([], Missing, "modules missing from docs/map.md").
 
 %%% ---------------------------------------------------------------- helpers ---
 

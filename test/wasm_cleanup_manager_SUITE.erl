@@ -20,7 +20,8 @@ all() ->
      admission_stops_at_capacity,
      release_frees_a_slot,
      the_manager_learns_the_reaper_generation,
-     local_cleanup_jobs_are_bounded].
+     local_cleanup_jobs_are_bounded,
+     queued_cleanup_jobs_start_in_the_order_queued].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -108,6 +109,50 @@ local_cleanup_jobs_are_bounded(_Config) ->
     [P ! release || P <- tl(Started)],
     _ = collect_one(2_000),
     ok.
+
+%% Jobs queued behind the cap start first in, first out. The overflow was a
+%% list appended at its end and is a `queue' now: this holds the order, it does
+%% not reproduce a defect. Slots another case still holds only delay the jobs
+%% queued here, so every job that starts is released until the three have.
+queued_cleanup_jobs_start_in_the_order_queued(_Config) ->
+    Cap = wasm_worker_reaper:setting(#{}, max_cleanup_jobs),
+    Self = self(),
+    Start = fun(Id, Tag) ->
+                Job = fun() ->
+                          Self ! {started, Tag, self()},
+                          receive release -> ok after 10_000 -> ok end
+                      end,
+                ok = wasm_cleanup_manager:start_local_cleanup(
+                       Id, #{id => Id, dir => "/nonexistent/cleanup",
+                             adapter_state => undefined, actions => [Job]})
+            end,
+    [Start(<<"fifo-held-", (integer_to_binary(N))/binary>>, held)
+     || N <- lists:seq(1, Cap)],
+    Held = held_started(300),
+    ?assertNotEqual([], Held),
+    [Start(<<"fifo-", (integer_to_binary(K))/binary>>, K) || K <- [1, 2, 3]],
+    {Order, Rest} = release_until(3, Held, [], []),
+    ?assertEqual([1, 2, 3], Order),
+    [P ! release || P <- Rest],
+    ok.
+
+held_started(Timeout) ->
+    receive {started, held, P} -> [P | held_started(Timeout)]
+    after Timeout -> []
+    end.
+
+%% Release one held job at a time and note which queued job takes the slot.
+release_until(0, Held, Order, Started) ->
+    {lists:reverse(Order), Held ++ Started};
+release_until(N, [P | Held], Order, Started) ->
+    P ! release,
+    receive
+        {started, held, P2} -> release_until(N, Held ++ [P2], Order, Started);
+        {started, Tag, Q}   -> release_until(N - 1, Held, [Tag | Order],
+                                             [Q | Started])
+    after 5_000 ->
+        ct:fail({no_job_started, lists:reverse(Order)})
+    end.
 
 collect_started(0, _Timeout) -> [];
 collect_started(N, Timeout) ->

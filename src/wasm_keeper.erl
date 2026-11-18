@@ -511,8 +511,9 @@ ensure_table() ->
 %% mons    :: #{pid() => reference()}
 %% caps    :: #{token() => non_neg_integer()}, a holder's page ceiling
 %% totals  :: #{token() => non_neg_integer()}, what it holds against that
-%% queued  :: #{resource() => [{From, Request}]}, transactions waiting for the
-%%            one in flight on that memory
+%% queued  :: #{resource() => queue:queue({From, Request})}, transactions
+%%            waiting, first in first out, for the one in flight on that
+%%            memory
 %% writers :: #{pid() => {reference(), #{resource() => true}}}, the processes
 %%            with a transaction in flight or an outcome not yet acknowledged,
 %%            monitored so their death ends either
@@ -984,7 +985,8 @@ transaction(Res, OpId, Req, {Pid, _} = From, State) ->
                     {reply, Reply, S1};
                 _Busy ->
                     #{queued := Q} = State,
-                    Waiting = maps:get(Res, Q, []) ++ [{From, Req}],
+                    Waiting = queue:in({From, Req},
+                                       maps:get(Res, Q, queue:new())),
                     {noreply, State#{queued := Q#{Res => Waiting}}}
             end;
         _ ->
@@ -1144,10 +1146,10 @@ finish_published(Res, Row, {OpId, Pid, arena, _Have, _Target, _PD}, State) ->
     next_transaction(Res, finish(Res, Row, Pid, OpId, ok, State)).
 
 next_transaction(Res, #{queued := Queued} = State) ->
-    case maps:get(Res, Queued, []) of
-        [] ->
+    case queue:out(maps:get(Res, Queued, queue:new())) of
+        {empty, _} ->
             State#{queued := maps:remove(Res, Queued)};
-        [{From, Req} | Rest] ->
+        {{value, {From, Req}}, Rest} ->
             S0 = State#{queued := Queued#{Res => Rest}},
             OpId = element(3, Req),
             case transaction(Res, OpId, Req, From, S0) of

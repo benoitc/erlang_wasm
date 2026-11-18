@@ -147,7 +147,8 @@ jobs:
       # nothing.
       - name: Fetch the QuickJS fixture
         run: scripts/fetch-qjs-fixture.sh
-      - run: rebar3 ct
+      # Temporary, on a diagnostic branch only: trace the reaper adoption case.
+      - run: rebar3 ct --suite=test/reaper_trace_SUITE
 
   # wasmtime's own WASI 0.2 and 0.3 test programs, run as wasmtime's tests run
   # them. They are not vendored: `scripts/build-wasmtime-p2.sh' builds them

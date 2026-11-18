@@ -41,7 +41,12 @@ traced(Config) ->
                                                   guardian_down, steward_down, remove_dirs,
                                                   apply_op, adopt_or_orphan, retry_handshake,
                                                   cleanup_done, init]]
-         ++ [{wasm_worker_fs, del_dir_r, '_'}, {file, del_dir_r, '_'}, {prim_file, del_dir, '_'}],
+         ++ [{wasm_worker_fs, del_dir_r, '_'}, {file, del_dir_r, '_'}, {prim_file, del_dir, '_'},
+             {wasm_script_worker, finish, 3}, {wasm_script_worker, runner_died, 2},
+             {wasm_worker_reaper, stop, 0}, {wasm_worker_reaper, start_link, 1},
+             {wasm_worker_reaper, op_finish, 2},
+             {wasm_cleanup_steward, handle_cast, 2}, {wasm_cleanup_steward, handle_info, 2},
+             {wasm_cleanup_steward, submit_finish, 2}],
     [erlang:trace_pattern(MFA, [{'_', [], [{message, {caller}}]}], [local]) || MFA <- Local],
     R = (catch wasm_adapter_conformance:a_restarted_reaper_adopts_a_live_request(kit_ctx(Config))),
     erlang:trace(all, false, [call]),

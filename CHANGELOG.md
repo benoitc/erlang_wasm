@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- **Fixed: a WASI 0.2 or 0.3 path with a NUL byte acted on a shorter name.**
+  Only opening a file refused a path containing a NUL byte. Creating a
+  directory, removing, renaming or linking a file, making a symbolic link,
+  reading or changing a file's details all acted on the part of the name
+  before the NUL, so a guest asking for `made` followed by a NUL and more
+  created `made`. It stayed inside the directories the guest was granted.
+  Such a path is now refused as invalid in every WASI version, and the
+  native file backend refuses one as well. WASI preview 1 was not affected.
+
 ## 0.10.0
 
 WASI 0.3 commands and HTTP handlers run, beside WASI 0.2 in the same

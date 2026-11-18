@@ -126,9 +126,15 @@ fallback resolves the name through the sandbox and adopts the host path, the sam
 shape `preopen/1` produces. `forget/1` releases either.
 """.
 -spec open_dir_at(root(), binary()) -> {ok, root()} | {error, non_neg_integer()}.
-open_dir_at({native, _} = Root, Guest) ->
+open_dir_at(Root, Guest) ->
+    case named(Guest) of
+        ok -> open_dir_at_1(Root, Guest);
+        Refused -> Refused
+    end.
+
+open_dir_at_1({native, _} = Root, Guest) ->
     open(Root, Guest, [read, follow]);
-open_dir_at({fallback, Base}, Guest) ->
+open_dir_at_1({fallback, Base}, Guest) ->
     case wasi_path:resolve(Base, Guest, true) of
         {error, E} ->
             {error, E};
@@ -155,8 +161,28 @@ which backend produced it.
 """.
 -spec open(root(), binary(), [read | write | create | truncate | exclusive]) ->
           {ok, handle()} | {error, non_neg_integer()}.
-open({native, Dir}, Guest, Modes) -> open_native(Dir, Guest, Modes);
-open({fallback, Root}, Guest, Modes) -> open_fallback(Root, Guest, Modes).
+open(Root, Guest, Modes) ->
+    case named(Guest) of
+        ok -> open_1(Root, Guest, Modes);
+        Refused -> Refused
+    end.
+
+open_1({native, Dir}, Guest, Modes) -> open_native(Dir, Guest, Modes);
+open_1({fallback, Root}, Guest, Modes) -> open_fallback(Root, Guest, Modes).
+
+%% A guest path is bytes with a length, and the native backend hands it to C,
+%% where the first NUL ends the string: `made\0suffix' acted on `made'. Preview
+%% 1 refuses one when it reads a path, and WASI 0.2 and 0.3 only did so in
+%% `open-at'. Refused here, where every path of every version passes, before
+%% the backend is chosen, so both backends answer the same `EINVAL'. Every
+%% function below that takes a guest path, or a symlink's target, goes through
+%% `named/1' first, in `open/3', `open_dir_at/2', `op/4', `op2/6', `fb/5' and
+%% the fallback `symlink/3'.
+named(Path) ->
+    case binary:match(Path, <<0>>) of
+        nomatch -> ok;
+        _ -> {error, ?EINVAL}
+    end.
 
 %% The native path does not consult `wasi_path` at all: the kernel enforces the
 %% boundary component by component, which is stronger than resolving first and
@@ -294,10 +320,16 @@ rmdir({fallback, R}, Guest) ->
 -spec symlink(root(), binary(), binary()) -> ok | {error, non_neg_integer()}.
 symlink({native, D}, Guest, Target) -> op(D, Guest, ?OP_SYMLINK, Target);
 symlink({fallback, R}, Guest, Target) ->
-    fb(R, Guest, false,
-       fun(Full) ->
-           prim_file:make_symlink(unicode:characters_to_list(Target), Full)
-       end).
+    case named(Target) of
+        ok ->
+            fb(R, Guest, false,
+               fun(Full) ->
+                   prim_file:make_symlink(unicode:characters_to_list(Target),
+                                          Full)
+               end);
+        Refused ->
+            Refused
+    end.
 
 -spec readlink(root(), binary()) -> {ok, binary()} | {error, non_neg_integer()}.
 readlink({native, D}, Guest) -> op(D, Guest, ?OP_READLINK, <<>>);
@@ -445,18 +477,42 @@ rename(From, A, To, B) ->
           ok | {error, non_neg_integer()}.
 link(From, A, To, B) -> op2(From, A, To, B, ?OP_LINK, fun file:make_link/2).
 
+%% `Arg' is a symlink's target for `OP_SYMLINK', and checked as a name then. For
+%% the set-times operations it is the packed timestamps, where zeros are data.
 op(D, Guest, Op, Arg) ->
-    case wasi_file_nif:path_op(D, Guest, Op, Arg) of
-        {error, E} -> {error, map_posix(E)};
-        Other -> Other
+    Named = case Op of
+                ?OP_SYMLINK -> [Guest, Arg];
+                _ -> [Guest]
+            end,
+    case all_named(Named) of
+        ok ->
+            case wasi_file_nif:path_op(D, Guest, Op, Arg) of
+                {error, E} -> {error, map_posix(E)};
+                Other -> Other
+            end;
+        Refused ->
+            Refused
     end.
 
-op2({native, D1}, A, {native, D2}, B, Op, _Fb) ->
+all_named([]) -> ok;
+all_named([P | Ps]) ->
+    case named(P) of
+        ok -> all_named(Ps);
+        Refused -> Refused
+    end.
+
+op2(From, A, To, B, Op, Fb) ->
+    case all_named([A, B]) of
+        ok -> op2_1(From, A, To, B, Op, Fb);
+        Refused -> Refused
+    end.
+
+op2_1({native, D1}, A, {native, D2}, B, Op, _Fb) ->
     case wasi_file_nif:path_op2(D1, A, D2, B, Op) of
         {error, E} -> {error, map_posix(E)};
         Other -> Other
     end;
-op2({fallback, R1}, A, {fallback, R2}, B, _Op, Fb) ->
+op2_1({fallback, R1}, A, {fallback, R2}, B, _Op, Fb) ->
     %% The source must exist and the destination need not, and both are checked
     %% against their own root.
     %%
@@ -480,6 +536,12 @@ fb(Root, Guest, MustExist, Fun) -> fb(Root, Guest, MustExist, Fun, nofollow).
 %% the target. So `readlink' answered `EINVAL' about a regular file and `unlink'
 %% removed the wrong one. See `wasi_path:resolve/4'.
 fb(Root, Guest, MustExist, Fun, Final) ->
+    case named(Guest) of
+        ok -> fb_1(Root, Guest, MustExist, Fun, Final);
+        Refused -> Refused
+    end.
+
+fb_1(Root, Guest, MustExist, Fun, Final) ->
     case wasi_path:resolve(Root, Guest, MustExist, Final) of
         {error, E} -> {error, E};
         {ok, Full} ->

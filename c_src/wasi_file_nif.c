@@ -189,6 +189,14 @@ static const char *errno_name(int e) {
     }
 }
 
+/* A guest path is bytes with a length. Copied into a C string, the first NUL
+ * would end it, and the call would act on the shorter name: "made\0suffix"
+ * made "made". wasi_fs refuses one before it calls here; this is where the
+ * truncation would happen, so it does not trust that. */
+static int has_nul(const ErlNifBinary *b) {
+    return memchr(b->data, 0, b->size) != NULL;
+}
+
 static ERL_NIF_TERM mk_errno(ErlNifEnv *env, int e) {
     /* Not an errno: the walk refused this path. Distinct from any host error,
      * because "you may not name that" and "the OS said no" are different
@@ -595,6 +603,10 @@ static ERL_NIF_TERM path_op_nif(ErlNifEnv *env, int argc,
         return enif_make_badarg(env);
     if (rel.size >= MAX_PATH_LEN || arg.size >= MAX_PATH_LEN)
         return mk_errno(env, ENAMETOOLONG);
+    /* arg is a symlink's target for OP_SYMLINK, and a name then; for the
+     * set-times operations it is packed timestamps, where zeros are data. */
+    if (has_nul(&rel) || (op == OP_SYMLINK && has_nul(&arg)))
+        return mk_errno(env, EINVAL);
 
     int base;
     int e = dir_dup(dir, &base);
@@ -719,6 +731,8 @@ static ERL_NIF_TERM path_op2_nif(ErlNifEnv *env, int argc,
         return enif_make_badarg(env);
     if (r1.size >= MAX_PATH_LEN || r2.size >= MAX_PATH_LEN)
         return mk_errno(env, ENAMETOOLONG);
+    if (has_nul(&r1) || has_nul(&r2))
+        return mk_errno(env, EINVAL);
 
     int b1, b2;
     int e = dir_dup(d1, &b1);
@@ -792,6 +806,10 @@ static ERL_NIF_TERM open_at_nif(ErlNifEnv *env, int argc,
     if (rel.size >= MAX_PATH_LEN) {
         if (dirfd_owned) close(dirfd);
         return mk_errno(env, ENAMETOOLONG);
+    }
+    if (has_nul(&rel)) {
+        if (dirfd_owned) close(dirfd);
+        return mk_errno(env, EINVAL);
     }
     char path[MAX_PATH_LEN];
     memcpy(path, rel.data, rel.size);

@@ -75,7 +75,7 @@ these:
 
 ## What holds the boundary
 
-A module cannot reach outside its sandbox, for five reasons:
+A module cannot reach outside its sandbox, for six reasons:
 
 - **Validation** proves, before anything runs, that every instruction has the
   right types and every index is in range. The interpreter does not check
@@ -101,6 +101,12 @@ A module cannot reach outside its sandbox, for five reasons:
   grant;
   [Design principles](design-principles.md#failures-are-values-at-the-guest-boundary)
   lists them.
+- **A path is the whole name the guest gave.** A WASI path is bytes with a
+  length, and the native file backend passes it to C, where a NUL byte ends
+  a string. So a path with a NUL in it is refused with `EINVAL` (`invalid` in
+  WASI 0.2 and 0.3) in every WASI version and on both backends, instead of
+  acting on the part before the NUL. `wasi_nul_path_SUITE` checks every path
+  operation.
 
 None of this depends on processes. A call in your own process is in the same
 sandbox as a call inside a worker.

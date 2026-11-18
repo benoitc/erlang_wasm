@@ -28,7 +28,9 @@ all() ->
      a_duplicated_handle_reads_after_the_original_is_closed,
      a_fallback_handle_is_not_duplicated_by_reopening,
      path_operations_refuse_what_the_walk_refuses,
-     requiring_the_native_backend_grants_nothing_on_the_fallback].
+     requiring_the_native_backend_grants_nothing_on_the_fallback,
+     the_nif_refuses_a_nul_in_a_path,
+     zeros_in_a_timestamp_buffer_are_data].
 
 init_per_testcase(_Case, Config) ->
     Priv = ?config(priv_dir, Config),
@@ -443,4 +445,58 @@ path_operations_refuse_what_the_walk_refuses(Config) ->
             ?assertMatch({ok, _}, wasi_fs:stat(Root, ~"moved")),
             ?assertEqual(ok, wasi_fs:rename(Root, ~"moved", Root, ~"note.txt")),
             ok = wasi_fs:forget(Root)
+    end.
+
+%% C ends a string at the first NUL, so the NIF, which is where a path becomes
+%% one, refuses a path or a symlink target holding one instead of trusting its
+%% callers to. `wasi_fs' refuses them first; these call the NIF around it.
+%% Fail-first: with only `wasi_fs' checking, `made' was created, the link made
+%% and `note.txt' renamed and opened.
+the_nif_refuses_a_nul_in_a_path(Config) ->
+    case wasi_fs:backend() of
+        fallback ->
+            {skip, "no native backend built"};
+        native ->
+            Data = ?config(data, Config),
+            {ok, D} = wasi_file_nif:open_dir(Data),
+            Nul = fun(N) -> <<N/binary, 0, "suffix">> end,
+            Gone = fun(N) -> {error, enoent} =:=
+                                 file:read_link_info(filename:join(Data, N)) end,
+            ?assertEqual({error, einval},
+                         wasi_file_nif:path_op(D, Nul(~"made"), 1, <<>>)),
+            ?assert(Gone("made")),
+            ?assertEqual({error, einval},
+                         wasi_file_nif:path_op(D, ~"lnk", 4, Nul(~"note.txt"))),
+            ?assert(Gone("lnk")),
+            ?assertEqual({error, einval},
+                         wasi_file_nif:path_op2(D, Nul(~"note.txt"), D,
+                                                ~"moved", 7)),
+            ?assertEqual({error, einval},
+                         wasi_file_nif:path_op2(D, ~"note.txt", D,
+                                                Nul(~"moved"), 7)),
+            ?assert(Gone("moved")),
+            ?assertEqual({ok, ~"hello"},
+                         file:read_file(filename:join(Data, "note.txt"))),
+            ?assertEqual({error, einval},
+                         wasi_file_nif:open_at(D, Nul(~"note.txt"), 0, 0)),
+            wasi_file_nif:close(D)
+    end.
+
+%% The other side of the same check: the set-times operations pass packed
+%% timestamps where a path's target would be, and zeros there are data. A
+%% check applied to every argument would refuse setting a time to the epoch.
+zeros_in_a_timestamp_buffer_are_data(Config) ->
+    case wasi_fs:backend() of
+        fallback ->
+            {skip, "no native backend built"};
+        native ->
+            Data = ?config(data, Config),
+            {ok, D} = wasi_file_nif:open_dir(Data),
+            Epoch = <<3:8, 0:64/little, 0:64/little, 0:64/little, 0:64/little>>,
+            ?assertEqual(ok, wasi_file_nif:path_op(D, ~"note.txt", 8, Epoch)),
+            {ok, #file_info{mtime = M}} =
+                file:read_file_info(filename:join(Data, "note.txt"),
+                                    [{time, posix}]),
+            ?assertEqual(0, M),
+            wasi_file_nif:close(D)
     end.

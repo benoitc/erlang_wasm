@@ -25,7 +25,8 @@ all() ->
      an_unknown_instruction_does_not_become_an_atom,
      errors_carry_an_offset,
      the_facade_compiles_text_too,
-     the_facade_answers_a_value_for_bad_text].
+     the_facade_answers_a_value_for_bad_text,
+     an_inline_segment_takes_an_index_in_its_own_space].
 
 %% `(memory (data ...))' and `(table funcref (elem ...))' declare a segment as
 %% well as a memory or a table, and that segment takes an index. A segment

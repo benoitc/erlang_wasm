@@ -24,7 +24,8 @@ all() ->
      the_page_counts_the_modules_right,
      every_function_a_moduledoc_names_exists,
      every_module_and_page_is_in_the_docs_site,
-     every_module_is_on_the_map].
+     every_module_is_on_the_map,
+     every_case_a_suite_defines_is_run].
 
 %% The three components `docs/architecture.md' names, and why each one is there.
 %%
@@ -230,6 +231,39 @@ every_module_is_on_the_map(_) ->
                     string:find(Page, "`" ++ atom_to_list(M) ++ "`")
                         =:= nomatch],
     ?assertEqual([], Missing, "modules missing from docs/map.md").
+
+%% A case that no `all/0', group or other function names never runs, and passes
+%% unseen: `wasm_wat_SUITE''s check that an inline segment takes an index in its
+%% own space sat outside `all/0', so the WAT bookkeeping it guards could have
+%% broken without a failure. A case is a function of arity 1 whose argument is
+%% `Config', `_Config' or `_' and that is not a Common Test callback; it is run
+%% when its name appears in its suite more than once, the definition aside.
+%% Fail-first: on the parent it named that WAT case.
+every_case_a_suite_defines_is_run(_) ->
+    Suites = filelib:wildcard(filename:join(repo_file("test"), "*_SUITE.erl")),
+    ?assert(length(Suites) > 50),
+    ?assertEqual([], lists:append([unrun_cases(F) || F <- Suites]),
+                 "cases no list or function names, so they never run").
+
+unrun_cases(File) ->
+    {ok, Forms} = epp_dodger:parse_file(File),
+    Cases = [Name || Form <- Forms,
+                     {function, _, Name, 1, Clauses} <- [erl_syntax:revert(Form)],
+                     not lists:member(Name, ct_callbacks()),
+                     lists:all(fun case_clause/1, Clauses)],
+    {ok, Bin} = file:read_file(File),
+    {ok, Tokens, _} = erl_scan:string(binary_to_list(Bin)),
+    Uses = lists:foldl(fun({atom, _, A}, Acc) -> maps:update_with(A, fun(N) -> N + 1 end, 1, Acc);
+                          (_, Acc) -> Acc
+                       end, #{}, Tokens),
+    [{filename:basename(File), Name} || Name <- Cases, maps:get(Name, Uses, 0) =< 1].
+
+case_clause({clause, _, [{var, _, V}], _, _}) -> lists:member(V, ['Config', '_Config', '_']);
+case_clause(_) -> false.
+
+ct_callbacks() ->
+    [init_per_suite, end_per_suite, init_per_group, end_per_group,
+     init_per_testcase, end_per_testcase, suite, all, groups].
 
 %%% ---------------------------------------------------------------- helpers ---
 

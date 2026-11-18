@@ -628,3 +628,18 @@ the documentation found these as well, none of them changed:
   `wasm_snapshot_file`, an internal module. A snapshot format bump breaks the
   committed `pager-0.8.0.img` fixture; the recipe says to update both and
   note it in Upgrading.
+
+## Before 0.10.1
+
+Reviewed on `main` at `b0d4a6f`, 2026-11-18. Since 0.10.0 two pull requests
+merged: #126 refuses a NUL byte in every WASI path, and #127 checks an
+existing upstream checkout against its pin. Both changed the docs they
+touch (`security.md`, `fixtures.md`, the pin recipe). The check found two
+gaps, both fixed in the release:
+
+- `docs/map.md` did not name the new `wasi_nul_path_SUITE`.
+- `docs/contributing/testing.md` said `wasm_scripts_SUITE` needs `make`
+  only; its new cases need `git`, and `wasi_nul_path_SUITE`'s native group
+  needs the NIF.
+
+Nothing else is new. The open items above are unchanged.

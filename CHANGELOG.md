@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.10.1
+
+A security fix for WASI 0.2 and 0.3 file paths, and the test suites a
+contributor fetches are now always the pinned ones.
 
 ### Security
 

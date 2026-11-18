@@ -48,9 +48,9 @@ an atom.
 -export([fold_sections/3, skip_export_desc/1, load_core/2]).
 -export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
          export_bindings/1, exports_resolve_on_entry/3, validate_lifts/2,
-         validate_lifts/3, resource_info/2, resource_info/3]).
+         validate_lifts/3, resource_info/2, resource_info/3, parsed/1]).
 
--export_type([async_target/0, graph/0, item/0]).
+-export_type([async_target/0, graph/0, item/0, parsed/0]).
 
 %% One entry of an index space, in the order the sections define it. The
 %% interpreter folds over this list assigning indices per kind.
@@ -82,6 +82,10 @@ an atom.
 -type async_mark() :: sync | {async, non_neg_integer() | none}.
 
 -type graph() :: [item()].
+%% What `parse/1' answers, which the readers below take in place of the bytes so
+%% that `wasm_component:prepare/1' parses a component's graph once, not once a
+%% reader.
+-type parsed() :: {ok, graph()} | {error, term()}.
 %% An async export's lift and callback core functions, as `{Instance, Name}'.
 -type async_target() :: #{lift := {wasm:instance(), binary()},
                           callback := {wasm:instance(), binary()} | none}.
@@ -93,6 +97,18 @@ an atom.
 %% component section).
 -define(CORE_SEC_IMPORT, 2).
 -define(CORE_SEC_EXPORT, 7).
+
+-doc """
+`parse/1`, for the readers that take its answer in place of the bytes: a
+component this parser cannot read, or one that makes it raise, is
+`{error, _}`, which each reader turns into the answer it gives for bytes it
+cannot read.
+""".
+-spec parsed(binary()) -> parsed().
+parsed(Sec) ->
+    try parse(Sec)
+    catch Class:Reason -> {error, {Class, Reason}}
+    end.
 
 -doc """
 Parse a component's top-level sections into an ordered item list.
@@ -198,12 +214,14 @@ component name. A function an exported interface holds is keyed
 function (an imported function) is omitted, and the caller falls back to the
 name it was given.
 """.
--spec export_map(binary()) -> #{binary() => binary()}.
-export_map(Sec) ->
+-spec export_map(binary() | parsed()) -> #{binary() => binary()}.
+export_map(Sec) when is_binary(Sec) ->
+    export_map(parsed(Sec));
+export_map(Parsed) ->
     %% Never fail: an export section this parser cannot read yields an empty map, and
     %% the caller falls back to calling the export by its own name.
     try
-        case parse(Sec) of
+        case Parsed of
             {ok, Graph} ->
                 {CompFuncs, CoreNames} = index_spaces(Graph),
                 maps:from_list(
@@ -231,10 +249,13 @@ dispatch each export to the instance its lift names) rather than call the larges
 core by export name. Tolerant: a graph it cannot read, or a lift it cannot pin to
 an alias, yields `true` (the fast path, unchanged).
 """.
--spec exports_resolve_on_entry(binary(), non_neg_integer(), binary()) -> boolean().
-exports_resolve_on_entry(Sec, EntryModIdx, EntryBytes) ->
+-spec exports_resolve_on_entry(binary() | parsed(), non_neg_integer(), binary()) ->
+          boolean().
+exports_resolve_on_entry(Sec, EntryModIdx, EntryBytes) when is_binary(Sec) ->
+    exports_resolve_on_entry(parsed(Sec), EntryModIdx, EntryBytes);
+exports_resolve_on_entry(Parsed, EntryModIdx, EntryBytes) ->
     try
-        case parse(Sec) of
+        case Parsed of
             {ok, Graph} ->
                 {CompFuncs, AliasInst} = alias_spaces(Graph),
                 InstMods = inst_modules(Graph),
@@ -280,11 +301,16 @@ succeed) as before rather than block on an unreadable input.
 validate_lifts(Sec, CoreMods) ->
     validate_lifts(Sec, CoreMods, wasm_component_types:type_space(Sec)).
 
--doc "As `validate_lifts/2`, with the type space `Types` already built.".
--spec validate_lifts(binary(), [binary()], map()) -> ok | {error, term()}.
-validate_lifts(Sec, CoreMods, Types) ->
+-doc """
+As `validate_lifts/2`, with the type space `Types` already built, and the
+graph as `parsed/1` gives it in place of the bytes.
+""".
+-spec validate_lifts(binary() | parsed(), [binary()], map()) -> ok | {error, term()}.
+validate_lifts(Sec, CoreMods, Types) when is_binary(Sec) ->
+    validate_lifts(parsed(Sec), CoreMods, Types);
+validate_lifts(Parsed, CoreMods, Types) ->
     try
-        case parse(Sec) of
+        case Parsed of
             {ok, Graph} ->
                 {_CompF, CoreNames} = index_spaces(Graph),
                 {_CompF2, AliasInst} = alias_spaces(Graph),
@@ -440,10 +466,12 @@ A component's `canon lift` carries a `string-encoding` option; `call/4` marshals
 export's strings with it. Returns `#{ExportName => utf16 | latin1_utf16}`, omitting UTF-8
 exports (the default), so the common component adds nothing.
 """.
--spec export_encodings(binary()) -> #{binary() => string_encoding()}.
-export_encodings(Sec) ->
+-spec export_encodings(binary() | parsed()) -> #{binary() => string_encoding()}.
+export_encodings(Sec) when is_binary(Sec) ->
+    export_encodings(parsed(Sec));
+export_encodings(Parsed) ->
     try
-        case parse(Sec) of
+        case Parsed of
             {ok, Graph} ->
                 Encs = comp_func_encodings(Graph),
                 maps:from_list(
@@ -477,11 +505,13 @@ through that realloc and runs that post-return rather than guessing `cabi_reallo
 `cabi_post_<export>`. Returns `#{ExportName => #{realloc => Name | none, post_return =>
 Name | none}}`, omitting exports whose lift declares neither.
 """.
--spec export_bindings(binary()) ->
+-spec export_bindings(binary() | parsed()) ->
           #{binary() => #{realloc => binary() | none, post_return => binary() | none}}.
-export_bindings(Sec) ->
+export_bindings(Sec) when is_binary(Sec) ->
+    export_bindings(parsed(Sec));
+export_bindings(Parsed) ->
     try
-        case parse(Sec) of
+        case Parsed of
             {ok, Graph} ->
                 {_CompFuncs, CoreNames} = index_spaces(Graph),
                 Lifts = lift_bindings(Graph),
@@ -541,11 +571,16 @@ Tolerant: what it cannot read is left out, never raised.
 resource_info(Sec, EntryModIdx) ->
     resource_info(Sec, EntryModIdx, wasm_component_types:type_space(Sec)).
 
--doc "As `resource_info/2`, with the type space `Types` already built.".
--spec resource_info(binary(), non_neg_integer(), map()) -> map().
-resource_info(Sec, EntryModIdx, Types) ->
+-doc """
+As `resource_info/2`, with the type space `Types` already built, and the
+graph as `parsed/1` gives it in place of the bytes.
+""".
+-spec resource_info(binary() | parsed(), non_neg_integer(), map()) -> map().
+resource_info(Sec, EntryModIdx, Types) when is_binary(Sec) ->
+    resource_info(parsed(Sec), EntryModIdx, Types);
+resource_info(Parsed, EntryModIdx, Types) ->
     Empty = #{sigs => #{}, defined => [], intrinsics => #{}, dtors => #{}},
-    try parse(Sec) of
+    try Parsed of
         {ok, Graph} ->
             Defined = lists:usort(
                         [Rt || {canon_resource, K, Rt} <- Graph, K =/= drop] ++

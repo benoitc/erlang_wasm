@@ -62,7 +62,7 @@ The banners divide the file in this order.
 | --- | --- |
 | `%%% holding cores` | `hold/1` |
 | `%%% decode` | `decode/1`: the section walk, the core modules and the export names |
-| `%%% prepare` | `prepare/1`, `source/1`, and `derive/2`, what instantiation reads from the bytes alone |
+| `%%% prepare` | `prepare/1`, `source/1`, and `derive/3`, what instantiation reads from the bytes alone |
 | `%%% instantiate` | `instantiate/3`; `instantiate_valid/4` picks the single-core path or `link_in/3`, which hands linked cores to `wasm_component_link` |
 | `%%% composition` | a component with no top-level core: `instantiate_composed/3` folds `compose_step/2` over its graph |
 | `%%% bridges between components` | one nested component calling another, sync (`bridge/3`) or async (`bridge_async/3`), and how a handle crosses (`to_provider/3`, `from_provider/4`) |
@@ -294,14 +294,19 @@ prepare(Bin) ->
                   {ok, {prepared, #{bin => Bin, decoded => Decoded, pre => #{}}}};
               {ok, #{core := Core, sec := Sec} = Decoded} ->
                   Cores = maps:get(cores, Decoded, [Core]),
-                  %% One type space for the lift check and everything derived.
+                  %% One graph and one type space, for the lift check and for
+                  %% everything derived: each reader used to parse the bytes
+                  %% again, six or seven times a prepare. `parse/1' raising, on
+                  %% a built-in it does not know, still fails the prepare.
+                  Parsed = wasm_component_link:parse(Sec),
                   Types = wasm_component_types:type_space(Sec),
-                  case wasm_component_link:validate_lifts(Sec, Cores, Types) of
+                  case wasm_component_link:validate_lifts(Parsed, Cores, Types) of
                       {error, _} = Invalid ->
                           Invalid;
                       ok ->
                           {ok, {prepared, #{bin => Bin, decoded => Decoded,
-                                            pre => derive(Decoded, Types)}}}
+                                            pre => derive(Decoded, Parsed,
+                                                          Types)}}}
                   end;
               {error, _} = E ->
                   E
@@ -315,19 +320,19 @@ source(Bin) when is_binary(Bin) -> Bin.
 
 %% What instantiation reads from the bytes alone: everything but the cores
 %% themselves, which the module cache or the loader builds.
-derive(#{core := Core, sec := Sec} = Decoded, Types) ->
+derive(#{core := Core} = Decoded, Parsed, Types) ->
     EntryIdx = maps:get(entry_idx, Decoded, 0),
     Pre = #{valid => ok,
-            res => wasm_component_link:resource_info(Sec, EntryIdx, Types),
+            res => wasm_component_link:resource_info(Parsed, EntryIdx, Types),
             entry_imports => wasm_component_link:core_imports(Core),
-            export_map => wasm_component_link:export_map(Sec),
-            str_enc => wasm_component_link:export_encodings(Sec),
-            bindings => wasm_component_link:export_bindings(Sec),
+            export_map => wasm_component_link:export_map(Parsed),
+            str_enc => wasm_component_link:export_encodings(Parsed),
+            bindings => wasm_component_link:export_bindings(Parsed),
             dtors => wasm_component_types:resource_dtors(Types),
-            on_entry => on_entry(Decoded)},
-    case wasm_component_link:parse(Sec) of
+            on_entry => on_entry(Decoded, Parsed)},
+    case Parsed of
         {ok, Graph} ->
-            Pre#{graph => Graph, types => link_types(Graph, Sec),
+            Pre#{graph => Graph, types => link_types(Graph, Types),
                  async_builtins => lists:keymember(canon_async, 1, Graph)};
         {error, _} ->
             %% Linking reports it, if the component ever needs the linker.
@@ -336,16 +341,20 @@ derive(#{core := Core, sec := Sec} = Decoded, Types) ->
 
 %% Whether every export resolves on the entry core, so it alone is built: read
 %% from the bytes, so a prepared component reads it once.
-on_entry(#{core := Core, sec := Sec} = Decoded) ->
+on_entry(#{sec := Sec} = Decoded) ->
+    on_entry(Decoded, wasm_component_link:parsed(Sec)).
+
+on_entry(#{core := Core} = Decoded, Parsed) ->
     length(maps:get(cores, Decoded, [Core])) =:= 1
         orelse wasm_component_link:exports_resolve_on_entry(
-                 Sec, maps:get(entry_idx, Decoded, 0), Core).
+                 Parsed, maps:get(entry_idx, Decoded, 0), Core).
 
 %% Only the async built-ins read the type space (an element or result type by
 %% index), and walking it is not free: a component with none skips it.
-link_types(Graph, Sec) ->
+link_types(Graph, SecOrTypes) ->
     case lists:keymember(canon_async, 1, Graph) of
-        true -> wasm_component_types:type_space(Sec);
+        true when is_binary(SecOrTypes) -> wasm_component_types:type_space(SecOrTypes);
+        true -> SecOrTypes;
         false -> none
     end.
 

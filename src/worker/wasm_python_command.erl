@@ -97,8 +97,9 @@ prepare(Request, #{module := M, boot := Boot}, Env) ->
     Stage = maps:get(stage, Env),
     Source = maps:get(source, Request, ?DEFAULT_SOURCE),
     Context = wasm_script_v1:encode_context(maps:get(context, Request, #{})),
-    case stage_all(Stage, [{~"_boot.py", Boot}, {~"main.py", Source},
-                           {~"context.json", Context}]) of
+    Files = [{~"_boot.py", Boot}, {~"main.py", Source},
+             {~"context.json", Context}],
+    case wasm_script_v1:stage_all(Stage, Files) of
         {error, E} ->
             {error, E, #{marker => Marker}};
         ok ->
@@ -106,13 +107,6 @@ prepare(Request, #{module := M, boot := Boot}, Env) ->
                    imports => #{bindings => wasi(Marker, Env)},
                    invoke => [{call, ~"_start", []}]},
              #{marker => Marker}}
-    end.
-
-stage_all(_Stage, []) -> ok;
-stage_all(Stage, [{Path, Bytes} | Rest]) ->
-    case Stage(ro, Path, Bytes) of
-        ok             -> stage_all(Stage, Rest);
-        {error, _} = E -> E
     end.
 
 %% The engine is given one directory and nothing else: no network, because an
@@ -133,24 +127,8 @@ wasi(Marker, Env) ->
         clocks => [monotonic], random => strong,
         stdout => Sink(stdout), stderr => Sink(stderr)}).
 
-decode(#{outcome := exited, exit := 0} = R, #{marker := Marker}) ->
-    #{channels := #{stdout := Out, stderr := Err}} = R,
-    case wasm_script_v1:decode_combined(Out, Marker) of
-        {ok, #{result := Result, stdout := Printed}} ->
-            {ok, #{result => Result, stdout => Printed, stderr => Err}};
-        {error, Code, Msg} ->
-            {error, wasm_script_v1:error(Code, Msg, #{stdout => Out, stderr => Err})}
-    end;
-decode(#{outcome := exited, exit := Code} = R, _State) ->
-    #{channels := #{stdout := Out, stderr := Err}} = R,
-    {error, wasm_worker_error:adapter(exit, ~"the engine exited non-zero",
-                                 #{code => Code, stdout => Out, stderr => Err})};
-decode(#{outcome := trapped, error := undefined}, _State) ->
-    {error, wasm_worker_error:adapter(adapter_failure, ~"trapped with no error", #{})};
-decode(#{outcome := trapped, error := E}, _State) ->
-    {error, wasm_worker_error:runtime(E)};
-decode(#{outcome := returned} = R, State) ->
-    decode(R#{outcome := exited, exit := 0}, State).
+decode(R, #{marker := Marker}) ->
+    wasm_script_v1:combined_outcome(R, Marker).
 
 cleanup(_State) -> ok.
 

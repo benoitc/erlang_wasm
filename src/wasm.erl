@@ -36,7 +36,7 @@ are in this order in the file.
 | snapshots | capturing and restoring an image, and holding one | `snapshot/1`, `snapshot/2`, `restore/3`, `acquire/1`, `release/1`, `snapshot_info/1` |
 | snapshot files | images on disk | `save_snapshot/2`, `load_snapshot/2` |
 | extern and export types | an export in the form another module imports | `extern/2` |
-| extern and export types | a function export's type, without instantiating | `func_type_of/2` |
+| extern and export types | a function export's type, without instantiating | `func_type_of/2`, `func_types_of/1` |
 | host helpers | reading and writing linear memory from the host | `read_memory/3`, `write_memory/3`, `memory_size/1` |
 | errors | printing an error value | `format_error/1` |
 
@@ -82,7 +82,8 @@ as an atom for the module bytes, raises as any Erlang function does;
 
 -export([load/1, load/2, load_file/1, unload/1]).
 -export([compile/1, compile/2, validate/1, instantiate/2, instantiate/3, destroy/1]).
--export([call/3, call/4, get_global/2, exports/1, extern/2, func_type_of/2]).
+-export([call/3, call/4, get_global/2, exports/1, extern/2, func_type_of/2,
+         func_types_of/1]).
 -export([pin/2, release/2, release_all/1]).
 -export([snapshot/1, snapshot/2, restore/3, snapshot_info/1]).
 -export([save_snapshot/2, load_snapshot/2]).
@@ -1327,7 +1328,8 @@ extern_1(Inst, Name) ->
 
 -doc """
 The type of a core function a module exports, read from the module bytes without
-instantiating it.
+instantiating it. Only the sections that type it are decoded: a module whose
+code is malformed still answers.
 
 For a static check that must run before any core start function does, e.g. the
 Component Model verifying a `canon lift`'s core function has the signature the
@@ -1338,22 +1340,50 @@ undecodable, the export is missing, or it is not a function export.
 -spec func_type_of(binary(), binary()) ->
           {ok, {[valtype()], [valtype()]}} | {error, term()}.
 func_type_of(Bytes, Name) ->
-    try wasm_decode:module_unchecked(Bytes) of
+    case func_types_of(Bytes) of
+        {ok, Types} ->
+            case maps:find(Name, Types) of
+                {ok, Type} -> Type;
+                error -> {error, {not_a_func_export, Name}}
+            end;
+        {error, _} = E ->
+            E
+    end.
+
+-doc """
+The type of every function a module exports, from one read of its bytes,
+without instantiating it. Only the type, import, function and export sections
+are decoded; the code is not, nor checked.
+
+`#{Name => {ok, {Params, Results}} | {error, Why}}`, one entry per function
+export: a caller checking several exports of one module, such as every
+`canon lift` of a component naming the same core, decodes it once rather
+than once per export. `{error, {undecodable_core, _}}` when the bytes do not
+decode.
+""".
+-spec func_types_of(binary()) ->
+          {ok, #{binary() => {ok, {[valtype()], [valtype()]}} | {error, term()}}}
+          | {error, term()}.
+func_types_of(Bytes) ->
+    %% Only the sections an export is typed by: decoding the code as well cost
+    %% 2.2 ms a prepare on `realupper', 13 times what the rest of it costs.
+    try wasm_decode:interface_unchecked(Bytes) of
         #module{types = Types, imports = Imports, funcs = Funcs, exports = Exports} ->
-            case [Idx || #export{name = N, desc = {func, Idx}} <- Exports, N =:= Name] of
-                [FuncIdx | _] ->
-                    Imported = [T || #import{desc = {func, T}} <- Imports],
-                    Space = list_to_tuple(Imported ++ [T || #func{type = T} <- Funcs]),
-                    case FuncIdx < tuple_size(Space) of
-                        true  -> functype_at(Types, element(FuncIdx + 1, Space));
-                        false -> {error, {func_index_out_of_range, FuncIdx}}
-                    end;
-                [] ->
-                    {error, {not_a_func_export, Name}}
-            end
+            Imported = [T || #import{desc = {func, T}} <- Imports],
+            Space = list_to_tuple(Imported ++ [T || #func{type = T} <- Funcs]),
+            {ok, maps:from_list(
+                   [{N, export_functype(Types, Space, Idx)}
+                    || #export{name = N, desc = {func, Idx}} <- lists:reverse(Exports)])}
     catch
         _:Reason -> {error, {undecodable_core, Reason}}
     end.
+
+%% `lists:reverse/1' above so that, for a name exported twice, the first export
+%% wins, as `func_type_of/2' always answered.
+export_functype(Types, Space, FuncIdx) when FuncIdx < tuple_size(Space) ->
+    functype_at(Types, element(FuncIdx + 1, Space));
+export_functype(_Types, _Space, FuncIdx) ->
+    {error, {func_index_out_of_range, FuncIdx}}.
 
 functype_at(Types, TypeIdx) when is_integer(TypeIdx), TypeIdx < length(Types) ->
     case lists:nth(TypeIdx + 1, Types) of

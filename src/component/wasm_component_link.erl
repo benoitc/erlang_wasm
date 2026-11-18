@@ -48,7 +48,7 @@ an atom.
 -export([fold_sections/3, skip_export_desc/1, load_core/2]).
 -export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
          export_bindings/1, exports_resolve_on_entry/3, validate_lifts/2,
-         resource_info/2]).
+         validate_lifts/3, resource_info/2, resource_info/3]).
 
 -export_type([async_target/0, graph/0, item/0]).
 
@@ -278,15 +278,23 @@ succeed) as before rather than block on an unreadable input.
 """.
 -spec validate_lifts(binary(), [binary()]) -> ok | {error, term()}.
 validate_lifts(Sec, CoreMods) ->
+    validate_lifts(Sec, CoreMods, wasm_component_types:type_space(Sec)).
+
+-doc "As `validate_lifts/2`, with the type space `Types` already built.".
+-spec validate_lifts(binary(), [binary()], map()) -> ok | {error, term()}.
+validate_lifts(Sec, CoreMods, Types) ->
     try
         case parse(Sec) of
             {ok, Graph} ->
                 {_CompF, CoreNames} = index_spaces(Graph),
                 {_CompF2, AliasInst} = alias_spaces(Graph),
                 InstMods = inst_modules(Graph),
-                Types = wasm_component_types:parse_types(Sec),
-                Mods = list_to_tuple(CoreMods),
-                check_lifts(Graph, CoreNames, AliasInst, InstMods, Types, Mods);
+                %% The whole type space: a lift's type index counts every type
+                %% defined, imported, aliased or exported before it, in every
+                %% type section. Reading only the first section checked 9 of the
+                %% 112 lifts in the committed fixtures.
+                Sigs = core_sigs(Graph, AliasInst, InstMods, CoreMods),
+                check_lifts(Graph, CoreNames, AliasInst, InstMods, Types, Sigs);
             {error, _} ->
                 ok
         end
@@ -294,46 +302,54 @@ validate_lifts(Sec, CoreMods) ->
         _:_ -> ok
     end.
 
-check_lifts([], _CoreNames, _AliasInst, _InstMods, _Types, _Mods) ->
+check_lifts([], _CoreNames, _AliasInst, _InstMods, _Types, _Sigs) ->
     ok;
 check_lifts([{canon_lift, CFI, _Enc, Async, _Rl, _P, Ft} | Rest],
-            CoreNames, AliasInst, InstMods, Types, Mods) ->
+            CoreNames, AliasInst, InstMods, Types, Sigs) ->
     case lift_signatures(CFI, Ft, Async, CoreNames, AliasInst, InstMods, Types,
-                         Mods) of
+                         Sigs) of
         skip ->
-            check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Mods);
+            check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Sigs);
         {Expected, Expected} ->
-            check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Mods);
+            check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Sigs);
         {Expected, Actual} ->
             {error, {invalid_lift_type,
                      #{core_func => maps:get(CFI, CoreNames, CFI),
                        expected => Expected, actual => Actual}}}
     end;
-check_lifts([_Other | Rest], CoreNames, AliasInst, InstMods, Types, Mods) ->
-    check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Mods).
+check_lifts([_Other | Rest], CoreNames, AliasInst, InstMods, Types, Sigs) ->
+    check_lifts(Rest, CoreNames, AliasInst, InstMods, Types, Sigs).
 
 %% The declared (expected) and actual core signatures of one lift, or `skip` when
 %% any piece is missing (a non-alias core func, an unresolvable module, a component
 %% type that is not a function type): the lift is then left unchecked.
-lift_signatures(CFI, Ft, Async, CoreNames, AliasInst, InstMods, Types, Mods) ->
+lift_signatures(CFI, Ft, Async, CoreNames, AliasInst, InstMods, Types, Sigs) ->
     case {maps:get(CFI, CoreNames, undefined), maps:get(CFI, AliasInst, undefined),
-          maps:get(Ft, Types, undefined)} of
-        {Name, InstIdx, {func, Params, Result}}
+          wasm_component_types:func_sig(Ft, Types)} of
+        {Name, InstIdx, {ok, {Params, Result}}}
           when is_binary(Name), is_integer(InstIdx) ->
             ModIdx = maps:get(InstIdx, InstMods, undefined),
-            case module_bytes(ModIdx, Mods) of
-                {ok, Bytes} ->
-                    case wasm:func_type_of(Bytes, Name) of
-                        {ok, Actual} ->
-                            {derive_lift_sig(Params, Result, Async), Actual};
-                        {error, _}   -> skip
-                    end;
-                error ->
+            case maps:get(ModIdx, Sigs, undefined) of
+                #{Name := {ok, Actual}} ->
+                    {derive_lift_sig(Params, Result, Async), Actual};
+                _ ->
                     skip
             end;
         _ ->
             skip
     end.
+
+%% Every function export's type of each core module a lift names, one decode a
+%% module: a core lifted from many times is decoded once, not once a lift.
+core_sigs(Graph, AliasInst, InstMods, CoreMods) ->
+    Mods = list_to_tuple(CoreMods),
+    ModIdxs = lists:usort(
+                [maps:get(I, InstMods, undefined)
+                 || {canon_lift, CFI, _, _, _, _, _} <- Graph,
+                    I <- [maps:get(CFI, AliasInst, undefined)], is_integer(I)]),
+    maps:from_list(
+      [{M, Types} || M <- ModIdxs, {ok, Bytes} <- [module_bytes(M, Mods)],
+                     {ok, Types} <- [wasm:func_types_of(Bytes)]]).
 
 module_bytes(ModIdx, Mods)
   when is_integer(ModIdx), ModIdx >= 0, ModIdx < tuple_size(Mods) ->
@@ -523,10 +539,14 @@ Tolerant: what it cannot read is left out, never raised.
             intrinsics := #{{binary(), binary()} => intrinsic()},
             dtors := #{binary() => non_neg_integer()}}.
 resource_info(Sec, EntryModIdx) ->
+    resource_info(Sec, EntryModIdx, wasm_component_types:type_space(Sec)).
+
+-doc "As `resource_info/2`, with the type space `Types` already built.".
+-spec resource_info(binary(), non_neg_integer(), map()) -> map().
+resource_info(Sec, EntryModIdx, Types) ->
     Empty = #{sigs => #{}, defined => [], intrinsics => #{}, dtors => #{}},
     try parse(Sec) of
         {ok, Graph} ->
-            Types = wasm_component_types:type_space(Sec),
             Defined = lists:usort(
                         [Rt || {canon_resource, K, Rt} <- Graph, K =/= drop] ++
                         [Rt || {Rt, {resource, _}} <- maps:to_list(Types)]),

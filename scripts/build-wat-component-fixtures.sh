@@ -17,7 +17,7 @@ for src in asyncabi/asyncabi wasi3keys/wasi3keys wasi3keys/asyncping \
            ifaceexports/ifaceexports asynclifts/asynclifts \
            composedfunc/composedfunc threadleft/threadleft \
            forwardref/forwardref resinit/resinit \
-           stdioinit/stdioinit; do
+           stdioinit/stdioinit latedtor/latedtor; do
   out="$dir/$(basename "$src").component.wasm"
   wasm-tools parse "$dir/$src.wat" -o "$out"
   wasm-tools validate --features all "$out"
@@ -25,6 +25,10 @@ done
 
 # The forwards: written with placeholder built-ins, then rewritten. The
 # validator does not know the forwards yet, so this one is not validated.
+# Deliberately invalid: a lift whose declared type does not match its core
+# function, which wasm-tools validate refuses as it should. Parsed only.
+wasm-tools parse "$dir/latelift/latelift.wat" -o "$dir/latelift.component.wasm"
+
 wasm-tools parse "$dir/asyncforward/asyncforward.wat" -o "$dir/asyncforward.component.wasm"
 "$here/scripts/forward-opcodes.escript" "$dir/asyncforward.component.wasm"
 

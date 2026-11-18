@@ -62,7 +62,7 @@ The banners divide the file in this order.
 | --- | --- |
 | `%%% holding cores` | `hold/1` |
 | `%%% decode` | `decode/1`: the section walk, the core modules and the export names |
-| `%%% prepare` | `prepare/1`, `source/1`, and `derive/1`, what instantiation reads from the bytes alone |
+| `%%% prepare` | `prepare/1`, `source/1`, and `derive/2`, what instantiation reads from the bytes alone |
 | `%%% instantiate` | `instantiate/3`; `instantiate_valid/4` picks the single-core path or `link_in/3`, which hands linked cores to `wasm_component_link` |
 | `%%% composition` | a component with no top-level core: `instantiate_composed/3` folds `compose_step/2` over its graph |
 | `%%% bridges between components` | one nested component calling another, sync (`bridge/3`) or async (`bridge_async/3`), and how a handle crosses (`to_provider/3`, `from_provider/4`) |
@@ -294,12 +294,14 @@ prepare(Bin) ->
                   {ok, {prepared, #{bin => Bin, decoded => Decoded, pre => #{}}}};
               {ok, #{core := Core, sec := Sec} = Decoded} ->
                   Cores = maps:get(cores, Decoded, [Core]),
-                  case wasm_component_link:validate_lifts(Sec, Cores) of
+                  %% One type space for the lift check and everything derived.
+                  Types = wasm_component_types:type_space(Sec),
+                  case wasm_component_link:validate_lifts(Sec, Cores, Types) of
                       {error, _} = Invalid ->
                           Invalid;
                       ok ->
                           {ok, {prepared, #{bin => Bin, decoded => Decoded,
-                                            pre => derive(Decoded)}}}
+                                            pre => derive(Decoded, Types)}}}
                   end;
               {error, _} = E ->
                   E
@@ -313,15 +315,15 @@ source(Bin) when is_binary(Bin) -> Bin.
 
 %% What instantiation reads from the bytes alone: everything but the cores
 %% themselves, which the module cache or the loader builds.
-derive(#{core := Core, sec := Sec} = Decoded) ->
+derive(#{core := Core, sec := Sec} = Decoded, Types) ->
     EntryIdx = maps:get(entry_idx, Decoded, 0),
     Pre = #{valid => ok,
-            res => wasm_component_link:resource_info(Sec, EntryIdx),
+            res => wasm_component_link:resource_info(Sec, EntryIdx, Types),
             entry_imports => wasm_component_link:core_imports(Core),
             export_map => wasm_component_link:export_map(Sec),
             str_enc => wasm_component_link:export_encodings(Sec),
             bindings => wasm_component_link:export_bindings(Sec),
-            dtors => wasm_component_types:resource_dtors(Sec),
+            dtors => wasm_component_types:resource_dtors(Types),
             on_entry => on_entry(Decoded)},
     case wasm_component_link:parse(Sec) of
         {ok, Graph} ->

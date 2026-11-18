@@ -148,6 +148,7 @@ Read `ATTEMPTS.md` for what was tried and dropped, and
 - [Multi-core component linking: native decode unchanged (2026-09-23)](#multi-core-component-linking-native-decode-unchanged-2026-09-23)
 - [Multi-core linking: the realloc override is off the guarded path (2026-09-23)](#multi-core-linking-the-realloc-override-is-off-the-guarded-path-2026-09-23)
 - [Checking every lift, at no cost to preparation (2026-11-18)](#checking-every-lift-at-no-cost-to-preparation-2026-11-18)
+- [Preparing a component with one graph parse (2026-11-18)](#preparing-a-component-with-one-graph-parse-2026-11-18)
 
 **The design**
 
@@ -10037,4 +10038,45 @@ full, for the one lift it did check, on every prepare.
 
 **Raw.** `test/audit/raw/lift-validation/`: `bench.erl`, `gate.sh` and
 `gate.log`.
+
+## Preparing a component with one graph parse (2026-11-18)
+
+**The question.** `wasm_component:prepare/1` parsed the component's graph six
+times for echo and asynclifts and seven for ifaceexports and realupper:
+`derive/2` once, and each of the readers it calls once more (counted with
+`call_count` tracing). Parsing was 62% of realupper's prepare. Does parsing
+once and handing the result to every reader pay, and does it leave
+instantiating a prepared component alone?
+
+**The gate, fixed before measuring.** Cold `prepare/1`: realupper at most
+0.6x `main`, ifaceexports at most 0.75x, asynclifts at most 0.85x, echo at
+most 1.03x. Instantiating a prepared component (with one call for echo): at
+most 1.03x on each.
+
+**The result.** `main` at `cae72d1` against the branch, five rounds in
+alternating order, minimum of five batches each, run twice; `main` against
+itself first. The load average was 30 to 33 (this box is shared), well above
+the protocol's 8.
+
+| fixture | prepare, run 1 | prepare, run 2 | instantiate, run 1 | instantiate, run 2 | null, instantiate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| echo | 0.66 | 0.64 | 1.05 | 1.01 | 1.01 |
+| asynclifts | 0.65 | 0.65 | 0.98 | 1.05 | 1.09 |
+| ifaceexports | 0.72 | 0.72 | 0.95 | 0.97 | 1.04 |
+| realupper | 0.49 | 0.48 | 0.98 | 1.00 | 1.01 |
+
+Preparation passes on every fixture in both runs: realupper's prepare went
+from 168 µs to 82 µs.
+
+Instantiation passes on two fixtures in both runs and fails 1.03x on one
+fixture in each run, a different one each time: echo at 1.05 in the first,
+asynclifts at 1.05 in the second. The null run, `main` against `main`,
+measured 1.09 and 1.04 on the same path. The branch does not touch it: a
+prepared component carries the same derived data as before, computed from
+one parse instead of seven. Per-round ratios for asynclifts ran from 0.84 to
+1.40. This setup cannot resolve 3% on instantiation at this load; the gate
+is reported as it stands, not redefined.
+
+**Raw.** `test/audit/raw/prepare-once/`: `bench.erl`, `gate.sh`, `gate.log`,
+`gate2.log` and `null.log`.
 

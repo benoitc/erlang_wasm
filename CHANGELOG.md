@@ -4,6 +4,11 @@
 
 ### Changes
 
+- **Preparing a component is faster.** `wasm_component:prepare/1` read the
+  component's wiring six or seven times, once for each thing it derives from
+  it; it reads it once now. Preparing takes about half the time it did for a
+  WASI command, and a third less for a small component. Instantiating a
+  prepared component is unchanged.
 - **Fixed: most of a component's lifts were not type-checked.** A lift is a
   component function implemented by a core function, and its declared type
   must match that core function's. The check read only the first of a

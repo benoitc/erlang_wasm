@@ -13,13 +13,15 @@ The guide is `docs/wasi-nn.md`.
 
 What the module itself decides:
 
-- A guest loads a model by name only, and only a name in the grant's
-  `models`. Any other name answers `not-found`. `load`, which takes the model
-  as bytes, answers `unsupported-operation`.
+- A guest loads a model by name, and only a name in the grant's `models`.
+  Any other name answers `not-found`.
+- A guest brings a model as bytes, with `load`, only in a format the grant's
+  `encodings` lists and only when the backend has the optional `load`
+  callback. Otherwise `load` answers `unsupported-operation`.
 - A tensor is held by the host. The bytes of every live tensor of one
-  process are counted, and 16 MiB is the bound. Over it, the tensor
-  constructor traps with `nn_tensor_limit_reached` and `compute` answers
-  `too-large`.
+  process are counted, and the grant's `max_tensor_bytes` is the bound,
+  16 MiB when left out. Over it, the tensor constructor traps with
+  `nn_tensor_limit_reached` and `compute` answers `too-large`.
 - `compute` takes ownership of its input tensors, as the interface says, and
   frees them whatever the backend answers.
 - A backend that raises, or answers a term of another shape, gives the guest
@@ -29,17 +31,28 @@ What the module itself decides:
 It never calls `wasi_preview2`, which calls it.
 """.
 
--export([imports/1, close_resource/1]).
+-export([imports/1, close_resource/1, check_tensor/1]).
 
--export_type([grant/0, tensor/0, tensor_type/0, error/0, error_code/0]).
+-export_type([grant/0, tensor/0, tensor_type/0, error/0, error_code/0,
+              encoding/0, target/0]).
 
 -doc """
-The `nn` grant: the backend module, the model names this guest may load, and
-a term handed to the backend's `load_by_name/2` unchanged.
+The `nn` grant: the backend module, the model names this guest may load, the
+model formats it may bring as bytes, the bound on the tensor bytes the host
+holds for it, and a term handed to the backend unchanged.
 """.
 -type grant() :: #{backend := module(),
                    models := [binary()],
+                   encodings => [encoding()],
+                   max_tensor_bytes => pos_integer(),
                    backend_opts => term()}.
+
+-doc "The format of a model a guest brings as bytes.".
+-type encoding() :: openvino | onnx | tensorflow | pytorch | tensorflowlite
+                  | ggml | autodetect.
+
+-doc "Where the guest asks for the model to run.".
+-type target() :: cpu | gpu | tpu.
 
 -doc "The element type of a tensor.".
 -type tensor_type() :: fp16 | fp32 | fp64 | bf16 | u8 | i32 | i64.
@@ -65,6 +78,15 @@ checks what it needs.
 -callback load_by_name(Name :: binary(), BackendOpts :: term()) ->
     {ok, Graph :: term()} | {error, error()}.
 
+-doc """
+Load a model the guest brings as bytes: one binary for each part of the
+model, in the guest's order. Optional. It is called only for an encoding in
+the grant's `encodings`.
+""".
+-callback load(Builders :: [binary()], encoding(), target(),
+               BackendOpts :: term()) ->
+    {ok, Graph :: term()} | {error, error()}.
+
 -doc "Start one inference session on a graph.".
 -callback init_execution_context(Graph :: term()) ->
     {ok, Context :: term()} | {error, error()}.
@@ -81,6 +103,8 @@ The guest dropped a graph or a context, or its instance was destroyed. Called
 once for each.
 """.
 -callback close({graph | context, term()}) -> ok.
+
+-optional_callbacks([load/4]).
 
 -define(TENSOR, <<"wasi:nn/tensor">>).
 -define(GRAPH, <<"wasi:nn/graph">>).
@@ -104,7 +128,8 @@ once for each.
 %% `result<T, error>`, where both arms are handles of host resources.
 -define(HANDLE_RESULT, {result, handle, handle}).
 
-%% The bytes every live tensor of one process may hold together.
+%% The bytes every live tensor of one process may hold together, when the
+%% grant does not say.
 -define(MAX_TENSOR_BYTES, 16 * 1024 * 1024).
 %% The live tensor bytes of this process. It is never below the truth, and
 %% `reserve/1' counts again before it refuses.
@@ -125,10 +150,14 @@ options hold an `nn` key.
 imports(#{backend := Backend, models := Models} = Grant)
   when is_atom(Backend), is_list(Models) ->
     BackendOpts = maps:get(backend_opts, Grant, undefined),
+    Encodings = maps:get(encodings, Grant, []),
+    Max = maps:get(max_tensor_bytes, Grant, ?MAX_TENSOR_BYTES),
     Fun = fun wasm_component:import_fun/2,
     #{{?TENSOR, <<"[constructor]tensor">>} =>
           Fun({[{list, u32}, ?TENSOR_TYPE, {list, u8}], handle},
-              fun([Dims, Type, Data]) -> new_tensor(Dims, Type, Data) end),
+              fun([Dims, Type, Data]) ->
+                  new_tensor(Dims, Type, Data, Max)
+              end),
       {?TENSOR, <<"[method]tensor.dimensions">>} =>
           Fun({[handle], {list, u32}},
               fun([H]) -> maps:get(dimensions, tensor(H)) end),
@@ -141,9 +170,9 @@ imports(#{backend := Backend, models := Models} = Grant)
       {?TENSOR, <<"[resource-drop]tensor">>} => drop_fun(),
       {?GRAPH, <<"load">>} =>
           Fun({[{list, {list, u8}}, ?ENCODING, ?TARGET], ?HANDLE_RESULT},
-              fun([_Builders, _Encoding, _Target]) ->
-                  failure({unsupported_operation,
-                           <<"load a model by name">>})
+              fun([Builders, Encoding, Target]) ->
+                  load(Backend, Encodings, BackendOpts, Builders,
+                       encoding_atom(Encoding), target_atom(Target))
               end),
       {?GRAPH, <<"load-by-name">>} =>
           Fun({[string], ?HANDLE_RESULT},
@@ -157,7 +186,7 @@ imports(#{backend := Backend, models := Models} = Grant)
       {?INFERENCE, <<"[method]graph-execution-context.compute">>} =>
           Fun({[handle, ?NAMED_TENSORS],
                {result, ?NAMED_TENSORS, handle}},
-              fun([H, Inputs]) -> compute(H, Inputs) end),
+              fun([H, Inputs]) -> compute(H, Inputs, Max) end),
       {?INFERENCE, <<"[resource-drop]graph-execution-context">>} =>
           drop_fun(),
       {?ERRORS, <<"[method]error.code">>} =>
@@ -183,18 +212,43 @@ close_resource({nn_context, {Backend, Context}}) ->
 close_resource(_Other) ->
     ok.
 
+-doc """
+Check a tensor against the rule of the interface: the length of the data is
+the product of the dimensions times the size of one element. A backend for a
+model with fixed shapes calls it on each input; the host does not, because
+guests that send text commonly send it with dimensions `[1]`.
+""".
+-spec check_tensor(tensor()) -> ok | {error, error()}.
+check_tensor(#{dimensions := Dims, type := Type, data := Data}) ->
+    Expected = lists:foldl(fun(D, Product) -> D * Product end,
+                           element_bytes(Type), Dims),
+    case byte_size(Data) of
+        Expected ->
+            ok;
+        _ ->
+            {error, {invalid_argument,
+                     <<"the data length does not match the dimensions">>}}
+    end.
+
+element_bytes(u8)   -> 1;
+element_bytes(fp16) -> 2;
+element_bytes(bf16) -> 2;
+element_bytes(fp32) -> 4;
+element_bytes(i32)  -> 4;
+element_bytes(fp64) -> 8;
+element_bytes(i64)  -> 8.
+
 %%% -------------------------------------------------------------- tensors ---
 
 %% A constructor has no error arm, so the bound is a trap, as the bound on
 %% host handles is.
-new_tensor(Dims, Type, Data) ->
+new_tensor(Dims, Type, Data, Max) ->
     Tensor = #{dimensions => Dims, type => type_atom(Type), data => Data},
-    case reserve(tensor_bytes(Tensor)) of
+    case reserve(tensor_bytes(Tensor), Max) of
         ok ->
             wasm_component:host_new(nn_tensor, Tensor);
         full ->
-            wasm_error:trap(nn_tensor_limit_reached,
-                            #{limit => ?MAX_TENSOR_BYTES})
+            wasm_error:trap(nn_tensor_limit_reached, #{limit => Max})
     end.
 
 %% The tensor behind a handle a method was called on. The methods of a tensor
@@ -215,8 +269,8 @@ nn_error(Handle) ->
 tensor_bytes(#{dimensions := Dims, data := Data}) ->
     byte_size(Data) + 4 * length(Dims).
 
-reserve(Bytes) ->
-    case live_bytes() + Bytes =< ?MAX_TENSOR_BYTES of
+reserve(Bytes, Max) ->
+    case live_bytes() + Bytes =< Max of
         true ->
             put(?BYTES, live_bytes() + Bytes),
             ok;
@@ -225,7 +279,7 @@ reserve(Bytes) ->
             %% process was destroyed without the closer. Count before
             %% refusing.
             Counted = count_bytes(),
-            case Counted + Bytes =< ?MAX_TENSOR_BYTES of
+            case Counted + Bytes =< Max of
                 true  -> put(?BYTES, Counted + Bytes), ok;
                 false -> put(?BYTES, Counted), full
             end
@@ -268,6 +322,28 @@ load_by_name(Backend, Models, BackendOpts, Name) ->
             failure({not_found, <<"no such model">>})
     end.
 
+%% A model as bytes is the guest's own file read by a native engine, so it
+%% takes a grant of its own: the format must be listed, and the backend must
+%% be able to load one.
+load(Backend, Encodings, BackendOpts, Builders, Encoding, Target) ->
+    _ = code:ensure_loaded(Backend),
+    case lists:member(Encoding, Encodings)
+        andalso erlang:function_exported(Backend, load, 4) of
+        true ->
+            Args = [Builders, Encoding, Target, BackendOpts],
+            case call(Backend, load, Args) of
+                {ok, Graph} ->
+                    {ok, wasm_component:host_new(nn_graph,
+                                                 {Backend, Graph})};
+                {error, Error} ->
+                    failure(Error)
+            end;
+        false ->
+            failure({unsupported_operation,
+                     <<"this host does not load a model of this format "
+                       "from bytes">>})
+    end.
+
 init_execution_context(Handle) ->
     case wasm_component:host_get(Handle) of
         {ok, {nn_graph, {Backend, Graph}}} ->
@@ -284,12 +360,12 @@ init_execution_context(Handle) ->
 
 %% The inputs are `own' handles: the guest gave the tensors away, so they are
 %% freed here whatever happens next.
-compute(Handle, Inputs) ->
+compute(Handle, Inputs, Max) ->
     Taken = take_inputs(Inputs),
     case wasm_component:host_get(Handle) of
         {ok, {nn_context, {Backend, Context}}} ->
             case Taken of
-                {ok, Named} -> run(Backend, Context, Named);
+                {ok, Named} -> run(Backend, Context, Named, Max);
                 error -> failure({invalid_argument, <<"not a tensor">>})
             end;
         _ ->
@@ -309,20 +385,20 @@ take_inputs(Inputs) ->
             error
     end.
 
-run(Backend, Context, Named) ->
+run(Backend, Context, Named, Max) ->
     case call(Backend, compute, [Context, Named]) of
         {ok, Outputs} ->
             case valid_outputs(Outputs) of
-                true  -> keep_outputs(Outputs);
+                true  -> keep_outputs(Outputs, Max);
                 false -> failure(bad_answer())
             end;
         {error, Error} ->
             failure(Error)
     end.
 
-keep_outputs(Outputs) ->
+keep_outputs(Outputs, Max) ->
     Bytes = lists:sum([tensor_bytes(T) || {_Name, T} <- Outputs]),
-    case reserve(Bytes) of
+    case reserve(Bytes, Max) of
         ok ->
             {ok, [{Name, wasm_component:host_new(nn_tensor, T)}
                   || {Name, T} <- Outputs]};
@@ -422,6 +498,18 @@ type_name(bf16) -> <<"BF16">>;
 type_name(u8)   -> <<"U8">>;
 type_name(i32)  -> <<"I32">>;
 type_name(i64)  -> <<"I64">>.
+
+encoding_atom(<<"openvino">>)       -> openvino;
+encoding_atom(<<"onnx">>)           -> onnx;
+encoding_atom(<<"tensorflow">>)     -> tensorflow;
+encoding_atom(<<"pytorch">>)        -> pytorch;
+encoding_atom(<<"tensorflowlite">>) -> tensorflowlite;
+encoding_atom(<<"ggml">>)           -> ggml;
+encoding_atom(<<"autodetect">>)     -> autodetect.
+
+target_atom(<<"cpu">>) -> cpu;
+target_atom(<<"gpu">>) -> gpu;
+target_atom(<<"tpu">>) -> tpu.
 
 is_type(Type) ->
     lists:member(Type, [fp16, fp32, fp64, bf16, u8, i32, i64]).

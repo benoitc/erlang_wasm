@@ -250,11 +250,17 @@ has the inference engine. [wasi-nn](../wasi-nn.md) has the callbacks.
    every failure; a raise reaches the guest as `runtime-error` with no
    detail.
 2. Bound the time `compute/2` may take. The runtime does not.
-3. Free what a graph or a context holds in `close/1`. It is called once for
+3. Export `load/4` only if the engine reads a model from bytes, and check
+   each input with `wasi_nn:check_tensor/1` if the model has fixed shapes.
+4. Free what a graph or a context holds in `close/1`. It is called once for
    each, on the guest's drop or when the instance is destroyed.
-4. To change the host side (the grant, the tensor bound, a function of the
-   interface), edit `wasi_nn` and add a case to `wasm_wasi2_nn_SUITE`.
-   `test/support/wasi_nn_test_backend.erl` is the backend that suite uses.
+5. To change the host side (the grant, the tensor bound, a function of the
+   interface), edit `wasi_nn` and add a case to `wasm_wasi2_nn_SUITE`. Its
+   backends are `wasi_nn_test_backend`, shaped like a language model, and
+   `wasi_nn_classifier_backend`, shaped like a tensor model, both under
+   `test/support/`. When the interface changes upstream, replace the WIT
+   file under `test/fixtures/component/wasinn/wit/deps/nn/`: the vector
+   cases read the functions and the enums from it.
 
 ## Add a WASI 0.3 interface
 

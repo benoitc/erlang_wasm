@@ -58,8 +58,10 @@ these:
   the host holds. Keep `wasi_http_listener` on loopback, its default, unless
   a proxy in front of it limits requests. See [HTTP](http.md).
 - **Inference.** The `nn` grant names the models a guest may load; every
-  other name answers `not-found`. The host holds at most 16 MiB of tensors
-  for one process. See [wasi-nn](wasi-nn.md).
+  other name answers `not-found`. A guest brings a model of its own only in
+  a format you list in `encodings`, and a native engine then parses that
+  file: list none for a guest you do not trust. `max_tensor_bytes` (16 MiB
+  by default) bounds the tensors the host holds. See [wasi-nn](wasi-nn.md).
 - **Trusted directories.** `snapshot_dir` and `code_cache_dir` writable only
   by the node's user; see
   [Snapshot images are trusted the same way](#snapshot-images-are-trusted-the-same-way)

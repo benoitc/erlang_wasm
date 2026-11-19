@@ -31,7 +31,7 @@ Words used by both pages, such as resource and handle, are in
 | --- | --- | --- |
 | `wasm_component` | which path a component takes, what a call does at the host boundary, the host handle table | `instantiate/3`, then `call/4` |
 | `wasm_component_link` | how several cores wire to each other and to the host; which core implements each export | `link/4`, then its `step` clauses |
-| `wasm_component_types` | the signatures read from the type section: lift checks, bridges, handle checks | `type_space/1` |
+| `wasm_component_types` | the signatures read from the component's whole type space (every type section, import and alias): lift checks, bridges, handle checks | `type_space/1` |
 | `wasm_canon` | how a value crosses: flattening, memory layout, spill, string encodings, realloc | `lower_params/3`, `lift_result/3` |
 | `wasm_resources` | who holds a guest resource handle, and when a use traps | the module doc, then `host_lend/3` |
 | `wasm_async` | tasks, waitable-sets, futures and streams, async imports | `builtin/2`, `wait_on_set/1` |

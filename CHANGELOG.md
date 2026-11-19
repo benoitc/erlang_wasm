@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.1
+
+Documentation only: a page that runs a model through `wasi:nn`.
+
+### Changes
+
+- **New example: "Run a model from a component".** The page loads a small
+  backend, grants a model to a component, shows the answer, and shows what
+  happens when the model is not granted. Every step on it is run by the
+  test suite. The backend, `examples/nn_upper.erl` in the repository, is
+  there to copy when you connect your own engine.
+
 ## 0.11.0
 
 A component can ask the host to run a machine-learning model, through

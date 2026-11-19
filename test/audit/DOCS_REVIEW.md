@@ -787,6 +787,20 @@ know `wasi:nn` exists. N5 and N6 are claims of the guide no test backs.
   as able to change in the supported API table until the interface is
   stable, so that a change upstream is not a breaking release here?
 
+**Decided, 2026-11-19.** N1 to N6 and N8 are fixed before the release, in
+the pull request that carries this section. N7, the example page that runs,
+waits. Q17: the release is 0.11.0. Q18: the guide names `erllama_wasi_nn`,
+links to its repository and says it is in progress. Q19: `wasi_nn` is marked
+a release candidate in the supported API table, the extension points, the
+guide, `features.md`, the module doc and the changelog.
+
+N5 was settled by a case, `the_wasi_3_runner_takes_the_grant`: the 0.3
+runner serves the grant to the commands it runs. No 0.3 guest that imports
+`wasi:nn` exists, and the guide now says which runner takes the key and no
+more. N6 by `a_component_that_imports_nn_is_not_captured`.
+
+**Still open from this section.** N7.
+
 **Grew, no new finding.** `wasm_async` went from 2,743 to 2,953 lines with
 the cooperative threads of #139: it is still the largest module after
 `wasm_exec`, and the open item on why it keeps its state in the process

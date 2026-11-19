@@ -8,8 +8,11 @@
   model. Pass an `nn` option naming a backend module and the models the guest
   may load; without it nothing changes. The runtime ships no inference
   engine: a backend is a module of yours that implements the `wasi_nn`
-  behaviour. Models are loaded by name only, and the host holds at most
-  16 MiB of tensors for one process. See the wasi-nn guide.
+  behaviour, for a language model or for a tensor model such as ONNX. A
+  guest loads the models you name; it brings a model of its own only in a
+  format you list in `encodings`. The host holds at most 16 MiB of tensors
+  for one process unless `max_tensor_bytes` says otherwise. See the wasi-nn
+  guide.
 - **Fixed: a WASI 0.3 component built with wasi-libc's cooperative threads
   did not run.** Such a program starts every thread through the Component
   Model's thread built-ins and keeps each thread's stack pointer in a context

@@ -1,0 +1,12 @@
+[package]
+name = "nncommand"
+version = "0.0.0"
+edition = "2021"
+[[bin]]
+name = "nncommand"
+path = "src/main.rs"
+[dependencies]
+wit-bindgen = "0.62"
+[profile.release]
+opt-level = "s"
+strip = true

@@ -108,6 +108,7 @@ call these modules and no others.
 | load, run and limit modules | `wasm`, `wasi`, `wasi_preview1`, `wasm_limits`, `wasm_engine`, `wasm_error` |
 | components | `wasm_component`, `wasi_preview2`, `wasi_preview3` |
 | HTTP | `wasi_http`, `wasi_http_listener`, and the transports `wasi_http_h1` and `wasi_http_h2` |
+| inference | `wasi_nn` |
 | workers | `wasm_instance_worker`, `wasm_script_worker`, `wasm_worker_error` |
 | language adapters | `wasm_javascript`, `wasm_javascript_command`, `wasm_python`, `wasm_python_command`, `wasm_lua` |
 
@@ -118,6 +119,7 @@ exports so that the runtime can use it. These are supported too:
 | --- | --- | --- |
 | `wasm_worker_adapter` | teaches the worker kernel another language; check it with the test kit `wasm_adapter_conformance` | [Writing an adapter](worker-contract.md) |
 | `wasi_http_transport` | sends the outbound HTTP requests of a component | [HTTP](http.md) |
+| `wasi_nn` | runs the models a component asks for through `wasi:nn` | [wasi-nn](wasi-nn.md) |
 
 A few internal modules have one or two functions that a guide documents.
 Those functions are supported; the rest of the module is not:

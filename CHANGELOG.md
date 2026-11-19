@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **New: `wasi:nn`.** A component can ask the host to run a machine-learning
+  model. Pass an `nn` option naming a backend module and the models the guest
+  may load; without it nothing changes. The runtime ships no inference
+  engine: a backend is a module of yours that implements the `wasi_nn`
+  behaviour. Models are loaded by name only, and the host holds at most
+  16 MiB of tensors for one process. See the wasi-nn guide.
+
 ## 0.10.2
 
 Every lift of a component is type-checked now, and a destructor declared in a

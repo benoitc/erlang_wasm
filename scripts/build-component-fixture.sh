@@ -19,6 +19,7 @@
 #     wasitcp    -- wasi:sockets tcp client + listener
 #     wasiudp    -- wasi:sockets udp datagrams
 #     wasiver    -- a versioned import id (@0.2.0), for version normalisation
+#     wasinn     -- wasi:nn tensor, graph, inference and errors
 #     asyncval   -- async funcs over future<u32> and stream<u8> (the async ABI)
 #     asyncimp   -- an async func that awaits an async import (caller-side async)
 #
@@ -34,7 +35,7 @@ rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
 # Fixtures whose core module must import nothing (no host, no WASI world).
 no_import=" echo vectors counter "
 
-for name in echo vectors counter hostcall hostagg wasirandom wasiclocks wasienv wasiio wasiin wasiiofull wasifs wasisock wasitcp wasiudp wasiver asyncval asyncimp; do
+for name in echo vectors counter hostcall hostagg wasirandom wasiclocks wasienv wasiio wasiin wasiiofull wasifs wasisock wasitcp wasiudp wasiver asyncval asyncimp wasinn; do
   src="$here/test/fixtures/component/$name"
   out="$here/test/fixtures/component/$name.component.wasm"
   ( cd "$src" && cargo build --release --target wasm32-unknown-unknown )
@@ -57,7 +58,7 @@ done
 # wasi:cli/command component (wasmtime runs it directly), so there is no
 # `component new` step. These are the differential fixtures.
 rustup target add wasm32-wasip2 >/dev/null 2>&1 || true
-for name in realupper realcat argv envvar exitcode catcat filewrite httpsget; do
+for name in realupper realcat argv envvar exitcode catcat filewrite httpsget nncommand; do
   src="$here/test/fixtures/component/$name"
   out="$here/test/fixtures/component/$name.component.wasm"
   ( cd "$src" && cargo build --release --target wasm32-wasip2 )

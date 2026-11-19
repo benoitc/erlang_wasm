@@ -26,6 +26,7 @@ pick the recipe -> read what it names -> test that fails -> change
   [a preview 1 syscall](#add-a-wasi-preview-1-syscall),
   [a WASI 0.2 interface](#add-a-wasi-02-function-or-interface),
   [a WASI 0.3 interface](#add-a-wasi-03-interface),
+  [a wasi-nn backend](#write-a-wasi-nn-backend),
   [a canonical or async built-in](#add-a-canonical-or-async-built-in),
   [an HTTP transport](#add-an-http-transport),
   [an implementation behind a behaviour](#replace-an-implementation-behind-a-behaviour),
@@ -239,6 +240,21 @@ A snapshot file carries two version numbers in its header, both defined in
 4. Merge it into `command/1` if a command component needs it.
 5. Test it in the matching `wasm_wasi2_*` suite, and update
    [Components](../components.md) or [WASI preview 1](../wasi.md).
+
+## Write a wasi-nn backend
+
+A backend is not part of this project: it lives in the application that
+has the inference engine. [wasi-nn](../wasi-nn.md) has the callbacks.
+
+1. Implement the `wasi_nn` behaviour. Answer `{error, {Code, Message}}` for
+   every failure; a raise reaches the guest as `runtime-error` with no
+   detail.
+2. Bound the time `compute/2` may take. The runtime does not.
+3. Free what a graph or a context holds in `close/1`. It is called once for
+   each, on the guest's drop or when the instance is destroyed.
+4. To change the host side (the grant, the tensor bound, a function of the
+   interface), edit `wasi_nn` and add a case to `wasm_wasi2_nn_SUITE`.
+   `test/support/wasi_nn_test_backend.erl` is the backend that suite uses.
 
 ## Add a WASI 0.3 interface
 

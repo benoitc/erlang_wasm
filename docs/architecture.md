@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the ninety-four modules are, which
+This page is the map of the runtime: what the ninety-five modules are, which
 ones depend on which, and where to start reading. Read it before you change
 anything. Each module documents itself, but no module describes how they fit
 together.
@@ -89,7 +89,7 @@ L10 wasm_javascript  wasm_javascript_command  wasm_python
     wasm_python_command  wasm_lua  wasm_adapter_conformance  wasi_preview3
     wasi_p3_filesystem  wasi_p3_sockets  wasi_p3_http
 L9  wasi  wasm_script_worker  wasi_preview2  wasi_p2_filesystem  wasi_p2_sockets
-    wasi_http  wasi_http_transport  wasi_http_h1  wasi_http_h2
+    wasi_http  wasi_http_transport  wasi_http_h1  wasi_http_h2  wasi_nn
 L8  wasi_preview1  wasm_snapshot_store  wasm_instance_worker
     wasm_component  wasm_component_link  wasm_canon  wasm_async  wasm_component_types
     wasm_worker_images
@@ -185,7 +185,7 @@ copies and what a restore writes back.
 Cycles are allowed here. What is not allowed is a fourth cycle that appears
 without anyone noticing. You cannot see a cycle by reading one module.
 Everything else about `wasm_memory` you learn inside `wasm_memory`, but a
-cycle you only find by reading all ninety-four.
+cycle you only find by reading all ninety-five.
 
 It is easy to add one by mistake. One call from `wasm_error`, at level 0, up
 into `wasm` would merge fourteen modules into one cycle, and only the test

@@ -57,6 +57,9 @@ these:
 - **HTTP.** `http_max_body_bytes` (8 MiB by default) bounds every HTTP body
   the host holds. Keep `wasi_http_listener` on loopback, its default, unless
   a proxy in front of it limits requests. See [HTTP](http.md).
+- **Inference.** The `nn` grant names the models a guest may load; every
+  other name answers `not-found`. The host holds at most 16 MiB of tensors
+  for one process. See [wasi-nn](wasi-nn.md).
 - **Trusted directories.** `snapshot_dir` and `code_cache_dir` writable only
   by the node's user; see
   [Snapshot images are trusted the same way](#snapshot-images-are-trusted-the-same-way)

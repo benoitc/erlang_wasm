@@ -140,6 +140,7 @@ into one application.
 | `wasi_p2_filesystem` | the `wasi:filesystem` part of the WASI 0.2 host | internal |
 | `wasi_p2_sockets` | the `wasi:sockets` part of the WASI 0.2 host | internal |
 | `wasi_sock2` | the TCP backend for `wasi:sockets`, over OTP's `socket` module | internal |
+| `wasi_nn` | the `wasi:nn` host, and the behaviour an inference backend implements | supported |
 | `wasi_preview3` | the WASI 0.3 host | supported |
 | `wasi_p3_filesystem` | `wasi:filesystem` at 0.3, over the same preopened descriptors | internal |
 | `wasi_p3_sockets` | `wasi:sockets` at 0.3, the same sockets under the same grant | internal |
@@ -201,6 +202,7 @@ Every suite named is a file in `test/`.
 | WASI 0.2 | `wasi_preview2:imports/0`, `wasi_preview2:run_command/2` | `wasi_preview2`, `wasi_p2_filesystem`, `wasi_p2_sockets`, `wasi_sock2` | the `wasi_preview2` options | none | `wasm_wasi2_clocks_SUITE`, `wasm_wasi2_env_SUITE`, `wasm_wasi2_fs_SUITE`, `wasm_wasi2_in_SUITE`, `wasm_wasi2_io_SUITE`, `wasm_wasi2_iofull_SUITE`, `wasm_wasi2_random_SUITE`, `wasm_wasi2_sockets_SUITE`, `wasm_wasi2_tcp_SUITE`, `wasm_wasi2_udp_SUITE`, `wasm_wasi2_real_SUITE`, `wasm_wasi2_conformance_SUITE`, `wasm_wasi2_adapter_SUITE`, `wasm_wasi2_testsuite_SUITE`, `wasm_wasi2_p2_SUITE`, `wasm_wasi2_async_SUITE` | [WASI 0.2](wasi-0-2.md) |
 | WASI 0.3 | `wasi_preview3:run_command/3`, `wasi_preview3:run_serve/3` | `wasi_preview3`, `wasi_p3_filesystem`, `wasi_p3_sockets`, `wasi_p3_http` | the `wasi_preview3` options | none | `wasm_wasi3_p3_SUITE` | [WASI 0.3](wasi-0-3.md) |
 | HTTP | `wasi_http:http/1`, `wasi_http_listener:start/1` | `wasi_http`, `wasi_http_listener`, `wasi_http_transport`, `wasi_http_h1`, `wasi_http_h2` | `http_transport` | the `wasi_http_transport` behaviour | `wasm_wasi2_http_SUITE`, `wasm_wasi2_https_SUITE`, `wasm_wasi2_http_limits_SUITE`, `wasm_wasi2_serve_SUITE` | [HTTP](http.md) |
+| wasi-nn | `wasi_nn:imports/1`, the `nn` option of `wasi_preview2:command/1` | `wasi_nn` | `nn` | the `wasi_nn` behaviour | `wasm_wasi2_nn_SUITE` | [wasi-nn](wasi-nn.md) |
 | Instance workers | `wasm_instance_worker:start_link/1`, `wasm_instance_worker:call/3` | `wasm_instance_worker` | `worker_timeout` | none | `wasm_worker_SUITE` | [Using workers](worker.md) |
 | Script workers | `wasm_script_worker:start_link/2`, `wasm_script_worker:run/2` | `wasm_script_worker`, `wasm_worker_adapter`, `wasm_worker_error`, `wasm_script_v1`, `wasm_worker_fs`, `wasm_worker_images` | worker options; `scratch_roots` | the `wasm_worker_adapter` behaviour | `wasm_worker_kernel_SUITE`, `wasm_component_worker_SUITE` | [Using workers](worker.md), [Worker internals](worker-internals.md), [Worker configuration](worker-reference.md) |
 | Worker cleanup | internal: every script worker request goes through it | `wasm_cleanup_manager`, `wasm_cleanup_steward`, `wasm_cleanup_steward_sup`, `wasm_worker_reaper`, `wasm_worker_sup` | `reaper_options`, `scratch_roots` | none | `wasm_cleanup_manager_SUITE`, `wasm_cleanup_steward_SUITE`, `wasm_worker_sup_SUITE`, `wasm_worker_kernel_SUITE` | [Worker internals](worker-internals.md#cleanup-goes-through-a-steward), then `test/audit/CLEANUP_STEWARD.md` |

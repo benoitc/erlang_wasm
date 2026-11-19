@@ -185,6 +185,7 @@ jobs:
             test/fixtures/wasmtime-p2-serve
             test/fixtures/wasmtime-p3
             test/fixtures/wasmtime-p3-serve
+            test/fixtures/wasmtime-nn
           key: wasmtime-programs-${{ runner.os }}-${{ hashFiles('scripts/build-wasmtime-p2.sh') }}
       # Checked before it is used, as the WASI SDK is: it composes the
       # middleware programs the suites serve.
@@ -219,10 +220,11 @@ jobs:
             test/fixtures/wasmtime-p2-serve
             test/fixtures/wasmtime-p3
             test/fixtures/wasmtime-p3-serve
+            test/fixtures/wasmtime-nn
           key: ${{ steps.programs.outputs.cache-primary-key }}
       - name: Run them
         run: >-
-          rebar3 ct --suite=test/wasm_wasi2_p2_SUITE,test/wasm_wasi2_serve_SUITE,test/wasm_wasi2_http_limits_SUITE,test/wasm_wasi3_p3_SUITE
+          rebar3 ct --suite=test/wasm_wasi2_p2_SUITE,test/wasm_wasi2_serve_SUITE,test/wasm_wasi2_http_limits_SUITE,test/wasm_wasi3_p3_SUITE,test/wasm_wasi2_nn_wasmtime_SUITE
       # The programs past the suite's 60 s bound for each one, under a bound of
       # their own: p3_sockets_tcp_streams takes about seven minutes.
       - name: Run the slow one

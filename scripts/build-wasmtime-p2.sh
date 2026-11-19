@@ -89,6 +89,19 @@ for f in "$out"/p3_*.component.wasm; do
 done
 echo "built $n3 WASI 0.3 commands into $dest3, $s3 services into $serve3"
 
+# The same build makes wasmtime's wasi-nn programs. The nn_wit_* ones import
+# `wasi:nn` as a component does; wasm_wasi2_nn_wasmtime_SUITE runs them against
+# a backend that runs no model. The nn_witx_* ones use the older core-module
+# form of the interface, which this runtime does not serve.
+destnn="$here/test/fixtures/wasmtime-nn"
+mkdir -p "$destnn"
+nnn=0
+for f in "$out"/nn_wit_*.component.wasm; do
+  wasm-tools strip "$f" -o "$destnn/$(basename "$f")"
+  nnn=$((nnn + 1))
+done
+echo "built $nnn wasi-nn programs into $destnn"
+
 # The middleware programs import wasi:http/handler; wasmtime's tests compose
 # each with the echo handler before serving it, and so does this. `compose'
 # names the dependency after the file, which must be kebab case.

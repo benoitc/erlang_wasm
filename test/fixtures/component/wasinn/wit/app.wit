@@ -1,0 +1,28 @@
+package test:wasinn;
+
+world app {
+  import wasi:nn/tensor@0.2.0-rc-2024-10-28;
+  import wasi:nn/graph@0.2.0-rc-2024-10-28;
+  import wasi:nn/inference@0.2.0-rc-2024-10-28;
+  import wasi:nn/errors@0.2.0-rc-2024-10-28;
+
+  record output {
+    name: string,
+    dimensions: list<u32>,
+    ty: string,
+    data: list<u8>,
+  }
+
+  /// Load `model` by name, run it on `input` and return every output.
+  export run: func(model: string, input: list<u8>) -> result<list<output>, string>;
+  /// Make `count` tensors of `size` bytes and keep them. Returns how many
+  /// are kept.
+  export hold: func(count: u32, size: u32) -> u32;
+  /// Drop every tensor `hold` kept.
+  export release: func();
+  /// Call `load` with model bytes and return what the host answers.
+  export load-bytes: func() -> string;
+  /// Hand `compute` a handle it should refuse; `kind` picks which. The
+  /// tensor involved holds `size` bytes.
+  export misuse: func(model: string, kind: u32, size: u32) -> string;
+}

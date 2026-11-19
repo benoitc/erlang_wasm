@@ -707,3 +707,99 @@ lines each.
 Q2, Q4, Q5, Q7, Q9 and Q11 to Q15. The CPython groups of
 `wasm_worker_lang_SUITE` are still outside `all/0`; this cycle ran them by
 hand for #133, and all 91 cases passed.
+
+## Before the release after 0.10.2
+
+Reviewed on `main` at `cc125d6`, 2026-11-19. Since 0.10.2 three pull requests
+merged: #138 (`wasi:nn`: the host and the backend behaviour), #139 (WASI 0.3
+components built with cooperative threads) and #140 (`wasi:nn`: a model from
+bytes under a grant, and tests from the interface and from wasmtime). One
+module was added, `wasi_nn`: 95 modules, about 61,000 lines, 105 suites.
+
+**What is already right.** `wasi_nn` has its level in `architecture.md`, its
+row and its area in `map.md`, an `ex_doc` group, a line in the supported API
+and in the extension points of `start-here.md`, a grant row and an interface
+row in `wasi-0-2.md`, a paragraph in `security.md`, a recipe, and a guide of
+its own, `wasi-nn.md`, which defines its five words before it uses them, says
+which engines fit, and says what its tests do not prove. The two new suites
+are in `testing.md`, `fixtures.md`, `CONTRIBUTING.md` and the CI job.
+Cooperative threads are in `component-internals.md`, `features.md` and
+`map.md`. The changelog has both under "Unreleased", in plain words.
+
+**Found, small.** N1 to N4 are pages a reader looks at first and that do not
+know `wasi:nn` exists. N5 and N6 are claims of the guide no test backs.
+
+- **N1. `features.md` has no row for `wasi:nn`.** It is the page that says
+  what is implemented and how each part is checked. It needs a row, and a
+  short section like the one for preview 1: what is served, what is not
+  (a model loaded by the host from a path, streaming, the older
+  `wasi_ephemeral_nn` form), and the two suites.
+- **N2. `README.md` does not mention it.** The second paragraph lists the
+  Component Model and WASI 0.1, 0.2 and 0.3. A reader looking for inference
+  finds nothing. One clause, and no more: the README is an entry, not a list.
+- **N3. The module doc of `wasi_preview2` has a table of interfaces without
+  `wasi:nn`.** `recipes.md` sends a contributor to that table.
+- **N4. `component-internals.md` names "who uses" the host resource table
+  and leaves `wasi_nn` out**, and its "Where to add things" says a host
+  import that returns a resource must provide its `[resource-drop]`. That is
+  half of it. A component whose entry core imports only host names drops
+  through that import; a linked one, which is every `wasm32-wasip2` build,
+  drops through `canon resource.drop`, which calls the instance's
+  `resource_closer`. A host module must free in both. `wasi_nn` was written
+  from this page and missed the second route until a test found it. The page
+  should say it in the place a contributor reads.
+- **N5. The guide says the `nn` option works with "the WASI 0.3 runners".**
+  It should: `wasi_preview3:command/1` merges the 0.2 map, and its runner
+  uses the 0.2 closer. No case runs a 0.3 component that imports `wasi:nn`.
+  Either add one case or say "0.2" until one exists.
+- **N6. The guide says a component that imports `wasi:nn` cannot be captured
+  in a snapshot.** That follows from `snapshot_hooks/0` not declaring the
+  interface, and from the handles having no origin. No case asserts it, and
+  the table of refusals in `snapshots.md` names files and sockets only. One
+  case, and one more example in that table.
+
+**Found, worth doing but not small.**
+
+- **N7. The guide's code is parsed, never run.** Its three Erlang blocks bind
+  a `Bin` the reader does not have. Every other feature a user starts from
+  has a page under `docs/examples/` that `wasm_docs_SUITE` executes. An
+  example page, "Run a model from a component", can run for real: the
+  `nncommand` component is committed, and a ten-line backend written on the
+  page stands in for an engine. It is also where a diagram belongs: guest,
+  host, backend, and which of the three holds the tensor.
+- **N8. `start-here.md` has no path for it.** The table "what you have, what
+  to read" sends a reader with a component to `components.md` and
+  `wasi-0-2.md`. A reader who has a model and wants a guest to call it has
+  no row.
+
+**Found, questions for the maintainer.**
+
+- **Q17. Which version.** `wasi:nn` is a new interface and a new behaviour,
+  and nothing breaks. By the rule the changelog has followed, that is
+  0.11.0, not 0.10.3. Confirm.
+- **Q18. Naming a backend.** The guide tells a reader to bring a backend and
+  names none. `erllama_wasi_nn` exists (erllama, pull request 81, not
+  merged, and not on Hex until this release is). Name it in the guide now,
+  as "the backend for llama.cpp", or wait until it is published?
+- **Q19. The interface is a release candidate.** The host serves
+  `wasi:nn@0.2.0-rc-2024-10-28` and answers any other candidate under the
+  same names. The guide says so in its notes. Should `wasi_nn` be marked
+  as able to change in the supported API table until the interface is
+  stable, so that a change upstream is not a breaking release here?
+
+**Grew, no new finding.** `wasm_async` went from 2,743 to 2,953 lines with
+the cooperative threads of #139: it is still the largest module after
+`wasm_exec`, and the open item on why it keeps its state in the process
+dictionary stands. `wasi_nn` is 525 lines with one responsibility, of which
+about 130 are the module doc, the types and the callbacks; it needs no
+split. `wasm_wasi2_nn_SUITE` is 544 lines, of which the last 60 parse the
+upstream WIT file; if a second suite needs that parser it moves to
+`test/support/`.
+
+**Still open, unchanged.** Every item under "Still open" above, and questions
+Q2, Q4, Q5, Q7, Q9 and Q11 to Q15.
+
+**Suggested order.** N3 and N4 first: they are a few lines each and N4 is
+the one that cost time. Then N1 and N2. Then N5 and N6, a case each. N7 and
+N8 together, since the example page is what the new row points to. Nothing
+here needs a source change outside module docs and tests.

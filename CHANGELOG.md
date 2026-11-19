@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.10.2
+
+Every lift of a component is type-checked now, and a destructor declared in a
+later type section runs. `wasm:validate/1` takes a module loaded with
+`wasm:load/1`. Preparing a component and parsing a large text module are
+faster.
 
 ### Changes
 

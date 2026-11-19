@@ -349,7 +349,8 @@ environment, `exit`, and the terminal interfaces (which report no tty). Hand it
 to a command component and call its `wasi:cli/run.run` export.
 
 Options: `stdin` (a binary, default empty), `stdout` and `stderr`
-(`fun((binary()) -> ok)` sinks, default discard).
+(`fun((binary()) -> ok)` sinks, default discard). `nn` is a `wasi_nn:grant()`
+and adds `wasi:nn`; without it a component that imports `wasi:nn` is refused.
 """.
 -spec command(#{stdin => binary(),
                 stdout => fun((binary()) -> ok),
@@ -363,7 +364,8 @@ Options: `stdin` (a binary, default empty), `stdout` and `stderr`
                 network => term(),
                 http_transport => module(),
                 http_tls => [ssl:tls_client_option()],
-                http_max_body_bytes => pos_integer()}) ->
+                http_max_body_bytes => pos_integer(),
+                nn => wasi_nn:grant()}) ->
           #{{binary(), binary()} => fun()}.
 command(Opts) ->
     Stdin = maps:get(stdin, Opts, <<>>),
@@ -402,7 +404,13 @@ command(Opts) ->
                   {ok, Max} -> HttpOpts#{max_body_bytes => Max};
                   error -> HttpOpts
               end)],
-    lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net ++ Http).
+    %% wasi:nn is opt-in, as sockets are: only a caller that names a backend
+    %% and the models a guest may load gets the interface.
+    Nn = case maps:find(nn, Opts) of
+             {ok, NnGrant} -> [wasi_nn:imports(NnGrant)];
+             error         -> []
+         end,
+    lists:foldl(fun maps:merge/2, #{}, Base ++ Fs ++ Net ++ Http ++ Nn).
 
 %% The mounts a command exposes: an explicit named list, or the single preopen.
 -doc "The mounts the `preopen`, `writable` and `preopens` options describe.".
@@ -1082,6 +1090,10 @@ close_resource({tcp_socket, {connected, Handle}}) ->
 close_resource({tcp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;
 close_resource({udp_socket, {udp_bound, Sock, _Conn}})  -> _ = wasi_sock2:close(Sock), ok;
 close_resource({udp_socket, {_State, Handle}})          -> _ = wasi_sock2:close(Handle), ok;
+%% A `wasi:nn' tensor, graph or context: its bytes or its backend resource.
+close_resource({Tag, _} = Resource) when Tag =:= nn_tensor; Tag =:= nn_graph;
+                                         Tag =:= nn_context ->
+    wasi_nn:close_resource(Resource);
 close_resource(_)                                       -> ok.
 
 %% Non-blocking read: return whatever is available, up to Len bytes, without

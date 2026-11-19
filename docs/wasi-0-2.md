@@ -60,6 +60,7 @@ grant out, the component does not get that capability.
 | `http_transport` | the module that performs outbound HTTP | `wasi_http_h1` |
 | `http_tls` | `ssl` client options for `https` | verify against system CAs |
 | `http_max_body_bytes` | the largest HTTP body the host holds: a response an outbound request reads, and a body the guest writes | 8 MiB |
+| `nn` | `wasi:nn`: a backend and the model names the guest may load; see [wasi-nn](wasi-nn.md) | no `wasi:nn` |
 
 `args` is returned exactly as you pass it. Nothing is added in front.
 
@@ -150,6 +151,7 @@ application may not be started; with `instantiate/3`, leave `loader` out.
 | `wasi:sockets`: TCP, UDP, name lookup | `sockets/1`, in `wasi_p2_sockets` |
 | `wasi:http` types and `outgoing-handler` | `wasi_http:http/1` |
 | one `wasi:http/incoming-handler` request | `run_serve/3` |
+| `wasi:nn`, when the `nn` option is given | `wasi_nn:imports/1` |
 
 `command/1` puts all of these in one import map, limited by the grants in its
 options. Pass that map to `wasm_component:instantiate/2` when you want to

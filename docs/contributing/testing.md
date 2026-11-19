@@ -93,7 +93,7 @@ need something a fresh clone does not have:
 | `wasm_module_cache_SUITE` | `qjs.wasm` for one case | that case **fails** |
 | `wasm_worker_lang_SUITE` | `qjs.wasm`, then `qjs_reactor.wasm` and `lua_reactor.wasm` for their groups | skips, or the group skips |
 | `wasm_worker_lang_SUITE`, the `python_*` groups | `python.wasm` or `py_reactor.wasm`; not in `all/0`, so run them with `--group` | not run |
-| `wasm_wasi2_p2_SUITE`, `wasm_wasi2_serve_SUITE`, `wasm_wasi2_http_limits_SUITE`, `wasm_wasi3_p3_SUITE` | wasmtime's programs | skips; fails with `WASM_REQUIRE_WASMTIME_FIXTURES` set |
+| `wasm_wasi2_p2_SUITE`, `wasm_wasi2_serve_SUITE`, `wasm_wasi2_http_limits_SUITE`, `wasm_wasi3_p3_SUITE`, `wasm_wasi2_nn_wasmtime_SUITE` | wasmtime's programs | skips; fails with `WASM_REQUIRE_WASMTIME_FIXTURES` set |
 | `wasm_wasi2_async_SUITE` | wasmtime's `p2_cli_invoke_async` program | skips, whatever the variables say |
 | `wasm_wasi3_p3_SUITE`, `slow_programs` | `WASM_RUN_SLOW_PROGRAMS=1` | that case skips |
 | `wasm_wasi2_conformance_SUITE`, `wasm_wasi2_real_SUITE`, `wasm_component_worker_SUITE` | `wasmtime` on the path, for the cases that compare with it | those cases skip |
@@ -113,7 +113,7 @@ for a plain `rebar3 ct`.
 | `WASM_TESTSUITE` | where the specification suite checkout is | `testsuite/`, found by walking up from the working directory |
 | `WASI_TESTSUITE` | where the WASI suite checkout is | `wasi-testsuite/`, found the same way |
 | `WASM_SPEC_MAX_FAILURES` | how many failures `wasm_spec_SUITE` keeps for each suite; set it to 1000 to see them all | 25 |
-| `WASM_REQUIRE_WASMTIME_FIXTURES` | makes a missing wasmtime program fail `wasm_wasi2_p2_SUITE`, `wasm_wasi2_serve_SUITE`, `wasm_wasi2_http_limits_SUITE` and `wasm_wasi3_p3_SUITE` instead of skipping; any value but empty or `0` | unset: they skip |
+| `WASM_REQUIRE_WASMTIME_FIXTURES` | makes a missing wasmtime program fail `wasm_wasi2_p2_SUITE`, `wasm_wasi2_serve_SUITE`, `wasm_wasi2_http_limits_SUITE`, `wasm_wasi3_p3_SUITE` and `wasm_wasi2_nn_wasmtime_SUITE` instead of skipping; any value but empty or `0` | unset: they skip |
 | `WASM_RUN_SLOW_PROGRAMS` | `1` runs `wasm_wasi3_p3_SUITE`'s `slow_programs` case, about seven minutes | unset: skipped |
 | `WASM_DOCS_STRICT` | `1` makes `wasm_docs_SUITE` fail on a missing checker tool, and run every block whose fixture is declared | unset: those blocks skip |
 | `WASM_DOCS_FIXTURES` | the fixtures you declare present, by id, comma separated: `qjs`, `python`, `qjs_reactor`, `lua_reactor`, `python_reactor` | none |

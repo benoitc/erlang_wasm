@@ -37,6 +37,31 @@ fn ty(t: TensorType) -> &'static str {
     }
 }
 
+// The enums by position, in the order the interface declares them.
+const TYPES: [TensorType; 7] = [
+    TensorType::Fp16,
+    TensorType::Fp32,
+    TensorType::Fp64,
+    TensorType::Bf16,
+    TensorType::U8,
+    TensorType::I32,
+    TensorType::I64,
+];
+const ENCODINGS: [GraphEncoding; 7] = [
+    GraphEncoding::Openvino,
+    GraphEncoding::Onnx,
+    GraphEncoding::Tensorflow,
+    GraphEncoding::Pytorch,
+    GraphEncoding::Tensorflowlite,
+    GraphEncoding::Ggml,
+    GraphEncoding::Autodetect,
+];
+const TARGETS: [ExecutionTarget; 3] = [
+    ExecutionTarget::Cpu,
+    ExecutionTarget::Gpu,
+    ExecutionTarget::Tpu,
+];
+
 fn text(e: Error) -> String {
     format!("{}: {}", code(e.code()), e.data())
 }
@@ -56,9 +81,18 @@ struct C;
 
 impl Guest for C {
     fn run(model: String, input: Vec<u8>) -> Result<Vec<Output>, String> {
+        Self::run_with(model, vec![1], 4, input)
+    }
+
+    fn run_with(
+        model: String,
+        dimensions: Vec<u32>,
+        ty_index: u32,
+        input: Vec<u8>,
+    ) -> Result<Vec<Output>, String> {
         let graph = load_by_name(&model).map_err(text)?;
         let ctx = graph.init_execution_context().map_err(text)?;
-        let tensor = Tensor::new(&[1], TensorType::U8, &input);
+        let tensor = Tensor::new(&dimensions, TYPES[ty_index as usize], &input);
         let outs = ctx
             .compute(vec![("input".to_string(), tensor)])
             .map_err(text)?;
@@ -91,6 +125,23 @@ impl Guest for C {
         match load(&[vec![1u8, 2, 3]], GraphEncoding::Ggml, ExecutionTarget::Cpu) {
             Ok(_) => "ok".to_string(),
             Err(e) => text(e),
+        }
+    }
+
+    fn load_with(parts: Vec<Vec<u8>>, encoding: u32, target: u32) -> String {
+        match load(&parts, ENCODINGS[encoding as usize], TARGETS[target as usize]) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => text(e),
+        }
+    }
+
+    fn tensor_echo(dimensions: Vec<u32>, ty_index: u32, data: Vec<u8>) -> Output {
+        let t = Tensor::new(&dimensions, TYPES[ty_index as usize], &data);
+        Output {
+            name: String::new(),
+            dimensions: t.dimensions(),
+            ty: ty(t.ty()).to_string(),
+            data: t.data(),
         }
     }
 

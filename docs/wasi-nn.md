@@ -38,7 +38,9 @@ Grant = #{backend => my_nn,
 | --- | --- | --- |
 | `backend` | the module that implements `wasi_nn` | required |
 | `models` | the names this guest may pass to `load-by-name` | required |
-| `backend_opts` | any term, handed to your `load_by_name/2` unchanged | `undefined` |
+| `encodings` | the model formats this guest may bring as bytes, with `load` | none: `load` is refused |
+| `max_tensor_bytes` | how many bytes of tensors the host holds for this guest | 16 MiB |
+| `backend_opts` | any term, handed to your backend unchanged | `undefined` |
 
 Without the `nn` key the interface is absent, and a component that imports
 `wasi:nn` is refused when you instantiate it.
@@ -46,9 +48,16 @@ Without the `nn` key the interface is absent, and a component that imports
 A name that is not in `models` answers `not-found`, exactly as a name your
 backend does not know. So a guest cannot find out which models you have.
 
+`encodings` is a separate grant, because a model the guest brings is a file
+of the guest's that a native engine parses. List only the formats your
+backend reads: `openvino`, `onnx`, `tensorflow`, `pytorch`, `tensorflowlite`,
+`ggml` or `autodetect`. For a format you do not list, or a backend with no
+`load/4`, `load` answers `unsupported-operation`.
+
 ## Write a backend
 
-A backend exports four functions. This one answers its input unchanged:
+A backend exports four functions, and a fifth if it loads a model from
+bytes. This one answers its input unchanged:
 
 <!-- check: modules my_nn -->
 ```erlang
@@ -76,12 +85,18 @@ close(_GraphOrContext) ->
 | callback | called when | answer |
 | --- | --- | --- |
 | `load_by_name(Name, BackendOpts)` | the guest loads a granted name | `{ok, Graph}` |
+| `load(Parts, Encoding, Target, BackendOpts)`, optional | the guest brings a model in a granted format | `{ok, Graph}` |
 | `init_execution_context(Graph)` | the guest starts a session | `{ok, Context}` |
 | `compute(Context, Inputs)` | the guest runs the model | `{ok, Outputs}` |
 | `close({graph, Graph})`, `close({context, Context})` | the guest drops it, or its instance is destroyed | `ok` |
 
 `Graph` and `Context` are your own terms. The runtime keeps them and gives
 them back; it does not look inside.
+
+In `load/4`, `Parts` is a list of binaries, one for each part of the model
+in the guest's order: an ONNX model is one part, an OpenVINO model is its
+description and then its weights. `Encoding` is one of the atoms above and
+`Target` is `cpu`, `gpu` or `tpu`, as the guest asked.
 
 `Inputs` and `Outputs` are lists of `{Name, Tensor}`. A tensor is a map:
 
@@ -91,9 +106,22 @@ them back; it does not look inside.
 | `type` | `fp16`, `fp32`, `fp64`, `bf16`, `u8`, `i32` or `i64` |
 | `data` | a binary: the elements, as the engine lays them out |
 
-The runtime does not check that `data` has the length `dimensions` implies.
-Guests that send text commonly send it as `u8` with dimensions `[1]`, so
-check what your engine needs in `compute/2`.
+The interface has one rule about a tensor: the length of `data` is the
+product of the dimensions times the size of one element, so a 2 by 2 tensor
+of `fp32` holds 16 bytes. The runtime does not apply it for you, because
+guests that send text commonly send it as `u8` with dimensions `[1]`. A
+backend whose model has fixed shapes applies it with `wasi_nn:check_tensor/1`:
+
+<!-- check: modules my_onnx -->
+```erlang
+compute(Context, [{_Name, Tensor}]) ->
+    case wasi_nn:check_tensor(Tensor) of
+        ok -> my_onnx:infer(Context, Tensor);
+        {error, _} = Refused -> Refused
+    end.
+```
+
+It answers `{error, {invalid_argument, _}}`, which you can return as it is.
 
 On failure, answer `{error, {Code, Message}}`. `Message` is a UTF-8 binary of
 at most 1024 bytes, and `Code` is one of:
@@ -118,7 +146,7 @@ If a callback raises, or answers a term of another shape, the guest gets a
 | the guest calls | what happens |
 | --- | --- |
 | `graph.load-by-name(name)` | your `load_by_name/2`, if `name` is granted |
-| `graph.load(bytes, encoding, target)` | `unsupported-operation`: a model is loaded by name |
+| `graph.load(bytes, encoding, target)` | your `load/4`, if the format is granted and you export it |
 | `graph.init-execution-context()` | your `init_execution_context/1` |
 | `graph-execution-context.compute(inputs)` | your `compute/2` |
 | `tensor` constructor, `dimensions`, `ty`, `data` | answered by the runtime, which holds the tensor |
@@ -130,9 +158,14 @@ returns, whatever the answer.
 ## Limits
 
 - **Tensor bytes.** The host holds every tensor. All the live tensors of one
-  process may hold 16 MiB together. Over that, creating a tensor traps with
-  `nn_tensor_limit_reached`, and a `compute` whose outputs do not fit answers
-  `too-large`. Dropping a tensor gives its bytes back.
+  process may hold `max_tensor_bytes` together, 16 MiB unless you say. Over
+  that, creating a tensor traps with `nn_tensor_limit_reached`, and a
+  `compute` whose outputs do not fit answers `too-large`. Dropping a tensor
+  gives its bytes back. One image of 224 by 224 as `fp32` is about 0.6 MiB;
+  raise the bound for batches or large inputs.
+- **Model bytes.** A model a guest brings with `load` passes through the
+  guest's memory, so it is bounded by `max_memory_pages`. The host does not
+  keep it: your backend does.
 - **Handles.** A graph, a context, a tensor and an error are each one host
   resource. `resource_limit` bounds how many are live.
 - **Time.** `compute` blocks until your backend answers. `fuel` does not
@@ -142,6 +175,19 @@ returns, whatever the answer.
   snapshot.
 - **Streaming.** `compute` answers once, with every output. The interface
   has no way to return tokens as they are generated.
+
+## Which engines fit
+
+The behaviour does not assume a kind of model. Two shapes are tested:
+
+| kind of engine | how a guest uses it | what your backend does |
+| --- | --- | --- |
+| a language model (GGUF and the like) | `load-by-name`, a `u8` tensor holding text, a `u8` tensor back | maps a name to a loaded model; ignores dimensions |
+| a tensor model (ONNX, OpenVINO, PyTorch) | `load` with the model's bytes or `load-by-name`, typed tensors with real shapes | exports `load/4`; applies `check_tensor/1`; answers typed tensors |
+
+To serve several engines to one guest, write a backend that looks at the
+name or the format and calls the module that has the engine. The grant takes
+one backend.
 
 ## Build the imports yourself
 
@@ -157,6 +203,23 @@ Closer = fun wasi_nn:close_resource/1,
                                         #{resource_closer => Closer}),
 ok = wasm_component:destroy(Inst, Closer).
 ```
+
+## How it is tested
+
+The specification of `wasi:nn` has no test suite: the `test` directory of
+its repository holds a placeholder. Two things stand in for one.
+
+| what | where | what a pass shows |
+| --- | --- | --- |
+| vectors read from the interface | `wasm_wasi2_nn_SUITE` | the host has an import for every function of the upstream WIT file and no other; every case of every enum arrives as the name the file gives it, in its order; the data rule holds for every element type |
+| wasmtime's `nn_wit_*` programs | `wasm_wasi2_nn_wasmtime_SUITE` | the host carries exactly what wasmtime's own guests send, for a model from bytes (ONNX, OpenVINO in two parts, PyTorch) and by name, and those guests read the answer |
+
+Both run against backends that run no model. So they test the host and the
+behaviour, and they do not test any engine: a backend has its own suite,
+where it runs a real model.
+
+Wasmtime's `nn_witx_*` programs are not run: they use the older form of the
+interface, in the notes below.
 
 ## Notes
 

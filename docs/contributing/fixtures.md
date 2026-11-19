@@ -29,6 +29,7 @@ a run without the fixture proves nothing about what it covers.
 | `test/fixtures/lang/py_reactor.wasm` and `py_reactor_lib/` | built | `scripts/build-python-reactor.sh`, about twenty minutes | the `python_reactor` groups of `wasm_worker_lang_SUITE` | none | not built |
 | `test/fixtures/wasmtime-p2/` and `-p2-serve/` | built | `scripts/build-wasmtime-p2.sh` (`make p2-fixtures`), with Rust, `cargo` and `wasm-tools` | `wasm_wasi2_p2_SUITE`, `wasm_wasi2_async_SUITE`, `wasm_wasi2_serve_SUITE`, `wasm_wasi2_http_limits_SUITE` | the pinned wasmtime tag in the script | built by "wasmtime programs", cached |
 | `test/fixtures/wasmtime-p3/` and `-p3-serve/` | built | the same script | `wasm_wasi3_p3_SUITE` | the same tag | the same job and cache |
+| `test/fixtures/wasmtime-nn/` | built | the same script | `wasm_wasi2_nn_wasmtime_SUITE` | the same tag | the same job and cache |
 | `test/fixtures/component/` | committed | `scripts/build-component-fixture.sh` (Rust and `wasm-tools`), `scripts/build-wat-component-fixtures.sh` (`wasm-tools`) | the `wasm_component_*` suites, most `wasm_wasi2_*` suites, `wasm_canon_prop_SUITE`, `wasm_recipe_SUITE` | committed; the preview 1 adapter is downloaded by the first script at a pinned wasmtime release | used as committed |
 | `test/fixtures/snapshot/` | committed | `scripts/build-snapshot-fixtures.py` | `wasm_snapshot_SUITE`, `wasm_worker_kernel_SUITE`, `wasm_shared_pages_SUITE` | committed | used as committed |
 | `test/fixtures/rust/` | committed | `scripts/build-rust-fixture.sh` | `wasm_rust_SUITE`, and `wasm_docs_SUITE` through the pages that run it | committed | used as committed |
@@ -133,6 +134,7 @@ would stay behind, so delete them when you change the tag:
    ```sh
    S=test/wasm_wasi2_p2_SUITE,test/wasm_wasi2_serve_SUITE
    S=$S,test/wasm_wasi2_http_limits_SUITE,test/wasm_wasi3_p3_SUITE
+   S=$S,test/wasm_wasi2_nn_wasmtime_SUITE
    WASM_REQUIRE_WASMTIME_FIXTURES=1 rebar3 ct --suite=$S
    ```
 

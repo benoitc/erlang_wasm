@@ -665,7 +665,7 @@ and the upgrade recipe. The new fixtures `latelift` and `latedtor` come from
 `scripts/build-wat-component-fixtures.sh`, which `fixtures.md` already
 names for that directory.
 
-**Found, small, proposed for this release.**
+**Found, small, fixed in this release.**
 
 - `docs/component-internals.md:34` says `wasm_component_types` holds "the
   signatures read from the type section". Reading one type section was the
@@ -687,6 +687,13 @@ names for that directory.
   1.16). Each record says so, and nothing was redefined. Should gates move to
   a quieter machine or a CI runner, so that a 3% gate can pass or fail on
   its own numbers?
+
+  *Answered:* yes, gates run on a quieter machine from now on. None of the
+  three needs a re-run for this release. #130 changed preparation, whose
+  gates passed in both runs; instantiation reads the same prepared data as
+  before. #134 adds one `queue:in/2` and one `queue:out/1`, nanoseconds, to
+  a path that starts a process. #135 kept `prim_file`, so nothing changed;
+  a quieter run matters only if moving to `file` comes up again.
 
 **Grew, no new finding.** `wasm_component_link` (1,792 to 1,847 lines) now
 has readers that take either the bytes or a parsed graph (`parsed()`),

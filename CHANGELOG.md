@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
+
+A component can ask the host to run a machine-learning model, through
+`wasi:nn` and a backend you supply. WASI 0.3 components built with
+wasi-libc's cooperative threads run.
 
 ### Changes
 

@@ -643,3 +643,60 @@ gaps, both fixed in the release:
   needs the NIF.
 
 Nothing else is new. The open items above are unchanged.
+
+## Before the release after 0.10.1
+
+Reviewed on `main` at `9e7f556`, 2026-11-19. Since 0.10.1 six pull requests
+merged, all from one code review: #129 (three validation defects), #130 (one
+graph parse per prepare), #132 (a race in the conformance kit), #133 (shared
+staging and decoding in the adapters), #134 (linear text parsing, real
+queues) and #135 (documented OTP APIs). No module was added or removed: 94
+modules, about 60,200 lines, 102 suites.
+
+**What is already right.** Every function these PRs removed or renamed is
+gone from the docs: `parse_types/1`, `derive/1`, `current/2`, the adapters'
+own `stage_all/2`. The moduledocs that name functions pass
+`wasm_architecture_SUITE`. `wasm_script_v1` documents its new shared steps
+and stays internal, so `worker-contract.md`, written for adapters outside
+this repository, rightly does not mention them. The rule on OTP APIs is now
+stated once with its two exceptions (AGENTS.md), enforced by
+`only_documented_otp_calls_are_made`, and pointed to from CONTRIBUTING.md
+and the upgrade recipe. The new fixtures `latelift` and `latedtor` come from
+`scripts/build-wat-component-fixtures.sh`, which `fixtures.md` already
+names for that directory.
+
+**Found, small, proposed for this release.**
+
+- `docs/component-internals.md:34` says `wasm_component_types` holds "the
+  signatures read from the type section". Reading one type section was the
+  defect #129 fixed: lifts and destructors are now resolved in the whole type
+  space (every type section, import and alias). The line should say so.
+- `test/audit/PERF.md`, "Documented OTP APIs", says CPython's whole module
+  "did not reach `split/2` in the probe". The reason is known: it defines
+  10,586 functions, over the 8,192 at which a compile is refused before
+  anything is lowered (`compiled-tier-internals.md`, "The compile limits").
+  The record should say that, not leave it as a gap.
+
+**Found, a question for the maintainer.**
+
+- **Q16. Where gates are measured.** `measuring.md` asks for a load average
+  below 8. This machine ran at 30 to 190 through this cycle. Three gates
+  could not be resolved and were recorded as they stood: instantiation in
+  #130 (null run up to 1.09), one waiter on the cleanup manager in #134 (null
+  run 1.07, pairs up to 1.45), and `prim_file` in #135 (null run 0.65 to
+  1.16). Each record says so, and nothing was redefined. Should gates move to
+  a quieter machine or a CI runner, so that a 3% gate can pass or fail on
+  its own numbers?
+
+**Grew, no new finding.** `wasm_component_link` (1,792 to 1,847 lines) now
+has readers that take either the bytes or a parsed graph (`parsed()`),
+which is what lets `prepare/1` parse once. This adds to M5: the module is
+the component decoder as well as the linker, and the name still does not
+say so. `wasm_script_v1` grew from 230 to 307 lines with the shared steps,
+which is where they belong. The other touched modules changed by under 50
+lines each.
+
+**Still open, unchanged.** Every item under "Still open" above, and questions
+Q2, Q4, Q5, Q7, Q9 and Q11 to Q15. The CPython groups of
+`wasm_worker_lang_SUITE` are still outside `all/0`; this cycle ran them by
+hand for #133, and all 91 cases passed.

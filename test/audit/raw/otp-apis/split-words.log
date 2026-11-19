@@ -1,0 +1,32 @@
+funs=264 shards=2 same_units=false same_set=false moved=140 flat_loads=[405561,
+                                                                        405561] ext_split_flat_loads=[404397,
+                                                                                                      406725] max_ratio=1.0029
+  kinds=#{atom => 151619,big => 157,float => 50,small => 175858}
+  walk_units_same=true
+  walk_equals_flat=true flat_us=1294 walk_us=3904
+funs=264 shards=4 same_units=false same_set=false moved=190 flat_loads=[202781,
+                                                                        202776,
+                                                                        202779,
+                                                                        202786] ext_split_flat_loads=[205268,
+                                                                                                      199643,
+                                                                                                      204789,
+                                                                                                      201422] max_ratio=1.0122
+  kinds=#{atom => 151619,big => 157,float => 50,small => 175858}
+  walk_units_same=true
+  walk_equals_flat=true flat_us=1299 walk_us=3960
+funs=896 shards=2 same_units=false same_set=false moved=432 flat_loads=[726781,
+                                                                        726785] ext_split_flat_loads=[727887,
+                                                                                                      725679] max_ratio=1.0015
+  kinds=#{atom => 278669,big => 17,float => 19,small => 308062}
+  walk_units_same=true
+  walk_equals_flat=true flat_us=2284 walk_us=7023
+funs=896 shards=4 same_units=false same_set=false moved=677 flat_loads=[363389,
+                                                                        363392,
+                                                                        363392,
+                                                                        363393] ext_split_flat_loads=[361229,
+                                                                                                      364054,
+                                                                                                      362851,
+                                                                                                      365432] max_ratio=1.0056
+  kinds=#{atom => 278669,big => 17,float => 19,small => 308062}
+  walk_units_same=true
+  walk_equals_flat=true flat_us=2185 walk_us=7079

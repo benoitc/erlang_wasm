@@ -84,7 +84,11 @@ open a pull request". The ones to check before every commit:
   [Design principles](docs/design-principles.md#failures-are-values-at-the-guest-boundary).
 - Options express what the embedder knows, never an implementation tactic.
   Do not add a knob for a tactic that wins only on some workloads.
-- Use only documented OTP APIs.
+- Use only documented OTP APIs. Two exceptions are measured and kept:
+  `erts_debug:size_shared/1`, the only measure of a cached module that keeps
+  its sharing, and `prim_file`, which keeps file operations off
+  `file_server_2`. `wasm_architecture_SUITE` lists them with their reasons
+  and fails on any other call; the numbers are in `test/audit/PERF.md`.
 - Do not run a formatter; keep 80 columns by hand.
 - Do not use the em-dash character in code, docs or messages.
 - A new module needs a level in `docs/architecture.md`, a line in

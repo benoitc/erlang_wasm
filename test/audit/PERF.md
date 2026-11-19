@@ -10136,3 +10136,69 @@ growing with the length of the line.
 
 **Raw.** `test/audit/raw/linear-builders/`: `bench.erl`, `gate.sh`,
 `ratios.escript`, `null.log`, `gate.log` and `gate2.log`.
+
+## Documented OTP APIs: what was replaced, and what is kept (2026-11-19)
+
+**The question.** Three undocumented OTP calls were in the application:
+`erts_debug:size_shared/1` charging a cached module against the cache's
+budget, `erts_debug:flat_size/1` weighing functions to balance compile
+shards, and eight `prim_file` calls in `wasi_path`, `wasi_fs` and
+`wasm_worker_fs`. Can each be replaced by a documented call without losing
+what it was there for?
+
+**The cache: kept.** A cached module is the `{Module, Prep}` entry stored in
+`persistent_term`, measured on three fixtures:
+
+| fixture | `size_shared/1` | `external_size/1` | `flat_size/1` | real growth of `persistent_term` |
+| --- | ---: | ---: | ---: | ---: |
+| qjs | 37.6 MB | 33.2 MB | 110.8 MB | 37.7 MB |
+| python | 190.4 MB | 164.7 MB | 557.0 MB | 190.5 MB |
+| lua | 7.3 MB | 6.3 MB | 21.6 MB | 7.3 MB |
+
+`persistent_term` keeps a term's sharing, so `size_shared/1` is the real
+cost to within 0.3%. The documented `erlang:external_size/1` is 12 to 14%
+low, which would let the budget under-count. The real growth of
+`persistent_term` is documented too, but measured around a put it takes in
+whatever else the node puts or erases in that time, and a CPython put takes
+about half a second.
+
+**Compile sharding: replaced.** The gate, fixed before measuring: the units
+must be the same as today's. A split happens only under a forced
+`compile_shards` or above 4,096 functions in a unit, so `split/2` was
+patched in a scratch build to bin each unit both ways. The hot sets came from
+one QuickJS and one CPython worker with `compile_shards` 2 and 4.
+
+- With `erlang:external_size/1` the units differ in all four cases. The
+  heaviest unit, in today's words, is 0.15 to 1.2% heavier.
+- With a word count of the IR's tuples, lists, floats and integers, every
+  function's weight is the same as `flat_size/1`'s. So are all four splits.
+- The count takes 4 to 7 ms per unit against 1 to 2 ms, inside a compile
+  that takes seconds.
+
+CPython's whole module did not reach `split/2` in the probe, so it is not in
+the comparison.
+
+**`prim_file`: kept.** None of the eight calls has a `raw` option in `file`,
+so each would go through `file_server_2`, one process for the node. The
+variant with `file` against `main`: `bench/paths/reqbench.erl` with the
+CPython reactor, 14 workers, 64 callers, 10 s. Five pairs of launches in
+alternating order, `main` against itself first. The load average was 33 to
+187, far above the protocol's 8.
+
+| run | median ratio, requests a second | range over five pairs | `file_server_2` queue at 64 callers |
+| --- | ---: | --- | --- |
+| null | 1.00 | 0.65 to 1.16 | max 0 |
+| `file` against `main` | 0.99 | 0.79 to 1.17 | max 14 to 16, mean about 2, against 0 |
+
+The rule fixed beforehand was: move to `file` within 1.10x. At this load the
+null run alone spreads further than that, so throughput cannot decide it.
+The queue can. The serialisation point that the record "Requests on a pool"
+removed comes back with `file`. `prim_file` stays.
+
+Both exceptions are listed, with their reasons, in `wasm_architecture_SUITE`
+(`only_documented_otp_calls_are_made`), which fails on any other call into
+`erts_debug`, `erts_internal` or a `prim_*` module.
+
+**Raw.** `test/audit/raw/otp-apis/`: `splitprobe.erl` and `split-probe.patch`
+(the scratch build), `split-external.log`, `split-words.log`, `reqgate.sh`,
+`req-null.log` and `req-gate.log`.

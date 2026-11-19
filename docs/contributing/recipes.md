@@ -594,7 +594,8 @@ without it.
    the compiler in a process of its own, bound by `wasm_lifetime:bind/1`.
    Measure before you remove it.
 5. Use only documented OTP APIs: an undocumented one is what a new release
-   changes without notice.
+   changes without notice. On an upgrade, recheck the measured exceptions
+   `wasm_architecture_SUITE` lists, since those are the calls it can break.
 
 ## Claim a speed-up
 

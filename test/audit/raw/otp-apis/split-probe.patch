@@ -1,0 +1,85 @@
+diff --git a/src/wasm_jit.erl b/src/wasm_jit.erl
+index 1cebc7a..e0f6415 100644
+--- a/src/wasm_jit.erl
++++ b/src/wasm_jit.erl
+@@ -1,4 +1,5 @@
+ -module(wasm_jit).
++-compile(nowarn_unused_function).
+ -moduledoc """
+ When a module gets compiled, and how a call reaches the result.
+ 
+@@ -1038,12 +1039,74 @@ split(Unit, Limits) ->
+         N ->
+             Sized = [{erts_debug:flat_size(IR), U} || {_, _, _, IR} = U <- Unit],
+             Cap = map_get(max_funs, wasm_core:limits()),
++            probe_split(Unit, N, Cap),
+             case bins(lists:reverse(lists:sort(Sized)), empty_bins(N), Cap) of
+                 full -> full;
+                 Parts -> renumber(Parts)
+             end
+     end.
+ 
++probe_split(Unit, N, Cap) ->
++    Flat = [{erts_debug:flat_size(IR), U} || {_, _, _, IR} = U <- Unit],
++    Ext = [{erlang:external_size(IR), U} || {_, _, _, IR} = U <- Unit],
++    W = maps:from_list([{element(2, U), Wt} || {Wt, U} <- Flat]),
++    B1 = bins(lists:reverse(lists:sort(Flat)), empty_bins(N), Cap),
++    B2 = bins(lists:reverse(lists:sort(Ext)), empty_bins(N), Cap),
++    Ids = fun(Ps) -> [lists:sort([element(2, U) || U <- P]) || P <- Ps] end,
++    I1 = Ids(B1), I2 = Ids(B2),
++    Loads = fun(Is) -> [lists:sum([map_get(X, W) || X <- P]) || P <- Is] end,
++    L1 = Loads(I1), L2 = Loads(I2),
++    Moved = length(lists:append(I1) -- lists:append(I2)) +
++        lists:sum([length(A -- B) || {A, B} <- lists:zip(lists:sort(I1), lists:sort(I2), trim)]),
++    {ok, F} = file:open("/private/tmp/claude-501/-Users-benoitc-Projects-erlang-wasm/6ae9d259-9f52-4d24-b2e6-3021f2b63cc5/scratchpad/split.log", [append]),
++    io:format(F, "funs=~b shards=~b same_units=~p same_set=~p moved=~b flat_loads=~p ext_split_flat_loads=~p max_ratio=~.4f~n",
++              [length(Unit), N, I1 =:= I2, lists:sort(I1) =:= lists:sort(I2), Moved, L1, L2,
++               lists:max(L2) / lists:max(L1)]),
++    Walk = [{ir_words(IR), U} || {_, _, _, IR} = U <- Unit],
++    {T1, _} = timer:tc(fun() -> [erts_debug:flat_size(IR) || {_, _, _, IR} <- Unit] end),
++    {T2, _} = timer:tc(fun() -> [ir_words(IR) || {_, _, _, IR} <- Unit] end),
++    Kinds = lists:foldl(fun({_, _, _, IR}, Acc) -> kinds(IR, Acc) end, #{}, Unit),
++    io:format(F, "  kinds=~p~n", [Kinds]),
++    WB = bins(lists:reverse(lists:sort(Walk)), empty_bins(N), Cap),
++    io:format(F, "  walk_units_same=~p~n", [Ids(WB) =:= I1]),
++    io:format(F, "  walk_equals_flat=~p flat_us=~b walk_us=~b~n", [Walk =:= Flat, T1, T2]),
++    file:close(F).
++
++kinds(T, A) when is_tuple(T) -> lists:foldl(fun kinds/2, A, tuple_to_list(T));
++kinds([H | T], A) -> kinds(T, kinds(H, A));
++kinds([], A) -> A;
++kinds(X, A) ->
++    K = if is_atom(X) -> atom; is_float(X) -> float;
++           is_integer(X), X >= -(1 bsl 59), X < (1 bsl 59) -> small;
++           is_integer(X) -> big; is_binary(X) -> binary; is_map(X) -> map;
++           is_function(X) -> function; is_pid(X) -> pid; is_reference(X) -> ref;
++           true -> other end,
++    maps:update_with(K, fun(N) -> N + 1 end, 1, A).
++
++ir_words(T) when is_tuple(T) ->
++    1 + tuple_size(T) + tuple_words(T, tuple_size(T), 0);
++ir_words([H | T]) ->
++    2 + ir_words(H) + ir_words(T);
++ir_words(F) when is_float(F) ->
++    2;
++ir_words(I) when is_integer(I), I >= -(1 bsl 59), I < 1 bsl 59 ->
++    0;
++ir_words(I) when is_integer(I) ->
++    1 + (byte_size(binary:encode_unsigned(abs(I))) + 7) div 8;
++ir_words(_Other) ->
++    0.
++
++tuple_words(_T, 0, Acc) -> Acc;
++tuple_words(T, N, Acc) -> tuple_words(T, N - 1, Acc + ir_words(element(N, T))).
++
++words(T) when is_tuple(T) -> 1 + tuple_size(T) + lists:sum([words(E) || E <- tuple_to_list(T)]);
++words([H | T]) -> 2 + words(H) + words(T);
++words(F) when is_float(F) -> 2;
++words(I) when is_integer(I) -> erts_debug:flat_size(I);
++words(B) when is_binary(B) -> erts_debug:flat_size(B);
++words(M) when is_map(M) -> erts_debug:flat_size(M);
++words(_) -> 0.
++
+ %%% ---------------------------------------------------------------- limits ---
+ 
+ -doc """

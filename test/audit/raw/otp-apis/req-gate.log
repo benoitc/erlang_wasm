@@ -1,0 +1,55 @@
+round 1 load 141.80 115.22 67.62
+a warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+a clients 1: 333 requests, 33.3 req/s, p50 27 ms, p99 59 ms, schedulers 10% normal / 1% dirty io
+a   file_server_2              max   0  mean 0.00
+a clients 64: 1570 requests, 157.0 req/s, p50 412 ms, p99 608 ms, schedulers 67% normal / 4% dirty io
+a   file_server_2              max   0  mean 0.00
+b warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+b clients 1: 229 requests, 22.9 req/s, p50 39 ms, p99 102 ms, schedulers 9% normal / 1% dirty io
+b   file_server_2              max   2  mean 0.01
+b clients 64: 1559 requests, 155.9 req/s, p50 413 ms, p99 594 ms, schedulers 66% normal / 4% dirty io
+b   file_server_2              max  14  mean 2.08
+round 2 load 132.20 116.68 71.38
+b warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+b clients 1: 259 requests, 25.9 req/s, p50 31 ms, p99 94 ms, schedulers 9% normal / 1% dirty io
+b   file_server_2              max   2  mean 0.01
+b clients 64: 1466 requests, 146.6 req/s, p50 441 ms, p99 602 ms, schedulers 65% normal / 4% dirty io
+b   file_server_2              max  15  mean 1.92
+a warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+a clients 1: 259 requests, 25.9 req/s, p50 34 ms, p99 102 ms, schedulers 10% normal / 1% dirty io
+a   file_server_2              max   0  mean 0.00
+a clients 64: 1249 requests, 124.9 req/s, p50 491 ms, p99 1021 ms, schedulers 64% normal / 5% dirty io
+a   file_server_2              max   0  mean 0.00
+round 3 load 125.75 116.54 74.58
+a warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+a clients 1: 231 requests, 23.1 req/s, p50 37 ms, p99 137 ms, schedulers 9% normal / 1% dirty io
+a   file_server_2              max   0  mean 0.00
+a clients 64: 1558 requests, 155.8 req/s, p50 408 ms, p99 732 ms, schedulers 68% normal / 4% dirty io
+a   file_server_2              max   0  mean 0.00
+b warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+b clients 1: 293 requests, 29.3 req/s, p50 31 ms, p99 71 ms, schedulers 10% normal / 1% dirty io
+b   file_server_2              max   1  mean 0.01
+b clients 64: 1550 requests, 155.0 req/s, p50 426 ms, p99 550 ms, schedulers 63% normal / 4% dirty io
+b   file_server_2              max  14  mean 1.83
+round 4 load 114.82 114.67 76.93
+b warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+b clients 1: 272 requests, 27.2 req/s, p50 32 ms, p99 80 ms, schedulers 10% normal / 1% dirty io
+b   file_server_2              max   1  mean 0.01
+b clients 64: 1429 requests, 142.9 req/s, p50 457 ms, p99 674 ms, schedulers 57% normal / 4% dirty io
+b   file_server_2              max  16  mean 2.21
+a warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+a clients 1: 336 requests, 33.6 req/s, p50 27 ms, p99 54 ms, schedulers 11% normal / 1% dirty io
+a   file_server_2              max   0  mean 0.00
+a clients 64: 1810 requests, 181.0 req/s, p50 351 ms, p99 549 ms, schedulers 70% normal / 4% dirty io
+a   file_server_2              max   0  mean 0.00
+round 5 load 108.68 112.39 78.83
+a warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+a clients 1: 317 requests, 31.7 req/s, p50 27 ms, p99 79 ms, schedulers 10% normal / 1% dirty io
+a   file_server_2              max   0  mean 0.00
+a clients 64: 1808 requests, 180.8 req/s, p50 359 ms, p99 486 ms, schedulers 62% normal / 4% dirty io
+a   file_server_2              max   0  mean 0.00
+b warm; jit #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 0,
+b clients 1: 341 requests, 34.1 req/s, p50 27 ms, p99 55 ms, schedulers 11% normal / 1% dirty io
+b   file_server_2              max   2  mean 0.01
+b clients 64: 1622 requests, 162.2 req/s, p50 400 ms, p99 519 ms, schedulers 58% normal / 4% dirty io
+b   file_server_2              max  15  mean 2.16

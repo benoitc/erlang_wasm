@@ -25,7 +25,8 @@ all() ->
      every_function_a_moduledoc_names_exists,
      every_module_and_page_is_in_the_docs_site,
      every_module_is_on_the_map,
-     every_case_a_suite_defines_is_run].
+     every_case_a_suite_defines_is_run,
+     only_documented_otp_calls_are_made].
 
 %% The three components `docs/architecture.md' names, and why each one is there.
 %%
@@ -231,6 +232,56 @@ every_module_is_on_the_map(_) ->
                     string:find(Page, "`" ++ atom_to_list(M) ++ "`")
                         =:= nomatch],
     ?assertEqual([], Missing, "modules missing from docs/map.md").
+
+%% Only documented OTP APIs, as AGENTS.md says, except the calls listed here.
+%% An undocumented call can change under an upgrade without notice. Each
+%% exception names its reason, and `test/audit/PERF.md' has the numbers.
+%% A call into `erts_debug', `erts_internal' or a `prim_*' module that is not
+%% listed fails this case.
+%% Fail-first: on the parent it named `wasm_jit''s `erts_debug:flat_size/1',
+%% which compile sharding no longer calls.
+only_documented_otp_calls_are_made(_) ->
+    Calls = lists:usort(
+              [{M, MFA} || M <- modules(),
+                           MFA <- imports(M),
+                           undocumented(element(1, MFA)),
+                           not lists:member(MFA, compiler_emitted())]),
+    ?assertEqual([], Calls -- [{M, MFA} || {M, MFA, _Why} <- otp_exceptions()]).
+
+%% `size_shared/1' is what a cached module really costs: `persistent_term'
+%% keeps a term's sharing, and the documented `erlang:external_size/1' counts
+%% 12 to 14% less, which would let the cache's budget under-count.
+%%
+%% `prim_file' does in the caller what `file' sends to `file_server_2', one
+%% process for the node. None of these calls has a `raw' option in `file'.
+%% Through `file', the server's queue came back under a pool of workers: at
+%% 64 callers it reached 14 to 16, where with `prim_file' it stays at 0.
+otp_exceptions() ->
+    Raw = "file operations without queueing on file_server_2",
+    [{wasm_module_cache, {erts_debug, size_shared, 1},
+      "the only measure of a cached entry that keeps its sharing"}
+     | [{M, {prim_file, F, A}, Raw}
+        || {M, F, A} <- [{wasi_fs, list_dir, 1}, {wasi_fs, make_symlink, 2},
+                         {wasi_fs, read_link, 1}, {wasi_path, read_link, 1},
+                         {wasi_path, read_link_all, 1},
+                         {wasm_worker_fs, del_dir, 1},
+                         {wasm_worker_fs, list_dir_all, 1},
+                         {wasm_worker_fs, make_dir, 1},
+                         {wasm_worker_fs, rename, 2}]]].
+
+%% What the compiler writes for a map generator, `K := V <- Map': no source
+%% calls these, and they come and go with the compiler that emits them.
+compiler_emitted() ->
+    [{erts_internal, mc_iterator, 1}, {erts_internal, mc_refill, 1}].
+
+undocumented(erts_debug) -> true;
+undocumented(erts_internal) -> true;
+undocumented(Mod) -> lists:prefix("prim_", atom_to_list(Mod)).
+
+imports(M) ->
+    Beam = filename:join(ebin(), atom_to_list(M) ++ ".beam"),
+    {ok, {M, [{imports, Imports}]}} = beam_lib:chunks(Beam, [imports]),
+    Imports.
 
 %% A case that no `all/0', group or other function names never runs, and passes
 %% unseen: `wasm_wat_SUITE''s check that an inline segment takes an index in its

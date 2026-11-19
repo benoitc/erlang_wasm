@@ -1036,13 +1036,36 @@ split(Unit, Limits) ->
     case shard_count(length(Unit), Limits) of
         1 -> [Unit];
         N ->
-            Sized = [{erts_debug:flat_size(IR), U} || {_, _, _, IR} = U <- Unit],
+            Sized = [{ir_words(IR), U} || {_, _, _, IR} = U <- Unit],
             Cap = map_get(max_funs, wasm_core:limits()),
             case bins(lists:reverse(lists:sort(Sized)), empty_bins(N), Cap) of
                 full -> full;
                 Parts -> renumber(Parts)
             end
     end.
+
+%% The heap words a function's IR occupies, counted the way the runtime lays
+%% terms out, so a weight means the same as the sizes quoted above. Only the
+%% terms the IR holds are counted: tuples, lists, floats and integers. Atoms
+%% and small integers live in the word that refers to them. Anything else does
+%% not occur in the IR and weighs nothing. It agrees with the runtime's own
+%% count on QuickJS's and CPython's hot sets, and splits them into the same
+%% units; `test/audit/PERF.md' has the comparison.
+ir_words(T) when is_tuple(T) ->
+    1 + tuple_size(T) + tuple_words(T, tuple_size(T), 0);
+ir_words([H | T]) ->
+    2 + ir_words(H) + ir_words(T);
+ir_words(F) when is_float(F) ->
+    2;
+ir_words(I) when is_integer(I), I >= -(1 bsl 59), I < 1 bsl 59 ->
+    0;
+ir_words(I) when is_integer(I) ->
+    1 + (byte_size(binary:encode_unsigned(abs(I))) + 7) div 8;
+ir_words(_Other) ->
+    0.
+
+tuple_words(_T, 0, Acc) -> Acc;
+tuple_words(T, N, Acc) -> tuple_words(T, N - 1, Acc + ir_words(element(N, T))).
 
 %%% ---------------------------------------------------------------- limits ---
 

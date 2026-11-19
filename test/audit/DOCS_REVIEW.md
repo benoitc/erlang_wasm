@@ -822,3 +822,24 @@ Q2, Q4, Q5, Q7, Q9 and Q11 to Q15.
 the one that cost time. Then N1 and N2. Then N5 and N6, a case each. N7 and
 N8 together, since the example page is what the new row points to. Nothing
 here needs a source change outside module docs and tests.
+
+## Before 0.11.1
+
+Reviewed on `main` at `9126c8f`, 2026-11-19. Since 0.11.0 one pull request
+merged, #143: the example page for `wasi:nn` that N7 asked for, with
+`examples/nn_upper.erl` and two cases in `wasm_examples_SUITE`. Nothing in
+`src/` changed: 95 modules, 105 suites.
+
+**What is already right.** The page is in the example chain (it follows
+"Use a component resource" and is now the last), in both lists of
+`rebar.config`, and linked from the top of the guide. `start-here.md` and
+`map.md` say `examples/` holds three demonstrations, and `features.md` says
+the third is a backend and not a guest. The page states what the component
+does when its model is not granted as the suite observed it: a trap, not an
+exit code.
+
+**Found.** Nothing new.
+
+**Still open, unchanged.** Every item under "Still open" above, and questions
+Q2, Q4, Q5, Q7, Q9 and Q11 to Q15. The three blocks of `wasi-nn.md` itself
+are still parsed and not run; the example page is where a reader runs them.

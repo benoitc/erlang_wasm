@@ -98,6 +98,5 @@ it.
 
 ## Read this next
 
-This is the last example. Go on with [Hold modules and
-instances](../embedding.md).
+The next example: [Run a model from a component](run-a-model.md).
 The guide behind this example: [Components](../components.md).

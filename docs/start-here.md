@@ -49,8 +49,8 @@ that shows you how.
 The library gives you the modules. You bring the guest: the `.wasm` file, or
 for a script the language runtime file and the source code. You also bring
 the values for the limits, and the supervision. You do not need anything in
-`examples/`: it holds two demonstrations, `plugin_worker` and `qjs_worker`,
-for you to read and copy.
+`examples/`: it holds three demonstrations for you to read and copy,
+`plugin_worker`, `qjs_worker` and `nn_upper`.
 
 ## Read in this order
 

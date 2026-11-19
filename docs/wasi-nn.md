@@ -17,6 +17,9 @@ repository. It is in progress and not yet published.
 this part of the runtime: `wasi_nn`, its callbacks and the `nn` option may
 change when the interface does, in a release that is not marked as breaking.
 
+To see it work before you read further, run the example:
+[Run a model from a component](examples/run-a-model.md).
+
 ## Words used on this page
 
 | word | meaning |

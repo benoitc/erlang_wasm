@@ -799,7 +799,12 @@ runner serves the grant to the commands it runs. No 0.3 guest that imports
 `wasi:nn` exists, and the guide now says which runner takes the key and no
 more. N6 by `a_component_that_imports_nn_is_not_captured`.
 
-**Still open from this section.** N7.
+**N7, done after the release.** `docs/examples/run-a-model.md` is an
+example page `wasm_docs_SUITE` runs: it loads `examples/nn_upper.erl`, the
+smallest backend, grants a model to the committed `nncommand` component and
+shows the answer, then shows what a missing grant does. It has the diagram
+of who holds what. `wasm_examples_SUITE` compiles the backend, runs it, and
+fails when the page and the file differ. Nothing from this section is open.
 
 **Grew, no new finding.** `wasm_async` went from 2,743 to 2,953 lines with
 the cooperative threads of #139: it is still the largest module after

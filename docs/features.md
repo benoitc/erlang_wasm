@@ -320,7 +320,9 @@ test runs without a Rust toolchain.
 ## Real usage
 
 Two complete examples, both in `examples/` and both tested by
-`wasm_examples_SUITE`. They show two different *kinds* of guest.
+`wasm_examples_SUITE`. They show two different *kinds* of guest. A third
+module there, `nn_upper`, is not a guest but the smallest `wasi:nn` backend;
+[Run a model from a component](examples/run-a-model.md) runs it.
 
 | | `plugin_worker` | `qjs_worker` |
 | --- | ---: | ---: |

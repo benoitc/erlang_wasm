@@ -24,6 +24,9 @@ and a context are closed once.
 -include_lib("stdlib/include/assert.hrl").
 
 -define(MIB, 1024 * 1024).
+-define(NO_LOAD,
+        <<"unsupported-operation: this host does not load a model of this "
+          "format from bytes">>).
 -define(OUTPUT,
         {record, [{<<"name">>, string}, {<<"dimensions">>, {list, u32}},
                   {<<"ty">>, string}, {<<"data">>, {list, u8}}]}).
@@ -55,7 +58,15 @@ all() ->
      the_imports_work_without_the_command_host,
      a_command_runs_a_model,
      a_command_closes_what_it_dropped_and_what_it_kept,
-     a_command_without_the_grant_is_refused].
+     a_command_without_the_grant_is_refused,
+     the_host_serves_every_function_of_the_interface,
+     every_tensor_type_round_trips,
+     every_encoding_and_target_reaches_the_backend,
+     every_error_code_reaches_the_guest,
+     the_length_rule_holds_for_every_type,
+     an_encoding_outside_the_grant_is_refused,
+     a_backend_without_load_refuses_bytes,
+     the_tensor_bound_is_the_grants].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -127,8 +138,7 @@ without_the_option_the_import_is_missing(Config) ->
 
 loading_from_bytes_is_refused(Config) ->
     I = instance(Config),
-    ?assertEqual({ok, <<"unsupported-operation: load a model by name">>},
-                 call(I, <<"load-bytes">>, {[], string}, [])),
+    ?assertEqual({ok, ?NO_LOAD}, call(I, <<"load-bytes">>, {[], string}, [])),
     ?assertEqual([], wasm_component:host_live()).
 
 %%% ----------------------------------------------------------- the bound ---
@@ -310,7 +320,178 @@ a_command_without_the_grant_is_refused(_Config) ->
                  wasi_preview2:run_command(command(), <<"hello">>, #{})),
     ?assertEqual([], drain()).
 
+%%% ------------------------------------------- vectors from the interface ---
+%%
+%% The specification has no test suite. What it has is the interface, in WIT,
+%% and one rule about a tensor's data. These cases read the interface from
+%% the copy of the upstream file the guest was built from, and expect what it
+%% says: its functions, and the cases of each enum in their order. The guest
+%% passes an enum by position, so a table of the host that disagrees with
+%% the interface by one place fails here.
+
+%% Every function, constructor, method and drop the interface declares has an
+%% import, and the host has no import the interface lacks.
+the_host_serves_every_function_of_the_interface(_Config) ->
+    ?assertEqual(wit_fields(),
+                 lists:sort(maps:keys(wasi_nn:imports(grant())))).
+
+every_tensor_type_round_trips(Config) ->
+    I = instance(Config),
+    Types = wit_enum("tensor-type"),
+    ?assertEqual(7, length(Types)),
+    [?assertEqual({ok, #{<<"name">> => <<>>, <<"dimensions">> => [2, 3],
+                         <<"ty">> => Type, <<"data">> => <<"abcdef">>}},
+                  call(I, <<"tensor-echo">>, {[{list, u32}, u32, {list, u8}],
+                                              ?OUTPUT},
+                       [[2, 3], Index, <<"abcdef">>]))
+     || {Index, Type} <- lists:enumerate(0, Types)],
+    ?assertEqual([], wasm_component:host_live()),
+    %% And the backend sees the atom the name spells, with the dimensions.
+    [begin
+         {ok, _} = call(I, <<"run-with">>,
+                        {[string, {list, u32}, u32, {list, u8}],
+                         {result, {list, ?OUTPUT}, string}},
+                        [<<"echo">>, [2, 3], Index, <<"abcdef">>]),
+         ?assertEqual([{nn, compute,
+                        [{<<"input">>, #{dimensions => [2, 3],
+                                         type => atom(Type),
+                                         data => <<"abcdef">>}}]}],
+                      [M || {nn, compute, _} = M <- drain()])
+     end || {Index, Type} <- lists:enumerate(0, Types)].
+
+%% Twenty-one calls: each format with each target. The backend must see the
+%% atom the interface's name spells, and every part of the model in order.
+every_encoding_and_target_reaches_the_backend(Config) ->
+    Encodings = wit_enum("graph-encoding"),
+    Targets = wit_enum("execution-target"),
+    ?assertEqual({7, 3}, {length(Encodings), length(Targets)}),
+    Grant = (classifier())#{encodings => [atom(E) || E <- Encodings]},
+    I = instance(Config, Grant),
+    [begin
+         ?assertEqual({ok, <<"ok">>}, load_with(I, [<<1>>, <<2, 3>>], E, T)),
+         ?assertEqual([{nn, load, atom(Encoding), atom(Target), [1, 2]}],
+                      drain())
+     end || {E, Encoding} <- lists:enumerate(0, Encodings),
+            {T, Target} <- lists:enumerate(0, Targets)],
+    ?assertEqual([], wasm_component:host_live()).
+
+every_error_code_reaches_the_guest(Config) ->
+    I = instance(Config),
+    Codes = wit_enum("error-code"),
+    ?assertEqual(9, length(Codes)),
+    [?assertEqual({error, <<Code/binary, ": as asked">>},
+                  run(I, <<"echo">>,
+                      <<"code:", (atom_to_binary(atom(Code)))/binary>>))
+     || Code <- Codes].
+
+%% The one rule of the specification about data: its length is the product
+%% of the dimensions times the size of an element. The first vector is the
+%% specification's own example, a 2x2 tensor of `f32` in 16 bytes.
+the_length_rule_holds_for_every_type(_Config) ->
+    ?assertEqual(ok, wasi_nn:check_tensor(tensor([2, 2], fp32, 16))),
+    Sizes = [{u8, 1}, {fp16, 2}, {bf16, 2}, {fp32, 4}, {i32, 4}, {fp64, 8},
+             {i64, 8}],
+    ?assertEqual(lists:sort([atom(T) || T <- wit_enum("tensor-type")]),
+                 lists:sort([T || {T, _} <- Sizes])),
+    [begin
+         Bytes = Size * lists:foldl(fun erlang:'*'/2, 1, Dims),
+         ?assertEqual(ok, wasi_nn:check_tensor(tensor(Dims, Type, Bytes))),
+         ?assertMatch({error, {invalid_argument, _}},
+                      wasi_nn:check_tensor(tensor(Dims, Type, Bytes + 1))),
+         ?assertMatch({error, {invalid_argument, _}},
+                      wasi_nn:check_tensor(tensor(Dims, Type, Bytes + Size)))
+     end || {Type, Size} <- Sizes,
+            Dims <- [[1], [7], [2, 2], [1, 3, 224, 224], [3, 0, 5], []]].
+
+%%% ------------------------------------------------- a model from bytes ---
+
+%% Fail-first: without the `lists:member/2` check in `wasi_nn:load/6` the
+%% backend loads a format the grant does not list.
+an_encoding_outside_the_grant_is_refused(Config) ->
+    I = instance(Config, (classifier())#{encodings => [onnx]}),
+    ?assertEqual({ok, <<"ok">>}, load_with(I, [<<1>>], 1, 0)),
+    ?assertMatch([{nn, load, onnx, cpu, [1]}], drain()),
+    ?assertEqual({ok, ?NO_LOAD}, load_with(I, [<<1>>], 3, 0)),
+    ?assertEqual([], drain()).
+
+%% `wasi_nn_test_backend` exports no `load/4`.
+a_backend_without_load_refuses_bytes(Config) ->
+    I = instance(Config, (grant())#{encodings => [ggml]}),
+    ?assertEqual({ok, ?NO_LOAD}, call(I, <<"load-bytes">>, {[], string}, [])),
+    ?assertEqual([], wasm_component:host_live()).
+
+%%% ------------------------------------------------------------ the bound ---
+
+the_tensor_bound_is_the_grants(Config) ->
+    Small = instance(Config, (grant())#{max_tensor_bytes => 3 * ?MIB}),
+    ?assertEqual({ok, 2}, hold(Small, 2)),
+    ?assertMatch({error, #{class := trap, kind := nn_tensor_limit_reached,
+                           ctx := #{limit := 3145728}}},
+                 hold(Small, 1)),
+    ok = wasm_component:destroy(Small, fun wasi_preview2:close_resource/1),
+    Large = instance(Config, (grant())#{max_tensor_bytes => 32 * ?MIB}),
+    ?assertEqual({ok, 20}, hold(Large, 20)).
+
 %%% -------------------------------------------------------------- helpers ---
+
+classifier() ->
+    #{backend => wasi_nn_classifier_backend, models => [],
+      backend_opts => #{owner => self()}}.
+
+load_with(I, Parts, Encoding, Target) ->
+    call(I, <<"load-with">>, {[{list, {list, u8}}, u32, u32], string},
+         [Parts, Encoding, Target]).
+
+tensor(Dims, Type, Bytes) ->
+    #{dimensions => Dims, type => Type, data => binary:copy(<<0>>, Bytes)}.
+
+%% The atom a backend sees for a name of the interface: `FP32` is `fp32`,
+%% `invalid-argument` is `invalid_argument`.
+atom(Name) ->
+    binary_to_atom(
+      binary:replace(string:lowercase(Name), <<"-">>, <<"_">>, [global])).
+
+%% The upstream interface, without its comments.
+wit() ->
+    {ok, Text} = file:read_file(
+                   filename:join([code:lib_dir(wasm), "..", "..", "..", "..",
+                                  "test", "fixtures", "component", "wasinn",
+                                  "wit", "deps", "nn", "wasi-nn.wit"])),
+    re:replace(Text, "//[^\n]*", "", [global, {return, binary}]).
+
+%% The cases of an enum of the interface, in the order it declares them.
+wit_enum(Name) ->
+    {match, [Body]} = re:run(wit(), "enum\\s+" ++ Name ++ "\\s*\\{([^}]*)\\}",
+                             [{capture, all_but_first, binary}]),
+    [Case || Case <- re:split(Body, "[\\s,]+"), Case =/= <<>>].
+
+%% Every import key the interface implies, sorted.
+wit_fields() ->
+    [_World | Interfaces] = re:split(wit(), "\\binterface\\s+"),
+    lists:sort(lists:flatmap(fun interface_fields/1, Interfaces)).
+
+interface_fields(Text) ->
+    {match, [Name]} = re:run(Text, "^([a-z-]+)",
+                             [{capture, all_but_first, binary}]),
+    Iface = <<"wasi:nn/", Name/binary>>,
+    Resources = matches(Text, "resource\\s+([a-z-]+)\\s*\\{([^}]*)\\}"),
+    Rest = re:replace(Text, "(resource|enum)\\s+[a-z-]+\\s*\\{[^}]*\\}",
+                      "", [global, {return, binary}]),
+    [{Iface, F} || [F] <- matches(Rest, "([a-z-]+)\\s*:\\s*func")]
+        ++ [{Iface, F} || [R, Body] <- Resources, F <- resource_fields(R, Body)].
+
+resource_fields(R, Body) ->
+    [<<"[resource-drop]", R/binary>>]
+        ++ [<<"[constructor]", R/binary>>
+            || re:run(Body, "constructor\\s*\\(") =/= nomatch]
+        ++ [<<"[method]", R/binary, ".", M/binary>>
+            || [M] <- matches(Body, "([a-z-]+)\\s*:\\s*func")].
+
+matches(Text, Pattern) ->
+    case re:run(Text, Pattern, [global, {capture, all_but_first, binary}]) of
+        {match, Found} -> Found;
+        nomatch -> []
+    end.
 
 grant() ->
     #{backend => wasi_nn_test_backend,
@@ -318,9 +499,12 @@ grant() ->
       backend_opts => #{owner => self()}}.
 
 instance(Config) ->
+    instance(Config, grant()).
+
+instance(Config, Grant) ->
     {ok, I} = wasm_component:instantiate(
                 ?config(component, Config),
-                wasi_preview2:command(#{nn => grant()}),
+                wasi_preview2:command(#{nn => Grant}),
                 #{resource_closer => fun wasi_preview2:close_resource/1}),
     I.
 
@@ -343,8 +527,7 @@ call(I, Name, Sig, Args) ->
     wasm_component:call(I, Name, Sig, Args).
 
 drain() ->
-    receive {nn, _, _} = M -> [M | drain()];
-            {nn, _, _, _} = M -> [M | drain()]
+    receive M when element(1, M) =:= nn -> [M | drain()]
     after 0 -> []
     end.
 

@@ -25,4 +25,13 @@ world app {
   /// Hand `compute` a handle it should refuse; `kind` picks which. The
   /// tensor involved holds `size` bytes.
   export misuse: func(model: string, kind: u32, size: u32) -> string;
+  /// Call `load` with these parts of a model. `encoding` and `target` are
+  /// positions in the `graph-encoding` and `execution-target` enums.
+  export load-with: func(parts: list<list<u8>>, encoding: u32, target: u32) -> string;
+  /// As `run`, with a tensor of these dimensions and of the type at
+  /// position `ty` of the `tensor-type` enum.
+  export run-with: func(model: string, dimensions: list<u32>, ty: u32, data: list<u8>) -> result<list<output>, string>;
+  /// Make a tensor and read it back through its three methods. `ty` is a
+  /// position in the `tensor-type` enum.
+  export tensor-echo: func(dimensions: list<u32>, ty: u32, data: list<u8>) -> output;
 }

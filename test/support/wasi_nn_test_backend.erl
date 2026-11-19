@@ -35,6 +35,8 @@ compute({_Name, Owner}, Inputs) ->
         <<"type">> ->
             {ok, [{<<"output">>, #{dimensions => [1], type => f128,
                                    data => <<>>}}]};
+        <<"code:", Code/binary>> ->
+            {error, {binary_to_existing_atom(Code), <<"as asked">>}};
         <<"code">> ->
             {error, {no_such_code, <<"a code the interface lacks">>}};
         <<"big">> ->

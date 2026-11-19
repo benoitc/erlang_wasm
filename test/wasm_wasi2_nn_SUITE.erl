@@ -59,6 +59,8 @@ all() ->
      a_command_runs_a_model,
      a_command_closes_what_it_dropped_and_what_it_kept,
      a_command_without_the_grant_is_refused,
+     the_wasi_3_runner_takes_the_grant,
+     a_component_that_imports_nn_is_not_captured,
      the_host_serves_every_function_of_the_interface,
      every_tensor_type_round_trips,
      every_encoding_and_target_reaches_the_backend,
@@ -319,6 +321,33 @@ a_command_without_the_grant_is_refused(_Config) ->
     ?assertMatch({error, _},
                  wasi_preview2:run_command(command(), <<"hello">>, #{})),
     ?assertEqual([], drain()).
+
+%% `wasi_preview3:run_command/3` runs 0.2 commands too, with the 0.2 host
+%% merged into its own: the grant and the closer must come through it. No
+%% 0.3 guest that imports `wasi:nn` exists to run.
+the_wasi_3_runner_takes_the_grant(_Config) ->
+    ?assertMatch({ok, #{stdout := <<"HELLO">>, exit_code := 0}},
+                 wasi_preview3:run_command(command(), <<"hello">>,
+                                           #{nn => grant()})),
+    ?assertEqual(3, length([M || {nn, close, _, _} = M <- drain()])),
+    ?assertEqual([], wasm_component:host_live()).
+
+%% The hooks of the WASI host declare its stateless interfaces, and
+%% `wasi:nn` is not one of them: a graph is the backend's, and nothing could
+%% make it again for another instance.
+a_component_that_imports_nn_is_not_captured(Config) ->
+    {ok, I} = wasm_component:instantiate(
+                ?config(component, Config),
+                wasi_preview2:command(#{nn => grant()}),
+                #{snapshotable => true,
+                  resource_closer => fun wasi_preview2:close_resource/1}),
+    {error, #{kind := Kind} = Refusal} =
+        wasm_component:snapshot(
+          I, #{snapshot_hooks => wasi_preview2:snapshot_hooks()}),
+    ?assertEqual(import_not_snapshottable, Kind),
+    %% And it is the `wasi:nn` import that is named, not another one.
+    Text = iolist_to_binary(io_lib:format("~p", [Refusal])),
+    ?assertNotEqual(nomatch, binary:match(Text, <<"wasi:nn">>)).
 
 %%% ------------------------------------------- vectors from the interface ---
 %%

@@ -23,6 +23,7 @@ version when it resolves them, so one host serves every `0.2.x`.
 | `wasi:filesystem`, read-only or writable per mount | `wasi_p2_filesystem:filesystem/1` |
 | `wasi:sockets`: TCP, UDP, name lookup | `wasi_p2_sockets:sockets/1`, over `wasi_sock2` |
 | `wasi:http` | `wasi_http:http/1` |
+| `wasi:nn`, with the `nn` option | `wasi_nn:imports/1` |
 | a whole `wasi:cli/command` world | `command/1`, run by `run_command/2` |
 | one `wasi:http/incoming-handler` request | `run_serve/3` |
 

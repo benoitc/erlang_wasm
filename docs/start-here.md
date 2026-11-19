@@ -43,6 +43,7 @@ that shows you how.
 | untrusted code, one instance per request | `wasm_instance_worker` | [Using workers](worker.md) |
 | a script (JavaScript, Python, Lua) sent with each request | `wasm_script_worker` and an adapter | [Hosting scripting languages](scripting.md) |
 | an HTTP handler component | `wasi_http_listener` | [HTTP](http.md) |
+| a model, and a component that should call it | `wasi_nn`, and a backend for your engine | [wasi-nn](wasi-nn.md) |
 | a change to make in the runtime | [CONTRIBUTING.md](../CONTRIBUTING.md) | [Where things are](map.md), [Architecture](architecture.md) |
 
 The library gives you the modules. You bring the guest: the `.wasm` file, or
@@ -108,7 +109,7 @@ call these modules and no others.
 | load, run and limit modules | `wasm`, `wasi`, `wasi_preview1`, `wasm_limits`, `wasm_engine`, `wasm_error` |
 | components | `wasm_component`, `wasi_preview2`, `wasi_preview3` |
 | HTTP | `wasi_http`, `wasi_http_listener`, and the transports `wasi_http_h1` and `wasi_http_h2` |
-| inference | `wasi_nn` |
+| inference | `wasi_nn`, a release candidate: it follows `wasi:nn`, which is one upstream, and may change with it |
 | workers | `wasm_instance_worker`, `wasm_script_worker`, `wasm_worker_error` |
 | language adapters | `wasm_javascript`, `wasm_javascript_command`, `wasm_python`, `wasm_python_command`, `wasm_lua` |
 
@@ -119,7 +120,7 @@ exports so that the runtime can use it. These are supported too:
 | --- | --- | --- |
 | `wasm_worker_adapter` | teaches the worker kernel another language; check it with the test kit `wasm_adapter_conformance` | [Writing an adapter](worker-contract.md) |
 | `wasi_http_transport` | sends the outbound HTTP requests of a component | [HTTP](http.md) |
-| `wasi_nn` | runs the models a component asks for through `wasi:nn` | [wasi-nn](wasi-nn.md) |
+| `wasi_nn`, a release candidate | runs the models a component asks for through `wasi:nn` | [wasi-nn](wasi-nn.md) |
 
 A few internal modules have one or two functions that a guide documents.
 Those functions are supported; the rest of the module is not:

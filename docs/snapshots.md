@@ -400,7 +400,7 @@ A restore is refused with `snapshot_incompatible` when its
 
 | What the instance holds | Kind |
 | --- | --- |
-| an import no hook declares | `import_not_snapshottable` |
+| an import no hook declares, such as any `wasi:nn` import | `import_not_snapshottable` |
 | a host resource with no origin: a file, a socket, an opened subdirectory | `host_resource_not_snapshottable` |
 | a stream that changed since it was made, such as one with a write permit outstanding | `host_resource_not_snapshottable` |
 | a resource the host holds | `resource_held_by_host` |

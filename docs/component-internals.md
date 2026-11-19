@@ -328,8 +328,8 @@ stream, a file descriptor, a socket or an HTTP request. It lives in
 change how one is freed or captured.
 
 **Who uses it.** The WASI hosts: `wasi_preview2`, `wasi_p2_filesystem`,
-`wasi_p2_sockets` and `wasi_http` for 0.2, and `wasi_p3_sockets` and
-`wasi_p3_http` for 0.3. A method looks its handle up with `host_get/1`,
+`wasi_p2_sockets`, `wasi_http` and `wasi_nn` for 0.2, and `wasi_p3_sockets`
+and `wasi_p3_http` for 0.3. A method looks its handle up with `host_get/1`,
 changes its state with `host_update/2`, and `[resource-drop]` calls
 `host_drop/1`. Your own host imports can use it the same way.
 
@@ -521,7 +521,23 @@ what its `imports/0` returns. A larger one has a module of its own, as
 `wasi_preview3`, or in a module beside `wasi_p3_filesystem`, `wasi_p3_sockets`
 and `wasi_p3_http`, merged by `wasi_preview3:command/1`. Its interface names
 keep the version, as in `~"wasi:sockets/types@0.3"`. If the import returns a
-resource, create it with `host_new/2` and also provide its `[resource-drop]`.
+resource, create it with `host_new/2`.
+
+A resource that holds something to free must free it on two routes, because
+a guest's drop reaches the host in two ways:
+
+- A component whose entry core imports only names the host supplies calls
+  the `[resource-drop]` function of your imports map.
+- A linked component, which every `wasm32-wasip2` build is, drops through
+  `canon resource.drop`. That calls the `resource_closer` of the instance,
+  with `{Tag, State}`, and then forgets the handle. The same closer runs on
+  what is still live at `destroy/2`.
+
+So provide both: a `[resource-drop]` that frees and calls `host_drop/1`, and
+a closer clause for your tag. Each drop takes one route, so each resource is
+freed once. `wasi_nn:close_resource/1` and the clause that calls it in
+`wasi_preview2:close_resource/1` are a small example, and
+`wasm_wasi2_nn_SUITE` has a guest for each route.
 
 **A canonical type.** Every layer has to agree on it:
 

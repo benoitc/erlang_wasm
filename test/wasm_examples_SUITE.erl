@@ -1,4 +1,4 @@
-%% @doc The two worked examples, run as written.
+%% @doc The worked examples, run as written.
 %%
 %% `examples/plugin_worker' and `examples/qjs_worker' are the two ways to use
 %% this library: compile the logic ahead of time, or ship an interpreter and
@@ -7,6 +7,10 @@
 %%
 %% What each case checks is the part that makes the logic *untrusted* rather
 %% than merely separate: a runaway is killed, and nothing survives a request.
+%%
+%% `examples/nn_upper' is a third module, of another kind: the smallest
+%% `wasi:nn' backend. Its page, `docs/examples/run-a-model.md', prints it in
+%% full, and a case here fails when the page and the file differ.
 -module(wasm_examples_SUITE).
 
 -compile([export_all, nowarn_export_all]).
@@ -20,7 +24,9 @@ all() ->
      a_runaway_plugin_is_killed,
      a_script_is_evaluated,
      a_runaway_script_is_killed,
-     scripts_cannot_see_each_other].
+     scripts_cannot_see_each_other,
+     the_example_backend_answers_a_command,
+     the_page_prints_the_example_backend].
 
 init_per_suite(Config) ->
     %% `examples/' is not in the application, so the examples are compiled here
@@ -28,7 +34,7 @@ init_per_suite(Config) ->
     Dir = filename:join(?config(priv_dir, Config), "examples"),
     ok = filelib:ensure_path(Dir),
     [{ok, _} = compile:file(source(M), [{outdir, Dir}, return_errors])
-     || M <- [plugin_worker, qjs_worker]],
+     || M <- [plugin_worker, qjs_worker, nn_upper]],
     true = code:add_patha(Dir),
     Config.
 
@@ -134,3 +140,28 @@ scripts_cannot_see_each_other(Config) ->
                          qjs_worker:eval(W, ~"print(typeof globalThis.marker);")),
             ok = qjs_worker:stop(W)
     end.
+
+%%% ------------------------------------------------- the wasi:nn backend ---
+
+the_example_backend_answers_a_command(_Config) ->
+    {ok, _} = application:ensure_all_started(wasm),
+    {ok, Guest} = file:read_file(
+                    fixture(["component", "nncommand.component.wasm"])),
+    Grant = #{backend => nn_upper, models => [~"echo"]},
+    ?assertMatch({ok, #{exit_code := 0, stdout := ~"ONCE UPON A TIME"}},
+                 wasi_preview2:run_command(Guest, ~"once upon a time",
+                                           #{nn => Grant})),
+    ?assertEqual({error, {invalid_argument,
+                          ~"one u8 tensor of text is expected"}},
+                 nn_upper:compute(#{}, [])).
+
+%% The page shows the module so that a reader need not open the file. What
+%% it shows is the file from its `-behaviour` line to its end.
+the_page_prints_the_example_backend(_Config) ->
+    {ok, Source} = file:read_file(source(nn_upper)),
+    {ok, Page} = file:read_file(
+                   filename:join([filename:dirname(source(nn_upper)), "..",
+                                  "docs", "examples", "run-a-model.md"])),
+    [_Doc, Code] = binary:split(Source, ~"-behaviour(wasi_nn).\n"),
+    ?assert(byte_size(Code) > 500),
+    ?assertNotEqual(nomatch, binary:match(Page, Code)).

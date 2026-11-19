@@ -10175,8 +10175,9 @@ one QuickJS and one CPython worker with `compile_shards` 2 and 4.
 - The count takes 4 to 7 ms per unit against 1 to 2 ms, inside a compile
   that takes seconds.
 
-CPython's whole module did not reach `split/2` in the probe, so it is not in
-the comparison.
+CPython's whole module is not in the comparison because it is never split:
+it defines 10,586 functions, and a compile over 8,192 is refused before
+anything is lowered (`compiled-tier-internals.md`, "The compile limits").
 
 **`prim_file`: kept.** None of the eight calls has a `raw` option in `file`,
 so each would go through `file_server_2`, one process for the node. The

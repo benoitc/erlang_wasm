@@ -161,7 +161,8 @@ Facts the jobs depend on:
   trade-off in `ATTEMPTS.md` and ship one default.
 - **Use documented OTP APIs only.** A behaviour that holds only through an
   undocumented call can change under an upgrade without notice; remove the
-  need for it instead.
+  need for it instead. The measured exceptions are listed, with their
+  reasons, in `wasm_architecture_SUITE`, which fails on any other call.
 - **No new module cycle.** `wasm_architecture_SUITE` pins the three that
   exist; a new cross-module call can add a fourth.
 

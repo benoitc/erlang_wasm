@@ -26,7 +26,7 @@ the few internal functions a guide documents.
 | `include/` | shared records and constants |
 | `c_src/` | the optional file NIF, `wasi_file_nif.c` |
 | `priv/script_v1/` | the boot scripts the shipped JavaScript and Python adapters load |
-| `examples/` | `plugin_worker` and `qjs_worker`, two demonstrations to read and copy |
+| `examples/` | `plugin_worker`, `qjs_worker` and `nn_upper`, three demonstrations to read and copy |
 | `test/` | every Common Test suite, one `*_SUITE.erl` each |
 | `test/support/` | what suites share: fake adapters, the conformance runners, `wasm_asm` |
 | `test/fixtures/` | the WebAssembly files suites load; [Fixtures](contributing/fixtures.md) says where each comes from |

@@ -982,6 +982,16 @@ step({canon_lower, CompFuncIdx, ReallocIdx, Enc, Async}, S) ->
             E;
         ok ->
             case host_fun(CompFunc, S) of
+                %% A synchronous lower of an async import: the call blocks
+                %% until the host function has resolved.
+                {ok, {async_import, Sig, Fun, {producer, PFun}}} when Async =:= sync ->
+                    Realloc = realloc_callable(ReallocIdx, S),
+                    Sync = wasm_async:sync_lower(Sig, Fun, PFun),
+                    {ok, external_side(S, lowered(Sync, Realloc, Enc, S), Origin)};
+                {ok, {async_import, Sig, Fun}} when Async =:= sync ->
+                    Realloc = realloc_callable(ReallocIdx, S),
+                    Sync = wasm_async:sync_lower(Sig, Fun, none),
+                    {ok, external_side(S, lowered(Sync, Realloc, Enc, S), Origin)};
                 {ok, {async_import, Sig, Fun, {producer, PFun}}} ->
                     %% A suspending async import: completes later via a subtask event.
                     {ok, external_side(S, wasm_async:async_lower(Sig, Fun, PFun), Origin)};
@@ -1019,7 +1029,11 @@ step({canon_async, Which, Meta}, S) ->
                 _ ->
                     Fun
             end,
-    {ok, host_side(S, Bound)};
+    case Which of
+        context_get -> {ok, thread_side(S, Bound)};
+        context_set -> {ok, thread_side(S, Bound)};
+        _ -> {ok, host_side(S, Bound)}
+    end;
 step({canon_resource, drop, Rt}, S) ->
     %% For a resource this component DEFINES, `canon resource.drop` removes the
     %% handle from the instance's table (a double drop, or a handle never minted
@@ -1142,8 +1156,8 @@ realloc_callable(none, _S) ->
     undefined;
 realloc_callable(Idx, S) ->
     case maps:get(Idx, maps:get(core_funcs, S), undefined) of
-        {wasm_func, Fun, _Type}    -> guest_side(Fun);
-        Fun when is_function(Fun)  -> guest_side(Fun);
+        {wasm_func, Fun, _Type}    -> guest_side(fresh_context(Fun));
+        Fun when is_function(Fun)  -> guest_side(fresh_context(Fun));
         _                          -> undefined
     end.
 
@@ -1151,6 +1165,11 @@ realloc_callable(Idx, S) ->
 %% (`wasm_async:owner_side/1').
 host_side(S, Fun) ->
     bump(S, n_cf, core_funcs, wasm_async:owner_side(Fun)).
+
+%% A built-in that acts on the calling thread alone
+%% (`wasm_async:thread_side/1').
+thread_side(S, Fun) ->
+    bump(S, n_cf, core_funcs, wasm_async:thread_side(Fun)).
 
 %% A lowered component import, recorded as coming from outside the component.
 external_side(S, Fun, Origin) ->
@@ -1164,6 +1183,11 @@ external_side(S, Fun, Origin) ->
 origin({host, Iface, Field}) -> {Iface, Field};
 origin({import_func, Name}) -> {Name, Name};
 origin(_) -> internal.
+
+%% A `realloc' runs with context slots of its own
+%% (`wasm_async:fresh_context/1').
+fresh_context(Fun) ->
+    fun(Ctx, Args) -> wasm_async:fresh_context(fun() -> Fun(Ctx, Args) end) end.
 
 %% A call back into the guest from the host, which runs where the guest's
 %% call is: in the fiber the owner is serving, if any.

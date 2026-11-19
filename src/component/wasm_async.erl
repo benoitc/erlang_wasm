@@ -76,11 +76,12 @@ The banners divide the file in this order.
          new_future_readable/2, new_stream_readable/2,
          new_future_channel/1, new_stream_channel/1, new_stream_channel/2,
          register_producer/2, register_producer/3, deliver_before/2, wait_on_set/1, take_produced/1,
-         async_lower/2, async_lower/3, backpressure/1]).
+         async_lower/2, async_lower/3, sync_lower/3, backpressure/1]).
 %% Tasks that outlive the call that started them, and the host's side of the
 %% streams and futures they use.
 -export([resolved/0, suspend_task/4, leave_call/0, pending/0, pump/1, close_frame/0,
-         nested/1, owner_side/1, fiber_waiting/1, reenter/1, start_fiber/1, suspend_fiber/1,
+         nested/1, owner_side/1, thread_side/1, take_owner_keys/0,
+         forget_owner_funs/1, fresh_context/1, fiber_waiting/1, reenter/1, start_fiber/1, suspend_fiber/1,
          guest_call/1, sync_call/3, drop_threads/1, quiet/1,
          handle_counter/0, raise_handle_counter/1,
          host_reader/1, host_sink/2, host_sink/3, host_stream/1, host_future/1,
@@ -197,6 +198,12 @@ The banners divide the file in this order.
 -define(READY(Comp), {?MODULE, ready_threads, Comp}).
 %% In an explicit thread's process.
 -define(IN_THREAD, {?MODULE, in_thread}).
+%% A host function a thread asks its owner to run, kept here, in the owner,
+%% under the key its wrapper carries: the thread names it and never sends it.
+-define(OWNER_FUN(Key), {?MODULE, owner_fun, Key}).
+%% The keys made since `take_owner_keys/0' last took them: those of the
+%% component being linked.
+-define(OWNER_KEYS, {?MODULE, owner_keys}).
 %% A cancellation asked of the stackful task a fiber runs: `requested', then
 %% `delivered' once a cancellable wait has reported it.
 -define(CANCEL(Pid), {?MODULE, cancel, Pid}).
@@ -539,7 +546,11 @@ wait in place.
 """.
 -spec builtin(atom(), map()) -> function().
 %% Every built-in traps while its instance runs a call that must not leave it
-%% (a `realloc' or a `post-return'), as the specification has it.
+%% (a `realloc' or a `post-return'), as the specification has it. The context
+%% slots are the exception: a toolchain keeps its stack pointer there, and a
+%% `realloc' reads it.
+builtin(Which, Meta) when Which =:= context_get; Which =:= context_set ->
+    builtin_1(Which, Meta);
 builtin(Which, Meta) ->
     F = builtin_1(Which, Meta),
     fun(Ctx, Flats) ->
@@ -568,7 +579,10 @@ builtin_1(task_cancel, _Meta) ->
                 {ok, []}
         end
     end;
-%% context.get/set: a task-local i32 slot wit-bindgen uses for its task pointer.
+%% context.get/set: a thread-local slot. wit-bindgen keeps its task pointer
+%% there, and wasi-libc a thread's stack pointer and TLS base. An explicit
+%% thread's slots are in its own process (`thread_side/1'), a task's implicit
+%% thread's in the frame.
 builtin_1(context_get, #{slot := Slot}) ->
     fun(_Ctx, _Flats) -> {ok, [get_context(Slot)]} end;
 builtin_1(context_set, #{slot := Slot}) ->
@@ -1152,6 +1166,67 @@ async_lower({Params, Result}, Fun, PFun) ->
         end
     end.
 
+-doc """
+The core function a synchronous lower of an async host import binds to: a
+`canon lower` without the async option, of a function whose type is async.
+The guest passes its arguments as any synchronous call does and gets the
+result back the same way, so the call blocks its thread until the host
+function has resolved. `PFun` is the producer of the three-argument
+`async_lower/3`, or `none`.
+""".
+-spec sync_lower({[wasm_canon:desc()], wasm_canon:desc() | none},
+                 fun(([term()]) -> term()), fun((map()) -> any()) | none) ->
+          function().
+sync_lower({Params, Result}, Fun, PFun) ->
+    fun(_Ctx, Flats) ->
+        Inst = task_instance(),
+        {Terms, Rest} = wasm_canon:lift_params(Inst, Params, Flats),
+        case Fun(Terms) of
+            {returned, Value} ->
+                sync_result(Inst, Result, Rest, Value);
+            %% A call into another component's task has no synchronous form
+            %% here.
+            {pending_task, _, _} -> {trap, sync_lower_of_pending_task};
+            {pending_start, _, _, _} -> {trap, sync_lower_of_pending_task};
+            Value when PFun =:= none ->
+                sync_result(Inst, Result, Rest, Value);
+            Value ->
+                %% The producer's result is kept on the subtask, not written:
+                %% a result returned flat has no return area.
+                case start_subtask(none, [], Value, PFun) of
+                    {ok, [Status]} ->
+                        H = Status bsr 4,
+                        wait_or_block(
+                          fun() -> try_deliver(H) end, blocking,
+                          fun({event, _, _, ?SUBTASK_RETURNED}) ->
+                                  #{value := V} = get(?WAITABLE(H)),
+                                  forget_waitable(H),
+                                  sync_result(Inst, Result, Rest, V);
+                             ({event, _, _, _}) ->
+                                  forget_waitable(H),
+                                  {trap, subtask_cancelled};
+                             ({error, Reason}) ->
+                                  {trap, Reason}
+                          end);
+                    Trap ->
+                        Trap
+                end
+        end
+    end.
+
+%% A synchronous call's result: flat when it is one core value, else stored
+%% at the return-area pointer the guest passed last.
+sync_result(_Inst, none, _Rest, _Value) ->
+    {ok, []};
+sync_result(Inst, Result, Rest, Value) ->
+    case wasm_canon:result_via_memory(Result) of
+        true ->
+            write_return_area(Inst, Result, Rest, Value),
+            {ok, []};
+        false ->
+            {ok, wasm_canon:lower_value(Inst, Result, Value)}
+    end.
+
 start_subtask(Result, Rest, Value, PFun) ->
     case get(?LIMIT) of
         Limit when is_integer(Limit) ->
@@ -1245,8 +1320,46 @@ wait_or_block(Ready, Mode, Finish) ->
                 none -> throw({?MODULE, fiber_block, Ready, Finish});
                 Event -> Finish(Event)
             end;
+        {blocking, undefined} ->
+            case other_threads() of
+                false -> Finish(wait_core(Ready, Mode));
+                {Comp, Me} ->
+                    case wait_core(Ready, nonblocking) of
+                        none -> Finish(block_thread(Comp, Me, Ready));
+                        Event -> Finish(Event)
+                    end
+            end;
         _ ->
             Finish(wait_core(Ready, Mode))
+    end.
+
+%% The implicit thread's instance and index, when the instance has other
+%% threads to run while this one waits.
+other_threads() ->
+    Comp = thread_comp(),
+    case maps:size(threads(Comp)) of
+        0 -> false;
+        _ ->
+            Me = current_thread(Comp),
+            case maps:size(threads(Comp)) of
+                1 -> false;
+                _ -> {Comp, Me}
+            end
+    end.
+
+%% The implicit thread `Me' waits for `Ready': the other threads run, here,
+%% until it has its event.
+block_thread(Comp, Me, Ready) ->
+    {ok, T} = thread(Comp, Me),
+    set_thread(Comp, Me, T#{state := waiting, wait => {Ready, fun(E) -> E end}}),
+    ok = wasm_instance:commit_inflight(),
+    Answer = run_threads(Comp, Me, undefined, false),
+    ok = wasm_instance:refresh_inflight(),
+    case Answer of
+        {event, Event} -> Event;
+        {trap, Reason} -> {error, Reason};
+        %% Picked without its event: nothing resumes a waiting thread so.
+        {ok, _} -> {error, thread_resumed_without_event}
     end.
 
 %% Ingest what is already queued and deliver if `Ready' finds an event; otherwise
@@ -1421,7 +1534,7 @@ try_deliver(H) ->
                     end,
             write_return_area(maps:get(inst, S, task_instance()), Result, [RetPtr],
                               Value),
-            put(?WAITABLE(H), S#{state => returned}),
+            put(?WAITABLE(H), S#{state => returned, value => Value}),
             {event, ?EV_SUBTASK, H, ?SUBTASK_RETURNED};
         #{'end' := subtask, state := cancelled_ready} = S ->
             put(?WAITABLE(H), S#{state => cancelled}),
@@ -1762,6 +1875,20 @@ finished(Id, _Task) ->
 %%% ------------------------------------------------------------------ fibers ---
 
 -doc """
+As `owner_side/1`, for a built-in that acts on the calling thread alone (a
+context slot): an explicit thread runs it in its own process.
+""".
+-spec thread_side(function()) -> function().
+thread_side(F) ->
+    Owned = owner_side(F),
+    fun(Ctx, Flats) ->
+        case get(?IN_THREAD) of
+            true -> F(Ctx, Flats);
+            undefined -> Owned(Ctx, Flats)
+        end
+    end.
+
+-doc """
 Wrap a core function the host provides to a guest (an import, an async
 built-in, a resource intrinsic): run in a fiber, it is run by the owner, which
 holds the frame and the host's resources, and its answer, or what it raised,
@@ -1769,6 +1896,14 @@ comes back to the fiber.
 """.
 -spec owner_side(function()) -> function().
 owner_side(F) ->
+    %% Made where the instance is linked, which is its owner: the function
+    %% stays there, and a thread asks for it by key. A call's context holds
+    %% the whole instance, and a function may too, so sending either to the
+    %% owner copies all of it, for every call (measured: 250 MB and 0.38 s a
+    %% call for a 5.6 MB module).
+    Key = erlang:unique_integer([positive]),
+    put(?OWNER_FUN(Key), F),
+    put(?OWNER_KEYS, [Key | owner_keys()]),
     fun(Ctx, Flats) ->
         case get(?FIBER) of
             undefined -> F(Ctx, Flats);
@@ -1781,12 +1916,54 @@ owner_side(F) ->
                         %% this call returns: it sees what this one did, and
                         %% this one, after, what it did.
                         ok = wasm_instance:commit_inflight(),
-                        try fiber_call(Owner, Ref, fun() -> F(Ctx, Flats) end)
+                        try thread_call(Owner, Ref, Key, F, Ctx, Flats)
                         after ok = wasm_instance:refresh_inflight()
                         end
                 end
         end
     end.
+
+thread_call(Owner, Ref, Key, F, #{instance := Inst} = Ctx, Flats) ->
+    Id = wasm_instance:id(Inst),
+    Small = maps:without([instance, mut], Ctx),
+    case fiber_call(Owner, Ref, fun() -> owner_call(Key, Id, Small, Flats) end) of
+        %% An owner that did not link the instance (it was handed over) has
+        %% no function under the key: it is sent, the slow way.
+        owner_fun_unknown ->
+            fiber_call(Owner, Ref, fun() -> F(Ctx, Flats) end);
+        Answer ->
+            Answer
+    end;
+thread_call(Owner, Ref, _Key, F, Ctx, Flats) ->
+    fiber_call(Owner, Ref, fun() -> F(Ctx, Flats) end).
+
+%% In the owner: the context is rebuilt from its own copy of the instance,
+%% whose state the thread has just committed.
+owner_call(Key, Id, Small, Flats) ->
+    case {get(?OWNER_FUN(Key)), wasm_instance:lookup(Id)} of
+        {F, {ok, Inst}} when is_function(F) ->
+            F(Small#{instance => Inst, mut => wasm_instance:mut(Inst)}, Flats);
+        _ ->
+            owner_fun_unknown
+    end.
+
+owner_keys() -> case get(?OWNER_KEYS) of undefined -> []; L -> L end.
+
+-doc """
+The keys of the host functions `owner_side/1` has kept since the last call:
+`wasm_component` takes them when it has linked an instance, and gives them to
+`forget_owner_funs/1` when it destroys it.
+""".
+-spec take_owner_keys() -> [pos_integer()].
+take_owner_keys() ->
+    Keys = owner_keys(),
+    _ = erase(?OWNER_KEYS),
+    Keys.
+
+-doc "Forget the host functions kept under `Keys` (`take_owner_keys/0`).".
+-spec forget_owner_funs([pos_integer()]) -> ok.
+forget_owner_funs(Keys) ->
+    lists:foreach(fun(Key) -> erase(?OWNER_FUN(Key)) end, Keys).
 
 %% While it waits, the fiber runs what the owner sends back into the guest
 %% (an allocation for a result), since the guest's call is here.
@@ -2184,6 +2361,13 @@ run_threads(Comp, Waiter, Target, Cancellable) ->
             {ok, [0]};
         none ->
             stalled(Comp, Waiter, Cancellable);
+        %% The waiter is the implicit thread, in a wait of its own
+        %% (`block_thread/3'): it goes on with its event.
+        {resume, Waiter, _Finish, Event} ->
+            {ok, T} = thread(Comp, Waiter),
+            set_thread(Comp, Waiter,
+                       maps:without([wait, event], T#{state := running})),
+            {event, Event};
         {run, I} ->
             case thread(Comp, I) of
                 {ok, #{kind := remote, pid := _} = T} ->
@@ -2210,7 +2394,14 @@ pick(_Comp, I) when is_integer(I) -> {run, I};
 pick(Comp, undefined) ->
     case pop_ready(Comp) of
         none -> waiting_event(Comp);
-        I -> {run, I}
+        I ->
+            %% A thread that only yields is always ready: one whose event has
+            %% come runs before it, or would never run.
+            ingest_available(task_ref(), ?POLL_DRAIN),
+            case waiting_event(Comp) of
+                none -> {run, I};
+                Resume -> put(?READY(Comp), [I | ready(Comp)]), Resume
+            end
     end.
 
 waiting_event(Comp) ->
@@ -2293,11 +2484,16 @@ run_remote(Comp, I, #{pid := Pid, ref := Ref} = T, How) ->
 run_remote(Comp, I, #{start := {FInst, F, C}} = T, start) ->
     Owner = self(),
     Ref = make_ref(),
+    %% The thread calls through tables that name the component's other cores
+    %% (wit-component's shim holds the imports), so it knows every instance
+    %% its owner does.
+    Known = [Inst || {{wasm_inst, _}, Inst} <- get()],
     {Pid, Mon} = spawn_opt(
                    fun() ->
                            ok = wasm_lifetime:bind(Owner),
                            put(?FIBER, {Owner, Ref}),
                            put(?IN_THREAD, true),
+                           lists:foreach(fun wasm_instance:remember/1, Known),
                            ok = wasm_instance:remember(FInst),
                            Owner ! {fiber_done, Ref,
                                     protect(fun() -> wasm:call_func(FInst, F, [C]) end)}
@@ -2382,6 +2578,20 @@ guest_call(Fun) ->
     end.
 
 running() -> case get(?RUNNING) of undefined -> 0; N -> N end.
+
+-doc """
+Run `Fun`, a `realloc` the host calls in the guest, as the specification has
+it run: in a thread of its own, whose context slots start at zero. The
+caller's slots are put back after. wasi-libc relies on it: its `cabi_realloc`
+runs on a stack of its own and leaves slot 0, the stack pointer, at zero.
+""".
+-spec fresh_context(fun(() -> T)) -> T.
+fresh_context(Fun) ->
+    Saved = save_ctx(),
+    erase_ctx(),
+    try Fun()
+    after restore_ctx(Saved)
+    end.
 
 %% A task's context slots (`context.get'/`set') are its own.
 save_ctx() -> maps:from_list([{K, V} || {?CTX(_) = K, V} <- get()]).

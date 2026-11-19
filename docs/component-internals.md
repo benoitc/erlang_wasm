@@ -557,6 +557,7 @@ resource, create it with `host_new/2` and also provide its `[resource-drop]`.
 | `wasm_component_iface_SUITE` | an interface's functions called as their `canon lift` declares: post-return, string encoding and realloc |
 | `wasm_component_forward_SUITE` | `stream.forward` and `future.forward` |
 | `wasm_component_wast_SUITE` | wasmtime's test scripts for the cooperative thread built-ins |
+| `wasm_component_coop_threads_SUITE` | what wasi-libc's cooperative threads need: sync lifts and lowers of async functions, context slots per thread and for `realloc`, a waiting thread, a thread's host calls |
 | `wasm_component_snapshot_SUITE` | `snapshot/2` and `restore/3` of a component, with one core and with linked cores |
 | `wasm_component_worker_SUITE` | a component through the worker kernel |
 | `wasm_recipe_SUITE` | the build plan, and one gated real build |
@@ -582,6 +583,7 @@ for s in wasm_component_SUITE \
          wasm_component_iface_SUITE \
          wasm_component_forward_SUITE \
          wasm_component_wast_SUITE \
+         wasm_component_coop_threads_SUITE \
          wasm_component_snapshot_SUITE; do
     rebar3 ct --suite="test/$s" || break
 done

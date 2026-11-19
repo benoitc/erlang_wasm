@@ -10,6 +10,14 @@
   engine: a backend is a module of yours that implements the `wasi_nn`
   behaviour. Models are loaded by name only, and the host holds at most
   16 MiB of tensors for one process. See the wasi-nn guide.
+- **Fixed: a WASI 0.3 component built with wasi-libc's cooperative threads
+  did not run.** Such a program starts every thread through the Component
+  Model's thread built-ins and keeps each thread's stack pointer in a context
+  slot. Its `run` could not be called, its blocking calls into the host read
+  their arguments from the wrong place, its threads shared one stack pointer,
+  and a thread that waited stopped every other thread. These now work as the
+  Component Model specifies. A host call made from such a thread also no
+  longer copies the whole instance to the process that owns it.
 
 ## 0.10.2
 

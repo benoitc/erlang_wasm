@@ -66,6 +66,7 @@ specification. What they cover, and what they do not, is in
 | WASI 0.2: random, clocks, cli, io, filesystem, sockets | complete |
 | `wasi:http`: outbound requests and serving an incoming-handler | complete |
 | WASI 0.3: cli, clocks, random, filesystem, sockets and `wasi:http`, beside 0.2 in one component ([WASI 0.3](wasi-0-3.md)) | complete |
+| `wasi:nn`: a component asks the host to run a model, through a backend you supply ([wasi-nn](wasi-nn.md)) | complete for the release candidate `0.2.0-rc-2024-10-28`; [what is not served](#wasi-nn) |
 | An async task that runs on after its call returns, and host imports that take or give a stream or future | complete |
 | Preparing a component once for many instances (`wasm_component:prepare/1`) | complete |
 | Snapshots of component instances, composed ones too, with WASI stdio and preopens made again per request ([snapshots](snapshots.md)) | complete, in memory only |
@@ -257,6 +258,31 @@ timestamp. It also follows symlinks, so it cannot set a link's own times. And
 conformance suite's baseline lists each one.
 
 Without a checkout the suite skips, so you can keep it in every run.
+
+## wasi-nn
+
+How a component gets inference, and how you write a backend, is in
+[wasi-nn](wasi-nn.md). This is what the host serves, and how it is checked.
+
+It serves the four interfaces of `wasi:nn@0.2.0-rc-2024-10-28`: `tensor`,
+`graph`, `inference` and `errors`. A guest loads a model by a name you
+granted, or brings one as bytes in a format you granted. The runtime has no
+inference engine: a backend is a module that implements the `wasi_nn`
+behaviour. The interface is a release candidate upstream, so this part of
+the API may change with it.
+
+Not served:
+
+- tokens as they are generated: `compute` answers once, and the interface
+  has no other way;
+- the older form of the interface for core modules, `wasi_ephemeral_nn`;
+- a snapshot of a component that imports `wasi:nn`.
+
+The specification has no test suite. `wasm_wasi2_nn_SUITE` reads the
+upstream WIT file and expects its functions and the cases of every enum in
+their order, and `wasm_wasi2_nn_wasmtime_SUITE` runs wasmtime's five
+`nn_wit_*` programs. Both use backends that run no model, so they check the
+host and not an engine.
 
 ## Real toolchain acceptance
 

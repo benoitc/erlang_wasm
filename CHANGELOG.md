@@ -11,8 +11,9 @@
   behaviour, for a language model or for a tensor model such as ONNX. A
   guest loads the models you name; it brings a model of its own only in a
   format you list in `encodings`. The host holds at most 16 MiB of tensors
-  for one process unless `max_tensor_bytes` says otherwise. See the wasi-nn
-  guide.
+  for one process unless `max_tensor_bytes` says otherwise. The interface is
+  a release candidate upstream, so this part of the API may change with it.
+  See the wasi-nn guide.
 - **Fixed: a WASI 0.3 component built with wasi-libc's cooperative threads
   did not run.** Such a program starts every thread through the Component
   Model's thread built-ins and keeps each thread's stack pointer in a context

@@ -9,6 +9,13 @@ an inference engine to the runtime.
 
 The runtime has no inference engine of its own. You give it a **backend**: an
 Erlang module that implements the `wasi_nn` behaviour and calls the engine.
+One backend exists outside this project, for llama.cpp:
+[`erllama_wasi_nn`](https://github.com/benoitc/erllama), in the erllama
+repository. It is in progress and not yet published.
+
+`wasi:nn` is a release candidate upstream (`0.2.0-rc-2024-10-28`), and so is
+this part of the runtime: `wasi_nn`, its callbacks and the `nn` option may
+change when the interface does, in a release that is not marked as breaking.
 
 ## Words used on this page
 
@@ -22,8 +29,9 @@ Erlang module that implements the `wasi_nn` behaviour and calls the engine.
 
 ## Grant it to a component
 
-Pass an `nn` key in the options of `wasi_preview2:command/1`,
-`wasi_preview2:run_command/3` or the WASI 0.3 runners:
+Pass an `nn` key in the options of `wasi_preview2:command/1` or
+`wasi_preview2:run_command/3`. `wasi_preview3:run_command/3` takes the same
+key, for the 0.2 and the 0.3 commands it runs:
 
 <!-- check: modules my_nn -->
 ```erlang
@@ -172,7 +180,7 @@ returns, whatever the answer.
   count that time: fuel counts WebAssembly work. Bound it in your backend, or
   run the component in a worker with a timeout; see [Using workers](worker.md).
 - **Snapshots.** A component that imports `wasi:nn` cannot be captured in a
-  snapshot.
+  snapshot: `wasm_component:snapshot/2` answers `import_not_snapshottable`.
 - **Streaming.** `compute` answers once, with every output. The interface
   has no way to return tokens as they are generated.
 

@@ -3,7 +3,8 @@
 A WebAssembly runtime written in Erlang/OTP.
 
 It decodes, validates and runs WebAssembly itself, with linear memory, the
-Component Model, and WASI 0.1 (preview 1), 0.2 and 0.3. It is not a binding
+Component Model, WASI 0.1 (preview 1), 0.2 and 0.3, and `wasi:nn` for a
+backend you supply. It is not a binding
 to Wasmtime, Wasmer, WAMR or wasm3. Workers run untrusted guests one request
 at a time, each in its own processes with a deadline. The only native code is
 an optional file NIF, and the runtime works without it.

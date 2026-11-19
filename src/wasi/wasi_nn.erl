@@ -11,6 +11,9 @@ module's callbacks, and it lives in another application.
 Read it when you write a backend, or when you change what a guest may load.
 The guide is `docs/wasi-nn.md`.
 
+The interface is a release candidate upstream, and so is this module: its
+callbacks and the grant may change when the interface does.
+
 What the module itself decides:
 
 - A guest loads a model by name, and only a name in the grant's `models`.

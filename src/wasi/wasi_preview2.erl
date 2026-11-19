@@ -513,7 +513,17 @@ run_collect(Instance, OutRef, ErrRef) ->
                        nomatch -> fun wasm_component:call/4;
                        _ -> fun wasm_component:call_async/4
                    end,
-            RunResult = Call(Instance, Export, {[], {result, none, none}}, []),
+            Sig = {[], {result, none, none}},
+            RunResult =
+                case Call(Instance, Export, Sig, []) of
+                    %% A 0.3 `run' may be lifted synchronously, as wasi-libc
+                    %% with cooperative threads lifts it: the task blocks
+                    %% inside its one core call.
+                    {error, {no_async_export, _}} ->
+                        wasm_component:call(Instance, Export, Sig, []);
+                    Other ->
+                        Other
+                end,
             Stdout = collect_output(OutRef),
             Stderr = collect_output(ErrRef),
             case exit_outcome(RunResult) of

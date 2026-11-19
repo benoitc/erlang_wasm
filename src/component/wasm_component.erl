@@ -590,13 +590,19 @@ link_in(#{sec := Sec, entry_idx := EntryIdx, exports := Exports} = Decoded, Impo
                            none -> LinkOpts0;
                            Types -> LinkOpts0#{types => Types}
                        end,
-            case wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts) of
+            _ = wasm_async:take_owner_keys(),
+            Linked = wasm_component_link:link(Graph, EntryIdx, Resolve, LinkOpts),
+            %% The host functions kept for the instance's threads go when it
+            %% does (`destroy/2').
+            OwnerKeys = wasm_async:take_owner_keys(),
+            case Linked of
                 {ok, #{core := Inst, cores := Cores, export_targets := Targets,
                        async_targets := Async, externals := Externals}} ->
                     {ok, #{core => Inst, exports => Exports, cores => Cores,
-                           externals => Externals,
+                           externals => Externals, owner_keys => OwnerKeys,
                            export_targets => Targets, async_targets => Async}};
                 {error, _} = E ->
+                    ok = wasm_async:forget_owner_funs(OwnerKeys),
                     E
             end
     end.
@@ -1315,6 +1321,7 @@ destroy(Inst, Closer) ->
     %% Its threads too: a thread a synchronous call left suspended has a
     %% process, and no frame stops it.
     lists:foreach(fun wasm_async:drop_threads/1, res_ids(Inst)),
+    ok = wasm_async:forget_owner_funs(owner_keys(Inst)),
     lists:foreach(fun wasm:destroy/1, cores_of(Inst)),
     lists:foreach(fun wasm_resources:destroy_instance/1, res_ids(Inst)),
     sweep_host(Closer),
@@ -1323,6 +1330,11 @@ destroy(Inst, Closer) ->
 %% The resource-table ids an instance holds: its own, plus every sub-instance's
 %% for a composed instance, so destroying it frees each nested table and leaves
 %% any other instance's table in the process untouched.
+owner_keys(#{insts := Insts}) ->
+    lists:append([owner_keys(Sub) || {instance, Sub} <- maps:values(Insts)]);
+owner_keys(#{owner_keys := Keys}) -> Keys;
+owner_keys(_) -> [].
+
 res_ids(#{insts := Insts}) ->
     [Id || {instance, Sub} <- maps:values(Insts),
            Id <- res_ids(Sub)];
@@ -1443,7 +1455,8 @@ do_call_1(I, Export, {Params, Result}, Args) ->
                 CoreArgs = wasm_canon:lower_params(Inst, Params, Args1),
                 Call = fun() -> wasm:call(Inst, CoreName, CoreArgs) end,
                 Answer = case maps:get(async_builtins, I, true) of
-                             true -> wasm_async:sync_call(Inst, maps:get(res_id, I),
+                             true -> wasm_async:sync_call(memory_core(I, Inst),
+                                                          maps:get(res_id, I),
                                                           Call);
                              false -> Call()
                          end,
@@ -1460,6 +1473,15 @@ do_call_1(I, Export, {Params, Result}, Args) ->
                 end
             end)
       end).
+
+%% The core the built-ins of a synchronous task read and write: the lift's
+%% own, unless that one has no memory, as the module wit-component adds around
+%% a lift has none. Then it is the entry core.
+memory_core(#{core := Entry}, Inst) ->
+    case maps:is_key(~"memory", wasm:exports(Inst)) of
+        true -> Inst;
+        false -> Entry
+    end.
 
 %%% ------------------------------------------------------- host boundary ---
 
@@ -1597,7 +1619,12 @@ target_for(I, Export) ->
 realloc_fun(_Inst, none) ->
     undefined;
 realloc_fun(Inst, Name) ->
-    fun(_Ctx, Args) -> wasm_async:reenter(fun() -> wasm:call(Inst, Name, Args) end) end.
+    fun(_Ctx, Args) ->
+        wasm_async:reenter(
+          fun() ->
+              wasm_async:fresh_context(fun() -> wasm:call(Inst, Name, Args) end)
+          end)
+    end.
 
 %%% ----------------------------------------------------------- async calls ---
 

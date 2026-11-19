@@ -10203,3 +10203,38 @@ Both exceptions are listed, with their reasons, in `wasm_architecture_SUITE`
 **Raw.** `test/audit/raw/otp-apis/`: `splitprobe.erl` and `split-probe.patch`
 (the scratch build), `split-external.log`, `split-words.log`, `reqgate.sh`,
 `req-null.log` and `req-gate.log`.
+
+## A host call from a thread: a key, not the instance (2026-11-19)
+
+**The claim.** A host call made by an explicit thread
+(`wasm_async:owner_side/1`) no longer sends the call's context, or the host
+function, to the owner process. The owner keeps the function under a key and
+rebuilds the context from its own copy of the instance.
+
+**Why.** An explicit thread is a process. Its call's context holds the
+`#inst{}` record and the instance state, and a lowered host function captures
+the guest instance too, so sending either copied all of it, for every call.
+
+**Measured.** The guest is the BEAM itself: Kettlecorn 0.1.0's `beam.wasm`
+(5.6 MB, OTP 29.1.2, WASI 0.3, wasi-libc's cooperative threads), booting and
+evaluating one expression. One launch each, instrumented in the thread, load
+average 20 to 50. This is not the paired protocol: the effect is three orders
+of magnitude, and there is no earlier build that boots this guest to pair
+with.
+
+| what | before | after |
+| --- | ---: | ---: |
+| size of the context sent, `erts_debug:flat_size/1` | 31,579,835 words (about 250 MB) | not sent |
+| one call, thread to owner and back, mean of the first 200 | 0.37 to 0.39 s | not measured alone |
+| host calls answered a second, sampled during boot | about 64 | about 300 |
+| the boot and one expression | did not finish in 9.5 minutes | 89 to 108 s |
+
+The same boot on wasmtime 50.0.1, compiled code cached, takes 0.11 s and
+about 690 million units of fuel. After the change a sample of the scheduler
+thread is about 90% in the interpreter and about 10% waiting for the owner.
+
+**Not measured.** QuickJS and the request benchmarks: nothing they run makes
+an explicit thread, and the change is on that path only. `wasm_exec` is not
+touched.
+
+**Raw.** Not kept: the probes were scratch files.

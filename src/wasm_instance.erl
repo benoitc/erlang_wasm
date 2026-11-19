@@ -53,7 +53,7 @@ restore twice. The bounds are still checked, because they trap.
 -export([tag/2, default_value/1]).
 -export([mut/1, set_mut/2, memory/2, heap/1]).
 -export([root_view/1, mut_of/1, elems_of/1, release/1]).
--export([remember/1, lookup/1, body_of/2]).
+-export([remember/1, id/1, lookup/1, body_of/2]).
 -export([identity/1, module_handle/1, code_slot/1, set_code_slot/2,
          compiler_ir/2]).
 -export([ask_compile/1, release_ask/1, executed/1]).
@@ -1935,6 +1935,10 @@ ir_keys(Id) ->
         undefined -> [];
         Keys -> Keys
     end.
+
+-doc "The id an instance is known by, as `lookup/1` takes it.".
+-spec id(#inst{}) -> term().
+id(#inst{id = Id}) -> Id.
 
 -doc """
 The instance a `funcref` names, if this process can reach it.

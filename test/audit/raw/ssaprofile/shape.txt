@@ -1,0 +1,5 @@
+21:20  up 20 days, 22 mins, 68 users, load averages: 15.23 14.19 12.57
+#{instructions => 2316900,arity_max => 72,arity_median => 30,arity_p90 => 69,
+  arity_sum => 269583,beam_bytes => 12712512,beam_functions => 7702}
+# load 21:23  up 20 days, 25 mins, 69 users, load averages: 16.62 15.70 13.51
+

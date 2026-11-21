@@ -1,0 +1,95 @@
+21:07  up 20 days, 9 mins, 67 users, load averages: 12.40 12.28 11.44
+Compiling 
+ get_module_name_from_core     :      0.104 s  228175.6 kB
+ core_lint_module              :      9.790 s  228175.9 kB
+ core_compile_directives       :      0.000 s  228175.9 kB
+ sys_core_prepare              :      0.839 s  228175.9 kB
+ sys_core_fold                 :      2.218 s  222844.6 kB
+ sys_core_alias                :      0.504 s  222843.2 kB
+ core_transforms               :      0.000 s  222843.2 kB
+ sys_core_bsm                  :      0.284 s  222843.2 kB
+ core_to_ssa                   :      8.979 s  516251.6 kB
+ beam_ssa_bool                 :      4.745 s  477835.6 kB
+ beam_ssa_share                :      0.437 s  471826.7 kB
+ beam_ssa_recv                 :      0.220 s  471826.7 kB
+ beam_ssa_bsm                  :      2.004 s  472130.0 kB
+    %% Sub passes of beam_ssa_bsm from slowest to fastest:
+    allow_context_passthrough  :      1.816 s  99 %
+    combine_matches            :      0.006 s   0 %
+    skip_outgoing_tail_extracti:      0.002 s   0 %
+    annotate_context_parameters:      0.002 s   0 %
+    accept_context_args        :      0.001 s   0 %
+ beam_ssa_opt                  :    104.569 s  581942.2 kB
+    %% Sub passes of beam_ssa_opt from slowest to fastest:
+    ssa_opt_alias              :     27.590 s  30 %
+    ssa_opt_type_start         :     21.641 s  24 %
+    ssa_opt_type_continue      :     10.710 s  12 %
+    ssa_opt_dead               :      9.701 s  11 %
+    ssa_opt_sink               :      8.419 s   9 %
+    ssa_opt_live               :      8.146 s   9 %
+    ssa_opt_cse                :      1.410 s   2 %
+    ssa_opt_destructive_update :      0.660 s   1 %
+    ssa_opt_tail_phis          :      0.559 s   1 %
+    ssa_opt_bc_size            :      0.496 s   1 %
+    ssa_opt_ranges             :      0.458 s   0 %
+    ssa_opt_merge_blocks       :      0.369 s   0 %
+    ssa_opt_float              :      0.333 s   0 %
+    ssa_opt_ne                 :      0.189 s   0 %
+    ssa_opt_linearize          :      0.164 s   0 %
+    ssa_opt_split_blocks       :      0.131 s   0 %
+    ssa_opt_deoptimize_update_t:      0.123 s   0 %
+    ssa_opt_record             :      0.113 s   0 %
+    ssa_opt_element            :      0.098 s   0 %
+    ssa_opt_trim_unreachable   :      0.098 s   0 %
+    ssa_opt_coalesce_phis      :      0.088 s   0 %
+    ssa_opt_try                :      0.081 s   0 %
+    ssa_opt_unfold_literals    :      0.070 s   0 %
+    ssa_opt_no_reuse           :      0.062 s   0 %
+    ssa_opt_redundant_br       :      0.060 s   0 %
+    ssa_opt_tail_literals      :      0.058 s   0 %
+    ssa_opt_bs_ensure          :      0.043 s   0 %
+    ssa_opt_update_tuple       :      0.041 s   0 %
+    ssa_opt_type_finish        :      0.026 s   0 %
+    ssa_opt_bs_create_bin      :      0.023 s   0 %
+    ssa_opt_blockify           :      0.019 s   0 %
+    ssa_opt_bsm                :      0.013 s   0 %
+    ssa_opt_is_between         :      0.008 s   0 %
+    ssa_opt_tuple_size         :      0.008 s   0 %
+    ssa_opt_get_tuple_element  :      0.007 s   0 %
+    ssa_opt_merge_updates      :      0.006 s   0 %
+    ssa_opt_bsm_shortcut       :      0.002 s   0 %
+    ssa_opt_sw                 :      0.001 s   0 %
+ beam_ssa_throw                :      0.667 s  581942.2 kB
+ beam_ssa_pre_codegen          :     13.036 s  761954.7 kB
+    %% Sub passes of beam_ssa_pre_codegen from slowest to fastest:
+    live_intervals             :      3.484 s  31 %
+    reserve_yregs              :      1.918 s  17 %
+    linear_scan                :      1.523 s  13 %
+    reserve_regs               :      1.106 s  10 %
+    find_yregs                 :      1.003 s   9 %
+    turn_yregs                 :      0.700 s   6 %
+    place_frames               :      0.603 s   5 %
+    frame_size                 :      0.297 s   3 %
+    sanitize                   :      0.227 s   2 %
+    number_instructions        :      0.117 s   1 %
+    expand_update_tuple        :      0.085 s   1 %
+    copy_retval                :      0.080 s   1 %
+    assert_no_critical_edges   :      0.079 s   1 %
+    fix_bs                     :      0.049 s   0 %
+    opt_get_list               :      0.048 s   0 %
+    expand_match_fail          :      0.005 s   0 %
+    fix_receives               :      0.001 s   0 %
+ beam_ssa_codegen              :      7.326 s  351862.0 kB
+ beam_validator_strong         :      8.811 s  351862.0 kB
+ beam_a                        :      0.969 s  352206.4 kB
+ beam_block                    :      0.955 s  465494.5 kB
+ beam_jump                     :      1.334 s  460835.8 kB
+ beam_clean                    :      0.940 s  460835.8 kB
+ beam_trim                     :      0.279 s  460797.5 kB
+ beam_flatten                  :      0.584 s  348475.1 kB
+ beam_z                        :      0.303 s  332680.9 kB
+ beam_validator_weak           :      8.533 s  332680.9 kB
+ beam_asm                      :      1.933 s       1.2 kB
+#{total_ms => 184174}
+# load 21:10  up 20 days, 12 mins, 67 users, load averages: 11.22 11.49 11.24
+

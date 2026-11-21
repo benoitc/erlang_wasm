@@ -1,0 +1,6 @@
+#{functions => 255,core_nodes => 5464955,arm_nodes => 155875,
+  arm_share_pct => 2.85226502322526,default_arm_nodes => 53319,
+  default_arms => 1679,default_share_pct => 0.9756530474633368,
+  explicit_arms => 4422,tables => 249}
+# load 21:07  up 20 days, 9 mins, 67 users, load averages: 12.70 12.33 11.44
+

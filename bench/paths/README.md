@@ -324,6 +324,42 @@ Four things it will not let you get wrong, each of which cost a draft:
   samples is invisible, and so is the memory the collector needs while
   collecting. Never size a ceiling by it.
 
+## Where a compile's time is spent
+
+`ssaprofile` answers which passes, which `beam_ssa_opt` sub-passes and which
+generated functions a cold compile spends its time on. Use it before changing
+the generator to make compiling cheaper: the result is in `PERF.md`, "Where
+the compiler's time goes on QuickJS's hot set".
+
+```sh
+rebar3 compile
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/ssaprofile.erl
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -run ssaprofile main capture /tmp/qjs.core
+erl -noshell -pa bench/paths -run ssaprofile main passes /tmp/qjs.core
+erl -noshell -pa bench/paths -run ssaprofile main perfun /tmp/qjs.core /tmp/perfun.terms
+```
+
+- `capture` saves the Core the background compiler hands to
+  `compile:forms/2` for the `realbench qjs on` script, so every later step
+  compiles the same input. It needs the dependencies on the path, hence
+  `ERL_LIBS`; the other steps need only OTP.
+- `passes` compiles it with the documented `time` option, which prints every
+  pass and every `beam_ssa_opt` sub-pass.
+- `tprof` ranks the compiler's own functions inside one compile.
+- `perfun` compiles each generated function alone and writes one
+  `{Name, Arity, Microseconds, CoreNodes}` term per function; `subpass` sums
+  the `time` output of those compiles, to set beside `passes`.
+- `shape` counts the BEAM functions, arities and instructions the unit
+  becomes. `brtable` measures the share of Core the `br_table` arms are.
+
+In `perfun`, every other function is a stub that answers `erlang:get/1`, and
+the function under test is exported. A stub that cannot return lets the type
+pass delete everything after each call, and an unexported function nobody
+calls is removed before any SSA pass runs; the first draft of this arm made
+both mistakes, and the arm now asserts the function is in the compiled
+module.
+
 ## Short notes
 
 - The box matters more than most of these differences. Taken here at load

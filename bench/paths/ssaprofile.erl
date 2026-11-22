@@ -43,10 +43,12 @@ main(["shape", In]) -> report(shape(load(In)));
 main(["subpass", In]) -> report(subpass(load(In)));
 main(["brtable"]) -> report(brtable()).
 
+%% A step that could not measure exits non-zero, so a script driving it stops
+%% rather than reading an error as a result.
 report(R) ->
     io:format("~p~n", [R]),
     io:format("# load ~s~n", [os:cmd("uptime")]),
-    erlang:halt(0).
+    erlang:halt(case R of {error, _} -> 1; _ -> 0 end).
 
 load(In) ->
     {ok, B} = file:read_file(In),
@@ -67,13 +69,15 @@ capture(Out) ->
     Opts = #{compile => true, compile_after => 1},
     {ok, I} = wasm:instantiate(M, wasi_preview1:imports(Cfg), Opts),
     {ok, _} = wasm:call(I, ~"_start", []),
-    {ok, J} = wasm:instantiate(M, wasi_preview1:imports(Cfg), Opts),
+    %% As `realbench' does: the second instance is the one that waits on the
+    %% compile. What ran is read from the first, the only one that has run.
+    {ok, _J} = wasm:instantiate(M, wasi_preview1:imports(Cfg), Opts),
     receive
         {core, Core} ->
             ok = file:write_file(Out, term_to_binary(Core)),
             #{out => Out, core_nodes => cerl_trees:size(Core),
               functions => length(cerl:module_defs(Core)),
-              executed => length(wasm_instance:executed(J))}
+              executed => length(wasm_instance:executed(I))}
     after 600000 -> {error, no_compile_seen}
     end.
 

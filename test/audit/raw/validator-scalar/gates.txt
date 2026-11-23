@@ -1,0 +1,32 @@
+qjs null F n=6 decode 0.998 validate 0.982 bimodal false
+  decode [1.03,0.999,1.044,0.985,0.938,0.997]
+  validate [1.0,0.962,0.974,0.98,0.984,1.012]
+  base decode 197918.000 us validate 121144.500 us
+qjs null R n=6 decode 0.979 validate 1.012 bimodal false
+  decode [0.973,0.946,1.02,0.964,0.985,1.009]
+  validate [0.992,1.083,0.997,1.111,1.0,1.023]
+  base decode 203496.000 us validate 119886.500 us
+qjs ab F n=6 decode 0.998 validate 0.814 bimodal false
+  decode [0.967,1.055,0.999,1.005,0.993,0.997]
+  validate [0.845,0.869,0.812,0.816,0.808,0.765]
+  base decode 200587.500 us validate 120658.000 us
+qjs ab R n=6 decode 1.002 validate 0.818 bimodal false
+  decode [1.005,0.97,0.954,1.011,0.999,1.033]
+  validate [0.83,0.813,0.805,0.826,0.815,0.82]
+  base decode 204958.500 us validate 122030.000 us
+python null F n=6 decode 0.994 validate 0.999 bimodal false
+  decode [0.988,0.975,1.007,1.013,0.997,0.99]
+  validate [0.919,0.949,1.017,1.016,1.002,0.996]
+  base decode 1280320.000 us validate 872748.000 us
+python null R n=6 decode 0.999 validate 1.011 bimodal false
+  decode [0.999,0.998,1.0,0.99,1.019,1.006]
+  validate [1.023,1.0,1.01,0.987,1.017,1.013]
+  base decode 1269410.000 us validate 868171.000 us
+python ab F n=6 decode 0.998 validate 0.722 bimodal false
+  decode [0.961,0.992,1.003,0.996,0.999,1.008]
+  validate [0.765,0.729,0.707,0.726,0.709,0.718]
+  base decode 1271470.000 us validate 871795.500 us
+python ab R n=6 decode 0.986 validate 0.718 bimodal false
+  decode [0.968,0.979,0.992,1.01,1.016,0.945]
+  validate [0.705,0.705,0.765,0.787,0.73,0.655]
+  base decode 1267694.500 us validate 875755.500 us

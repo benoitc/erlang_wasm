@@ -10432,3 +10432,65 @@ S2's were 0.983 to 1.050. The base compiled in about 114 s and its warm
 `cross.terms`, `gates-final.txt`, `scratch-filter.patch` and `BASE_SHA`.
 `rerun-attempt1-aborted.log` is a first rerun that was stopped after four
 discarded attempts at the first pair.
+
+## Validating scalar instructions without the vector table (2026-11-23)
+
+**The claim.** Validating a binary module takes 18% less time on QuickJS and
+28% less on CPython, and allocates 9% and 6% fewer words, with decoding
+unchanged.
+
+**Why.** Every scalar binary operator, comparison and float unary operator
+reached `numeric/1`'s last clause, missed the 219 clauses of
+`wasm_validate_simd:type_of/1`, and then had its name turned into a character
+list and compared as strings. On QuickJS that happened 86,870 times, on
+CPython 242,852. Each of those 90 instructions now has its own clause with its
+types written out, ahead of the vector table.
+
+**Arm.** `bench/paths/compilephases.erl`. `time` decodes then validates the
+guest in a fresh process per round and keeps the minimum of five rounds per
+launch; `alloc` counts the words each whole phase allocates with `tprof`'s
+`call_memory`, tracing only a wrapper that calls the phase in a position that
+is not a tail call. Tracing `wasm_validate:module/1` itself charges nothing,
+because it tail-calls its worker. Base b469b4f, change 7ce6d1b (the same
+source as this commit before rebasing), each built from `git archive` in a
+scratch directory.
+
+**Gates, written before measuring.** Validation time at or below 0.95 on both
+guests; decode time at or below 1.03; words allocated by validation at or
+below 0.95. The median of the paired ratios per ordering, six pairs per
+ordering, both orderings, a null set first passing between 0.95 and 1.05, no
+bimodal side; a pair counts only if the 5-minute load average was below 8 at
+the start and end of both its runs.
+
+| guest | validation (F / R) | decode (F / R) | null, decode and validation (F; R) |
+| --- | ---: | ---: | --- |
+| QuickJS | 0.814 / 0.818 | 0.998 / 1.002 | 0.998, 0.982; 0.979, 1.012 |
+| CPython | 0.722 / 0.718 | 0.998 / 0.986 | 0.994, 0.999; 0.999, 1.011 |
+
+Base validation took about 121 ms (QuickJS) and 872 ms (CPython).
+
+| words allocated by validation | base | change | ratio |
+| --- | ---: | ---: | ---: |
+| QuickJS | 20,114,906 | 18,263,624 | 0.908 |
+| CPython | 84,250,793 | 79,139,459 | 0.939 |
+
+The counts were the same in each of three runs per side. Decoding allocated
+23,166,093 and 110,114,383 words on both sides.
+
+**The first timing set did not count.** The arm records the 5-minute load
+average and the driver waited on the 1-minute one; QuickJS runs are about two
+seconds, so the driver launched as soon as the 1-minute average fell under 8
+while the 5-minute one was still near 25, and every QuickJS pair was
+discarded. CPython's pairs from that set are kept, all but one, which was
+rerun. The driver now waits on the 5-minute average.
+
+**Tests.** `wasm_validate_scalar_SUITE` builds three modules from bytes for
+every opcode from 0x45 to 0xC4 (right types, a wrong operand, a wrong result)
+and checks that a scalar instruction never consults the vector table. The
+second case failed on main with three calls; a planted wrong signature for
+`i32.add` made both fail.
+
+**Raw.** `test/audit/raw/validator-scalar/`: `time-first.terms`,
+`time-rerun.terms`, `discarded-first.terms`, `alloc.terms`, `gates.txt`,
+`pa-run.sh`, `pa-rerun.sh`, `pagate.erl`, `before-fix.log`,
+`planted-i32-add.log` and `BUILDS`.

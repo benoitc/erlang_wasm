@@ -1,0 +1,6 @@
+%%% wasm_validate_scalar_SUITE ==> scalar_lookup_skips_the_vector_table: FAILED
+  expected: {call_count,0}
+       got: {call_count,3}
+      line: 46
+Failed 1 tests. Passed 1 tests. 
+main at b469b4f, suite added, src unchanged

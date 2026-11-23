@@ -1481,55 +1481,101 @@ numeric(f64_convert_i32_s) -> {[i32], [f64]};
 numeric(f64_convert_i32_u) -> {[i32], [f64]};
 numeric(f64_convert_i64_s) -> {[i64], [f64]};
 numeric(f64_convert_i64_u) -> {[i64], [f64]};
+%% Arithmetic, bitwise operators and comparisons. A comparison gives i32
+%% whatever the width of its operands; everything else keeps its type. Each is
+%% its own clause so that the scalar instructions, which are most of a body,
+%% never reach the vector table below or build a string from their name.
+numeric(i32_add) -> {[i32, i32], [i32]};
+numeric(i32_sub) -> {[i32, i32], [i32]};
+numeric(i32_mul) -> {[i32, i32], [i32]};
+numeric(i32_div_s) -> {[i32, i32], [i32]};
+numeric(i32_div_u) -> {[i32, i32], [i32]};
+numeric(i32_rem_s) -> {[i32, i32], [i32]};
+numeric(i32_rem_u) -> {[i32, i32], [i32]};
+numeric(i32_and) -> {[i32, i32], [i32]};
+numeric(i32_or) -> {[i32, i32], [i32]};
+numeric(i32_xor) -> {[i32, i32], [i32]};
+numeric(i32_shl) -> {[i32, i32], [i32]};
+numeric(i32_shr_s) -> {[i32, i32], [i32]};
+numeric(i32_shr_u) -> {[i32, i32], [i32]};
+numeric(i32_rotl) -> {[i32, i32], [i32]};
+numeric(i32_rotr) -> {[i32, i32], [i32]};
+numeric(i32_eq) -> {[i32, i32], [i32]};
+numeric(i32_ne) -> {[i32, i32], [i32]};
+numeric(i32_lt_s) -> {[i32, i32], [i32]};
+numeric(i32_lt_u) -> {[i32, i32], [i32]};
+numeric(i32_gt_s) -> {[i32, i32], [i32]};
+numeric(i32_gt_u) -> {[i32, i32], [i32]};
+numeric(i32_le_s) -> {[i32, i32], [i32]};
+numeric(i32_le_u) -> {[i32, i32], [i32]};
+numeric(i32_ge_s) -> {[i32, i32], [i32]};
+numeric(i32_ge_u) -> {[i32, i32], [i32]};
+numeric(i64_add) -> {[i64, i64], [i64]};
+numeric(i64_sub) -> {[i64, i64], [i64]};
+numeric(i64_mul) -> {[i64, i64], [i64]};
+numeric(i64_div_s) -> {[i64, i64], [i64]};
+numeric(i64_div_u) -> {[i64, i64], [i64]};
+numeric(i64_rem_s) -> {[i64, i64], [i64]};
+numeric(i64_rem_u) -> {[i64, i64], [i64]};
+numeric(i64_and) -> {[i64, i64], [i64]};
+numeric(i64_or) -> {[i64, i64], [i64]};
+numeric(i64_xor) -> {[i64, i64], [i64]};
+numeric(i64_shl) -> {[i64, i64], [i64]};
+numeric(i64_shr_s) -> {[i64, i64], [i64]};
+numeric(i64_shr_u) -> {[i64, i64], [i64]};
+numeric(i64_rotl) -> {[i64, i64], [i64]};
+numeric(i64_rotr) -> {[i64, i64], [i64]};
+numeric(i64_eq) -> {[i64, i64], [i32]};
+numeric(i64_ne) -> {[i64, i64], [i32]};
+numeric(i64_lt_s) -> {[i64, i64], [i32]};
+numeric(i64_lt_u) -> {[i64, i64], [i32]};
+numeric(i64_gt_s) -> {[i64, i64], [i32]};
+numeric(i64_gt_u) -> {[i64, i64], [i32]};
+numeric(i64_le_s) -> {[i64, i64], [i32]};
+numeric(i64_le_u) -> {[i64, i64], [i32]};
+numeric(i64_ge_s) -> {[i64, i64], [i32]};
+numeric(i64_ge_u) -> {[i64, i64], [i32]};
+numeric(f32_add) -> {[f32, f32], [f32]};
+numeric(f32_sub) -> {[f32, f32], [f32]};
+numeric(f32_mul) -> {[f32, f32], [f32]};
+numeric(f32_div) -> {[f32, f32], [f32]};
+numeric(f32_min) -> {[f32, f32], [f32]};
+numeric(f32_max) -> {[f32, f32], [f32]};
+numeric(f32_copysign) -> {[f32, f32], [f32]};
+numeric(f32_abs) -> {[f32], [f32]};
+numeric(f32_neg) -> {[f32], [f32]};
+numeric(f32_ceil) -> {[f32], [f32]};
+numeric(f32_floor) -> {[f32], [f32]};
+numeric(f32_trunc) -> {[f32], [f32]};
+numeric(f32_nearest) -> {[f32], [f32]};
+numeric(f32_sqrt) -> {[f32], [f32]};
+numeric(f32_eq) -> {[f32, f32], [i32]};
+numeric(f32_ne) -> {[f32, f32], [i32]};
+numeric(f32_lt) -> {[f32, f32], [i32]};
+numeric(f32_gt) -> {[f32, f32], [i32]};
+numeric(f32_le) -> {[f32, f32], [i32]};
+numeric(f32_ge) -> {[f32, f32], [i32]};
+numeric(f64_add) -> {[f64, f64], [f64]};
+numeric(f64_sub) -> {[f64, f64], [f64]};
+numeric(f64_mul) -> {[f64, f64], [f64]};
+numeric(f64_div) -> {[f64, f64], [f64]};
+numeric(f64_min) -> {[f64, f64], [f64]};
+numeric(f64_max) -> {[f64, f64], [f64]};
+numeric(f64_copysign) -> {[f64, f64], [f64]};
+numeric(f64_abs) -> {[f64], [f64]};
+numeric(f64_neg) -> {[f64], [f64]};
+numeric(f64_ceil) -> {[f64], [f64]};
+numeric(f64_floor) -> {[f64], [f64]};
+numeric(f64_trunc) -> {[f64], [f64]};
+numeric(f64_nearest) -> {[f64], [f64]};
+numeric(f64_sqrt) -> {[f64], [f64]};
+numeric(f64_eq) -> {[f64, f64], [i32]};
+numeric(f64_ne) -> {[f64, f64], [i32]};
+numeric(f64_lt) -> {[f64, f64], [i32]};
+numeric(f64_gt) -> {[f64, f64], [i32]};
+numeric(f64_le) -> {[f64, f64], [i32]};
+numeric(f64_ge) -> {[f64, f64], [i32]};
+%% Anything else is a vector instruction or not an instruction at all.
 numeric(Op) ->
-    simd_or_false(Op).
+    wasm_validate_simd:type_of(Op).
 
-simd_or_false(Op) ->
-    case wasm_validate_simd:type_of(Op) of
-        {_, _} = T -> T;
-        false -> numeric_fallback(Op)
-    end.
-
-numeric_fallback(Op) ->
-    case atom_to_list(Op) of
-        "i32_" ++ Rest -> int_op(i32, Rest);
-        "i64_" ++ Rest -> int_op(i64, Rest);
-        "f32_" ++ Rest -> float_op(f32, Rest);
-        "f64_" ++ Rest -> float_op(f64, Rest);
-        _ -> false
-    end.
-
-%% Comparisons yield i32 regardless of operand width; everything else is
-%% width-preserving. Conversions are handled above, before this fallback.
-int_op(T, Name) ->
-    case classify_int(Name) of
-        binop -> {[T, T], [T]};
-        relop -> {[T, T], [i32]};
-        false -> false
-    end.
-
-float_op(T, Name) ->
-    case classify_float(T, Name) of
-        binop -> {[T, T], [T]};
-        unop -> {[T], [T]};
-        relop -> {[T, T], [i32]};
-        false -> false
-    end.
-
-classify_int(N) when N =:= "add"; N =:= "sub"; N =:= "mul";
-                     N =:= "div_s"; N =:= "div_u"; N =:= "rem_s"; N =:= "rem_u";
-                     N =:= "and"; N =:= "or"; N =:= "xor";
-                     N =:= "shl"; N =:= "shr_s"; N =:= "shr_u";
-                     N =:= "rotl"; N =:= "rotr" -> binop;
-classify_int(N) when N =:= "eq"; N =:= "ne";
-                     N =:= "lt_s"; N =:= "lt_u"; N =:= "gt_s"; N =:= "gt_u";
-                     N =:= "le_s"; N =:= "le_u"; N =:= "ge_s"; N =:= "ge_u" -> relop;
-classify_int(_) -> false.
-
-classify_float(_T, N) when N =:= "add"; N =:= "sub"; N =:= "mul"; N =:= "div";
-                           N =:= "min"; N =:= "max"; N =:= "copysign" -> binop;
-classify_float(_T, N) when N =:= "abs"; N =:= "neg"; N =:= "ceil"; N =:= "floor";
-                           N =:= "trunc"; N =:= "nearest"; N =:= "sqrt" -> unop;
-classify_float(_T, N) when N =:= "eq"; N =:= "ne"; N =:= "lt"; N =:= "gt";
-                           N =:= "le"; N =:= "ge" -> relop;
-classify_float(_T, _) -> false.

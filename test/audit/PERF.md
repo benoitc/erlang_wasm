@@ -10386,6 +10386,13 @@ checked before and after every run; one null pair took seven attempts. The
 result below is the 13 kept pairs and the 23 replacements: six load-valid
 pairs per ordering for every arm.
 
+The readings each run recorded, and that decided whether it counted, are the
+**5-minute** load average (`selbench.erl` takes the second value `sysctl -n
+vm.loadavg` prints). The drivers waited on the 1-minute average before
+starting a run. A run that counted therefore had the 5-minute average below 8
+at both ends; this paragraph was added after the record merged, when the
+second harness to copy that reading showed which value it was.
+
 | | cold, median paired ratio (F / R) | warm, median paired ratio (F / R) | verdict |
 | --- | ---: | ---: | --- |
 | null | 0.989 / 0.997 | 0.996 / 0.984 | passes |

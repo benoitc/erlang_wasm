@@ -10238,3 +10238,108 @@ an explicit thread, and the change is on that path only. `wasm_exec` is not
 touched.
 
 **Raw.** Not kept: the probes were scratch files.
+
+## Where the compiler's time goes on QuickJS's hot set (2026-11-21)
+
+**The question.** Compiling QuickJS's hot set is the compiled tier's largest
+cold cost, and `beam_ssa_opt` is most of it. Before changing the generator to
+make it cheaper, find what inside the compile takes the time: which passes,
+which sub-passes, and which generated functions.
+
+**Arm.** `bench/paths/ssaprofile.erl`. `capture` runs the `realbench qjs on`
+script and saves the first `compile:forms/2` input of the background compiler:
+223 compiled functions, 255 definitions, 5,464,955 Core nodes, the same unit an
+outside review of ab4e636 measured. Every later step compiles that saved term
+with the tier's `full` options. One launch per step, `+S 10:10`, on a box at
+load average 11 to 18, above the protocol's 8. These are shares inside one
+compile and per-function ratios, not a comparison between builds, so no pairs
+are needed; the absolute seconds are inflated by the load.
+
+**By pass** (`passes`: the documented `time` option, which also times the
+sub-passes through `compile:run_sub_passes/2`). The whole unit took 184 s.
+
+| pass | s | share |
+| --- | ---: | ---: |
+| `beam_ssa_opt` | 104.6 | 57% |
+| `beam_ssa_pre_codegen` | 13.0 | 7% |
+| `core_lint_module` | 9.8 | 5% |
+| `core_to_ssa` | 9.0 | 5% |
+| `beam_validator_strong` | 8.8 | 5% |
+| `beam_validator_weak` | 8.5 | 5% |
+| `beam_ssa_codegen` | 7.3 | 4% |
+| `beam_ssa_bool` | 4.7 | 3% |
+| everything else | 18.3 | 10% |
+
+`core_lint_module` and `sys_core_prepare` always run for `from_core`, and the
+two validators always run (OTP `compile.erl`, `core_passes/1`): no option
+removes them, only less code makes them cheaper.
+
+**Inside `beam_ssa_opt`.**
+
+| sub-pass | s | share of the pass |
+| --- | ---: | ---: |
+| `ssa_opt_alias` | 27.6 | 26% |
+| `ssa_opt_type_start` | 21.6 | 21% |
+| `ssa_opt_type_continue` | 10.7 | 10% |
+| `ssa_opt_dead` | 9.7 | 9% |
+| `ssa_opt_sink` | 8.4 | 8% |
+| `ssa_opt_live` | 8.1 | 8% |
+| the other 36 | 18.5 | 18% |
+
+`tprof` `call_time` over the SSA modules (`tprof`) spreads the time thinly:
+the costliest compiler function, `beam_ssa:rpo_1/4`, is 4.4% of it, and the
+top ten are 23%. There is no single hot spot inside OTP to avoid.
+
+**By generated function** (`perfun`: each function compiled alone, exported,
+with every other function of the unit a stub that answers a value of unknown
+type). The 255 compiles sum to **171 s**, against 184 s for the unit: the cost
+is local to each function, not an interaction between them. The sub-pass split
+summed over those compiles (`subpass`) matches the unit's: `ssa_opt_type_start`
+26.6 s, `ssa_opt_alias` 23.5 s.
+
+| generated | wasm function | Core nodes | compile s | share |
+| --- | --- | ---: | ---: | ---: |
+| `wasm_f_30` | 158, Rust `Runtime::run_with_context` | 694,096 | 28.6 | 16.8% |
+| `wasm_f_0` | 45, `JS_CallInternal` | 732,590 | 28.4 | 16.6% |
+| `wasm_f_1` | 46, `js_parse_statement_or_decl` | 455,722 | 15.2 | 8.9% |
+| `wasm_f_2` | 47, `js_create_function` | 490,211 | 14.9 | 8.7% |
+| `wasm_f_3` | 48, `js_parse_postfix_expr` | 221,983 | 7.0 | 4.1% |
+| `invoke/6` | the unit's entry dispatcher | 11,405 | 4.4 | 2.5% |
+
+The top two functions are a third of the compile, the top four half, the top
+twenty three quarters. Over the 114 functions above 5,000 Core nodes, compile
+time grows as size^0.95: about linear, at 27 to 41 us per Core node. The
+dispatcher is the exception, at 382 us per node.
+
+**What it means.**
+
+- The compile is a few very large functions, each costing about what its size
+  says. A cut in cold compile time has to make those functions smaller or not
+  compile them; trimming one construct the generator emits everywhere is worth
+  its share of Core nodes and no more (the `br_table` arms were 2.85%, recorded
+  in `ATTEMPTS.md` as dropped).
+- Three of the top five are QuickJS's parser and function setup, 37.1 s and
+  21.7% of the compile. They run while a script is parsed, not while it runs.
+  They are in the unit because the tier compiles every function that ran
+  (`wasm_jit:unit/2`, `ran/1`). Choosing the set by how hot a function is,
+  rather than by whether it ran, is the first change to measure next. A
+  scratch run on CPython in September 2026, never committed and so a lead
+  rather than a result, ranked functions by call entries plus loop back-edges
+  and kept most of the benefit for a small part of the compile. The gates must
+  cover warm `_start` as well as compile time, because a function left out
+  costs a tier crossing on every call into it.
+- The dispatcher's cost per node is ten times the rest. At 2.5% it is a small
+  item, worth a look once the hot-set question is settled.
+
+**Two instrument errors, caught before these numbers.** A first `perfun` used
+stubs that cannot return, which lets the type pass delete everything after
+each call; and with every caller stubbed, an unexported function is unused and
+the compiler removed it before any SSA pass ran, so code generation summed to
+0.011 s. Both were visible in the output and are fixed in the arm: stubs
+answer `erlang:get/1`, the function under test is exported, and `perfun`
+asserts it is in the compiled module.
+
+**Raw.** `test/audit/raw/ssaprofile/`: `passes.txt`, `tprof.txt`,
+`perfun.txt`, `perfun.terms`, `subpass-alone.txt`, `shape.txt` (7,702 BEAM
+functions after lifting, median arity 30, 12.7 MB of code). The capture itself
+is 87 MB and is not kept; `capture` rebuilds it.

@@ -1183,3 +1183,34 @@ per call, measured about 5 ns in isolation, at the edge of the gate; it was not
 built.
 
 Script and log: `test/audit/raw/generation/`.
+
+## Fewer `br_table` clauses in generated code
+
+`ssa-profile` branch, 2026-11-21. The generator writes one `case` clause for
+every entry of a `br_table`, and each clause is a full jump to its target
+continuation, carrying every local and the cache. An outside review of ab4e636
+found that 1,679 of the 4,422 entries in QuickJS's 223-function hot set go to
+the default target, so leaving them to the catch-all clause looked like a cheap
+cut in what `beam_ssa_opt` has to optimise.
+
+**Dropped at screening, before any code.** The rule set before measuring was:
+stop if those clauses are under 3% of the generated Core. Counted on the exact
+unit the background compiler hands to `compile:forms/2`:
+
+| What was counted | Core nodes | Share |
+| --- | ---: | ---: |
+| The whole unit (255 definitions) | 5,464,955 | 100% |
+| All explicit `br_table` clauses (4,422, in 249 tables) | 155,875 | 2.85% |
+| Clauses that go to the default (1,679) | 53,319 | 0.98% |
+
+Every clause together is under the screen, so the two-level form (map each
+index to a target number first, then one jump per distinct target) misses it
+too.
+
+This counts size, not compile time. **What would reopen it**: a profile that
+attributes a real share of `beam_ssa_opt`'s time to these clauses. The
+compiler-time profile in `PERF.md` ("Where the compiler's time goes on
+QuickJS's hot set") is the first place to look.
+
+Script and counts: `bench/paths/ssaprofile.erl` (`brtable`) and
+`test/audit/raw/brtable/`.

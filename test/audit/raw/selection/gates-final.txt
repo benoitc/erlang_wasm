@@ -1,0 +1,43 @@
+pairs kept 13, replaced 23, missing 0 []
+null #{f =>
+           #{warm => 0.9957530039741074,cold => 0.9888377328522876,
+             cold_pairs => [0.99,0.982,0.988,1.006,0.994,0.974],
+             n => 6,
+             warm_pairs => [0.993,1.008,0.992,0.978,0.999,1.009]},
+       pass => true,
+       r =>
+           #{warm => 0.9839958589975157,cold => 0.9972832105337697,
+             cold_pairs => [0.994,1.0,0.981,0.978,1.003,1.003],
+             n => 6,
+             warm_pairs => [0.978,1.037,0.99,0.971,0.993,0.94]},
+       base_cold_s => 113.533942,base_warm_ms => 223.72,bimodal_sides => 0,
+       sides_too_few_for_bimodality => 0,variant_cold_s => 111.854977,
+       variant_warm_ms => 222.2175}
+s1 #{f =>
+         #{warm => 1.0715673749963657,cold => 0.7707800444930298,
+           cold_pairs => [0.775,0.777,0.767,0.765,0.776,0.749],
+           n => 6,
+           warm_pairs => [1.082,1.081,1.062,1.09,1.049,1.044]},
+     pass => false,
+     r =>
+         #{warm => 1.0590330840095339,cold => 0.76723701039385,
+           cold_pairs => [0.732,0.768,0.781,0.773,0.766,0.756],
+           n => 6,
+           warm_pairs => [1.055,1.033,1.058,1.098,1.06,1.102]},
+     base_cold_s => 114.0142265,base_warm_ms => 224.8825,bimodal_sides => 0,
+     sides_too_few_for_bimodality => 0,variant_cold_s => 87.3682425,
+     variant_warm_ms => 240.7815}
+s2 #{f =>
+         #{warm => 1.0202031501385138,cold => 0.8273058258266851,
+           cold_pairs => [0.846,0.827,0.826,0.822,0.837,0.828],
+           n => 6,
+           warm_pairs => [1.023,1.017,1.04,1.017,1.034,0.985]},
+     pass => true,
+     r =>
+         #{warm => 1.0106847606087608,cold => 0.8418770547560315,
+           cold_pairs => [0.845,0.849,0.82,0.839,0.839,0.845],
+           n => 6,
+           warm_pairs => [1.006,1.05,1.015,0.995,0.983,1.03]},
+     base_cold_s => 114.283065,base_warm_ms => 226.2755,bimodal_sides => 0,
+     sides_too_few_for_bimodality => 0,variant_cold_s => 95.3828535,
+     variant_warm_ms => 226.8805}

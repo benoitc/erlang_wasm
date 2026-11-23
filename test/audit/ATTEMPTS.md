@@ -1214,3 +1214,25 @@ QuickJS's hot set") is the first place to look.
 
 Script and counts: `bench/paths/ssaprofile.erl` (`brtable`) and
 `test/audit/raw/brtable/`.
+
+## Leaving QuickJS's parser out of the compiled set
+
+`selection-experiment` branch, 2026-11-23. QuickJS's parser and function setup
+code (`js_parse_statement_or_decl`, `js_create_function`,
+`js_parse_postfix_expr`) is 21.7% of the compile of its hot set and does
+little work in a run: 21 calls and 151 loop back-edges between them.
+
+**Rejected.** Leaving the three out cut the cold compile by 23% (median paired
+ratio 0.771 / 0.767) and slowed every warm `_start` by 6 to 7% (1.072 / 1.059,
+all twelve pairs above the 1.03 limit), because each run parses its script
+again and the parser then runs interpreted. Leaving out the Rust wrapper
+instead passed: 16 to 17% off the compile for a 1.1 to 2.0% warm slowdown.
+`PERF.md`, "Leaving hand-picked functions out of QuickJS's compiled set", has
+both.
+
+This is a result for the three together; it does not show that any one of
+them is expensive to leave out. **What would reopen it**: a selection rule
+that measures interpreted work per function and ranks one of these as cheap,
+checked by leaving that function out alone.
+
+Raw: `test/audit/raw/selection/`.

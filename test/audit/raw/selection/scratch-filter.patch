@@ -1,0 +1,13 @@
+--- /dev/fd/11	2026-11-22 22:14:58
++++ src/wasm_jit.erl	2026-11-22 14:57:17
+@@ -1481,7 +1481,9 @@
+ unit(Inst, Executed) ->
+     Fns = [F || F <- tuple_to_list(Inst#inst.funcs), is_record(F, fn)],
+     Ran = ran(Executed),
+-    Ok = [{F, wasm_instance:compiler_ir(F, Inst)} || F <- Fns, Ran(F#fn.idx)],
++    Excl = application:get_env(wasm, scratch_exclude, []),
++    Ok = [{F, wasm_instance:compiler_ir(F, Inst)} || F <- Fns, Ran(F#fn.idx),
++          not lists:member(F#fn.idx, Excl)],
+     Eligible = [{F, IR} || {F, IR} <- Ok,
+                            element(1, wasm_core:can_compile(F, IR)) =:= ok],
+     [{Pos, F#fn.idx, F, IR}

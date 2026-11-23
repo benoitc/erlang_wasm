@@ -1,0 +1,14 @@
+#{tag => "cross",mode => "cross",excl => [],load_end => 10.47,
+  crossings => #{host => 16},
+  top_targets =>
+      [{42,2},{8,2},{43,1},{40,1},{39,1},{37,1},{31,1},{30,1},{29,1},{15,1}]}.
+#{tag => "cross",mode => "cross",excl => "./0",load_end => 10.14,
+  crossings => #{host => 16,guest => 19},
+  top_targets =>
+      [{48,15},{46,3},{42,2},{8,2},{47,1},{43,1},{40,1},{39,1},{37,1},{31,1}]}.
+#{tag => "cross",mode => "cross",
+  excl => [158],
+  load_end => 8.86,
+  crossings => #{host => 15,guest => 1},
+  top_targets =>
+      [{42,2},{8,2},{158,1},{43,1},{40,1},{39,1},{37,1},{31,1},{29,1},{15,1}]}.

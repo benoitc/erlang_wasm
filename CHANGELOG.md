@@ -4,9 +4,9 @@
 
 ### Changes
 
-- **Faster: validating a binary module.** The validation step of
-  `wasm:compile/1` takes about 18% less time on QuickJS and 28% less on
-  CPython. Decoding is unchanged.
+- **Faster: compiling a binary module.** `wasm:compile/1` takes about 12%
+  less time on the QuickJS guest and 18% less on the CPython guest, and
+  decoding allocates 40 to 47% less memory. Peak memory is unchanged.
 
 ## 0.11.1
 

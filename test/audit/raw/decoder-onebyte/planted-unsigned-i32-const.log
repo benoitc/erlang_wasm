@@ -1,0 +1,4 @@
+%%% wasm_decode_immediates_SUITE ==> signed_constant: FAILED
+  expected: [{i32_const,-64}]
+       got: [{i32_const,64}]
+Failed 1 tests. Passed 2 tests. 

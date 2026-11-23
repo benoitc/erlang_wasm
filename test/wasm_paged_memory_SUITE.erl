@@ -1179,8 +1179,8 @@ the_miss_path_is_one_function_per_access_shape(_Config) ->
             end,
     %% Defined: these four and nothing else named `wasm_m_'. `i64.store32' and
     %% `i32.store' are one shape, four bytes of an integer.
-    Defs = [{"'wasm_m_load_1_i32_s'/10", 1}, {"'wasm_m_load_4_u32'/10", 2},
-            {"'wasm_m_store_4_int'/11", 2}, {"'wasm_m_store_8_int'/11", 1}],
+    Defs = [{"'wasm_m_load_1_i32_s'/9", 1}, {"'wasm_m_load_4_u32'/9", 2},
+            {"'wasm_m_store_4_int'/10", 2}, {"'wasm_m_store_8_int'/10", 1}],
     ?assertEqual([Name || {Name, _} <- Defs],
                  lists:sort([Name || {Name, _} <- Fns,
                                      lists:prefix("'wasm_m_", Name)])),
@@ -1296,7 +1296,7 @@ forced(Wat, Warm) ->
 %% modules have no `module_info', and the arity is part of what changed.
 misses(I, Name, F) ->
     Mod = wasm_code_slots:slot_module(wasm_instance:code_slot(I)),
-    MFAs = [{Mod, Name, A} || A <- [8, 10]],
+    MFAs = [{Mod, Name, A} || A <- [8, 9]],
     _ = [erlang:trace_pattern(MFA, true, [call_count]) || MFA <- MFAs],
     R = entered(true, I, F),
     N = lists:sum([C || MFA <- MFAs,

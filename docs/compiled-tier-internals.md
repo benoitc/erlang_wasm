@@ -186,8 +186,9 @@ page table, and reading the page table on every access is what made it slow.
 Read `wasm_core`'s private `cached/9` before you change the code generated for
 a memory access.
 
-- An entry is a block number, the array that block lives in and the word
-  index of its first word. A block is 64 KiB on a memory with no image and
+- An entry is a block number, the array that block lives in, and the
+  difference between a word's index in that array and the word's number from
+  the start of memory, which is the same for every word of the block. A block is 64 KiB on a memory with no image and
   4 KiB on a restored one, where untouched pages sit in a table of 4 KiB
   slots. A function that accesses memory 0 picks the size once, when it is
   entered (`tag_bindings/3`); a memory never gains or loses an image, so the
@@ -217,7 +218,7 @@ access shape the module uses, built by `wasm_core`'s private `miss_fn/1`:
   table, the growth chunks, the read of an untouched image page and the call
   to the helper.
 - It takes the state, the address, the value for a store, the six cache
-  values and the block's shift and mask, and returns
+  values and the block's shift, and returns
   `{Result, P1, A1, B1, P2, A2, B2}` on every path.
 - A shape is a direction, a width and a kind, twenty at most, and each has a
   literal name: `wasm_m_load_4_i32_u`, `wasm_m_store_8_int`. Nothing a guest

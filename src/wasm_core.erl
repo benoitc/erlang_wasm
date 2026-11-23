@@ -1020,7 +1020,7 @@ function(#fn{nparams = NP, nresults = NRes, defaults = Defaults,
     %% How much of memory 0 one cache entry covers, decided once on entry and
     %% only where the body has a cached access: see `tag_bindings/3'.
     Tag = case Tlb =/= undefined andalso cached_access(IR) of
-              true -> {cerl:c_var('Ts'), cerl:c_var('Tm')};
+              true -> cerl:c_var('Ts');
               false -> undefined
           end,
     G0 = #g{env = Env, nlocals = NLocals, nres = NRes, n = N0,
@@ -2412,7 +2412,8 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
 %% An access to memory 0 through its translation cache.
 %%
 %% The cache holds two translations, the most recently used first: each a
-%% block of memory and the array and word index its first word is at. A block
+%% block of memory, the array it is in, and the difference between a word's
+%% index in that array and its number from the start of memory. A block
 %% is 64 KiB on a memory with no image and 4 KiB on a restored one, chosen once
 %% on entry (`tag_bindings/3'). Only
 %% translations to an array are ever put in it, a private slot or a growth
@@ -2447,20 +2448,20 @@ access(Dir, Mut, M, N, Kind, Addr, Val) ->
 %% faster. See `test/audit/PERF.md', "What makes A4's generated code large:
 %% two diagnostics" for the cause and "The miss path out of line" for the
 %% gates.
-cached(Dir, Mut, N, Kind, Addr, Val, Tlb, {Ts, Tm}, Form) ->
+cached(Dir, Mut, N, Kind, Addr, Val, Tlb, Ts, Form) ->
     {TP, TA, TB, _TP2, _TA2, _TB2} = Tlb,
     A = cerl:c_var('A'), Ix = cerl:c_var('Ix'), Bit = cerl:c_var('Bit'),
     Pg = cerl:c_var('Pg'),
     %% Either leaves the cache as it was.
     Keep = fun(R) -> answer(Form, R, Tlb) end,
-    Hit = cerl:c_let([Ix], bif('+', [TB, page_word(A, Tm)]),
+    Hit = cerl:c_let([Ix], bif('+', [TB, addr_word(A)]),
                      Keep(perform(Dir, Mut, N, Kind, A, TA, Ix, Bit, Val))),
     Slow = Keep(helper(Dir, Mut, N, Kind, A, Val)),
     Vals = case Dir of load -> []; store -> [Val] end,
     Out = from_tuple(Form,
                      cerl:c_apply(miss_fname(Dir, N, Kind),
                                   [Mut, A | Vals] ++ tuple_to_list(Tlb)
-                                  ++ [Ts, Tm])),
+                                  ++ [Ts])),
     cerl:c_let([A], Addr,
       cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
                                   cerl:abstract(8)]),
@@ -2470,10 +2471,12 @@ cached(Dir, Mut, N, Kind, Addr, Val, Tlb, {Ts, Tm}, Form) ->
               all([bif('=:=', [Pg, TP])], Hit, Out),
               Slow)))).
 
-%% The word of its block an address is in, counting from zero; `Tm' is the
-%% block's mask.
-page_word(A, Tm) ->
-    bif('bsr', [bif('band', [A, Tm]), cerl:abstract(3)]).
+%% The number of the word an address is in, counted from the start of memory.
+%% Inside one block it and the word's index in the block's array go up
+%% together, so an entry keeps their difference, set on refill, and a hit adds
+%% this back: no mask, so nothing depends on the block's size but the tag.
+addr_word(A) ->
+    bif('bsr', [A, cerl:abstract(3)]).
 
 %% The load or the store itself, on a word already found. A store answers the
 %% state to go on with, which the inline one never changes.
@@ -2539,16 +2542,15 @@ miss_fn({Dir, N, Kind}) ->
                        || V <- ['P1', 'A1', 'B1', 'P2', 'A2', 'B2']]),
     Mem = cerl:c_var('Mem'), Sh = cerl:c_var('Sh'), Ix = cerl:c_var('Ix'),
     Ck = cerl:c_var('Ck'), Bit = cerl:c_var('Bit'), Ci = cerl:c_var('Ci'),
-    Pg = cerl:c_var('Pg'), Ts = cerl:c_var('Ts'), Tm = cerl:c_var('Tm'),
+    Pg = cerl:c_var('Pg'), Ts = cerl:c_var('Ts'),
     Done = fun(R, Cache) -> answer(tuple, R, Cache) end,
     Keep = fun(R) -> Done(R, Tlb) end,
     Refill = fun(R, C, I) ->
-                     Done(R, {Pg, C, bif('-', [I, page_word(A, Tm)]),
-                              TP, TA, TB})
+                     Done(R, {Pg, C, bif('-', [I, addr_word(A)]), TP, TA, TB})
              end,
     Do = fun(C, I) -> perform(Dir, Mut, N, Kind, A, C, I, Bit, Val) end,
     Slow = Keep(helper(Dir, Mut, N, Kind, A, Val)),
-    Hit2 = cerl:c_let([Ix], bif('+', [TB2, page_word(A, Tm)]),
+    Hit2 = cerl:c_let([Ix], bif('+', [TB2, addr_word(A)]),
                       Done(Do(TA2, Ix), {TP2, TA2, TB2, TP, TA, TB})),
     Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
                cerl:c_let([Ci], bif('bsr', [A, Sh]),
@@ -2565,7 +2567,7 @@ miss_fn({Dir, N, Kind}) ->
                       Slow)),
     Vals = case Dir of load -> []; store -> [Val] end,
     {miss_fname(Dir, N, Kind),
-     cerl:c_fun([Mut, A | Vals] ++ tuple_to_list(Tlb) ++ [Ts, Tm],
+     cerl:c_fun([Mut, A | Vals] ++ tuple_to_list(Tlb) ++ [Ts],
        cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
                                    cerl:abstract(8)]),
          cerl:c_let([Pg], bif('bsr', [A, Ts]),
@@ -2573,7 +2575,7 @@ miss_fn({Dir, N, Kind}) ->
 
 miss_fname(Dir, N, Kind) ->
     cerl:c_fname(miss_name(Dir, N, Kind),
-                 case Dir of load -> 10; store -> 11 end).
+                 case Dir of load -> 9; store -> 10 end).
 
 %% The name of the function for an access shape: a direction, a width in bytes
 %% and a kind, as `wasm_exec:load_spec/1' and `store_spec/1' answer them. Each
@@ -2621,18 +2623,19 @@ cached_access(IR) ->
 %%
 %% This relies on 64 KiB WebAssembly pages: a block that was in bounds stays in
 %% bounds because a memory is a whole number of pages and never shrinks.
+%% Only the shift is carried: an entry stores the difference between a word's
+%% array index and its number from the start of memory (`addr_word/1'), which
+%% is the same for every word of a block whatever the block's size.
 tag_bindings(undefined, _Mut, Body) -> Body;
-tag_bindings({Ts, Tm}, Mut, Body) ->
+tag_bindings(Ts, Mut, Body) ->
     Ib = cerl:c_var('Ib'),
-    Pick = fun(NoImage, Image) ->
-                   cerl:c_case(Ib, [cerl:c_clause([cerl:abstract(0)],
-                                                  cerl:abstract(NoImage)),
-                                    cerl:c_clause([cerl:c_var('_Ib')],
-                                                  cerl:abstract(Image))])
-           end,
     cerl:c_let([Ib], field(mem_at(Mut, 0), ?MEM_IMG_BYTES),
-      cerl:c_let([Ts], Pick(16, 12),
-        cerl:c_let([Tm], Pick(65535, 4095), Body))).
+      cerl:c_let([Ts],
+                 cerl:c_case(Ib, [cerl:c_clause([cerl:abstract(0)],
+                                                cerl:abstract(16)),
+                                  cerl:c_clause([cerl:c_var('_Ib')],
+                                                cerl:abstract(12))]),
+                 Body)).
 
 %% Every shape of access to memory 0 in a unit, each once: the functions the
 %% module needs and no others. Read off the bodies, as `shape/1' is, so an

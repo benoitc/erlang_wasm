@@ -1,0 +1,12 @@
+#{side => base, guest => "qjs",decode_words => 23166093,validate_words => 18263644,  load_end => 45.28}.
+#{side => new, guest => "qjs",decode_words => 13786571,validate_words => 18263624,  load_end => 45.28}.
+#{side => base, guest => "python",decode_words => 110114383,validate_words => 79139475,  load_end => 45.46}.
+#{side => new, guest => "python",decode_words => 58224203,validate_words => 79139459,  load_end => 45.25}.
+#{side => base, guest => "qjs",decode_words => 23166093,validate_words => 18263644,  load_end => 45.25}.
+#{side => new, guest => "qjs",decode_words => 13786571,validate_words => 18263624,  load_end => 44.98}.
+#{side => base, guest => "python",decode_words => 110114383,validate_words => 79139475,  load_end => 44.58}.
+#{side => new, guest => "python",decode_words => 58224203,validate_words => 79139459,  load_end => 44.07}.
+#{side => base, guest => "qjs",decode_words => 23166093,validate_words => 18263644,  load_end => 44.07}.
+#{side => new, guest => "qjs",decode_words => 13786571,validate_words => 18263624,  load_end => 44.07}.
+#{side => base, guest => "python",decode_words => 110114383,validate_words => 79139475,  load_end => 43.84}.
+#{side => new, guest => "python",decode_words => 58224203,validate_words => 79139459,  load_end => 43.86}.

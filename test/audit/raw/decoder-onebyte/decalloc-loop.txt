@@ -1,0 +1,28 @@
+== base
+total 23101953
+wasm_decode_code:{instrs,2} calls 597734 words 8758226
+wasm_leb128:{u32,1} calls 352776 words 4748527
+wasm_decode_code:{instr,2} calls 563497 words 3540389
+wasm_leb128:{s32,1} calls 91097 words 1157601
+wasm_leb128:{u64,1} calls 68750 words 885144
+wasm_decode_code:{u32_arg,2} calls 248505 words 745515
+wasm_decode_code:{mem_arg,2} calls 68747 words 687470
+wasm_leb128:{sleb,5} calls 122136 words 443143
+wasm_decode_code:{'-instr/2-fun-10-',1} calls 146383 words 439149
+wasm_leb128:{s33,1} calls 28648 words 374028
+wasm_leb128:{uleb,5} calls 45761 words 298497
+wasm_leb128:{s64,1} calls 12566 words 143318
+== new
+total 13316221
+wasm_decode_code:{instrs,2} calls 597734 words 6320470
+wasm_decode_code:{instr,2} calls 235012 words 3062601
+wasm_leb128:{u32,1} calls 89580 words 1119154
+wasm_leb128:{sleb,5} calls 122136 words 443143
+wasm_leb128:{s33,1} calls 28648 words 374028
+wasm_leb128:{u64,1} calls 24148 words 299111
+wasm_leb128:{uleb,5} calls 45761 words 298497
+wasm_leb128:{s32,1} calls 25808 words 260407
+wasm_decode_code:{mem_arg,2} calls 24145 words 241450
+wasm_leb128:{s64,1} calls 12566 words 143318
+wasm_decode_code:{u32_arg,2} calls 29911 words 89733
+wasm_decode_code:{blocktype,1} calls 28648 words 85944

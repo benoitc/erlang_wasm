@@ -1,0 +1,12 @@
+#{side => base, guest => "qjs",peak_heap_words => 10487663,load_end => 6.69}.
+#{side => new, guest => "qjs",peak_heap_words => 10487663,load_end => 6.69}.
+#{side => base, guest => "qjs",peak_heap_words => 10487663,load_end => 6.69}.
+#{side => new, guest => "qjs",peak_heap_words => 10487663,load_end => 6.69}.
+#{side => base, guest => "qjs",peak_heap_words => 10487663,load_end => 6.69}.
+#{side => new, guest => "qjs",peak_heap_words => 10487663,load_end => 6.69}.
+#{side => base, guest => "python",peak_heap_words => 134652998,load_end => 6.69}.
+#{side => new, guest => "python",peak_heap_words => 134652998,load_end => 6.69}.
+#{side => base, guest => "python",peak_heap_words => 134652998,load_end => 6.65}.
+#{side => new, guest => "python",peak_heap_words => 134652998,load_end => 6.65}.
+#{side => base, guest => "python",peak_heap_words => 134652998,load_end => 6.65}.
+#{side => new, guest => "python",peak_heap_words => 134652998,load_end => 6.65}.

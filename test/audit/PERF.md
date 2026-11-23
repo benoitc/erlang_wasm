@@ -10435,9 +10435,15 @@ discarded attempts at the first pair.
 
 ## Validating scalar instructions without the vector table (2026-11-23)
 
-**The claim.** Validating a binary module takes 18% less time on QuickJS and
-28% less on CPython, and allocates 9% and 6% fewer words, with decoding
-unchanged.
+**Corrected the same day: the time saving below holds only when the validator
+is called directly.** Through `wasm:compile/1`, which sets a heap floor
+before decoding, validation is 3 to 4% faster on QuickJS and up to 3% on
+CPython, which misses this change's 0.95 gate; the allocation saving stands.
+See "One-byte immediates in the decoder loop, timed through `wasm:compile/1`".
+
+**The claim, as first recorded.** Validating a binary module takes 18% less
+time on QuickJS and 28% less on CPython, and allocates 9% and 6% fewer words,
+with decoding unchanged.
 
 **Why.** Every scalar binary operator, comparison and float unary operator
 reached `numeric/1`'s last clause, missed the 219 clauses of
@@ -10494,3 +10500,101 @@ second case failed on main with three calls; a planted wrong signature for
 `time-rerun.terms`, `discarded-first.terms`, `alloc.terms`, `gates.txt`,
 `pa-run.sh`, `pa-rerun.sh`, `pagate.erl`, `before-fix.log`,
 `planted-i32-add.log` and `BUILDS`.
+
+## One-byte immediates in the decoder loop, timed through `wasm:compile/1` (2026-11-23)
+
+**The claim.** `wasm:compile/1` takes 12% less time on QuickJS and 18% less on
+CPython. Decoding takes 29 to 31% less time on QuickJS and 38 to 40% less on
+CPython, and allocates 40 to 47% fewer words. Validation is no slower and the
+peak heap is unchanged.
+
+**Why.** Most immediates in a real binary are one byte, but each one still
+cost a call to `wasm_leb128`, a `{Value, Rest}` tuple and, for an index, a call
+through a function value. Counted while decoding (`step0-counts.terms`), seven
+instructions each carried more than 5% of the one-byte reads on QuickJS or
+CPython: `local.get` (36% on both), `i32.const` (16% and 10%), the memory
+arguments of `i32.load` (8% and 22%) and `i32.store` (4% and 11%),
+`local.tee`, `local.set` and `br_if`. The loop `wasm_decode_code:instrs/2` now
+matches those seven with a one-byte immediate in its own clauses and pushes
+the instruction directly. `i32.const` keeps its sign: bit 6 of the byte, as in
+`wasm_leb128:s32/1`.
+
+**The first version failed.** It put the same matches in the clauses of
+`instr/2`, the per-opcode function. Decoding then allocated more, not less:
+1.485 of the baseline on QuickJS and 1.376 on CPython, against a gate of
+0.95. Split by function with `tprof`, `instr/2` went from about 6 words a call
+to about 38, on every call and not only the seven fast ones; that cost twice
+what the calls to `wasm_leb128` had. The raw output of that version was not
+kept. In the loop's own match, decoding allocates 0.595 (QuickJS) and 0.529
+(CPython) of the baseline; the same in each of three runs per side
+(`direct-path/alloc.terms`).
+
+**The first timing failed too, and the harness was wrong.** Timed by calling
+the decoder and validator directly, decoding was 0.760 / 0.745 (QuickJS) and
+0.664 / 0.668 (CPython), but validation on QuickJS was 1.691 / 1.657 against a
+limit of 1.03. Validated in a fresh process, the module costs the same on both
+sides (`valdiag.erl`); after a direct decode in the same process the old
+decoder's garbage had left a large heap that made validation 38% faster, and
+the new one does not. That path is not the one users take: `wasm:compile/1`
+sets a heap floor of two words per input byte before decoding anything over
+16 KiB, collects, and keeps it through validation (`with_room/2` in
+`src/wasm.erl`). The whole-compile figures first drawn from that run were also
+wrong, because they added decode and validation minima from different rounds.
+The direct-path gate failure stands as recorded (`direct-path/gates.txt`).
+
+**Arm, corrected.** `bench/paths/compilephases.erl` `time` now makes one
+complete `wasm:compile/1` call per round in a fresh process, with the decode
+and validation times taken from call and return timestamps inside that same
+call, and keeps the round with the lowest total with its own phases. `peak`
+records the largest heap, young plus old, the compiling process holds at any
+collection during the call. Base 670ecb3, change this branch, each built from
+`git archive` in a scratch directory.
+
+**Gates, written before this measurement, thresholds unchanged.** Decode at or
+below 0.95, validation at or below 1.03, peak heap at or below 1.03; the median
+of the paired ratios per ordering; six pairs per ordering; a null set first
+between 0.95 and 1.05; no bimodal side; the 5-minute load average below 8 at
+both ends of every run.
+
+| guest | total (F / R) | decode (F / R) | validation (F / R) | peak heap |
+| --- | ---: | ---: | ---: | ---: |
+| QuickJS | 0.877 / 0.883 | 0.694 / 0.714 | 0.921 / 0.942 | 1.000 |
+| CPython | 0.821 / 0.813 | 0.617 / 0.600 | 0.925 / 0.953 | 1.000 |
+
+The QuickJS null passed (total 1.005 / 0.977). The first CPython set's null
+did not: its decode ratio in the reverse ordering was 1.096, outside the band,
+so that set was discarded and run again (`public-path/time.terms` holds it);
+the rerun's null passed (total 1.020 / 1.005) and its pairs are the CPython
+row above. A baseline compile took about 170 ms (QuickJS) and 1.09 s
+(CPython). Peak heaps were 10,487,663 and 134,652,998 words on both sides in
+every run: the heap floor sets them.
+
+**The scalar validator clauses, checked again on this path.** The section
+"Validating scalar instructions without the vector table" measured the
+validator called directly. Through `wasm:compile/1`, base b469b4f against
+670ecb3, with that change's own gates:
+
+| guest | validation (F / R), gate 0.95 | decode (F / R) | total (F / R) |
+| --- | ---: | ---: | ---: |
+| QuickJS | 0.962 / 0.972 | 1.014 / 1.020 | 0.979 / 0.997 |
+| CPython | 0.968 / 0.995 | 0.997 / 0.987 | 0.999 / 1.014 |
+
+Both nulls passed. On the public path that change saves 3 to 4% of validation
+on QuickJS and up to 3% on CPython, which misses its 0.95 gate. Its saving
+in allocated words stands; most of the time it saved when called directly was
+collection that the heap floor already avoids.
+
+**Tests.** `wasm_decode_immediates_SUITE` decodes each fast instruction with
+the values at the edges of one byte, a two-byte value, a needlessly long
+encoding and a truncated one, and compares each with what `wasm_leb128` gives
+for the same bytes. It passes against `main`'s decoder as well, as it must; a
+planted unsigned clause for `i32.const`, which reads 0x40 as 64, makes it
+fail (`planted-unsigned-i32-const.log`).
+
+**Raw.** `test/audit/raw/decoder-onebyte/`: `step0-counts.terms` and
+`decprobe.erl` (the opcode counts), `decalloc.erl` and `decalloc-loop.txt`
+(allocation by function), `valdiag.erl`, `direct-path/` (the failed direct
+timing and the allocation counts), `public-path/` (the drivers, the gate
+script, both CPython sets, the QuickJS set and the peak runs), `BUILDS`.
+The re-check of the validator clauses is in
+`test/audit/raw/validator-scalar/public-path/`.

@@ -35,6 +35,34 @@ instrs(Bin) -> instrs(Bin, []).
 
 instrs(<<16#0B, Rest/binary>>, Acc) -> {lists:reverse(Acc), end_, Rest};
 instrs(<<16#05, Rest/binary>>, Acc) -> {lists:reverse(Acc), else_, Rest};
+%% The commonest immediates fit in one byte, and those are read here, in the
+%% loop's own match, without a call to `instr/2' and `wasm_leb128' and the two
+%% tuples they answer. These are the instructions that carried more than 5% of
+%% a guest's one-byte reads, counted on QuickJS and CPython. Every other
+%% encoding, longer or malformed, falls through to `instr/2' as before, so the
+%% errors are the same. Matching them in the clauses of `instr/2' instead made
+%% every call to it allocate six times as much. See `test/audit/PERF.md',
+%% "One-byte immediates in the decoder loop".
+instrs(<<16#20, 0:1, I:7, Rest/binary>>, Acc) ->
+    instrs(Rest, [{local_get, I} | Acc]);
+instrs(<<16#21, 0:1, I:7, Rest/binary>>, Acc) ->
+    instrs(Rest, [{local_set, I} | Acc]);
+instrs(<<16#22, 0:1, I:7, Rest/binary>>, Acc) ->
+    instrs(Rest, [{local_tee, I} | Acc]);
+instrs(<<16#0D, 0:1, L:7, Rest/binary>>, Acc) ->
+    instrs(Rest, [{br_if, L} | Acc]);
+%% Signed: bit 6 is the sign, so 0x40 is -64 and 0x7F is -1, as in
+%% `wasm_leb128:s32/1'.
+instrs(<<16#41, 0:1, 0:1, V:6, Rest/binary>>, Acc) ->
+    instrs(Rest, [{i32_const, V} | Acc]);
+instrs(<<16#41, 0:1, 1:1, V:6, Rest/binary>>, Acc) ->
+    instrs(Rest, [{i32_const, V - 64} | Acc]);
+%% A memory argument whose flags byte names no memory index and whose offset
+%% is one byte, as `mem_arg/2' would read them.
+instrs(<<16#28, 0:2, A:6, 0:1, O:7, Rest/binary>>, Acc) ->
+    instrs(Rest, [{i32_load, {A, O, 0}} | Acc]);
+instrs(<<16#36, 0:2, A:6, 0:1, O:7, Rest/binary>>, Acc) ->
+    instrs(Rest, [{i32_store, {A, O, 0}} | Acc]);
 instrs(<<Op:8, Rest/binary>>, Acc) ->
     {I, Rest1} = instr(Op, Rest),
     instrs(Rest1, [I | Acc]);

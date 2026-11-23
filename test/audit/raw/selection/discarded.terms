@@ -1,0 +1,112 @@
+#{tag => "R:6:s2:first:rerun1",mode => "time",
+  excl => [158],
+  load_end => 12.01,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 97274419,load_start => 6.02,
+  warm_us => [231050,225520,230210]}.
+#{tag => "R:6:s2:second:rerun1",mode => "time",excl => [],load_end => 8.12,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112320849,load_start => 9.51,
+  warm_us => [230244,218421,219059]}.
+#{tag => "R:6:s2:first:rerun2",mode => "time",
+  excl => [158],
+  load_end => 8.7,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 94965495,load_start => 8.12,
+  warm_us => [226717,228934,222807]}.
+#{tag => "R:6:s2:second:rerun2",mode => "time",excl => [],load_end => 7.55,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112027052,load_start => 8.31,
+  warm_us => [229511,216758,215824]}.
+#{tag => "R:6:null:first:rerun1",mode => "time",excl => [],load_end => 7.89,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 113188406,load_start => 7.91,
+  warm_us => [238380,231752,217525]}.
+#{tag => "R:6:null:second:rerun1",mode => "time",excl => [],load_end => 7.67,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112038946,load_start => 8.14,
+  warm_us => [224029,231137,216916]}.
+#{tag => "R:6:null:first:rerun2",mode => "time",excl => [],load_end => 10.15,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114380176,load_start => 7.67,
+  warm_us => [232692,219966,222466]}.
+#{tag => "R:6:null:second:rerun2",mode => "time",excl => [],load_end => 8.03,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 111497860,load_start => 9.01,
+  warm_us => [223195,219938,223705]}.
+#{tag => "R:6:null:first:rerun3",mode => "time",excl => [],load_end => 8.18,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114888659,load_start => 8.03,
+  warm_us => [225789,222614,220067]}.
+#{tag => "R:6:null:second:rerun3",mode => "time",excl => [],load_end => 7.97,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 111728178,load_start => 8.0,
+  warm_us => [231732,216526,221385]}.
+#{tag => "R:6:null:first:rerun4",mode => "time",excl => [],load_end => 9.54,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 113828862,load_start => 7.97,
+  warm_us => [224426,216869,220951]}.
+#{tag => "R:6:null:second:rerun4",mode => "time",excl => [],load_end => 7.95,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114183319,load_start => 9.01,
+  warm_us => [228997,216177,218077]}.
+#{tag => "R:6:null:first:rerun5",mode => "time",excl => [],load_end => 9.28,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114108981,load_start => 7.95,
+  warm_us => [228242,223389,226891]}.
+#{tag => "R:6:null:second:rerun5",mode => "time",excl => [],load_end => 8.2,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 115221130,load_start => 8.7,
+  warm_us => [233200,219312,218407]}.
+#{tag => "R:6:null:first:rerun6",mode => "time",excl => [],load_end => 9.43,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 118764009,load_start => 8.2,
+  warm_us => [227009,224390,224976]}.
+#{tag => "R:6:null:second:rerun6",mode => "time",excl => [],load_end => 7.6,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 111904789,load_start => 8.79,
+  warm_us => [226953,218813,228472]}.
+#{tag => "F:7:null:first:rerun1",mode => "time",excl => [],load_end => 9.06,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 115405620,load_start => 7.6,
+  warm_us => [224364,219779,222156]}.
+#{tag => "F:7:null:second:rerun1",mode => "time",excl => [],load_end => 7.19,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112951199,load_start => 8.35,
+  warm_us => [231984,217471,230880]}.

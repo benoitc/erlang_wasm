@@ -1,0 +1,456 @@
+#{tag => "F:1:null:first",mode => "time",excl => [],load_end => 8.16,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 178076426,load_start => 8.86,
+  warm_us => [367486,365460,353286]}.
+#{tag => "F:1:null:second",mode => "time",excl => [],load_end => 7.72,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 177036523,load_start => 8.16,
+  warm_us => [372584,360866,351097]}.
+#{tag => "F:1:s1:first",mode => "time",excl => [],load_end => 6.93,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 175702655,load_start => 7.72,
+  warm_us => [369989,358505,354784]}.
+#{tag => "F:1:s1:second",mode => "time",excl => "./0",load_end => 6.56,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 136595974,load_start => 6.93,
+  warm_us => [391485,387451,384350]}.
+#{tag => "F:1:s2:first",mode => "time",excl => [],load_end => 6.71,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 177649780,load_start => 6.56,
+  warm_us => [379353,361712,357791]}.
+#{tag => "F:1:s2:second",mode => "time",
+  excl => [158],
+  load_end => 5.76,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 145983649,load_start => 6.71,
+  warm_us => [377681,367914,360095]}.
+#{tag => "R:2:s1:first",mode => "time",excl => "./0",load_end => 7.46,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 139206193,load_start => 5.76,
+  warm_us => [402331,392175,383015]}.
+#{tag => "R:2:s1:second",mode => "time",excl => [],load_end => 8.33,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 183943818,load_start => 7.52,
+  warm_us => [369080,358108,347210]}.
+#{tag => "R:2:s2:first",mode => "time",
+  excl => [158],
+  load_end => 8.23,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 150870530,load_start => 8.01,
+  warm_us => [374512,363745,358285]}.
+#{tag => "R:2:s2:second",mode => "time",excl => [],load_end => 8.37,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 177821709,load_start => 8.19,
+  warm_us => [378670,360463,360019]}.
+#{tag => "R:2:null:first",mode => "time",excl => [],load_end => 11.62,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 148788848,load_start => 8.12,
+  warm_us => [248361,236250,236649]}.
+#{tag => "R:2:null:second",mode => "time",excl => [],load_end => 12.0,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 125341092,load_start => 11.62,
+  warm_us => [251688,240498,233204]}.
+#{tag => "F:3:null:first",mode => "time",excl => [],load_end => 10.96,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 123903142,load_start => 11.02,
+  warm_us => [257412,240121,239948]}.
+#{tag => "F:3:null:second",mode => "time",excl => [],load_end => 13.62,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 124670440,load_start => 10.96,
+  warm_us => [258614,242098,237868]}.
+#{tag => "F:3:s1:first",mode => "time",excl => [],load_end => 8.26,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 121787876,load_start => 9.5,
+  warm_us => [241436,234704,235347]}.
+#{tag => "F:3:s1:second",mode => "time",excl => "./0",load_end => 8.71,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 92275574,load_start => 8.26,
+  warm_us => [250741,247250,251536]}.
+#{tag => "F:3:s2:first",mode => "time",excl => [],load_end => 8.0,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 121280689,load_start => 8.71,
+  warm_us => [248117,235877,233750]}.
+#{tag => "F:3:s2:second",mode => "time",
+  excl => [158],
+  load_end => 7.38,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 101211138,load_start => 8.0,
+  warm_us => [244943,243908,238486]}.
+#{tag => "R:4:s1:first",mode => "time",excl => "./0",load_end => 6.83,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 92061144,load_start => 7.38,
+  warm_us => [259407,249069,246813]}.
+#{tag => "R:4:s1:second",mode => "time",excl => [],load_end => 6.1,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 120184119,load_start => 6.83,
+  warm_us => [245258,234312,234929]}.
+#{tag => "R:4:s2:first",mode => "time",
+  excl => [158],
+  load_end => 6.36,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 98964023,load_start => 6.1,
+  warm_us => [243826,240896,230936]}.
+#{tag => "R:4:s2:second",mode => "time",excl => [],load_end => 5.88,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 116506931,load_start => 6.36,
+  warm_us => [233959,227909,229466]}.
+#{tag => "R:4:null:first",mode => "time",excl => [],load_end => 37.36,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 258303561,load_start => 5.88,
+  warm_us => [468708,452768,413645]}.
+#{tag => "R:4:null:second",mode => "time",excl => [],load_end => 40.06,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 276707691,load_start => 37.36,
+  warm_us => [661656,674016,671241]}.
+#{tag => "F:5:null:first",mode => "time",excl => [],load_end => 23.26,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 182124729,load_start => 29.79,
+  warm_us => [372466,355540,348028]}.
+#{tag => "F:5:null:second",mode => "time",excl => [],load_end => 20.79,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 179974743,load_start => 23.26,
+  warm_us => [372333,358514,350358]}.
+#{tag => "F:5:s1:first",mode => "time",excl => [],load_end => 12.78,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 113566148,load_start => 16.23,
+  warm_us => [226295,217393,219247]}.
+#{tag => "F:5:s1:second",mode => "time",excl => "./0",load_end => 10.32,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 90454208,load_start => 12.78,
+  warm_us => [242526,238655,240890]}.
+#{tag => "F:5:s2:first",mode => "time",excl => [],load_end => 10.39,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114704745,load_start => 10.32,
+  warm_us => [235134,221878,226645]}.
+#{tag => "F:5:s2:second",mode => "time",
+  excl => [158],
+  load_end => 9.92,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 97715384,load_start => 10.39,
+  warm_us => [229623,229823,230866]}.
+#{tag => "R:6:s1:first",mode => "time",excl => "./0",load_end => 9.12,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 88420858,load_start => 9.45,
+  warm_us => [248249,236913,239692]}.
+#{tag => "R:6:s1:second",mode => "time",excl => [],load_end => 8.01,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112120524,load_start => 9.12,
+  warm_us => [231919,221383,221443]}.
+#{tag => "R:6:s2:first",mode => "time",
+  excl => [158],
+  load_end => 8.01,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 94489180,load_start => 8.01,
+  warm_us => [232490,239885,241069]}.
+#{tag => "R:6:s2:second",mode => "time",excl => [],load_end => 7.41,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 116611216,load_start => 8.01,
+  warm_us => [238181,226668,223265]}.
+#{tag => "R:6:null:first",mode => "time",excl => [],load_end => 12.72,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 117289638,load_start => 7.41,
+  warm_us => [235188,225802,223654]}.
+#{tag => "R:6:null:second",mode => "time",excl => [],load_end => 10.43,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112455446,load_start => 12.72,
+  warm_us => [253579,215961,226549]}.
+#{tag => "F:7:null:first",mode => "time",excl => [],load_end => 9.86,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 111944008,load_start => 10.43,
+  warm_us => [234931,218026,225193]}.
+#{tag => "F:7:null:second",mode => "time",excl => [],load_end => 8.59,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 111123574,load_start => 9.86,
+  warm_us => [225598,219762,223191]}.
+#{tag => "F:7:s1:first",mode => "time",excl => [],load_end => 8.11,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112855350,load_start => 8.59,
+  warm_us => [222291,221923,231212]}.
+#{tag => "F:7:s1:second",mode => "time",excl => "./0",load_end => 7.27,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 85538218,load_start => 8.11,
+  warm_us => [241005,237130,245576]}.
+#{tag => "F:7:s2:first",mode => "time",excl => [],load_end => 7.9,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114500023,load_start => 7.27,
+  warm_us => [238433,224994,219955]}.
+#{tag => "F:7:s2:second",mode => "time",
+  excl => [158],
+  load_end => 12.61,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 97839297,load_start => 7.9,
+  warm_us => [235432,231019,227911]}.
+#{tag => "R:8:s1:first",mode => "time",excl => "./0",load_end => 15.79,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 93335753,load_start => 10.16,
+  warm_us => [252318,248625,256005]}.
+#{tag => "R:8:s1:second",mode => "time",excl => [],load_end => 24.3,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 121837649,load_start => 15.79,
+  warm_us => [240079,240670,232067]}.
+#{tag => "R:8:s2:first",mode => "time",
+  excl => [158],
+  load_end => 12.95,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 97851712,load_start => 15.49,
+  warm_us => [235847,236428,230670]}.
+#{tag => "R:8:s2:second",mode => "time",excl => [],load_end => 11.65,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 117621617,load_start => 12.95,
+  warm_us => [233854,226993,226618]}.
+#{tag => "R:8:null:first",mode => "time",excl => [],load_end => 10.37,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 117275787,load_start => 11.11,
+  warm_us => [232306,224275,228158]}.
+#{tag => "R:8:null:second",mode => "time",excl => [],load_end => 8.73,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 116938349,load_start => 10.37,
+  warm_us => [231408,222421,227213]}.
+#{tag => "F:9:null:first",mode => "time",excl => [],load_end => 7.93,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114128766,load_start => 8.73,
+  warm_us => [233412,228380,225319]}.
+#{tag => "F:9:null:second",mode => "time",excl => [],load_end => 7.26,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114360943,load_start => 7.93,
+  warm_us => [228518,222993,225999]}.
+#{tag => "F:9:s1:first",mode => "time",excl => [],load_end => 12.31,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114934451,load_start => 7.26,
+  warm_us => [253292,239530,240414]}.
+#{tag => "F:9:s1:second",mode => "time",excl => "./0",load_end => 12.15,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 92296775,load_start => 12.31,
+  warm_us => [252364,245340,248768]}.
+#{tag => "F:9:s2:first",mode => "time",excl => [],load_end => 8.4,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114114919,load_start => 10.45,
+  warm_us => [234770,226281,223013]}.
+#{tag => "F:9:s2:second",mode => "time",
+  excl => [158],
+  load_end => 7.6,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 96508315,load_start => 8.4,
+  warm_us => [234479,234768,227407]}.
+#{tag => "R:10:s1:first",mode => "time",excl => "./0",load_end => 6.78,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 88652876,load_start => 7.6,
+  warm_us => [252687,239906,241532]}.
+#{tag => "R:10:s1:second",mode => "time",excl => [],load_end => 6.34,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 115362365,load_start => 6.78,
+  warm_us => [239095,233887,233257]}.
+#{tag => "R:10:s2:first",mode => "time",
+  excl => [158],
+  load_end => 6.91,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 96691384,load_start => 6.34,
+  warm_us => [233678,237797,234609]}.
+#{tag => "R:10:s2:second",mode => "time",excl => [],load_end => 7.33,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 115225972,load_start => 6.91,
+  warm_us => [251264,234615,238573]}.
+#{tag => "R:10:null:first",mode => "time",excl => [],load_end => 6.48,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112740629,load_start => 7.53,
+  warm_us => [231876,217691,220073]}.
+#{tag => "R:10:null:second",mode => "time",excl => [],load_end => 6.21,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112750246,load_start => 6.48,
+  warm_us => [233238,219207,228109]}.
+#{tag => "F:11:null:first",mode => "time",excl => [],load_end => 6.38,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 113381016,load_start => 6.21,
+  warm_us => [226185,226241,221614]}.
+#{tag => "F:11:null:second",mode => "time",excl => [],load_end => 6.01,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 112644439,load_start => 6.38,
+  warm_us => [229806,225900,223291]}.
+#{tag => "F:11:s1:first",mode => "time",excl => [],load_end => 5.62,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 114391903,load_start => 6.01,
+  warm_us => [237723,223118,231118]}.
+#{tag => "F:11:s1:second",mode => "time",excl => "./0",load_end => 5.45,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 88773698,load_start => 5.62,
+  warm_us => [243618,242069,242371]}.
+#{tag => "F:11:s2:first",mode => "time",excl => [],load_end => 6.85,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 118317760,load_start => 5.45,
+  warm_us => [236171,231507,224003]}.
+#{tag => "F:11:s2:second",mode => "time",
+  excl => [158],
+  load_end => 7.08,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 98993003,load_start => 6.85,
+  warm_us => [239786,239475,236141]}.
+#{tag => "R:12:s1:first",mode => "time",excl => "./0",load_end => 7.38,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 220,refused => 0,cached => 0,
+        entered => 3,reentered => 861},
+  cold_us => 89248330,load_start => 7.25,
+  warm_us => [246902,240094,242347]}.
+#{tag => "R:12:s1:second",mode => "time",excl => [],load_end => 7.55,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 121874123,load_start => 7.38,
+  warm_us => [244678,229783,229132]}.
+#{tag => "R:12:s2:first",mode => "time",
+  excl => [158],
+  load_end => 6.39,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 222,refused => 0,cached => 0,
+        entered => 3,reentered => 2172},
+  cold_us => 97834863,load_start => 7.29,
+  warm_us => [237205,238320,232032]}.
+#{tag => "R:12:s2:second",mode => "time",excl => [],load_end => 6.02,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 119349940,load_start => 6.39,
+  warm_us => [237906,233701,232978]}.
+#{tag => "R:12:null:first",mode => "time",excl => [],load_end => 7.9,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 119413638,load_start => 6.02,
+  warm_us => [253076,231935,241486]}.
+#{tag => "R:12:null:second",mode => "time",excl => [],load_end => 7.3,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 119770557,load_start => 7.9,
+  warm_us => [233384,226963,226669]}.

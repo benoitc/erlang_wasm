@@ -10343,3 +10343,85 @@ asserts it is in the compiled module.
 `perfun.txt`, `perfun.terms`, `subpass-alone.txt`, `shape.txt` (7,702 BEAM
 functions after lifting, median arity 30, 12.7 MB of code). The capture itself
 is 87 MB and is not kept; `capture` rebuilds it.
+
+## Leaving hand-picked functions out of QuickJS's compiled set (2026-11-23)
+
+**The question.** The profile above found that half of QuickJS's cold compile
+is four very large functions, and that today the tier compiles every function
+that ran. Does leaving some of them interpreted save compile time without
+costing warm `_start` time?
+
+**What was compared.** Three sets, each on the same scratch build of b09fe23
+whose only change is a filter in `wasm_jit:unit/2` that drops a fixed list of
+function indices (`scratch-filter.patch`). The list is fixed before a run, so
+nothing counts anything in a timed run, and with an empty list the build
+compiles the same 223 functions as `main`.
+
+- **Base**: the 223 functions that ran.
+- **S1**: without 46 `js_parse_statement_or_decl`, 47 `js_create_function` and
+  48 `js_parse_postfix_expr`, the parser and setup code: 21.7% of the isolated
+  compiles above.
+- **S2**: without 158, the Rust `Runtime::run_with_context` wrapper: 16.8%.
+
+An interpreted trace of the same script gives their work: 158 has 1 call and
+105 loop back-edges, 47 1 and 147, 46 5 and 3, 48 15 and 1, and
+`JS_CallInternal` 3 calls and 540,016 back-edges.
+
+**Per run**, each in a fresh VM: cold is the wall time from the end of the
+first `_start` (where the tier asks for the compile) until `wasm_jit:await/2`
+returns on a second instance; warm is the median of three timed `_start` runs,
+each in a fresh process, which parse the script again every time. Every run
+checked that the guest printed `864318946` and that 223, 220 or 222 functions
+compiled, with none failed.
+
+**Gates, written before the first run.** Cold at or below 0.85 (S1) and 0.90
+(S2); warm `_start` at or below 1.03; both orderings; six pairs per ordering;
+a null set (base against base) first, passing between 0.95 and 1.05; a run
+counts only if load was below 8 when it started and when it ended.
+
+**Load.** The first set of 72 runs checked load only before each pair, and 43
+runs started or ended at 8 or above, leaving 13 valid pairs of 36. The 23
+invalid pairs were rerun, both sides in their original order, with load
+checked before and after every run; one null pair took seven attempts. The
+result below is the 13 kept pairs and the 23 replacements: six load-valid
+pairs per ordering for every arm.
+
+| | cold, median paired ratio (F / R) | warm, median paired ratio (F / R) | verdict |
+| --- | ---: | ---: | --- |
+| null | 0.989 / 0.997 | 0.996 / 0.984 | passes |
+| S1 | 0.771 / 0.767 | 1.072 / 1.059 | rejected |
+| S2 | 0.827 / 0.842 | 1.020 / 1.011 | passes |
+
+Per pair, S1's warm ratios were 1.033 to 1.102, all twelve above the limit;
+S2's were 0.983 to 1.050. The base compiled in about 114 s and its warm
+`_start` took about 225 ms.
+
+**What it means.**
+
+- **S1 is rejected as a group.** Leaving the parser and setup code out cuts the
+  compile by 23% and costs 6 to 7% on every warm `_start`, because every run
+  parses the script again and the parser then runs interpreted. This does not
+  show that 47 or 48 alone is expensive to leave out.
+- **S2 passes, on this workload.** Leaving the wrapper out cuts the compile by
+  16 to 17% for a 1.1 to 2.0% warm slowdown, inside the 3% budget. It is a
+  measured example, not a rule: nothing excludes it, and a selector has to
+  find functions like it.
+- **Calls and back-edges cannot tell the two apart.** The wrapper (1 call, 105
+  back-edges) was cheap to leave out; 47 (1 call, 147) and 48 (15 calls, 1)
+  were in the group that was not. And the wrapper runs on every request, so a
+  function that recurs can still be worth leaving out. A selection rule needs
+  a measure of the work a function does in its own body while interpreted,
+  set against what it costs to compile.
+- **Crossings.** Calls from compiled code into interpreted guest functions
+  (`wasm_exec:call_out/7`, one untimed run per arm): none for the base, 19 a
+  `_start` for S1, 1 for S2. The timed runs also count 287 (S1) and 724 (S2)
+  reentries a `_start` from the interpreter back into compiled code, against
+  none for the base. The timings price each reduced set; they do not split its
+  cost into interpreted work and crossings.
+
+**Raw.** `test/audit/raw/selection/`: `selbench.erl` (one run), `runsel.sh`
+(the first set), `rerun.sh` and `rerun-one.sh` (the replacements),
+`selgate.erl` (the gates), `time.terms`, `rerun.terms`, `discarded.terms`,
+`cross.terms`, `gates-final.txt`, `scratch-filter.patch` and `BASE_SHA`.
+`rerun-attempt1-aborted.log` is a first rerun that was stopped after four
+discarded attempts at the first pair.

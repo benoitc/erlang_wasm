@@ -360,6 +360,33 @@ calls is removed before any SSA pass runs; the first draft of this arm made
 both mistakes, and the arm now asserts the function is in the compiled
 module.
 
+## What decoding and validating cost
+
+`compilephases` times the two phases of `wasm:compile/1` on a real guest and
+counts what each allocates. Use it for a change to `wasm_decode` or
+`wasm_validate`; the result for the scalar validator clauses is in `PERF.md`,
+"Validating scalar instructions without the vector table".
+
+```sh
+rebar3 compile
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/compilephases.erl
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -run compilephases main time qjs 5
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -run compilephases main alloc python
+```
+
+- `time GUEST ROUNDS` runs decode then validate in a fresh process per round
+  and prints the minimum of each over the rounds, with the 5-minute load
+  average at the start and the end.
+- `alloc GUEST` prints the words each whole phase allocates. Only a wrapper
+  around the phase is traced: `wasm_validate:module/1` tail-calls its worker,
+  so tracing it directly charges nothing, and tracing a helper moves that
+  helper's words out of the count.
+- A driver that waits for low load must wait on the same average the arm
+  records. Waiting on the 1-minute average while checking the 5-minute one
+  discarded every short QuickJS run of the first set.
+
 ## Short notes
 
 - The box matters more than most of these differences. Taken here at load

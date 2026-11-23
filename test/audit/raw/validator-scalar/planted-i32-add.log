@@ -1,0 +1,5 @@
+%%% wasm_validate_scalar_SUITE ==> every_scalar_opcode: FAILED
+  expected: {106,i32_add,ok}
+       got: {106,i32_add,
+%%% wasm_validate_scalar_SUITE ==> scalar_lookup_skips_the_vector_table: FAILED
+Failed 2 tests. Passed 0 tests. 

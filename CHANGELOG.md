@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **Faster: validating a binary module.** The validation step of
+  `wasm:compile/1` takes about 18% less time on QuickJS and 28% less on
+  CPython. Decoding is unchanged.
+
 ## 0.11.1
 
 Documentation only: a page that runs a model through `wasi:nn`.

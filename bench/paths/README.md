@@ -362,10 +362,10 @@ module.
 
 ## What decoding and validating cost
 
-`compilephases` times the two phases of `wasm:compile/1` on a real guest and
-counts what each allocates. Use it for a change to `wasm_decode` or
-`wasm_validate`; the result for the scalar validator clauses is in `PERF.md`,
-"Validating scalar instructions without the vector table".
+`compilephases` times `wasm:compile/1` on a real guest, in total and phase by
+phase, and records its peak heap and what each phase allocates. Use it for a
+change to `wasm_decode` or `wasm_validate`; its results are in `PERF.md`,
+"One-byte immediates in the decoder loop, timed through `wasm:compile/1`".
 
 ```sh
 rebar3 compile
@@ -373,19 +373,29 @@ erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/compilephases.e
 ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
     -run compilephases main time qjs 5
 ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -run compilephases main peak qjs
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
     -run compilephases main alloc python
 ```
 
-- `time GUEST ROUNDS` runs decode then validate in a fresh process per round
-  and prints the minimum of each over the rounds, with the 5-minute load
-  average at the start and the end.
-- `alloc GUEST` prints the words each whole phase allocates. Only a wrapper
-  around the phase is traced: `wasm_validate:module/1` tail-calls its worker,
-  so tracing it directly charges nothing, and tracing a helper moves that
-  helper's words out of the count.
+- `time GUEST ROUNDS` makes one complete `wasm:compile/1` call per round in
+  a fresh process, so the heap floor it sets for a module over 16 KiB is part
+  of what is timed. Decode and validation come from call and return
+  timestamps inside that same call, and the launch prints the round with the
+  lowest total with its own phases, plus the 5-minute load average at the
+  start and the end.
+- `peak GUEST` prints the largest heap, young plus old, the compiling process
+  held at any collection during one call.
+- `alloc GUEST` prints the words each phase allocates when called directly.
+  Only a wrapper around the phase is traced: `wasm_validate:module/1`
+  tail-calls its worker, so tracing it directly charges nothing, and tracing
+  a helper moves that helper's words out of the count.
+- Timing the phases by calling them directly skips that heap floor and gives
+  a different answer: it reported a validation slowdown the public call does
+  not have, and a validation speed-up it mostly does not have either.
 - A driver that waits for low load must wait on the same average the arm
   records. Waiting on the 1-minute average while checking the 5-minute one
-  discarded every short QuickJS run of the first set.
+  discarded every short QuickJS run of one set.
 
 ## Short notes
 

@@ -910,6 +910,16 @@ copy_at(_M, _Dst, _Src, 0) -> ok;
 %% high-to-low copy down the byte-at-a-time path even when the ranges were
 %% disjoint, which measured 0.01 GB/s against 0.4 GB/s for the word path: a
 %% 40x penalty on the common case of copying between two separate buffers.
+%% Aligned differently, nothing ever lines a word of one up with a word of
+%% the other, and the byte path was all that was left: a 64 KiB copy cost 37
+%% times the reductions of an aligned one. Such a copy goes through blocks
+%% instead, each read whole before it is written. Under 32 bytes the bytes
+%% cost no more.
+copy_at(M, Dst, Src, Len) when (Dst - Src) band 7 =/= 0, Len >= 32 ->
+    case Dst =< Src orelse Dst >= Src + Len of
+        true -> copy_blocks_up(M, Dst, Src, Len);
+        false -> copy_blocks_down(M, Dst, Src, Len)
+    end;
 copy_at(M, Dst, Src, Len) when Dst =< Src; Dst >= Src + Len ->
     copy_fwd(M, Dst, Src, Len);
 %% Overlapping with the destination above: from the top down. When the two
@@ -1019,6 +1029,25 @@ run_words(#mem{shift = Shift, img_bytes = IB}, Len, Addrs) ->
                       false ->
                           PerChunk - ((A band ((1 bsl Shift) - 1)) bsr 3)
                   end || A <- Addrs]]).
+
+%% Blocks of at most 4 KiB, each read whole (`collect/4') and then written
+%% (`scatter/3'), both of which move whole words wherever their own address
+%% is aligned. Going up is safe when the destination is below the source or
+%% clear of it, and going down when it is above and overlapping: either way a
+%% block's write can only land on source bytes already read.
+-define(COPY_BLOCK, 4096).
+
+copy_blocks_up(_M, _D, _S, 0) -> ok;
+copy_blocks_up(M, D, S, Len) ->
+    B = min(?COPY_BLOCK, Len),
+    ok = scatter(M, D, collect(M, S, B, <<>>)),
+    copy_blocks_up(M, D + B, S + B, Len - B).
+
+copy_blocks_down(_M, _D, _S, 0) -> ok;
+copy_blocks_down(M, D, S, Len) ->
+    B = min(?COPY_BLOCK, Len),
+    ok = scatter(M, D + Len - B, collect(M, S + Len - B, B, <<>>)),
+    copy_blocks_down(M, D, S, Len - B).
 
 %% A copy from the top down whose source and destination are aligned alike,
 %% given the end of each, one past its last byte: the bytes above the last

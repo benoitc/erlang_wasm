@@ -1,0 +1,4 @@
+%%% wasm_paged_memory_SUITE ==> every_copy_alignment_agrees_with_a_binary: FAILED
+  expected: {65236,65237,4097,
+Failed 1 tests. Passed 0 tests. 
+the first version of every_copy_alignment_agrees_with_a_binary used image_bin/1 (zeros and a 256-byte period over most of the range) and passed with this plant; filled with non-repeating bytes it fails, as above

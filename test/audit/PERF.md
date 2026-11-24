@@ -10598,3 +10598,84 @@ timing and the allocation counts), `public-path/` (the drivers, the gate
 script, both CPython sets, the QuickJS set and the peak runs), `BUILDS`.
 The re-check of the validator clauses is in
 `test/audit/raw/validator-scalar/public-path/`.
+
+## A 64 KiB translation-cache entry for memory with no image (2026-11-24)
+
+**The claim.** A warm compiled QuickJS `_start` takes about 20% less time and
+allocates 27% fewer words. Cold compile time, restored-memory requests and
+the size of the generated code are unchanged within the gates.
+
+**Why.** Compiled code reaches memory 0 through a cache of two entries, and
+an entry covered 4 KiB. Only a memory restored from an image needs that: its
+untouched pages are separate 4 KiB slots. Any other memory is growth chunks of
+at least 64 KiB, so two 4 KiB pages of one chunk pushed each other out of the
+first entry and every switch between them went through the miss function. Now
+each function that touches memory 0 picks the block size once on entry, 64 KiB
+when the memory has no image and 4 KiB when it has one. An entry keeps the
+difference between a word's array index and its number from the start of
+memory, which is the same for every word of a block, so a hit needs no mask,
+and the miss functions take the block's shift as one more argument.
+
+**Step 0, a scratch spike** (the shift changed to 16 in place, unrestored
+QuickJS only, with a counter on the second entry's hit; `step0/`):
+
+| warm QuickJS `_start` | 4 KiB entries | 64 KiB entries |
+| --- | ---: | ---: |
+| calls into the miss functions | 1,725,605 | 1,169,593 (-32.2%) |
+| of which second-entry hits | 715,221 | 990,952 |
+| of which the full lookup | 1,010,384 | 178,641 (-82%) |
+
+The screen, written first, was at least 25% fewer calls.
+
+**The first design was rejected.** It carried the shift and a mask as two
+values bound on entry. Warm time passed (0.825 / 0.824), but the generated
+module grew from 12,712,512 to 13,196,548 bytes (1.038, against a gate of
+1.03) and cold compile in the reverse ordering was 1.054 (gate 1.03). The sum
+of the arities of the compiled module's functions went from 269,583 to 283,589
+and its instruction count from 2,316,900 to 2,396,841, which fits the two
+values becoming arguments of the lifted continuations, though these runs do
+not isolate that. Recorded in `ATTEMPTS.md`; raw in `two-argument/`. Six of
+that set's pairs were first discarded by a driver bug (its crash check matched
+the compile counters' `failed => 0` in every run); they were recovered by
+applying the driver's own rule, the first attempt per pair with all four load
+readings below 8 and no crash, to the saved records.
+
+**The shift-only design.** Base 3f5df4c, change f792b53, each built from
+`git archive` in a scratch directory. Gates written before measuring; the
+median of the paired ratios per ordering; six pairs per ordering; a null set
+first between 0.95 and 1.05; the 5-minute load average below 8 at both ends
+of every timed run; the guest's output checked on every run.
+
+| gate | forward | reverse | limit |
+| --- | ---: | ---: | --- |
+| generated module size | 1.004 | 1.004 | 1.03 (screen: 13,093,887 bytes) |
+| miss-function calls, warm QuickJS | -32.2% | | at least 25% fewer |
+| warm QuickJS `_start` | 0.806 | 0.790 | 0.97 |
+| cold compile, trigger to publication | 1.005 | 1.020 | 1.03 |
+| restored CPython request, `call` phase | 1.017 | 0.991 | 1.03 |
+| words allocated per warm QuickJS `_start` | 0.729 (all six pairs 0.728 to 0.730) | | 1.03 |
+
+- QuickJS (`tlbbench.erl`, `shift-only/`): base 233 ms warm and 119 s cold,
+  change 185 ms and 120 s; 12,761,504 bytes against 12,712,512; null 1.002 /
+  1.006 warm, 1.000 / 1.011 cold.
+- Restored memory (`requestbench split py_entry compiled`, `restored/`): median
+  `call` 962 us base, 960 us change; null 1.027 / 0.970. Two null pairs gave
+  up after six attempts on load and were run again. An untimed run per side
+  with every timed sample traced (`requestbench-verify.erl`) found all 200
+  samples in generated code on both.
+- Allocation (`alloc/`, `allocwords` with its `validate/0` passing): 16.4 M
+  words base, 11.96 M change.
+
+**Tests.** In `wasm_paged_memory_SUITE`: loads that alternate between two
+4 KiB pages of one block in one call make one miss-function call (200 on
+main); the second block of a 128 KiB chunk reads its own words; a shared
+memory, a module with no memory, and the random boundary check on a plain
+memory agree with the interpreter. A planted 64 KiB tag on memories with an
+image fails `an_access_past_the_first_entry_agrees_with_the_interpreter`; a
+planted 4 KiB mask in the first design failed the second-block and shared
+cases. The random check on a plain memory passed with the planted mask: each
+of its functions makes one access per call, so it never exercises a hit.
+
+**Raw.** `test/audit/raw/tlb-64k/`: `step0/`, `two-argument/`, `shift-only/`,
+`restored/`, `alloc/`, the harness `tlbbench.erl`, the gate script
+`cgate.erl`, the planted-defect logs and `BUILDS`.

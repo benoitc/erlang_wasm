@@ -1,0 +1,5 @@
+#{interpreter_dispatch => 0,
+  jit =>
+      #{failed => 0,crashed => 0,refused => 0,cached => 0,compiled => 223,
+        entered => 1,reentered => 0},
+  miss_calls => 1725605,output_ok => true}.

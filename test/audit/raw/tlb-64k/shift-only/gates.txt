@@ -1,0 +1,14 @@
+null F n=6 warm 1.002 cold 1.000 size 1.0000 bimodal false
+  warm [1.01,0.987,0.984,1.015,1.057,0.994]
+  cold [0.999,1.015,1.021,1.0,0.981,0.994]
+null R n=6 warm 1.006 cold 1.011 size 1.0000 bimodal false
+  warm [1.043,0.953,1.018,1.025,0.995,0.99]
+  cold [1.011,1.027,1.012,1.011,1.022,1.003]
+ab F n=6 warm 0.806 cold 1.005 size 1.0039 bimodal false
+  warm [0.831,0.785,0.756,0.813,0.799,0.849]
+  cold [0.982,1.018,0.943,0.992,1.02,1.042]
+ab R n=6 warm 0.790 cold 1.020 size 1.0039 bimodal false
+  warm [0.795,0.783,0.814,0.783,0.817,0.785]
+  cold [1.028,1.021,1.025,1.02,1.007,1.001]
+base: warm 233 ms cold 119 s bytes [12712512]
+new:  warm 185 ms cold 120 s bytes [12761504]

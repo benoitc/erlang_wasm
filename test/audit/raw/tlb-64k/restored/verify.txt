@@ -1,0 +1,3 @@
+Untimed verification, requestbench-verify.erl (every timed sample traced):
+base 3f5df4c: verdict => ok all_entered => true entered_samples => 200
+new f792b53:  verdict => ok all_entered => true entered_samples => 200

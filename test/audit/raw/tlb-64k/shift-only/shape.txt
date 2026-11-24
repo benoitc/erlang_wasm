@@ -1,0 +1,4 @@
+#{instructions => 2337097,arity_max => 73,arity_median => 31,arity_p90 => 70,
+  arity_sum => 276586,beam_bytes => 12761504,beam_functions => 7702}
+# load 21:41  up 22 days, 43 mins, 72 users, load averages: 9.17 26.56 20.06
+

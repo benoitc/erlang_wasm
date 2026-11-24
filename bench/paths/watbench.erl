@@ -8,17 +8,26 @@ Use this for a change to `wasm_wat`. Fetch the specification suites first
 
     rebar3 compile
     erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/watbench.erl
+    rebar3 as test compile
     ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \\
-        -run watbench main corpus 5
+        -pa _build/test/lib/wasm/test -run watbench main corpus 5
+    ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \\
+        -pa _build/test/lib/wasm/test -run watbench main digest
     ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \\
         -run watbench main scale 8000
 
-`corpus ROUNDS` slices every `(module ...)` written as text out of the
-`.wast` files, parses all of them with `wasm_wat:module/1` once per round in
-a fresh process, and prints the lowest total in microseconds, with the
-5-minute load average at both ends. The three files `wasm_wat_SUITE` leaves
-out are left out here too. `scale N` parses a module of `N` explicit type
-declarations in a fresh process and prints its reductions per type.
+The inputs are every `(module ...)` written as text in the `.wast` files,
+sliced out by counting parentheses, and, when `wasm_wat_SUITE` is on the code
+path, the sources of its own cases (`sources/0`). The three files the suite
+leaves out are left out here too.
+
+`corpus ROUNDS` parses all of them with `wasm_wat:module/1` once per round in
+a fresh process and prints the lowest total in microseconds, with the
+5-minute load average at both ends. `digest` parses each once and prints how
+many parsed, how many did not, and a SHA-256 over every result in order, so
+two revisions can be checked to answer the same modules. `scale N` parses a
+module of `N` explicit type declarations in a fresh process and prints its
+reductions per type.
 """.
 -export([main/1]).
 
@@ -30,6 +39,14 @@ main(["corpus", Rounds]) ->
     Us = [one_round(Mods) || _ <- lists:seq(1, list_to_integer(Rounds))],
     report(#{modules => length(Mods), corpus_us => lists:min(Us),
              load_start => L0});
+main(["digest"]) ->
+    Mods = corpus(),
+    Rs = [wasm_wat:module(M) || M <- Mods],
+    Ok = length([x || {ok, _} <- Rs]),
+    report(#{inputs => length(Mods), parsed => Ok,
+             refused => length(Mods) - Ok,
+             sha256 => binary:encode_hex(
+                         crypto:hash(sha256, term_to_binary(Rs)))});
 main(["scale", N0]) ->
     N = list_to_integer(N0),
     Src = iolist_to_binary(
@@ -80,7 +97,14 @@ corpus() ->
     Files = [F || F <- filelib:wildcard("testsuite/*.wast"),
                   not lists:member(filename:basename(F), ?EXCLUDED)],
     [] =/= Files orelse erlang:error(no_testsuite),
-    lists:append([modules_in(F) || F <- Files]).
+    lists:append([modules_in(F) || F <- Files]) ++ suite_sources().
+
+%% The inputs of `wasm_wat_SUITE', when its compiled module is on the path.
+suite_sources() ->
+    case code:ensure_loaded(wasm_wat_SUITE) of
+        {module, _} -> wasm_wat_SUITE:sources();
+        {error, _} -> []
+    end.
 
 modules_in(Path) ->
     {ok, Bin} = file:read_file(Path),

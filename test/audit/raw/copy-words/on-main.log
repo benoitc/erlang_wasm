@@ -1,0 +1,1 @@
+every_copy_alignment_agrees_with_a_binary on f09a310 (main), before the change: All 1 tests passed (correctness already held; the byte path is slow, not wrong)

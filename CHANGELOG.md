@@ -4,6 +4,11 @@
 
 ### Changes
 
+- **Faster: passing a list of 32-bit integers to and from a component.** A
+  `list<u32>` now crosses the guest's memory in large blocks instead of one
+  element at a time. In the benchmark, a round trip of 4,096 values took about
+  a twelfth of the time and one of 16 values about half. Other list types are
+  unchanged.
 - **Fixed: a misaligned list from a component was accepted.** A list a
   component passed as a pointer and a length was read even when the pointer
   was not aligned to its elements, though the same list reached through memory

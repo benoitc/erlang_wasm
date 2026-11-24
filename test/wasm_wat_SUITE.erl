@@ -26,7 +26,9 @@ all() ->
      errors_carry_an_offset,
      the_facade_compiles_text_too,
      the_facade_answers_a_value_for_bad_text,
-     an_inline_segment_takes_an_index_in_its_own_space].
+     an_inline_segment_takes_an_index_in_its_own_space,
+     implicit_types_take_the_indices_the_format_gives,
+     thousands_of_types_parse_in_linear_time].
 
 %% `(memory (data ...))' and `(table funcref (elem ...))' declare a segment as
 %% well as a memory or a table, and that segment takes an index. A segment
@@ -487,3 +489,56 @@ the_facade_answers_a_value_for_bad_text(_Config) ->
                  wasm:compile({wat, ~"(module (memory 1)"})),
     ?assertMatch({error, #{class := _, kind := _}},
                  wasm:compile({wat, ~"(module (global i32 (i32.no_such_thing 1)))"})).
+
+%% An implicit type use takes the first plain type with its signature, whether
+%% that type is written before or after the use; a member of a `(rec ...)' is
+%% never reused; a signature with no plain type gets a new type after every
+%% declared one, in a group of its own, in the order the uses appear.
+implicit_types_take_the_indices_the_format_gives(_Config) ->
+    {ok, M} = wasm_wat:module(~"(module
+      (type $a (func (param i32)))
+      (type $a2 (func (param i32)))
+      (rec (type $r (func (param i64))))
+      (func (param i32))
+      (func (param i64))
+      (func (result f32))
+      (type $late (func (result f32)))
+      (func (param f64))
+      (func (param i64)))"),
+    Bodies = [Body || #subtype{body = Body} <- M#module.types],
+    ?assertEqual([#functype{params = [i32], results = []},
+                  #functype{params = [i32], results = []},
+                  #functype{params = [i64], results = []},
+                  #functype{params = [], results = [f32]},
+                  #functype{params = [i64], results = []},
+                  #functype{params = [f64], results = []}], Bodies),
+    ?assertEqual([{0, 1}, {1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}],
+                 M#module.rec_groups),
+    ?assertEqual([0, 4, 3, 5, 4], [T || #func{type = T} <- M#module.funcs]).
+
+%% Each explicit type used to be appended to a list and counted, so a module of
+%% n types cost n squared. Reductions per type stay within 1.5 times between
+%% 2,000 and 8,000 types, in a process of their own.
+thousands_of_types_parse_in_linear_time(_Config) ->
+    Per = fun(N) ->
+                  Src = iolist_to_binary(
+                          ["(module ",
+                           [["(type (func (param i32) (result ",
+                             lists:nth(I rem 4 + 1,
+                                       ["i32", "i64", "f32", "f64"]),
+                             ")))"]
+                            || I <- lists:seq(1, N)],
+                           ")"]),
+                  Self = self(),
+                  spawn(fun() ->
+                                R0 = reds(),
+                                {ok, _} = wasm_wat:module(Src),
+                                Self ! {reds, reds() - R0}
+                        end),
+                  receive {reds, R} -> R / N end
+          end,
+    Small = Per(2000),
+    Large = Per(8000),
+    ?assert(Large =< 1.5 * Small, {per_type, Small, Large}).
+
+reds() -> element(2, process_info(self(), reductions)).

@@ -100,7 +100,18 @@ numeric literals are `wasm_wat_num`, and the instruction name table is
     %% across groups, so a front end that lost the boundaries would make two
     %% distinct types equal.
     groups = [] :: [{non_neg_integer(), pos_integer()}],
-    labels = [] :: [binary() | undefined]
+    labels = [] :: [binary() | undefined],
+    %% How many types there are so far, declared and implicit. While the
+    %% module is collected and resolved, `type_forms', `types' and `groups' are
+    %% held newest first, so adding one is not a copy of all the others; they
+    %% are turned round once, in `declared_types/1' and `resolved/1'. Counting
+    %% and appending made a module of n types cost n squared.
+    ntypes = 0 :: non_neg_integer(),
+    %% A signature and the first plain type that has it, the one an implicit
+    %% type use resolves to (`register_type/2').
+    sigs = #{} :: #{#functype{} => non_neg_integer()},
+    %% The finished types, for lookups by index in the build pass.
+    type_at = {} :: tuple()
 }).
 
 -doc "Parse a text module.".
@@ -125,7 +136,7 @@ parse(Source) ->
 parse_forms(Forms) ->
     ok = ensure_instruction_atoms(),
     Fields = module_fields(Forms),
-    Ctx = resolve(Fields, declared_types(collect(Fields, #ctx{}))),
+    Ctx = resolved(resolve(Fields, declared_types(collect(Fields, #ctx{})))),
     with_data_count(build(Fields, Ctx)).
 
 %% The data count section is present exactly when a data index appears in the
@@ -152,8 +163,29 @@ names_data_instr({array_new_data, _, _}) -> true;
 names_data_instr({array_init_data, _, _}) -> true;
 names_data_instr(_Instr) -> false.
 
+%% The declared types, built once every name is known, and the first plain
+%% type for each signature. `types' and `groups' stay newest first through the
+%% resolve pass, which can add to both.
 declared_types(Ctx) ->
-    Ctx#ctx{types = [subtype(Form, Ctx) || Form <- Ctx#ctx.type_forms], field_names = field_names(Ctx#ctx.type_forms)}.
+    Forms = lists:reverse(Ctx#ctx.type_forms),
+    Ctx1 = Ctx#ctx{type_forms = Forms},
+    Types = [subtype(Form, Ctx1) || Form <- Forms],
+    Plain = Ctx#ctx.plain_types,
+    Sigs = lists:foldl(fun({I, #subtype{body = Body}}, Acc) ->
+                               case maps:is_key(I, Plain)
+                                   andalso not maps:is_key(Body, Acc) of
+                                   true -> Acc#{Body => I};
+                                   false -> Acc
+                               end
+                       end, #{}, lists:enumerate(0, Types)),
+    Ctx1#ctx{types = lists:reverse(Types), sigs = Sigs,
+             field_names = field_names(Forms)}.
+
+%% Every type there will be is known once the resolve pass is done.
+resolved(#ctx{types = Rev, groups = Groups} = Ctx) ->
+    Types = lists:reverse(Rev),
+    Ctx#ctx{types = Types, groups = lists:reverse(Groups),
+            type_at = list_to_tuple(Types)}.
 
 field_names(Forms) ->
     element(2, lists:foldl(
@@ -235,21 +267,23 @@ collect_field(Form, _Ctx) ->
 
 collect_kind(<<"type">>, Args, Ctx) ->
     {Name, Rest} = optional_id(Args),
-    First = length(Ctx#ctx.type_forms),
+    First = Ctx#ctx.ntypes,
     declare(type, Name,
-            Ctx#ctx{type_forms = Ctx#ctx.type_forms ++ [Rest],
-                    groups = Ctx#ctx.groups ++ [{First, 1}],
+            Ctx#ctx{type_forms = [Rest | Ctx#ctx.type_forms],
+                    groups = [{First, 1} | Ctx#ctx.groups],
+                    ntypes = First + 1,
                     plain_types = plain(First, Ctx)});
 %% An explicit `(rec ...)` is one group however many types it declares, which
 %% is what makes two identical members of it distinct types. Zero is a count
 %% like any other: `(rec)` declares an empty group and still occupies one.
 collect_kind(<<"rec">>, Args, Ctx) ->
-    First = length(Ctx#ctx.type_forms),
+    First = Ctx#ctx.ntypes,
     Ctx1 = lists:foldl(fun(F, C) -> collect_field(F, C) end,
                        Ctx#ctx{in_rec = true}, Args),
-    Count = length(Ctx1#ctx.type_forms) - First,
-    Groups = lists:sublist(Ctx1#ctx.groups, length(Ctx#ctx.groups)),
-    Ctx1#ctx{groups = Groups ++ [{First, Count}], in_rec = Ctx#ctx.in_rec};
+    Count = Ctx1#ctx.ntypes - First,
+    %% Each member added a group of its own, newest first; they are one.
+    Groups = lists:nthtail(Count, Ctx1#ctx.groups),
+    Ctx1#ctx{groups = [{First, Count} | Groups], in_rec = Ctx#ctx.in_rec};
 collect_kind(<<"import">>, Args, Ctx) ->
     [_Mod, _Name, Desc] = Args,
     collect_import(Desc, ordered(Ctx));
@@ -441,32 +475,19 @@ resolve_blocktype(Forms, Ctx) ->
         _ -> {F3, Ctx}
     end.
 
-register_type(FT, Ctx) ->
-    case type_index(FT, Ctx) of
-        {ok, _} -> Ctx;
-        error ->
-            First = length(Ctx#ctx.types),
-            Ctx#ctx{types = Ctx#ctx.types ++ [#subtype{body = FT}],
-                    groups = Ctx#ctx.groups ++ [{First, 1}],
-                    plain_types = (Ctx#ctx.plain_types)#{First => true}}
-    end.
-
-type_index(FT, #ctx{types = Types, plain_types = Plain}) ->
-    type_index(FT, Types, Plain, 0).
-
-type_index(_FT, [], _Plain, _I) ->
-    error;
-type_index(FT, [T | Rest], Plain, I) ->
-    case matching_type(FT, T) andalso maps:is_key(I, Plain) of
-        true -> {ok, I};
-        false -> type_index(FT, Rest, Plain, I + 1)
-    end.
-
-%% A type use matches on the signature alone. Whether the type is final or has
-%% a supertype does not enter into it: `(type $t (sub (func)))' is what an
-%% implicit `(func)' resolves to if it is the first type with that signature.
-matching_type(FT, #subtype{body = FT}) -> true;
-matching_type(_FT, _Type) -> false.
+%% A type use matches on the signature alone, against the first plain type that
+%% has it. Whether the type is final or has a supertype does not enter into it:
+%% `(type $t (sub (func)))' is what an implicit `(func)' resolves to if it is
+%% the first type with that signature. A new one is added after all the others,
+%% in a group of its own.
+register_type(FT, #ctx{sigs = Sigs} = Ctx) when is_map_key(FT, Sigs) ->
+    Ctx;
+register_type(FT, #ctx{ntypes = First} = Ctx) ->
+    Ctx#ctx{types = [#subtype{body = FT} | Ctx#ctx.types],
+            groups = [{First, 1} | Ctx#ctx.groups],
+            ntypes = First + 1,
+            sigs = (Ctx#ctx.sigs)#{FT => First},
+            plain_types = (Ctx#ctx.plain_types)#{First => true}}.
 
 signature(Params, Results) ->
     #functype{params = [T || {_Name, T} <- Params], results = Results}.
@@ -929,8 +950,9 @@ anonymous_params([{list, _, [{keyword, _, <<"param">>} | Rest]} | More], Ctx, Ac
 anonymous_params(Rest, _Ctx, Acc) ->
     {Acc, Rest}.
 
-same_signature(N, Signature, #ctx{types = Types}) when N < length(Types) ->
-    case lists:nth(N + 1, Types) of
+same_signature(N, Signature, #ctx{ntypes = Count, type_at = At})
+  when N < Count ->
+    case element(N + 1, At) of
         #subtype{body = Signature} -> ok;
         _ -> fail(inline_function_type, N)
     end;
@@ -949,8 +971,8 @@ explicit_type(Forms, _Ctx) ->
 %% the module and validation rejects it there. The parameters it would have
 %% declared are unknown, which only matters for numbering locals a body that
 %% will never be validated might declare.
-declared_params(N, #ctx{types = Types}) when N < length(Types) ->
-    case lists:nth(N + 1, Types) of
+declared_params(N, #ctx{ntypes = Count, type_at = At}) when N < Count ->
+    case element(N + 1, At) of
         #subtype{body = #functype{params = Params}} -> Params;
         _ -> []
     end;
@@ -994,8 +1016,8 @@ with_locals(Entries, Ctx) ->
                           end, {0, #{}}, Entries)),
     Ctx#ctx{names = (Ctx#ctx.names)#{local => Named}, labels = []}.
 
-find_type(FT, Ctx) ->
-    case type_index(FT, Ctx) of
+find_type(FT, #ctx{sigs = Sigs}) ->
+    case maps:find(FT, Sigs) of
         {ok, I} -> I;
         %% The pass that collects implicit types walks every type use there is,
         %% so a use arriving here unmatched means the two passes disagree about

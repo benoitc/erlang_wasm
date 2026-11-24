@@ -10679,3 +10679,47 @@ of its functions makes one access per call, so it never exercises a hit.
 **Raw.** `test/audit/raw/tlb-64k/`: `step0/`, `two-argument/`, `shift-only/`,
 `restored/`, `alloc/`, the harness `tlbbench.erl`, the gate script
 `cgate.erl`, the planted-defect logs and `BUILDS`.
+
+## A list of u32 across guest memory a block at a time (2026-11-24)
+
+**The claim.** Passing a `list<u32>` to a component and back takes about a
+twelfth of the time for a list of thousands of elements, and half the time for
+16 elements.
+
+**Why.** Lifting a list read each element with its own `wasm:read_memory/3`,
+and lowering wrote each with its own `wasm:write_memory/3`: a 4,096-element
+echo made 4,096 data reads, 4,096 writes and one read of the result's pointer
+and length. A list of u32 now moves a block of at most 16,384 elements (64
+KiB) per call, decoded and encoded with binary comprehensions in the same
+little-endian form `load/3` and `store/4` use. Bounds and alignment are
+checked before anything is read, as before. Other element types still go one
+element at a time; they wait until a workload needs them.
+
+**Arm.** `bench/paths/listbench.erl`: `time N ROUNDS` calls the vectors
+fixture's `echo-list-u32` with an `N`-element list once per round in a fresh
+process, checks the answer and keeps the lowest of five rounds per launch;
+`count N` counts memory calls in one round trip. Base ccfd095, change 40d6641,
+each built from `git archive` in a scratch directory.
+
+**Gates, written before measuring.** 4,096 elements at or below 0.5; 16
+elements at or below 1.03; 1,000,000 elements reported. The median of the
+paired ratios per ordering, six pairs per ordering, a null set first between
+0.95 and 1.05, the 5-minute load average below 8 at both ends of every run.
+
+| elements | base | change | ratio (F / R) | gate |
+| ---: | ---: | ---: | ---: | --- |
+| 16 | 12 to 14 us | 5 to 7 us | 0.455 / 0.481 | 1.03 |
+| 4,096 | 3.0 ms | 0.24 ms | 0.083 / 0.079 | 0.5 |
+| 1,000,000 | 1.03 s | 80 ms | 0.078 / 0.079 | reported |
+
+The nulls were 1.012 / 0.962, 1.013 / 0.991 and 0.989 / 1.006. A 4,096-element
+echo now makes one data read and one write, of 16,384 bytes each
+(`count-4096.terms`).
+
+**Tests.** `wasm_component_vectors_SUITE`: an echo at lengths 0, 1, 16,383,
+16,384, 16,385 and 40,000 comes back as it went in, and the list data crosses
+memory in one read and one write per block. The second failed on main with 16
+reads and 16 writes for 16 elements (`before-fix.log`); a planted block that
+drops its last element made the first fail (`planted-short-block.log`).
+
+**Raw.** `test/audit/raw/list-u32-bulk/`.

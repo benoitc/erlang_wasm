@@ -1,0 +1,24 @@
+n=16 null F pairs=6 ratio 1.012 bimodal false base 13 us new 13 us
+  [0.857,1.273,0.769,0.786,1.167,1.4]
+n=16 null R pairs=6 ratio 0.962 bimodal false base 12 us new 11 us
+  [0.882,1.1,1.0,0.923,1.0,0.786]
+n=16 ab F pairs=6 ratio 0.455 bimodal false base 12 us new 5 us
+  [0.455,0.538,0.417,0.545,0.455,0.357]
+n=16 ab R pairs=6 ratio 0.481 bimodal false base 14 us new 7 us
+  [0.462,0.583,0.357,0.357,0.5,0.636]
+n=4096 null F pairs=6 ratio 1.013 bimodal false base 3041 us new 3088 us
+  [0.994,0.969,0.998,1.09,1.027,1.039]
+n=4096 null R pairs=6 ratio 0.991 bimodal false base 2995 us new 3019 us
+  [1.018,0.983,0.999,1.091,0.981,0.962]
+n=4096 ab F pairs=6 ratio 0.083 bimodal false base 2989 us new 246 us
+  [0.079,0.084,0.082,0.083,0.086,0.079]
+n=4096 ab R pairs=6 ratio 0.079 bimodal false base 3012 us new 240 us
+  [0.081,0.078,0.078,0.07,0.079,0.086]
+n=1000000 null F pairs=6 ratio 0.989 bimodal false base 1025637 us new 1009183 us
+  [1.01,0.973,0.983,0.982,1.022,0.995]
+n=1000000 null R pairs=6 ratio 1.006 bimodal false base 1022149 us new 1026760 us
+  [1.015,1.01,0.993,0.982,1.009,1.003]
+n=1000000 ab F pairs=6 ratio 0.078 bimodal false base 1031073 us new 80051 us
+  [0.077,0.079,0.078,0.076,0.077,0.079]
+n=1000000 ab R pairs=6 ratio 0.079 bimodal false base 1027106 us new 79927 us
+  [0.082,0.078,0.081,0.076,0.079,0.078]

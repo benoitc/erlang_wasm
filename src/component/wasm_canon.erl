@@ -355,7 +355,7 @@ lift_value(Inst, {list, ElemD}, [Ptr, Len | R]) ->
     {ESize, EAlign} = size_align(ElemD),
     ok = check_aligned(Ptr, EAlign),
     ok = ensure_list_fits(Inst, Ptr, Len, ESize),
-    {[load(Inst, ElemD, Ptr + I * ESize) || I <- lists:seq(0, Len - 1)], R};
+    {load_elems(Inst, ElemD, Ptr, Len, ESize), R};
 lift_value(Inst, {record, Fields}, Flats) ->
     {Map, Rest} = lists:foldl(
                     fun({N, FD}, {Acc, F0}) ->
@@ -458,7 +458,7 @@ load(Inst, {list, ElemD}, Ptr) ->
     {ESize, EAlign} = size_align(ElemD),
     ok = check_aligned(P, EAlign),
     ok = ensure_list_fits(Inst, P, Len, ESize),
-    [load(Inst, ElemD, P + I * ESize) || I <- lists:seq(0, Len - 1)];
+    load_elems(Inst, ElemD, P, Len, ESize);
 load(Inst, {record, Fields}, Ptr) ->
     {Map, _} = lists:foldl(
                  fun({N, FD}, {Acc, Off0}) ->
@@ -682,9 +682,48 @@ place_list(Inst, ElemD, List) ->
     Len = length(List),
     {ESize, EAlign} = size_align(ElemD),
     Ptr = realloc(Inst, EAlign, Len * ESize),
-    _ = [store(Inst, ElemD, Ptr + I * ESize, V)
-         || {V, I} <- lists:zip(List, lists:seq(0, Len - 1))],
+    ok = store_elems(Inst, ElemD, Ptr, List, ESize),
     {Ptr, Len}.
+
+%% A list of u32 crosses guest memory a block at a time, one read or write of
+%% at most 64 KiB each, instead of one call per element: a 4,096-element echo
+%% made 4,097 reads and 4,096 writes. Bounds and alignment are checked by the
+%% caller before anything is read, so the errors are the ones the per-element
+%% path gave. Every other element type still goes one element at a time.
+-define(LIST_BLOCK, 16384).
+
+load_elems(Inst, u32, Ptr, Len, _ESize) ->
+    lists:append(
+      [begin
+           {ok, Bin} = wasm:read_memory(Inst, Ptr + First * 4, N * 4),
+           [V || <<V:32/little>> <= Bin]
+       end || {First, N} <- blocks(Len)]);
+load_elems(Inst, ElemD, Ptr, Len, ESize) ->
+    [load(Inst, ElemD, Ptr + I * ESize) || I <- lists:seq(0, Len - 1)].
+
+store_elems(Inst, u32, Ptr, List, _ESize) ->
+    store_blocks(Inst, Ptr, List);
+store_elems(Inst, ElemD, Ptr, List, ESize) ->
+    _ = [store(Inst, ElemD, Ptr + I * ESize, V)
+         || {V, I} <- lists:zip(List, lists:seq(0, length(List) - 1))],
+    ok.
+
+%% The same encoding `store/4' writes for one u32, a block at a time.
+store_blocks(_Inst, _Ptr, []) -> ok;
+store_blocks(Inst, Ptr, List) ->
+    {Block, Rest} = take(?LIST_BLOCK, List, []),
+    Bin = << <<(V band 16#FFFFFFFF):32/little>> || V <- Block >>,
+    ok = wasm:write_memory(Inst, Ptr, Bin),
+    store_blocks(Inst, Ptr + byte_size(Bin), Rest).
+
+take(0, Rest, Acc) -> {lists:reverse(Acc), Rest};
+take(_, [], Acc) -> {lists:reverse(Acc), []};
+take(N, [V | Rest], Acc) -> take(N - 1, Rest, [V | Acc]).
+
+%% `{First, Count}' for each block of a list of `Len' elements.
+blocks(Len) ->
+    [{First, min(?LIST_BLOCK, Len - First)}
+     || First <- lists:seq(0, Len - 1, ?LIST_BLOCK)].
 
 %% Write a value of `Desc` into linear memory at `Ptr`.
 store(Inst, D, Ptr, V) when D =:= u8; D =:= s8 ->

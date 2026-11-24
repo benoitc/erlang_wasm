@@ -1,0 +1,3 @@
+%%% wasm_component_vectors_SUITE ==> a_u32_list_round_trips_at_every_chunk_edge: FAILED
+  expected: {16384,
+Failed 1 tests. Passed 0 tests. 

@@ -29,7 +29,9 @@ all() ->
      nan_and_infinity_floats_round_trip,
      an_oversized_list_traps_on_bounds,
      an_unaligned_by_memory_result_traps,
-     an_unaligned_flat_list_traps].
+     an_unaligned_flat_list_traps,
+     a_u32_list_round_trips_at_every_chunk_edge,
+     a_u32_list_crosses_memory_in_chunks].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -216,6 +218,66 @@ an_oversized_list_traps_on_bounds(Config) ->
     ?assertMatch({error, #{kind := out_of_bounds_memory_access}},
                  wasm_error:capture(
                    fun() -> wasm_canon:lift_params(Core, [{list, u32}], [0, Len]) end)).
+
+%% A list of u32 goes in and out of the guest in blocks of 16,384 elements
+%% (64 KiB). Every length around a block edge comes back as it went in, with
+%% values across the whole range.
+a_u32_list_round_trips_at_every_chunk_edge(Config) ->
+    Inst = ?config(inst, Config),
+    [?assertEqual({N, {ok, u32s(N)}},
+                  {N, wasm_component:call(Inst, <<"echo-list-u32">>,
+                                          {[{list, u32}], {list, u32}},
+                                          [u32s(N)])})
+     || N <- [0, 1, 16383, 16384, 16385, 40000]].
+
+%% The list's data crosses guest memory in one read and one write per block,
+%% not one per element; the result's pointer and length are one more read of
+%% eight bytes. Fail-first: a 4,096-element echo made 4,096 data reads and
+%% 4,096 writes.
+a_u32_list_crosses_memory_in_chunks(Config) ->
+    Inst = ?config(inst, Config),
+    [begin
+         {Reads, Writes} = memory_calls(
+                             fun() ->
+                                     {ok, _} = wasm_component:call(
+                                                 Inst, <<"echo-list-u32">>,
+                                                 {[{list, u32}], {list, u32}},
+                                                 [u32s(N)])
+                             end),
+         Blocks = (N + 16383) div 16384,
+         ?assertEqual({N, Blocks, Blocks}, {N, Reads, Writes})
+     end || N <- [16, 4096, 16385]].
+
+u32s(N) -> [(I * 2654435761) band 16#FFFFFFFF || I <- lists:seq(1, N)].
+
+%% Calls to `wasm:read_memory/3' other than the eight-byte pointer and length,
+%% and to `wasm:write_memory/3', while F runs in this process.
+memory_calls(F) ->
+    Self = self(),
+    Tracer = spawn_link(fun() -> memory_tally(Self, 0, 0) end),
+    MFAs = [{wasm, read_memory, 3}, {wasm, write_memory, 3}],
+    _ = [erlang:trace_pattern(MFA, true, [global]) || MFA <- MFAs],
+    _ = erlang:trace(self(), true, [call, {tracer, Tracer}]),
+    try F()
+    after
+        _ = erlang:trace(self(), false, [call]),
+        _ = [erlang:trace_pattern(MFA, false, [global]) || MFA <- MFAs]
+    end,
+    Ref = erlang:trace_delivered(self()),
+    receive {trace_delivered, _, Ref} -> ok end,
+    Tracer ! {done, Self},
+    receive {memory_calls, Tracer, R} -> R end.
+
+memory_tally(Owner, Reads, Writes) ->
+    receive
+        {trace, _, call, {wasm, read_memory, [_, _, 8]}} ->
+            memory_tally(Owner, Reads, Writes);
+        {trace, _, call, {wasm, read_memory, _}} ->
+            memory_tally(Owner, Reads + 1, Writes);
+        {trace, _, call, {wasm, write_memory, _}} ->
+            memory_tally(Owner, Reads, Writes + 1);
+        {done, Owner} -> Owner ! {memory_calls, self(), {Reads, Writes}}
+    end.
 
 %%% -------------------------------------------------------------- helpers ---
 

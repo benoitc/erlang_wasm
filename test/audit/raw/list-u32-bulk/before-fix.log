@@ -1,0 +1,4 @@
+a_u32_list_round_trips_at_every_chunk_edge: All 1 tests passed.
+a_u32_list_crosses_memory_in_chunks:   expected: {16,1,1}
+a_u32_list_crosses_memory_in_chunks:        got: {16,16,16}
+a_u32_list_crosses_memory_in_chunks: Failed 1 tests. Passed 0 tests. 

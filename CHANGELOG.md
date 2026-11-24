@@ -4,6 +4,11 @@
 
 ### Changes
 
+- **Fixed: a misaligned list from a component was accepted.** A list a
+  component passed as a pointer and a length was read even when the pointer
+  was not aligned to its elements, though the same list reached through memory
+  was refused. Both are refused now, with an `unaligned` trap, as the
+  Canonical ABI requires.
 - **Faster: compiled code that reads and writes linear memory.** On a memory
   that was not restored from a snapshot, a warm compiled QuickJS run took
   about 20% less time and allocated 27% fewer heap words in the benchmark.

@@ -397,6 +397,28 @@ ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
   records. Waiting on the 1-minute average while checking the 5-minute one
   discarded every short QuickJS run of one set.
 
+## What passing a list to a component costs
+
+`listbench` times a round trip of a `list<u32>` through the vectors
+fixture's `echo-list-u32` export and counts the memory calls it makes. Use it
+for a change to how `wasm_canon` lifts or lowers lists; its result is in
+`PERF.md`, "A list of u32 across guest memory a block at a time".
+
+```sh
+rebar3 compile
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/listbench.erl
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -run listbench main time 4096 5
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -run listbench main count 4096
+```
+
+- `time N ROUNDS` makes one round trip per round in a fresh process, checks
+  the answer, and prints the lowest of the rounds with the 5-minute load
+  average at both ends.
+- `count N` counts `wasm:read_memory/3` and `wasm:write_memory/3` calls in one
+  round trip, the eight-byte read of the result's pointer and length apart.
+
 ## Short notes
 
 - The box matters more than most of these differences. Taken here at load

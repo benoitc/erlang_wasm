@@ -352,7 +352,8 @@ lift_value(Inst, {list, u8}, [Ptr, Len | R]) ->
     {ok, Bin} = wasm:read_memory(Inst, Ptr, Len),
     {Bin, R};
 lift_value(Inst, {list, ElemD}, [Ptr, Len | R]) ->
-    {ESize, _} = size_align(ElemD),
+    {ESize, EAlign} = size_align(ElemD),
+    ok = check_aligned(Ptr, EAlign),
     ok = ensure_list_fits(Inst, Ptr, Len, ESize),
     {[load(Inst, ElemD, Ptr + I * ESize) || I <- lists:seq(0, Len - 1)], R};
 lift_value(Inst, {record, Fields}, Flats) ->

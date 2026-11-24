@@ -1,0 +1,3 @@
+an_unaligned_flat_list_traps on a04dccd (main), before the fix:
+  load_value of a descriptor pointing at address 1: {error, #{kind := unaligned}} (passed)
+  lift_params of [1, 2] flat: got {[[7,9]],[]} where unaligned was expected (failed, line 260)

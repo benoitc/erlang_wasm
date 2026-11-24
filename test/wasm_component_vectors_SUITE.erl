@@ -28,7 +28,8 @@ all() ->
      an_unknown_case_name_is_rejected,
      nan_and_infinity_floats_round_trip,
      an_oversized_list_traps_on_bounds,
-     an_unaligned_by_memory_result_traps].
+     an_unaligned_by_memory_result_traps,
+     an_unaligned_flat_list_traps].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -242,6 +243,34 @@ an_unaligned_by_memory_result_traps(_Config) ->
     ?assertMatch({error, #{kind := unaligned}},
                  wasm_component:call(Inst, <<"run">>,
                                      {[], {tuple, [u32, u32]}}, [])).
+
+%% A list handed over flat, as a pointer and a length, is refused when the
+%% pointer is not aligned to its elements, as the same list reached through a
+%% descriptor in memory already was. The flat path read a `list<u32>' at
+%% address 1 and answered its elements.
+an_unaligned_flat_list_traps(_Config) ->
+    {ok, M} = wasm:compile({wat, ~"(module (memory (export \"memory\") 1))"}),
+    {ok, Inst} = wasm:instantiate(M, #{}),
+    ok = wasm:write_memory(Inst, 0, <<0, 7:32/little, 9:32/little, 0:24>>),
+    %% A descriptor at 16 pointing at the same bytes as the flat call below.
+    ok = wasm:write_memory(Inst, 16, <<1:32/little, 2:32/little>>),
+    Raised = fun(F) ->
+                     try F() catch throw:{wasm_error, E} -> {error, E} end
+             end,
+    ?assertMatch({error, #{kind := unaligned}},
+                 Raised(fun() ->
+                                wasm_canon:load_value(Inst, {list, u32}, 16)
+                        end)),
+    ?assertMatch({error, #{kind := unaligned}},
+                 Raised(fun() ->
+                                wasm_canon:lift_params(Inst, [{list, u32}],
+                                                       [1, 2])
+                        end)),
+    %% Aligned, the flat path still answers the elements.
+    ok = wasm:write_memory(Inst, 4, <<7:32/little, 9:32/little>>),
+    ?assertEqual({[[7, 9]], []},
+                 wasm_canon:lift_params(Inst, [{list, u32}], [4, 2])),
+    ok = wasm:destroy(Inst).
 
 fixture_path() ->
     filename:join([code:lib_dir(wasm), "..", "..", "..", "..",

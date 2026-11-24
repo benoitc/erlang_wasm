@@ -1,0 +1,8 @@
+a_cache_entry_covers_a_whole_block_without_an_image: %%% wasm_paged_memory_SUITE ==> a_cache_entry_covers_a_whole_block_without_an_image: FAILED
+a_cache_entry_covers_a_whole_block_without_an_image:   expected: 1
+a_cache_entry_covers_a_whole_block_without_an_image:        got: 200
+a_cache_entry_covers_a_whole_block_without_an_image: Failed 1 tests. Passed 0 tests. 
+two_blocks_of_one_chunk_read_their_own_words: All 1 tests passed.
+generated_code_agrees_on_a_memory_with_no_image: All 1 tests passed.
+a_shared_memory_agrees_with_the_interpreter: All 1 tests passed.
+a_module_with_no_memory_compiles: All 1 tests passed.

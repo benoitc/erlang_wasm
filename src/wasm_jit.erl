@@ -143,7 +143,13 @@ moved, because even with all three a refusal still interprets.
 %% local dispatcher. Every function's arity, return shape and i32
 %% representation changed; an artifact built by 15 would be called with the
 %% wrong arguments.
--define(ABI, 16).
+%%
+%% 17: memory 0's translation cache covers 64 KiB on a memory with no image,
+%% chosen once on a function's entry; an entry keeps the difference between a
+%% word's array index and its number from the start of memory, and the
+%% functions an access applies on a miss take the block's shift as one more
+%% argument.
+-define(ABI, 17).
 
 -define(DEFAULT_AFTER, 32).
 

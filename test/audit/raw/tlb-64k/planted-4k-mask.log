@@ -1,0 +1,10 @@
+two_blocks_of_one_chunk_read_their_own_words: %%% wasm_paged_memory_SUITE ==> two_blocks_of_one_chunk_read_their_own_words: FAILED
+two_blocks_of_one_chunk_read_their_own_words:   expected: {0,65532,{ok,[23390]}}
+two_blocks_of_one_chunk_read_their_own_words:        got: {0,65532,{ok,[7000]}}
+two_blocks_of_one_chunk_read_their_own_words: Failed 1 tests. Passed 0 tests. 
+generated_code_agrees_on_a_memory_with_no_image: All 1 tests passed.
+a_shared_memory_agrees_with_the_interpreter: %%% wasm_paged_memory_SUITE ==> a_shared_memory_agrees_with_the_interpreter: FAILED
+a_shared_memory_agrees_with_the_interpreter:   expected: {0,4096,{ok,[4098]}}
+a_shared_memory_agrees_with_the_interpreter:        got: {0,4096,{ok,[2]}}
+a_shared_memory_agrees_with_the_interpreter: Failed 1 tests. Passed 0 tests. 
+the random agree case on a plain memory passed with the planted mask: each of its exported functions makes one access per call, so it only exercises the miss path, never a hit

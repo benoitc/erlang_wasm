@@ -39,7 +39,12 @@ all() ->
      writes_outside_generated_code_keep_its_reads_inline,
      an_untouched_page_reads_every_width_in_place,
      an_access_past_the_first_entry_agrees_with_the_interpreter,
-     the_miss_path_is_one_function_per_access_shape].
+     the_miss_path_is_one_function_per_access_shape,
+     a_cache_entry_covers_a_whole_block_without_an_image,
+     two_blocks_of_one_chunk_read_their_own_words,
+     generated_code_agrees_on_a_memory_with_no_image,
+     a_shared_memory_agrees_with_the_interpreter,
+     a_module_with_no_memory_compiles].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -261,6 +266,12 @@ instance(Bin, Extra) ->
     {ok, I} = wasm:instantiate(H, #{}, Opts),
     {I, Opts}.
 
+plain_instance(Extra) ->
+    {ok, H} = wasm:compile({wat, scribe_wat()}),
+    Opts = Extra#{fuel => infinity},
+    {ok, I} = wasm:instantiate(H, #{}, Opts),
+    {I, Opts}.
+
 the_interpreter_agrees_with_a_flat_memory(_Config) ->
     agree(#{}, 400).
 
@@ -270,10 +281,17 @@ generated_code_agrees_with_a_flat_memory(_Config) ->
 
 %% Random accesses biased to page, chunk and region boundaries, each applied to
 %% the instance and to a binary, and every load compared as it happens.
-agree(Tier, Steps) ->
+agree(Tier, Steps) -> agree(Tier, Steps, image).
+
+%% `image' starts from four pages of a shared image; `plain' from one zeroed
+%% page of an ordinary memory, where a cache entry covers 64 KiB.
+agree(Tier, Steps, Layout) ->
     rand:seed(exsss, {3, 5, 7}),
-    Bin = image_bin(4),
-    {I, Opts} = instance(Bin, Tier),
+    {Bin, {I, Opts}} =
+        case Layout of
+            image -> B = image_bin(4), {B, instance(B, Tier)};
+            plain -> {<<0:(?PAGE * 8)>>, plain_instance(Tier)}
+        end,
     Compiled = maps:is_key(compile, Tier),
     Warm = warm(Compiled, I, Opts, Bin),
     Model = lists:foldl(fun(_, Mod) -> step(I, Opts, Mod, Compiled) end, Warm,
@@ -1161,8 +1179,8 @@ the_miss_path_is_one_function_per_access_shape(_Config) ->
             end,
     %% Defined: these four and nothing else named `wasm_m_'. `i64.store32' and
     %% `i32.store' are one shape, four bytes of an integer.
-    Defs = [{"'wasm_m_load_1_i32_s'/8", 1}, {"'wasm_m_load_4_u32'/8", 2},
-            {"'wasm_m_store_4_int'/9", 2}, {"'wasm_m_store_8_int'/9", 1}],
+    Defs = [{"'wasm_m_load_1_i32_s'/9", 1}, {"'wasm_m_load_4_u32'/9", 2},
+            {"'wasm_m_store_4_int'/10", 2}, {"'wasm_m_store_8_int'/10", 1}],
     ?assertEqual([Name || {Name, _} <- Defs],
                  lists:sort([Name || {Name, _} <- Fns,
                                      lists:prefix("'wasm_m_", Name)])),
@@ -1182,3 +1200,107 @@ the_miss_path_is_one_function_per_access_shape(_Config) ->
 
 pairs([Name, Body | Rest]) -> [{Name, Body} | pairs(Rest)];
 pairs([]) -> [].
+
+%%% ---------------------------------------------------- block-sized entries ---
+
+%% On a memory with no image a cache entry covers a 64 KiB block, so loads that
+%% alternate between two 4 KiB pages of one block, inside one call, miss once:
+%% the first load, into the empty cache. When an entry covered 4 KiB, every
+%% switch went through the miss function for the second entry.
+a_cache_entry_covers_a_whole_block_without_an_image(_Config) ->
+    ct:timetrap({minutes, 3}),
+    Wat = ~"(module (memory 1)
+      (func (export \"put\") (param i32 i32) local.get 0 local.get 1 i32.store)
+      (func (export \"alt\") (param i32) (result i32) (local i32)
+        (loop $l
+          (local.set 1 (i32.add (local.get 1)
+            (i32.add (i32.load (i32.const 0)) (i32.load (i32.const 4096)))))
+          (local.set 0 (i32.sub (local.get 0) (i32.const 1)))
+          (br_if $l (local.get 0)))
+        (local.get 1)))",
+    {I, Opts} = forced(Wat, [{~"put", [0, 3]}, {~"put", [4096, 5]},
+                             {~"alt", [1]}]),
+    {Got, Misses} = misses(I, wasm_m_load_4_u32,
+                           fun() -> wasm:call(I, ~"alt", [100], Opts) end),
+    ?assertEqual({ok, [800]}, Got),
+    ?assertEqual(1, Misses),
+    ok = wasm:destroy(I).
+
+%% A memory of two pages is one 128 KiB chunk holding two blocks; the second
+%% block's entry must point half way into the chunk.
+two_blocks_of_one_chunk_read_their_own_words(_Config) ->
+    ct:timetrap({minutes, 3}),
+    Wat = ~"(module (memory 2)
+      (func (export \"put\") (param i32 i32) local.get 0 local.get 1 i32.store)
+      (func (export \"get\") (param i32) (result i32) local.get 0 i32.load)
+      (func (export \"pair\") (param i32 i32) (result i32)
+        (i32.add (i32.mul (i32.load (local.get 0)) (i32.const 1000))
+                 (i32.load (local.get 1)))))",
+    Addrs = [0, 65532, 65536, 65540, 131068],
+    Puts = [{~"put", [A, A div 4 + 7]} || A <- Addrs],
+    {I, Opts} = forced(Wat, Puts ++ [{~"get", [0]}, {~"pair", [0, 4]}]),
+    [?assertEqual({A, B, {ok, [(A div 4 + 7) * 1000 + B div 4 + 7]}},
+                  {A, B, entered(true, I,
+                                 fun() -> wasm:call(I, ~"pair", [A, B], Opts)
+                                 end)})
+     || A <- Addrs, B <- Addrs],
+    ok = wasm:destroy(I).
+
+generated_code_agrees_on_a_memory_with_no_image(_Config) ->
+    ct:timetrap({minutes, 3}),
+    agree(#{compile => true, compile_after => 1, compile_force => true}, 400,
+          plain).
+
+a_shared_memory_agrees_with_the_interpreter(_Config) ->
+    ct:timetrap({minutes, 3}),
+    Wat = ~"(module (memory 1 2 shared)
+      (func (export \"put\") (param i32 i32) local.get 0 local.get 1 i32.store)
+      (func (export \"sum\") (param i32 i32) (result i32)
+        (i32.add (i32.load (local.get 0)) (i32.load (local.get 1)))))",
+    Addrs = [0, 4092, 4096, 65532],
+    Calls = [{~"put", [A, A + 1]} || A <- Addrs],
+    {I, Opts} = forced(Wat, Calls ++ [{~"sum", [0, 4]}]),
+    [?assertEqual({A, B, {ok, [A + B + 2]}},
+                  {A, B, entered(true, I,
+                                 fun() -> wasm:call(I, ~"sum", [A, B], Opts)
+                                 end)})
+     || A <- Addrs, B <- Addrs],
+    ok = wasm:destroy(I).
+
+%% A stateful function with no memory at all: nothing in it reads memory 0,
+%% so it must not ask for memory 0's layout.
+a_module_with_no_memory_compiles(_Config) ->
+    ct:timetrap({minutes, 3}),
+    Wat = ~"(module (global $g (mut i32) (i32.const 0))
+      (func (export \"bump\") (param i32) (result i32)
+        (global.set $g (i32.add (global.get $g) (local.get 0)))
+        (global.get $g)))",
+    {I, Opts} = forced(Wat, [{~"bump", [1]}]),
+    ?assertEqual({ok, [11]},
+                 entered(true, I,
+                         fun() -> wasm:call(I, ~"bump", [10], Opts) end)),
+    ok = wasm:destroy(I).
+
+%% Instantiate with the tier forced, make the warm-up calls, and wait for the
+%% compile, so the next calls are served by generated code.
+forced(Wat, Warm) ->
+    {ok, M} = wasm:compile({wat, Wat}),
+    Opts = #{fuel => infinity, compile => true, compile_after => 1,
+             compile_force => true},
+    {ok, I} = wasm:instantiate(M, #{}, Opts),
+    _ = [{ok, _} = wasm:call(I, F, A, Opts) || {F, A} <- Warm],
+    ok = wasm_jit:await(I, 120_000),
+    {I, Opts}.
+
+%% Calls to the named miss function during F, whatever its arity: generated
+%% modules have no `module_info', and the arity is part of what changed.
+misses(I, Name, F) ->
+    Mod = wasm_code_slots:slot_module(wasm_instance:code_slot(I)),
+    MFAs = [{Mod, Name, A} || A <- [8, 9]],
+    _ = [erlang:trace_pattern(MFA, true, [call_count]) || MFA <- MFAs],
+    R = entered(true, I, F),
+    N = lists:sum([C || MFA <- MFAs,
+                        {call_count, C} <- [erlang:trace_info(MFA, call_count)],
+                        is_integer(C)]),
+    _ = [erlang:trace_pattern(MFA, false, [call_count]) || MFA <- MFAs],
+    {R, N}.

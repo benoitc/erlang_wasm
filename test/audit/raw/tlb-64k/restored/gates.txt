@@ -1,0 +1,9 @@
+null F n=6 call 1.027 total 1.023 bimodal false
+  call [1.158,0.984,1.025,1.029,1.107,0.949]
+null R n=6 call 0.970 total 0.972 bimodal false
+  call [0.976,0.963,0.954,0.956,1.14,1.211]
+ab F n=6 call 1.017 total 1.015 bimodal false
+  call [1.029,1.012,1.021,0.902,1.034,0.964]
+ab R n=6 call 0.991 total 0.988 bimodal false
+  call [0.992,0.889,1.044,1.015,0.979,0.99]
+base call 962 us, new call 960 us

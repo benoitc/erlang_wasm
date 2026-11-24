@@ -1236,3 +1236,23 @@ that measures interpreted work per function and ranks one of these as cheap,
 checked by leaving that function out alone.
 
 Raw: `test/audit/raw/selection/`.
+
+## Carrying the block's shift and mask through memory 0's cache
+
+`tlb-64k` branch, 2026-11-24. The first design of the 64 KiB cache entry bound
+both the block's shift and its mask once on a function's entry and passed both
+to the miss functions.
+
+**Rejected.** It made a warm QuickJS `_start` 17.5% faster (0.825 / 0.824) but
+failed two gates written before measuring: the generated module grew to 1.038
+of the baseline (13,196,548 bytes against 12,712,512, limit 1.03), and cold
+compile in the reverse ordering was 1.054 (limit 1.03). The compiled module's
+arity sum went up by 14,006 and its instructions by 79,941, consistent with
+the two values becoming arguments of the lifted continuations.
+
+**What replaced it.** Only the shift is carried; an entry keeps the difference
+between a word's array index and its number from the start of memory, so a hit
+adds `A bsr 3` and needs no mask. That design passed every gate. `PERF.md`, "A
+64 KiB translation-cache entry for memory with no image", has both.
+
+Raw: `test/audit/raw/tlb-64k/two-argument/`.

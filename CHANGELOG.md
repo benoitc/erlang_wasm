@@ -4,6 +4,11 @@
 
 ### Changes
 
+- **Faster: compiled code that reads and writes linear memory.** On a memory
+  that was not restored from a snapshot, a warm compiled QuickJS run took
+  about 20% less time and allocated 27% fewer heap words in the benchmark.
+  Restored memories and compile times are unchanged. Compiled code cached by
+  an earlier version is compiled again once.
 - **Faster: compiling a binary module.** In the public-path benchmark,
   `wasm:compile/1` took about 12% less time on QuickJS and 18% less on
   CPython. Decoding allocated 40 to 47% fewer heap words. The largest heap

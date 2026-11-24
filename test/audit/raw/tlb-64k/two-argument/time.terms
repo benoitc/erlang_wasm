@@ -1,0 +1,120 @@
+#{tag => "F:1:null:first",mode => "time",load_start => 7.62,load_end => 6.91,
+  side => base,excl => [],beam_bytes => 12712512,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 130984227,
+  warm_us => [247040,234520,235691]}.
+#{tag => "F:1:null:second",mode => "time",load_start => 6.91,load_end => 6.17,
+  side => base,excl => [],beam_bytes => 12712512,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 120282676,
+  warm_us => [236318,230291,231635]}.
+#{tag => "F:1:ab:first",mode => "time",load_start => 7.56,load_end => 7.41,
+  side => base,excl => [],beam_bytes => 12712512,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 123825462,
+  warm_us => [254553,244540,237488]}.
+#{tag => "F:1:ab:second",mode => "time",load_start => 7.41,load_end => 7.6,
+  side => new,excl => [],beam_bytes => 13196548,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 130962553,
+  warm_us => [197856,198261,195424]}.
+#{tag => "R:2:ab:first",mode => "time",load_start => 5.1,load_end => 5.34,
+  side => new,excl => [],beam_bytes => 13196548,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 127777861,
+  warm_us => [186602,185519,186437]}.
+#{tag => "R:2:ab:second",mode => "time",load_start => 5.3,load_end => 5.15,
+  side => base,excl => [],beam_bytes => 12712512,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 122055063,
+  warm_us => [244138,235616,227632]}.
+#{tag => "R:2:null:first",mode => "time",load_start => 6.36,load_end => 7.51,
+  side => base,excl => [],beam_bytes => 12712512,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 117729377,
+  warm_us => [249056,231933,238288]}.
+#{tag => "R:2:null:second",mode => "time",load_start => 7.51,load_end => 6.26,
+  side => base,excl => [],beam_bytes => 12712512,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 126791153,
+  warm_us => [241880,234209,236617]}.
+#{tag => "F:3:null:first",mode => "time",load_start => 6.11,load_end => 5.81,
+  side => base,excl => [],beam_bytes => 12712512,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 122699535,
+  warm_us => [256115,238728,234282]}.
+#{tag => "F:3:null:second",mode => "time",load_start => 5.81,load_end => 6.67,
+  side => base,excl => [],beam_bytes => 12712512,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 122707274,
+  warm_us => [261273,239615,236281]}.
+#{tag => "F:3:ab:first",mode => "time",load_start => 6.91,load_end => 7.86,
+  side => base,excl => [],beam_bytes => 12712512,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 123651196,
+  warm_us => [244353,233706,234923]}.
+#{tag => "F:3:ab:second",mode => "time",load_start => 7.86,load_end => 7.64,
+  side => new,excl => [],beam_bytes => 13196548,
+  counts =>
+      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,
+        entered => 3,reentered => 0},
+  cold_us => 124298817,
+  warm_us => [194357,194829,190746]}.
+#{side => new, tag => "R:4:ab:first",mode => "time",excl => [],load_end => 6.9,  beam_bytes => 13196548,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 125617811,load_start => 7.95,  warm_us => [185322,183528,187066]}.
+#{side => base, tag => "R:4:ab:second",mode => "time",excl => [],load_end => 7.1,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 120429788,load_start => 6.9,  warm_us => [246748,244762,236584]}.
+#{side => base, tag => "R:4:null:first",mode => "time",excl => [],load_end => 6.76,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 121144757,load_start => 7.1,  warm_us => [254667,241773,231010]}.
+#{side => base, tag => "R:4:null:second",mode => "time",excl => [],load_end => 6.26,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 120472703,load_start => 6.76,  warm_us => [247331,234953,233730]}.
+#{side => base, tag => "F:5:null:first",mode => "time",excl => [],load_end => 5.7,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 120782845,load_start => 6.26,  warm_us => [248195,236346,232256]}.
+#{side => base, tag => "F:5:null:second",mode => "time",excl => [],load_end => 5.28,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 120712513,load_start => 5.7,  warm_us => [249100,238897,241868]}.
+#{side => base, tag => "F:5:ab:first",mode => "time",excl => [],load_end => 6.15,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 122571171,load_start => 5.28,  warm_us => [255968,255627,247809]}.
+#{side => new, tag => "F:5:ab:second",mode => "time",excl => [],load_end => 5.6,  beam_bytes => 13196548,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 125143897,load_start => 6.15,  warm_us => [202057,188034,194439]}.
+#{side => new, tag => "R:6:ab:first",mode => "time",excl => [],load_end => 5.51,  beam_bytes => 13196548,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 126980183,load_start => 5.6,  warm_us => [190968,188991,184588]}.
+#{side => base, tag => "R:6:ab:second",mode => "time",excl => [],load_end => 5.23,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 119549153,load_start => 5.51,  warm_us => [242289,232381,232594]}.
+#{side => base, tag => "R:6:null:first",mode => "time",excl => [],load_end => 7.82,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 122702981,load_start => 5.23,  warm_us => [245848,238198,234239]}.
+#{side => base, tag => "R:6:null:second",mode => "time",excl => [],load_end => 7.36,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 126270412,load_start => 7.82,  warm_us => [248805,241015,248779]}.
+#{side => base, tag => "F:7:null:first",mode => "time",excl => [],load_end => 7.69,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 125632056,load_start => 7.92,  warm_us => [241786,237969,229056]}.
+#{side => base, tag => "F:7:null:second",mode => "time",excl => [],load_end => 6.82,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 124552559,load_start => 7.69,  warm_us => [259131,247167,239504]}.
+#{side => base, tag => "F:7:ab:first",mode => "time",excl => [],load_end => 6.61,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 124783892,load_start => 6.82,  warm_us => [245081,253701,234604]}.
+#{side => new, tag => "F:7:ab:second",mode => "time",excl => [],load_end => 6.89,  beam_bytes => 13196548,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 127122749,load_start => 6.61,  warm_us => [216342,206756,200008]}.
+#{side => new, tag => "R:8:ab:first",mode => "time",excl => [],load_end => 6.54,  beam_bytes => 13196548,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 132737797,load_start => 6.89,  warm_us => [202325,202683,207675]}.
+#{side => base, tag => "R:8:ab:second",mode => "time",excl => [],load_end => 7.11,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 125441616,load_start => 6.53,  warm_us => [265360,239178,235966]}.
+#{side => base, tag => "R:8:null:first",mode => "time",excl => [],load_end => 6.91,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 124150668,load_start => 7.81,  warm_us => [258126,240335,238855]}.
+#{side => base, tag => "R:8:null:second",mode => "time",excl => [],load_end => 6.67,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 125335931,load_start => 6.91,  warm_us => [253454,237725,235943]}.
+#{side => base, tag => "F:9:null:first",mode => "time",excl => [],load_end => 6.79,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 122725071,load_start => 6.67,  warm_us => [257183,238682,237550]}.
+#{side => base, tag => "F:9:null:second",mode => "time",excl => [],load_end => 6.16,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 125116300,load_start => 6.79,  warm_us => [266874,248341,241239]}.
+#{side => base, tag => "F:9:ab:first",mode => "time",excl => [],load_end => 7.75,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 126436487,load_start => 6.16,  warm_us => [254757,236134,241482]}.
+#{side => new, tag => "F:9:ab:second",mode => "time",excl => [],load_end => 7.41,  beam_bytes => 13196548,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 129401042,load_start => 7.75,  warm_us => [208295,191481,198678]}.
+#{side => new, tag => "R:10:ab:first",mode => "time",excl => [],load_end => 6.78,  beam_bytes => 13196548,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 130015939,load_start => 7.41,  warm_us => [202533,193165,234499]}.
+#{side => base, tag => "R:10:ab:second",mode => "time",excl => [],load_end => 6.63,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 122673627,load_start => 6.78,  warm_us => [259108,242621,234975]}.
+#{side => base, tag => "R:10:null:first",mode => "time",excl => [],load_end => 7.02,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 123224370,load_start => 6.63,  warm_us => [250275,239915,234806]}.
+#{side => base, tag => "R:10:null:second",mode => "time",excl => [],load_end => 6.46,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 121832446,load_start => 7.02,  warm_us => [256397,240648,235168]}.
+#{side => base, tag => "F:11:null:first",mode => "time",excl => [],load_end => 6.13,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 123116584,load_start => 6.46,  warm_us => [267500,241000,241041]}.
+#{side => base, tag => "F:11:null:second",mode => "time",excl => [],load_end => 6.03,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 124697146,load_start => 6.13,  warm_us => [254850,239298,233914]}.
+#{side => base, tag => "F:11:ab:first",mode => "time",excl => [],load_end => 5.73,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 119159435,load_start => 6.03,  warm_us => [247857,236023,231576]}.
+#{side => new, tag => "F:11:ab:second",mode => "time",excl => [],load_end => 5.63,  beam_bytes => 13196548,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 128551593,load_start => 5.73,  warm_us => [210081,190275,195724]}.
+#{side => new, tag => "R:12:ab:first",mode => "time",excl => [],load_end => 5.55,  beam_bytes => 13196548,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 127217100,load_start => 5.63,  warm_us => [198084,200449,190080]}.
+#{side => base, tag => "R:12:ab:second",mode => "time",excl => [],load_end => 5.67,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 121129361,load_start => 5.55,  warm_us => [245278,228806,234389]}.
+#{side => base, tag => "R:12:null:first",mode => "time",excl => [],load_end => 7.85,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 123959044,load_start => 5.67,  warm_us => [260923,237696,233384]}.
+#{side => base, tag => "R:12:null:second",mode => "time",excl => [],load_end => 7.83,  beam_bytes => 12712512,  counts =>      #{failed => 0,crashed => 0,compiled => 223,refused => 0,cached => 0,        entered => 3,reentered => 0},  cold_us => 120423472,load_start => 7.85,  warm_us => [249471,234966,226804]}.

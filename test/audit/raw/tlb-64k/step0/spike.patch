@@ -1,0 +1,40 @@
+--- -	2026-11-23 15:03:21
++++ src/wasm_core.erl	2026-11-23 14:57:50
+@@ -2453,7 +2453,7 @@
+     cerl:c_let([A], Addr,
+       cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+                                   cerl:abstract(8)]),
+-        cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
++        cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(16)]),
+           all([bif('=<', [bif('+', [Bit, cerl:abstract(N * 8)]),
+                           cerl:abstract(64)])],
+               all([bif('=:=', [Pg, TP])], Hit, Out),
+@@ -2461,7 +2461,7 @@
+ 
+ %% The word of its page an address is in, counting from zero.
+ page_word(A) ->
+-    bif('bsr', [bif('band', [A, cerl:abstract(4095)]), cerl:abstract(3)]).
++    bif('bsr', [bif('band', [A, cerl:abstract(65535)]), cerl:abstract(3)]).
+ 
+ %% The load or the store itself, on a word already found. A store answers the
+ %% state to go on with, which the inline one never changes.
+@@ -2535,8 +2535,8 @@
+              end,
+     Do = fun(C, I) -> perform(Dir, Mut, N, Kind, A, C, I, Bit, Val) end,
+     Slow = Keep(helper(Dir, Mut, N, Kind, A, Val)),
+-    Hit2 = cerl:c_let([Ix], bif('+', [TB2, page_word(A)]),
+-                      Done(Do(TA2, Ix), {TP2, TA2, TB2, TP, TA, TB})),
++    Hit2 = cerl:c_seq(cerl:c_call(cerl:c_atom(wasm_probe), cerl:c_atom(hit2), []), cerl:c_let([Ix], bif('+', [TB2, page_word(A)]),
++                      Done(Do(TA2, Ix), {TP2, TA2, TB2, TP, TA, TB}))),
+     Growth = cerl:c_let([Sh], field(Mem, ?MEM_SHIFT),
+                cerl:c_let([Ci], bif('bsr', [A, Sh]),
+                  cerl:c_let([Ck], chunk_at(Mem, Ci),
+@@ -2555,7 +2555,7 @@
+      cerl:c_fun([Mut, A | Vals] ++ tuple_to_list(Tlb),
+        cerl:c_let([Bit], bif('*', [bif('band', [A, cerl:abstract(7)]),
+                                    cerl:abstract(8)]),
+-         cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(12)]),
++         cerl:c_let([Pg], bif('bsr', [A, cerl:abstract(16)]),
+                     all([bif('=:=', [Pg, TP2])], Hit2, Miss))))}.
+ 
+ miss_fname(Dir, N, Kind) ->

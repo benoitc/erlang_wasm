@@ -357,6 +357,8 @@ jobs:
         with:
           otp-version: ${{ env.OTP }}
           rebar3-version: ${{ env.REBAR3 }}
+      - name: The build stamp
+        run: scripts/test-build-nif.sh
       - name: The file suites on the check build
         env:
           # Unoptimised and not inlined, so each function keeps its own

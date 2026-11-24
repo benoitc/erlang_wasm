@@ -1,0 +1,2 @@
+tail: /var/folders/qs/s0kr8vxx1976tzhlsm5vrqz40000gn/T//wasm_nif_stamp.DrxhRf/tree/priv/wasi_file_nif.stamp: No such file or directory
+FAIL: stamp does not name the library

@@ -1315,16 +1315,21 @@ misses(I, Name, F) ->
 %% made on a binary. On an ordinary memory grown one page at a time, so the
 %% copies cross 64 KiB chunk boundaries, and on an image-backed one, where
 %% they cross 4 KiB slots and pages no write has reached.
+%%
+%% Both memories hold bytes that do not repeat. The first version of this case
+%% used `image_bin/1', which is zeros or a 256-byte period over most of the
+%% range, and a copy that read some bytes from the wrong place still passed.
 every_copy_alignment_agrees_with_a_binary(_Config) ->
     ct:timetrap({minutes, 10}),
+    Noise = noise(4 * ?PAGE),
     Plain = fun() ->
                     {ok, M0} = wasm_memory:create(#limits{min = 1, max = 8},
                                                   #{}),
                     {ok, 1, M1} = wasm_memory:grow(M0, 3),
-                    ok = wasm_memory:store_bytes(M1, 0, image_bin(4)),
+                    ok = wasm_memory:store_bytes(M1, 0, Noise),
                     M1
             end,
-    Image = fun() -> paged(image_bin(4)) end,
+    Image = fun() -> paged(Noise) end,
     [copies(Make) || Make <- [Plain, Image]],
     ok.
 
@@ -1354,6 +1359,11 @@ copies(Make) ->
                              end, Model0, Cases),
                  wasm_memory:load_bytes(M, 0, 4 * ?PAGE)),
     ok = wasm_memory:free(M).
+
+%% Bytes from a multiplicative hash of their position: no period a copy's
+%% offsets could line up with.
+noise(N) ->
+    << <<(((I * 2654435761) bsr 16) band 255)>> || I <- lists:seq(0, N - 1) >>.
 
 %% A destination `Delta' bytes past a multiple of 8 from the source: above it
 %% and overlapping, below it and overlapping, and above it and clear of it.

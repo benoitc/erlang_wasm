@@ -46,8 +46,14 @@ you what the machine is doing to you before any other number means anything.
    (cd /tmp/base && rebar3 compile)
    ```
 
-2. Check the load average. The maintainer's machine has swung from 4 to 84
-   in one session; start below 8, and redo a run that ends above it.
+2. Check the load average: the 5-minute one, the second value `sysctl -n
+   vm.loadavg` prints, which is what the arms record. The maintainer's
+   machine has swung from 4 to 84 in one session; a run counts only if that
+   average was below 8 when it started and when it ended, and is redone
+   otherwise. If a script waits for the machine to be quiet before a run, it
+   must wait on the same average it checks: one that waited on the 1-minute
+   average launched short runs while the 5-minute one was still near 25, and
+   threw every one of them away.
 3. Run each side in a fresh emulator, one process per run. A long-lived
    process carries its heap into the next run, and QuickJS repeated in one
    process is bimodal, 1.7 or 13 seconds.
@@ -57,6 +63,43 @@ you what the machine is doing to you before any other number means anything.
    rounds; never compare minimums picked across launches.
 6. For pool and throughput arms, pin the schedulers (`+S 10:10`) and use no
    more workers than performance cores.
+
+## Time the call a user makes
+
+Measure through the public function a user calls, and take any phase times
+from inside that same call. `wasm:compile/1` sets a heap floor before it
+decodes a module over 16 KiB; an arm that called the decoder and the
+validator directly skipped it, reported a 69% validation slowdown that the
+public call does not have, and an 18 to 28% validation gain that is 3 to 4%
+through it. Add phase times up only within one call: minimums taken from
+different rounds and added together describe a call that never happened.
+
+## Decide on paired ratios
+
+The rule the timed comparisons in `PERF.md` since 0.11.1 were held to,
+written here so you can hold yours to it:
+
+- Six pairs per ordering, twelve in all. A pair is one run of each side, each
+  in a fresh emulator, one after the other; its ratio is the change's number
+  over the baseline's.
+- A null set first: the baseline against itself, the same way. It passes
+  when the median of its paired ratios is between 0.95 and 1.05 in each
+  ordering and neither side is bimodal. A set whose null fails is discarded
+  and run again, at most three times; three failures make the result
+  inconclusive, which is neither a win nor a loss.
+- The decision is the median of the paired ratios, in each ordering; both
+  must pass. Limits are one-sided: a win is "at or below X", a no-slowdown
+  gate is "at or below 1.03" with no lower bound.
+- A pair that gives up under the load rule after six attempts is run again
+  under the same rule before you read a verdict. Report every pair, not only
+  the medians.
+
+Before a run that takes hours, feed the script's acceptance check one healthy
+record, one from a failed run and one taken at high load, and see it accept
+the first and refuse the other two. Two checks were wrong this way: one
+matched `failed => 0` in the compile counters of every healthy run and threw
+all of them away, the other lost the escape in its pattern and refused
+everything.
 
 ## Use `realbench` for the interpreter
 

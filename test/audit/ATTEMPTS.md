@@ -458,7 +458,8 @@ reading the wrong word.
 **Multiple shards per module.** Compilation is one shot: a function that first
 runs after the module was built stays interpreted. Needs a function-index to
 slot mapping that single-slot adoption does not have, and a phased workload to
-measure, which does not exist as a fixture.
+measure, which does not exist as a fixture. Reopen with a guest of two phases
+whose second phase spends real time in functions the first never reached.
 
 **The interpreter's heap.** Repeating a real module in one process is bimodal on
 collection time. A fresh process per invocation is reliably fast; shedding
@@ -475,6 +476,34 @@ trusts are still open.
 **Turning the tier on by default.** Every gate item passes and the answer is
 still no: 8.4x on a language runtime, flat on a plugin, and tens of seconds of a
 core spent on a guess a default cannot make.
+
+**Choosing the compiled set by how much work a function does.** The tier
+compiles every function that ran. Leaving QuickJS's Rust wrapper out cut the
+cold compile by 16 to 17% for a 1 to 2% warm slowdown; leaving its parser out
+cost 6 to 7% (`PERF.md`, "Leaving hand-picked functions out of QuickJS's
+compiled set"). Calls and loop back-edges cannot tell the two apart, so a rule
+needs the work each function does in its own body while interpreted, set
+against a cheap estimate of its compile cost such as body size. Gates already
+written for it: the selector frozen before it is tested on request paths it
+did not observe; cold compile at or below 0.90 on a declared target; warm
+requests and interpreted execution with the profiling on at or below 1.03;
+time from the first request to the first compiled response at or below 1.03.
+Reopen with a counter of interpreted work per function whose cost on the
+interpreted path is measured.
+
+**Placing shards by call edges, and caching a shard set.** Four units compile
+QuickJS 3.6 times faster and run about 16% slower, because calls between
+units cost more (`PERF.md`, "Shards: 3.8x to compile, 1.5x to run"), and a
+split compile is never cached (above). Reopen with a profile showing that the
+calls a partition cuts take more than 5% of warm time; measure compile time
+from the trigger to publication on the same functions on both sides.
+
+**Finding a cached artifact before preparing the compile.** `wasm_jit:unit/2`
+lowers every selected function to compiler input before `cached/6` looks up a
+key that needs only the function numbers. Reopen if, on a confirmed cache
+hit, that preparation is more than 10% of a restart's time to the first
+compiled call. An earlier lookup must use exactly the function set the key
+holds today.
 
 ## The memory path, measured against wasmtime and wasm3
 

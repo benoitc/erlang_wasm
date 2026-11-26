@@ -16,13 +16,13 @@
   `{handle_failed, Error}` and frees its instance, and a supervisor restarts
   it with fresh state. Actors need the `wasm` application running. Nothing
   that existed before changes. See [Actors](docs/actors.md).
-- **Fixed: `wasm_component:prepare/1` refused a component that uses types
-  from an interface.** A world that brings in an interface's types with
-  `use`, as most do, is built with type imports that the host has nothing to
-  supply for. `prepare/1` refused them as an unsupported import, though
-  instantiating the same bytes directly worked. Both work now, and each
-  function such a component exports is matched to the cleanup and allocator
-  its own definition names.
+- **Fixed: a component that uses types from a WIT interface could not be
+  prepared.** A world that brings in an interface's types with `use`, as
+  most do, is built with type imports the host has nothing to supply for.
+  `wasm_component:prepare/1` refused them as an unsupported import, though
+  instantiating the same bytes directly worked. You can now prepare such a
+  component once and instantiate it many times, which is what a supervisor
+  restarting an actor does.
 
 ## 0.11.2
 

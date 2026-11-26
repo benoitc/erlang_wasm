@@ -38,6 +38,11 @@ A guest that keeps running between requests and reads its own stdin is
 covered in [Talk to a running guest](streams.md). It uses a process for the
 same reasons.
 
+A component that keeps its state from one message to the next, and sends
+messages to other processes, is an actor rather than a worker: a worker
+gives each request what its isolation policy says, an actor keeps one
+instance for its whole life. See [Actors](actors.md).
+
 ## Start one
 
 ```erlang

@@ -324,9 +324,15 @@ bytes:
 ok = wasm_component:destroy(Inst).
 ```
 
-`prepare/1` returns the same errors `instantiate` would. `hold/1` and the WASI
-runners take a prepared component too, and the HTTP listener prepares its
-component when it starts.
+`prepare/1` checks the component before you instantiate it and can report
+`unsupported_canon_builtin` at that point. Instantiation still resolves host
+imports and can report further errors. `hold/1` and the WASI runners take a
+prepared component too, and the HTTP listener prepares its component when it
+starts.
+
+A component that should keep its state between messages, under a
+supervisor, is an [actor](actors.md): prepare it once and every restart
+instantiates the prepared component.
 
 ## Notes
 
@@ -347,5 +353,6 @@ component when it starts.
 ## Read this next
 
 [Use a component resource](examples/use-a-component-resource.md), then
-[Security](security.md). To change the Component Model code itself, read
-[Component internals](component-internals.md).
+[Security](security.md). To run a component as a process that handles typed
+messages, read [Actors](actors.md). To change the Component Model code
+itself, read [Component internals](component-internals.md).

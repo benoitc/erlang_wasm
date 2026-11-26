@@ -140,6 +140,9 @@ process of its own, a **worker**, and a timeout can kill it. A call made
 directly runs in your own process, and nothing can interrupt it. A worker is
 not a second engine. It is an ordinary process that owns an instance. See
 [Stop a runaway](examples/stop-a-runaway.md) and [Workers](worker.md).
+A component that keeps its state between messages lives in a process of its
+own too, an **actor**, which a supervisor restarts with a fresh instance:
+see [Actors](actors.md).
 
 ## Deadlines and cleanup stay outside the guest
 
@@ -252,6 +255,7 @@ internals pages use come last.
 
 | term | meaning | read |
 | --- | --- | --- |
+| **actor** | a process that owns one component instance for its whole life and handles typed messages one at a time; started with `wasm_actor:start_link/2` | [Actors](actors.md) |
 | **adapter** | a module that teaches the worker kernel one language, by implementing `wasm_worker_adapter` | [Writing an adapter](worker-contract.md) |
 | **async ABI** | the Canonical ABI's `async func`, `stream` and `future`; called with `wasm_component:call_async/4` | [Components](components.md) |
 | **`baseline`, `full`** | the two compile levels: `full` code runs faster, `baseline` code compiles faster | [The compiled tier](compiled-tier.md) |

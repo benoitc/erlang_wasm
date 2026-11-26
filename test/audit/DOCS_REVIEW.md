@@ -943,6 +943,8 @@ of the compiled set"):
   a two-phase guest).
 
 They belong in `ATTEMPTS.md`, "Open, and each a decision rather than a task".
+D4 was already there as "Multiple shards per module"; it gains its reopening
+condition rather than a second entry.
 
 **Questions for the maintainer.**
 

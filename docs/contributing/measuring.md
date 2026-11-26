@@ -76,8 +76,8 @@ different rounds and added together describe a call that never happened.
 
 ## Decide on paired ratios
 
-The rule every change in `PERF.md` since 0.11.1 was held to, written here so
-you can hold yours to it:
+The rule the timed comparisons in `PERF.md` since 0.11.1 were held to,
+written here so you can hold yours to it:
 
 - Six pairs per ordering, twelve in all. A pair is one run of each side, each
   in a fresh emulator, one after the other; its ratio is the change's number

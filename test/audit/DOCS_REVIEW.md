@@ -968,3 +968,119 @@ release, in the pull request that carries this section. Q20: the release is
 only, in `memory.md`, `measuring.md`, `bench/paths/README.md` and the
 changelog. D1 to D4 in the same pull request, in `ATTEMPTS.md`. Then the
 release, once Q20 and Q21 are answered.
+
+## Before 0.12.0
+
+Reviewed on `main` at `34e5e34`, 2026-11-26. Since 0.11.2 one pull request
+merged: #157, the actor API (`wasm_actor`, `wasm_actor_registry`,
+`docs/actors.md`) and a fix to `wasm_component:prepare/1` that brought a
+linker fix with it. Now 97 modules, about 61,700 lines; 108 suites, one more:
+`wasm_actor_SUITE`.
+
+**What is already right.** The guide is task-shaped: the contract, how to
+start one under a supervisor, what `ok` from a send promises and what it does
+not, what to do with `full` and `closed`, and what a trap does. The module
+doc says the same in reference form. Both new modules have their level in
+`architecture.md`, a line in `map.md` and an `ex_doc` group; `wasm_sup` and
+`architecture.md` draw the new subsystem in the supervision tree; the actor
+table is in `wasm_store`'s list; the fixture has its source, its build step
+and its row in `fixtures.md`; `start-here.md` has a row for the case. The
+changelog says there is nothing to upgrade. Sizes are in proportion:
+`wasm_actor` is 375 lines and 61 clauses beside `wasm_instance_worker`'s 281
+and 29, and the registry is 70.
+
+**Found, small.**
+
+- **P5. Only two pages lead to actors.** A reader reaches `actors.md` from
+  the table in `start-here.md` or from `map.md`. The pages where someone
+  decides how to hold an instance do not mention it: `worker.md`, "Decide
+  whether you need one" (a guest that keeps its state between messages is
+  the case a worker does not cover), `concepts.md`, "Put an instance in its
+  own process" and the glossary, `components.md`, "Instantiate one component
+  many times" and "Read this next", and the README's first paragraph, which
+  names workers. One sentence or link each. Primary problem: navigation.
+- **P6. `recipes.md` has no recipe for actors.** The Workers line lists the
+  adapter, the kernel and a worker request. A recipe would name the two
+  modules, the suite and the page, and the three rules a change must keep:
+  the name is registered only after the queue exists, the counter goes up
+  before the capacity check, and a restarted registry watches every row
+  again. Primary problem: navigation.
+- **P7. One sentence of the changelog claims more than was shown.** The fix
+  entry ends "each function such a component exports is matched to the
+  cleanup and allocator its own definition names". The suites show it for
+  components that `prepare/1` used to refuse, which took the name-based path
+  on 0.11.2 and were right there. No component is shown that 0.11.2 matched
+  wrongly. Either drop the sentence or keep it with that scope (see Q22).
+  Primary problem: documentation.
+- **P8. `components.md` says `prepare/1` returns the errors `instantiate`
+  would.** A comment in `prepare/1` says a built-in its parser does not know
+  still fails the prepare, while the unprepared path tolerates a graph it
+  cannot read in several places (`validate_lifts/3`, `async_builtins/1`).
+  Whether the unprepared path then succeeds on such a component has not been
+  checked. See Q23. Primary problem: documentation.
+
+**Found, in the code.**
+
+- **C1. The component function index space is rebuilt by eight separate
+  folds.** `alias_step/2`, `cfe_step/2`, `lb_step/2`, `lift_types/1`,
+  `index_step/2`, `step/2` and `export_funcs_step/2` in
+  `wasm_component_link` (1,902 lines, 341 clauses), and `compose_step/2` in
+  `wasm_component`, each count the same items in the same order. That is how
+  a function export came to be counted in none of them: the fix touched
+  seven. The instance index space has the same shape and is counted in two
+  of the folds that track instances (`export_funcs_step/2` and
+  `compose_step/2`); `step/2` counts only imported instances in `n_pi`. No
+  page says what the index spaces are: `component-internals.md` does not
+  use the words. Recommended now: a short section there on the rule (every
+  import, alias, definition and export takes the next index of its sort, in
+  section order) and the folds that apply it. Later: one pass that builds
+  every index space once, which the readers then share. Primary problem:
+  code complexity.
+- **C2. `wasm_actor` restates the value shapes `wasm_canon` lowers.**
+  `fits/2` and `plain/1` (about 70 lines) decide what a send accepts. If
+  `wasm_canon` changes a shape, for example to accept a list for
+  `list<u8>`, the send check and the lowering disagree and nothing fails.
+  Two ways to close it: move the check into `wasm_canon` beside the lowering
+  it describes, or add a property case that generates values for each
+  descriptor and asserts that `fits/2` and a successful lowering agree.
+  See Q24. Primary problem: module organisation.
+
+**Release evidence.** The full suite on `08e0b98`, the commit #157 merged:
+1,750 passed, 2 skipped (`WASM_DOCS_STRICT` and `WASM_RUN_SLOW_PROGRAMS` not
+set). All ten CI jobs passed on it; the Tests job was first cancelled at five
+minutes with no failing case and passed when rerun (1,551 passed, the same
+201 skips as `main`). Each new case failed on a planted defect, the
+page-count case once the instance's builder outlives the actor. `wasm_demo`,
+cloned fresh and pinned to `08e0b98`, ran `actor_demo()` as expected and
+passed 13 of 14 in `make test` with no C or WebAssembly toolchain on the
+path. The one failure is `py_test_`, whose first CPython request misses its
+240 s bound without the file NIF; it fails the same way on the demo's `main`
+with Hex 0.10.1, and passes in 66 s with the NIF built.
+
+**Questions for the maintainer.**
+
+- **Q22. The second sentence of the fix entry.** Drop it, or keep it scoped
+  to components that `prepare/1` used to refuse?
+- **Q23. `prepare/1` and an unknown built-in.** Is failing the prepare where
+  the unprepared path might succeed intended? If so, `components.md` should
+  say so; if not, `prepare/1` should take the unreadable graph as the
+  unprepared path does.
+- **Q24. Where the actor's value check lives.** In `wasm_canon`, or in
+  `wasm_actor` with a property case that ties it to the lowering?
+- **Q25. C1 now or later.** The section in `component-internals.md` before
+  the release, and the single index-space pass recorded as open work?
+
+**Decided before this review.** The release is 0.12.0: a new supported API,
+nothing removed or changed. By Q21's rule there is no Upgrading section. The
+demo's `py_test_` timeout without the NIF is a release-specific exception;
+its 240 s bound stays until a run without the NIF measures what CPython
+needs.
+
+**Still open, unchanged.** Every item under "Still open" above, and
+questions Q2, Q4, Q5, Q7, Q9 and Q11 to Q15.
+
+**Suggested order.** P5, P6 and the C1 section together, documentation
+only. P7 and P8 once Q22 and Q23 are answered. C2 and the single
+index-space pass are code changes for a pull request of their own, after
+the release unless you say otherwise. Then the version bump and the release
+section of the changelog.

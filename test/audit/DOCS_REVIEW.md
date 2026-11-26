@@ -1084,3 +1084,36 @@ only. P7 and P8 once Q22 and Q23 are answered. C2 and the single
 index-space pass are code changes for a pull request of their own, after
 the release unless you say otherwise. Then the version bump and the release
 section of the changelog.
+
+**Decided, 2026-11-26.** P5, P6, P7, P8 and the documentation part of C1
+are fixed before the bump, in the pull request that carries this section;
+the release pull request follows it. P5: a link at each of the four entry
+points. P6: the recipe carries the three rules, with the reason a full queue
+takes messages again (a refused send gives its reservation back, and the
+actor frees a slot when it takes a message out).
+
+- Q22: the cleanup and allocator sentence is dropped. The entry announces
+  what a user gets: a component that uses WIT interface types can be
+  prepared before it is instantiated.
+- Q23: `prepare/1` keeps refusing a canonical built-in it does not know,
+  as its source says. `components.md` no longer claims the same errors as
+  `instantiate`: preparing checks the component first and can report
+  `unsupported_canon_builtin`, and instantiation still resolves host
+  imports and can report more. Whether the unprepared path succeeds on such
+  a built-in stays unverified and is not claimed.
+- Q24: admission stays in `wasm_actor`. After the release, a property case
+  with one direction: given a working instance and enough memory, every
+  message `send/2` admits lowers for its type. Refusal of invalid messages
+  is tested apart. The two must not be required to accept the same inputs:
+  admission range-checks a `u8`, where flat lowering masks the integer.
+- Q25: the rule is documented now in `component-internals.md`, with a
+  worked example of an export taking an index and moving the next
+  definition's, the component and core spaces told apart, and the three
+  different instance counts recorded.
+
+**Open after 0.12.0.**
+
+- **O1.** One pass that builds every component and core index space once,
+  shared by the readers of the graph, and the instance space counted the
+  same way by all of them (C1).
+- **O2.** The directional property case for actor admission (Q24).

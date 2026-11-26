@@ -10723,3 +10723,72 @@ reads and 16 writes for 16 elements (`before-fix.log`); a planted block that
 drops its last element made the first fail (`planted-short-block.log`).
 
 **Raw.** `test/audit/raw/list-u32-bulk/`.
+
+## memory.copy by words when it overlaps or is aligned differently (2026-11-26)
+
+**The claim.** A 64 KiB `memory.copy` whose destination overlaps its source
+from above takes about a fiftieth of the time it did when the two are aligned
+alike, and one between two addresses aligned differently about a
+twenty-fifth, in either direction. An aligned forward copy and a warm QuickJS
+run are unchanged.
+
+**Why.** `copy_fwd/4` moved whole words only when both addresses were
+multiples of 8, and `copy_bwd/4`, which an overlap from above takes, moved one
+byte at a time always, each byte a read-modify-write of its word. Step 1: an
+overlap from above with both aligned alike copies its uneven top bytes, then
+whole words from the top down, then its uneven bottom bytes. Step 2: a copy of
+32 bytes or more between addresses aligned differently goes through blocks of
+at most 4 KiB, each read whole (`collect/4`) and then written (`scatter/3`),
+upward when the destination is below the source or clear of it and downward
+when it overlaps from above. Shorter copies stay on the byte path.
+
+**Arm.** `bench/paths/copybench.erl`: one 64 KiB copy in a three-page memory
+holding a pattern, once per round in a fresh process, checked against the same
+copy made on a binary; the lowest time of five rounds per launch and its
+reductions. Warm QuickJS: the harness of the 64 KiB cache entry
+(`tlbbench.erl`), which checks the guest's output and the compiled count on
+every run. Each build from `git archive` in a scratch directory.
+
+**Gates, written before measuring.** Step 1 alone first, against main:
+backward same-alignment time at or below 0.25 and reductions at most twice the
+aligned forward copy's; aligned forward copy and warm QuickJS at or below
+1.03. Then both steps against main: each misaligned direction at or below 0.5
+in time and at or below a quarter of today's reductions; aligned forward and
+warm QuickJS at or below 1.03. The median of the paired ratios per ordering,
+six pairs per ordering, a null set first between 0.95 and 1.05, the 5-minute
+load average below 8 at both ends of every run.
+
+**Step 1** (main f09a310 against 5389a7b, `stage1/`):
+
+| 64 KiB copy | main | step 1 | ratio (F / R) | gate |
+| --- | ---: | ---: | ---: | --- |
+| backward, aligned alike: time | 5.4 ms | 0.117 ms | 0.022 / 0.022 | 0.25 |
+| backward, aligned alike: reductions | 946,074 | 24,951 | 0.026 | twice the forward copy's |
+| aligned forward: time | 118 us | 117 to 120 us | 0.984 / 1.004 | 1.03 |
+| warm QuickJS `_start` | 191 ms | 192 ms | 1.006 / 0.977 | 1.03 |
+
+**Both steps** (main against 3fff0b0, `stage2/`):
+
+| 64 KiB copy | main | both | ratio (F / R) | gate |
+| --- | ---: | ---: | ---: | --- |
+| aligned differently, forward: time | 5.5 ms | 0.21 ms | 0.038 / 0.038 | 0.5 |
+| aligned differently, forward: reductions | 946,099 | 29,640 | 0.031 | 0.25 |
+| aligned differently, overlapping from above: time | 5.4 ms | 0.21 ms | 0.039 / 0.040 | 0.5 |
+| aligned differently, overlapping from above: reductions | 946,089 | 29,607 | 0.031 | 0.25 |
+| aligned forward: time | 116 to 118 us | 116 to 118 us | 1.009 / 1.026 | 1.03 |
+| warm QuickJS `_start` | 192 ms | 192 ms | 0.999 / 1.011 | 1.03 |
+
+Every null passed. One warm QuickJS pair of the second set gave up after six
+attempts on load and was run again under the same rule (`rerun-f9.sh`).
+
+**Tests.** `every_copy_alignment_agrees_with_a_binary` in
+`wasm_paged_memory_SUITE`: every source and destination offset modulo 8, an
+overlap from above, one from below and none, at 11 lengths around a word, a
+4 KiB block and a 64 KiB chunk, on an ordinary and an image-backed memory,
+each compared with the same copy on a binary. It passed on main, as it must. A
+planted bottom-up word run and planted upward blocks on an overlap from above
+each make it fail. Its first version filled memory with `image_bin/1`, which
+is zeros or a 256-byte period over most of the range, and passed with the
+planted block order; it now uses bytes that do not repeat.
+
+**Raw.** `test/audit/raw/copy-words/`.

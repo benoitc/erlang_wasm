@@ -419,6 +419,25 @@ ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
 - `count N` counts `wasm:read_memory/3` and `wasm:write_memory/3` calls in one
   round trip, the eight-byte read of the result's pointer and length apart.
 
+## What one memory.copy costs
+
+`copybench` times one `wasm_memory:copy/4` of a given shape and counts its
+reductions, checking the result against the same copy made on a binary. Use
+it for a change to how memory is copied; its result is in `PERF.md`,
+"memory.copy by words when it overlaps or is aligned differently".
+
+```sh
+rebar3 compile
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/copybench.erl
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -run copybench main 8 0 65536 5
+```
+
+The arguments are the destination, the source, the length and the rounds.
+`8 0 65536` overlaps from above with the two aligned alike, `65537 0 65536`
+is aligned differently and clear of the source, `9 0 65536` is both, and
+`65536 0 65536` is the aligned forward copy the others are compared with.
+
 ## Short notes
 
 - The box matters more than most of these differences. Taken here at load

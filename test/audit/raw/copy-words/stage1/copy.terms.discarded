@@ -1,0 +1,2 @@
+#{side => base, tag => "8:0:F:11:null:first", reductions => 946074,len => 65536,copy_us => 5479,dst => 8,load_end => 8.12,  load_start => 7.97,src => 0}.
+#{side => base, tag => "8:0:F:11:null:second", reductions => 946074,len => 65536,copy_us => 5384,dst => 8,load_end => 7.96,  load_start => 7.96,src => 0}.

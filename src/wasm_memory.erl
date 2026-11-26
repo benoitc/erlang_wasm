@@ -910,8 +910,22 @@ copy_at(_M, _Dst, _Src, 0) -> ok;
 %% high-to-low copy down the byte-at-a-time path even when the ranges were
 %% disjoint, which measured 0.01 GB/s against 0.4 GB/s for the word path: a
 %% 40x penalty on the common case of copying between two separate buffers.
+%% Aligned differently, nothing ever lines a word of one up with a word of
+%% the other, and the byte path was all that was left: a 64 KiB copy cost 37
+%% times the reductions of an aligned one. Such a copy goes through blocks
+%% instead, each read whole before it is written. Under 32 bytes the bytes
+%% cost no more.
+copy_at(M, Dst, Src, Len) when (Dst - Src) band 7 =/= 0, Len >= 32 ->
+    case Dst =< Src orelse Dst >= Src + Len of
+        true -> copy_blocks_up(M, Dst, Src, Len);
+        false -> copy_blocks_down(M, Dst, Src, Len)
+    end;
 copy_at(M, Dst, Src, Len) when Dst =< Src; Dst >= Src + Len ->
     copy_fwd(M, Dst, Src, Len);
+%% Overlapping with the destination above: from the top down. When the two
+%% are aligned alike, the middle goes a word at a time.
+copy_at(M, Dst, Src, Len) when (Dst - Src) band 7 =:= 0 ->
+    copy_down(M, Dst + Len, Src + Len, Len);
 copy_at(M, Dst, Src, Len) ->
     copy_bwd(M, Dst + Len - 1, Src + Len - 1, Len).
 
@@ -1015,6 +1029,64 @@ run_words(#mem{shift = Shift, img_bytes = IB}, Len, Addrs) ->
                       false ->
                           PerChunk - ((A band ((1 bsl Shift) - 1)) bsr 3)
                   end || A <- Addrs]]).
+
+%% Blocks of at most 4 KiB, each read whole (`collect/4') and then written
+%% (`scatter/3'), both of which move whole words wherever their own address
+%% is aligned. Going up is safe when the destination is below the source or
+%% clear of it, and going down when it is above and overlapping: either way a
+%% block's write can only land on source bytes already read.
+-define(COPY_BLOCK, 4096).
+
+copy_blocks_up(_M, _D, _S, 0) -> ok;
+copy_blocks_up(M, D, S, Len) ->
+    B = min(?COPY_BLOCK, Len),
+    ok = scatter(M, D, collect(M, S, B, <<>>)),
+    copy_blocks_up(M, D + B, S + B, Len - B).
+
+copy_blocks_down(_M, _D, _S, 0) -> ok;
+copy_blocks_down(M, D, S, Len) ->
+    B = min(?COPY_BLOCK, Len),
+    ok = scatter(M, D + Len - B, collect(M, S + Len - B, B, <<>>)),
+    copy_blocks_down(M, D, S, Len - B).
+
+%% A copy from the top down whose source and destination are aligned alike,
+%% given the end of each, one past its last byte: the bytes above the last
+%% word boundary one at a time, then whole words, descending, then the bytes
+%% below the first. Descending is what makes it safe when the destination
+%% overlaps the source from above, as ascending is for `copy_fwd/4'.
+copy_down(_M, _Dt, _St, 0) -> ok;
+copy_down(M, Dt, St, Len) when Len >= 8, Dt band 7 =:= 0 ->
+    N = run_words_down(M, Len, [Dt, St]),
+    {DC, DI} = wword_at(M, Dt - 8),
+    ok = copy_src_down(DC, DI, src_at(M, St - 8), N),
+    copy_down(M, Dt - N * 8, St - N * 8, Len - N * 8);
+copy_down(M, Dt, St, Len) ->
+    write(M, Dt - 1, 1, read(M, St - 1, 1)),
+    copy_down(M, Dt - 1, St - 1, Len - 1).
+
+%% How many aligned words, ending at each of `Tops' (exclusive), can be moved
+%% before any of them leaves its chunk or, in the image region, its page,
+%% counting down; no more than `Len' allows.
+run_words_down(#mem{shift = Shift, img_bytes = IB}, Len, Tops) ->
+    lists:min([Len bsr 3
+               | [case T - 8 of
+                      A when A < IB ->
+                          ((A band (?SLOT_BYTES - 1)) bsr 3) + 1;
+                      A ->
+                          ((A band ((1 bsl Shift) - 1)) bsr 3) + 1
+                  end || T <- Tops]]).
+
+%% `N' words ending at the destination's index `DI', from the source run that
+%% ends at the word `src_at/2' found.
+copy_src_down(DC, DI, {at, SC, SI}, N) -> copy_run_down(DC, DI, SC, SI, N);
+copy_src_down(DC, DI, {bin, Bin, Off}, N) ->
+    scatter_run(DC, DI - N + 1, binary:part(Bin, Off - (N - 1) * 8, N * 8));
+copy_src_down(DC, DI, zero, N) -> fill_run(DC, DI - N + 1, 0, N).
+
+copy_run_down(_DC, _DI, _SC, _SI, 0) -> ok;
+copy_run_down(DC, DI, SC, SI, N) ->
+    atomics:put(DC, DI, atomics:get(SC, SI)),
+    copy_run_down(DC, DI - 1, SC, SI - 1, N - 1).
 
 copy_bwd(_M, _D, _S, 0) -> ok;
 copy_bwd(M, D, S, Len) ->

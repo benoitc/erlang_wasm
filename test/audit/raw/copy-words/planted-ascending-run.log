@@ -1,0 +1,2 @@
+%%% wasm_paged_memory_SUITE ==> every_copy_alignment_agrees_with_a_binary: FAILED
+Failed 1 tests. Passed 0 tests. 

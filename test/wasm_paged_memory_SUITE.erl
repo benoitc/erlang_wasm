@@ -44,7 +44,8 @@ all() ->
      two_blocks_of_one_chunk_read_their_own_words,
      generated_code_agrees_on_a_memory_with_no_image,
      a_shared_memory_agrees_with_the_interpreter,
-     a_module_with_no_memory_compiles].
+     a_module_with_no_memory_compiles,
+     every_copy_alignment_agrees_with_a_binary].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -1304,3 +1305,69 @@ misses(I, Name, F) ->
                         is_integer(C)]),
     _ = [erlang:trace_pattern(MFA, false, [call_count]) || MFA <- MFAs],
     {R, N}.
+
+%%% ------------------------------------------------------------ memory.copy ---
+
+%% Every source offset modulo 8 against every destination offset modulo 8, for
+%% a copy whose destination overlaps the source from above, one that overlaps
+%% it from below and one that does not overlap, at lengths either side of a
+%% word, a 4 KiB block and a 64 KiB chunk, each compared with the same copy
+%% made on a binary. On an ordinary memory grown one page at a time, so the
+%% copies cross 64 KiB chunk boundaries, and on an image-backed one, where
+%% they cross 4 KiB slots and pages no write has reached.
+%%
+%% Both memories hold bytes that do not repeat. The first version of this case
+%% used `image_bin/1', which is zeros or a 256-byte period over most of the
+%% range, and a copy that read some bytes from the wrong place still passed.
+every_copy_alignment_agrees_with_a_binary(_Config) ->
+    ct:timetrap({minutes, 10}),
+    Noise = noise(4 * ?PAGE),
+    Plain = fun() ->
+                    {ok, M0} = wasm_memory:create(#limits{min = 1, max = 8},
+                                                  #{}),
+                    {ok, 1, M1} = wasm_memory:grow(M0, 3),
+                    ok = wasm_memory:store_bytes(M1, 0, Noise),
+                    M1
+            end,
+    Image = fun() -> paged(Noise) end,
+    [copies(Make) || Make <- [Plain, Image]],
+    ok.
+
+copies(Make) ->
+    M = Make(),
+    Model0 = wasm_memory:load_bytes(M, 0, 4 * ?PAGE),
+    Lens = [1, 7, 8, 9, 15, 16, 17, 4095, 4096, 4097, 65537],
+    Cases = [{Src, Dst, Len}
+             || Len <- Lens, SMod <- lists:seq(0, 7), Delta <- lists:seq(0, 7),
+                %% Near the 64 KiB boundary, so long copies cross it.
+                Src <- [?PAGE - 300 + SMod],
+                Dst <- dsts(Src, Delta, Len),
+                Dst >= 0, Dst + Len =< 4 * ?PAGE, Src + Len =< 4 * ?PAGE],
+    _ = lists:foldl(
+          fun({Src, Dst, Len}, Model) ->
+                  ok = wasm_memory:copy(M, Dst, Src, Len),
+                  Want = put_bytes(Model, Dst, binary:part(Model, Src, Len)),
+                  Lo = max(0, min(Dst, Src) - 16),
+                  Hi = min(4 * ?PAGE, max(Dst, Src) + Len + 16),
+                  ?assertEqual({Src, Dst, Len, binary:part(Want, Lo, Hi - Lo)},
+                               {Src, Dst, Len,
+                                wasm_memory:load_bytes(M, Lo, Hi - Lo)}),
+                  Want
+          end, Model0, Cases),
+    ?assertEqual(lists:foldl(fun({S, D, L}, Mo) ->
+                                     put_bytes(Mo, D, binary:part(Mo, S, L))
+                             end, Model0, Cases),
+                 wasm_memory:load_bytes(M, 0, 4 * ?PAGE)),
+    ok = wasm_memory:free(M).
+
+%% Bytes from a multiplicative hash of their position: no period a copy's
+%% offsets could line up with.
+noise(N) ->
+    << <<(((I * 2654435761) bsr 16) band 255)>> || I <- lists:seq(0, N - 1) >>.
+
+%% A destination `Delta' bytes past a multiple of 8 from the source: above it
+%% and overlapping, below it and overlapping, and above it and clear of it.
+dsts(Src, Delta, Len) ->
+    Gap = case Delta of 0 -> 8; _ -> Delta end,
+    [Src + Gap || Gap < Len] ++ [Src - Gap || Gap < Len]
+        ++ [Src + Len + 64 + Delta].

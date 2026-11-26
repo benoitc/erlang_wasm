@@ -843,3 +843,122 @@ exit code.
 **Still open, unchanged.** Every item under "Still open" above, and questions
 Q2, Q4, Q5, Q7, Q9 and Q11 to Q15. The three blocks of `wasi-nn.md` itself
 are still parsed and not run; the example page is where a reader runs them.
+
+## Before the release after 0.11.1
+
+Reviewed on `main` at `6b1e578`, 2026-11-26. Since 0.11.1 ten pull requests
+merged, from an outside performance review of ab4e636: #145 (where a cold
+compile spends its time, no source change), #146 (leaving hand-picked
+functions uncompiled, recorded only), #147 (one validator clause per scalar
+instruction), #148 (one-byte immediates in the decoder loop), #149 (a 64 KiB
+translation-cache entry on memory with no image, ABI 16 to 17), #150
+(a misaligned flat list refused), #151 (`list<u32>` in blocks), #152
+(`memory.copy` by words and blocks), #153 (the NIF build skipped when
+nothing changed) and #154 (WAT type declarations in linear time). Still 95
+modules, about 61,200 lines; 107 suites, two more:
+`wasm_validate_scalar_SUITE` and `wasm_decode_immediates_SUITE`.
+
+**What is already right.** Every change has its `PERF.md` section with the
+gates written before measuring, its raw files, and, where something was
+dropped or rejected, an `ATTEMPTS.md` entry. The two new suites are in the
+decode and validation rows of `map.md`. `compiled-tier-internals.md`
+describes the cache as it now is: `cached/9`, `tag_bindings/3`, a block of
+64 KiB or 4 KiB, one shift passed to the miss functions. `nif.md` has a
+section on when the library is rebuilt. Each new arm has its own section in
+`bench/paths/README.md`. No page describes the old behaviour: the 4 KiB
+pages the docs still name are the page table of a restored memory, which is
+still 4 KiB. Every changelog entry says what changed for a user, and the
+generated-code ABI change says that cached code is compiled again once. No
+module grew out of proportion: the largest change is `wasm_memory`, 1,339 to
+1,411 lines.
+
+**Found, small.**
+
+- **P1. `memory.md` says less than it should about the cache.** Its
+  paragraph says the cache holds "page translations" for restored memory.
+  It now covers a 64 KiB block on a memory with no image, which is most
+  memories and where the speed-up is. One sentence, and the link it already
+  has.
+- **P2. The table of arms at the top of `bench/paths/README.md` has no row
+  for `ssaprofile`, `compilephases`, `listbench` or `copybench`.** Each has a
+  section further down; a reader looking for an arm starts at the table.
+- **P3. `watbench` has a row and no section.** Every other arm added this
+  cycle has one, with the commands; its own module doc has them, and the
+  section should say that `corpus` needs `wasm_wat_SUITE` on the path to
+  include the suite's inputs, which silently changes the input count if it is
+  missing.
+- **P4. The WAT entry in the changelog describes the implementation.**
+  "builds the type list in linear time and looks up inline function
+  signatures by their first matching type" is how, not what it means. The
+  rule is plain words and no implementation: "Parsing a text module with
+  thousands of type declarations no longer slows down with the square of
+  their number; ordinary modules parse as fast as before."
+
+**Found, worth doing before the release.** The measuring protocol learned
+four things this cycle that live only in `PERF.md` sections, where the next
+contributor will not look first.
+
+- **M1. Which load average, and waiting on the one you check.**
+  `measuring.md` says "start below 8, and redo a run that ends above it". It
+  does not say which average. The harnesses record the 5-minute one; a driver
+  that waited on the 1-minute one launched short runs while the 5-minute one
+  was still near 25, and every one of them was discarded. One sentence:
+  name the 5-minute average and say the driver waits on the value it checks.
+- **M2. Time the public call.** `wasm:compile/1` sets a heap floor before it
+  decodes; an arm that called the decoder and validator directly reported a
+  69% validation slowdown that the public call does not have, and an 18 to
+  28% validation gain that is 3 to 4% through it (#147's record carries the
+  correction). The rule: time the call a user makes, and take phase times
+  from inside that same call, never minimums from different rounds added
+  together.
+- **M3. The gate rule every change here used is not written down in the
+  guide.** Six pairs per ordering, a null set first between 0.95 and 1.05,
+  three failed nulls make a result inconclusive, the decision on the median
+  of the paired ratios in each ordering, one-sided limits, and a pair that
+  gives up on load rerun under the same rule before a verdict. It is in
+  `bench/paths/README.md` under `revision_set` and in every `PERF.md`
+  section, not in `measuring.md`, which is the page AGENTS.md calls "the only
+  statement of it".
+- **M4. Check a driver's acceptance test before a long run.** Two driver
+  bugs this cycle threw away hours: a crash check that matched the compile
+  counters' `failed => 0` in every healthy run, and a pattern that lost its
+  escape. Each was caught by feeding the check one healthy, one failed and
+  one hot record. One line in `measuring.md`.
+
+**Found, a record that lives outside the repository.** The plan behind these
+pull requests deferred four pieces of work, each with what would reopen it.
+Only one is in the repository (`ATTEMPTS.md`, "Leaving QuickJS's parser out
+of the compiled set"):
+
+- **D1.** Choosing the compiled set by exclusive interpreted work, with the
+  gates already written: frozen selector, cold compile at most 0.90 on a
+  declared target, warm and profiled-interpreted execution at most 1.03,
+  first request to first compiled response at most 1.03.
+- **D2.** Placing shards by call edges and caching a whole shard set (reopen
+  with a profile showing cut edges take more than 5% of warm time).
+- **D3.** Looking up a cached artifact before `unit/2` prepares the compile
+  (reopen if that preparation is more than 10% of a restart's time to the
+  first compiled call).
+- **D4.** Compiling functions that become hot after the first compile (needs
+  a two-phase guest).
+
+They belong in `ATTEMPTS.md`, "Open, and each a decision rather than a task".
+
+**Questions for the maintainer.**
+
+- **Q20. Which version.** Nothing in the supported API changed. Cached
+  compiled code is rebuilt once (ABI 17), and a guest that passes a
+  misaligned list as flat values now traps, as the Canonical ABI requires,
+  where it was read. By the changelog's rule so far, performance and fixes
+  are a patch: 0.11.2. Confirm, or 0.12.0 because of the refusal.
+- **Q21. An Upgrading note for the refusal?** Upgrading has one section per
+  breaking release. If a refusal of a guest that broke the ABI counts as
+  breaking, it needs a section; if not, the changelog entry is enough.
+
+**Still open, unchanged.** Every item under "Still open" above, and
+questions Q2, Q4, Q5, Q7, Q9 and Q11 to Q15.
+
+**Suggested order.** P1 to P4 and M1 to M4 together: they are documentation
+only, in `memory.md`, `measuring.md`, `bench/paths/README.md` and the
+changelog. D1 to D4 in the same pull request, in `ATTEMPTS.md`. Then the
+release, once Q20 and Q21 are answered.

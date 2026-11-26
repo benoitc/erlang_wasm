@@ -4,6 +4,11 @@
 
 ### Changes
 
+- **Faster: `memory.copy` that overlaps or is not aligned.** A copy whose
+  destination overlaps its source from above, or whose two addresses are
+  aligned differently, went one byte at a time. It now moves whole words or
+  blocks, and a 64 KiB copy of either kind took a twenty-fifth to a fiftieth
+  of the time in the benchmark. Other copies are unchanged.
 - **Faster: passing a list of 32-bit integers to and from a component.** A
   `list<u32>` now crosses the guest's memory in large blocks instead of one
   element at a time. In the benchmark, a round trip of 4,096 values took about

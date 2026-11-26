@@ -1,0 +1,12 @@
+65536:0 null F n=6 time 0.996 reductions 1.000 base 116 us 24951 reds new 116 us 24951 reds
+65536:0 null R n=6 time 1.018 reductions 1.000 base 116 us 24951 reds new 117 us 24951 reds
+65536:0 ab F n=6 time 1.009 reductions 1.000 base 118 us 24951 reds new 118 us 24951 reds
+65536:0 ab R n=6 time 1.026 reductions 1.000 base 116 us 24951 reds new 116 us 24951 reds
+65537:0 null F n=6 time 1.027 reductions 1.000 base 5453 us 946099 reds new 5608 us 946099 reds
+65537:0 null R n=6 time 1.016 reductions 1.000 base 5476 us 946099 reds new 5562 us 946099 reds
+65537:0 ab F n=6 time 0.038 reductions 0.031 base 5473 us 946099 reds new 211 us 29640 reds
+65537:0 ab R n=6 time 0.038 reductions 0.031 base 5499 us 946099 reds new 210 us 29640 reds
+9:0 null F n=6 time 1.000 reductions 1.000 base 5383 us 946089 reds new 5430 us 946089 reds
+9:0 null R n=6 time 1.008 reductions 1.000 base 5345 us 946089 reds new 5383 us 946089 reds
+9:0 ab F n=6 time 0.039 reductions 0.031 base 5411 us 946089 reds new 209 us 29607 reds
+9:0 ab R n=6 time 0.040 reductions 0.031 base 5402 us 946089 reds new 214 us 29607 reds

@@ -675,10 +675,13 @@ compose_step({comp_func_alias, InstIdx, Name}, #{funcs := Funcs, n_func := N} = 
     S#{funcs => Funcs#{N => {InstIdx, Name}}, n_func => N + 1};
 %% A func export (component sort 1) names a component func; map the export name to the
 %% instance export that func resolves to.
-compose_step({comp_export, Name, 1, Idx}, #{funcs := Funcs, dispatch := D} = S) ->
+compose_step({comp_export, Name, 1, Idx},
+             #{funcs := Funcs, n_func := N, dispatch := D} = S) ->
+    %% The export is also a new func index, for the same function.
     case maps:find(Idx, Funcs) of
-        {ok, Target} -> S#{dispatch => D#{Name => Target}};
-        error        -> S
+        {ok, Target} -> S#{dispatch => D#{Name => Target},
+                           funcs => Funcs#{N => Target}, n_func => N + 1};
+        error        -> S#{n_func => N + 1}
     end;
 %% An instance export (sort 5) re-exports a nested component's interface: its
 %% functions, named `<interface>#<func>', dispatch to that component's own.

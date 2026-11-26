@@ -37,6 +37,7 @@ all() ->
      a_registry_restart_keeps_watching,
      a_message_that_does_not_fit_raises,
      a_bad_start_is_an_error,
+     a_prepared_component_starts_actors,
      a_restarted_actor_takes_messages_once_its_name_resolves,
      a_taken_name_is_refused].
 
@@ -250,6 +251,18 @@ a_bad_start_is_an_error(Config) ->
     %% Without `note' the fixture does not instantiate.
     ?assertMatch({error, _},
                  wasm_actor:start_link(C, #{message => ?MSG})).
+
+%% The fixture imports its message types as `(type (eq ...))', as every
+%% world that `use's an interface's types does. `prepare/1' used to refuse
+%% that import, so a supervisor could not prepare such a guest once.
+a_prepared_component_starts_actors(Config) ->
+    {ok, Prepared} = wasm_component:prepare(?config(component, Config)),
+    A = actor_from(Prepared, a, #{}),
+    B = actor_from(Prepared, b, #{}),
+    ok = wasm_actor:send(A, add(2)),
+    ok = wasm_actor:send(B, add(7)),
+    ?assertEqual([2], [N || {_, N} <- posted(a, 1)]),
+    ?assertEqual([7], [N || {_, N} <- posted(b, 1)]).
 
 %% A sender that looks the name up the moment the supervisor has restarted
 %% the actor must find a queue behind it. The name used to be registered

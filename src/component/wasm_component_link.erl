@@ -45,6 +45,9 @@ an atom.
 
 -include("wasm_component.hrl").
 
+%% The component sort byte of a function, in an export's sortidx.
+-define(SORT_FUNC, 1).
+
 -export([fold_sections/3, skip_export_desc/1, load_core/2]).
 -export([parse/1, link/4, core_imports/1, export_map/1, export_encodings/1,
          export_bindings/1, exports_resolve_on_entry/3, validate_lifts/2,
@@ -443,6 +446,8 @@ alias_step({canon_lower, _, _, _, _}, {CF, AI, PF, C}) -> {CF, AI, PF, C + 1};
 alias_step({canon_async, _, _}, {CF, AI, PF, C}) -> {CF, AI, PF, C + 1};
 alias_step({canon_resource, _, _}, {CF, AI, PF, C}) -> {CF, AI, PF, C + 1};
 alias_step({core_alias, func, InstIdx, _Name}, {CF, AI, PF, C}) -> {CF, AI#{C => InstIdx}, PF, C + 1};
+alias_step({comp_export, _, ?SORT_FUNC, Idx}, {CF, AI, PF, C}) ->
+    {exported(Idx, PF, CF), AI, PF + 1, C};
 alias_step(_Other, Acc) -> Acc.
 
 %% Core-instance index -> the module it instantiates, in `step`'s core-instance
@@ -495,6 +500,7 @@ comp_func_encodings(Graph) ->
 cfe_step({comp_import_func, _}, {PF, E})        -> {PF + 1, E};
 cfe_step({comp_func_alias, _, _}, {PF, E})      -> {PF + 1, E};
 cfe_step({canon_lift, _CFI, Enc, _Async, _Rl, _P, _Ft}, {PF, E}) -> {PF + 1, E#{PF => Enc}};
+cfe_step({comp_export, _, ?SORT_FUNC, Idx}, {PF, E}) -> {PF + 1, exported(Idx, PF, E)};
 cfe_step(_Other, Acc)                           -> Acc.
 
 -doc """
@@ -537,6 +543,7 @@ lift_bindings(Graph) ->
 lb_step({comp_import_func, _}, {PF, M})   -> {PF + 1, M};
 lb_step({comp_func_alias, _, _}, {PF, M}) -> {PF + 1, M};
 lb_step({canon_lift, _CFI, _Enc, _Async, Rl, P, _Ft}, {PF, M}) -> {PF + 1, M#{PF => {Rl, P}}};
+lb_step({comp_export, _, ?SORT_FUNC, Idx}, {PF, M}) -> {PF + 1, exported(Idx, PF, M)};
 lb_step(_Other, Acc)                      -> Acc.
 
 binding_of({RlIdx, PIdx}, CoreNames) ->
@@ -618,10 +625,12 @@ lift_types(Graph) ->
                    fun({comp_import_func, _}, {PF, A})   -> {PF + 1, A};
                       ({comp_func_alias, _, _}, {PF, A}) -> {PF + 1, A};
                       ({canon_lift, _, _, _, _, _, Ft}, {PF, A}) ->
-                           {PF + 1, [{PF, Ft} | A]};
+                           {PF + 1, A#{PF => Ft}};
+                      ({comp_export, _, ?SORT_FUNC, Idx}, {PF, A}) ->
+                           {PF + 1, exported(Idx, PF, A)};
                       (_Other, Acc0) -> Acc0
-                   end, {0, []}, Graph),
-    Acc.
+                   end, {0, #{}}, Graph),
+    maps:to_list(Acc).
 
 %% The resource built-ins the entry core imports: the entry module's instantiate
 %% args name a core instance per import namespace, whose exports name core
@@ -718,6 +727,8 @@ index_step({canon_resource, _, _}, {CompF, CoreN, PF, CF}) ->
     {CompF, CoreN, PF, CF + 1};
 index_step({core_alias, func, _InstIdx, Name}, {CompF, CoreN, PF, CF}) ->
     {CompF, CoreN#{CF => Name}, PF, CF + 1};
+index_step({comp_export, _, ?SORT_FUNC, Idx}, {CompF, CoreN, PF, CF}) ->
+    {exported(Idx, PF, CompF), CoreN, PF + 1, CF};
 index_step(_Other, Acc) ->
     Acc.
 
@@ -954,6 +965,11 @@ step({comp_inst_exports, _Exports}, S) ->
     {ok, S};
 step({comp_instance_alias, _InstIdx, _Name}, S) ->
     {ok, S};
+step({comp_export, _Name, ?SORT_FUNC, Idx}, S) ->
+    %% Exporting a function gives it a new index as well, which later items may
+    %% name: the same function again.
+    Funcs = maps:get(comp_funcs, S),
+    {ok, bump(S, n_pf, comp_funcs, maps:get(Idx, Funcs, {export, Idx}))};
 step({comp_export, _Name, _Sort, _Idx}, S) ->
     %% Export entries name what the component offers; they do not wire anything, so
     %% linking skips them (`export_map/1` reads them instead).
@@ -1093,6 +1109,14 @@ alias_into(S, Counter, Space, InstIdx, Name) ->
     end.
 
 %% Append Val at the next index of Space, advancing its counter.
+%% A function export is a new index for the function it exports: in every
+%% index-keyed map, the new index gets what the exported one has.
+exported(Idx, New, Map) ->
+    case maps:find(Idx, Map) of
+        {ok, V} -> Map#{New => V};
+        error -> Map
+    end.
+
 bump(S, Counter, Space, Val) ->
     N = maps:get(Counter, S),
     S#{Counter => N + 1, Space => maps:put(N, Val, maps:get(Space, S))}.
@@ -1781,6 +1805,13 @@ externdesc(Name, <<16#05, R0/binary>>) ->
 externdesc(Name, <<16#01, R0/binary>>) ->
     {_TypeIdx, R1} = wasm_leb128:u32(R0),
     {{comp_import_func, Name}, R1};
+%% A type imported as equal to one the component already has: what a world
+%% that `use's types from an interface gets from `wasm-tools component new'.
+%% The host supplies nothing for it and it takes no slot in the index spaces
+%% this linker counts, so, like a type alias, it is no item.
+externdesc(_Name, <<16#03, 16#00, R0/binary>>) ->
+    {_TypeIdx, R1} = wasm_leb128:u32(R0),
+    {skip, R1};
 externdesc(_Name, <<Tag, _/binary>>) ->
     %% Value, type, component or core-module import extern: not something this linker
     %% resolves, so name it rather than running off the strict matches.

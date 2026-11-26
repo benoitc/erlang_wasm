@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.11.2
+
+A performance release: compiling a binary module, compiled memory access,
+`list<u32>` across a component, overlapping or misaligned `memory.copy` and
+WAT type declarations are faster. One fix: a misaligned list from a component
+is refused whichever way it is passed.
 
 ### Changes
 

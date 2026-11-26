@@ -22,6 +22,9 @@ wasm_sup                one_for_one, 5 in 300
   |     +-- wasm_module_cache          the images script workers share
   |     +-- wasm_worker_images
   |
+  +-- wasm_actor_sup    one_for_one    forgets an actor that died
+  |     +-- wasm_actor_registry
+  |
   +-- wasm_worker_sup   rest_for_one   request cleanup for script workers
         +-- wasm_cleanup_steward_sup   one steward per in-flight request
         +-- wasm_cleanup_manager       bounds how many requests hold cleanup
@@ -81,6 +84,7 @@ init([]) ->
                                                            wasm_jit_sup]),
          wasm_subsup:child(wasm_cache_sup,  one_for_one,  [wasm_module_cache,
                                                            wasm_worker_images]),
+         wasm_subsup:child(wasm_actor_sup,  one_for_one,  [wasm_actor_registry]),
          #{id => wasm_worker_sup,
            start => {wasm_worker_sup, start_link, []},
            restart => permanent,

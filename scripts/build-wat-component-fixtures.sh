@@ -33,6 +33,16 @@ wasm-tools parse "$dir/latelift/latelift.wat" -o "$dir/latelift.component.wasm"
 wasm-tools parse "$dir/asyncforward/asyncforward.wat" -o "$dir/asyncforward.component.wasm"
 "$here/scripts/forward-opcodes.escript" "$dir/asyncforward.component.wasm"
 
+# The actor fixture: a core module in text and the world it implements, made
+# a component the way a guest toolchain does, by embedding the world and
+# wrapping the core.
+tmp="$(mktemp -d)"
+wasm-tools component embed "$dir/actor/actor.wit" --world fixture \
+  "$dir/actor/actor.wat" -o "$tmp/actor.core.wasm"
+wasm-tools component new "$tmp/actor.core.wasm" -o "$dir/actor.component.wasm"
+wasm-tools validate --features all "$dir/actor.component.wasm"
+rm -rf "$tmp"
+
 tag="$(sed -n 's/^tag="\(.*\)"$/\1/p' "$here/scripts/build-wasmtime-p2.sh")"
 wasmtime="${WASMTIME_P2_SRC:-$here/.wasmtime-src}/wasmtime"
 test "$(git -C "$wasmtime" describe --tags)" = "$tag"

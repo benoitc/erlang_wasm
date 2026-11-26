@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the ninety-five modules are, which
+This page is the map of the runtime: what the ninety-seven modules are, which
 ones depend on which, and where to start reading. Read it before you change
 anything. Each module documents itself, but no module describes how they fit
 together.
@@ -54,6 +54,7 @@ wasm_sup                one_for_one
   +-- wasm_code_sup     generated code, the compilers      wasm_code_slots, wasm_jit_sup
   +-- wasm_cache_sup    modules by content hash, and       wasm_module_cache,
                         the images workers share           wasm_worker_images
+  +-- wasm_actor_sup    forgets an actor that died         wasm_actor_registry
   +-- wasm_worker_sup   request cleanup for workers        wasm_cleanup_steward_sup,
                                                            wasm_cleanup_manager,
                                                            wasm_worker_reaper
@@ -88,7 +89,7 @@ L11 wasi_http_listener
 L10 wasm_javascript  wasm_javascript_command  wasm_python
     wasm_python_command  wasm_lua  wasm_adapter_conformance  wasi_preview3
     wasi_p3_filesystem  wasi_p3_sockets  wasi_p3_http
-L9  wasi  wasm_script_worker  wasi_preview2  wasi_p2_filesystem  wasi_p2_sockets
+L9  wasi  wasm_script_worker  wasm_actor  wasi_preview2  wasi_p2_filesystem  wasi_p2_sockets
     wasi_http  wasi_http_transport  wasi_http_h1  wasi_http_h2  wasi_nn
 L8  wasi_preview1  wasm_snapshot_store  wasm_instance_worker
     wasm_component  wasm_component_link  wasm_canon  wasm_async  wasm_component_types
@@ -109,7 +110,7 @@ L0  wasm_error  wasm_num  wasm_limits  wasm_code_slots  wasm_file_cache
     wasm_snapshot_file  wasm_subsup  wasm_validate_simd  wasm_validate_atomic
     wasi_path  wasi_net  wasi_sock2  wasi_file_nif  wasm_worker_error
     wasm_worker_adapter  wasm_recipe  wasm_worker_fs  wasm_resources
-    wasm_lifetime
+    wasm_lifetime  wasm_actor_registry
 ```
 
 `test/wasm_architecture_SUITE.erl` asserts that this block names every module
@@ -185,7 +186,7 @@ copies and what a restore writes back.
 Cycles are allowed here. What is not allowed is a fourth cycle that appears
 without anyone noticing. You cannot see a cycle by reading one module.
 Everything else about `wasm_memory` you learn inside `wasm_memory`, but a
-cycle you only find by reading all ninety-five.
+cycle you only find by reading all ninety-seven.
 
 It is easy to add one by mistake. One call from `wasm_error`, at level 0, up
 into `wasm` would merge fourteen modules into one cycle, and only the test

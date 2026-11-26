@@ -518,7 +518,9 @@ implicit_types_take_the_indices_the_format_gives(_Config) ->
 
 %% Each explicit type used to be appended to a list and counted, so a module of
 %% n types cost n squared. Reductions per type stay within 1.5 times between
-%% 2,000 and 8,000 types, in a process of their own.
+%% 1,000 and 16,000 types, in a process of their own. At 2,000 and 8,000 the
+%% quadratic parser measured 1.62 once and 1.50 another time, too close to the
+%% limit to fail reliably; at these sizes it is about 2.5.
 thousands_of_types_parse_in_linear_time(_Config) ->
     Per = fun(N) ->
                   Src = iolist_to_binary(
@@ -537,8 +539,8 @@ thousands_of_types_parse_in_linear_time(_Config) ->
                         end),
                   receive {reds, R} -> R / N end
           end,
-    Small = Per(2000),
-    Large = Per(8000),
+    Small = Per(1000),
+    Large = Per(16000),
     ?assert(Large =< 1.5 * Small, {per_type, Small, Large}).
 
 reds() -> element(2, process_info(self(), reductions)).

@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
+
+Adds actors: a component run as a supervised OTP process that keeps its state
+and handles typed messages one at a time. One fix: a component that uses types
+from a WIT interface can now be prepared before it is instantiated.
 
 ### Changes
 

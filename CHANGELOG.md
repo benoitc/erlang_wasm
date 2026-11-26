@@ -17,10 +17,10 @@
   element at a time. In the benchmark, a round trip of 4,096 values took about
   a twelfth of the time and one of 16 values about half. Other list types are
   unchanged.
-- **Faster WAT parsing for modules with many types.** The text parser now
-  builds the type list in linear time and looks up inline function signatures
-  by their first matching type. Increasing a module from 2,000 to 8,000 type
-  declarations took about the same work per declaration.
+- **Faster: parsing a text module with many type declarations.** Parsing
+  slowed down with the square of the number of `(type ...)` declarations, so a
+  module of thousands of them took far longer than its size suggests. It now
+  grows in proportion, and ordinary modules parse as fast as before.
 - **Fixed: a misaligned list from a component was accepted.** A list a
   component passed as a pointer and a length was read even when the pointer
   was not aligned to its elements, though the same list reached through memory

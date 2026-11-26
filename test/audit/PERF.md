@@ -10680,6 +10680,65 @@ of its functions makes one access per call, so it never exercises a hit.
 `restored/`, `alloc/`, the harness `tlbbench.erl`, the gate script
 `cgate.erl`, the planted-defect logs and `BUILDS`.
 
+## WAT parsing with many type declarations (2026-11-26)
+
+Increasing the number of declared types from 2,000 to 8,000 took 0.949 times
+as many reductions per type. The parser collects the types newest first and
+indexes each plain function signature by its first declaration. The revision
+that first did this (`a6722c9`) passed the scaling gate but exceeded the
+corpus time limit in the reverse ordering.
+
+The revised parser records each signature while building its type. It skips
+that work for modules without explicit type declarations. Anonymous
+declarations only advance their index, and functions without named parameters
+or locals reuse the module's name context. Recursive group members share the
+tail of the group list that preceded them.
+
+**Corpus timing.** Apple M4 Pro, OTP 29.1.2, original baseline `f09a310`.
+Both sides used the same compiled `watbench main corpus 5`, the original
+2,144 specification inputs and 96 suite inputs. Each launch used a fresh VM
+and kept the lowest of five rounds. Twelve rounds alternated the ordering of
+paired launches, with a baseline/baseline control in every round. Each table
+entry is the median of six paired ratios. The real ratios must be at most
+1.03, the nulls between 0.95 and 1.05, and neither side bimodal.
+
+| corpus set | baseline first | candidate first |
+| --- | ---: | ---: |
+| original G | 1.016 | 1.058 |
+| revised G | 0.984 | 0.977 |
+| revised run's null | 0.989 | 0.973 |
+
+All 24 pairs counted on their first attempt. The five-minute load at both
+ends of every launch was 5.61 to 6.48. Neither side was bimodal. The timed
+loop discards each parse result as it goes. The separate digest arm retains
+the results and hashes their external term encoding in input order. All
+2,240 parsed on both builds and produced the same SHA-256.
+
+**Scaling.** `watbench main scale N` in a fresh VM measured 319.61 reductions
+per type at 2,000 declarations and 303.42 at 8,000. The gate is at most 1.5
+times the smaller module's reductions per type. The baseline measured 473.27
+and 710.08 respectively.
+
+**Allocation.** One untimed pass warmed the parser. The next pass measured
+heap words with the calibrated per-process collection trace in `allocwords`.
+A separate pass traced only `wasm_wat:module/1` with `tprof` call memory.
+Both diagnostics found about 1.4% fewer words than the original G over the
+same 2,240 inputs. Against the baseline the methods give different answers.
+
+| corpus heap words | baseline | original G | revised G |
+| --- | ---: | ---: | ---: |
+| GC trace | 21,946,349 | 22,096,293 | 21,777,377 |
+| entry call memory | 22,662,696 | 23,251,425 | 22,927,951 |
+
+**Reproduce.** `bench/paths/watbench.erl` gives the commands for the corpus,
+digest and scaling arms. For the allocation diagnostic, compile a separate
+copy of `watbench` with `+export_all` to expose its corpus, and compile
+`bench/paths/allocwords.erl` and `watalloc.erl` beside it. Use the same test
+suite code path as the corpus arm and invoke `-s watalloc main`.
+
+**Raw.** `test/audit/raw/wat-types/` contains every timing pair, the two
+digests and scaling runs, the allocation diagnostic and its output.
+
 ## A list of u32 across guest memory a block at a time (2026-11-24)
 
 **The claim.** Passing a `list<u32>` to a component and back takes about a

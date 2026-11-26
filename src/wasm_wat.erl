@@ -166,20 +166,25 @@ names_data_instr(_Instr) -> false.
 %% The declared types, built once every name is known, and the first plain
 %% type for each signature. `types' and `groups' stay newest first through the
 %% resolve pass, which can add to both.
+declared_types(#ctx{type_forms = []} = Ctx) ->
+    Ctx;
 declared_types(Ctx) ->
     Forms = lists:reverse(Ctx#ctx.type_forms),
-    Ctx1 = Ctx#ctx{type_forms = Forms},
-    Types = [subtype(Form, Ctx1) || Form <- Forms],
-    Plain = Ctx#ctx.plain_types,
-    Sigs = lists:foldl(fun({I, #subtype{body = Body}}, Acc) ->
-                               case maps:is_key(I, Plain)
-                                   andalso not maps:is_key(Body, Acc) of
-                                   true -> Acc#{Body => I};
-                                   false -> Acc
-                               end
-                       end, #{}, lists:enumerate(0, Types)),
-    Ctx1#ctx{types = lists:reverse(Types), sigs = Sigs,
-             field_names = field_names(Forms)}.
+    {Types, Sigs} = declared_types(Forms, Ctx, 0, [], #{}),
+    Ctx#ctx{types = Types, sigs = Sigs, field_names = field_names(Forms),
+            type_forms = [], plain_types = #{}}.
+
+declared_types([], _Ctx, _I, Types, Sigs) ->
+    {Types, Sigs};
+declared_types([Form | Rest], Ctx, I, Types, Sigs) ->
+    #subtype{body = Body} = Type = subtype(Form, Ctx),
+    Next = case is_record(Body, functype) andalso
+                is_map_key(I, Ctx#ctx.plain_types) andalso
+                not is_map_key(Body, Sigs) of
+               true -> Sigs#{Body => I};
+               false -> Sigs
+           end,
+    declared_types(Rest, Ctx, I + 1, [Type | Types], Next).
 
 %% Every type there will be is known once the resolve pass is done.
 resolved(#ctx{types = Rev, groups = Groups} = Ctx) ->
@@ -281,9 +286,8 @@ collect_kind(<<"rec">>, Args, Ctx) ->
     Ctx1 = lists:foldl(fun(F, C) -> collect_field(F, C) end,
                        Ctx#ctx{in_rec = true}, Args),
     Count = Ctx1#ctx.ntypes - First,
-    %% Each member added a group of its own, newest first; they are one.
-    Groups = lists:nthtail(Count, Ctx1#ctx.groups),
-    Ctx1#ctx{groups = [{First, Count} | Groups], in_rec = Ctx#ctx.in_rec};
+    Ctx1#ctx{groups = [{First, Count} | Ctx#ctx.groups],
+             in_rec = Ctx#ctx.in_rec};
 collect_kind(<<"import">>, Args, Ctx) ->
     [_Mod, _Name, Desc] = Args,
     collect_import(Desc, ordered(Ctx));
@@ -360,19 +364,17 @@ declare_maybe(Space, Args, Ctx) ->
 ordered(#ctx{defined = true}) -> fail(import_after_definition, <<"import">>);
 ordered(Ctx) -> Ctx.
 
+declare(Space, undefined, #ctx{counts = Counts} = Ctx) ->
+    Ctx#ctx{counts = Counts#{Space => maps:get(Space, Counts, 0) + 1}};
 declare(Space, Name, #ctx{names = Names, counts = Counts} = Ctx) ->
     Index = maps:get(Space, Counts, 0),
     Named = maps:get(Space, Names, #{}),
-    Named1 = case Name of
-                 undefined -> Named;
-                 _ ->
-                     case maps:is_key(Name, Named) of
-                         true -> fail(duplicate_identifier, Name);
-                         false -> Named#{Name => Index}
-                     end
-             end,
-    Ctx#ctx{names = Names#{Space => Named1},
-            counts = Counts#{Space => Index + 1}}.
+    case is_map_key(Name, Named) of
+        true -> fail(duplicate_identifier, Name);
+        false ->
+            Ctx#ctx{names = Names#{Space => Named#{Name => Index}},
+                    counts = Counts#{Space => Index + 1}}
+    end.
 
 optional_id([{id, _, Name} | Rest]) -> {Name, Rest};
 optional_id(Args) -> {undefined, Args}.
@@ -486,8 +488,7 @@ register_type(FT, #ctx{ntypes = First} = Ctx) ->
     Ctx#ctx{types = [#subtype{body = FT} | Ctx#ctx.types],
             groups = [{First, 1} | Ctx#ctx.groups],
             ntypes = First + 1,
-            sigs = (Ctx#ctx.sigs)#{FT => First},
-            plain_types = (Ctx#ctx.plain_types)#{First => true}}.
+            sigs = (Ctx#ctx.sigs)#{FT => First}}.
 
 signature(Params, Results) ->
     #functype{params = [T || {_Name, T} <- Params], results = Results}.
@@ -1006,15 +1007,18 @@ named_entries(Forms, Ctx) ->
 
 %% Parameters and locals share one index space, in that order.
 with_locals(Entries, Ctx) ->
-    Named = element(2, lists:foldl(
-                          fun({undefined, _}, {I, Acc}) -> {I + 1, Acc};
-                             ({Name, _}, {I, Acc}) ->
-                                  case maps:is_key(Name, Acc) of
-                                      true -> fail(duplicate_identifier, Name);
-                                      false -> {I + 1, Acc#{Name => I}}
-                                  end
-                          end, {0, #{}}, Entries)),
-    Ctx#ctx{names = (Ctx#ctx.names)#{local => Named}, labels = []}.
+    case local_names(Entries, 0, #{}) of
+        Empty when map_size(Empty) =:= 0 -> Ctx;
+        Named -> Ctx#ctx{names = (Ctx#ctx.names)#{local => Named}}
+    end.
+
+local_names([], _I, Names) -> Names;
+local_names([{undefined, _} | Rest], I, Names) ->
+    local_names(Rest, I + 1, Names);
+local_names([{Name, _} | _], _I, Names) when is_map_key(Name, Names) ->
+    fail(duplicate_identifier, Name);
+local_names([{Name, _} | Rest], I, Names) ->
+    local_names(Rest, I + 1, Names#{Name => I}).
 
 find_type(FT, #ctx{sigs = Sigs}) ->
     case maps:find(FT, Sigs) of

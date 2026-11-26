@@ -34,7 +34,8 @@ pick the recipe -> read what it names -> test that fails -> change
 - **Workers**:
   [a language adapter](#add-a-language-adapter),
   [the worker kernel](#change-the-worker-kernel),
-  [debug a worker request](#debug-a-worker-request).
+  [debug a worker request](#debug-a-worker-request),
+  [actors](#change-how-actors-queue-send-or-restart).
 - **Tests and fixtures**:
   [rebuild or verify a fixture](#rebuild-or-verify-a-fixture),
   [bump an upstream pin](#bump-an-upstream-pin),
@@ -461,6 +462,43 @@ worker, the guardian and the runner, the three processes of a request.
    is still owned, with the guardian holding each.
 3. `bench/paths/phasing_adapter.erl` wraps a real adapter and times a request
    at each of its adapter boundaries.
+
+## Change how actors queue, send or restart
+
+An actor is `wasm_actor`: one component instance in a `gen_server`, with a
+bounded queue that senders reach without a message to the actor.
+`wasm_actor_registry` only forgets an actor that died without cleaning up.
+
+1. Read [Actors](../actors.md), which is what callers are promised, and the
+   module docs of `wasm_actor` and `wasm_actor_registry`.
+2. Keep the three rules a send depends on:
+   - **The name comes last.** An actor registers its name in `init/1`
+     after its row is in the `wasm_actors` table, not through
+     `gen_server`'s `{local, Name}`, which registers before `init/1` runs.
+     Otherwise a sender that finds a restarted actor's name is told
+     `closed`.
+   - **Reserve, then check, then give back.** `send/2` adds one to the
+     queue counter and only then compares it with the capacity; a send that
+     lands past it subtracts its one again and answers `full`. So senders
+     racing for the last slot cannot both take it, and the counter never
+     keeps a refused send. The actor subtracts one when it takes a message
+     out, before the guest runs, which is why a full queue takes messages
+     again as soon as the actor works through them, and why a handler can
+     always post one message to itself.
+   - **A restarted registry watches every row again.** The registry
+     monitors each actor so a killed one's row goes. The table belongs to
+     `wasm_store`, so it outlives a registry restart; the new registry scans
+     it in `init/1`, after its name is registered, so a watch request lost
+     with the old one is for a row the scan finds.
+3. Add the case to `wasm_actor_SUITE`. Its fixture is
+   `test/fixtures/component/actor/`, rebuilt by
+   `scripts/build-wat-component-fixtures.sh`; the `note` import is how a case
+   sees what the guest did. Plant the defect your case is for and watch the
+   case fail before you keep it. A case about freed memory needs an owner
+   that outlives the actor, because an exiting process frees its instance's
+   pages whether or not the actor destroyed it.
+4. A changed promise to callers changes `docs/actors.md` and the module doc
+   together, and the changelog.
 
 ## Rebuild or verify a fixture
 

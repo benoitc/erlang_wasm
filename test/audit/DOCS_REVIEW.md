@@ -958,6 +958,10 @@ They belong in `ATTEMPTS.md`, "Open, and each a decision rather than a task".
 **Still open, unchanged.** Every item under "Still open" above, and
 questions Q2, Q4, Q5, Q7, Q9 and Q11 to Q15.
 
+**Decided, 2026-11-26.** P1 to P4, M1 to M4 and D1 to D4 are fixed before the
+release, in the pull request that carries this section. Q20: the release is
+0.11.2. Q21: the changelog entry is enough; no Upgrading section.
+
 **Suggested order.** P1 to P4 and M1 to M4 together: they are documentation
 only, in `memory.md`, `measuring.md`, `bench/paths/README.md` and the
 changelog. D1 to D4 in the same pull request, in `ATTEMPTS.md`. Then the

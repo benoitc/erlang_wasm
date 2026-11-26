@@ -191,10 +191,13 @@ mmap region: B, deferred", has the numbers and what would reopen it.
 
 ## The translation cache
 
-Generated code reaches memory 0 through a two-entry cache of page translations,
-so that low addresses of a restored memory do not read the page table on
-every access. It only caches translations to an array (a private slot or a
-growth chunk). Neither of these ever moves, so no entry ever becomes wrong.
+Generated code reaches memory 0 through a two-entry cache of translations,
+so that an access does not find its chunk, or in a restored memory read the
+page table, every time. An entry covers a 64 KiB block on a memory with no
+image, which is every memory that was not restored, and a 4 KiB page on a
+restored one, whose untouched pages sit in the page table one by one. It only
+caches translations to an array (a private slot or a growth chunk). Neither
+of these ever moves, so no entry ever becomes wrong.
 If you change the code generated for a memory access, read "The translation
 cache" in [Compiled tier
 internals](compiled-tier-internals.md#the-translation-cache).

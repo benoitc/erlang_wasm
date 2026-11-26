@@ -18,7 +18,9 @@ of this page that covers it.
 | `benchlib` | shared helpers every arm needs, such as running work in a fresh process | "Comparing memory representations" |
 | `callcost` | what a call costs the interpreter, and what it would cost a compiled function | "What a call costs, and what it would cost a compiled function" |
 | `capturebench` | what capturing an image costs: `wasm:snapshot/2` alone and a whole worker start | none |
+| `copybench` | one `memory.copy` by direction and alignment, its time and reductions, checked against a binary | "What one memory.copy costs" |
 | `compileheap` | where a compile's memory is spent, and what a ceiling on it would cost | "Where a compile's memory is spent, and what a ceiling would cost" |
+| `compilephases` | what `wasm:compile/1` costs on a real guest, in total, per phase from inside the same call, and at its peak heap | "What decoding and validating cost" |
 | `corespike` | feasibility spike: one function compiled to Core Erlang and run | "Compiling one function instead of interpreting it" |
 | `coverage` | what share of a real module the compiled tier takes, and what refuses the rest; a diagnostic | "What the generator actually refuses today" |
 | `densitybench` | what a live instance costs the node, and how many fit under a page budget | "Restores, density and footprint" |
@@ -29,6 +31,7 @@ of this page that covers it.
 | `guestarm` | one start-up of a real language runtime, priced on the process that runs it | none |
 | `guestprof` | where a real guest's compiled run spends its time, and what memory it touches | "Where a real guest's time goes" |
 | `instbench` | what a fresh `wasm:instantiate/3` costs, for each way a module reaches it | "Memory kernels and instantiation" |
+| `listbench` | a `list<u32>` round trip through a component, and the memory calls it makes | "What passing a list to a component costs" |
 | `lowbench` | a request's wall time on a real guest, and what its first request costs | none |
 | `matrix` | the instrument for repeated runs: wall, CPU, reductions, collections and msacc per run; a diagnostic | "The measurement protocol, and why it is not optional" |
 | `optbshare` | what K held instances cost the node and the OS, per instance, including memory outside the BEAM's allocators | "Restores, density and footprint" |
@@ -46,11 +49,12 @@ of this page that covers it.
 | `restorebits` | what one `wasm:restore/3` spends, and on what | none |
 | `retainbench` | what a compiled module holds of its input once the input is gone | none |
 | `sockbench` | a WASI socket send and receive round trip against a local TCP echo | none |
+| `ssaprofile` | where a cold compile of QuickJS's hot set spends its time: by pass, by `beam_ssa_opt` sub-pass, by generated function | "Where a compile's time is spent" |
 | `storebench` | what a store costs in generated code | "What a store costs in generated code" |
 | `subset` | how much of a real module a compiler could take, one restriction at a time; a diagnostic | "How much of a module a compiler could take" |
 | `teardown` | what it costs to take down a process that was carrying an image | none |
 | `tiered` | whether the compiled tier is actually running the program | "Is the tier actually running the program" |
-| `watbench` | WAT corpus parse time, result digest and type scaling | none |
+| `watbench` | WAT corpus parse time, result digest and type scaling | "What parsing text costs" |
 | `workerbench` | what a worker host sees per request, and when the tier changes it; also heap-floor sweeps | "Pricing a request rather than a path" |
 
 ## Run an arm
@@ -438,6 +442,36 @@ The arguments are the destination, the source, the length and the rounds.
 `8 0 65536` overlaps from above with the two aligned alike, `65537 0 65536`
 is aligned differently and clear of the source, `9 0 65536` is both, and
 `65536 0 65536` is the aligned forward copy the others are compared with.
+
+## What parsing text costs
+
+`watbench` times `wasm_wat:module/1` over every text module in the
+specification suites and checks what it returns. Use it for a change to
+`wasm_wat`; its result is in `PERF.md`, "WAT parsing with many type
+declarations". Fetch the suites first (`make suites`), and build the test
+profile so the suite's own inputs are on the path:
+
+```sh
+rebar3 as test compile
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/watbench.erl
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -pa _build/test/lib/wasm/test -run watbench main corpus 5
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -pa _build/test/lib/wasm/test -run watbench main digest
+ERL_LIBS=_build/default/lib erl -noshell -pa bench/paths \
+    -run watbench main scale 8000
+```
+
+- `corpus ROUNDS` parses every input once per round in a fresh process and
+  prints the lowest total, with the 5-minute load average at both ends.
+- `digest` parses each input once and prints how many parsed and a SHA-256
+  over all the results, so you can check two revisions answer the same.
+- `scale N` prints the reductions per type of a module of `N` type
+  declarations.
+- The inputs are the text modules of the `.wast` files (2,144 at the last
+  count) and, when `wasm_wat_SUITE` is on the path, its own 96 sources.
+  Without `-pa _build/test/lib/wasm/test` the count drops to 2,144 and
+  nothing says so but the `modules` field: compare it on both sides.
 
 ## Short notes
 

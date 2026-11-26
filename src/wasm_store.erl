@@ -55,7 +55,7 @@ reset instead of a permanent leak. See `wasm_keeper:init/1`.
 %% nothing gives a lifetime to. Adding a long-lived table means adding it here.
 -define(TABLES, [wasm_holders, wasm_tables, wasm_waiters,
                  wasm_code_slots, wasm_code_calls, wasm_code_diag,
-                 wasm_code_cache_paths]).
+                 wasm_code_cache_paths, wasm_actors]).
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
@@ -73,6 +73,7 @@ init([]) ->
     ok = wasm_engine:ensure_store(),
     ok = wasm_engine:ensure_waiter_table(),
     ok = wasm_code_slots:ensure_table(),
+    ok = wasm_actor_registry:ensure_table(),
     ok = ensure_snapshot_counter(),
     Heir = whereis(wasm_store_sup),
     _ = [bequeath(T, Heir) || T <- ?TABLES, is_pid(Heir)],

@@ -156,6 +156,8 @@ into one application.
 | module | what it does | status |
 | --- | --- | --- |
 | `wasm_instance_worker` | a worker owning one WebAssembly instance | supported |
+| `wasm_actor` | a component that handles typed messages one at a time, as a supervised process | supported |
+| `wasm_actor_registry` | where senders find an actor's queue; forgets an actor that died | internal |
 | `wasm_script_worker` | the worker kernel: processes, deadlines, bounded streams, an adapter | supported |
 | `wasm_worker_adapter` | the behaviour that teaches the kernel one language | extension point |
 | `wasm_worker_error` | the worker's error type, and the closed set of its kinds | supported |
@@ -204,6 +206,7 @@ Every suite named is a file in `test/`.
 | HTTP | `wasi_http:http/1`, `wasi_http_listener:start/1` | `wasi_http`, `wasi_http_listener`, `wasi_http_transport`, `wasi_http_h1`, `wasi_http_h2` | `http_transport` | the `wasi_http_transport` behaviour | `wasm_wasi2_http_SUITE`, `wasm_wasi2_https_SUITE`, `wasm_wasi2_http_limits_SUITE`, `wasm_wasi2_serve_SUITE` | [HTTP](http.md) |
 | wasi-nn | `wasi_nn:imports/1`, the `nn` option of `wasi_preview2:command/1` | `wasi_nn` | `nn` | the `wasi_nn` behaviour | `wasm_wasi2_nn_SUITE`, `wasm_wasi2_nn_wasmtime_SUITE` | [wasi-nn](wasi-nn.md) |
 | Instance workers | `wasm_instance_worker:start_link/1`, `wasm_instance_worker:call/3` | `wasm_instance_worker` | `worker_timeout` | none | `wasm_worker_SUITE` | [Using workers](worker.md) |
+| Actors | `wasm_actor:start_link/2`, `wasm_actor:send/2` | `wasm_actor`, `wasm_actor_registry` | `start_link/2` options | the message type, chosen by the host | `wasm_actor_SUITE` | [Actors](actors.md) |
 | Script workers | `wasm_script_worker:start_link/2`, `wasm_script_worker:run/2` | `wasm_script_worker`, `wasm_worker_adapter`, `wasm_worker_error`, `wasm_script_v1`, `wasm_worker_fs`, `wasm_worker_images` | worker options; `scratch_roots` | the `wasm_worker_adapter` behaviour | `wasm_worker_kernel_SUITE`, `wasm_component_worker_SUITE` | [Using workers](worker.md), [Worker internals](worker-internals.md), [Worker configuration](worker-reference.md) |
 | Worker cleanup | internal: every script worker request goes through it | `wasm_cleanup_manager`, `wasm_cleanup_steward`, `wasm_cleanup_steward_sup`, `wasm_worker_reaper`, `wasm_worker_sup` | `reaper_options`, `scratch_roots` | none | `wasm_cleanup_manager_SUITE`, `wasm_cleanup_steward_SUITE`, `wasm_worker_sup_SUITE`, `wasm_worker_kernel_SUITE` | [Worker internals](worker-internals.md#cleanup-goes-through-a-steward), then `test/audit/CLEANUP_STEWARD.md` |
 | Language adapters | `wasm_script_worker:start_link/2` with an adapter module | `wasm_javascript`, `wasm_javascript_command`, `wasm_python`, `wasm_python_command`, `wasm_lua`, `wasm_adapter_conformance` | the adapter's options | a new adapter, through `wasm_worker_adapter` | `wasm_worker_lang_SUITE`, `wasm_lang_SUITE` | [Hosting scripting languages](scripting.md), [Writing an adapter](worker-contract.md) |

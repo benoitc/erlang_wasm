@@ -1,0 +1,16 @@
+// The world wasm_actor_SUITE runs: the actor contract, with a message type
+// of the suite's own and one more import, `note`, through which the guest
+// reports what it saw.
+package test:actor;
+
+interface protocol {
+    variant message { add(u32), added(u32), boom }
+    enum send-error { full, closed }
+}
+
+world fixture {
+    use protocol.{message, send-error};
+    import post: func(msg: message) -> result<_, send-error>;
+    import note: func(n: u32);
+    export handle: func(msg: message);
+}

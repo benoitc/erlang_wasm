@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **New: actors.** `wasm_actor` runs a component as an OTP process that
+  handles typed messages one at a time and keeps its state between them. You
+  start one with `wasm_actor:start_link/2` under your own supervisor, giving
+  it the message type and where the guest's posts go, and send to it with
+  `wasm_actor:send/2`. A successful send means the message is in the actor's
+  queue: one sender's messages are handled in the order sent, and the queue
+  is bounded, so a send answers `{error, full}` when it is at its capacity and
+  `{error, closed}` when no actor is there. A handler can post to any actor,
+  itself included, without waiting for it. A trap stops the actor with
+  `{handle_failed, Error}` and frees its instance, and a supervisor restarts
+  it with fresh state. Actors need the `wasm` application running. Nothing
+  that existed before changes. See [Actors](docs/actors.md).
+- **Fixed: `wasm_component:prepare/1` refused a component that uses types
+  from an interface.** A world that brings in an interface's types with
+  `use`, as most do, is built with type imports that the host has nothing to
+  supply for. `prepare/1` refused them as an unsupported import, though
+  instantiating the same bytes directly worked. Both work now, and each
+  function such a component exports is matched to the cleanup and allocator
+  its own definition names.
+
 ## 0.11.2
 
 A performance release: compiling a binary module, compiled memory access,

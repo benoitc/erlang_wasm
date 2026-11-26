@@ -41,6 +41,7 @@ that shows you how.
 | a program with a `main` (a WASI command) | `wasi` | [WASI preview 1](wasi.md) |
 | a WASI 0.2 or 0.3 component | `wasm_component`, `wasi_preview2`, `wasi_preview3` | [Components](components.md), [WASI 0.2](wasi-0-2.md), [WASI 0.3](wasi-0-3.md) |
 | untrusted code, one instance per request | `wasm_instance_worker` | [Using workers](worker.md) |
+| a component that keeps state and handles messages from other actors | `wasm_actor` | [Actors](actors.md) |
 | a script (JavaScript, Python, Lua) sent with each request | `wasm_script_worker` and an adapter | [Hosting scripting languages](scripting.md) |
 | an HTTP handler component | `wasi_http_listener` | [HTTP](http.md) |
 | a model, and a component that should call it | `wasi_nn`, and a backend for your engine | [wasi-nn](wasi-nn.md) |
@@ -110,7 +111,7 @@ call these modules and no others.
 | components | `wasm_component`, `wasi_preview2`, `wasi_preview3` |
 | HTTP | `wasi_http`, `wasi_http_listener`, and the transports `wasi_http_h1` and `wasi_http_h2` |
 | inference | `wasi_nn`, a release candidate: it follows `wasi:nn`, which is one upstream, and may change with it |
-| workers | `wasm_instance_worker`, `wasm_script_worker`, `wasm_worker_error` |
+| workers | `wasm_instance_worker`, `wasm_actor`, `wasm_script_worker`, `wasm_worker_error` |
 | language adapters | `wasm_javascript`, `wasm_javascript_command`, `wasm_python`, `wasm_python_command`, `wasm_lua` |
 
 An **extension point** is a behaviour: a list of callbacks your own module

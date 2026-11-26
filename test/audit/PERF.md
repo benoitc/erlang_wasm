@@ -10792,3 +10792,36 @@ is zeros or a 256-byte period over most of the range, and passed with the
 planted block order; it now uses bytes that do not repeat.
 
 **Raw.** `test/audit/raw/copy-words/`.
+
+## The file NIF build skipped when nothing changed (2026-11-26)
+
+**The claim.** On a `rebar3 compile` with nothing changed, the NIF build hook
+takes about 36 ms instead of 211 ms, and starts neither `erl` nor the C
+compiler.
+
+**Why.** `scripts/build-nif.sh` ran on every compile, started an `erl` to find
+the Erlang headers and ran the compiler, with no check whether anything had
+changed. It now writes `priv/wasi_file_nif.stamp` beside the library: the
+checksums of the source and of the script, the flags, the identity of `erl`
+and of the compiler, the header directory with a checksum of its headers, and
+the checksum of the library it produced. An unchanged build compares those
+with what is there now, reading files only, and stops; anything that differs
+takes the old path.
+
+**Gates, written before measuring.** An unchanged build starts neither `erl`
+from the hook nor the compiler, checked with logging wrappers first on the
+path (`scripts/test-build-nif.sh`); the whole hook on an unchanged build,
+median of six runs, under 50 ms.
+
+| unchanged build, 6 runs | median | runs |
+| --- | ---: | --- |
+| main (661ddce) | 211 ms | 207 to 214 ms |
+| this change | 36.2 ms | 34.6 to 39.5 ms |
+
+Timed with `time.perf_counter` around the script, the 5-minute load average
+at 6.2 to 6.3. The test script also checks that a changed flag, `erl`, source
+or library builds again, and that two builds at once with different flags
+leave a library and stamp that agree. It fails on main's script at its first
+check, which finds no stamp (`on-main.log`).
+
+**Raw.** `test/audit/raw/nif-stamp/`.

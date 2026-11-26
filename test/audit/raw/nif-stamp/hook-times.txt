@@ -1,0 +1,3 @@
+unchanged-build hook time, 6 runs each, 5-minute load 6.26 at both ends (2026-11-26):
+this branch: 39.5 35.0 34.6 36.3 37.6 36.0 ms, median 36.2 ms (gate: under 50 ms)
+main's script (661ddce), same measurement: 214 211 207 211 211 211 ms, median 211 ms

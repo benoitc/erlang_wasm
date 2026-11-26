@@ -1,0 +1,5 @@
+#{sha256 =>
+      <<"B02393AA0648779B4373566D1460775C07E6C92829E92AE6E1B0E54B0991F3F1">>,
+  inputs => 2240,parsed => 2240,refused => 0,load_end => 5.61}.
+#{reductions => 946546,per_type => 473.273,types => 2000,load_end => 5.61}.
+#{reductions => 5680665,per_type => 710.083125,types => 8000,load_end => 5.61}.

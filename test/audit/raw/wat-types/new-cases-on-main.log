@@ -1,0 +1,6 @@
+implicit_types_take_the_indices_the_format_gives: All 1 tests passed.
+thousands_of_types_parse_in_linear_time:   expected: true
+thousands_of_types_parse_in_linear_time:        got: false
+thousands_of_types_parse_in_linear_time:    comment: {per_type,437.2375,708.177625}
+thousands_of_types_parse_in_linear_time: Failed 1 tests. Passed 0 tests. 
+on main: All 1 tests passed.

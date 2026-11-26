@@ -1,0 +1,10 @@
+harness overhead 0 words
+
+         N           want       retained  discarded      worst
+    100000         200000         200024     200018       0.0%
+   1000000        2000000        2000024    2000018       0.0%
+   4000000        8000000        8000024    8000018       0.0%
+
+estimator agrees within 5%
+#{allocated => 21777377,call_memory => 22927951,major => 1094,minor => 2316,
+  inputs => 2240}.

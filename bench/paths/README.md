@@ -50,6 +50,7 @@ of this page that covers it.
 | `subset` | how much of a real module a compiler could take, one restriction at a time; a diagnostic | "How much of a module a compiler could take" |
 | `teardown` | what it costs to take down a process that was carrying an image | none |
 | `tiered` | whether the compiled tier is actually running the program | "Is the tier actually running the program" |
+| `watbench` | WAT corpus parse time, result digest and type scaling | none |
 | `workerbench` | what a worker host sees per request, and when the tier changes it; also heap-floor sweeps | "Pricing a request rather than a path" |
 
 ## Run an arm

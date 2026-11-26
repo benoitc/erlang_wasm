@@ -166,6 +166,62 @@ The steps, in order:
 
 A failed build destroys the resource table it created.
 
+### Index spaces
+
+A component refers to everything by number: an export names the function it
+exports by its index, a `canon lift` names its post-return by index. Read
+this before you change how `wasm_component_link` parses or counts items.
+
+The rule: every import, alias, definition and export takes the next index of
+its sort, in section order. There are two families of index spaces, counted
+apart:
+
+- **component** spaces: component functions (imports, aliases, `canon lift`,
+  and exports), component instances, types and components;
+- **core** spaces: core functions (`canon lower`, `canon resource.*`, the
+  async built-ins, aliases of core exports), core instances, memories,
+  tables and globals.
+
+A `canon lift`'s realloc and post-return are core function indices. The
+function it defines is a component function.
+
+An export is the case that is easy to miss: exporting a function gives that
+same function a second component index, and the next definition comes after
+it. This is the start of the `vectors` fixture, as `wasm-tools print`
+shows it:
+
+```text
+(import "point" (type (eq 0)))                  type 1, no function index
+(func $echo-u8 (canon lift (core func ...)))    component func 0
+(export "echo-u8" (func $echo-u8))              component func 1: func 0 again
+(func $echo-u16 (canon lift (core func ...)))   component func 2
+(export "echo-u16" (func 2))                    component func 3: func 2 again
+```
+
+A reader that does not count the exports numbers the `echo-u16` lift 1, and
+the export that names function 2 then reaches the next lift and its
+post-return. Before 0.12.0 every fold that numbers functions made that
+mistake, and components
+like this one were saved only because a type import stopped the parse and
+sent them down the name-based path.
+
+Where the rule is applied: each reader of the graph folds it on its own
+(`alias_step/2`, `cfe_step/2`, `lb_step/2`, `lift_types/1`, `index_step/2`,
+`step/2` and `export_funcs_step/2` in `wasm_component_link`,
+`compose_step/2` in `wasm_component`). A change to what takes an index
+changes all of them. The component instance space is counted three ways:
+`export_funcs_step/2` counts every instance, an exported one included;
+`compose_step/2` counts imported, aliased and instantiated ones but not an
+inline instance or an exported one; and the linker's `step/2` counts only
+imported instances, which are the only ones it looks up. One pass that
+builds every index space once is open work, recorded in
+`test/audit/DOCS_REVIEW.md`.
+
+To check a change, run `wasm_component_vectors_SUITE`,
+`wasm_canon_prop_SUITE` and `wasm_wasi2_nn_SUITE`, whose components export
+functions between their lifts, and `wasm_actor_SUITE`, which prepares one
+that imports types.
+
 ### Linking several cores
 
 `wasm_component_link:parse/1` turns the sections into an ordered list of

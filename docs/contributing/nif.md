@@ -8,6 +8,26 @@ if you are changing `c_src/`: it says how to run the NIF under a sanitizer and
 what a sanitizer can and cannot find. The checks every change passes are in
 [Contributing](../../CONTRIBUTING.md).
 
+## When the library is rebuilt
+
+`rebar3 compile` runs `scripts/build-nif.sh` every time, and the script skips
+the build when nothing it depends on has changed: it starts neither `erl` nor
+the compiler. `priv/wasi_file_nif.stamp` records what the last build used (the
+source, the script, the flags, `erl`, the compiler and the Erlang headers) and
+the checksum of the library it produced. Anything that differs builds again,
+and so does a missing or replaced library, or a missing stamp.
+
+To force a build, delete either file:
+
+```sh
+rm -f priv/wasi_file_nif.stamp
+rebar3 compile
+```
+
+`scripts/test-build-nif.sh` checks the stamp on a copy of the build in a
+scratch directory: an unchanged build starts nothing, and a changed flag,
+`erl`, source or library builds again. The NIF job in CI runs it.
+
 ## Run the NIF under a sanitizer
 
 ```sh

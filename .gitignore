@@ -2,6 +2,7 @@ _build/
 # ex_doc writes its site here; the sources are in docs/
 doc/
 priv/*.so
+priv/*.stamp
 priv/*.dll
 *.beam
 *.dump

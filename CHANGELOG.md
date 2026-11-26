@@ -4,6 +4,9 @@
 
 ### Changes
 
+- **Faster: rebuilding the project when the C code has not changed.** For
+  contributors: `rebar3 compile` no longer starts an extra Erlang VM and the C
+  compiler for the optional file NIF when nothing it depends on has changed.
 - **Faster: `memory.copy` that overlaps or is not aligned.** A copy whose
   destination overlaps its source from above, or whose two addresses are
   aligned differently, went one byte at a time. It now moves whole words or

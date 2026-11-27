@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the ninety-nine modules are, which
+This page is the map of the runtime: what the hundred and two modules are, which
 ones depend on which, and where to start reading. Read it before you change
 anything. Each module documents itself, but no module describes how they fit
 together.
@@ -98,6 +98,7 @@ L7  wasm  wasm_module_cache  wasm_snapshot_owner  wasm_jit_sup
 L6  wasm_exec  wasm_core  wasm_jit  wasm_snapshot
 L5  wasm_instance  wasm_wat
 L4  wasm_validate  wasm_wat_instr  wasm_encode  wasm_encode_code
+    wasm_encode_simd  wasm_encode_gc  wasm_encode_atomic
 L3  wasm_memory  wasm_table  wasm_global  wasm_heap  wasm_store
     wasm_validate_code  wasm_wast  wasm_worker_sup
 L2  wasm_decode  wasm_decode_code  wasm_decode_simd  wasm_decode_gc
@@ -164,11 +165,13 @@ SIMD immediate can contain a memory argument and a GC instruction can contain a
 block type. The recursion comes from the binary format itself; it is not a
 mistake in the layers.
 
-**The encoder, two modules.** The decoder's cycle run backwards. `wasm_encode`
-writes a global's initialiser through `wasm_encode_code:expr/1`, and
-`wasm_encode_code` writes a block type and a `select` type through
-`wasm_encode:valtype/1`. The two are split exactly as the decoder is, so that
-each reads against its decoder line for line.
+**The encoder, five modules.** The decoder's cycle run backwards.
+`wasm_encode` writes a global's initialiser through `wasm_encode_code:expr/1`,
+`wasm_encode_code` writes a block type through `wasm_encode:valtype/1`, and
+the opcode-space modules `wasm_encode_simd`, `wasm_encode_gc` and
+`wasm_encode_atomic` write a memory argument through `wasm_encode_code`. The
+modules are split exactly as the decoder's are, so that each reads against its
+decoder line for line.
 
 **The tier, three modules.** Two edges, one function each. `wasm_core` calls
 `wasm_exec:load_spec/1` and `store_spec/1` at generation time, so that the
@@ -192,7 +195,7 @@ copies and what a restore writes back.
 Cycles are allowed here. What is not allowed is a fifth cycle that appears
 without anyone noticing. You cannot see a cycle by reading one module.
 Everything else about `wasm_memory` you learn inside `wasm_memory`, but a
-cycle you only find by reading all ninety-nine.
+cycle you only find by reading all hundred and two.
 
 It is easy to add one by mistake. One call from `wasm_error`, at level 0, up
 into `wasm` would merge fourteen modules into one cycle, and only the test

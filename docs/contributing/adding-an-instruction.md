@@ -6,15 +6,16 @@ an instruction, or when one is already decoded but traps as unimplemented.
 
 Every instruction is an atom whose name is the text-format name with the dots
 replaced: `i32.add` is `i32_add`, `i64.trunc_sat_f32_u` is
-`i64_trunc_sat_f32_u`. That atom is the only thing the four stages share.
+`i64_trunc_sat_f32_u`. That atom is the only thing the five stages share.
 
-## The four stages
+## The five stages
 
-Every instruction passes through the same four, in this order:
+Every instruction passes through the same five, in this order:
 
 | stage | question | where |
 | --- | --- | --- |
 | decode | which bytes mean this instruction | `wasm_decode_*` |
+| encode | which bytes to write it back as | `wasm_encode_*` |
 | validate | what it takes off the stack and puts back | `wasm_validate_*` |
 | interpret | what it computes | `wasm_exec`, or a helper module |
 | compile | how to say that in Core Erlang | `wasm_core`, optional |
@@ -29,12 +30,15 @@ atom. Add an entry only if yours takes an immediate.
 
 ## A plain numeric instruction
 
-`i64.extend8_s` is the model. Four files, one line each.
+`i64.extend8_s` is the model. Five files, one line each.
 
-<!-- check: skip "single clauses excerpted from three different files" -->
+<!-- check: skip "single clauses excerpted from five different files" -->
 ```erlang
 %% src/wasm_decode_code.erl -- the opcode
 instr(16#C2, R) -> {i64_extend8_s, R};
+
+%% src/wasm_encode_code.erl -- the same opcode, written back
+instr(i64_extend8_s) -> 16#C2;
 
 %% src/wasm_validate_code.erl -- the stack effect
 numeric(i64_extend8_s) -> {[i64], [i64]};
@@ -53,12 +57,15 @@ generated as a call to `wasm_exec:op1/2` or `op2/3`. Writing an inline form in
 
 ## A SIMD instruction, the `0xFD` space
 
-Three files, and none of them is `wasm_exec`.
+Four files, and none of them is `wasm_exec`.
 
-<!-- check: skip "single clauses excerpted from three different files" -->
+<!-- check: skip "single clauses excerpted from four different files" -->
 ```erlang
 %% src/wasm_decode_simd.erl -- the sub-opcode
 sub(186, R) -> {i32x4_dot_i16x8_s, R};
+
+%% src/wasm_encode_simd.erl -- the prefix and the sub-opcode, as LEB128
+instr(i32x4_dot_i16x8_s) -> <<16#FD, 16#BA, 16#01>>;
 
 %% src/wasm_validate_simd.erl -- operand types
 type_of(i32x4_dot_i16x8_s) -> {[v128, v128], [v128]};
@@ -71,10 +78,13 @@ binary_op(i32x4_dot_i16x8_s, A, B) -> ...
 
 ## A GC instruction, the `0xFB` space
 
-<!-- check: skip "single clauses excerpted from three different files" -->
+<!-- check: skip "single clauses excerpted from four different files" -->
 ```erlang
 %% src/wasm_decode_gc.erl
 sub(22, R0) -> cast(ref_cast, nonull, R0);
+
+%% src/wasm_encode_gc.erl
+instr({ref_cast, {ref, nonull, HT}}) -> [16#FB, 22, heaptype(HT)];
 
 %% src/wasm_validate_code.erl -- not a separate module: casts are typed
 %% against the type hierarchy, which lives with the rest of validation
@@ -87,8 +97,8 @@ run([{ref_cast, Target} | Rest], Ctrl, #st{stack = [R | _]} = St) -> ...
 
 ## An atomic instruction, the `0xFE` space
 
-`wasm_decode_atomic` and `wasm_validate_atomic`, then `wasm_exec` or
-`wasm_wait` depending on whether it waits.
+`wasm_decode_atomic`, `wasm_encode_atomic` and `wasm_validate_atomic`, then
+`wasm_exec` or `wasm_wait` depending on whether it waits.
 
 ## The test to write
 
@@ -109,6 +119,12 @@ One per stage you touched, and in this order.
    a masked shift count of zero, and every other input hid it.
 4. **A hand-written case** only for behaviour the specification suite does not
    reach, such as an interaction with limits or with the host.
+
+The encoder needs no case of its own. `wasm_encode_SUITE`'s
+`every_decoded_opcode_encodes_to_its_bytes` decodes every opcode with a list
+of sample immediates and fails while the encoder cannot write yours back to
+the same bytes. If your instruction's immediate has a shape no sample fits,
+it fails for that too: add a sample to `immediates/0` in its shortest form.
 
 ## Checking what you generated
 

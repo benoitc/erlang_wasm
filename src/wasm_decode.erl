@@ -749,6 +749,10 @@ uses_data_index([{loop, _, Body} | Rest]) ->
     uses_data_index(Body) orelse uses_data_index(Rest);
 uses_data_index([{if_, _, Then, Else} | Rest]) ->
     uses_data_index(Then) orelse uses_data_index(Else) orelse uses_data_index(Rest);
+%% A `try_table' is a block too: a bulk-memory instruction inside one needs the
+%% data count as much as one anywhere else. `wasm_encode' checks the same.
+uses_data_index([{try_table, _, _, Body} | Rest]) ->
+    uses_data_index(Body) orelse uses_data_index(Rest);
 uses_data_index([_ | Rest]) -> uses_data_index(Rest);
 uses_data_index([]) -> false.
 

@@ -34,7 +34,7 @@
 all() ->
     [decode_is_total, decode_creates_no_atoms, wasi_creates_no_atoms,
      mutation_is_total, memory_matches_model, paged_memory_matches_model,
-     leb128_roundtrip].
+     leb128_roundtrip, decoded_mutants_encode_to_themselves].
 
 %%% --------------------------------------------------------------- totality ---
 
@@ -55,6 +55,32 @@ mutation_is_total(_Config) ->
                             R = wasm_decode:module(Bin),
                             is_total_result(R) andalso validate_is_total(R)
                         end))
+    end.
+
+%% Whatever the decoder reads, the encoder writes back: the mutants that still
+%% decode, which is where odd shapes come from, encode to bytes that decode to
+%% the same record. Encoding them again gives the same bytes. About one mutant
+%% in ten still decodes, so a run encodes some fifty of them.
+decoded_mutants_encode_to_themselves(_Config) ->
+    Seeds = seed_modules(),
+    case Seeds of
+        [] -> {skip, "no spec fixtures to mutate"};
+        _ ->
+            run(?FORALL({Seed, Muts}, {oneof(Seeds), list(mutation())},
+                        case wasm_decode:module(apply_mutations(Seed, Muts)) of
+                            {error, _} -> true;
+                            {ok, M} -> encodes_to_itself(M)
+                        end))
+    end.
+
+encodes_to_itself(M) ->
+    case wasm_encode:module(M) of
+        {ok, Bin} ->
+            wasm_decode:module(Bin) =:= {ok, M}
+                andalso wasm_encode:module(M) =:= {ok, Bin};
+        {error, E} ->
+            ct:pal("a decoded module did not encode: ~p", [E]),
+            false
     end.
 
 validate_is_total({error, _}) -> true;

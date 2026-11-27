@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **Fixed: a module could leave out its data count section when it used
+  bulk memory inside a `try_table`.** The binary format requires the data
+  count section whenever a function uses `memory.init` or `data.drop`, and
+  such a module is malformed without it. The check looked inside every kind
+  of block but `try_table`, so a module that used them only there was read.
+  It is refused now, as it is elsewhere.
+
 ## 0.12.0
 
 Adds actors: a component run as a supervised OTP process that keeps its state

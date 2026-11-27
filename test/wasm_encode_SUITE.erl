@@ -30,7 +30,9 @@ all() ->
      a_memory_argument_names_only_another_memory,
      an_if_writes_else_only_when_it_has_one,
      integers_take_their_shortest_form,
-     what_cannot_be_encoded_is_an_error_value].
+     what_cannot_be_encoded_is_an_error_value,
+     every_decoded_opcode_encodes_to_its_bytes,
+     a_data_count_is_required_inside_a_try_table].
 
 %%% ------------------------------------------------------------- golden ---
 
@@ -191,9 +193,120 @@ what_cannot_be_encoded_is_an_error_value(_) ->
                   {W, wasm_encode:module(M)})
      || {W, M} <- Bad].
 
+%% The decoder and the encoder agree on when a module needs a data count, a
+%% `try_table' body included: the decoder used to look into every block but
+%% that one, and would read a module the encoder then refused.
+a_data_count_is_required_inside_a_try_table(_) ->
+    Body = [{try_table, empty, [], [{data_drop, 0}]}],
+    M = func_module(Body, []),
+    ?assertMatch({error, #{kind := unencodable}}, wasm_encode:module(M)),
+    {ok, Bin} = wasm_encode:module(M#module{data_count = 1,
+                                             datas = [#data{init = ~"", mode = passive}]}),
+    %% The same bytes with the data count section cut out.
+    {ok, Without} = drop_section(12, Bin),
+    ?assertMatch({error, #{kind := data_count_section_required}},
+                 wasm_decode:module(Without)).
+
+%%% ---------------------------------------------------------- every opcode ---
+
+%% The decoder and the encoder must not drift. For every opcode, and every
+%% sub-opcode behind the four prefixes, each candidate immediate that the
+%% decoder reads as exactly one instruction must encode back to the bytes it
+%% was read from. An opcode the decoder accepts but no candidate fits fails
+%% too: an instruction with a new immediate shape needs a candidate here, and
+%% that is how the shape gets a round trip.
+every_decoded_opcode_encodes_to_its_bytes(_) ->
+    Opcodes = [<<Op>> || Op <- lists:seq(0, 255),
+                         not lists:member(Op, [16#05, 16#0B | prefixes()])]
+        ++ [<<P, (wasm_leb128:encode_u32(Sub))/binary>>
+            || P <- prefixes(), Sub <- lists:seq(0, 511)],
+    Probed = [{Op, probe(Op)} || Op <- Opcodes],
+    Decoded = [{Op, Cases} || {Op, {decoded, Cases}} <- Probed],
+    NoCandidate = [Op || {Op, no_candidate} <- Probed],
+    Drifted = [{Op, Bytes, I, Got}
+               || {Op, Cases} <- Decoded, {Bytes, I} <- Cases,
+                  Got <- [try instr(I) catch _:E -> {raised, E} end],
+                  Got =/= Bytes],
+    ct:log("~p opcodes decoded, ~p encodings checked",
+           [length(Decoded), length(lists:append([C || {_, C} <- Decoded]))]),
+    ?assertEqual([], NoCandidate),
+    ?assertEqual([], Drifted),
+    %% Every space is reached, so a scan that stopped early cannot pass.
+    ?assert(length(Decoded) >= 500).
+
+prefixes() -> [16#FB, 16#FC, 16#FD, 16#FE].
+
+%% `{decoded, [{Bytes, Instr}]}', `illegal' when the decoder refuses the
+%% opcode itself, or `no_candidate'.
+probe(Op) ->
+    Tried = [{S, decode_one(<<Op/binary, S/binary>>)} || S <- immediates()],
+    case [{<<Op/binary, S/binary>>, I} || {S, {ok, I}} <- Tried] of
+        [] ->
+            case lists:all(fun({_, R}) -> R =:= {illegal, Op} end, Tried) of
+                true -> illegal;
+                false -> no_candidate
+            end;
+        Cases ->
+            {decoded, Cases}
+    end.
+
+%% One instruction and nothing after it, or the opcode refused by name.
+decode_one(Bytes) ->
+    case wasm_error:capture(fun() -> {ok, wasm_decode_code:expr(<<Bytes/binary, 16#0B>>)} end) of
+        {ok, {[I], <<>>}} -> {ok, I};
+        {error, #{kind := illegal_opcode, ctx := Ctx}} -> {illegal, refused(Ctx)};
+        _ -> other
+    end.
+
+refused(#{opcode := P, sub := Sub}) -> <<P, (wasm_leb128:encode_u32(Sub))/binary>>;
+refused(#{opcode := Op}) -> <<Op>>.
+
+%% Each in its shortest form, and naming memory 0 implicitly, because those
+%% are the only encodings the encoder writes. A candidate is read by every
+%% opcode, so each must be shortest for every shape that can read it: `64'
+%% signed is two bytes and unsigned is one, so neither is here.
+immediates() ->
+    [<<>>,
+     <<5>>, <<16#AC, 2>>,                                % an index, small and two-byte
+     <<3, 7>>, <<16#AC, 2, 1>>,                          % two indices
+     <<16#7F>>, <<16#BF, 16#7F>>,                        % -1 and -65 signed, also unsigned
+     <<16#80, 16#80, 16#80, 16#80, 16#78>>,              % the least i32
+     <<16#80, 16#80, 16#80, 16#80, 16#80, 16#80, 16#80, 16#80, 16#80, 16#7F>>,
+     <<16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 16#FF, 0>>,
+     <<0, 0, 16#80, 16#3F>>, <<0, 0, 0, 16#80>>,         % f32 1.0, -0.0
+     <<1, 0, 16#C0, 16#7F>>, <<0, 0, 16#80, 16#FF>>,     % a NaN payload, -inf
+     <<0, 0, 0, 0, 0, 0, 16#F0, 16#3F>>,                 % f64 1.0
+     <<1, 0, 0, 0, 0, 0, 16#F8, 16#FF>>,                 % a negative NaN
+     list_to_binary(lists:seq(0, 15)),                   % 16 raw bytes
+     <<2, 16#AC, 2>>, <<66, 1, 8>>,                      % memarg, memory 0 and 1
+     <<2, 8, 3>>, <<66, 1, 8, 3>>,                       % memarg and a lane
+     <<16#40, 16#01, 16#0B>>, <<16#7F, 16#41, 1, 16#0B>>,% block types and bodies
+     <<2, 16#0B>>, <<16#63, 5, 16#0B>>, <<16#64, 16#70, 16#0B>>,
+     <<16#40, 16#01, 16#05, 16#01, 16#0B>>,              % if with an else
+     <<2, 0, 1, 3>>, <<0, 5>>,                           % br_table
+     <<16#70>>, <<16#6F>>, <<16#6E>>, <<16#71>>,         % heap types
+     <<1, 16#7F>>, <<0>>,                                % select types
+     <<16#40, 2, 0, 1, 0, 2, 1, 16#0B>>,                 % try_table handlers
+     <<16#7F, 2, 1, 3, 0, 3, 1, 16#01, 16#0B>>,
+     <<0, 2, 16#6E, 16#6D>>, <<1, 2, 16#6E, 16#6D>>,     % br_on_cast flags
+     <<2, 2, 16#6E, 5>>, <<3, 2, 5, 16#71>>].
+
 %%% -------------------------------------------------------------- helpers ---
 
 header() -> <<"\0asm", 1:32/little>>.
+
+drop_section(Id, <<Header:8/binary, Rest/binary>>) ->
+    {ok, <<Header/binary, (drop_section_(Id, Rest))/binary>>}.
+
+drop_section_(_Id, <<>>) -> <<>>;
+drop_section_(Id, <<S, Rest0/binary>>) ->
+    {Size, Rest1} = wasm_leb128:u32(Rest0),
+    <<Body:Size/binary, Rest/binary>> = Rest1,
+    case S of
+        Id -> drop_section_(Id, Rest);
+        _ -> <<S, (wasm_leb128:encode_u32(Size))/binary, Body/binary,
+               (drop_section_(Id, Rest))/binary>>
+    end.
 
 %% One function of type `[] -> []' with these locals and this body.
 func_module(Body, Locals) ->

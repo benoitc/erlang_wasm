@@ -4,7 +4,9 @@ Instruction and expression encoding: `wasm_decode_code` run backwards.
 
 Read this before you add an opcode: an instruction the decoder reads must be
 written here too, and `wasm_encode_SUITE` fails for every decoded opcode this
-cannot write back to the same bytes.
+cannot write back to the same bytes. The prefixed spaces have modules of their
+own, as in the decoder: `wasm_encode_simd` for `0xFD`, `wasm_encode_gc` for
+`0xFB` and `wasm_encode_atomic` for `0xFE`. `0xFC` is small and stays here.
 
 Each instruction is one clause, the opcode byte first, so the table reads
 against the decoder's line for line. Nested bodies are written in place and
@@ -65,6 +67,12 @@ instr({loop, BT, Body}) -> [16#03, blocktype(BT), expr(Body)];
 instr({if_, BT, Then, []}) -> [16#04, blocktype(BT), expr(Then)];
 instr({if_, BT, Then, Else}) when is_list(Then) ->
     [16#04, blocktype(BT), instrs(Then), 16#05, expr(Else)];
+%% - exceptions ------------------------------------------------------------
+instr({throw, T}) -> [16#08, u32(T)];
+instr(throw_ref) -> 16#0A;
+instr({try_table, BT, Catches, Body}) ->
+    [16#1F, blocktype(BT), wasm_encode:vec(Catches, fun catch_clause/1), expr(Body)];
+
 instr({br, L}) -> [16#0C, u32(L)];
 instr({br_if, L}) -> [16#0D, u32(L)];
 instr({br_table, Labels, Default}) ->
@@ -72,7 +80,11 @@ instr({br_table, Labels, Default}) ->
 instr(return) -> 16#0F;
 instr({call, F}) -> [16#10, u32(F)];
 instr({call_indirect, T, Table}) -> [16#11, u32(T), u32(Table)];
+%% Tail calls.
+instr({return_call, F}) -> [16#12, u32(F)];
+instr({return_call_indirect, T, Table}) -> [16#13, u32(T), u32(Table)];
 instr({call_ref, T}) -> [16#14, u32(T)];
+instr({return_call_ref, T}) -> [16#15, u32(T)];
 
 %% - reference types -------------------------------------------------------
 %% `ref.null' names a heap type, so the reference must be nullable.
@@ -302,8 +314,31 @@ instr({table_grow, T}) -> [16#FC, 15, u32(T)];
 instr({table_size, T}) -> [16#FC, 16, u32(T)];
 instr({table_fill, T}) -> [16#FC, 17, u32(T)];
 
-%% - unknown ---------------------------------------------------------------
-instr(I) -> unencodable(instr, I).
+%% -- 0xFB, 0xFD and 0xFE: each space in a module of its own ----------------
+instr(I) -> prefixed(I).
+
+%% Each answers `false' for an instruction that is not its own, so the spaces
+%% are tried in turn; only an instruction none of them knows has no encoding.
+prefixed(I) ->
+    case wasm_encode_simd:instr(I) of
+        false ->
+            case wasm_encode_gc:instr(I) of
+                false ->
+                    case wasm_encode_atomic:instr(I) of
+                        false -> unencodable(instr, I);
+                        Bytes -> Bytes
+                    end;
+                Bytes -> Bytes
+            end;
+        Bytes -> Bytes
+    end.
+
+%% A handler of `try_table': `{Kind, TagIdx | undefined, LabelIdx}'.
+catch_clause({catch_, Tag, L}) -> [16#00, u32(Tag), u32(L)];
+catch_clause({catch_ref, Tag, L}) -> [16#01, u32(Tag), u32(L)];
+catch_clause({catch_all, undefined, L}) -> [16#02, u32(L)];
+catch_clause({catch_all_ref, undefined, L}) -> [16#03, u32(L)];
+catch_clause(C) -> unencodable(catch_clause, C).
 
 %%% --------------------------------------------------------------- helpers ---
 

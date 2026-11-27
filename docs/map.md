@@ -190,6 +190,7 @@ Every suite named is a file in `test/`.
 
 | area | enter at | modules | configured by | extend through | tests | read |
 | --- | --- | --- | --- | --- | --- | --- |
+| Binary encode | `wasm:encode/1`, `wasm:load({wat, Source})` | `wasm_encode`, `wasm_encode_code`, `wasm_encode_simd`, `wasm_encode_gc`, `wasm_encode_atomic`, `wasm_leb128` | `max_module_bytes` | none | `wasm_encode_SUITE`, `wasm_prop_SUITE`, `wasm_core_prop_SUITE` | [Getting started](getting-started.md#turn-text-into-a-wasm-file), then `wasm_encode`'s module doc |
 | Binary decode | `wasm:compile/2` | `wasm_decode`, `wasm_decode_code`, `wasm_decode_simd`, `wasm_decode_gc`, `wasm_decode_atomic`, `wasm_leb128` | `max_module_bytes` | none | `wasm_spec_SUITE`, `wasm_decode_immediates_SUITE`, `wasm_decode_retain_SUITE`, `wasm_prop_SUITE` | [Adding an instruction](contributing/adding-an-instruction.md) |
 | Validation and type identity | `wasm:compile/2`, `wasm:validate/1` | `wasm_validate`, `wasm_validate_code`, `wasm_validate_simd`, `wasm_validate_atomic`, `wasm_types` | `max_rec_groups` | none | `wasm_spec_SUITE`, `wasm_validate_scalar_SUITE`, `wasm_annotate_SUITE`, `wasm_prop_SUITE` | [Adding an instruction](contributing/adding-an-instruction.md) |
 | Text format and wast | `wasm:compile({wat, Source})`, `wasm_wast:script/1` | `wasm_wat`, `wasm_wat_lex`, `wasm_wat_sexp`, `wasm_wat_num`, `wasm_wat_instr`, `wasm_wast` | none | none | `wasm_wat_SUITE`, `wasm_wat_lex_SUITE`, `wasm_wast_SUITE` | [Features and conformance](features.md#specification-test-suite) |

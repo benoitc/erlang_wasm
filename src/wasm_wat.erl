@@ -2,9 +2,11 @@
 -moduledoc """
 The text format, parsed into the same `#module{}` the binary decoder produces.
 
-Hand a `.wat` file to `wasm:load/1` and you land here. Everything downstream is
-unchanged: a text module is validated, instantiated and
-run by exactly the code a binary one is. The text format is a *front end*, not a
+Hand text to `wasm:load/1`, `wasm:compile/1` or `wasm:encode/1` as
+`{wat, Source}` and you land here. Everything downstream is unchanged: a text
+module is validated, instantiated and run by exactly the code a binary one is,
+and `wasm:load/1` encodes it first so that it is named by the same bytes as
+its `.wasm`. The text format is a *front end*, not a
 second runtime, and the way to keep it honest is to make it produce the same
 value rather than a parallel one.
 

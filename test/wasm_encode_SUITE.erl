@@ -32,7 +32,17 @@ all() ->
      integers_take_their_shortest_form,
      what_cannot_be_encoded_is_an_error_value,
      every_decoded_opcode_encodes_to_its_bytes,
-     a_data_count_is_required_inside_a_try_table].
+     a_data_count_is_required_inside_a_try_table,
+     encode_takes_a_module_a_handle_or_text,
+     text_and_its_wasm_share_one_cache_entry,
+     encoded_bytes_are_bounded_by_max_module_bytes,
+     text_that_does_not_parse_or_validate_is_refused].
+
+init_per_suite(Config) ->
+    {ok, _} = application:ensure_all_started(wasm),
+    Config.
+
+end_per_suite(_Config) -> ok.
 
 %%% ------------------------------------------------------------- golden ---
 
@@ -207,6 +217,61 @@ a_data_count_is_required_inside_a_try_table(_) ->
     ?assertMatch({error, #{kind := data_count_section_required}},
                  wasm_decode:module(Without)).
 
+%%% ---------------------------------------------------------------- the api ---
+
+encode_takes_a_module_a_handle_or_text(_) ->
+    {Wat, Golden} = barrel_map(),
+    ?assertEqual({ok, Golden}, wasm:encode({wat, Wat})),
+    {ok, Compiled} = wasm:compile({wat, Wat}),
+    ?assertEqual({ok, Golden}, wasm:encode(Compiled)),
+    {ok, H} = wasm:load(Golden),
+    ?assertEqual({ok, Golden}, wasm:encode(H)),
+    ok = wasm:unload(H),
+    ?assertMatch({error, #{kind := module_not_loaded}},
+                 wasm:encode({wasm_module, crypto:hash(sha256, <<"gone">>)})).
+
+%% The text and the bytes `wasm-tools parse' then `wasm-tools strip --all'
+%% wrote for it are one module to the cache: one entry, one handle, named by
+%% the SHA-256 of those bytes.
+text_and_its_wasm_share_one_cache_entry(_) ->
+    {Wat, Golden} = barrel_map(),
+    {ok, FromText} = wasm:load({wat, Wat}),
+    {ok, FromBytes} = wasm:load(Golden),
+    ?assertEqual(FromText, FromBytes),
+    ?assertEqual({wasm_module, crypto:hash(sha256, Golden)}, FromText),
+    {ok, Encoded} = wasm:encode({wat, Wat}),
+    ?assertEqual({ok, FromText}, wasm:load(Encoded)),
+    [ok = wasm:unload(FromText) || _ <- lists:seq(1, 3)],
+    %% The committed bytes are wasm-tools' output; check it still writes them.
+    case wasm_tools_bytes(Wat) of
+        {ok, Bytes} -> ?assertEqual(Golden, Bytes);
+        skip -> ct:log("wasm-tools not on the path: checked against the committed bytes only")
+    end.
+
+encoded_bytes_are_bounded_by_max_module_bytes(_) ->
+    {Wat, Golden} = barrel_map(),
+    Old = application:get_env(wasm, max_module_bytes),
+    ok = application:set_env(wasm, max_module_bytes, byte_size(Golden) - 1),
+    try
+        {ok, M} = wasm_wat:module(Wat),
+        ?assertMatch({error, #{kind := module_too_large}}, wasm:encode(M)),
+        ?assertMatch({error, #{kind := module_too_large}}, wasm:encode({wat, Wat})),
+        ?assertMatch({error, #{kind := module_too_large}}, wasm:load({wat, Wat}))
+    after
+        case Old of
+            {ok, V} -> application:set_env(wasm, max_module_bytes, V);
+            undefined -> application:unset_env(wasm, max_module_bytes)
+        end
+    end.
+
+text_that_does_not_parse_or_validate_is_refused(_) ->
+    ?assertMatch({error, #{class := malformed}}, wasm:encode({wat, ~"(module"})),
+    ?assertMatch({error, #{class := malformed}}, wasm:load({wat, ~"(module"})),
+    %% Encoding does not validate; loading does.
+    Invalid = ~"(module (func (result i32)))",
+    ?assertMatch({ok, _}, wasm:encode({wat, Invalid})),
+    ?assertMatch({error, #{class := invalid}}, wasm:load({wat, Invalid})).
+
 %%% ---------------------------------------------------------- every opcode ---
 
 %% The decoder and the encoder must not drift. For every opcode, and every
@@ -325,3 +390,29 @@ golden() ->
         {ok, Bin} <- [file:read_file(filename:rootname(W) ++ ".wasm")]].
 
 fixtures() -> wasm_spec_runner:fixtures_dir().
+
+barrel_map() ->
+    Base = filename:join([fixtures(), "encode", "barrel_map"]),
+    {ok, Wat} = file:read_file(Base ++ ".wat"),
+    {ok, Golden} = file:read_file(Base ++ ".wasm"),
+    {Wat, Golden}.
+
+%% What `wasm-tools parse' then `wasm-tools strip --all' write for `Wat', when
+%% the tool is there. Plain `strip' keeps the name section.
+wasm_tools_bytes(Wat) ->
+    case os:find_executable("wasm-tools") of
+        false -> skip;
+        Tool ->
+            Dir = filename:join(os:getenv("TMPDIR", "/tmp"),
+                                "wasm_encode_" ++ integer_to_list(erlang:unique_integer([positive]))),
+            ok = filelib:ensure_dir(filename:join(Dir, "x")),
+            In = filename:join(Dir, "m.wat"),
+            Parsed = filename:join(Dir, "m.wasm"),
+            Stripped = filename:join(Dir, "s.wasm"),
+            ok = file:write_file(In, Wat),
+            [] = os:cmd(Tool ++ " parse " ++ In ++ " -o " ++ Parsed),
+            [] = os:cmd(Tool ++ " strip --all " ++ Parsed ++ " -o " ++ Stripped),
+            {ok, Bytes} = file:read_file(Stripped),
+            _ = file:del_dir_r(Dir),
+            {ok, Bytes}
+    end.

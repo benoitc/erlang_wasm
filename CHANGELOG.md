@@ -4,6 +4,19 @@
 
 ### Changes
 
+- **New: encode a module to the binary format.** `wasm:encode/1` writes a
+  module as `.wasm` bytes. It takes text as `{wat, Source}`, a module you
+  compiled or built in Erlang, or a handle from `wasm:load/1`, so you can
+  turn text into a `.wasm` file without a toolchain, or hand a module you
+  changed to another engine. The same module always gives the same bytes. A
+  later release that changed those bytes would change the SHA-256 of every
+  module encoded with it, and so break anything that names modules by their
+  digest; it will be announced as a breaking change.
+- **New: load the text format.** `wasm:load/1` and `wasm:load/2` take
+  `{wat, Source}`, and encode it before loading. A module loaded from text and
+  the same module loaded from its `.wasm` share one cache entry and one
+  handle. Until now text could only be compiled, and each compile gave it a
+  new identity that nothing shared.
 - **Fixed: a module could leave out its data count section when it used
   bulk memory inside a `try_table`.** The binary format requires the data
   count section whenever a function uses `memory.init` or `data.drop`, and

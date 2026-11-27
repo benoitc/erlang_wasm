@@ -71,6 +71,34 @@ Each section of this page starts from a clean shell. If you paste them all
 into one shell, run `f().` between sections, so that you can bind names like
 `Mod` and `Inst` again.
 
+## Turn text into a `.wasm` file
+
+You do not need a toolchain to write a `.wasm` file either. `encode/1` turns
+the text format into the binary format, and `load/1` loads text directly:
+
+<!-- check: fresh -->
+```erlang
+Src = ~"""
+(module
+  (func (export "add") (param i32 i32) (result i32)
+    local.get 0 local.get 1 i32.add))
+""",
+{ok, Bin} = wasm:encode({wat, Src}),
+ok        = file:write_file("add.wasm", Bin),
+{ok, Mod} = wasm:load_file("add.wasm"),
+{ok, Mod} = wasm:load({wat, Src}),
+ok        = file:delete("add.wasm").
+```
+
+Both loads give the same handle. A module is named by the SHA-256 of its
+bytes, and `load/1` encodes text before it loads it, so the text and its
+`.wasm` are one module to the cache. The bytes are the same every time you
+encode the same module, which is what makes that name stable. The rules are
+in `wasm_encode`.
+
+`encode/1` takes a module you compiled or loaded too, so a module you built
+or changed in Erlang can be written out and handed to another engine.
+
 ## Give it something to call
 
 Imports are plain Erlang functions. You give them in a map, with the module

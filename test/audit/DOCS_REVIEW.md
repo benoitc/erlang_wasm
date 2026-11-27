@@ -1195,3 +1195,16 @@ Q11 to Q15.
 pull request if you want it before the release, since it is small and
 already tested; otherwise with O1 after it. Then the version bump and the
 release section of the changelog.
+
+**Decided, 2026-11-27.** P9 to P12 and C3 are fixed before the release, in
+the pull request that carries this section. Q26: the release is 0.13.0. Q27:
+no Upgrading section; the changelog entry is enough. Q28: C3 before the
+release.
+
+Sharing the check found that the copies differed in a third way: the
+decoder's and the encoder's did not count `array.new_data` and
+`array.init_data`, which name a data segment too, so the decoder read a
+module that `wasm-tools validate` refuses for its missing data count. The one
+function counts all four instructions, and the decoder refuses that module
+now. It is the same kind of refusal as Q27's, of a module the specification
+already forbids, and the changelog entry says so.

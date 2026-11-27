@@ -10893,3 +10893,58 @@ fail reliably; at the new sizes main measures 2.92 and fails
 
 **Raw.** `test/audit/raw/wat-types/` contains every timing pair, the two
 digests and scaling runs, the allocation diagnostic and its output.
+
+## Encoding a module (2026-11-27)
+
+What `wasm:encode/1` costs next to decoding the same bytes, on the QuickJS
+module the benchmarks use and on the Rust module, `wasi_demo.wasm`. This is
+the cost of a new function, not a comparison of two revisions, so there is no
+gate and no null set; it is recorded so the next change to the encoder has a
+number to compare with.
+
+**Method.** Apple M4 Pro, OTP 29.1.2, at `541160d` with the encoder of the
+next commit. `bench/paths/encodebench.erl`, twelve launches per module, each
+in a fresh emulator, alternating which arm is timed first in each round
+(`decode_first`, `encode_first`). Each launch times every arm five times, each
+call in a fresh process, and keeps the lowest. A launch counted only if the
+5-minute load average was below 8 at both ends; all 24 counted on their first
+attempt, at loads of 7.66 to 7.99. The arms are `wasm_decode:module/1` on the
+file's bytes, `wasm:encode/1` on the module `wasm:compile/1` gave, which
+strips the validator's annotations first, and `wasm_encode:module/1` on the
+decoded record. Each value is the median of the launches.
+
+| module | ordering | decode | `wasm:encode/1` | encoder alone | encode / decode |
+| --- | --- | ---: | ---: | ---: | ---: |
+| QuickJS, 1,840,749 bytes | decode first | 161.4 ms | 146.7 ms | 148.8 ms | 0.908 |
+| | encode first | 162.2 ms | 140.1 ms | 149.9 ms | 0.876 |
+| | all twelve | 161.6 ms | 145.5 ms | 148.8 ms | 0.904 |
+| `wasi_demo`, 122,596 bytes | decode first | 2.76 ms | 4.05 ms | 4.03 ms | 1.464 |
+| | encode first | 2.81 ms | 4.07 ms | 4.01 ms | 1.443 |
+| | all twelve | 2.79 ms | 4.05 ms | 4.02 ms | 1.456 |
+
+The ratio column is the median of each launch's own ratio, not a ratio of
+medians.
+
+**What it says.** Encoding QuickJS takes about nine tenths of decoding it; the
+Rust module takes about one and a half times. Why the smaller module costs
+more per byte to encode was not measured. Stripping the validator's
+annotations costs nothing measurable: `wasm:encode/1` on the validated module
+and the encoder on the decoded record are within 3% of each other in both
+orderings, in different directions.
+
+**Bytes.** QuickJS encodes to exactly the bytes it was read from, all
+1,840,749. `wasi_demo` encodes to 115,187 bytes, and the whole difference is
+in its code section, 82,066 bytes down to 74,657: its toolchain wrote some of
+the integers in function bodies at a fixed width, and the encoder writes each
+in its shortest form. Every other section is the same size. The CPython
+fixture goes from 26,267,204 bytes to 13,333,795: 12,923,243 of the
+12,933,409 bytes it loses are the `.debug_*` sections the decoder does not
+keep.
+
+**Decode, for comparison.** These decode times are the decoder alone, without
+the heap floor `wasm:compile/1` sets before it decodes a large module; "One-byte
+immediates in the decoder loop, timed through `wasm:compile/1`" above has the
+public call.
+
+**Raw.** `test/audit/raw/encode/qjs.terms` and `wasi_demo.terms`, one record
+per launch.

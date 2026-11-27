@@ -156,15 +156,29 @@ load({wat, _} = Text, Opts) ->
     end;
 load(Binary, Opts) -> wasm_module_cache:load(Binary, Opts).
 
--doc "Read a `.wasm` file and load it.".
+-doc """
+Read a module file and load it.
+
+A path ending in `.wat` is the text format, loaded as `{wat, Source}` is by
+`load/1`: encoded first, so it gets the same handle as its `.wasm`. Any other
+path is the binary format. The extension decides, not the contents, so a
+damaged `.wasm` is still reported as one.
+""".
 -spec load_file(file:filename_all()) -> {ok, module_()} | {error, term()}.
 load_file(Path) ->
     case file:read_file(Path) of
-        {ok, Binary} -> load(Binary);
+        {ok, Bytes} ->
+            case is_text_path(Path) of
+                true -> load({wat, Bytes});
+                false -> load(Bytes)
+            end;
         {error, Reason} ->
             {error, err(link, file_error, ~"cannot read module file",
                         #{path => Path, reason => Reason})}
     end.
+
+is_text_path(Path) ->
+    string:equal(filename:extension(Path), ".wat", true).
 
 -doc """
 Drop your claim on a cached module.

@@ -74,7 +74,8 @@ into one shell, run `f().` between sections, so that you can bind names like
 ## Turn text into a `.wasm` file
 
 You do not need a toolchain to write a `.wasm` file either. `encode/1` turns
-the text format into the binary format, and `load/1` loads text directly:
+the text format into the binary format, and `load/1` and `load_file/1` load
+text directly:
 
 <!-- check: fresh -->
 ```erlang
@@ -85,12 +86,16 @@ Src = ~"""
 """,
 {ok, Bin} = wasm:encode({wat, Src}),
 ok        = file:write_file("add.wasm", Bin),
+ok        = file:write_file("add.wat", Src),
 {ok, Mod} = wasm:load_file("add.wasm"),
+{ok, Mod} = wasm:load_file("add.wat"),
 {ok, Mod} = wasm:load({wat, Src}),
-ok        = file:delete("add.wasm").
+ok        = file:delete("add.wasm"),
+ok        = file:delete("add.wat").
 ```
 
-Both loads give the same handle. A module is named by the SHA-256 of its
+All three loads give the same handle. `load_file/1` reads a path ending in
+`.wat` as text and any other path as the binary format. A module is named by the SHA-256 of its
 bytes, and `load/1` encodes text before it loads it, so the text and its
 `.wasm` are one module to the cache. The bytes are the same every time you
 encode the same module, which is what makes that name stable. The rules are

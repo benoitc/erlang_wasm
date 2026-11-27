@@ -13,9 +13,9 @@
   module encoded with it, and so break anything that names modules by their
   digest; it will be announced as a breaking change.
 - **New: load the text format.** `wasm:load/1` and `wasm:load/2` take
-  `{wat, Source}`, and encode it before loading. A module loaded from text and
-  the same module loaded from its `.wasm` share one cache entry and one
-  handle. Until now text could only be compiled, and each compile gave it a
+  `{wat, Source}`, and `wasm:load_file/1` reads a `.wat` file as text; both
+  encode it before loading. A module loaded from text and the same module
+  loaded from its `.wasm` share one cache entry and one handle. Until now text could only be compiled, and each compile gave it a
   new identity that nothing shared.
 - **Fixed: a module could leave out its data count section when it used
   bulk memory inside a `try_table`.** The binary format requires the data

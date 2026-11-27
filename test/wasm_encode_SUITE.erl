@@ -36,7 +36,8 @@ all() ->
      encode_takes_a_module_a_handle_or_text,
      text_and_its_wasm_share_one_cache_entry,
      encoded_bytes_are_bounded_by_max_module_bytes,
-     text_that_does_not_parse_or_validate_is_refused].
+     text_that_does_not_parse_or_validate_is_refused,
+     load_file_reads_a_wat_file_as_text].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -271,6 +272,28 @@ text_that_does_not_parse_or_validate_is_refused(_) ->
     Invalid = ~"(module (func (result i32)))",
     ?assertMatch({ok, _}, wasm:encode({wat, Invalid})),
     ?assertMatch({error, #{class := invalid}}, wasm:load({wat, Invalid})).
+
+%% A `.wat' path is text and any other path is the binary format: the
+%% extension decides, so a file whose contents disagree with its name is
+%% refused for what its name says it is.
+load_file_reads_a_wat_file_as_text(Config) ->
+    {Wat, Golden} = barrel_map(),
+    WatPath = filename:join([fixtures(), "encode", "barrel_map.wat"]),
+    {ok, FromWasm} = wasm:load_file(filename:join([fixtures(), "encode", "barrel_map.wasm"])),
+    ?assertEqual({ok, FromWasm}, wasm:load_file(WatPath)),
+    ?assertEqual({ok, FromWasm}, wasm:load_file(list_to_binary(WatPath))),
+    Dir = ?config(priv_dir, Config),
+    Upper = filename:join(Dir, "map.WAT"),
+    ok = file:write_file(Upper, Wat),
+    ?assertEqual({ok, FromWasm}, wasm:load_file(Upper)),
+    BytesNamedText = filename:join(Dir, "bytes.wat"),
+    ok = file:write_file(BytesNamedText, Golden),
+    ?assertMatch({error, #{class := malformed}}, wasm:load_file(BytesNamedText)),
+    TextNamedBytes = filename:join(Dir, "text.wasm"),
+    ok = file:write_file(TextNamedBytes, Wat),
+    ?assertMatch({error, #{kind := magic_header_not_detected}},
+                 wasm:load_file(TextNamedBytes)),
+    [ok = wasm:unload(FromWasm) || _ <- lists:seq(1, 4)].
 
 %%% ---------------------------------------------------------- every opcode ---
 

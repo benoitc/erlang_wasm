@@ -144,9 +144,9 @@ parse_forms(Forms) ->
 %% The data count section is present exactly when a data index appears in the
 %% code, which is what lets `memory.init' be validated without reading the data
 %% section. Emitting it merely because there are segments is a different module
-%% from the one the binary format produces for the same source.
-with_data_count(#module{datas = []} = M) ->
-    M;
+%% from the one the binary format produces for the same source. A module that
+%% names a data index and has no segments still needs it, with a count of
+%% zero: without it the binary has no form the decoder reads.
 with_data_count(#module{datas = Datas, funcs = Funcs} = M) ->
     case lists:any(fun(#func{body = Body}) -> names_data(Body) end, Funcs) of
         true -> M#module{data_count = length(Datas)};

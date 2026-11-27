@@ -47,8 +47,9 @@ functions. You can paste this into `rebar3 shell` as it is.
 ## Load a module from a file
 
 A module built by a real compiler comes as a `.wasm` file. The bytes below
-are the same `add` module, as `wat2wasm` writes it, so you can try this
-without a compiler. With your own module, skip the first line:
+are the same `add` module, as `wat2wasm` writes it, and as `wasm:encode/1`
+does in [Turn text into a `.wasm` file](#turn-text-into-a-wasm-file), so you
+can try this without a compiler. With your own module, skip the first line:
 
 <!-- check: fresh -->
 ```erlang

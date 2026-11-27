@@ -32,7 +32,7 @@ all() ->
      integers_take_their_shortest_form,
      what_cannot_be_encoded_is_an_error_value,
      every_decoded_opcode_encodes_to_its_bytes,
-     a_data_count_is_required_inside_a_try_table,
+     every_data_index_needs_a_data_count,
      encode_takes_a_module_a_handle_or_text,
      text_and_its_wasm_share_one_cache_entry,
      encoded_bytes_are_bounded_by_max_module_bytes,
@@ -204,19 +204,26 @@ what_cannot_be_encoded_is_an_error_value(_) ->
                   {W, wasm_encode:module(M)})
      || {W, M} <- Bad].
 
-%% The decoder and the encoder agree on when a module needs a data count, a
-%% `try_table' body included: the decoder used to look into every block but
-%% that one, and would read a module the encoder then refused.
-a_data_count_is_required_inside_a_try_table(_) ->
-    Body = [{try_table, empty, [], [{data_drop, 0}]}],
-    M = func_module(Body, []),
-    ?assertMatch({error, #{kind := unencodable}}, wasm_encode:module(M)),
-    {ok, Bin} = wasm_encode:module(M#module{data_count = 1,
-                                             datas = [#data{init = ~"", mode = passive}]}),
-    %% The same bytes with the data count section cut out.
-    {ok, Without} = drop_section(12, Bin),
-    ?assertMatch({error, #{kind := data_count_section_required}},
-                 wasm_decode:module(Without)).
+%% The decoder and the encoder agree on when a module needs a data count:
+%% every instruction that names a data segment, at the top of a body or inside
+%% any block. The decoder used to miss the GC instructions and anything inside
+%% a `try_table', and read modules the encoder then refused.
+every_data_index_needs_a_data_count(_) ->
+    Names = [{data_drop, 0}, {memory_init, 0, 0},
+             {array_new_data, 0, 0}, {array_init_data, 0, 0}],
+    [begin
+         M = func_module(Body, []),
+         ?assertMatch({Body, {error, #{kind := unencodable}}},
+                      {Body, wasm_encode:module(M)}),
+         Data = [#data{init = ~"", mode = passive}],
+         {ok, Bin} = wasm_encode:module(M#module{data_count = 1, datas = Data}),
+         %% The same bytes with the data count section cut out.
+         {ok, Without} = drop_section(12, Bin),
+         ?assertMatch({Body, {error, #{kind := data_count_section_required}}},
+                      {Body, wasm_decode:module(Without)})
+     end || I <- Names,
+            Body <- [[I], [{block, empty, [I]}],
+                     [{try_table, empty, [], [I]}]]].
 
 %%% ---------------------------------------------------------------- the api ---
 

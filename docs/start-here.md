@@ -38,6 +38,7 @@ that shows you how.
 | you have | you use | read |
 | --- | --- | --- |
 | a core `.wasm` module | `wasm`, and `wasi_preview1` if it imports WASI | [Getting started](getting-started.md) |
+| a module in the text format, or one built in Erlang, that you want as a `.wasm` | `wasm:encode/1`, and `wasm:load/1` with `{wat, Source}` | [Turn text into a `.wasm` file](getting-started.md#turn-text-into-a-wasm-file) |
 | a program with a `main` (a WASI command) | `wasi` | [WASI preview 1](wasi.md) |
 | a WASI 0.2 or 0.3 component | `wasm_component`, `wasi_preview2`, `wasi_preview3` | [Components](components.md), [WASI 0.2](wasi-0-2.md), [WASI 0.3](wasi-0-3.md) |
 | untrusted code, one instance per request | `wasm_instance_worker` | [Using workers](worker.md) |

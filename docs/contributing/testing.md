@@ -83,7 +83,7 @@ need something a fresh clone does not have:
 
 | suite | needs | without it |
 | --- | --- | --- |
-| `wasm_spec_SUITE` | `testsuite/` | skips |
+| `wasm_spec_SUITE` | `testsuite/`; two cases, which check the encoder's output against another tool, also need `wasm-tools` | skips; those two cases skip without `wasm-tools`, as they do on the Tests job |
 | `wasm_wast_SUITE`, `wasm_wat_SUITE` | `testsuite/` for one case each; two `wasm_wat_SUITE` cases also need `wasm-tools` | those cases skip |
 | `wasi_conformance_SUITE` | `wasi-testsuite/` | skips |
 | `wasm_wasi2_testsuite_SUITE` | `wasi-testsuite/` and `wasm-tools` | skips |

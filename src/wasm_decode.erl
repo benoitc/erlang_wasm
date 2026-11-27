@@ -39,7 +39,7 @@ in `include/wasm.hrl`, which is what `wasm_validate` then checks.
 
 -export([module/1, module_unchecked/1, interface_unchecked/1]).
 -export([valtype/1, reftype/1, heaptype/1, limits/1, name/1]).
--export([imports/1]).
+-export([imports/1, uses_data_index/1]).
 
 %%% ----------------------------------------------------------------- api ---
 
@@ -741,20 +741,29 @@ check_data_count_required(#module{funcs = Funcs}) ->
                                  <<"data count section required">>, #{})
     end.
 
-uses_data_index([{memory_init, _, _} | _]) -> true;
-uses_data_index([{data_drop, _} | _]) -> true;
-uses_data_index([{block, _, Body} | Rest]) ->
-    uses_data_index(Body) orelse uses_data_index(Rest);
-uses_data_index([{loop, _, Body} | Rest]) ->
-    uses_data_index(Body) orelse uses_data_index(Rest);
-uses_data_index([{if_, _, Then, Else} | Rest]) ->
-    uses_data_index(Then) orelse uses_data_index(Else) orelse uses_data_index(Rest);
-%% A `try_table' is a block too: a bulk-memory instruction inside one needs the
-%% data count as much as one anywhere else. `wasm_encode' checks the same.
-uses_data_index([{try_table, _, _, Body} | Rest]) ->
-    uses_data_index(Body) orelse uses_data_index(Rest);
-uses_data_index([_ | Rest]) -> uses_data_index(Rest);
-uses_data_index([]) -> false.
+-doc """
+Whether a body names a data segment by index, in any block: `memory.init`,
+`data.drop`, `array.new_data` or `array.init_data`. A module whose code does
+needs the data count section.
+
+The encoder and the text parser ask through this, so the three cannot
+disagree. They did, three ways: one copy did not look inside a `try_table`,
+two did not know the GC instructions, and one stopped when a module had no
+segments.
+""".
+-spec uses_data_index([instr()]) -> boolean().
+uses_data_index(Body) -> lists:any(fun names_data/1, Body).
+
+names_data({memory_init, _, _}) -> true;
+names_data({data_drop, _}) -> true;
+names_data({array_new_data, _, _}) -> true;
+names_data({array_init_data, _, _}) -> true;
+names_data({block, _, Body}) -> uses_data_index(Body);
+names_data({loop, _, Body}) -> uses_data_index(Body);
+names_data({if_, _, Then, Else}) ->
+    uses_data_index(Then) orelse uses_data_index(Else);
+names_data({try_table, _, _, Body}) -> uses_data_index(Body);
+names_data(_) -> false.
 
 check_func_code_pairing(#module{funcs = Funcs}, Seen) ->
     HasFunc = maps:is_key(?SEC_FUNCTION, Seen),

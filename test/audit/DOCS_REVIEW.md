@@ -1117,3 +1117,94 @@ actor frees a slot when it takes a message out).
   shared by the readers of the graph, and the instance space counted the
   same way by all of them (C1).
 - **O2.** The directional property case for actor admission (Q24).
+
+## Before the release after 0.12.0
+
+Reviewed on `main` at `5d2cb34`, 2026-11-27. Since 0.12.0 one pull request
+merged, #160: the encoder (`wasm_encode`, `wasm_encode_code` and the
+`0xFD`, `0xFB` and `0xFE` encoders), `wasm:encode/1`, text through
+`wasm:load/1` and `wasm:load_file/1`, the specification suite's encode phases,
+and two fixes it found, one in the decoder and one in the text parser. Now 102
+modules, about 63,100 lines; 109 suites, one more: `wasm_encode_SUITE`.
+
+**What is already right.** The canonical encoding is written where a
+contributor changing it will read it, the `wasm_encode` module doc, and the
+golden vectors that hold it were written by `wasm-tools`, not by the encoder.
+Each new module has its level, its line in `map.md`, its `ex_doc` group, and
+the encoder's cycle is the fourth documented one in `architecture.md`, with
+its reason. `adding-an-instruction.md` has the encode stage and says which
+case fails when an instruction is decoded but not encoded. `getting-started.md`
+shows turning text into a `.wasm` and loading a `.wat` file, and runs it. The
+changelog says the bytes are stable and that changing them would be breaking.
+`PERF.md` records the encoder's cost next to the decoder's. Sizes are in
+proportion: `wasm_encode` is 470 lines and 134 clauses against
+`wasm_decode`'s 785 and 172, and `wasm_encode_code` 373 and 236 against
+`wasm_decode_code`'s 559 and 251.
+
+**Found, small.**
+
+- **P9. CONTRIBUTING's CI table describes the "wasmtime programs" job as it
+  was.** The job now fetches the specification suites, installs `wasm-tools`
+  on every run rather than only on a cache miss, and runs the encoder's two
+  `wasm_spec_SUITE` cases against it. Its row says none of this. Primary
+  problem: documentation.
+- **P10. `testing.md` gives `wasm_spec_SUITE` only `testsuite/` as a
+  need.** Two of its cases need `wasm-tools` and skip without it, which is
+  what they do on the Tests job. Primary problem: documentation.
+- **P11. `start-here.md`'s "you have" table has no row for text.** A reader
+  with a `.wat` file, or a module built in Erlang, who wants a `.wasm` or a
+  shared cache entry has no line that points to `wasm:encode/1` or
+  `load/1` with `{wat, Source}`; the getting-started section is reached only
+  by reading that page through. Primary problem: navigation.
+- **P12. The getting-started page still says the `add` bytes are "as
+  `wat2wasm` writes it".** Since `wasm:encode/1` writes the same bytes, the
+  section could say so, or show encoding them. Small, and optional.
+  Primary problem: documentation.
+
+**Found, in the code.**
+
+- **C3. Whether a body names a data segment is decided by three copies of one
+  walk.** `uses_data_index/1` in `wasm_decode` and in `wasm_encode`, and
+  `names_data/1` in `wasm_wat`, each walk a body for `memory.init` and
+  `data.drop` through every kind of block. Both fixes in #160 were these
+  copies disagreeing: the decoder's did not look inside a `try_table`, and
+  the parser's stopped when there were no segments. Recommended: one exported
+  function, in the lowest of the three (`wasm_decode`), that the other two
+  call; `wasm_encode` already calls downward into the front end's level, so
+  it adds no cycle. A change of a dozen lines, with the existing cases in
+  `wasm_encode_SUITE` and `wasm_wat_SUITE` to hold it. Primary problem:
+  module organisation.
+
+**Questions for the maintainer.**
+
+- **Q26. Which version.** `wasm:encode/1` is a new supported function and
+  `wasm:load/1` takes a new kind of argument; by the practice so far that is a
+  minor release, 0.13.0. Confirm.
+- **Q27. An Upgrading note?** The decoder now refuses a module that uses bulk
+  memory inside a `try_table` without a data count section. It was malformed
+  all along. By Q21's rule a refusal of a module the specification already
+  forbids is a changelog entry, not an Upgrading section. Confirm.
+- **Q28. C3 before or after the release.**
+
+**Still open.** O1 and O2 from "Open after 0.12.0", unchanged: the shared
+index-space pass and the directional property case for actor admission. And
+every item under "Still open" above, and questions Q2, Q4, Q5, Q7, Q9 and
+Q11 to Q15.
+
+**Suggested order.** P9 to P12 together, documentation only. C3 in the same
+pull request if you want it before the release, since it is small and
+already tested; otherwise with O1 after it. Then the version bump and the
+release section of the changelog.
+
+**Decided, 2026-11-27.** P9 to P12 and C3 are fixed before the release, in
+the pull request that carries this section. Q26: the release is 0.13.0. Q27:
+no Upgrading section; the changelog entry is enough. Q28: C3 before the
+release.
+
+Sharing the check found that the copies differed in a third way: the
+decoder's and the encoder's did not count `array.new_data` and
+`array.init_data`, which name a data segment too, so the decoder read a
+module that `wasm-tools validate` refuses for its missing data count. The one
+function counts all four instructions, and the decoder refuses that module
+now. It is the same kind of refusal as Q27's, of a module the specification
+already forbids, and the changelog entry says so.

@@ -148,22 +148,11 @@ parse_forms(Forms) ->
 %% names a data index and has no segments still needs it, with a count of
 %% zero: without it the binary has no form the decoder reads.
 with_data_count(#module{datas = Datas, funcs = Funcs} = M) ->
-    case lists:any(fun(#func{body = Body}) -> names_data(Body) end, Funcs) of
+    case lists:any(fun(#func{body = B}) -> wasm_decode:uses_data_index(B) end,
+                   Funcs) of
         true -> M#module{data_count = length(Datas)};
         false -> M
     end.
-
-names_data(Body) -> lists:any(fun names_data_instr/1, Body).
-
-names_data_instr({block, _, Body}) -> names_data(Body);
-names_data_instr({loop, _, Body}) -> names_data(Body);
-names_data_instr({if_, _, Then, Else}) -> names_data(Then) orelse names_data(Else);
-names_data_instr({try_table, _, _, Body}) -> names_data(Body);
-names_data_instr({memory_init, _, _}) -> true;
-names_data_instr({data_drop, _}) -> true;
-names_data_instr({array_new_data, _, _}) -> true;
-names_data_instr({array_init_data, _, _}) -> true;
-names_data_instr(_Instr) -> false.
 
 %% The declared types, built once every name is known, and the first plain
 %% type for each signature. `types' and `groups' stay newest first through the

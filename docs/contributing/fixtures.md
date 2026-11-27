@@ -37,6 +37,7 @@ a run without the fixture proves nothing about what it covers.
 | `test/fixtures/native/` | committed | `scripts/build-native-fixture.sh`, with a clang that targets wasm32 | `wasm_native_SUITE` | committed | used as committed |
 | `test/fixtures/seeds/` | committed | no script: toolchain output kept as it is | `wasm_prop_SUITE`, `wasm_bench_SUITE`, `wasm_jit_bounds_SUITE`, `wasm_jit_lifetime_SUITE`, `wasm_module_cache_SUITE`, `wasm_annotate_SUITE` | committed | used as committed |
 | `test/fixtures/wasi/` | committed | `hello.wasm` beside its source `hello.wat` | `wasi_SUITE` | committed | used as committed |
+| `test/fixtures/encode/` | committed | each `.wasm` is `wasm-tools parse` then `wasm-tools strip --all` of the `.wat` beside it, so the encoder is held to bytes it did not write | `wasm_encode_SUITE` | the bytes are the expected output: a change in what the encoder writes fails them | used as committed |
 
 The two upstream suites live beside the project, in `testsuite/` and
 `wasi-testsuite/` at its root, and git ignores both. `WASM_TESTSUITE` and

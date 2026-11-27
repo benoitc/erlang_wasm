@@ -1,6 +1,6 @@
 # Architecture
 
-This page is the map of the runtime: what the ninety-seven modules are, which
+This page is the map of the runtime: what the ninety-nine modules are, which
 ones depend on which, and where to start reading. Read it before you change
 anything. Each module documents itself, but no module describes how they fit
 together.
@@ -72,7 +72,7 @@ WebAssembly and do not change the runtime, start at
 
 There are twelve levels (L0 to L11), computed from the code and not drawn by
 hand. A module sits one level above the highest module it calls. The modules
-of each of the three cycles below share one level. So a module only ever calls
+of each of the four cycles below share one level. So a module only ever calls
 **downward**, and level 0 depends on nothing else in the project: you can
 start reading there and understand it completely. The worker modules, in
 `src/worker/`, sit on top of the runtime they use: the adapters at L10, the
@@ -97,7 +97,7 @@ L8  wasi_preview1  wasm_snapshot_store  wasm_instance_worker
 L7  wasm  wasm_module_cache  wasm_snapshot_owner  wasm_jit_sup
 L6  wasm_exec  wasm_core  wasm_jit  wasm_snapshot
 L5  wasm_instance  wasm_wat
-L4  wasm_validate  wasm_wat_instr
+L4  wasm_validate  wasm_wat_instr  wasm_encode  wasm_encode_code
 L3  wasm_memory  wasm_table  wasm_global  wasm_heap  wasm_store
     wasm_validate_code  wasm_wast  wasm_worker_sup
 L2  wasm_decode  wasm_decode_code  wasm_decode_simd  wasm_decode_gc
@@ -154,15 +154,21 @@ functions to run in place of interpreted ones. The layers above `wasm` are
 built on it, and the level listing above says which lower modules each may
 also call directly.
 
-## The three cycles
+## The four cycles
 
-There are exactly three cycles, and each one is only a few calls.
+There are exactly four cycles, and each one is only a few calls.
 
 **The decoder, five modules.** `wasm_decode_code` and the opcode-space modules
 `wasm_decode_simd`, `wasm_decode_gc` and `wasm_decode_atomic` call each other. A
 SIMD immediate can contain a memory argument and a GC instruction can contain a
 block type. The recursion comes from the binary format itself; it is not a
 mistake in the layers.
+
+**The encoder, two modules.** The decoder's cycle run backwards. `wasm_encode`
+writes a global's initialiser through `wasm_encode_code:expr/1`, and
+`wasm_encode_code` writes a block type and a `select` type through
+`wasm_encode:valtype/1`. The two are split exactly as the decoder is, so that
+each reads against its decoder line for line.
 
 **The tier, three modules.** Two edges, one function each. `wasm_core` calls
 `wasm_exec:load_spec/1` and `store_spec/1` at generation time, so that the
@@ -183,10 +189,10 @@ avoided; you can only choose which module is in it. The choice was
 mechanism, `wasm_snapshot`, stays out of the cycle: it is what a capture
 copies and what a restore writes back.
 
-Cycles are allowed here. What is not allowed is a fourth cycle that appears
+Cycles are allowed here. What is not allowed is a fifth cycle that appears
 without anyone noticing. You cannot see a cycle by reading one module.
 Everything else about `wasm_memory` you learn inside `wasm_memory`, but a
-cycle you only find by reading all ninety-seven.
+cycle you only find by reading all ninety-nine.
 
 It is easy to add one by mistake. One call from `wasm_error`, at level 0, up
 into `wasm` would merge fourteen modules into one cycle, and only the test
@@ -253,7 +259,7 @@ exactly this.
 
 Do not derive the graph by grepping the sources. Module documentation refers
 to other modules as `` `wasm_exec:call/3` `` and a grep counts every one of
-those as a dependency. On this code that turns three cycles into one cycle of
+those as a dependency. On this code that turns four cycles into one cycle of
 fourteen modules, which is completely wrong.
 
 ## Short notes
@@ -267,7 +273,7 @@ fourteen modules, which is completely wrong.
 - `wasm_error` is at level 0 on purpose. Every module may build an error, and
   building one must never call back into the runtime.
 - Adding a module means deciding its level. If it needs something above it, you
-  are about to add a fourth cycle.
+  are about to add a fifth cycle.
 
 ## Read this next
 

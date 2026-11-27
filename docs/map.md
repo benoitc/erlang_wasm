@@ -49,6 +49,8 @@ into one application.
 | `wasm_decode_gc` | the `0xFB` opcode space: garbage collection | internal |
 | `wasm_decode_atomic` | the `0xFE` opcode space: threads | internal |
 | `wasm_leb128` | LEB128 varint decoding, strict per the binary format | internal |
+| `wasm_encode` | WebAssembly binary format encoder: a `#module{}` back to bytes | internal |
+| `wasm_encode_code` | instruction and expression encoding | internal |
 | `wasm_validate` | module-level validation | internal |
 | `wasm_validate_code` | function body validation | internal |
 | `wasm_validate_simd` | operand types for the `0xFD` vector opcode space | internal |

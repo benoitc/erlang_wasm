@@ -22,7 +22,8 @@ that case is matched directly before entering the loop.
 
 -export([u32/1, u64/1, s32/1, s64/1, s33/1]).
 -export([uleb/2, sleb/2]).
--export([encode_u32/1, encode_s32/1, encode_s64/1]).
+-export([encode_u32/1, encode_u64/1, encode_s32/1, encode_s33/1,
+         encode_s64/1]).
 
 -define(U32_MAX_BYTES, 5).
 -define(U64_MAX_BYTES, 10).
@@ -110,14 +111,22 @@ sleb(<<>>, _Max, _N, _Acc, _Shift) ->
 max_bytes(Bits) -> (Bits + 6) div 7.
 
 %%% -------------------------------------------------------------- encoding ---
-%%% Used by tests and fixture builders, not on any runtime path.
+%%% The shortest encoding of each value, which is the only one `wasm_encode'
+%%% writes. None of these checks a range: the width is the caller's to bound.
 
 -spec encode_u32(non_neg_integer()) -> binary().
 encode_u32(V) when V >= 0, V < 128 -> <<0:1, V:7>>;
 encode_u32(V) when V >= 0 -> <<1:1, (V band 16#7F):7, (encode_u32(V bsr 7))/binary>>.
 
+-spec encode_u64(non_neg_integer()) -> binary().
+encode_u64(V) -> encode_u32(V).
+
 -spec encode_s32(integer()) -> binary().
 encode_s32(V) -> encode_s(V).
+
+-doc "The `s33` of a block type or a heap type: a type index, or a negative code.".
+-spec encode_s33(integer()) -> binary().
+encode_s33(V) -> encode_s(V).
 
 -spec encode_s64(integer()) -> binary().
 encode_s64(V) -> encode_s(V).

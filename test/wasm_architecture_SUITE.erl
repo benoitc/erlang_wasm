@@ -1,12 +1,12 @@
 %% @doc The shape of the module graph, held to what `docs/architecture.md' says.
 %%
-%% That page draws the runtime as eleven layers with three cycles in it, and a
+%% That page draws the runtime as eleven layers with four cycles in it, and a
 %% drawing nobody checks stops being true. This recomputes the graph from the
 %% compiled modules and fails when it has changed.
 %%
-%% The point is not that cycles are forbidden. All three of these are
+%% The point is not that cycles are forbidden. All four of these are
 %% deliberate and each is defensible in one sentence; what is forbidden is a
-%% *fourth* one appearing without anybody deciding it should. A cycle is the
+%% *fifth* one appearing without anybody deciding it should. A cycle is the
 %% one structural property a reader cannot discover locally: every other
 %% question about a module can be answered by reading that module, and this one
 %% can only be answered by reading all of them.
@@ -18,7 +18,7 @@
 -include_lib("stdlib/include/assert.hrl").
 
 all() ->
-    [the_module_graph_has_the_three_documented_cycles,
+    [the_module_graph_has_the_four_documented_cycles,
      every_module_says_what_it_is,
      the_layer_diagram_names_every_module,
      the_page_counts_the_modules_right,
@@ -46,9 +46,10 @@ documented_cycles() ->
     [[wasm, wasm_module_cache, wasm_snapshot_owner],
      [wasm_core, wasm_exec, wasm_jit],
      [wasm_decode, wasm_decode_atomic, wasm_decode_code, wasm_decode_gc,
-      wasm_decode_simd]].
+      wasm_decode_simd],
+     [wasm_encode, wasm_encode_code]].
 
-the_module_graph_has_the_three_documented_cycles(_) ->
+the_module_graph_has_the_four_documented_cycles(_) ->
     Cycles = lists:sort([lists:sort(C) || C <- cycles()]),
     ct:log("module cycles:~n~p", [Cycles]),
     ?assertEqual(lists:sort(documented_cycles()), Cycles).

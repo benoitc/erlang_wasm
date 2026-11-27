@@ -51,6 +51,9 @@ four-stage recipe.
 %% supply the default a missing `align=` means. Exported rather than copied:
 %% two tables of natural alignments would be two tables to disagree.
 -export([load_store/1]).
+%% For the encoder, which takes a body as decoded or as validated and writes
+%% the instructions either way. One way back from the annotation, not two.
+-export([strip/1]).
 
 %%% ----------------------------------------------------------------- api ---
 

@@ -1,0 +1,12 @@
+#{file => <<"qjs.wasm">>,decode => 160327,bytes_in => 1840749,  bytes_out => 1840749,encode => 143382,encode_decoded => 146852,  load_end => 7.91,load_start => 7.99,order => decode_first}.
+#{file => <<"qjs.wasm">>,decode => 156712,bytes_in => 1840749,  bytes_out => 1840749,encode => 138021,encode_decoded => 142560,  load_end => 7.91,load_start => 7.91,order => encode_first}.
+#{file => <<"qjs.wasm">>,decode => 157319,bytes_in => 1840749,  bytes_out => 1840749,encode => 146566,encode_decoded => 149350,  load_end => 7.84,load_start => 7.91,order => decode_first}.
+#{file => <<"qjs.wasm">>,decode => 160702,bytes_in => 1840749,  bytes_out => 1840749,encode => 139937,encode_decoded => 147002,  load_end => 7.8,load_start => 7.84,order => encode_first}.
+#{file => <<"qjs.wasm">>,decode => 159236,bytes_in => 1840749,  bytes_out => 1840749,encode => 144392,encode_decoded => 148217,  load_end => 7.8,load_start => 7.8,order => decode_first}.
+#{file => <<"qjs.wasm">>,decode => 160706,bytes_in => 1840749,  bytes_out => 1840749,encode => 138906,encode_decoded => 144647,  load_end => 7.7,load_start => 7.8,order => encode_first}.
+#{file => <<"qjs.wasm">>,decode => 162663,bytes_in => 1840749,  bytes_out => 1840749,encode => 146923,encode_decoded => 146229,  load_end => 7.66,load_start => 7.7,order => decode_first}.
+#{file => <<"qjs.wasm">>,decode => 166096,bytes_in => 1840749,  bytes_out => 1840749,encode => 156641,encode_decoded => 152722,  load_end => 7.66,load_start => 7.66,order => encode_first}.
+#{file => <<"qjs.wasm">>,decode => 166560,bytes_in => 1840749,  bytes_out => 1840749,encode => 155210,encode_decoded => 160377,  load_end => 7.74,load_start => 7.66,order => decode_first}.
+#{file => <<"qjs.wasm">>,decode => 164698,bytes_in => 1840749,  bytes_out => 1840749,encode => 140261,encode_decoded => 153139,  load_end => 7.71,load_start => 7.74,order => encode_first}.
+#{file => <<"qjs.wasm">>,decode => 162445,bytes_in => 1840749,  bytes_out => 1840749,encode => 147671,encode_decoded => 152013,  load_end => 7.71,load_start => 7.71,order => decode_first}.
+#{file => <<"qjs.wasm">>,decode => 163760,bytes_in => 1840749,  bytes_out => 1840749,encode => 148132,encode_decoded => 153315,  load_end => 7.72,load_start => 7.71,order => encode_first}.

@@ -645,8 +645,8 @@ The verdict for one cache directory, worked out once however many ask at once.
 
 `Init` is a fun rather than a module and function **on purpose**: this server
 must not name `wasm_code_cache`, because that module calls this one and a
-static edge back would make a fourth module cycle.
-`wasm_architecture_SUITE` asserts there are exactly three.
+static edge back would make another module cycle, and
+`wasm_architecture_SUITE` asserts the exact set.
 
 Serialising matters more than it looks. Creating a cache directory is
 `make_dir`, then a chmod, and `make_dir` respects the umask: a second process

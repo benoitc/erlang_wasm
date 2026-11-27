@@ -2,9 +2,11 @@
 -moduledoc """
 The text format, parsed into the same `#module{}` the binary decoder produces.
 
-Hand a `.wat` file to `wasm:load/1` and you land here. Everything downstream is
-unchanged: a text module is validated, instantiated and
-run by exactly the code a binary one is. The text format is a *front end*, not a
+Hand text to `wasm:load/1`, `wasm:compile/1` or `wasm:encode/1` as
+`{wat, Source}` and you land here. Everything downstream is unchanged: a text
+module is validated, instantiated and run by exactly the code a binary one is,
+and `wasm:load/1` encodes it first so that it is named by the same bytes as
+its `.wasm`. The text format is a *front end*, not a
 second runtime, and the way to keep it honest is to make it produce the same
 value rather than a parallel one.
 
@@ -142,9 +144,9 @@ parse_forms(Forms) ->
 %% The data count section is present exactly when a data index appears in the
 %% code, which is what lets `memory.init' be validated without reading the data
 %% section. Emitting it merely because there are segments is a different module
-%% from the one the binary format produces for the same source.
-with_data_count(#module{datas = []} = M) ->
-    M;
+%% from the one the binary format produces for the same source. A module that
+%% names a data index and has no segments still needs it, with a count of
+%% zero: without it the binary has no form the decoder reads.
 with_data_count(#module{datas = Datas, funcs = Funcs} = M) ->
     case lists:any(fun(#func{body = Body}) -> names_data(Body) end, Funcs) of
         true -> M#module{data_count = length(Datas)};

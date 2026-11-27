@@ -24,6 +24,7 @@ of this page that covers it.
 | `corespike` | feasibility spike: one function compiled to Core Erlang and run | "Compiling one function instead of interpreting it" |
 | `coverage` | what share of a real module the compiled tier takes, and what refuses the rest; a diagnostic | "What the generator actually refuses today" |
 | `densitybench` | what a live instance costs the node, and how many fit under a page budget | "Restores, density and footprint" |
+| `encodebench` | what `wasm:encode/1` costs on a real guest, next to what decoding the same bytes costs | "What encoding costs" |
 | `floor` | the benchmark loop written in Erlang against the interpreter: the floor no interpreter beats | none |
 | `fusecount` | which fusion rules fire and how many dispatches they remove; a diagnostic | "Which fusion rules actually fire" |
 | `fuseoff` | one module's loop timed with `fuse => false` and `fuse => true` | none |
@@ -442,6 +443,28 @@ The arguments are the destination, the source, the length and the rounds.
 `8 0 65536` overlaps from above with the two aligned alike, `65537 0 65536`
 is aligned differently and clear of the source, `9 0 65536` is both, and
 `65536 0 65536` is the aligned forward copy the others are compared with.
+
+## What encoding costs
+
+`encodebench` times `wasm:encode/1` on a module `wasm:compile/1` gave, the
+encoder alone on the decoded record, and `wasm_decode:module/1` on the same
+bytes, each round in a fresh process. Use it for a change to `wasm_encode` or
+the opcode-space encoders; its result is in `PERF.md`, "Encoding a module".
+
+```sh
+rebar3 compile
+erlc -o bench/paths -pa _build/default/lib/wasm/ebin bench/paths/encodebench.erl
+erl -noshell -pa _build/default/lib/wasm/ebin -pa bench/paths \
+    -run encodebench main test/fixtures/lang/qjs.wasm 5 decode_first
+```
+
+- The arguments are the module, the rounds, and which is timed first in each
+  round, `decode_first` or `encode_first`. Run both, each in a fresh
+  emulator, alternately.
+- It prints the lowest time of each, in microseconds, the size of the encoded
+  bytes and the 5-minute load average at both ends.
+- It checks first that the compiled and the decoded record encode to the same
+  bytes, so the two encode timings describe the same output.
 
 ## What parsing text costs
 

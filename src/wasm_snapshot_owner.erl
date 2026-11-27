@@ -14,7 +14,7 @@ gone as well; this process only gives up the image's own hold.
 
 ## Why this is its own module
 
-`docs/architecture.md` names three cycles and `wasm_architecture_SUITE` asserts
+`docs/architecture.md` names every cycle and `wasm_architecture_SUITE` asserts
 them, so joining one is a decision rather than a side effect. Holding a claim
 means calling `wasm_module_cache`, and the cache calls `wasm:compile/2` on a
 miss, so **anything long-lived that holds a claim and is reachable from the

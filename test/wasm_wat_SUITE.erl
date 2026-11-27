@@ -28,7 +28,21 @@ all() ->
      the_facade_answers_a_value_for_bad_text,
      an_inline_segment_takes_an_index_in_its_own_space,
      implicit_types_take_the_indices_the_format_gives,
-     thousands_of_types_parse_in_linear_time].
+     thousands_of_types_parse_in_linear_time,
+     a_data_index_needs_a_data_count_with_no_segments_too].
+
+%% `memory.init' and `data.drop' need the data count section, which text does
+%% not write: whoever writes the binary adds it, as `wasm-tools parse' does,
+%% with a count of zero when there are no segments. The parser used to add it
+%% only when there were segments, and that record has no binary form.
+a_data_index_needs_a_data_count_with_no_segments_too(_) ->
+    {ok, M} = wasm_wat:module(~"(module (memory 1) (func (data.drop 0)))"),
+    ?assertEqual(0, M#module.data_count),
+    {ok, Bin} = wasm_encode:module(M),
+    ?assertEqual({ok, M}, wasm_decode:module(Bin)),
+    %% And none when no data index is named.
+    {ok, N} = wasm_wat:module(~"(module (memory 1) (func))"),
+    ?assertEqual(undefined, N#module.data_count).
 
 %% `(memory (data ...))' and `(table funcref (elem ...))' declare a segment as
 %% well as a memory or a table, and that segment takes an index. A segment

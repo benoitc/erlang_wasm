@@ -19,16 +19,29 @@
 %% conformance it does not have.
 -module(wasm_spec_runner).
 
+-include_lib("wasm/include/wasm.hrl").
+
 -export([run/2, run/3, run_source/3, run_source/4, run_all/2, run_all/3,
          suite_dir/0, suites/0, fixtures_dir/0, format_report/1]).
+%% For the cases that need a suite's modules one by one rather than replayed.
+-export([suite_path/1, module_commands/1, module_of/1]).
 
 
--type phase() :: decode | validate | execute.
+%% `encode' round-trips every module it builds through the encoder before the
+%% later phases see it: encoded, decoded again, compared, and encoded once
+%% more. The later phases then run on what the round trip gave back.
+%% How many modules the `encode' phase round-tripped in the replay running in
+%% this process. A count rather than a field of `#st{}', because the places a
+%% module is built answer the module, not the state.
+-define(ENCODED, {?MODULE, encoded}).
+
+-type phase() :: decode | encode | validate | execute.
 
 -type result() :: #{suite := binary(),
                     pass := non_neg_integer(),
                     fail := non_neg_integer(),
                     skip := non_neg_integer(),
+                    encoded := non_neg_integer(),
                     failures := [map()]}.
 
 %% State threaded through one suite's command list.
@@ -155,8 +168,27 @@ isolated(Suite, F) ->
 run(Suite, Phases) -> run(Suite, Phases, #{}).
 
 -spec run(binary(), [phase()], map()) -> result().
+%% @doc Where a suite's `.wast' source is.
+-spec suite_path(binary()) -> file:filename_all().
+suite_path(Suite) ->
+    filename:join(suite_dir(), wasm_spec_manifest:source_of(Suite)).
+
+%% @doc A suite's `module' and `module_definition' commands, in order, as
+%% `{Type, Line, Source}'. The suite means each of them to be valid.
+-spec module_commands(binary()) -> [{binary(), non_neg_integer(), term()}].
+module_commands(Suite) ->
+    {ok, Source} = file:read_file(suite_path(Suite)),
+    {ok, Cmds} = wasm_wast:script(Source),
+    [{T, maps:get(<<"line">>, C, 0), maps:get(<<"module">>, C)}
+     || #{<<"type">> := T} = C <- Cmds,
+        T =:= <<"module">> orelse T =:= <<"module_definition">>].
+
+%% @doc The module a command's source builds, from bytes or from text.
+-spec module_of(term()) -> {ok, term()} | {error, term()}.
+module_of(Source) -> decoded(#{<<"module">> => Source}).
+
 run(Suite, Phases, Opts) ->
-    Path = filename:join(suite_dir(), wasm_spec_manifest:source_of(Suite)),
+    Path = suite_path(Suite),
     case file:read_file(Path) of
         {ok, Source} ->
             run_source(Suite, Source, Phases, Opts);
@@ -186,11 +218,13 @@ replay(Suite, Cmds, Phases, Opts) ->
               false -> 25;
               V -> list_to_integer(V)
           end,
+    _ = put(?ENCODED, 0),
     St = lists:foldl(fun command/2,
                      #st{phases = Phases, max_failures = Max, opts = Opts,
                          imports = wasm_spectest:imports()}, Cmds),
     #{suite => Suite, pass => St#st.pass, fail => St#st.fail,
-      skip => St#st.skip, failures => lists:reverse(St#st.failures)}.
+      skip => St#st.skip, encoded => erase(?ENCODED),
+      failures => lists:reverse(St#st.failures)}.
 
 %%% -------------------------------------------------------------- commands ---
 
@@ -325,10 +359,62 @@ enabled(Phase, #st{phases = Ps}) -> lists:member(Phase, Ps).
 
 %% Decode, then validate if that phase is on, then instantiate if that is on.
 load_wasm(St, C) ->
-    case decoded(C) of
+    case decoded(C, St) of
         {error, E} -> {error, E};
         {ok, M} -> load_wasm_validate(St, M)
     end.
+
+%% The module a command carries, through the encoder first when that phase is
+%% on.
+decoded(C, St) ->
+    case {decoded(C), enabled(encode, St)} of
+        {{ok, M}, true} -> round_trip(M);
+        {Decoded, _} -> Decoded
+    end.
+
+%% Encoded, decoded and compared, then encoded once more: the same record and
+%% the same bytes both times, `identity' aside, since a text module and a
+%% decoded one are given theirs later. The record that came back is what the
+%% later phases run, so they check the bytes too.
+round_trip(M) ->
+    Key = M#module{identity = undefined},
+    maybe
+        {ok, Bin} ?= wasm_encode:module(M),
+        {ok, M2} ?= wasm_decode:module(Bin),
+        Back = M2#module{identity = undefined},
+        same ?= same_record(Key, Back),
+        {ok, Bin} ?= stable(wasm_encode:module(M2), Bin),
+        _ = put(?ENCODED, get(?ENCODED) + 1),
+        {ok, M2}
+    else
+        {error, #{} = E} -> {error, encode_error(E)};
+        {differs, Field, Want, Got} ->
+            {error, #{class => encode, kind => round_trip_differs,
+                      msg => <<"decode(encode(M)) is not M">>,
+                      ctx => #{field => Field, want => Want, got => Got}}};
+        {unstable, Second} ->
+            {error, #{class => encode, kind => encoding_not_stable,
+                      msg => <<"encode(decode(encode(M))) is not encode(M)">>,
+                      ctx => #{second => Second}}}
+    end.
+
+%% The encoder's own errors keep their kind, under a class no phase expects,
+%% so an `assert_invalid' module that does not encode is a failure and not a
+%% pass for the wrong reason.
+encode_error(#{} = E) -> E#{class => encode}.
+
+stable({ok, Bin}, Bin) -> {ok, Bin};
+stable(Other, _Bin) -> {unstable, Other}.
+
+same_record(M, M) -> same;
+same_record(Want, Got) ->
+    Fields = record_info(fields, module),
+    [{Field, W, G} | _] = [{F, W, G}
+                           || {F, W, G} <- lists:zip3(Fields,
+                                                      tl(tuple_to_list(Want)),
+                                                      tl(tuple_to_list(Got))),
+                              W =/= G],
+    {differs, Field, W, G}.
 
 %% Where a command's module comes from. It travels with the command, as text
 %% already read, as text carried in a string, or as bytes written out directly.
@@ -352,7 +438,7 @@ load_wasm_validate(St, M) ->
 %% Decode and validate without instantiating, for a definition that will be
 %% instantiated later, more than once, or not at all.
 defined(St, C) ->
-    case decoded(C) of
+    case decoded(C, St) of
         {error, E} -> {error, E};
         {ok, M} ->
             case enabled(validate, St) of
@@ -395,7 +481,7 @@ expect_class(St, C, Want) ->
 %% and was hiding whatever the link checking really does.
 classify(C, St) ->
     maybe
-        {ok, M} ?= decoded(C),
+        {ok, M} ?= decoded(C, St),
         ok ?= classify_validate(M, St),
         classify_instantiate(M, St)
     else

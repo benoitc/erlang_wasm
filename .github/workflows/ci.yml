@@ -189,8 +189,9 @@ jobs:
           key: wasmtime-programs-${{ runner.os }}-${{ hashFiles('scripts/build-wasmtime-p2.sh') }}
       # Checked before it is used, as the WASI SDK is: it composes the
       # middleware programs the suites serve.
+      # On every run, not only when the programs are rebuilt: the encoder is
+      # checked against it further down, cache or no cache.
       - name: Install the pinned wasm-tools
-        if: steps.programs.outputs.cache-hit != 'true'
         run: |
           curl -fsSL -o /tmp/wasm-tools.tar.gz \
             https://github.com/bytecodealliance/wasm-tools/releases/download/v1.256.0/wasm-tools-1.256.0-x86_64-linux.tar.gz
@@ -225,6 +226,15 @@ jobs:
       - name: Run them
         run: >-
           rebar3 ct --suite=test/wasm_wasi2_p2_SUITE,test/wasm_wasi2_serve_SUITE,test/wasm_wasi2_http_limits_SUITE,test/wasm_wasi3_p3_SUITE,test/wasm_wasi2_nn_wasmtime_SUITE
+      # wasm-tools is on this runner and not on the Tests one, so the encoder is
+      # checked against it here: every specification module it encodes must
+      # validate, and how many encode as wasm-tools does is reported.
+      - name: Fetch the specification suites
+        run: scripts/fetch-suites.sh
+      - name: Check the encoder against wasm-tools
+        run: >-
+          rebar3 ct --suite=test/wasm_spec_SUITE
+          --case=wasm_tools_validates_what_is_encoded,byte_match_with_wasm_tools_is_reported
       # The programs past the suite's 60 s bound for each one, under a bound of
       # their own: p3_sockets_tcp_streams takes about seven minutes.
       - name: Run the slow one

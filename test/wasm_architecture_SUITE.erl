@@ -1,12 +1,12 @@
 %% @doc The shape of the module graph, held to what `docs/architecture.md' says.
 %%
-%% That page draws the runtime as eleven layers with three cycles in it, and a
+%% That page draws the runtime as eleven layers with four cycles in it, and a
 %% drawing nobody checks stops being true. This recomputes the graph from the
 %% compiled modules and fails when it has changed.
 %%
-%% The point is not that cycles are forbidden. All three of these are
+%% The point is not that cycles are forbidden. All four of these are
 %% deliberate and each is defensible in one sentence; what is forbidden is a
-%% *fourth* one appearing without anybody deciding it should. A cycle is the
+%% *fifth* one appearing without anybody deciding it should. A cycle is the
 %% one structural property a reader cannot discover locally: every other
 %% question about a module can be answered by reading that module, and this one
 %% can only be answered by reading all of them.
@@ -18,7 +18,7 @@
 -include_lib("stdlib/include/assert.hrl").
 
 all() ->
-    [the_module_graph_has_the_three_documented_cycles,
+    [the_module_graph_has_the_four_documented_cycles,
      every_module_says_what_it_is,
      the_layer_diagram_names_every_module,
      the_page_counts_the_modules_right,
@@ -46,9 +46,11 @@ documented_cycles() ->
     [[wasm, wasm_module_cache, wasm_snapshot_owner],
      [wasm_core, wasm_exec, wasm_jit],
      [wasm_decode, wasm_decode_atomic, wasm_decode_code, wasm_decode_gc,
-      wasm_decode_simd]].
+      wasm_decode_simd],
+     [wasm_encode, wasm_encode_atomic, wasm_encode_code, wasm_encode_gc,
+      wasm_encode_simd]].
 
-the_module_graph_has_the_three_documented_cycles(_) ->
+the_module_graph_has_the_four_documented_cycles(_) ->
     Cycles = lists:sort([lists:sort(C) || C <- cycles()]),
     ct:log("module cycles:~n~p", [Cycles]),
     ?assertEqual(lists:sort(documented_cycles()), Cycles).
@@ -141,18 +143,36 @@ the_layer_diagram_names_every_module(_) ->
 %% compares names and not the sentence.
 the_page_counts_the_modules_right(_) ->
     {match, [Words]} = re:run(architecture_page(),
-                              "what the ([a-z-]+) modules are",
+                              "what the ([a-z -]+?) modules are",
                               [{capture, all_but_first, list}]),
     ?assertEqual(length(modules()), number(Words)).
 
+%% Written as the page writes it: "ninety-seven", "hundred and two".
 number(Words) ->
+    case string:split(Words, " and ") of
+        [Hundreds, Rest] -> hundreds(Hundreds) + below_hundred(Rest);
+        [W] ->
+            case lists:member(W, ["hundred", "one hundred"]) of
+                true -> 100;
+                false -> below_hundred(W)
+            end
+    end.
+
+hundreds("hundred") -> 100;
+hundreds("one hundred") -> 100;
+hundreds("two hundred") -> 200.
+
+below_hundred(Words) ->
     Units = #{"one" => 1, "two" => 2, "three" => 3, "four" => 4, "five" => 5,
               "six" => 6, "seven" => 7, "eight" => 8, "nine" => 9},
+    Teens = #{"ten" => 10, "eleven" => 11, "twelve" => 12, "thirteen" => 13,
+              "fourteen" => 14, "fifteen" => 15, "sixteen" => 16,
+              "seventeen" => 17, "eighteen" => 18, "nineteen" => 19},
     Tens = #{"twenty" => 20, "thirty" => 30, "forty" => 40, "fifty" => 50,
              "sixty" => 60, "seventy" => 70, "eighty" => 80, "ninety" => 90},
     case string:split(Words, "-") of
         [T, U] -> maps:get(T, Tens) + maps:get(U, Units);
-        [T]    -> maps:get(T, Tens)
+        [W] -> maps:get(W, maps:merge(maps:merge(Units, Teens), Tens))
     end.
 
 %% The first fenced block on the page, which is the `L8'..`L0' listing. Taken

@@ -1,0 +1,12 @@
+#{file => <<"wasi_demo.wasm">>,decode => 2733,bytes_in => 122596,  bytes_out => 115187,encode => 3930,encode_decoded => 4034,load_end => 7.72,  load_start => 7.72,order => decode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2859,bytes_in => 122596,  bytes_out => 115187,encode => 4144,encode_decoded => 4086,load_end => 7.72,  load_start => 7.72,order => encode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2736,bytes_in => 122596,  bytes_out => 115187,encode => 4045,encode_decoded => 4028,load_end => 7.72,  load_start => 7.72,order => decode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2812,bytes_in => 122596,  bytes_out => 115187,encode => 4038,encode_decoded => 4013,load_end => 7.72,  load_start => 7.72,order => encode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2751,bytes_in => 122596,  bytes_out => 115187,encode => 4036,encode_decoded => 3969,load_end => 7.72,  load_start => 7.72,order => decode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2800,bytes_in => 122596,  bytes_out => 115187,encode => 3967,encode_decoded => 4011,load_end => 7.72,  load_start => 7.72,order => encode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2775,bytes_in => 122596,  bytes_out => 115187,encode => 4070,encode_decoded => 4007,load_end => 7.72,  load_start => 7.72,order => decode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2809,bytes_in => 122596,  bytes_out => 115187,encode => 3865,encode_decoded => 3910,load_end => 7.72,  load_start => 7.72,order => encode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2817,bytes_in => 122596,  bytes_out => 115187,encode => 4070,encode_decoded => 4030,load_end => 7.72,  load_start => 7.72,order => decode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2761,bytes_in => 122596,  bytes_out => 115187,encode => 4100,encode_decoded => 3992,load_end => 7.86,  load_start => 7.86,order => encode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 2779,bytes_in => 122596,  bytes_out => 115187,encode => 4062,encode_decoded => 4026,load_end => 7.86,  load_start => 7.86,order => decode_first}.
+#{file => <<"wasi_demo.wasm">>,decode => 3019,bytes_in => 122596,  bytes_out => 115187,encode => 4809,encode_decoded => 4357,load_end => 7.86,  load_start => 7.86,order => encode_first}.

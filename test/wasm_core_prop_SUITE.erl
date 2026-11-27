@@ -37,7 +37,8 @@ all() ->
     [every_supported_operation_is_generated,
      compiled_agrees_with_interpreted,
      compiled_traps_where_interpreted_traps,
-     shifts_agree_at_every_count].
+     shifts_agree_at_every_count,
+     generated_modules_encode_to_themselves].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(wasm),
@@ -99,6 +100,23 @@ shifts_agree_at_every_count(_) ->
                   not agrees({Op, {const, i64, V}, {const, i64, C}},
                              [0, 0, 0.0, 0.0])],
     ?assertEqual([], Fails64).
+
+%% The same programs, through the encoder instead of the tier: each parses,
+%% encodes, and decodes back to the record it was parsed to. Cheap next to the
+%% cases above, since nothing is compiled or run.
+generated_modules_encode_to_themselves(_) ->
+    run_prop(?FORALL(Tree, tree(4, i32),
+                     begin
+                         {ok, M} = wasm_wat:module(wat(Tree)),
+                         {ok, Bin} = wasm_encode:module(M),
+                         case wasm_decode:module(Bin) of
+                             {ok, M} -> true;
+                             Other ->
+                                 ct:pal("DID NOT ROUND TRIP~n~s~n~p",
+                                        [wat(Tree), Other]),
+                                 false
+                         end
+                     end)).
 
 shifters() -> [i32_shl, i32_shr_s, i32_shr_u, i32_rotl, i32_rotr].
 shifters64() -> [i64_shl, i64_shr_s, i64_shr_u, i64_rotl, i64_rotr].

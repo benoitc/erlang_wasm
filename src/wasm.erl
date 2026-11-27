@@ -82,6 +82,7 @@ as an atom for the module bytes, raises as any Erlang function does;
 
 -export([load/1, load/2, load_file/1, unload/1]).
 -export([compile/1, compile/2, validate/1, instantiate/2, instantiate/3, destroy/1]).
+-export([encode/1]).
 -export([call/3, call/4, get_global/2, exports/1, extern/2, func_type_of/2,
          func_types_of/1]).
 -export([pin/2, release/2, release_all/1]).
@@ -110,7 +111,7 @@ as an atom for the module bytes, raises as any Erlang function does;
 -nominal module_() :: #module{} | wasm_module_cache:handle().
 -doc "An instance, owned by the process that created it.".
 -nominal instance() :: #inst{}.
--doc "What `compile/1` takes: the binary format, or the text format.".
+-doc "What `compile/1` and `load/1` take: the binary format, or the text format.".
 -nominal source() :: binary() | {wat, binary()}.
 -doc """
 An export taken in the form another module imports it, as `extern/2` hands it
@@ -138,22 +139,46 @@ Decode, validate and cache a module, returning a handle.
 Use this rather than `compile/1`. Compiling is the expensive step, roughly 20 ms
 for a 100 KB Rust binary against 15 us to instantiate one, and loading the same
 bytes twice hands you the cached artefact instead of repeating the work.
-""".
--spec load(binary()) -> {ok, module_()} | {error, term()}.
-load(Binary) -> wasm_module_cache:load(Binary).
 
--spec load(binary(), map()) -> {ok, module_()} | {error, term()}.
+Takes the binary format, or `{wat, Source}` for the text format. Text is
+encoded first, as `encode/1` does, and the bytes are loaded: a module loaded
+from text and the same module loaded from its `.wasm` share one cache entry
+and one handle, named by the SHA-256 of those bytes.
+""".
+-spec load(source()) -> {ok, module_()} | {error, term()}.
+load(Source) -> load(Source, #{}).
+
+-spec load(source(), map()) -> {ok, module_()} | {error, term()}.
+load({wat, _} = Text, Opts) ->
+    case encode(Text) of
+        {ok, Binary} -> wasm_module_cache:load(Binary, Opts);
+        {error, _} = E -> E
+    end;
 load(Binary, Opts) -> wasm_module_cache:load(Binary, Opts).
 
--doc "Read a `.wasm` file and load it.".
+-doc """
+Read a module file and load it.
+
+A path ending in `.wat` is the text format, loaded as `{wat, Source}` is by
+`load/1`: encoded first, so it gets the same handle as its `.wasm`. Any other
+path is the binary format. The extension decides, not the contents, so a
+damaged `.wasm` is still reported as one.
+""".
 -spec load_file(file:filename_all()) -> {ok, module_()} | {error, term()}.
 load_file(Path) ->
     case file:read_file(Path) of
-        {ok, Binary} -> load(Binary);
+        {ok, Bytes} ->
+            case is_text_path(Path) of
+                true -> load({wat, Bytes});
+                false -> load(Bytes)
+            end;
         {error, Reason} ->
             {error, err(link, file_error, ~"cannot read module file",
                         #{path => Path, reason => Reason})}
     end.
+
+is_text_path(Path) ->
+    string:equal(filename:extension(Path), ".wat", true).
 
 -doc """
 Drop your claim on a cached module.
@@ -174,10 +199,10 @@ Takes the binary format, or `{wat, Source}` for the text format:
 {ok, M} = wasm:compile({wat, ~"(module (func (export \"f\") (result i32) i32.const 7))"}).
 ```
 
-Use it for one-shot work. If you instantiate more than once, use `load/1`.
-Text is one-shot by construction: the cache is keyed on a content hash of the
-bytes, and a module built from text takes a fresh identity every time it is
-validated, so `load/1` takes the binary format only.
+Use it for one-shot work. If you instantiate more than once, use `load/1`,
+which takes text too. A module compiled from text here has no bytes, so it
+takes a fresh identity every time and shares nothing; `load/1` encodes the
+text and names it by its bytes.
 """.
 -spec compile(source()) -> {ok, module_()} | {error, wasm_error:error()}.
 compile(Src) -> compile(Src, #{}).
@@ -248,6 +273,60 @@ with_room(Bytes, F) ->
     erlang:garbage_collect(),
     try F()
     after erlang:process_flag(min_heap_size, Old)
+    end.
+
+-doc """
+Encode a module to the binary format.
+
+Takes a `#module{}`, as `compile/1` or `wasm_decode:module/1` gives it, a
+handle from `load/1`, or `{wat, Source}`. Turn a text module into a `.wasm`
+file:
+
+```erlang
+{ok, Bin} = wasm:encode({wat, ~"(module (func (export \"f\") (result i32) i32.const 7))"}).
+```
+
+The bytes are the same for the same module every time, and they are what
+`load/1` names the module by. The rules that make them so are in
+`wasm_encode`. Encoding does not validate: an invalid module encodes, and
+`load/1` or `validate/1` refuses it.
+
+A module with no binary form, such as one built by hand with an index out of
+range, is `{error, #{kind := unencodable}}`. Bytes larger than
+`max_module_bytes` are `{error, #{kind := module_too_large}}`, as they would be
+on the way in. A handle the node no longer holds is `module_not_loaded`.
+""".
+-spec encode(module_() | {wat, binary()}) ->
+          {ok, binary()} | {error, wasm_error:error()}.
+encode({wat, Source}) when is_binary(Source) ->
+    case check_module_bytes(byte_size(Source)) of
+        ok ->
+            case wasm_wat:module(Source) of
+                {ok, M} -> encode_module(M);
+                {error, _} = E -> E
+            end;
+        {error, _} = Refused ->
+            Refused
+    end;
+encode({wasm_module, _} = Handle) ->
+    case wasm_module_cache:get(Handle) of
+        {ok, M} -> encode_module(M);
+        {error, not_loaded} ->
+            {error, err(link, module_not_loaded, ~"module is not loaded",
+                        #{handle => Handle})}
+    end;
+encode(M) ->
+    encode_module(M).
+
+encode_module(M) ->
+    case wasm_encode:module(M) of
+        {ok, Bin} ->
+            case check_module_bytes(byte_size(Bin)) of
+                ok -> {ok, Bin};
+                {error, _} = Refused -> Refused
+            end;
+        {error, _} = E ->
+            E
     end.
 
 -doc """

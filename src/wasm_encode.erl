@@ -153,7 +153,7 @@ custom({Name, Payload}) ->
 %% The decoder refuses both of these, so writing them would give bytes that
 %% are not a module.
 check_data_count(#module{data_count = undefined, funcs = Funcs}) ->
-    case lists:any(fun(#func{body = B}) -> uses_data_index(body(B));
+    case lists:any(fun(#func{body = B}) -> wasm_decode:uses_data_index(body(B));
                       (_) -> false
                    end, Funcs) of
         false -> ok;
@@ -166,20 +166,6 @@ check_data_count(#module{data_count = N, datas = Datas})
 check_data_count(#module{data_count = N, datas = Datas}) ->
     unencodable(data_count, N, #{reason => data_count_mismatch,
                                  datas => length(Datas)}).
-
-uses_data_index([{memory_init, _, _} | _]) -> true;
-uses_data_index([{data_drop, _} | _]) -> true;
-uses_data_index([{block, _, Body} | Rest]) ->
-    uses_data_index(Body) orelse uses_data_index(Rest);
-uses_data_index([{loop, _, Body} | Rest]) ->
-    uses_data_index(Body) orelse uses_data_index(Rest);
-uses_data_index([{if_, _, Then, Else} | Rest]) ->
-    uses_data_index(Then) orelse uses_data_index(Else)
-        orelse uses_data_index(Rest);
-uses_data_index([{try_table, _, _, Body} | Rest]) ->
-    uses_data_index(Body) orelse uses_data_index(Rest);
-uses_data_index([_ | Rest]) -> uses_data_index(Rest);
-uses_data_index(_) -> false.
 
 %%% ---------------------------------------------------------------- types ---
 

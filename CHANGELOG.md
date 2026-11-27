@@ -17,12 +17,13 @@
   encode it before loading. A module loaded from text and the same module
   loaded from its `.wasm` share one cache entry and one handle. Until now text could only be compiled, and each compile gave it a
   new identity that nothing shared.
-- **Fixed: a module could leave out its data count section when it used
-  bulk memory inside a `try_table`.** The binary format requires the data
-  count section whenever a function uses `memory.init` or `data.drop`, and
-  such a module is malformed without it. The check looked inside every kind
-  of block but `try_table`, so a module that used them only there was read.
-  It is refused now, as it is elsewhere.
+- **Fixed: a module could leave out its data count section in two cases.**
+  The binary format requires the data count section whenever code names a
+  data segment, and a module is malformed without it. The check looked
+  inside every kind of block but `try_table`, and did not count the garbage
+  collection instructions `array.new_data` and `array.init_data`, so a module
+  that named a data segment only in those ways was read. It is refused now,
+  as it is elsewhere.
 
 ## 0.12.0
 

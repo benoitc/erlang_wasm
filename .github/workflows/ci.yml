@@ -189,8 +189,9 @@ jobs:
           key: wasmtime-programs-${{ runner.os }}-${{ hashFiles('scripts/build-wasmtime-p2.sh') }}
       # Checked before it is used, as the WASI SDK is: it composes the
       # middleware programs the suites serve.
+      # On every run, not only when the programs are rebuilt: the encoder is
+      # checked against it further down, cache or no cache.
       - name: Install the pinned wasm-tools
-        if: steps.programs.outputs.cache-hit != 'true'
         run: |
           curl -fsSL -o /tmp/wasm-tools.tar.gz \
             https://github.com/bytecodealliance/wasm-tools/releases/download/v1.256.0/wasm-tools-1.256.0-x86_64-linux.tar.gz

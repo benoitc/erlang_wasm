@@ -44,6 +44,7 @@ all() ->
      the_generation_cap_holds,
      a_publish_after_eviction_erases_itself,
      a_shared_instance_leaves_the_destroy_map_alone,
+     stats_count_published_bodies,
      only_the_cached_module_shares,
      two_destroys_at_once_publish_once,
      a_publish_racing_an_eviction_leaves_nothing,
@@ -819,6 +820,18 @@ a_shared_instance_leaves_the_destroy_map_alone(_Config) ->
                   end),
     ?assertMatch(#{}, shared(Hash, true)),
     ok = wasm:unload(H).
+
+%% Published bodies are memory the cache's byte budget does not count, so
+%% `stats/0' reports them: a planted generation adds its size, as
+%% `erlang:external_size/1' counts it.
+stats_count_published_bodies(_Config) ->
+    #{ir_bytes := Before} = wasm_module_cache:stats(),
+    Key = ?SHARED_IR_GEN_KEY(crypto:strong_rand_bytes(32), true, 1),
+    Bodies = #{1 => lists:seq(1, 1000)},
+    persistent_term:put(Key, Bodies),
+    #{ir_bytes := After} = wasm_module_cache:stats(),
+    persistent_term:erase(Key),
+    ?assertEqual(erlang:external_size(Bodies), After - Before).
 
 %% 300 small functions, over the deferral threshold, then one whose lowered
 %% body is past the publishing floor, `go' calling it and `small' calling a

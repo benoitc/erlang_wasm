@@ -293,8 +293,32 @@ claims(Pid) when is_pid(Pid) ->
 -spec resident() -> non_neg_integer().
 resident() -> gen_server:call(?SERVER, resident).
 
+-doc """
+What the cache holds: how many modules and their bytes, its limits, and
+`ir_bytes`, the lowered bodies published for those modules, both the set a
+request's destroy publishes and the generations processes sharing one
+instance publish as they go. Published bodies stay until their module is
+evicted and are not counted against `max_resident_module_bytes`.
+
+`ir_bytes` is their size as `erlang:external_size/1` counts it, which
+under-counts what they occupy by a little: the literal copies
+`persistent_term` holds are invisible to `erts_debug:size_shared/1`, which
+reports them as 0.
+""".
 -spec stats() -> map().
-stats() -> gen_server:call(?SERVER, stats).
+stats() ->
+    Stats = gen_server:call(?SERVER, stats),
+    %% Sized here rather than in the server: it walks every published body,
+    %% and every load would wait behind it there.
+    Stats#{ir_bytes => ir_bytes()}.
+
+ir_bytes() ->
+    lists:sum([erlang:external_size(V)
+               || {K, V} <- persistent_term:get(), ir_key(K)]).
+
+ir_key({wasm_ir_shared, _, _}) -> true;
+ir_key({wasm_ir_shared, _, _, _}) -> true;
+ir_key(_) -> false.
 
 %%% ------------------------------------------------------------ callbacks ---
 

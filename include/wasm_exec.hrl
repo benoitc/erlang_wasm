@@ -16,6 +16,10 @@
 %% `after` covers that. A flag would stay set and that instance would never ask
 %% again, silently and for the life of the node. A time expires.
 -define(IX_ASKED, 3).
+%% How many processes have taken a lazily lowered body from this instance,
+%% each counted on its first miss. Two or more and what they lower is
+%% published for the others, as `wasm_instance:body_of/2' explains.
+-define(IX_TAKERS, 4).
 
 %% In the separate `#inst.leases' array, which only a snapshotable instance has.
 -define(IX_SNAP_STATE, 1).

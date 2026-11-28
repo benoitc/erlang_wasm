@@ -1,0 +1,1498 @@
+{
+ "unkernel no floor": {
+  "null": {
+   "pairs": {
+    "ab": [
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "67282",
+       "init_ms": "3592",
+       "task_heaps_mib": "98",
+       "node_mib": "838",
+       "pt_mib": "556",
+       "lowerings": "27980",
+       "generations": "0",
+       "load": "1.07/1.12",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "66508",
+       "init_ms": "3649",
+       "task_heaps_mib": "101",
+       "node_mib": "856",
+       "pt_mib": "556",
+       "lowerings": "27863",
+       "generations": "0",
+       "load": "1.12/1.22",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.988496180256235
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "68605",
+       "init_ms": "3648",
+       "task_heaps_mib": "94",
+       "node_mib": "834",
+       "pt_mib": "556",
+       "lowerings": "28150",
+       "generations": "0",
+       "load": "1.28/1.29",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "67231",
+       "init_ms": "3621",
+       "task_heaps_mib": "108",
+       "node_mib": "849",
+       "pt_mib": "556",
+       "lowerings": "28053",
+       "generations": "0",
+       "load": "1.29/1.34",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.9799723052255667
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "68152",
+       "init_ms": "3634",
+       "task_heaps_mib": "111",
+       "node_mib": "851",
+       "pt_mib": "556",
+       "lowerings": "28607",
+       "generations": "0",
+       "load": "1.58/1.57",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "68173",
+       "init_ms": "3574",
+       "task_heaps_mib": "96",
+       "node_mib": "852",
+       "pt_mib": "556",
+       "lowerings": "28169",
+       "generations": "0",
+       "load": "1.57/1.54",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 1.0003081347576006
+     }
+    ],
+    "ba": [
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "66890",
+       "init_ms": "3625",
+       "task_heaps_mib": "86",
+       "node_mib": "843",
+       "pt_mib": "556",
+       "lowerings": "28213",
+       "generations": "0",
+       "load": "1.22/1.28",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "70569",
+       "init_ms": "3808",
+       "task_heaps_mib": "94",
+       "node_mib": "834",
+       "pt_mib": "556",
+       "lowerings": "28823",
+       "generations": "0",
+       "load": "1.22/1.22",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 1.0550007474958887
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "68207",
+       "init_ms": "3568",
+       "task_heaps_mib": "107",
+       "node_mib": "862",
+       "pt_mib": "556",
+       "lowerings": "28113",
+       "generations": "0",
+       "load": "1.41/1.58",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "70341",
+       "init_ms": "3657",
+       "task_heaps_mib": "95",
+       "node_mib": "835",
+       "pt_mib": "556",
+       "lowerings": "28709",
+       "generations": "0",
+       "load": "1.34/1.41",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 1.0312871112935622
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "68480",
+       "init_ms": "3599",
+       "task_heaps_mib": "110",
+       "node_mib": "851",
+       "pt_mib": "556",
+       "lowerings": "28595",
+       "generations": "0",
+       "load": "1.51/1.45",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "68595",
+       "init_ms": "3624",
+       "task_heaps_mib": "115",
+       "node_mib": "854",
+       "pt_mib": "556",
+       "lowerings": "28726",
+       "generations": "0",
+       "load": "1.54/1.51",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 1.0016793224299065
+     }
+    ]
+   },
+   "median": {
+    "ab": 0.988496180256235,
+    "ba": 1.0312871112935622
+   }
+  },
+  "change": {
+   "pairs": {
+    "ab": [
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "68172",
+       "init_ms": "3629",
+       "task_heaps_mib": "108",
+       "node_mib": "847",
+       "pt_mib": "556",
+       "lowerings": "28670",
+       "generations": "0",
+       "load": "1.45/1.43",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "36117",
+       "init_ms": "3186",
+       "task_heaps_mib": "45",
+       "node_mib": "800",
+       "pt_mib": "574",
+       "lowerings": "5210",
+       "generations": "19",
+       "load": "1.43/1.45",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.5297922900897729
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "68117",
+       "init_ms": "3665",
+       "task_heaps_mib": "95",
+       "node_mib": "835",
+       "pt_mib": "556",
+       "lowerings": "28044",
+       "generations": "0",
+       "load": "1.47/1.46",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "36845",
+       "init_ms": "3294",
+       "task_heaps_mib": "45",
+       "node_mib": "800",
+       "pt_mib": "574",
+       "lowerings": "5223",
+       "generations": "19",
+       "load": "1.46/1.42",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.5409075561166816
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "68465",
+       "init_ms": "3587",
+       "task_heaps_mib": "102",
+       "node_mib": "857",
+       "pt_mib": "556",
+       "lowerings": "28601",
+       "generations": "0",
+       "load": "1.37/1.41",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "36452",
+       "init_ms": "3287",
+       "task_heaps_mib": "42",
+       "node_mib": "800",
+       "pt_mib": "574",
+       "lowerings": "5206",
+       "generations": "19",
+       "load": "1.41/1.43",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.532418023807785
+     }
+    ],
+    "ba": [
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "68275",
+       "init_ms": "3624",
+       "task_heaps_mib": "109",
+       "node_mib": "855",
+       "pt_mib": "556",
+       "lowerings": "28458",
+       "generations": "0",
+       "load": "1.42/1.47",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "36020",
+       "init_ms": "3279",
+       "task_heaps_mib": "42",
+       "node_mib": "799",
+       "pt_mib": "574",
+       "lowerings": "5199",
+       "generations": "19",
+       "load": "1.45/1.42",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.5275723178322959
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "68358",
+       "init_ms": "3583",
+       "task_heaps_mib": "100",
+       "node_mib": "856",
+       "pt_mib": "556",
+       "lowerings": "28573",
+       "generations": "0",
+       "load": "1.39/1.37",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "37580",
+       "init_ms": "3447",
+       "task_heaps_mib": "41",
+       "node_mib": "800",
+       "pt_mib": "574",
+       "lowerings": "5128",
+       "generations": "19",
+       "load": "1.42/1.39",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.5497527721700459
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "67897",
+       "init_ms": "3569",
+       "task_heaps_mib": "98",
+       "node_mib": "839",
+       "pt_mib": "556",
+       "lowerings": "28124",
+       "generations": "0",
+       "load": "1.43/1.45",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "36602",
+       "init_ms": "3260",
+       "task_heaps_mib": "40",
+       "node_mib": "796",
+       "pt_mib": "574",
+       "lowerings": "5187",
+       "generations": "19",
+       "load": "1.43/1.43",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/nofloor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.5390812554310205
+     }
+    ]
+   },
+   "median": {
+    "ab": 0.532418023807785,
+    "ba": 0.5390812554310205
+   }
+  }
+ },
+ "unkernel 32 MiB floor": {
+  "null": {
+   "pairs": {
+    "ab": [
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "25136",
+       "init_ms": "2659",
+       "task_heaps_mib": "1102",
+       "node_mib": "1842",
+       "pt_mib": "556",
+       "lowerings": "28467",
+       "generations": "0",
+       "load": "1.45/1.43",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "24556",
+       "init_ms": "2587",
+       "task_heaps_mib": "1100",
+       "node_mib": "1840",
+       "pt_mib": "556",
+       "lowerings": "28069",
+       "generations": "0",
+       "load": "1.43/1.44",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.9769255251432208
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "24396",
+       "init_ms": "2592",
+       "task_heaps_mib": "1023",
+       "node_mib": "1764",
+       "pt_mib": "556",
+       "lowerings": "27773",
+       "generations": "0",
+       "load": "1.39/1.40",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "24635",
+       "init_ms": "2579",
+       "task_heaps_mib": "1053",
+       "node_mib": "1793",
+       "pt_mib": "556",
+       "lowerings": "27920",
+       "generations": "0",
+       "load": "1.40/1.42",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 1.0097966879816362
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "25395",
+       "init_ms": "2928",
+       "task_heaps_mib": "1071",
+       "node_mib": "1811",
+       "pt_mib": "556",
+       "lowerings": "27752",
+       "generations": "0",
+       "load": "1.37/1.35",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "25583",
+       "init_ms": "2629",
+       "task_heaps_mib": "1148",
+       "node_mib": "1888",
+       "pt_mib": "556",
+       "lowerings": "28645",
+       "generations": "0",
+       "load": "1.35/1.40",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 1.0074030320929317
+     }
+    ],
+    "ba": [
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "24161",
+       "init_ms": "2645",
+       "task_heaps_mib": "1009",
+       "node_mib": "1748",
+       "pt_mib": "556",
+       "lowerings": "27777",
+       "generations": "0",
+       "load": "1.42/1.39",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "24812",
+       "init_ms": "2603",
+       "task_heaps_mib": "1111",
+       "node_mib": "1851",
+       "pt_mib": "556",
+       "lowerings": "28425",
+       "generations": "0",
+       "load": "1.44/1.42",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 1.0269442489963163
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "24615",
+       "init_ms": "2647",
+       "task_heaps_mib": "1014",
+       "node_mib": "1754",
+       "pt_mib": "556",
+       "lowerings": "28064",
+       "generations": "0",
+       "load": "1.38/1.37",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "24216",
+       "init_ms": "2655",
+       "task_heaps_mib": "1055",
+       "node_mib": "1795",
+       "pt_mib": "556",
+       "lowerings": "27815",
+       "generations": "0",
+       "load": "1.42/1.38",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.9837903717245582
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "24985",
+       "init_ms": "2590",
+       "task_heaps_mib": "1089",
+       "node_mib": "1828",
+       "pt_mib": "556",
+       "lowerings": "28494",
+       "generations": "0",
+       "load": "1.40/1.39",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "24562",
+       "init_ms": "2659",
+       "task_heaps_mib": "1045",
+       "node_mib": "1785",
+       "pt_mib": "556",
+       "lowerings": "27923",
+       "generations": "0",
+       "load": "1.40/1.40",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.9830698419051431
+     }
+    ]
+   },
+   "median": {
+    "ab": 1.0074030320929317,
+    "ba": 0.9837903717245582
+   }
+  },
+  "change": {
+   "pairs": {
+    "ab": [
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "24935",
+       "init_ms": "2645",
+       "task_heaps_mib": "1095",
+       "node_mib": "1913",
+       "pt_mib": "556",
+       "lowerings": "28535",
+       "generations": "0",
+       "load": "1.39/1.40",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "19982",
+       "init_ms": "2531",
+       "task_heaps_mib": "977",
+       "node_mib": "1734",
+       "pt_mib": "574",
+       "lowerings": "5121",
+       "generations": "19",
+       "load": "1.40/1.41",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.8013635452175657
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "24261",
+       "init_ms": "2648",
+       "task_heaps_mib": "1063",
+       "node_mib": "1803",
+       "pt_mib": "556",
+       "lowerings": "27826",
+       "generations": "0",
+       "load": "1.41/1.41",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "19578",
+       "init_ms": "2562",
+       "task_heaps_mib": "891",
+       "node_mib": "1648",
+       "pt_mib": "573",
+       "lowerings": "5088",
+       "generations": "18",
+       "load": "1.41/1.48",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.8069741560529244
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "24781",
+       "init_ms": "2662",
+       "task_heaps_mib": "1135",
+       "node_mib": "1875",
+       "pt_mib": "556",
+       "lowerings": "28477",
+       "generations": "0",
+       "load": "2.12/2.06",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "19721",
+       "init_ms": "2538",
+       "task_heaps_mib": "1010",
+       "node_mib": "1767",
+       "pt_mib": "573",
+       "lowerings": "5091",
+       "generations": "18",
+       "load": "2.06/1.99",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.7958113070497559
+     }
+    ],
+    "ba": [
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "24560",
+       "init_ms": "2582",
+       "task_heaps_mib": "1101",
+       "node_mib": "1840",
+       "pt_mib": "556",
+       "lowerings": "27818",
+       "generations": "0",
+       "load": "1.40/1.41",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "19620",
+       "init_ms": "2488",
+       "task_heaps_mib": "977",
+       "node_mib": "1735",
+       "pt_mib": "573",
+       "lowerings": "5083",
+       "generations": "18",
+       "load": "1.41/1.40",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.7988599348534202
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "25070",
+       "init_ms": "2672",
+       "task_heaps_mib": "1142",
+       "node_mib": "1882",
+       "pt_mib": "556",
+       "lowerings": "28657",
+       "generations": "0",
+       "load": "2.22/2.12",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "19697",
+       "init_ms": "2546",
+       "task_heaps_mib": "1002",
+       "node_mib": "1761",
+       "pt_mib": "573",
+       "lowerings": "5101",
+       "generations": "18",
+       "load": "1.48/2.22",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.7856800957319505
+     },
+     {
+      "x": {
+       "label": "x",
+       "prompt_ms": "24572",
+       "init_ms": "2649",
+       "task_heaps_mib": "1071",
+       "node_mib": "1811",
+       "pt_mib": "556",
+       "lowerings": "27955",
+       "generations": "0",
+       "load": "1.94/1.86",
+       "wasm": "/Users/benoitc/bench-shared/ew-base/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "y": {
+       "label": "x",
+       "prompt_ms": "19772",
+       "init_ms": "2573",
+       "task_heaps_mib": "977",
+       "node_mib": "1734",
+       "pt_mib": "574",
+       "lowerings": "5110",
+       "generations": "19",
+       "load": "1.99/1.94",
+       "wasm": "/Users/benoitc/bench-shared/ew-change/_build/default/lib/wasm/ebin/wasm_instance.beam",
+       "uk_vm": "/Users/benoitc/bench-shared/variants/floor/uk_vm.beam",
+       "attempts": 1
+      },
+      "ratio": 0.8046557056812632
+     }
+    ]
+   },
+   "median": {
+    "ab": 0.8013635452175657,
+    "ba": 0.7988599348534202
+   }
+  }
+ },
+ "sharedbench p1": {
+  "null": {
+   "pairs": {
+    "ab": [
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.62",
+       "steady_us": "668.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.67",
+       "steady_us": "713.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "ratio": 1.0673652694610778
+     },
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.61",
+       "steady_us": "722.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.62",
+       "steady_us": "716.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "ratio": 0.9916897506925207
+     },
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.59",
+       "steady_us": "730.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.66",
+       "steady_us": "716.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "ratio": 0.9808219178082191
+     }
+    ],
+    "ba": [
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.65",
+       "steady_us": "657.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.71",
+       "steady_us": "667.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "ratio": 1.0152207001522071
+     },
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.72",
+       "steady_us": "718.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.66",
+       "steady_us": "654.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "ratio": 0.9108635097493036
+     },
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.69",
+       "steady_us": "735.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.57",
+       "steady_us": "670.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "ratio": 0.9115646258503401
+     }
+    ]
+   },
+   "median": {
+    "ab": 0.9916897506925207,
+    "ba": 0.9115646258503401
+   }
+  },
+  "change": {
+   "pairs": {
+    "ab": [
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.70",
+       "steady_us": "714.0",
+       "load": "1.86",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.73",
+       "steady_us": "708.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "ratio": 0.9915966386554622
+     },
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.63",
+       "steady_us": "724.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.63",
+       "steady_us": "695.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "ratio": 0.9599447513812155
+     },
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.81",
+       "steady_us": "666.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.73",
+       "steady_us": "720.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "ratio": 1.0810810810810811
+     }
+    ],
+    "ba": [
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.80",
+       "steady_us": "714.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.50",
+       "steady_us": "718.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "ratio": 1.0056022408963585
+     },
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.55",
+       "steady_us": "707.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.62",
+       "steady_us": "719.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "ratio": 1.016973125884017
+     },
+     {
+      "x": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.61",
+       "steady_us": "660.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p1",
+       "callers": "1",
+       "lowerings": "301",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "0",
+       "heap_words": "[318187]",
+       "first_ms": "4.65",
+       "steady_us": "727.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "ratio": 1.1015151515151516
+     }
+    ]
+   },
+   "median": {
+    "ab": 0.9915966386554622,
+    "ba": 1.016973125884017
+   }
+  }
+ },
+ "sharedbench p8": {
+  "null": {
+   "pairs": {
+    "ab": [
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.99",
+       "steady_us": "716.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.96",
+       "steady_us": "700.0",
+       "load": "1.85",
+       "attempts": 1
+      },
+      "ratio": 0.9776536312849162
+     },
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.97",
+       "steady_us": "657.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.99",
+       "steady_us": "662.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "ratio": 1.0076103500761036
+     },
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.98",
+       "steady_us": "658.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "3.03",
+       "steady_us": "658.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "ratio": 1.0
+     }
+    ],
+    "ba": [
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.98",
+       "steady_us": "719.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "3.02",
+       "steady_us": "713.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "ratio": 0.9916550764951322
+     },
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.96",
+       "steady_us": "703.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.96",
+       "steady_us": "658.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "ratio": 0.9359886201991465
+     },
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.96",
+       "steady_us": "655.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "3.00",
+       "steady_us": "650.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "ratio": 0.9923664122137404
+     }
+    ]
+   },
+   "median": {
+    "ab": 1.0,
+    "ba": 0.9916550764951322
+   }
+  },
+  "change": {
+   "pairs": {
+    "ab": [
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.97",
+       "steady_us": "720.0",
+       "load": "2.05",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "813",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "512",
+       "heap_words": "[318187,121536,28690,28690,28690,28690,28690,28690]",
+       "first_ms": "0.69",
+       "steady_us": "224.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "ratio": 0.3111111111111111
+     },
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "3.01",
+       "steady_us": "720.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "813",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "512",
+       "heap_words": "[318187,121536,28690,28690,28690,28690,28690,28690]",
+       "first_ms": "0.73",
+       "steady_us": "233.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "ratio": 0.3236111111111111
+     },
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "3.02",
+       "steady_us": "716.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "813",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "512",
+       "heap_words": "[318187,121536,28690,28690,28690,28690,28690,28690]",
+       "first_ms": "0.69",
+       "steady_us": "222.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "ratio": 0.3100558659217877
+     }
+    ],
+    "ba": [
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.96",
+       "steady_us": "702.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "813",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "512",
+       "heap_words": "[318187,121536,28690,28690,28690,28690,28690,28690]",
+       "first_ms": "0.68",
+       "steady_us": "233.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "ratio": 0.3319088319088319
+     },
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.98",
+       "steady_us": "654.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "813",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "512",
+       "heap_words": "[318187,121536,28690,28690,28690,28690,28690,28690]",
+       "first_ms": "0.70",
+       "steady_us": "224.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "ratio": 0.3425076452599388
+     },
+     {
+      "x": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "2408",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "2107",
+       "heap_words": "[318187,318187,318187,318187,318187,318187,318187,318187]",
+       "first_ms": "2.97",
+       "steady_us": "719.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "y": {
+       "arm": "p8",
+       "callers": "8",
+       "lowerings": "813",
+       "first_caller_lowerings": "301",
+       "later_lowerings": "512",
+       "heap_words": "[318187,121536,28690,28690,28690,28690,28690,28690]",
+       "first_ms": "0.71",
+       "steady_us": "235.0",
+       "load": "2.03",
+       "attempts": 1
+      },
+      "ratio": 0.32684283727399166
+     }
+    ]
+   },
+   "median": {
+    "ab": 0.3111111111111111,
+    "ba": 0.3319088319088319
+   }
+  }
+ }
+}

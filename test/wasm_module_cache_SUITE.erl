@@ -36,6 +36,14 @@ all() ->
      eviction_takes_the_shared_bodies_with_it,
      eviction_takes_every_generation_with_it,
      a_restart_leaves_no_generation_published,
+     a_third_process_takes_a_large_body_without_lowering_it,
+     the_first_caller_gives_its_copy_up_once_shared,
+     one_process_publishes_no_generation,
+     inline_and_snapshotable_instances_publish_no_generation,
+     racing_publishers_leave_contiguous_generations,
+     the_generation_cap_holds,
+     a_publish_after_eviction_erases_itself,
+     a_shared_instance_leaves_the_destroy_map_alone,
      only_the_cached_module_shares,
      two_destroys_at_once_publish_once,
      a_publish_racing_an_eviction_leaves_nothing,
@@ -645,6 +653,207 @@ a_publish_racing_an_eviction_leaves_nothing(_Config) ->
          wait_until(fun() -> not maps:is_key({Hash, true}, ir_claims()) end,
                     5000)
      end || Ending <- [reports, dies]].
+
+%%% ------------------------------------------- sharing between processes ---
+
+%% One instance, three processes one after the other. The first lowers alone;
+%% the second is the second taker, so it lowers too and publishes, the body
+%% being past the floor; the third takes both bodies and lowers nothing, and
+%% the tier still sees what it ran. Fails on a runtime where each process
+%% lowers what it reaches.
+a_third_process_takes_a_large_body_without_lowering_it(_Config) ->
+    {Bin, Hash, Big, Want} = shared_module(),
+    {ok, H} = wasm:load(Bin),
+    {ok, I} = wasm:instantiate(H, #{}),
+    Go = fun() -> {wasm:call(I, ~"go", [1]), wasm_instance:executed(I)} end,
+    {{{ok, [Want]}, _}, 2} = lowerings(Go),
+    {{{ok, [Want]}, _}, 2} = lowerings(Go),
+    #{Big := IR} = generation(Hash, 1),
+    ?assert(erlang:external_size(IR) >= ?SHARED_IR_FLOOR_BYTES),
+    {{{ok, [Want]}, Ran}, 0} = lowerings(Go),
+    ?assert(lists:member(Big, Ran)),
+    ok = wasm:destroy(I),
+    ok = wasm:unload(H).
+
+%% A process that lowered before anybody shared keeps its copy only until its
+%% next miss: it then takes what was published and lets its own go.
+the_first_caller_gives_its_copy_up_once_shared(_Config) ->
+    {Bin, Hash, Big, Want} = shared_module(),
+    {ok, H} = wasm:load(Bin),
+    {ok, I} = wasm:instantiate(H, #{}),
+    Self = self(),
+    A = spawn_link(fun() ->
+                           {ok, [Want]} = wasm:call(I, ~"go", [1]),
+                           Self ! {heap, self(), heap_words()},
+                           receive again -> ok end,
+                           {ok, [_]} = wasm:call(I, ~"small", [1]),
+                           Self ! {heap, self(), heap_words()},
+                           receive stop -> ok end
+                   end),
+    Before = receive {heap, A, W0} -> W0 after 60000 -> ct:fail(slow) end,
+    {{{ok, [Want]}, _}, 2} =
+        lowerings(fun() -> {wasm:call(I, ~"go", [1]), x} end),
+    #{Big := IR} = generation(Hash, 1),
+    A ! again,
+    After = receive {heap, A, W1} -> W1 after 60000 -> ct:fail(slow) end,
+    ?assert(Before - After >= erts_debug:flat_size(IR) div 2),
+    A ! stop,
+    ok = wasm:destroy(I),
+    ok = wasm:unload(H).
+
+%% One process calling an instance publishes no generation, and its destroy
+%% still publishes what one request lowered, as it did.
+one_process_publishes_no_generation(_Config) ->
+    {Bin, Hash, _Big, Want} = shared_module(),
+    {ok, H} = wasm:load(Bin),
+    {{ok, [Want]}, _} =
+        lowerings(fun() ->
+                          {ok, I} = wasm:instantiate(H, #{}),
+                          R = wasm:call(I, ~"go", [1]),
+                          ok = wasm:destroy(I),
+                          R
+                  end),
+    ?assertEqual([], generations(Hash)),
+    ?assertMatch(#{}, shared(Hash, true)),
+    ok = wasm:unload(H).
+
+%% Only an instance of the module the cache holds, not built to be
+%% captured, shares: a compiled module and a snapshotable instance called
+%% from two processes each publish nothing.
+inline_and_snapshotable_instances_publish_no_generation(_Config) ->
+    {Bin, Hash, _Big, Want} = shared_module(),
+    {ok, Inline} = wasm:compile(Bin),
+    {ok, H} = wasm:load(Bin),
+    [begin
+         {ok, I} = wasm:instantiate(Mod, #{}, Opts),
+         [{{ok, [Want]}, 2} = lowerings(fun() -> wasm:call(I, ~"go", [1]) end)
+          || _ <- [1, 2]],
+         ok = wasm:destroy(I)
+     end || {Mod, Opts} <- [{Inline, #{}}, {H, #{snapshotable => true}}]],
+    ?assertEqual([], generations(Hash)),
+    ok = wasm:unload(H).
+
+%% Eight processes lowering at once publish generations that run 1, 2, ...
+%% with no number taken twice and no hole, and every call answers right.
+racing_publishers_leave_contiguous_generations(_Config) ->
+    {Bin, Hash, _Big, Want} = shared_module(),
+    {ok, H} = wasm:load(Bin),
+    {ok, I} = wasm:instantiate(H, #{}),
+    {{ok, [Want]}, 2} = lowerings(fun() -> wasm:call(I, ~"go", [1]) end),
+    Self = self(),
+    Ps = [spawn_link(fun() ->
+                             receive go -> ok end,
+                             Self ! {self(), wasm:call(I, ~"go", [1])}
+                     end) || _ <- lists:seq(1, 8)],
+    [P ! go || P <- Ps],
+    [{ok, [Want]} = receive {P, R} -> R after 60000 -> ct:fail(slow) end
+     || P <- Ps],
+    Ns = lists:sort([N || {_, _, _, N} <- generations(Hash)]),
+    ?assertNotEqual([], Ns),
+    ?assertEqual(lists:seq(1, length(Ns)), Ns),
+    ok = wasm:destroy(I),
+    ok = wasm:unload(H).
+
+%% With every generation taken, a publisher stops and keeps its bodies, which
+%% still run, and there is never one past the cap.
+the_generation_cap_holds(_Config) ->
+    {Bin, Hash, _Big, Want} = shared_module(),
+    {ok, H} = wasm:load(Bin),
+    Taken = [?SHARED_IR_GEN_KEY(Hash, true, N)
+             || N <- lists:seq(1, ?SHARED_IR_GENERATIONS)],
+    [persistent_term:put(K, #{999999 => []}) || K <- Taken],
+    {ok, I} = wasm:instantiate(H, #{}),
+    [{{ok, [Want]}, 2} = lowerings(fun() -> wasm:call(I, ~"go", [1]) end)
+     || _ <- [1, 2, 3]],
+    Past = ?SHARED_IR_GEN_KEY(Hash, true, ?SHARED_IR_GENERATIONS + 1),
+    ?assertEqual(undefined, persistent_term:get(Past, undefined)),
+    ok = wasm:destroy(I),
+    ok = wasm:unload(H),
+    [persistent_term:erase(K) || K <- Taken].
+
+%% An instance can outlive its module's residency. A publisher that lands
+%% after the eviction finds the module gone and takes its key back, so the
+%% node holds nothing for a module nobody holds.
+a_publish_after_eviction_erases_itself(_Config) ->
+    {Bin, Hash, _Big, Want} = shared_module(),
+    {ok, H} = wasm:load(Bin),
+    {ok, I} = wasm:instantiate(H, #{}),
+    {{ok, [Want]}, 2} = lowerings(fun() -> wasm:call(I, ~"go", [1]) end),
+    ok = wasm:unload(H),
+    wait_until(fun() -> holders(Bin) =:= absent end, 5000),
+    1 = erlang:trace_pattern({persistent_term, put_new, 2}, true, [call_count]),
+    {{ok, [Want]}, 2} = lowerings(fun() -> wasm:call(I, ~"go", [1]) end),
+    {call_count, Puts} = erlang:trace_info({persistent_term, put_new, 2},
+                                           call_count),
+    1 = erlang:trace_pattern({persistent_term, put_new, 2}, false,
+                             [call_count]),
+    ?assert(Puts >= 1),
+    ?assertEqual([], generations(Hash)),
+    ok = wasm:destroy(I).
+
+%% The destroy-time set is what one request reaches. A shared instance's
+%% bodies are in its generations, so its destroy leaves that set alone, and a
+%% later request in a single process still publishes it.
+a_shared_instance_leaves_the_destroy_map_alone(_Config) ->
+    {Bin, Hash, _Big, Want} = shared_module(),
+    {ok, H} = wasm:load(Bin),
+    Self = self(),
+    A = spawn_link(fun() ->
+                           {ok, I} = wasm:instantiate(H, #{}),
+                           {ok, [Want]} = wasm:call(I, ~"go", [1]),
+                           Self ! {inst, I},
+                           receive destroy -> ok end,
+                           Self ! {destroyed, wasm:destroy(I)}
+                   end),
+    I = receive {inst, X} -> X after 60000 -> ct:fail(slow) end,
+    {{ok, [Want]}, 2} = lowerings(fun() -> wasm:call(I, ~"go", [1]) end),
+    A ! destroy,
+    ok = receive {destroyed, D} -> D after 60000 -> ct:fail(slow) end,
+    ?assertEqual(undefined, shared(Hash, true)),
+    {{ok, [Want]}, _} =
+        lowerings(fun() ->
+                          {ok, J} = wasm:instantiate(H, #{}),
+                          R = wasm:call(J, ~"go", [1]),
+                          ok = wasm:destroy(J),
+                          R
+                  end),
+    ?assertMatch(#{}, shared(Hash, true)),
+    ok = wasm:unload(H).
+
+%% 300 small functions, over the deferral threshold, then one whose lowered
+%% body is past the publishing floor, `go' calling it and `small' calling a
+%% small one. Distinct bytes per call, so no case shares another's bodies.
+shared_module() ->
+    Ops = 100000,
+    Small = [<<16#20, 0, 16#41, (wasm_asm:sleb(N))/binary, 16#6A, 16#0B>>
+             || N <- lists:seq(0, 299)],
+    Big = iolist_to_binary([<<16#20, 0>>,
+                            lists:duplicate(Ops, <<16#41, 1, 16#6A>>),
+                            <<16#0B>>]),
+    Go = <<16#20, 0, 16#10, (wasm_asm:uleb(300))/binary, 16#0B>>,
+    Little = <<16#20, 0, 16#10, 1, 16#0B>>,
+    Name = integer_to_binary(erlang:unique_integer([positive])),
+    Payload = <<(byte_size(Name)), Name/binary>>,
+    Bin = iolist_to_binary(
+            [wasm_asm:module(
+               [wasm_asm:type_section([{[16#7F], [16#7F]}]),
+                wasm_asm:func_section(lists:duplicate(303, 0)),
+                wasm_asm:export_section([{~"go", 0, 301}, {~"small", 0, 302}]),
+                wasm_asm:code_section(Small ++ [Big, Go, Little])]),
+             0, byte_size(Payload), Payload]),
+    {Bin, crypto:hash(sha256, Bin), 300, 1 + Ops}.
+
+generation(Hash, N) ->
+    persistent_term:get(?SHARED_IR_GEN_KEY(Hash, true, N), undefined).
+
+generations(Hash) ->
+    [K || {{wasm_ir_shared, H, _, _} = K, _} <- persistent_term:get(),
+          H =:= Hash].
+
+heap_words() ->
+    true = erlang:garbage_collect(),
+    {total_heap_size, W} = process_info(self(), total_heap_size),
+    W.
 
 %%% ------------------------------------------------------ shared helpers ---
 

@@ -160,6 +160,10 @@
 %% bodies under a key of its own, so publishing one never replaces another.
 -define(SHARED_IR_GEN_KEY(Hash, Fuse, N), {wasm_ir_shared, Hash, Fuse, N}).
 -define(SHARED_IR_GENERATIONS, 32).
+%% How much a process lowers, as `erlang:external_size/1' counts it, before
+%% it publishes a generation; it publishes again only once it has lowered as
+%% much as it already published, so each process takes few generations.
+-define(SHARED_IR_FLOOR_BYTES, 262144).
 
 %% A decoded module. Sections absent from the binary leave their field empty,
 %% except `start' and `data_count' which distinguish absent from zero.

@@ -33,8 +33,14 @@ table would carry a second copy of every function body, twice the module.
 
 And the bodies requests actually lower, under `{wasm_ir_shared, Hash, Fuse}`.
 Those are not known at load, so the first instance destroyed publishes them,
-and the key is new, which starts no global scan. They are erased with the
-module.
+and the key is new, which starts no global scan.
+
+And what processes sharing one instance lower, as a kernel's tasks or a
+component's threads do: they publish it as they go, under generations
+`{wasm_ir_shared, Hash, Fuse, N}`, at most `?SHARED_IR_GENERATIONS` of them,
+each a new key; `wasm_instance:body_of/2` has the rule. Every one of these is
+erased with the module, and each erase is a scan, which is what the cap on
+generations bounds. `stats/0` reports how much they hold.
 
 ## Identity is the content hash
 
@@ -55,7 +61,7 @@ compiled artefact, with no coordination. It also means either of you can call
 
 -define(SERVER, ?MODULE).
 -define(PT_KEY(Hash), ?CACHED_MODULE_KEY(Hash)).
--define(IR_KEY(Hash, Fuse), {wasm_ir_shared, Hash, Fuse}).
+-define(IR_KEY(Hash, Fuse), ?SHARED_IR_KEY(Hash, Fuse)).
 
 %% Node-wide ceilings. Both exist to bound the `persistent_term` global scans
 %% that loading and unloading trigger.
@@ -293,8 +299,32 @@ claims(Pid) when is_pid(Pid) ->
 -spec resident() -> non_neg_integer().
 resident() -> gen_server:call(?SERVER, resident).
 
+-doc """
+What the cache holds: how many modules and their bytes, its limits, and
+`ir_bytes`, the lowered bodies published for those modules, both the set a
+request's destroy publishes and the generations processes sharing one
+instance publish as they go. Published bodies stay until their module is
+evicted and are not counted against `max_resident_module_bytes`.
+
+`ir_bytes` is their size as `erlang:external_size/1` counts it, which
+under-counts what they occupy by a little.
+""".
 -spec stats() -> map().
-stats() -> gen_server:call(?SERVER, stats).
+stats() ->
+    Stats = gen_server:call(?SERVER, stats),
+    %% Sized here rather than in the server: it walks every published body,
+    %% and every load would wait behind it there.
+    Stats#{ir_bytes => ir_bytes()}.
+
+%% Not `erts_debug:size_shared/1', which the module budget uses: it reports a
+%% term `persistent_term' holds, a literal, as 0.
+ir_bytes() ->
+    lists:sum([erlang:external_size(V)
+               || {K, V} <- persistent_term:get(), ir_key(K)]).
+
+ir_key({wasm_ir_shared, _, _}) -> true;
+ir_key({wasm_ir_shared, _, _, _}) -> true;
+ir_key(_) -> false.
 
 %%% ------------------------------------------------------------ callbacks ---
 
@@ -331,6 +361,7 @@ purge() ->
 
 ours({wasm_module, _}) -> true;
 ours({wasm_ir_shared, _, _}) -> true;
+ours({wasm_ir_shared, _, _, _}) -> true;
 ours(_) -> false.
 
 handle_call({acquire, Hash}, {Pid, _} = From, State) ->
@@ -519,6 +550,9 @@ drop_holders(Hash, N, State) ->
             %% Whether or not anything was published under them: erasing a key
             %% that is not there is a lookup, and one that is must go now.
             _ = [persistent_term:erase(?IR_KEY(Hash, F)) || F <- [true, false]],
+            _ = [persistent_term:erase(?SHARED_IR_GEN_KEY(Hash, F, G))
+                 || F <- [true, false],
+                    G <- lists:seq(1, ?SHARED_IR_GENERATIONS)],
             State#state{resident = maps:remove(Hash, State#state.resident),
                         ir = forget_stored_ir(Hash, State#state.ir)};
         {ok, #{holders := H} = Entry} ->

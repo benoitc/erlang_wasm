@@ -10,6 +10,18 @@
   changed nothing, and every other process using that instance then had to
   reload it. It is stored only when the call changed it now, which makes
   such a call about a quarter cheaper.
+- **Faster: processes that call one instance share what it prepares.** In a
+  module with more than 256 functions, each function is prepared the first
+  time a process calls it, and every process kept its own copy. When several
+  processes called one instance, as a kernel's tasks or a component's threads
+  do, each prepared everything again and carried a copy that its garbage
+  collections kept copying. When the module came from `wasm:load/1`, they now
+  prepare each function once between them and share it: a Linux kernel
+  compiled to WebAssembly, whose tasks are such processes, boots to its shell
+  in about half the time, or a fifth faster when its tasks already start with
+  a large heap. The
+  shared code stays until the module leaves the cache, and
+  `wasm_module_cache:stats/0` reports how much it holds as `ir_bytes`.
 
 ## 0.13.0
 

@@ -1285,3 +1285,36 @@ adds `A bsr 3` and needs no mask. That design passed every gate. `PERF.md`, "A
 64 KiB translation-cache entry for memory with no image", has both.
 
 Raw: `test/audit/raw/tlb-64k/two-argument/`.
+
+## Other ways to share lowered bodies between processes
+
+`shared-lowering` branch, 2026-11-28. Before generations (`wasm_instance`,
+`body_of/2`), five other designs were weighed for an instance that several
+processes call. None was built; each is recorded with what rules it out and
+what would bring it back. The plan and its measurements: `PERF.md`, "Sharing
+lowered bodies between the processes that call one instance".
+
+- **A key per function, put at its first lowering.** Complete and immediate,
+  but every key is erased at eviction and each erase is a scan of every heap
+  on the node: thousands of scans for one large module, which breaks the
+  bound the load rate limit exists to keep. **What would reopen it**: a way
+  to release many literal areas in one scan.
+- **Keys per instance, erased when it is destroyed.** Would share inline
+  `compile/1` modules too, but component fibers make per-request instances
+  multi-process, and `loader => compile` builds an inline module per runner,
+  so it could mean scans on every request. **What would reopen it**: an
+  inline workload that needs sharing and has no per-request instances.
+- **One key, published when a second process appears.** Shares only what the
+  first process had lowered by then; the kernel's emulator loop is lowered
+  later, by another task. **What would reopen it**: nothing on its own; it is
+  what generations do with a cap of one.
+- **One key, replaced as it grows.** Each replacement releases the old area,
+  so every process using it copies those bodies back onto its heap, which
+  undoes the sharing each time. **What would reopen it**: nothing.
+- **Lowering everything eagerly**, at instantiation or at load. Instantiation
+  goes from 12 to 78 ms and 21.7 MB per instance on QuickJS, and a cached
+  module's whole IR would sit in the literal area whether or not it runs; an
+  option asking for it would be a tactic, not something the embedder knows.
+  It was measured, as the upper bound, in the M1 spike (raw files under
+  `test/audit/raw/shared-lowering/`). **What would reopen it**: a module whose
+  instances always run most of it.

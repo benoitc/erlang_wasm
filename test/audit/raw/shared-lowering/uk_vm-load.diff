@@ -1,0 +1,21 @@
+--- uk_vm.erl.orig	2026-11-28 14:55:24
++++ floor/uk_vm.erl	2026-11-28 14:55:24
+@@ -114,7 +114,8 @@
+     persistent_term:put({?MODULE, shared}, Shared),
+     Path = maps:get(module, Opts, filename:join(code:priv_dir(unkernel_beam), "unkernel.wasm")),
+     {ok, Bin} = file:read_file(Path),
+-    {ok, Mod} = wasm:compile(Bin),
++    {ok, Handle} = wasm:load(Bin),
++    {ok, Mod} = wasm_module_cache:get(Handle),
+     Initrd = custom(Mod, <<"unkernel.initrd">>),
+     Cmdline = string:trim(<<(custom(Mod, <<"unkernel.cmdline">>))/binary, " ",
+                             (maps:get(cmdline, Opts, <<>>))/binary>>),
+@@ -127,7 +128,7 @@
+                true -> #{compile => true};
+                false -> #{}
+            end,
+-    {ok, Inst} = wasm:instantiate(Mod, Imports#{{<<"env">>, <<"memory">>} => Mem},
++    {ok, Inst} = wasm:instantiate(Handle, Imports#{{<<"env">>, <<"memory">>} => Mem},
+                                   maps:merge(limits(), Tier)),
+     IrqAddr = global(Inst, <<"wasm_host_irqs">>),
+     Owner = maps:get(owner, Opts),

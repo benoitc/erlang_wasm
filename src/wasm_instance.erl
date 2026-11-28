@@ -22,7 +22,9 @@ continuation lists beat a program counter on this VM.
 
 Above 256 functions a module is lowered progressively: a body is turned into IR
 the first time it is called, and cached per process, so a large module costs you
-what you use of it rather than what it contains.
+what you use of it rather than what it contains. Processes that call one
+instance of a module the cache holds share what they lower rather than each
+keeping a copy; `body_of/2` explains how.
 ## Where things are
 
 1,800 lines, and instantiation is only the first two hundred. The banners are
@@ -228,7 +230,7 @@ build(#module{} = M, Imports, Opts, Heap, Build, Store) ->
         case shared_prep(M) of
             {ok, {C, Own}, Hash} ->
                 %% `Fuse' is what `lower/2' reads back off the limits.
-                {C, Own, {wasm_ir_shared, Hash, Fuse}};
+                {C, Own, ?SHARED_IR_KEY(Hash, Fuse)};
             error ->
                 {wasm_validate:cached_context(M), undefined, undefined}
         end,
@@ -263,7 +265,7 @@ build(#module{} = M, Imports, Opts, Heap, Build, Store) ->
                      true  -> atomics:new(3, []);
                      false -> undefined
                  end,
-        version = atomics:new(3, []),
+        version = atomics:new(4, []),
         shared_ir = SharedIR
     },
     Shared = Ctx#ctx.shared_globals,
@@ -702,13 +704,28 @@ The execution IR of a function, building it the first time it is asked for.
 Cached in this process's dictionary, which is where it has to be: a dictionary
 read is 9 ns and copies nothing, where reading the IR out of a table would copy
 the whole function body on every call.
+
+A body somebody already lowered and published is taken instead of lowered. An
+instance of a module the cache holds can be called from several processes, as
+a kernel's tasks or a component's threads do, and each would otherwise lower
+every body it reaches and keep its own copy on its heap, where every full
+collection copies it again. So once a second process takes a body from the
+instance, what they lower is published under generations of their own
+(`?SHARED_IR_GEN_KEY'): a `persistent_term' literal, which taking copies
+nothing and collecting skips. A process publishes once it has
+`?SHARED_IR_FLOOR_BYTES' of bodies, then only once it has as much again as it
+already published, and a module has at most `?SHARED_IR_GENERATIONS': a new
+key starts no node-wide scan, but erasing each one does, at eviction.
 """.
 -spec body_of(#fn{}, #inst{}) -> [term()].
 body_of(#fn{body = {lazy, Raw}, idx = Idx}, #inst{id = Id} = Inst) ->
     Key = {wasm_ir, Id, Idx},
     case get(Key) of
         undefined ->
-            IR = shared_or_lower(Raw, Idx, Inst),
+            %% Before the keys below are first written: that is what makes this
+            %% process's first miss count it.
+            Shared = shared(Inst),
+            {IR, Lowered} = take(Raw, Idx, Inst, Shared),
             put(Key, IR),
             %% Remembering which indices were lowered, so releasing an instance
             %% erases exactly those. Scanning the whole dictionary instead cost
@@ -718,6 +735,10 @@ body_of(#fn{body = {lazy, Raw}, idx = Idx}, #inst{id = Id} = Inst) ->
             %% instantiating still gets swept. A module's worth of lowered
             %% bodies is megabytes to leak otherwise.
             ok = note(Id, Inst#inst.store),
+            ok = case Shared andalso Lowered of
+                     true -> pend(Idx, IR, Inst);
+                     false -> ok
+                 end,
             IR;
         IR ->
             IR
@@ -725,16 +746,153 @@ body_of(#fn{body = {lazy, Raw}, idx = Idx}, #inst{id = Id} = Inst) ->
 body_of(#fn{body = IR}, _Inst) ->
     IR.
 
-%% The first call of a function in this instance. A body some earlier instance
-%% of the module lowered and published is a `persistent_term' literal, so taking
-%% it and putting it in the dictionary copies nothing; everything after is as
-%% if it had been lowered here, including the record `executed/1' reads.
-shared_or_lower(Raw, _Idx, #inst{shared_ir = undefined} = Inst) ->
-    lower(Raw, Inst);
-shared_or_lower(Raw, Idx, #inst{shared_ir = Key} = Inst) ->
+%% Whether two or more processes take bodies from this instance. Each counts
+%% itself on its first miss, which is the only time this touches the counter;
+%% after that it is one read. Only an instance of the module the cache holds
+%% can share, and not one built to be captured.
+shared(#inst{shared_ir = undefined}) ->
+    false;
+shared(#inst{leases = L}) when L =/= undefined ->
+    false;
+shared(#inst{version = V, id = Id}) ->
+    Takers = case get({wasm_ir_keys, Id}) of
+                 undefined -> atomics:add_get(V, ?IX_TAKERS, 1);
+                 _ -> atomics:get(V, ?IX_TAKERS)
+             end,
+    Takers >= 2.
+
+%% The first call of a function in this instance, in this process. A body some
+%% earlier instance published at its destroy, or a process sharing this one
+%% published as it went, is a `persistent_term' literal, so taking it and
+%% putting it in the dictionary copies nothing; everything after is as if it
+%% had been lowered here, including the record `executed/1' reads. The second
+%% element says whether this process lowered it itself.
+take(Raw, _Idx, #inst{shared_ir = undefined} = Inst, _Shared) ->
+    {lower(Raw, Inst), true};
+take(Raw, Idx, Inst, Shared) ->
+    case published(Inst, Idx, Shared) of
+        {ok, IR} -> {IR, false};
+        error -> {lower(Raw, Inst), true}
+    end.
+
+%% The destroy-time set first, then each generation in order, up to the first
+%% one nobody published yet: generations are taken in order, so none is
+%% published after an absent one, short of a publish racing an eviction.
+published(#inst{shared_ir = Key} = Inst, Idx, Shared) ->
     case persistent_term:get(Key, undefined) of
-        #{Idx := IR} -> IR;
-        _ -> lower(Raw, Inst)
+        #{Idx := IR} -> {ok, IR};
+        _ when Shared -> generation(Inst, Idx, 1);
+        _ -> error
+    end.
+
+generation(_Inst, _Idx, N) when N > ?SHARED_IR_GENERATIONS ->
+    error;
+generation(#inst{shared_ir = ?SHARED_IR_KEY(Hash, Fuse)} = Inst, Idx, N) ->
+    case persistent_term:get(?SHARED_IR_GEN_KEY(Hash, Fuse, N), undefined) of
+        #{Idx := IR} -> {ok, IR};
+        #{} -> generation(Inst, Idx, N + 1);
+        undefined -> error
+    end.
+
+%% What this process lowered for a shared instance and has not published yet,
+%% how big it is, how much it published, and the next generation it tries.
+-record(pend, {bodies = [] :: [{non_neg_integer(), [term()]}],
+               bytes = 0 :: non_neg_integer(),
+               mine = 0 :: non_neg_integer(),
+               next = 1 :: pos_integer(),
+               stop = false :: boolean()}).
+
+pend(Idx, IR, #inst{id = Id} = Inst) ->
+    P0 = case get({wasm_ir_pend, Id}) of
+             undefined -> seed(Inst, Idx);
+             P -> P
+         end,
+    case P0 of
+        #pend{stop = true} ->
+            ok;
+        #pend{bodies = Bs, bytes = B} ->
+            P1 = P0#pend{bodies = [{Idx, IR} | Bs],
+                         bytes = B + erlang:external_size(IR)},
+            put({wasm_ir_pend, Id}, maybe_publish(P1, Inst)),
+            ok
+    end.
+
+%% The first time this process sees the instance shared, what it lowered
+%% before then joins what it publishes: it may be the one that lowered most,
+%% before anybody else came. What somebody published meanwhile is taken from
+%% there instead, which also lets this process's own copy go.
+seed(#inst{id = Id} = Inst, Except) ->
+    lists:foldl(
+      fun(I, #pend{bodies = Bs, bytes = B} = P) ->
+              case published(Inst, I, true) of
+                  {ok, Lit} ->
+                      put({wasm_ir, Id, I}, Lit),
+                      P;
+                  error ->
+                      IR = get({wasm_ir, Id, I}),
+                      P#pend{bodies = [{I, IR} | Bs],
+                             bytes = B + erlang:external_size(IR)}
+              end
+      end, #pend{}, [I || I <- ir_keys(Id), I =/= Except]).
+
+maybe_publish(#pend{bytes = B, mine = M} = P, Inst)
+  when B >= max(?SHARED_IR_FLOOR_BYTES, M) ->
+    publish_bodies(P, Inst);
+maybe_publish(P, _Inst) ->
+    P.
+
+%% Publish what is pending as the next free generation, check the module is
+%% still the cache's, and point this process's dictionary at the literals so
+%% its own copies become garbage. Anything that goes wrong leaves the bodies
+%% private, as they always were, and this process stops publishing for this
+%% instance.
+publish_bodies(#pend{bodies = Bs0} = P, #inst{id = Id} = Inst) ->
+    Bs = [B || {I, _} = B <- Bs0, not taken(Inst, Id, I)],
+    Done = P#pend{bodies = [], bytes = 0},
+    case Bs of
+        [] ->
+            Done;
+        _ ->
+            Mine = P#pend.mine + P#pend.bytes,
+            try claim(Inst, P#pend.next, maps:from_list(Bs)) of
+                stop -> Done#pend{stop = true};
+                N -> adopt(Inst, N, Bs, Done#pend{mine = Mine, next = N + 1})
+            catch
+                _:_ -> Done#pend{stop = true}
+            end
+    end.
+
+%% A body somebody published since this process lowered it.
+taken(Inst, Id, I) ->
+    case published(Inst, I, true) of
+        {ok, Lit} -> put({wasm_ir, Id, I}, Lit), true;
+        error -> false
+    end.
+
+%% `put_new/2' fails on a key another process took first, so each generation
+%% has one publisher; an equal value is a no-op, and that is still the same
+%% bodies.
+claim(_Inst, N, _Batch) when N > ?SHARED_IR_GENERATIONS ->
+    stop;
+claim(#inst{shared_ir = ?SHARED_IR_KEY(Hash, Fuse)} = Inst, N, Batch) ->
+    try persistent_term:put_new(?SHARED_IR_GEN_KEY(Hash, Fuse, N), Batch) of
+        ok -> N
+    catch
+        error:badarg -> claim(Inst, N + 1, Batch)
+    end.
+
+%% The module may have been evicted while this was published: the cache
+%% erased what it knew of, and this key is ours to take back.
+adopt(#inst{id = Id, shared_ir = ?SHARED_IR_KEY(Hash, Fuse)}, N, Bs, P) ->
+    Key = ?SHARED_IR_GEN_KEY(Hash, Fuse, N),
+    case persistent_term:get(?CACHED_MODULE_KEY(Hash), undefined) of
+        undefined ->
+            _ = persistent_term:erase(Key),
+            P#pend{stop = true};
+        _ ->
+            G = persistent_term:get(Key),
+            _ = [put({wasm_ir, Id, I}, maps:get(I, G)) || {I, _} <- Bs],
+            P
     end.
 
 %% Lowering reads the fusion decision from the process dictionary, and nested
@@ -1881,7 +2039,7 @@ What this instance lowered, for `wasm:destroy/1` to publish before the release
 erases it: `{Key, #{Idx => IR}}`, or `none`.
 
 Once per module, fuse setting and node: a key already there means somebody
-%% published, and replacing it would start the global scan a new key does not.
+published, and replacing it would start the global scan a new key does not.
 So what a later instance reaches beyond the first set is lowered per
 instance, as it always was. The first set is the one a request reaches, and
 it is stable from one request to the next.
@@ -1889,6 +2047,10 @@ it is stable from one request to the next.
 Not from an instance built to be captured. That one ran initialisation, not a
 request, and publishing what it lowered would take the slot the request's set
 belongs in: a worker destroys its capture instance before its first request.
+
+Nor from an instance that more than one process took bodies from. What they
+lowered is in its generations already, and this set stays what one request
+reaches.
 """.
 -spec unshared_ir(#inst{}) ->
           none | {{wasm_ir_shared, binary(), term()}, map()}.
@@ -1896,8 +2058,11 @@ unshared_ir(#inst{shared_ir = undefined}) ->
     none;
 unshared_ir(#inst{leases = L}) when L =/= undefined ->
     none;
-unshared_ir(#inst{shared_ir = Key, id = Id}) ->
-    case ir_keys(Id) of
+unshared_ir(#inst{shared_ir = Key, id = Id, version = V}) ->
+    %% A shared instance's bodies are in its generations already, and the
+    %% destroy-time set stays what one request reaches.
+    case atomics:get(V, ?IX_TAKERS) >= 2 orelse ir_keys(Id) of
+        true -> none;
         [] -> none;
         Idxs ->
             case persistent_term:get(Key, undefined) of
@@ -1912,6 +2077,7 @@ unshared_ir(#inst{shared_ir = Key, id = Id}) ->
 forget_ir(Id) ->
     _ = [erase({wasm_ir, Id, Idx}) || Idx <- ir_keys(Id)],
     erase({wasm_ir_keys, Id}),
+    erase({wasm_ir_pend, Id}),
     ok.
 
 -doc """

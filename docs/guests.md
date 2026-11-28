@@ -141,7 +141,9 @@ validation refuses it and names the proposal.
 
 A module with more than 256 functions is prepared in steps: each function body
 is lowered the first time it is called, not at instantiation. So you pay only
-for the part of the module that runs. You build the module the same way.
+for the part of the module that runs. Several processes calling one instance
+of a module from `wasm:load/1` lower each body once between them. You build
+the module the same way.
 
 ## Run what you built
 

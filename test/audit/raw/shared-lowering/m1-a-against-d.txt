@@ -1,0 +1,12 @@
+# A and D, alternating
+RESULT arm=A boot_ms=2373 init_ms=3735 prompt_ms=35673 exec_ms=[2420,559,598] task_heaps_mib=1087 node_mib=1762 pt_mib=186 emu=73.5 gc=25.3 load=5.22/5.31 instance=wasm/ebin uk_vm=unkernel_beam/ebin
+RESULT arm=D boot_ms=3238 init_ms=4304 prompt_ms=28856 exec_ms=[2184,492,536] task_heaps_mib=1041 node_mib=1818 pt_mib=240 emu=89.5 gc=9.2 load=5.31/5.12 instance=m1/eager uk_vm=unkernel_beam/ebin
+RESULT arm=D boot_ms=3222 init_ms=4273 prompt_ms=27682 exec_ms=[2428,473,501] task_heaps_mib=1016 node_mib=1771 pt_mib=240 emu=90.7 gc=8.0 load=5.12/4.95 instance=m1/eager uk_vm=unkernel_beam/ebin
+RESULT arm=A boot_ms=2308 init_ms=3622 prompt_ms=46149 exec_ms=[3556,693,595] task_heaps_mib=1063 node_mib=1841 pt_mib=186 emu=54.5 gc=17.9 load=4.95/13.45 instance=wasm/ebin uk_vm=unkernel_beam/ebin
+RESULT arm=A boot_ms=2847 init_ms=4204 prompt_ms=37522 exec_ms=[2447,606,634] task_heaps_mib=1135 node_mib=1715 pt_mib=186 emu=69.6 gc=25.1 load=13.45/17.78 instance=wasm/ebin uk_vm=unkernel_beam/ebin
+RESULT arm=D boot_ms=3466 init_ms=4618 prompt_ms=28711 exec_ms=[1621,489,488] task_heaps_mib=1055 node_mib=1771 pt_mib=240 emu=89.2 gc=9.4 load=17.78/16.35 instance=m1/eager uk_vm=unkernel_beam/ebin
+# null: A against A
+RESULT arm=A boot_ms=2344 init_ms=3847 prompt_ms=38249 exec_ms=[2446,562,585] task_heaps_mib=1174 node_mib=1817 pt_mib=186 emu=72.2 gc=25.4 load=16.35/15.77 instance=wasm/ebin uk_vm=unkernel_beam/ebin
+RESULT arm=A boot_ms=2399 init_ms=3736 prompt_ms=36319 exec_ms=[2511,607,602] task_heaps_mib=1119 node_mib=1755 pt_mib=186 emu=72.3 gc=26.3 load=15.77/14.64 instance=wasm/ebin uk_vm=unkernel_beam/ebin
+RESULT arm=A boot_ms=2517 init_ms=3941 prompt_ms=35980 exec_ms=[2389,552,588] task_heaps_mib=1142 node_mib=1731 pt_mib=186 emu=73.8 gc=24.8 load=14.64/13.53 instance=wasm/ebin uk_vm=unkernel_beam/ebin
+RESULT arm=A boot_ms=2309 init_ms=3633 prompt_ms=46188 exec_ms=[2485,598,605] task_heaps_mib=1135 node_mib=1809 pt_mib=186 emu=60.1 gc=19.4 load=13.53/12.27 instance=wasm/ebin uk_vm=unkernel_beam/ebin

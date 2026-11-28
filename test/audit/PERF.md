@@ -10999,3 +10999,94 @@ callee.
 
 **Raw.** `test/audit/raw/cross-instance-writeback/pairs.json`, every pair
 with its loads and attempts.
+
+## Sharing lowered bodies between the processes that call one instance (2026-11-28)
+
+A module over 256 functions is lowered a function at a time, on first call,
+and each lowered body was kept in the dictionary of the process that lowered
+it. One instance called from many long-lived processes, as unkernel's kernel
+tasks call the kernel, was lowered again by every process, and every copy sat
+on that process's heap, where each full collection copied it. At the unkernel
+shell prompt (M2, below) 28,528 `wasm_instance:lower/2` calls had produced
+2,605 distinct bodies, 17.1 MiB flat once each and 64.6 MiB across the 28
+live tasks. Now, once a second process takes bodies from an instance of a
+cached module, what they lower is published under at most 32 generations, new
+`persistent_term` keys, and taken from there (`wasm_instance:body_of/2`).
+
+**Before building: the M1 spike and M2.** Apple M4 Pro, OTP 29.1.3. M1
+lowered every function eagerly (`?LAZY_THRESHOLD` raised in a scratch build),
+which with unkernel keeping its instance in `persistent_term` makes all IR a
+shared literal: the most sharing can give. Boot to the prompt went from 86 s
+to 44 s without a task heap floor (stop rule: at or below 0.85; it was 0.51),
+and from about 36 s to 28 to 30 s with a 32 MiB floor; the load rose to 17
+mid-set, so the floor arm's base runs are recorded but not used for a gate.
+M2 counted what each task held at the prompt: two bodies far larger than the
+rest (the aarch64 decoder, 127,158 words flat, and the emulator's run loop,
+79,747, each held by 4 tasks), 1,354 bodies held by one task, and 31 by all
+27. Raw files: `m1-*.txt`, `ukm1.erl`, `m2-unkernel-prompt.txt`, `ukm2.erl`.
+
+**Method for the gates.** A Mac mini, Apple M5 Pro (15 cores), 24 GB,
+OTP 29.1.3, at a 5-minute load average of 1.37 to 2.22 throughout. Base
+`93376f1` (`main`), change this branch, each built from its own `git
+archive`. unkernel_beam `main` with `uk_vm` loading the kernel through
+`wasm:load/1` on both sides, so its instance's module is the cache's
+(`uk_vm-load.diff`), with and without the 32 MiB task heap floor
+(`uk_vm-nofloor.diff`). Each run a fresh emulator (`ukg.erl`: boot to the
+prompt, then the heaps, memory and counters below). The short form agreed
+with the maintainer: three pairs per ordering, a null set first, a run counted
+only if the load was below 8 at both ends; all were, on their first attempt.
+Drivers `gates.py` and `gates-rerun.py`, raw `gates-mini.json` and
+`gates-mini-rerun.json`.
+
+**Gates, written before measuring.** Boot without a floor at or below 0.80;
+boot with the floor and `pathbench inst_small` (the version array grows from
+three slots to four) at or below 1.03; `sharedbench` with eight callers:
+lowerings by callers 2 to 8 at most half of base; with one caller, at or
+below 1.03.
+
+| gate | null (base / base) | change / base | base | change |
+| --- | --- | --- | ---: | ---: |
+| unkernel boot, no floor | 0.988 / 1.031 | **0.532 / 0.539** | 68.2 s | 36.5 s |
+| unkernel boot, 32 MiB floor | 1.007 / 0.984 | **0.801 / 0.799** | 24.7 s | 19.7 s |
+| `sharedbench p8`, steady call | 1.000 / 0.992 | **0.311 / 0.332** | 718 us | 229 us |
+| `pathbench inst_small` | 1.042 / 1.015 | 0.899 / 1.008 | 5,278 ns | 5,006 ns |
+| `sharedbench p1`, steady call | 0.992 / 0.912, then 1.087 / 1.000 | 0.992 / 1.017, then 1.113 / 1.000 | 711, 719 us | 719, 724 us |
+
+Ratios are the medians in the base-first and change-first orderings; times
+are the medians of each side over both. The one-caller arm is
+**inconclusive**: its null failed twice, because its steady time is bimodal,
+near 655 or near 720 microseconds whichever side runs. Nothing it measures
+can change: with one caller the instance never counts as shared, so the
+lowerings (301), the heap (318,187 words) and the first call (4.67 against
+4.64 ms) came out the same on both sides, and steady calls never reach the
+code this changed.
+
+**What the processes hold, at the prompt.** Medians over the change pairs.
+
+| unkernel | `lower/2` calls | generations | task heaps | `persistent_term` | node |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| no floor, base | 28,516 | 0 | 101 MiB | 556 MiB | 851 MiB |
+| no floor, change | 5,203 | 19 | 42 MiB | 574 MiB | 800 MiB |
+| 32 MiB floor, base | 28,216 | 0 | 1,098 MiB | 556 MiB | 1,858 MiB |
+| 32 MiB floor, change | 5,096 | 18 | 977 MiB | 573 MiB | 1,735 MiB |
+
+`sharedbench p8`: 2,408 lowerings to 813, those by callers 2 to 8 from 2,107
+to 512, and callers 3 to 8 hold 28,690 words each against 318,187.
+
+**What it says.** Sharing roughly halves the unkernel boot when tasks have
+the default heap, and takes a fifth off it with the 32 MiB floor: the two
+costs add up, the copied bodies and how often a small heap is collected, and
+the floor removes only the second. It costs 17 to 18 MiB of `persistent_term`,
+the distinct bodies reached, kept until the module is evicted. The 556 MiB
+both sides hold there is not this change: loading through the cache keeps
+the module there, and unkernel_beam keeps its own copy of the instance beside
+it.
+
+**Not measured, and why.** QuickJS `realbench` and the CPython request arms:
+the interpreter's dispatch path is untouched, and an instance one process
+calls does nothing new beyond one counter add on that process's first miss,
+which the one-caller arm and `inst_small` price. Two known limits: a body a
+process lowers while what it holds unpublished stays under the floor is not
+published, so in `sharedbench` each caller after the second still lowers
+about 35 small bodies; and a process that lowered before sharing began keeps
+its copies until its next miss.

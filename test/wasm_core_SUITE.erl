@@ -68,6 +68,8 @@ all() ->
      f64_arithmetic_agrees_inline_and_through_the_helper,
      a_table_call_reaches_every_kind_of_target,
      a_table_call_to_another_instance_still_crosses,
+     a_read_only_call_into_another_instance_stores_nothing,
+     a_call_that_changes_another_instance_stores_its_state,
      a_table_call_into_the_unit_is_a_local_dispatch,
      a_table_nothing_can_change_is_resolved_when_compiled].
 
@@ -1575,6 +1577,67 @@ a_table_call_to_another_instance_still_crosses(_) ->
          ?assertEqual(wasm:call(Ii, ~"f", [V]), Got)
      end || V <- [0, 7, -1, -2147483648]],
     ok = wasm:destroy(Ic), ok = wasm:destroy(Ii), ok = wasm:destroy(O).
+
+%% A callee in another instance that only reads leaves that instance's stored
+%% state alone, from an interpreted caller (`foreign_call/5') and from a
+%% compiled one (`indirect_out/9'). Storing it anyway was an ETS insert and a
+%% version bump on every crossing, and the bump made every other process that
+%% holds the callee reload its state. Fails on a write-back that runs whether
+%% or not the call changed anything.
+a_read_only_call_into_another_instance_stores_nothing(_) ->
+    {O, Ic, Ii} = crossing_pair(~"(func $f (param i32) (result i32)
+                                    i32.const 0 local.get 0 i32.sub)"),
+    Stores = fun(Inst) ->
+                 _ = wasm:call(Inst, ~"f", [1]),
+                 1 = erlang:trace_pattern({wasm_instance, set_mut, 2}, true,
+                                          [call_count]),
+                 {ok, [-7]} = wasm:call(Inst, ~"f", [7]),
+                 {call_count, N} = erlang:trace_info({wasm_instance, set_mut, 2},
+                                                     call_count),
+                 1 = erlang:trace_pattern({wasm_instance, set_mut, 2}, false,
+                                          [call_count]),
+                 N
+             end,
+    E0 = maps:get(entered, wasm_jit:counts()),
+    ?assertEqual(0, Stores(Ic)),
+    ?assert(maps:get(entered, wasm_jit:counts()) > E0),
+    ?assertEqual(0, Stores(Ii)),
+    ok = wasm:destroy(Ic), ok = wasm:destroy(Ii), ok = wasm:destroy(O).
+
+%% And a callee that changes its own state still keeps the change: each call
+%% sees the one before, whichever way it was reached, and so does the owner.
+a_call_that_changes_another_instance_stores_its_state(_) ->
+    {O, Ic, Ii} = crossing_pair(~"(global $n (mut i32) (i32.const 0))
+        (func $f (param i32) (result i32)
+          global.get $n local.get 0 i32.add global.set $n global.get $n)
+        (func (export \"n\") (result i32) global.get $n)"),
+    _ = wasm:call(Ic, ~"f", [0]),
+    E0 = maps:get(entered, wasm_jit:counts()),
+    ?assertEqual({ok, [5]}, wasm:call(Ic, ~"f", [5])),
+    ?assert(maps:get(entered, wasm_jit:counts()) > E0),
+    ?assertEqual({ok, [7]}, wasm:call(Ii, ~"f", [2])),
+    ?assertEqual({ok, [10]}, wasm:call(Ic, ~"f", [3])),
+    ?assertEqual({ok, [10]}, wasm:call(O, ~"n", [])),
+    ok = wasm:destroy(Ic), ok = wasm:destroy(Ii), ok = wasm:destroy(O).
+
+%% An owner that exports a table holding `$f', and two users that call it
+%% through that table: one compiled, one interpreted.
+crossing_pair(Callee) ->
+    Owner = build(<<"(module (table (export \"t\") 1 funcref) (elem (i32.const 0) $f) ",
+                    Callee/binary, ")">>),
+    User = build(~"(module
+        (type $t (func (param i32) (result i32)))
+        (import \"o\" \"t\" (table 1 funcref))
+        (func (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 0 call_indirect (type $t)))"),
+    {ok, O} = wasm:instantiate(Owner, #{}),
+    {ok, T} = wasm:extern(O, ~"t"),
+    Imports = #{{~"o", ~"t"} => T},
+    Opts = #{compile => true, compile_whole => true, compile_sync => true,
+             compile_after => 1},
+    {ok, Ic} = wasm:instantiate(User, Imports, Opts),
+    {ok, Ii} = wasm:instantiate(User, Imports, #{}),
+    {O, Ic, Ii}.
 
 %% A target in the unit is reached through the module's dispatcher for its
 %% signature, a local call, and the crossing is only the fallback for a

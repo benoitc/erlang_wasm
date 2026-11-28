@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **Faster: a call into another instance that only reads it.** When one
+  instance called a function of another through a table, the other
+  instance's state was stored again after every call, even when the call
+  changed nothing, and every other process using that instance then had to
+  reload it. It is stored only when the call changed it now, which makes
+  such a call about a quarter cheaper.
+
 ## 0.13.0
 
 Adds an encoder: a module written as text or built in Erlang can be written

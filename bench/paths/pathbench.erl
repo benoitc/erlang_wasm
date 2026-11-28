@@ -49,6 +49,23 @@ run(inst_big) ->
     bench("instantiate-qjs-lazy", 200, fun() -> {ok, I} = wasm:instantiate(M, Im), wasm:destroy(I) end, 3);
 
 %%% ----------------------------------------------------------- call ---
+%% A call through a table another instance exports, to a callee that only
+%% reads: `foreign_call/5' when the caller is interpreted, `indirect_out/9'
+%% when it is compiled. Both read the callee's state, run it and store it
+%% back, so the arms price that crossing and what storing costs.
+run(call_foreign) ->
+    {O, U} = foreign_pair(#{}),
+    bench("call-foreign-interpreted", 200000, fun() -> wasm:call(U, ~"f", [7]) end),
+    ok = wasm:destroy(U), ok = wasm:destroy(O);
+run(call_foreign_compiled) ->
+    {O, U} = foreign_pair(#{compile => true, compile_whole => true,
+                            compile_sync => true, compile_after => 1}),
+    _ = wasm:call(U, ~"f", [7]),
+    E0 = maps:get(entered, wasm_jit:counts()),
+    bench("call-foreign-compiled", 200000, fun() -> wasm:call(U, ~"f", [7]) end),
+    %% Otherwise the arm timed the interpreter and says nothing.
+    true = maps:get(entered, wasm_jit:counts()) > E0,
+    ok = wasm:destroy(U), ok = wasm:destroy(O);
 run(call) ->
     {ok, M} = wasm:compile(fac()), {ok, I} = wasm:instantiate(M, #{}),
     bench("call-fac-10", 100000, fun() -> wasm:call(I, ~"fac-rec", [10]) end);
@@ -254,3 +271,20 @@ par(Ws, K) ->
 
 srv(I) ->
     receive {From, go} -> From ! {ok, wasm:call(I, ~"fac-rec", [10])}, srv(I) end.
+
+%% An owner exporting a table with one function that only reads its
+%% argument, and a user that calls it through that table.
+foreign_pair(UserOpts) ->
+    Build = fun(Wat) ->
+                {ok, P} = wasm_wat:module(Wat), {ok, M} = wasm_validate:module(P), M
+            end,
+    Owner = Build(~"(module (table (export \"t\") 1 funcref) (elem (i32.const 0) $neg)
+        (func $neg (param i32) (result i32) i32.const 0 local.get 0 i32.sub))"),
+    User = Build(~"(module (type $t (func (param i32) (result i32)))
+        (import \"o\" \"t\" (table 1 funcref))
+        (func (export \"f\") (param i32) (result i32)
+          local.get 0 i32.const 0 call_indirect (type $t)))"),
+    {ok, O} = wasm:instantiate(Owner, #{}),
+    {ok, T} = wasm:extern(O, ~"t"),
+    {ok, U} = wasm:instantiate(User, #{{~"o", ~"t"} => T}, UserOpts),
+    {O, U}.

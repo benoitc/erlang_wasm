@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.13.0
+
+Adds an encoder: a module written as text or built in Erlang can be written
+out as `.wasm` bytes, and text loads with the same handle as its binary. One
+fix: a module that leaves out a data count section it needs is refused.
 
 ### Changes
 
@@ -15,8 +19,9 @@
 - **New: load the text format.** `wasm:load/1` and `wasm:load/2` take
   `{wat, Source}`, and `wasm:load_file/1` reads a `.wat` file as text; both
   encode it before loading. A module loaded from text and the same module
-  loaded from its `.wasm` share one cache entry and one handle. Until now text could only be compiled, and each compile gave it a
-  new identity that nothing shared.
+  loaded from its `.wasm` share one cache entry and one handle. Until now
+  text could only be compiled, and each compile gave it a new identity that
+  nothing shared.
 - **Fixed: a module could leave out its data count section in two cases.**
   The binary format requires the data count section whenever code names a
   data segment, and a module is malformed without it. The check looked

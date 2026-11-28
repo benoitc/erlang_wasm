@@ -155,6 +155,12 @@
 %% is the instance's fuse setting, which lowering depends on.
 -define(SHARED_IR_KEY(Hash, Fuse), {wasm_ir_shared, Hash, Fuse}).
 
+%% What processes calling one instance of a cached module lowered, published
+%% as they go, under generations 1 to `?SHARED_IR_GENERATIONS': each a map of
+%% bodies under a key of its own, so publishing one never replaces another.
+-define(SHARED_IR_GEN_KEY(Hash, Fuse, N), {wasm_ir_shared, Hash, Fuse, N}).
+-define(SHARED_IR_GENERATIONS, 32).
+
 %% A decoded module. Sections absent from the binary leave their field empty,
 %% except `start' and `data_count' which distinguish absent from zero.
 -record(module, {

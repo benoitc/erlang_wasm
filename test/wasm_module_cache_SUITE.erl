@@ -34,6 +34,8 @@ all() ->
      a_second_request_lowers_nothing,
      the_tier_still_learns_what_ran,
      eviction_takes_the_shared_bodies_with_it,
+     eviction_takes_every_generation_with_it,
+     a_restart_leaves_no_generation_published,
      only_the_cached_module_shares,
      two_destroys_at_once_publish_once,
      a_publish_racing_an_eviction_leaves_nothing,
@@ -523,6 +525,33 @@ eviction_takes_the_shared_bodies_with_it(_Config) ->
     ?assertMatch(#{}, shared(Hash, true)),
     ok = wasm:unload(H),
     wait_until(fun() -> shared(Hash, true) =:= undefined end, 5000).
+
+%% What processes sharing an instance published is the module's too, every
+%% generation under both fuse settings, and goes with it. Planted here, as the
+%% producer would leave them, so this holds before anything produces them.
+eviction_takes_every_generation_with_it(_Config) ->
+    Bin = lazy_bin(0),
+    Hash = crypto:hash(sha256, Bin),
+    {ok, H} = wasm:load(Bin),
+    Keys = [{wasm_ir_shared, Hash, F, N}
+            || F <- [true, false], N <- [1, 2, ?SHARED_IR_GENERATIONS]],
+    [persistent_term:put(K, #{1 => [nop]}) || K <- Keys],
+    ok = wasm:unload(H),
+    wait_until(fun() -> holders(Bin) =:= absent end, 5000),
+    ?assertEqual([undefined || _ <- Keys],
+                 [persistent_term:get(K, undefined) || K <- Keys]).
+
+%% And a restarted cache, which has no record of them, clears them as it clears
+%% everything else it once published.
+a_restart_leaves_no_generation_published(_Config) ->
+    Key = {wasm_ir_shared, crypto:strong_rand_bytes(32), true, 3},
+    persistent_term:put(Key, #{1 => [nop]}),
+    Pid = whereis(wasm_module_cache),
+    Ref = monitor(process, Pid),
+    exit(Pid, kill),
+    receive {'DOWN', Ref, _, _, _} -> ok after 5000 -> ct:fail(alive) end,
+    wait_for_restart(Pid, 2000),
+    ?assertEqual(undefined, persistent_term:get(Key, undefined)).
 
 %% `identity' is a name anybody can give a module, so it cannot be what decides
 %% sharing. An inline module, one compiled under a resident module's hash with

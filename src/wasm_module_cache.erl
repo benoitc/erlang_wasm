@@ -331,6 +331,7 @@ purge() ->
 
 ours({wasm_module, _}) -> true;
 ours({wasm_ir_shared, _, _}) -> true;
+ours({wasm_ir_shared, _, _, _}) -> true;
 ours(_) -> false.
 
 handle_call({acquire, Hash}, {Pid, _} = From, State) ->
@@ -519,6 +520,9 @@ drop_holders(Hash, N, State) ->
             %% Whether or not anything was published under them: erasing a key
             %% that is not there is a lookup, and one that is must go now.
             _ = [persistent_term:erase(?IR_KEY(Hash, F)) || F <- [true, false]],
+            _ = [persistent_term:erase(?SHARED_IR_GEN_KEY(Hash, F, G))
+                 || F <- [true, false],
+                    G <- lists:seq(1, ?SHARED_IR_GENERATIONS)],
             State#state{resident = maps:remove(Hash, State#state.resident),
                         ir = forget_stored_ir(Hash, State#state.ir)};
         {ok, #{holders := H} = Entry} ->

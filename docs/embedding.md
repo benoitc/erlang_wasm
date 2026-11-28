@@ -107,6 +107,14 @@ handle returns `{error, #{kind := module_not_loaded}}`. Your application's
 module loaded there stays. A server that runs a component per request calls
 `wasm_component:hold/1` once from a long-lived process, for the same reason.
 
+A module from the cache is also what lets processes share an instance's
+code. In a module with more than 256 functions, each function body is
+prepared the first time a process calls it, and each process keeps its own
+copy. When several processes call one instance, as a kernel's tasks or a
+component's threads do, and the module came from `wasm:load/1`, they publish
+what they prepare for each other instead, so the work is done once and kept
+once. `wasm_module_cache:stats/0` reports the memory it holds as `ir_bytes`.
+
 `wasm:compile/1` does not use the cache. Use it only for work you do once.
 It also takes the text format:
 

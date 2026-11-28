@@ -181,9 +181,9 @@
     %% flag would not do: two concurrent calls need a count.
     leases :: undefined | atomics:atomics_ref(),
     store     :: term(),           % holder for #mut{}
-    %% Two counters in one `atomics' array, because an array per instance is an
-    %% allocation on the instantiation path and a second one would show up in
-    %% `pathbench inst_small'. `wasm_engine' names its counters the same way.
+    %% Four counters in one `atomics' array, because an array per instance is
+    %% an allocation on the instantiation path and a second one would show up
+    %% in `pathbench inst_small'. `wasm_engine' names its counters the same way.
     %%
     %%   1, `?IX_VERSION': bumped on every write to `store'. Lets a reader tell
     %%      in a few nanoseconds whether its cached copy is still current,
@@ -194,7 +194,10 @@
     %%      the association cannot be a field holding a name -- but the array
     %%      *handle* is immutable and only what it names changes, which is the
     %%      same argument `heap' makes above.
-    version   :: term(),           % atomics ref, two counters
+    %%   3, `?IX_ASKED': when a compilation was last asked for.
+    %%   4, `?IX_TAKERS': how many processes took a lazily lowered body, which
+    %%      decides whether what they lower is published for each other.
+    version   :: term(),           % atomics ref, four counters
     limits    :: map(),
     %% The validation context this module was built against, kept so a function
     %% body can be turned into IR when it is first called rather than at
@@ -204,8 +207,9 @@
     %% Where this module's lowered bodies are published node-wide, or
     %% `undefined'. Set only for an instance of the very module the cache
     %% holds, because the key names a hash and `identity' can be given any
-    %% hash at all. Read on a body's first call and at destroy, never on the
-    %% call path. Last, so no field before it moves.
+    %% hash at all. It also names the generations processes sharing this
+    %% instance publish under. Read on a body's first call and at destroy,
+    %% never on the call path. Last, so no field before it moves.
     shared_ir = undefined :: undefined | {wasm_ir_shared, binary(), term()}
 }).
 

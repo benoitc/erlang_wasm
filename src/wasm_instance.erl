@@ -22,7 +22,9 @@ continuation lists beat a program counter on this VM.
 
 Above 256 functions a module is lowered progressively: a body is turned into IR
 the first time it is called, and cached per process, so a large module costs you
-what you use of it rather than what it contains.
+what you use of it rather than what it contains. Processes that call one
+instance of a module the cache holds share what they lower rather than each
+keeping a copy; `body_of/2` explains how.
 ## Where things are
 
 1,800 lines, and instantiation is only the first two hundred. The banners are
@@ -2037,7 +2039,7 @@ What this instance lowered, for `wasm:destroy/1` to publish before the release
 erases it: `{Key, #{Idx => IR}}`, or `none`.
 
 Once per module, fuse setting and node: a key already there means somebody
-%% published, and replacing it would start the global scan a new key does not.
+published, and replacing it would start the global scan a new key does not.
 So what a later instance reaches beyond the first set is lowered per
 instance, as it always was. The first set is the one a request reaches, and
 it is stable from one request to the next.
@@ -2045,6 +2047,10 @@ it is stable from one request to the next.
 Not from an instance built to be captured. That one ran initialisation, not a
 request, and publishing what it lowered would take the slot the request's set
 belongs in: a worker destroys its capture instance before its first request.
+
+Nor from an instance that more than one process took bodies from. What they
+lowered is in its generations already, and this set stays what one request
+reaches.
 """.
 -spec unshared_ir(#inst{}) ->
           none | {{wasm_ir_shared, binary(), term()}, map()}.

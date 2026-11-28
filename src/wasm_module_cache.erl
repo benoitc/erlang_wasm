@@ -33,8 +33,14 @@ table would carry a second copy of every function body, twice the module.
 
 And the bodies requests actually lower, under `{wasm_ir_shared, Hash, Fuse}`.
 Those are not known at load, so the first instance destroyed publishes them,
-and the key is new, which starts no global scan. They are erased with the
-module.
+and the key is new, which starts no global scan.
+
+And what processes sharing one instance lower, as a kernel's tasks or a
+component's threads do: they publish it as they go, under generations
+`{wasm_ir_shared, Hash, Fuse, N}`, at most `?SHARED_IR_GENERATIONS` of them,
+each a new key; `wasm_instance:body_of/2` has the rule. Every one of these is
+erased with the module, and each erase is a scan, which is what the cap on
+generations bounds. `stats/0` reports how much they hold.
 
 ## Identity is the content hash
 

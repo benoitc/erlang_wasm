@@ -1216,7 +1216,8 @@ indirect_out(Inst, Mut, TypeIdx, TableIdx, I, Args, Depth, Mod, Gen) ->
             end;
         %% A callee in another instance runs against its own state, exactly as
         %% `foreign_call/5' has it: its mutable half is read, threaded and
-        %% written back, and this instance's is untouched.
+        %% written back if the call changed it, and this instance's is
+        %% untouched.
         {foreign, FInst, F} ->
             FMut = wasm_instance:mut(FInst),
             %% Through `with_depth/2` like every other nested invocation: this
@@ -1229,7 +1230,7 @@ indirect_out(Inst, Mut, TypeIdx, TableIdx, I, Args, Depth, Mod, Gen) ->
                                call(FInst, FMut, F, Args,
                                     maps:merge(FInst#inst.limits, Extra))
                            end),
-            ok = wasm_instance:set_mut(FInst, FMut1),
+            ok = store_changed(FInst, FMut, FMut1),
             {Results, Mut}
     end.
 
@@ -1957,12 +1958,20 @@ foreign_call(FInst, F, Cont, Ctrl, St) ->
                                       maps:merge(Limits, Extra))
                    end) of
         {ok, Results, FMut1} ->
-            ok = wasm_instance:set_mut(FInst, FMut1),
+            ok = store_changed(FInst, FMut, FMut1),
             run(Cont, Ctrl, St#st{stack = lists:reverse(Results) ++ Stack1})
     catch
         throw:{wasm_exception, Exn} ->
             throw_exn(Exn, Ctrl, St#st{stack = Stack1})
     end.
+
+%% Store a callee's state back only when the call changed it, as
+%% `wasm:invoke_at' does for an outermost call. A callee that only reads
+%% threads the same term through, so the match is a pointer comparison, and
+%% the write it skips is an ETS insert plus a version bump that made every
+%% other process holding the instance reload its state.
+store_changed(_FInst, Mut, Mut) -> ok;
+store_changed(FInst, _Before, After) -> wasm_instance:set_mut(FInst, After).
 
 %%% ------------------------------------------------------ bulk memory ops ---
 

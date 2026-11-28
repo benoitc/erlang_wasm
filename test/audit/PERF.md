@@ -10948,3 +10948,54 @@ public call.
 
 **Raw.** `test/audit/raw/encode/qjs.terms` and `wasi_demo.terms`, one record
 per launch.
+
+## A call into another instance that changes nothing in it (2026-11-28)
+
+A call through a table into another instance ran the callee against that
+instance's state and then stored the state back, whether or not the call had
+changed it: an ETS insert and a version bump, and the bump made every other
+process holding the callee reload its state on its next call. The outermost
+call already skipped the store when nothing changed (`wasm:invoke_at/6`,
+measured at 177 ns of a 386 ns call). `foreign_call/5`, for an interpreted
+caller, and `indirect_out/9`, for a compiled one, now make the same check.
+
+**Method.** Apple M4 Pro, OTP 29.1.3. Base `638f701` (`main`), change this
+commit, each built from its own copy with the same `rebar.lock`; the two
+differ only in `src/wasm_exec.erl`. `bench/paths/pathbench.erl` from this
+branch for both, four arms: `call_foreign` and `call_foreign_compiled`, a
+callee that only reads, reached through an imported table from an
+interpreted and from a compiled caller (the compiled arm checks that
+compiled code ran); `call` and `call_indirect`, calls within one instance,
+as no-slowdown guards. Each launch is a fresh emulator that times its arm
+five times and keeps the lowest. Six pairs per ordering, a null set (base
+against base) first for each arm, and a launch counted only if the 5-minute
+load average was below 8 at both ends: all did, at loads of 6.95 to 7.98,
+one of them on its second attempt. The driver is
+`test/audit/raw/cross-instance-writeback/pairs.py`.
+
+**Gates, written before measuring.** Win: both crossing arms at or below
+0.95, median of the paired ratios in each ordering. No slowdown: `call` and
+`call_indirect` at or below 1.03.
+
+| arm | null (base / base) | change / base | base | change |
+| --- | --- | --- | ---: | ---: |
+| `call_foreign` | 0.983 / 1.009 | **0.747 / 0.708** | 612 ns | 444 ns |
+| `call_foreign_compiled` | 1.018 / 0.994 | **0.787 / 0.739** | 783 ns | 607 ns |
+| `call` | 0.980 / 1.014 | 0.988 / 0.994 | 1,294 ns | 1,284 ns |
+| `call_indirect` | 1.010 / 1.007 | 0.999 / 1.013 | 298 ns | 301 ns |
+
+Ratios are the medians in the base-first and change-first orderings. Times
+are the medians of each side's launches over both orderings.
+
+**What it says.** A read-only call into another instance costs 25 to 29%
+less from an interpreted caller and 21 to 26% less from a compiled one;
+calls within one instance are unchanged. It does not remove the crossing:
+a call through another instance's table still costs about one and a half
+times a `call_indirect` within one from an interpreted caller, and twice
+from a compiled one, because the callee's state is still read and a nested
+invocation is still built. Not measured here: how often
+other processes' reloads were saved, which depends on how many hold the
+callee.
+
+**Raw.** `test/audit/raw/cross-instance-writeback/pairs.json`, every pair
+with its loads and attempts.

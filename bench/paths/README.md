@@ -49,6 +49,7 @@ of this page that covers it.
 | `restorebench` | what `wasm:restore/3` and `wasm:load_snapshot/2` take, per guest | "Restores, density and footprint" |
 | `restorebits` | what one `wasm:restore/3` spends, and on what | none |
 | `retainbench` | what a compiled module holds of its input once the input is gone | none |
+| `sharedbench` | what each process calling one instance lowers and keeps on its heap, with one caller and with eight | none |
 | `sockbench` | a WASI socket send and receive round trip against a local TCP echo | none |
 | `ssaprofile` | where a cold compile of QuickJS's hot set spends its time: by pass, by `beam_ssa_opt` sub-pass, by generated function | "Where a compile's time is spent" |
 | `storebench` | what a store costs in generated code | "What a store costs in generated code" |

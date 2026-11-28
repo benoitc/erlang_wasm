@@ -1,0 +1,78 @@
+prompt at 37.8 s; 28 tasks hold lowered bodies; lower/2 calls during the boot: 28528
+distinct bodies held: 2605, 17.1 MiB flat once each; held by all tasks: 64.6 MiB flat
+
+per task (bodies, flat MiB of them, heap MiB):
+  <0.196.0>    695 bodies    7.25 MiB  heap    80.2 MiB
+  <0.198.0>    542 bodies    6.27 MiB  heap    80.1 MiB
+  <0.147.0>    189 bodies    1.32 MiB  heap    72.5 MiB
+  <0.197.0>    761 bodies    7.90 MiB  heap    72.3 MiB
+  <0.145.0>    528 bodies    4.36 MiB  heap    72.3 MiB
+  <0.149.0>    316 bodies    2.80 MiB  heap    72.3 MiB
+  <0.136.0>    741 bodies    5.14 MiB  heap    72.2 MiB
+  <0.160.0>     95 bodies    0.75 MiB  heap    33.7 MiB
+  <0.153.0>     84 bodies    0.74 MiB  heap    33.1 MiB
+  <0.161.0>     89 bodies    0.82 MiB  heap    33.0 MiB
+  <0.143.0>    161 bodies    1.55 MiB  heap    33.0 MiB
+  <0.157.0>    108 bodies    1.25 MiB  heap    33.0 MiB
+  <0.139.0>    141 bodies    1.30 MiB  heap    33.0 MiB
+  <0.141.0>     69 bodies    0.64 MiB  heap    32.9 MiB
+  <0.144.0>     67 bodies    0.62 MiB  heap    32.9 MiB
+  <0.156.0>     69 bodies    0.66 MiB  heap    32.9 MiB
+  <0.158.0>     83 bodies    0.72 MiB  heap    32.9 MiB
+  <0.148.0>     67 bodies    0.59 MiB  heap    32.9 MiB
+  <0.146.0>     68 bodies    0.62 MiB  heap    32.9 MiB
+  <0.154.0>     68 bodies    0.62 MiB  heap    32.9 MiB
+  <0.155.0>     68 bodies    0.62 MiB  heap    32.9 MiB
+  <0.150.0>     68 bodies    0.62 MiB  heap    32.9 MiB
+  <0.152.0>     68 bodies    0.62 MiB  heap    32.9 MiB
+  <0.151.0>     68 bodies    0.63 MiB  heap    32.9 MiB
+  <0.142.0>     67 bodies    0.60 MiB  heap    32.8 MiB
+  <0.159.0>     66 bodies    0.60 MiB  heap    32.8 MiB
+  <0.140.0>     67 bodies    0.62 MiB  heap    32.8 MiB
+  <0.138.0>   2056 bodies   14.43 MiB  heap    32.8 MiB
+
+bodies by how many tasks hold them (holders: bodies):
+  [{1,1378},
+   {2,302},
+   {3,215},
+   {4,392},
+   {5,78},
+   {6,93},
+   {7,47},
+   {8,15},
+   {9,6},
+   {10,4},
+   {11,4},
+   {13,6},
+   {14,3},
+   {19,2},
+   {22,8},
+   {23,5},
+   {25,4},
+   {26,2},
+   {27,10},
+   {28,31}]
+
+the 20 largest bodies (index, flat words, holders, name):
+   18056    127158   4  .La64.decode.exec
+   18152     79747   4  kw_run
+   16962     47703   5  vsnprintf
+   16768     22886   7  mas_wr_store_entry
+   14219     17860   1  rtnl_fill_ifinfo
+    4049     14575   8  get_page_from_freelist
+     268     14253   4  copy_process
+    6115     11943   4  load_elf_binary
+    1301     11604   4  select_task_rq_fair
+    9704     11533   6  blake2s_compress_generic
+    1637     11369   1  build_sched_domains
+    3868     10658   4  change_protection
+    3973     10314   4  mmap_region
+    3733      9843   2  copy_page_range
+    3781      9735   4  handle_mm_fault
+    3737      8900   4  __zap_vma_range
+    3558      7920   1  mm_core_init_early
+    4043      7582   8  __alloc_frozen_pages_noprof
+   16820      7495   2  __mt_dup
+    5198      7421   1  attach_recursive_mnt
+
+kw_run (18152): 79747 flat words, held by 4 tasks

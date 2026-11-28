@@ -1,0 +1,11 @@
+# null: A against A
+# rounds
+RESULT arm=B boot_ms=2309 init_ms=4712 prompt_ms=87187 exec_ms=[4551,1286,1279] task_heaps_mib=96 node_mib=726 pt_mib=186 emu=24.1 gc=72.5 load=6.81/7.03 instance=wasm/ebin uk_vm=m1/nofloor
+RESULT arm=C boot_ms=3259 init_ms=4892 prompt_ms=43850 exec_ms=[3350,776,757] task_heaps_mib=31 node_mib=763 pt_mib=240 emu=46.0 gc=53.6 load=7.03/6.96 instance=m1/eager uk_vm=m1/nofloor
+RESULT arm=D boot_ms=3303 init_ms=4451 prompt_ms=29603 exec_ms=[1604,491,504] task_heaps_mib=1056 node_mib=1826 pt_mib=240 emu=90.1 gc=8.6 load=6.96/6.76 instance=m1/eager uk_vm=unkernel_beam/ebin
+RESULT arm=D boot_ms=3299 init_ms=4342 prompt_ms=28240 exec_ms=[2398,469,485] task_heaps_mib=1104 node_mib=1881 pt_mib=240 emu=89.9 gc=8.1 load=6.76/6.78 instance=m1/eager uk_vm=unkernel_beam/ebin
+RESULT arm=C boot_ms=3233 init_ms=5059 prompt_ms=44412 exec_ms=[2903,818,790] task_heaps_mib=31 node_mib=761 pt_mib=240 emu=45.9 gc=53.7 load=6.78/7.06 instance=m1/eager uk_vm=m1/nofloor
+RESULT arm=B boot_ms=2376 init_ms=4706 prompt_ms=85770 exec_ms=[4199,1123,1189] task_heaps_mib=104 node_mib=743 pt_mib=186 emu=24.0 gc=72.7 load=7.06/6.15 instance=wasm/ebin uk_vm=m1/nofloor
+RESULT arm=B boot_ms=2314 init_ms=4599 prompt_ms=85805 exec_ms=[6753,1350,1347] task_heaps_mib=88 node_mib=732 pt_mib=186 emu=24.5 gc=72.1 load=6.15/5.96 instance=wasm/ebin uk_vm=m1/nofloor
+RESULT arm=D boot_ms=3341 init_ms=4433 prompt_ms=29814 exec_ms=[2173,474,487] task_heaps_mib=1040 node_mib=1825 pt_mib=240 emu=88.4 gc=10.3 load=5.96/5.71 instance=m1/eager uk_vm=unkernel_beam/ebin
+RESULT arm=C boot_ms=3408 init_ms=5003 prompt_ms=43872 exec_ms=[3927,740,745] task_heaps_mib=39 node_mib=767 pt_mib=240 emu=46.2 gc=53.5 load=5.71/5.45 instance=m1/eager uk_vm=m1/nofloor

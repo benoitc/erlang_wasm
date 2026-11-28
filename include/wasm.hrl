@@ -149,6 +149,12 @@
 %% asked the cache would close that loop.
 -define(CACHED_MODULE_KEY(Hash), {wasm_module, Hash}).
 
+%% Where lowered bodies of a cached module are published, for instances of it
+%% to take instead of lowering again, here for the same reason: the instance
+%% writes and reads them, and the cache erases them with the module. `Fuse'
+%% is the instance's fuse setting, which lowering depends on.
+-define(SHARED_IR_KEY(Hash, Fuse), {wasm_ir_shared, Hash, Fuse}).
+
 %% A decoded module. Sections absent from the binary leave their field empty,
 %% except `start' and `data_count' which distinguish absent from zero.
 -record(module, {

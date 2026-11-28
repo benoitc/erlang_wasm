@@ -55,7 +55,7 @@ compiled artefact, with no coordination. It also means either of you can call
 
 -define(SERVER, ?MODULE).
 -define(PT_KEY(Hash), ?CACHED_MODULE_KEY(Hash)).
--define(IR_KEY(Hash, Fuse), {wasm_ir_shared, Hash, Fuse}).
+-define(IR_KEY(Hash, Fuse), ?SHARED_IR_KEY(Hash, Fuse)).
 
 %% Node-wide ceilings. Both exist to bound the `persistent_term` global scans
 %% that loading and unloading trigger.

@@ -228,7 +228,7 @@ build(#module{} = M, Imports, Opts, Heap, Build, Store) ->
         case shared_prep(M) of
             {ok, {C, Own}, Hash} ->
                 %% `Fuse' is what `lower/2' reads back off the limits.
-                {C, Own, {wasm_ir_shared, Hash, Fuse}};
+                {C, Own, ?SHARED_IR_KEY(Hash, Fuse)};
             error ->
                 {wasm_validate:cached_context(M), undefined, undefined}
         end,

@@ -307,9 +307,7 @@ instance publish as they go. Published bodies stay until their module is
 evicted and are not counted against `max_resident_module_bytes`.
 
 `ir_bytes` is their size as `erlang:external_size/1` counts it, which
-under-counts what they occupy by a little: the literal copies
-`persistent_term` holds are invisible to `erts_debug:size_shared/1`, which
-reports them as 0.
+under-counts what they occupy by a little.
 """.
 -spec stats() -> map().
 stats() ->
@@ -318,6 +316,8 @@ stats() ->
     %% and every load would wait behind it there.
     Stats#{ir_bytes => ir_bytes()}.
 
+%% Not `erts_debug:size_shared/1', which the module budget uses: it reports a
+%% term `persistent_term' holds, a literal, as 0.
 ir_bytes() ->
     lists:sum([erlang:external_size(V)
                || {K, V} <- persistent_term:get(), ir_key(K)]).
